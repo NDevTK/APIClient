@@ -2495,14 +2495,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            "is a fact about the bytes those headers describe, so bytes with no header list is a document whose "
            "type was never asked and a header list with no bytes is one computed for another response");
 
-    /* THE RESPONSE IS READ BEFORE THE AGENT EXISTS, and that ORDER is the spec's rather than this runner's
-       convenience. §7.5.1 reads `Origin-Agent-Cluster` off the response and hands the answer to §8.1.2.2's
-       obtain-a-similar-origin-window-agent, which is what ALLOCATES the agent — so a runner that brought the
-       agent up first would have allocated the cluster before it knew which key the response asked for. The
-       standard's own ordering says the same thing by calling the environment the read happens in RESERVED.
-       THE BYTES COME WITH THE HEADERS. A corpus file is served by wptserve, whose `.headers` sidecars and
-       `?pipe=header(...)` substitutions are the whole delivery mechanism for the areas this route exists for —
-       `html/browsers/origin/origin-keyed-agent-clusters/` sends nothing else. */
+    /* The response is read before the agent exists, in the spec's order: §7.5.1 reads `Origin-Agent-Cluster` off
+       the response and hands the answer to §8.1.2.2's obtain a similar-origin window agent, which allocates the
+       agent, so the cluster key must be known first (the standard calls the environment the read happens in
+       reserved). The bytes come with the headers: wptserve's `.headers` sidecars and `?pipe=header(...)` are the
+       whole delivery mechanism for areas like `html/browsers/origin/origin-keyed-agent-clusters/`. */
     memset(&response_headers, 0, sizeof response_headers);
     if (src) {
         response = html_headers;
@@ -2516,22 +2513,16 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
             response = &response_headers;
         }
     }
-    /* §7.4.2.1 "Supporting concepts"'s TARGET SNAPSHOT PARAMS' SANDBOXING FLAGS ARE THE CALLER'S ANSWER, NOT
-       A ZERO THIS FUNCTION WRITES — the struct's own member, not §7.4.2.3.4 "Non-fetch schemes and external
-       software"'s like-named row taken from it.
-       A ZERO STOOD HERE with the sentence that makes it right for a TOP-LEVEL traversable — no embedder
-       element, so §7.1.5 answers from the POPUP sandboxing flag set, which begins empty and which only
-       §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever fill, and nothing chose this
-       one — and that sentence was being applied to a document it is not about: a `--document` CHILD is rooted
-       in a navigable another PROCESS created, whose §7.1.5 set is its embedder's `<iframe sandbox>` attribute
-       unioned with the embedder document's own. For that one the zero is not an answer but the absence of
-       one, and it deleted the whole sandbox. Both callers state the set now, the top-level document in
-       §7.1.5's own word for the empty set. The other half of §7.4.2.2's union is this response's CSP-derived
-       flags, which navigation_params computes.
-       PARSED, THEN ASSERTED — never parsed inside the assert, because a DCHECK's condition is compiled out in
-       release and every child would then take the empty set whatever its command line said.
-       §8.1.3.5's SECURE-CONTEXT ANSWER is over the environment's TOP-LEVEL CREATION URL, which is what decides
-       whether an `Origin-Agent-Cluster`, a COOP or a COEP is honoured at all. */
+    /* §7.4.2.1 "Supporting concepts"' target snapshot params' sandboxing flags are the caller's answer (the
+       struct's own member, not §7.4.2.3.4 "Non-fetch schemes and external software"'s like-named row). For the
+       top-level document it is §7.1.5's empty set: no embedder element, so §7.1.5 answers from the popup
+       sandboxing flag set, which only §7.3.1.7 "Navigable target names"' rules for choosing a navigable fill. A
+       `--document` child is rooted in a navigable another process created, whose set is its embedder's
+       `<iframe sandbox>` attribute unioned with the embedder document's own, so both callers state it. The other
+       half of §7.4.2.2's union is this response's CSP-derived flags, which navigation_params computes. It is
+       parsed, then asserted, never parsed inside the DCHECK, whose condition is compiled out in release.
+       §8.1.3.5's secure-context answer is over the environment's top-level creation URL, which decides whether an
+       `Origin-Agent-Cluster`, a COOP or a COEP is honoured at all. */
     {
         bool ok = sandbox_flags_of_serialized(creation_sandbox_flags, &creation_flags);
 
@@ -2544,116 +2535,90 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                "navigable with no flags. Read as the empty set it would run a sandboxed frame's document with "
                "its sandbox deleted");
     }
-    /* THE PARAMS COME FROM THE RESPONSE THIS DOCUMENT IS CREATED FROM, whichever zone obtained it. They used to
-       come from `response_headers` unconditionally, which is this function's OWN fetch — so a `--document`
-       child, whose bytes and headers its caller had already fetched, was given the params of a response that
-       does not exist: no `Origin-Agent-Cluster`, no COOP, no response CSP and no CSP-derived sandboxing flags,
-       for a child whose whole delivery mechanism is a `?pipe=header(...)`. An EMPTY list is what a document
-       with no response gets, and that is the right answer for that one: §7.4's initial about:blank carries no
-       policy of its own and inherits its creator's, which is the clone applied below. */
+    /* The params come from the response this document is created from, whichever zone obtained it; a
+       `--document` child's caller fetched its bytes and headers. A document with no response gets an empty list,
+       which is right for it: §7.4's initial about:blank has no policy of its own and inherits its creator's,
+       which is the clone applied below. */
     navigation_params_from_response(&np, response ? response : &response_headers, creation_flags,
                                     secure_context_url_potentially_trustworthy(top_level_url));
-    /* HTML §7.4.5's FIRST STEP — "Let type be the computed type of navigationParams's response" — asked HERE,
-       where the response is, and carried to the parse below with the bytes it is a fact about. The same
-       component answers it for core/frame/navigable.c's child_document, and this runner did not ask it at all:
-       every top-level test document went to the HTML parser whatever the server served.
-       THE COST WAS NOT AN ABSENT FEATURE, IT WAS A MISNAMED ONE. An `.xhtml`/`.xht`/`.xml` file is served by
-       wptserve as `application/xhtml+xml` or `application/xml`, so MIME Sniffing §7 step 1 keeps that supplied
-       type and §7.4.5 sends it to §7.5.3; under the HTML parser instead, a `<script>` is raw text (HTML
-       §13.2.6.4.4 The "in head" insertion mode switches the tokenizer to §13.2.5.4 Script data state), so the
-       XML §2.7 "CDATA Sections" opener `<![CDATA[` and XML §4.6 "Predefined Entities"' `&lt;` both reach the
-       JavaScript compiler as program text. The document then failed as `a page <script> did not COMPILE` —
-       true about the bytes, and pointing at the wrong subsystem for a document that was never JavaScript. The
-       SAME files reached through an iframe already crashed by name, because that path goes through
-       child_document: one absent capability reporting under two names depending on which loader arrived. */
-    /* AND HTML §13.2.3.2 "Determining the character encoding" BESIDE IT, over the same response and the same
-       raw bytes, because it is the same defect one question over: this runner asked NEITHER, so a test file
-       served `windows-1252` — or one whose own `<meta charset>` says so — reached the tree builder with every
-       byte above 0x7F already replaced by U+FFFD, and its `document.characterSet` answered UTF-8. The child
-       navigable sniffed and decoded; this entry did not. THE TYPE IS COMPUTED FROM THE RAW BYTES AND THE PARSE
-       RUNS ON THE DECODE: MIME Sniffing §5.2 "Reading the resource header" reads the resource's own bytes,
-       while HTML §13.2.3.1 "Parsing with a known character encoding" is what the parser then operates under.
-       NO PARENT ENCODING — this is the runner's top-level document and §13.2.3.2's container step has no
-       container to read. */
+    /* HTML §7.4.5's first step, "Let type be the computed type of navigationParams's response", asked here where
+       the response is and carried to the parse with the bytes it describes; the same component answers it for
+       core/frame/navigable.c's child_document. wptserve serves `.xhtml`/`.xht`/`.xml` as `application/xhtml+xml`
+       or `application/xml`, MIME Sniffing §7 step 1 keeps that supplied type, and §7.4.5 sends it to §7.5.3. Under
+       the HTML parser a `<script>` is raw text (HTML §13.2.6.4.4 The "in head" insertion mode switches to
+       §13.2.5.4 Script data state), so XML §2.7 "CDATA Sections"' `<![CDATA[` and XML §4.6 "Predefined
+       Entities"' `&lt;` would reach the JavaScript compiler as program text.
+       HTML §13.2.3.2 "Determining the character encoding" runs beside it over the same response and raw bytes, so
+       a file served `windows-1252`, or whose `<meta charset>` says so, decodes correctly and reports it in
+       `document.characterSet`. The type is computed from the raw bytes (MIME Sniffing §5.2 "Reading the resource
+       header") and the parse runs on the decode (HTML §13.2.3.1 "Parsing with a known character encoding"). There
+       is no parent encoding: §13.2.3.2's container step has no container for the runner's top-level document. */
     if (response) {
         document_load_computed_type(&computed, response, src, html_n);
         computed_defined = true;
         root_encoding = document_load_decode(&decoded, &decoded_n, response, src, html_n,
                                              /*parent_encoding*/-1);
     }
-    /* THE RECORD OUTLIVES THE HEADER LIST IT WAS COMPUTED FROM — mime_sniff_computed's answer owns its own
-       strings — so the list is released here, at the last read of it, and the type travels on alone. The
-       decode above is the other thing that had to happen before this free: §13.2.3.2 reads the `Content-Type`
-       header and there is no reading it afterwards. */
+    /* The record outlives the header list it was computed from (mime_sniff_computed's answer owns its strings),
+       so the list is released at its last read. The decode above had to come first: §13.2.3.2 reads the
+       `Content-Type` header. */
     header_list_free(&response_headers);
 
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
     ctx = JS_NewContext(rt);
     wpt_agent_init(ctx, doc_name, origin, top_level_url, np.requests_oac, np.opener.value);
-    /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD, because what a document of this build IS is this runner's
-       answer and not the engine's — a child with a different platform surface would make every fidelity number
-       measured in it a number about a different browser. */
+    /* §7.4 calls back here for a same-origin child, because what a document of this build is is this runner's
+       answer: a child with a different platform surface would make every number measured in it a number about a
+       different browser. */
     navigable_set_realm_builder(wpt_child_realm);
 
     g_wpt_dom = dom_document_create();
     CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
-    /* SHARED, for main.c's reason: this is the runner's ACTIVE document and every flow reads its tree.
-       THE TWO CALLS ARE §7.4.5's LOAD-A-DOCUMENT AND §7.4's INITIAL about:blank — see child_document, which
-       makes the same split for the same reason. The parser this runner reaches for a response is now whichever
-       one §7.4.5's arm names, and the assert that keeps the HTML parser unreachable for a type it does not
-       serve is at that loader (core/loader/html_document.c), where the parse is. */
-    /* §13.2.4.5 ENABLED: this runner executes the test document's scripts, which is the whole of what it is
-       for, so its parser takes the same arm a browser's does. */
-    /* THE RESPONSE ARM PARSES THE DECODE AND THE NO-RESPONSE ARM PARSES THE BYTES IT WAS HANDED, which is the
-       same split as the two calls themselves: there is nothing to decode a document that came from no response
-       with, and its markup is this build's own constant or a WPT wrapper. */
+    /* Shared, for main.c's reason: this is the runner's active document and every flow reads its tree. The two
+       calls are §7.4.5's load a document and §7.4's initial about:blank, the split child_document makes. The
+       parser for a response is whichever one §7.4.5's arm names, and the assert keeping the HTML parser from a
+       type it does not serve is at that loader (core/loader/html_document.c). The response arm parses the decode
+       and the no-response arm parses the bytes it was handed, this build's constant or a WPT wrapper. §13.2.4.5
+       is enabled: this runner executes the test document's scripts, so its parser takes a browser's arm. */
     CHECK((computed_defined
              ? document_load(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed, root_encoding,
                              (const lxb_char_t *)decoded, decoded_n)
              : html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED,
                                    (const lxb_char_t *)src, html_n)) == LXB_STATUS_OK,
           "the runner's document did not parse");
-    /* AND §7.5.1's TYPE AND CONTENT TYPE FOR THIS DOCUMENT, off the same computed type the parse above
-       dispatched on — read BEFORE the record is freed, and never restated at the install below. The
-       no-response arm is §7.3.2.1 "Creating browsing contexts"' constant, which is the same split the two
-       parse calls above make and for the same reason: a document with no response has no type to compute. */
+    /* §7.5.1's type and content type for this document, off the computed type the parse dispatched on, read before
+       the record is freed and never restated at the install. The no-response arm is §7.3.2.1 "Creating browsing
+       contexts"' constant, the split the two parse calls make. */
     root_kind = computed_defined ? document_load_kind(&computed) : document_kind_initial_about_blank();
     if (computed_defined)
         mime_type_free(&computed);
     free(fetched);
-    /* THE DECODE IS BORROWED FOR THE LIFE OF THE LOAD (core/loader/document_load.h) and the load above was the
-       completing one, so the borrow has ended and these bytes are this frame's to release. */
+    /* The decode is borrowed for the life of the load (core/loader/document_load.h), and the load above has
+       completed, so the bytes are this frame's to release. */
     free(decoded);
 
-    /* THE ROOT NAVIGABLE IS THE HOST'S, so its §7.2.3 proxy is minted here — the same rule as every child,
-       whose creator mints it. A navigable has one, and whoever owns the navigable is who makes it. */
+    /* The root navigable is the host's, so its §7.2.3 proxy is minted here, as a child's creator mints its
+       proxy: whoever owns a navigable makes its one proxy. */
     {
-        /* THE RUNNER LOADED THIS DOCUMENT ITSELF, so it knows the navigable's name is the spec's initial "" —
-           nothing opened it under a name. Saying so is what keeps `window.name` a computed value here. */
-        /* §7.5.1's Document, from the navigation params the response decided — §7.4.5's final sandboxing flag
-           set and §7.1.7 step 3's CSP list both come out of the one place a response is read
-           (core/frame/navigation_params.c), so this runner and the product host create a Document from the
-           identical computation over the identical input. */
-        /* WHICH CSP LIST THIS DOCUMENT IS CREATED WITH, AND CSP §2.2's SELF-ORIGIN OF IT — HTML §7.1.7's own
-           determine-navigation-params-policy-container, called rather than restated. §2.2.2 "Parse response's
-           Content Security Policies" gives a response-delivered list "response's URL's origin", which for a
-           document this runner FETCHED is `origin`; §7.1.7's CLONE keeps the origin it was cloned from, which
-           for a `--document` child is its creator's and arrives on the command line. The self-origin is stated
-           separately from `origin` beside it because they are two facts (a Document's principal, and the origin
-           its policy resolves `'self'` against), and an inherited container is exactly what makes them
-           disagree. THE ORDERING IS NOT THIS RUNNER'S TO HOLD: a copy of it here and another in main.c is two
-           orderings, and the gate whose whole job is to measure the product host would be measuring its own. */
+        /* The runner loaded this document itself, so the navigable's name is the spec's initial "" and
+           `window.name` stays a computed value. §7.5.1's Document comes from the navigation params the response
+           decided: §7.4.5's final sandboxing flag set and §7.1.7 step 3's CSP list come out of the one place a
+           response is read (core/frame/navigation_params.c), as for the product host.
+           The CSP list is HTML §7.1.7's determine navigation params policy container, called rather than
+           restated. §2.2.2 "Parse response's Content Security Policies" gives a response-delivered list
+           "response's URL's origin", which for a document this runner fetched is `origin`; §7.1.7's clone keeps the
+           origin it was cloned from, which for a `--document` child is its creator's, from the command line. The
+           self-origin is separate from `origin` because they are two facts (a Document's principal, and the origin
+           `'self'` resolves against), and an inherited container makes them disagree. */
         EmbedderPolicyValue _coep = EMBEDDER_POLICY_UNSAFE_NONE, _coep_ro = EMBEDDER_POLICY_UNSAFE_NONE;
         SerializedPolicyContainer inherited;
-        /* §7.1.4's THREE STRINGS, READ BACK — see embedder_policy.h for why they cross as tokens. A token
-           naming none of them did not come off a header (that is §7.1.4.1's fail-open and belongs to `obtain`,
-           which ran in the PARENT); it came off this runner's own command line, which its own parent wrote, so
-           it is a record disagreeing with its writer and crashes rather than defaulting to `unsafe-none`. */
+        /* §7.1.4's three strings, read back (see embedder_policy.h for why they cross as tokens). A token naming
+           none of them came off this runner's own command line, written by its parent, not off a header
+           (§7.1.4.1's fail-open is `obtain`'s, run in the parent), so it crashes rather than defaulting. */
         SerializedPolicyContainer response;
         SerializedPolicyContainer policy;
-        /* THE PARSE IS A STATEMENT AND THE ASSERT ONLY READS IT — a DCHECK condition is compiled out in
-           release, so a parse performed inside one is a parse the shipped build never runs. */
+        /* The parse is a statement and the assert only reads it: a DCHECK condition is compiled out in release. */
         bool _ok = embedder_policy_value_of_token(inherited_coep, &_coep);
         bool _ok_ro = embedder_policy_value_of_token(inherited_coep_report_only, &_coep_ro);
 
@@ -2666,37 +2631,32 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
             inherited_csp, inherited_csp_self_origin,
             serialized_embedder_policy(_coep, inherited_coep_endpoint, _coep_ro,
                                        inherited_coep_report_only_endpoint),
-            /* §7.1.7's INTEGRITY POLICY ITEM IS NOT ON THIS RUNNER'S COMMAND-LINE RELAY, which is a third
-               carrier and not either of the two engine wires: those — the navigate job's arguments and the
-               parked navigable record — now carry it. This one is the runner writing a CHILD PROCESS's
-               inherited container onto its argv, so the field arrives with a new flag written at the parent
-               and read here. HOW ITS ABSENCE SHOWS: a WPT test whose document is created from a relayed
-               inherited container is judged without its creator's integrity policy, so an integrity-policy
-               subtest that passes in-instance would fail across the process boundary. */
+            /* Named residual. Not covered: §7.1.7's integrity policy item on this runner's command-line relay of
+               a child process's inherited container (the engine's two wires, the navigate job's arguments and the
+               parked navigable record, carry it). Next diff builds: a flag written at the parent and read here.
+               Absence shows as: an integrity-policy subtest that passes in-instance failing across the process
+               boundary. */
             NULL,
             /* §7.1.7's referrer policy item, not on this relay for the same reason. */
             NULL);
-        /* §7.5.1's OPENER POLICY ROW for this root Document — §7.1.3's policy obtained from the same response
-           the params above came from — and §7.3.1.3's PARENT, which for a `--document` child is a navigable in
-           the PARENT PROCESS and for the top-level test document is none. Both go to core/frame/navigable.c's
-           navigable_root, which is also where §7.1.4.2's check over the two containers runs: this runner and
-           the product host root a navigable through ONE algorithm, for the reason the container ordering above
-           is not restated here either. AFTER the inherited container, because that check reads it. */
+        /* §7.5.1's opener policy row for this root Document (§7.1.3's policy, from the same response as the
+           params) and §7.3.1.3's parent, which for a `--document` child is a navigable in the parent process and
+           for the top-level test document is none. Both go to core/frame/navigable.c's navigable_root, where
+           §7.1.4.2's check over the two containers also runs, so this runner and the product host root a
+           navigable through one algorithm. After the inherited container, because that check reads it. */
         JSValue root_proxy = navigable_root(ctx, world_local_doc(), "", np.opener.value, parent_navigable,
                                             inherited, &np.embedder, creation_flags);
 
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        /* AND §7.3.1.3's CONTAINER, BEFORE THE INSTALL BELOW: Permissions Policy §9.5 runs once per Document a
-           navigable is given, and for a navigable rooted in another process's frame tree only that process
-           could have run it. Stated after the rooting for §7.3.1.3's own order, exactly as the product host
-           states it — one algorithm, two hosts, and no copy of it here. */
+        /* §7.3.1.3's container, before the install below: Permissions Policy §9.5 runs once per Document a
+           navigable is given, and for a navigable rooted in another process's frame tree only that process could
+           run it. Stated after the rooting, in §7.3.1.3's order, as the product host states it. */
         navigable_root_container(ctx, root_proxy, container_policy);
-        /* AND §3.1.3's ANCESTOR ORIGINS FOR THAT NAVIGABLE'S DOCUMENT, before the install below for the same
-           sentence: §7.3.2.1 runs those steps once per Document a navigable is given and reads this there, and
-           for a navigable rooted in another process's frame tree only that process holds their three inputs.
-           A THIRD STATEMENT rather than a field of either above it — see navigable.h. */
+        /* §3.1.3's ancestor origins for that navigable's Document, before the install for the same reason:
+           §7.3.2.1 runs those steps once per Document a navigable is given and reads this there. A third
+           statement, not a field of either above (see navigable.h). */
         navigable_root_ancestor_origins(ctx, root_proxy, ancestor_origins);
-        /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
+        /* §7.1.4's item of the response's own container: §7.1.7's create a policy container from a fetch
            response step 4, obtained where the response is read and handed to the constructor here. */
         response = serialized_policy_container(np.csp, origin,
                                                serialized_embedder_policy_of(&np.embedder),
@@ -2707,67 +2667,50 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                           serialized_response_permissions_policy(np.permissions_policy,
                                                                  np.permissions_policy_report_only),
                           np.sandbox_flags, world_local_doc(), root_proxy,
-                          /* §7.4's ABOUT BASE URL: NULL. The runner's root document is created from a RESPONSE
-                             it read off disk, which is the arm §2.4.3 "Document base URLs" answers with the
-                             document's own address; a child navigable's arrives on the builder above. */
+                          /* §7.4's about base URL: NULL. The root document is created from a response, the
+                             arm §2.4.3 "Document base URLs" answers with the document's own address; a child
+                             navigable's arrives on the builder above. */
                           /*about_base_url*/ NULL,
-                          /* …AND HTML §4.8.5's CLASS: FALSE. A root document is not the product of an
-                             `<iframe srcdoc>` navigation, so it is of that class in no reading; a child
-                             navigable's answer arrives on the builder above. */
+                          /* HTML §4.8.5's class: false. A root document is not the product of an
+                             `<iframe srcdoc>` navigation; a child navigable's answer arrives on the builder
+                             above. */
                           /*is_iframe_srcdoc*/ false);
-        /* AND HTML §13.2.3.2 "Determining the character encoding"'s ANSWER ONTO THE DOCUMENT IT IS ABOUT —
-           here, for the reason core/frame/navigable.c and main.c both write it here: the Document record is
-           the install's product, so this is the first moment there is anything to write it on. -1 is the
-           no-response arm, which keeps DOM §4.5 "Interface Document"'s default rather than overwriting it
-           with an id nothing determined. */
+        /* HTML §13.2.3.2 "Determining the character encoding"'s answer, written onto the Document here, as
+           core/frame/navigable.c and main.c write it: the Document record is the install's product, so this is
+           the first moment there is one. -1 is the no-response arm, which keeps DOM §4.5 "Interface Document"'s
+           default. */
         if (root_encoding >= 0)
             document_set_encoding(ctx, root_encoding);
         JS_FreeValue(ctx, root_proxy);
     }
     navigation_params_free(&np);   /* document_install built its container from it and keeps no pointer */
-    /* SEALED AFTER THE FIRST DOCUMENT, and only that one: a component DECLARES its IDL members in its init and
-       INSTALLS from the cached id, so a second realm's install declares nothing. A declaration reached from the
-       second install is therefore a component that mints per-global, and the seal says so at the first one. */
+    /* Sealed after the first document only: a component declares its IDL members in its init and installs from
+       the cached id, so a second realm's install declares nothing, and a declaration reached from it is a
+       component that mints per global. */
     idl_args_seal();
     g_rt = rt;
     return ctx;
 }
 
-/* THE CHILD DOCUMENT'S OWN MAIN. It is a document, not a test: it parses its address's bytes, runs that
- * document's scripts, and then ANSWERS — it prints no results, because it has none.
+/* The child document's own main. It is a document, not a test: it parses its address's bytes, runs that
+ * document's scripts, and then answers questions; it prints no results, because it has none.
  *
- * IT ANSWERS BY RUNNING A PROGRAM, not by reading a property from C. `self.length` is an IDL getter and the
- * engine refuses to reach one from a C activation: there is no flow base under it, so a loop in the getter's
- * body would drive to completion instead of parking. The read is a flow like every other read, which is also
- * what makes an answer that has to suspend possible at all.
- *
- * THE WORLD ARRIVES WITH ITS ANCESTRY and both are used: this loop installs the asking flow's segment before
- * it answers, materializing it by forking the nearest ancestor this instance already holds. That matters for a
- * READ and is what makes a WRITE possible at all — two arms of one fork writing through one reference are two
- * timelines, and a peer that performed both against one baseline would build a third neither arm was in. */
-/* WHAT AN OPERATION IS — its verb, its field layout, its operands and the program that performs it — is NOT
-   here any more, and that is the point of the file it moved to. It was written out in this serve loop, where
-   the production ABI entry could not reach it, so the shipped engine had a sender with no receiver; a second
-   copy written for that entry would have been two spellings of one grammar. core/frame/remote_op.h.
-   AND NEITHER IS THE WORLD SWITCH, WHICH WAS THE REST OF THE SECOND SCHEDULER. This loop used to unapply the
-   last answer's segment and apply the new one itself, "because this serve loop IS this instance's scheduler" —
-   which is exactly the sentence that had to stop being true. engine_route and engine_perform materialize the
-   asking world's segment where they attach the record, flow_deliver and flow_perform ask again at the moment
-   the work actually runs, and the switch between timelines is flow_switch_in/out's, once, for every kind of
-   work. What is left here is this host's own: the CHANNEL it speaks (one line in, one line out) and the
-   ROUTING of what arrives on it. */
-
-/* A CHILD CANNOT INITIATE, so its notices ride back on the answer pipe prefixed `N\t` and the parent's router
-   takes them from there. Drained after every step, because a notice held is a delivery its target instance has
-   not been told about — and because one of them is not a notice at all: `remoteop.answer` is the COMPLETION of
-   the operation this channel asked for, so it leaves as the answer LINE. It is recognised by its rendezvous
-   TOKEN and not by being the only one of its kind: a document's state is its flows, so a document with N
-   timelines answers N times, and a second answer arriving for one question is a real thing this channel cannot
-   yet carry rather than something to overwrite the first with. */
-/* `<world><TAB><completion>` for the token in flight — the flow of the child that computed the answer and the
-   answer itself — owned here until it is written. The world is on the line because a document's state is its
-   flows: the parent has to be able to tell a SECOND timeline's answer from one answer relayed twice, and only
-   the flow that produced each can say which. */
+ * It answers by running a program, not by reading a property from C. `self.length` is an IDL getter and the
+ * engine refuses to reach one from a C activation with no flow base under it, so a read is a flow like every
+ * other, which also lets an answer suspend. The asking world arrives with its ancestry: engine_route and
+ * engine_perform materialize its segment where they attach the record (forking the nearest ancestor this instance
+ * holds), flow_deliver and flow_perform ask again when the work runs, and flow_switch_in/out switch timelines.
+ * Two arms of one fork writing through one reference are two timelines, and a peer that performed both against
+ * one baseline would build a third. What an operation is (verb, fields, operands, performing program) is
+ * core/frame/remote_op.h's, shared with the production ABI entry. What is left here is this host's channel (one
+ * line in, one line out) and the routing of what arrives on it. */
+/* A child's notices ride back on the answer pipe prefixed `N\t`, unasked in its boot round and ahead of an
+   answer after it, and the parent's router takes them. They are drained after every step, because a held notice is a delivery its target has not been
+   told about. `remoteop.answer` is not a notice but the completion of the operation this channel asked for, so
+   it leaves as the answer line; it is recognised by its rendezvous token. A document with N timelines answers N
+   times, and a second answer is something this channel cannot yet carry, not something to overwrite the first.
+   `g_child_answer` is `<world><TAB><completion>` for the token in flight, owned here until written; the world
+   lets the parent tell a second timeline's answer from one answer relayed twice. */
 static char *g_child_answer;
 
 static void wpt_child_emit_notices(const char *token)
@@ -2791,11 +2734,9 @@ static void wpt_child_emit_notices(const char *token)
                        "a second completion arrived for one cross-agent operation — this document has more than "
                        "one timeline and every one of their answers is true, so the channel that asked has to "
                        "be able to carry N of them: build the multi-answer reply before a peer may fork here");
-                /* THE REMAINDER IS `<world><TAB><completion>` AND IT CROSSES WHOLE. The world is the flow of
-                   THIS instance that computed the answer, and the parent needs it to tell the peer's other
-                   timelines from one answer delivered twice — so this channel relays it rather than reading it,
-                   exactly as it relays the completion. Its presence is asserted at the parent's decode, where
-                   the split happens and where a missing field would otherwise be read as part of the value. */
+                /* The remainder, `<world><TAB><completion>`, crosses whole: the world is the flow of this instance
+                   that computed the answer, and the parent needs it to tell the peer's other timelines from one
+                   answer delivered twice. Its presence is asserted at the parent's decode, where the split is. */
                 DCHECK(memchr(tab + 1, '\t', n - (size_t)(tab + 1 - p)) != NULL,
                        "a cross-agent operation's answer carried no TIMELINE before its completion — every "
                        "answer names the world of the flow that ran the program (flow_answer_perform), so this "
@@ -2814,14 +2755,12 @@ static void wpt_child_emit_notices(const char *token)
     }
 }
 
-/* THIS HOST'S LOOP OVER THE ONE SCHEDULER — a host with nothing else to do between quanta, which is what
-   engine.h says a driver like this is: the state machine is unchanged and a quantum boundary is invisible to
-   it. It is not a second scheduler and it is not a drive-to-completion: every program this instance runs (its
-   document's scripts, a delivery's task, the program that performs a peer's operation) is a work item on the
-   ONE frontier, preemptible and parkable at any depth, and this only hands the thread over and takes it back.
-   IT ENDS AT THE STALL AND NEVER AT DONE. A document a peer holds a reference into may not run out of
-   timelines (engine.h's engine_set_referenced), so its frontier is never exhausted — it stalls, waiting for
-   the next thing to arrive on this channel, which is precisely where the thread belongs. */
+/* This host's loop over the one scheduler, a host with nothing else to do between quanta (engine.h). Every
+   program this instance runs (its document's scripts, a delivery's task, the program that performs a peer's
+   operation) is a work item on the one frontier, preemptible and parkable at any depth; this only hands the
+   thread over and takes it back. It ends at the stall, never at DONE: a document a peer holds a reference into
+   may not run out of timelines (engine.h's engine_set_referenced), so its frontier stalls waiting for the next
+   thing on this channel, which is where the thread belongs. */
 static void wpt_child_run(JSContext *ctx, const char *token)
 {
     for (;;) {
@@ -2829,17 +2768,15 @@ static void wpt_child_run(JSContext *ctx, const char *token)
         int did;
         wpt_child_emit_notices(token);
         if (r == ENGINE_STEP_YIELD) continue;
-        /* AND WHAT THIS HOST OWES, at the same boundary and for the same reason the top-level half pays it
-           there: a child document fetches too (its own `<script src>` aside, its scripts call `fetch`), and a
-           reply nobody supplies is a timeline parked for the life of the instance. A stall this fills is not a
-           stall — the frontier has work again. */
+        /* What this host owes, at the same boundary as the top-level half pays it: a child document fetches too,
+           and a reply nobody supplies is a timeline parked for the life of the instance. A stall this fills is
+           not a stall. */
         did = wpt_issue_pending();
         if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
         if (did) continue;
-        /* NOTHING RUNNABLE AND NOTHING FILLED. If an answer is on its way this instance waits for it — and it
-           waits in the POLL rather than in a read, so the wait ends at whichever request lands first instead
-           of at the one that happened to be issued first. With nothing in flight there is nothing to wait for
-           and this is the stall the parent's next question resumes. */
+        /* Nothing runnable and nothing filled. With an answer on its way this instance waits in `poll`, so the
+           wait ends at whichever request lands first. With nothing in flight this is the stall the parent's next
+           question resumes. */
         if (g_inflight_n) { wpt_net_pump(ctx, /*block*/1); continue; }
         DCHECK(r == ENGINE_STEP_STALLED,
                "the scheduler declared this instance's frontier EXHAUSTED — a document another agent holds a "
@@ -2852,89 +2789,61 @@ static void wpt_child_run(JSContext *ctx, const char *token)
 static int wpt_child_main(int argc, char **argv)
 {
     const char *name = argv[2], *url = argv[3], *origin = argv[4], *csp = argc > 5 ? argv[5] : "";
-    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, from the parent process that created this navigable. NOT
-       defaulted to this document's own address: this instance's document may be NESTED, and answering from
-       its own address would make an https child of an http page report itself a secure context — which is the
-       ancestral hole Secure Contexts §4.2 exists to close, so a missing one is a parent that has not decided
-       what it created rather than a value to guess. */
+    /* The arguments are appended in the order they were added, so every position already read keeps its meaning.
+       Only the CSP pair defaults, because its empty value is the spec's absence; for the rest the checks below
+       refuse a short command line, since "not stated" and a legitimate "none" would otherwise be one value.
+       HTML §8.1.3.1's top-level creation URL, from the parent that created this navigable. This document may be
+       nested, and answering from its own address would make an https child of an http page a secure context,
+       the ancestral hole Secure Contexts §4.2 closes. */
     const char *top_level_url = argc > 6 ? argv[6] : NULL;
-    /* CSP §2.2's SELF-ORIGIN of the INHERITED list in `csp`, from the same parent for the same reason: §2.2.2
-       states a self-origin from OUTSIDE the policy bytes ("response's URL's origin"), and the only origin this
-       process could state for itself is its own address's — which for a clone of the CREATOR's container is
-       the wrong one by construction (CSP §2.2's note names documents "that have inherited their policy"). It
-       is LAST on the command line rather than beside `csp`, because appending is what keeps every position
-       above it a fact this file already reads. */
+    /* CSP §2.2's self-origin of the inherited list in `csp`: §2.2.2 states a self-origin from outside the policy
+       bytes ("response's URL's origin"), and this process's own address is the wrong one for a clone of the
+       creator's container (CSP §2.2's note names documents "that have inherited their policy"). An empty pair
+       spells CSP §2.2's absence. */
     const char *csp_self_origin = argc > 7 ? argv[7] : "";
-    /* §7.1.4's EMBEDDER POLICY of that same inherited container, its four items, from the same parent for the
-       same reason: §7.1.7's clone moves a container WHOLE, so an item this process had to guess at would be an
-       inheritance silently replaced by `unsafe-none` — and there is no header in this child's own response
-       that could ever say otherwise, because the item belongs to the CREATOR's response and not to this one.
-       APPENDED, like the self-origin above and for its reason: every position already read keeps its meaning.
-       NOT DEFAULTED WHEN ABSENT — the CHECK below refuses a short command line instead. The two items above it
-       could be spelled by an empty string because CSP §2.2's absence IS an empty pair; an embedder policy has
-       no absence (§7.1.7 gives every container one), so "the parent did not state it" and "the parent stated
-       `unsafe-none`" would be one value here, and that is the difference between a child a browser isolates
-       and one it does not. */
+    /* §7.1.4's embedder policy of that inherited container, its four items. §7.1.7's clone moves a container
+       whole, and the item belongs to the creator's response, so nothing in this child's response could supply it.
+       An embedder policy has no absence (§7.1.7 gives every container one), so "not stated" and "stated
+       `unsafe-none`" must stay distinct: that is the difference between a child a browser isolates and one it
+       does not. */
     const char *coep = argc > 8 ? argv[8] : NULL;
     const char *coep_endpoint = argc > 9 ? argv[9] : NULL;
     const char *coep_report_only = argc > 10 ? argv[10] : NULL;
     const char *coep_report_only_endpoint = argc > 11 ? argv[11] : NULL;
-    /* HTML §7.3.1.3 "Child navigables"' PARENT of the navigable this process is rooted in, from the parent
-       process — the one fact about its place in a frame tree that a child process cannot recover, since the
-       section makes "is a child navigable" mean "its parent is non-null" and nothing here can see above itself.
-       APPENDED, like the two items above and for their reason: every position already read keeps its meaning.
-       NOT DEFAULTED WHEN ABSENT, for the embedder policy's reason and one more: `u` — the encoding's own
-       undefined — is a REAL answer here (§7.1.3.2's swap sends it), so "the parent did not state it" and "the
-       parent stated no parent" would be one value, and that is the difference between a frame and a page. */
+    /* HTML §7.3.1.3 "Child navigables"' parent of the navigable this process is rooted in, which a child process
+       cannot see. `u`, the encoding's undefined, is a real answer (§7.1.3.2's swap sends it), the difference
+       between a frame and a page. */
     const char *parent_navigable = argc > 12 ? argv[12] : NULL;
-    /* AND §7.3.1.3's CONTAINER OF THAT NAVIGABLE — what the element presenting it ANSWERED, since the element
-       is in the parent process's tree and this one holds no part of it. Permissions Policy §9.5's result, in
+    /* §7.3.1.3's container of that navigable: Permissions Policy §9.5's result for the element presenting it, in
        core/permissions_policy/permissions_policy.h's serialization, or that grammar's "there is no container".
-       APPENDED, like every field above it, so every position already read keeps its meaning. NOT DEFAULTED
-       WHEN ABSENT, and this one has the sharpest reason of the three: §9.7 step 1's "if container is null,
-       return `Enabled`" is a REAL answer that a `--document` child legitimately gives (a swap provisions a
-       navigable nothing presents), so "the parent did not state it" and "the parent stated no container" would
-       be one value — and that value hands a cross-origin frame every supported feature its embedder holds. */
+       §9.7 step 1's "if container is null, return `Enabled`" is a real answer for a swap, so taking it by default
+       would hand a cross-origin frame every supported feature its embedder holds. */
     const char *container_policy = argc > 13 ? argv[13] : NULL;
-    /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the Document this process
-       is about to build, composed by the parent process out of a tree only it holds — its own Document's
-       recorded list, that Document's ORIGIN RECORD and the container element, none of which exists here.
-       APPENDED, like every field above it, so every position already read keeps its meaning. NOT DEFAULTED
-       WHEN ABSENT, and the reason is the container's exactly: the EMPTY list is a REAL answer a `--document`
-       child legitimately gives (a swap provisions a top-level traversable, which has no container document and
-       so takes §3.1.3 step 3), so "the parent did not state it" and "the parent stated no ancestors" would be
-       one value — and that value makes a cross-origin frame report itself as the top of its own tree to every
-       `location.ancestorOrigins` read, which no page can tell from the truth. */
+    /* HTML §3.1.3 "Ancestor origins"' internal ancestor origin objects list for the Document this process is about
+       to build, composed by the parent from a tree only it holds. The empty list is a real answer for a swap (a
+       top-level traversable takes §3.1.3 step 3), so taking it by default would make a cross-origin frame report
+       itself the top of its tree to every `location.ancestorOrigins` read. */
     const char *ancestor_origins = argc > 14 ? argv[14] : NULL;
-    /* AND HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for the navigable this process is rooted in,
-       computed by the parent process out of two things that do not exist here — the `<iframe sandbox>` ELEMENT
-       presenting the navigable, and that element's node document's own active set. APPENDED, like every field
-       above it, so every position already read keeps its meaning. NOT DEFAULTED WHEN ABSENT, and for the
-       container's reason exactly: the EMPTY set is a REAL answer a `--document` child legitimately gives (a
-       swap provisions a top-level traversable, whose popup sandboxing flag set nothing filled), so "the parent
-       did not state it" and "the parent stated no flags" would be one value — and that value runs a sandboxed
-       frame's scripts, submits its forms and relaxes its `document.domain`, which is the whole of what the
-       attribute removes. */
+    /* HTML §7.1.5 "Sandboxing"'s creation sandboxing flag set, computed by the parent from the `<iframe sandbox>`
+       element and its node document's active set. The empty set is a real answer for a swap, so taking it by
+       default would run a sandboxed frame's scripts, submit its forms and relax its `document.domain`. */
     const char *creation_sandbox_flags = argc > 15 ? argv[15] : NULL;
-    /* AND HOW THE PARENT REACHED THIS DOCUMENT, the create or swap notice's provenance word, APPENDED for the
-       same reason; engine_provenance_of_token refuses an absent or unknown one. */
+    /* How the parent reached this document, the create or swap notice's provenance word;
+       engine_provenance_of_token refuses an absent or unknown one. */
     const char *arrival = argc > 16 ? argv[16] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
-    /* THE RESPONSE'S HEADER LIST, WHICH TRAVELS WITH ITS BYTES. This child used to fetch with `wpt_get`, which
-       throws the list away — so the Document it built was created from a response it could not read: HTML
-       §7.4.5's computed type went unasked (every child parsed as HTML whatever the server served) and §7.5.1
-       got no `Origin-Agent-Cluster`, no opener policy, no response CSP and no CSP-derived sandboxing flags,
-       for an instance whose entire delivery mechanism in `html/browsers` is a `?pipe=header(...)`. */
+    /* The response's header list, which travels with its bytes: HTML §7.4.5's computed type and §7.5.1's
+       `Origin-Agent-Cluster`, opener policy, response CSP and CSP-derived sandboxing flags are read off it, and a
+       `?pipe=header(...)` is how `html/browsers` delivers them to a child. */
     HeaderList html_headers;
-    char line[65536];   /* a routed message rides this channel base64'd — see windowproxy.post below */
-    /* THE SESSION'S PROGRAM SEQUENCE, which outlives every statement in this function: the scheduler BORROWS
-       these arrays for the life of the session (engine_sched_begin), so a document's scripts may not be a
-       block-scoped temporary the way they were when this host ran them itself. */
+    char line[65536];   /* a routed message rides this channel base64'd; see the post arm below */
+    /* The session's program sequence, which outlives every statement in this function: the scheduler borrows
+       these arrays for the life of the session (engine_sched_begin). */
     DocScripts ds;
 
-    /* THE ANSWER PIPE IS STDOUT HERE, so nothing else may write to it — see report_out. */
+    /* The answer pipe is stdout here, so nothing else may write to it; see report_out. */
     g_report = stderr;
     setvbuf(stdout, NULL, _IOLBF, 0);
     {
@@ -2980,22 +2889,18 @@ static int wpt_child_main(int argc, char **argv)
           "the positive claim that nothing about this frame is sandboxed — it would run the scripts, submit "
           "the forms and relax the `document.domain` its embedder's markup forbids");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
-    /* `about:blank` HAS NO BYTES TO FETCH — its Document is the empty one §7.4 creates, which is what makes it
-       synchronous in a browser and what makes an <iframe> with no src scriptable immediately. */
+    /* `about:blank` has no bytes to fetch: its Document is the empty one §7.4 creates, which makes it synchronous
+       in a browser and an <iframe> with no src scriptable immediately. */
     memset(&html_headers, 0, sizeof html_headers);
     if (strncmp(g_base_url, "about:", 6) != 0) {
         html = wpt_get_headers(g_base_url, &html_n, &html_headers);
-        /* A child whose address does not load still HAS a document — a browser shows an error page and the
-           navigable exists — so this is about:blank rather than a dead instance. THE LIST GOES WITH THE BYTES:
-           a fetch that did not load is not a response, so its half-filled list is released here and the pair
-           that reaches the build is (NULL, NULL). */
+        /* A child whose address does not load still has a document (a browser shows an error page and the
+           navigable exists), so it is about:blank rather than a dead instance. A fetch that did not load is not a
+           response, so its half-filled list is released and the pair that reaches the build is (NULL, NULL). */
         if (!html) { html_n = 0; header_list_free(&html_headers); memset(&html_headers, 0, sizeof html_headers); }
     }
-    /* THE CHILD PROCESS'S TOP-LEVEL CREATION URL came from the parent with the rest of the environment —
-       this instance's document may be NESTED in a document of another instance, and only the zone that
-       created it knows which. A cross-origin child that answered from its OWN address would report itself a
-       secure context inside an insecurely-delivered page, which is exactly the ancestral hole Secure
-       Contexts §4.2 exists to close. */
+    /* The top-level creation URL came from the parent with the rest of the environment, because this document may
+       be nested in a document of another instance and only the creating zone knows which. */
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
                              coep_report_only_endpoint, parent_navigable, container_policy,
@@ -3003,53 +2908,30 @@ static int wpt_child_main(int argc, char **argv)
     free(html);
     header_list_free(&html_headers);
 
-    /* THIS INSTANCE EXISTS BECAUSE A PEER CREATED ITS NAVIGABLE and still holds a WindowProxy for it, so its
-       timelines may not run out — engine.h's engine_set_referenced, and the reason this line comes before the
-       session rather than after it. Without it the one flow below finishes with its last script, the frontier
-       drains, the session closes, and the first thing a peer asks arrives at a document with no timeline to
-       answer in. Stated by the HOST because provisioning is the host's fact: the engine cannot see its own
-       embedder. */
+    /* This instance exists because a peer created its navigable and still holds a WindowProxy for it, so its
+       timelines may not run out (engine.h's engine_set_referenced). It is set before the session: otherwise the
+       one flow finishes with its last script, the session closes, and a peer's first question arrives at a
+       document with no timeline to answer in. The host states it because provisioning is the host's fact. */
     engine_set_referenced(1);
     engine_set_arrival(engine_provenance_of_token(arrival));
 
-    /* THE TWO INTRINSICS A PEER PERFORMS A WRITE AND A CALL THROUGH are captured by the component that performs
-       them, at this realm's install — before this document's scripts run, which is the whole of what makes them
-       intrinsics rather than whatever the page has left on `Reflect`. There is nothing for this host to do. */
+    /* The two intrinsics a peer performs a write and a call through are captured by the component that performs
+       them, at this realm's install, before this document's scripts run, so a page cannot replace them on
+       `Reflect`. There is nothing for this host to do. */
 
-    /* THIS DOCUMENT'S SCRIPTS ARE THE SESSION'S PROGRAM SEQUENCE, and this host no longer runs them: it hands
-       them to the ONE scheduler and steps it. What that deletes is a `while (JS_FlowResume)` per script — a
-       drive-to-completion with the frontier bypassed, which is the one thing §scheduler forbids at every depth
-       and which this host had at the very top of every program it ran.
-       AN EXTERNAL SCRIPT IS LEFT AS AN EXTERNAL ROW — `(bodies[i] NULL, srcs[i] its address)`, which is what
-       core/loader/document_scripts.h declares such an entry IS ("external (srcs[i] is its URL, bodies[i] NULL
-       until the host supplies it)"). The flow parks on it, wpt_issue_pending below asks for it with the rest
-       of the frontier's pending list, and wpt_request_finish delivers a reply record carrying the STATUS — so
-       the document's own scripts go through §8.1.4.2 "Fetching scripts" exactly as the shipped host's do,
-       rather than past it.
-       WHAT THIS DELETED WAS A PRE-FETCH THAT MANUFACTURED A PROGRAM OUT OF AN ABSENCE. It read each address
-       with wpt_get and wrote `body ? body : strdup("")` into the slot — and wpt_get answers NULL for BOTH of
-       §8.1.4.2's failure members, a transport error and a status outside Fetch §2.2.3 "Statuses"' ok range
-       ("An ok status is a status in the range 200 to 299, inclusive"). So a `<script src>` this corpus server
-       answered 404 became an EMPTY PROGRAM: it compiled, it ran, it defined nothing, and §4.12.1.1
-       "Processing model"'s "execute the script element" reached step 8 — "If el's from an external file is
-       true, then fire an event named load at el" — where step 4, "If el's result is null, then fire an event
-       named error at el, and return", is the step the standard owes it. A test host that answers `load` where
-       a browser answers `error` does not merely miss a defect; it makes a fixture asserting `onerror` PASS
-       FOR THE WRONG REASON, which is worse than having no fixture. That default is CLAUDE.md's
-       §A-FIELD-A-CONSUMER-DEFAULTS at a seam: the `?:` turned "the producer produced nothing" into a
-       plausible datum, and the plausible datum was a program.
-       AND THE RESIDUAL THAT STOOD HERE NAMED A BLOCKER THIS HOST NO LONGER HAS. It said this host would use
-       the park "the moment its network edge can carry a REQUEST rather than a URL; today's `fetch` seam names
-       only the URL". engine_pending_split hands wpt_issue_pending a method, a destination, an initiator, a
-       provenance, a credentials mode and a URL, and that function puts every one of them back onto a
-       core/fetch/fetch.h request — headers and body included, out of `g_owed`, for a park that has a record.
-       A `<script src>` is Fetch §2.2.5 Requests' `GET` with no body at all (engine_pending_docscript says so
-       at the park), so the echoed-POST-body case the clause turned on cannot arise for this row. */
+    /* This document's scripts are the session's program sequence, handed to the one scheduler. An external script
+       stays an external row, `(bodies[i] NULL, srcs[i] its address)`, as core/loader/document_scripts.h declares:
+       the flow parks on it, wpt_issue_pending asks for it with the rest of the pending list (method, destination,
+       initiator, provenance, credentials mode and URL), and wpt_request_finish delivers a reply carrying the
+       status. So the document's scripts go through §8.1.4.2 "Fetching scripts" as the shipped host's do. A
+       `<script src>` the server answers 404 is then §4.12.1.1 "Processing model"'s step 4 ("If el's result is
+       null, then fire an event named error at el, and return"), never an empty program that reaches step 8's
+       `load`. */
     ds = document_exec_scripts(g_wpt_dom);
     engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.types, ds.sched, ds.els, ds.n, /*forking*/0, NULL);
-    /* THE DOCUMENT RUNS BEFORE THE FIRST QUESTION ARRIVES, which is what makes a child a participant rather
-       than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
-       post has to be on this channel before the parent asks anything. */
+    /* The document runs before the first question arrives, which makes a child a participant rather than an empty
+       frame: message-opener.html's whole body is one script that posts to its opener, and that post must be on
+       this channel before the parent asks anything. */
     wpt_child_run(ctx, NULL);
     /* The end of this child's boot round: everything it wrote so far it wrote unasked, and from here it writes
        only to answer (the parent's pump stops watching this channel on reading it). */
@@ -3058,17 +2940,16 @@ static int wpt_child_main(int argc, char **argv)
 
     while (fgets(line, sizeof line, stdin)) {
         char *nl = strchr(line, '\n');
-        /* A RECORD THAT DID NOT FIT arrived as two, and the tail would then be read as an operation of its own.
-           The channel is line-oriented, so the only safe answer to a truncated read is to stop. */
+        /* A record that did not fit arrives as two, and the tail would be read as an operation of its own. The
+           channel is line-oriented, so the only safe answer to a truncated read is to stop. */
         CHECK(nl != NULL || feof(stdin), "wpt: a cross-instance record was longer than this child's line buffer");
         char *answer;
-        /* THE CHANNEL'S TWO SHAPES, and only the first field is this host's — everything after it is the
-           EMITTING ENGINE'S RECORD, verbatim, handed to the entry that reads it. The zone contributes exactly
-           the two things a record may not carry itself: the SENDER'S ORIGIN, which only the trusted zone may
-           state (SECURITY.md), and the RENDEZVOUS TOKEN, which is the zone's because a request id is unique
-           only inside the instance that minted it.
-             `post <sender origin> <record>`  — §9.4.4 step 7 arriving. Nothing is asked; a delivery is MADE.
-             `op <token> <record>`            — a cross-agent operation this document is asked to perform. */
+        /* The channel's two shapes. Only the first field is this host's; the rest is the emitting engine's record,
+           verbatim, for the entry that reads it. The zone adds the two things a record may not carry itself: the
+           sender's origin, which only the trusted zone may state (SECURITY.md), and the rendezvous token, because a
+           request id is unique only inside the instance that minted it.
+             `post <sender origin> <record>`  : §9.4.4 step 7 arriving. Nothing is asked; a delivery is made.
+             `op <token> <record>`            : a cross-agent operation this document is asked to perform. */
         int is_post = !strncmp(line, "post\t", 5);
         int is_op   = !strncmp(line, "op\t", 3);
         char *f1, *rec;
@@ -3084,26 +2965,20 @@ static int wpt_child_main(int argc, char **argv)
                "a completion for the previous question was never written to this channel — the parent is "
                "blocked on a line that is not coming");
         if (is_post) {
-            /* NOTHING RUNS INSIDE THIS CALL. The record becomes a work item of every live timeline of this
-               document, and each of them makes its own delivery when the scheduler next runs it, under its own
-               delta — which is the whole reason the delivery is attached rather than performed: the page's
-               `message` listener was registered by a script, so it lives in the delta of the flow that ran that
-               script and nowhere else. This host used to take the record apart itself, route the payload, and
-               then run an EMPTY PROGRAM to completion as a way of turning the task queue over. */
+            /* Nothing runs inside this call. The record becomes a work item of every live timeline of this document,
+               each delivering under its own delta when the scheduler runs it: the page's `message` listener was
+               registered by a script, so it lives in the delta of the flow that ran that script. */
             engine_route(ctx, rec, f1);
             wpt_child_run(ctx, NULL);
-            /* THE ACK IS THE TRANSPORT'S, not a program's completion: nothing was asked, so there is nothing
-               for a timeline to answer. It is written through the one encoder so this pipe has ONE grammar
-               rather than one for the answers and a bare `u` for this. */
+            /* The ack is the transport's, not a program's completion: nothing was asked. It goes through the one
+               encoder so this pipe has one grammar. */
             answer = remote_completion_encode(ctx, ENGINE_COMPLETION_NORMAL, JS_UNDEFINED);
         } else {
-            /* A PEER ANSWERS BY RUNNING A PROGRAM, and the program is a FLOW on this instance's frontier — so
-               an answer that has to suspend can exist at all, and every other timeline of this document keeps
-               running while it does. What this host does is hand the operation over and step the scheduler
-               until it has nothing runnable; the completion arrives the way every other emission does, as a
-               notice naming the token, and wpt_child_emit_notices takes it off the stream.
-               THE THROW IS THE ANSWER and needs nothing here: flow_answer_perform encodes the completion with
-               its TYPE, so a peer's `try`/`catch` runs at the line that asked. */
+            /* A peer answers by running a program, a flow on this instance's frontier, so an answer can suspend and
+               every other timeline keeps running meanwhile. This host hands the operation over and steps the
+               scheduler until nothing is runnable; the completion arrives as a notice naming the token, which
+               wpt_child_emit_notices takes. A throw is the answer and needs nothing here: flow_answer_perform
+               encodes the completion with its type, so a peer's `try`/`catch` runs at the line that asked. */
             engine_perform(ctx, f1, rec);
             wpt_child_run(ctx, f1);
             DCHECK(g_child_answer != NULL,
