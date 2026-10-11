@@ -113,30 +113,16 @@ const char *fetch_credentials_token(FetchCredentialsMode m);
    record was filled, so an arrival here is our own conversion having stopped. */
 FetchCredentialsMode fetch_credentials_of_token(const char *token);
 
-/* FETCH §2.2.5 "Requests"' MODE, AS ITS OWN DOMAIN — "A request has an associated mode, which is
- * `same-origin`, `cors`, `no-cors`, `navigate`, `websocket`, or `webtransport`. Unless stated otherwise,
- * it is `no-cors`." SIX, AND THE SIXTH IS WHY A QUOTATION IS PASTED RATHER THAN RECALLED: this enum was
- * first written with FIVE, from memory of an older form of that sentence, and the citation auditor's
- * quotation check is what said so. The cost of the miss was not the comment — it was a member missing from
- * a DOMAIN, so `fetch_mode_of_token` would have refused a word §5.4 had already accepted.
- *
- * IT ARRIVES WITH ITS FIRST CONSUMER AND THIS IS THAT ARRIVAL, which is core/html/cors_settings_attribute.h's
- * own prediction coming true rather than a new decision: that file computes §2.5.1's mode and says the field
- * is not carried "because neither has a reader", and Subresource Integrity's integrity-policy check is the
- * reader. Its other reader is the trusted zone: the mode crosses the wire on the pending line
- * (`fetch_mode_token`), because SECURITY.md gives the SOP/CORS decision to that zone and Fetch §4.1 "Main
- * fetch" makes the decision from the mode — a `cors` reply passes §4.10 "CORS check", a `no-cors` one becomes an
- * opaque filtered response, a `same-origin` one refuses another origin. The mode is part of the request's
- * identity there: two requests that differ only in mode are two requests.
- *
- * `_UNPLACED` IS THE ZERO AND IT IS THE WHOLE POINT OF THE ENUM, for the reason FETCH_CREDENTIALS_UNPLACED is:
- * the failure this field has is SILENT. A producer that leaves it zero, or states the wrong one, does not
- * crash anything — the integrity-policy check's early-allow arm simply stops firing, and a
- * `<script src integrity crossorigin>` under `Integrity-Policy: blocked-destinations=(script)` is REFUSED
- * where a browser loads it. The element then fires `error` instead of `load`, the page runs its error
- * handler, and this engine explores a path the real page never takes with an endpoint surface smaller than
- * the real one and nothing anywhere saying so. A `no-cors` default would have made that state unspellable
- * from a legal one, so the zero is not a mode and the seams below refuse it. */
+/* Fetch §2.2.5 "Requests"' mode: "A request has an associated mode, which is `same-origin`, `cors`,
+ * `no-cors`, `navigate`, `websocket`, or `webtransport`. Unless stated otherwise, it is `no-cors`."
+ * Two readers: Subresource Integrity's integrity-policy check, and the trusted zone, which gets it on the
+ * pending line (`fetch_mode_token`) because it runs Fetch §4.1 "Main fetch"'s response tainting (a `cors`
+ * reply passes §4.10 "CORS check", a `no-cors` one is opaque, a `same-origin` one refuses another origin).
+ * The mode is part of the request's identity there: two requests differing only in mode are two requests.
+ * `_UNPLACED` is the zero, as for FETCH_CREDENTIALS_UNPLACED, because a wrong mode fails silently: the
+ * integrity-policy check refuses a `<script src integrity crossorigin>` a browser loads, or the zone reads a
+ * reply the page could not. A `no-cors` default would make that state indistinguishable from a legal one, so
+ * the zero is not a mode and the seams below refuse it. */
 typedef enum {
     FETCH_MODE_UNPLACED = 0,
     FETCH_MODE_SAME_ORIGIN,

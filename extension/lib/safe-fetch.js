@@ -1268,18 +1268,13 @@ function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
 }
 
 /* The IP address space of a host, for the origin-relative SSRF rule: Local Network Access §2.1 "IP Address
-   Space"'s three spaces, `loopback` less public than `local` less public than `public`, and its "Non-public IP
-   address blocks" table, row for row:
-     127.0.0.0/8 loopback · 10.0.0.0/8 local · 100.64.0.0/10 local · 172.16.0.0/12 local · 192.168.0.0/16 local ·
-     198.18.0.0/15 loopback · 169.254.0.0/16 local · 0.0.0.0/32 loopback · 0.0.0.0/8 local · ::1/128 loopback ·
-     fc00::/7 local · fe80::/10 local · fec0::/10 local · ::/128 loopback · 2001:db8::/32 local ·
-     3fff::/20 local · ::ffff:0:0/96 "see mapped IPv4 address".
-   Every other address is `public`. Two names are classified by the standards that define them rather than by
-   resolution: `localhost` and `*.localhost` are loopback (RFC 6761 §6.3 "Domain Name Reservation Considerations
-   for "localhost."": they "will always resolve to the respective IP loopback address"), and `*.local` is local
-   (Local Network Access §2.5 "Mixed Content" names a `.local` domain as a request known to be a local network
-   request). Any other name is `public` here; what it resolves to is not visible to this zone, which is the
-   private-network-by-name residual in SECURITY.md.
+   Space"'s "Non-public IP address blocks" table, row for row in `_v4Space` and `_ipAddressSpace`, including
+   ::ffff:0:0/96's "see mapped IPv4 address"; every other address is `public`. Two names are classified by the
+   standards that define them: `localhost` and `*.localhost` are loopback (RFC 6761 §6.3 "Domain Name
+   Reservation Considerations for "localhost."": they "will always resolve to the respective IP loopback
+   address"), and `*.local` is local (Local Network Access §2.5 "Mixed Content" names a `.local` domain as a
+   request known to be a local network request). Any other name is `public` here; what it resolves to is not
+   visible to this zone, which is the private-network-by-name residual in SECURITY.md.
    Every host comes from the WHATWG URL parser, so it is canonical: IPv4 is dotted-quad (the parser folds
    decimal, octal and hex spellings, so `http://2130706433/` is `127.0.0.1`), and IPv6 is the serializer's
    lowercase hex pieces with at most one `::` and no dotted tail. */
@@ -1511,24 +1506,20 @@ async function _readBody(resp, sink, gated) {
   return out;
 }
 /* @security-contract  ENFORCEMENT POINT (the single network chokepoint)
-   Guarantees: cookies omitted unless `opts.credentialed`, and then the reply passes this file's own SOP/CORS
-   (same-origin with `opts.pageOrigin`, else exact-origin ACAO and ACAC `true`); GET only; http(s) only; no
-   userinfo; origin-relative SSRF on the initial and the landed URL; the destructive-path deny list on
-   credentialed non-`observed` requests, before the wire and after a redirect; the egress policy's firing
-   walk before the wire and on the landed URL; CORB for script-like destinations; for a request the analysed
-   page made, Fetch §4.1 "Main fetch"' response tainting from its mode (a `cors` reply passes §4.10 "CORS
-   check" and is CORS-filtered, a cross-origin `no-cors` reply is opaque, a cross-origin `same-origin` request
-   is a network error), stated on the record as `type`. Every post-fetch gate judges the landed URL.
-   Principals, per call and never a global: `opts.pageUrl` (the document's `MessageSender.url`) classifies
-   the SSRF target; `opts.pageOrigin` (`MessageSender.origin`, opaque-unique, or the agent-cluster origin the
-   host assigned) is the credentialed SOP's principal and the request origin of every page request, held by
-   the host and never parsed from a URL or taken from the engine. An opaque principal is same-origin with
-   nothing.
-   Credentialed callers: `bridge.js`'s `navigationLoad` and `frontierRederive`, only where the address is
-   same-origin with the browser-stated principal (`navigationCarriesSession`). The page's own requests
-   (`fetched`, `fetchedXhr`) state `credentialed: false` and the page origin. The facts the policy decides from
-   (`destination`, `mode`, `provenance`, `pinned`, `docReach`, `actor`, `credentialed`, `credentials`) are
-   stated by every caller and asserted at the entry. */
+   Guarantees: GET only; http(s) only; no userinfo; cookies omitted unless `opts.credentialed`, and then the
+   reply passes SOP/CORS (same-origin with `opts.pageOrigin`, else exact-origin ACAO and ACAC `true`); the
+   origin-relative SSRF rule; the destructive-path deny list on credentialed non-`observed` requests; the
+   egress policy's firing walk; CORB for script-like destinations; for a page's request, Fetch §4.1 "Main
+   fetch"' response tainting from its mode (`cors` passes §4.10 "CORS check" and is CORS-filtered,
+   cross-origin `no-cors` is opaque, cross-origin `same-origin` is a network error), stated as the record's
+   `type`. Every post-fetch gate judges the landed URL.
+   Principals, per call: `opts.pageUrl` (`MessageSender.url`) classifies the SSRF target; `opts.pageOrigin`
+   (`MessageSender.origin` or the host-assigned cluster origin, never parsed from a URL or taken from the
+   engine) is the SOP principal and every page request's origin. An opaque principal is same-origin with
+   nothing. Credentialed callers are `bridge.js`'s `navigationLoad` and `frontierRederive`, only where
+   `navigationCarriesSession` holds; the page's own requests (`fetched`, `fetchedXhr`) are uncredentialed.
+   Every caller states `destination`, `mode`, `provenance`, `pinned`, `docReach`, `actor`, `credentialed`
+   and `credentials`, asserted at the entry. */
 async function safeFetch(url, opts) {
   opts = opts || {};
   /* The option set this file reads is closed, so a caller's statement it will not read is refused at the

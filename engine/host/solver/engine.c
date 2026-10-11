@@ -3376,25 +3376,18 @@ const char *engine_pending_fetches(void) {
                     if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
                         (size_t)(t7 - (t6 + 1)) == ol && !memcmp(t6 + 1, o, ol) &&
                         (size_t)(lend - (t7 + 1)) == ul && !memcmp(t7 + 1, u, ul)) {
-                        /* The set's initiator is the most observed of its members, a statement about the
-                           request: one reply fills every entry on the key, so when a document's `<script
-                           type=module src>` and an arm's `fetch()` (both `cors`) name one address the line states
-                           the fact that survives both (a
-                           real load makes this request), independent of walk order. The upgrade is monotone.
-                           The provenance folds the same way, most observed rather than most forced: if any
-                           member's path stood on no contradicted arm, a real client makes exactly this request
-                           and the server's answer is evidence about the app; labelling it forced would be false
-                           and would cost active discovery. What a forced flow does with the reply is that flow's
-                           `path_forced` fact, not the bytes'.
-                           The destination folds differently, toward the strictest ingestion: if any member will
-                           compile the reply, the bytes must pass the code rule (a cross-origin non-JS body
-                           refused for a `fetch()` is a narrowing; accepted for a `<script src>` it is code
-                           execution), so script-like (§2.2.5) wins. Where no member is script-like the line keeps
-                           what it has, since no consumer distinguishes, say, `image` from `font`; a consumer that
-                           does would need the register keyed on the destination.
-                           Every offset and verdict is taken before the first write, and the five writes run back
-                           to front (credentials, witness, provenance, initiator, destination), because a rewrite
-                           shifts everything after its field. */
+                        /* One reply fills every entry on the key, so each folded field states what survives
+                           every member, independent of walk order. The initiator and the provenance fold to
+                           the most observed (monotone): if any member's path stood on no contradicted arm, a
+                           real client makes exactly this request, and labelling its reply forced would be false
+                           and would cost active discovery; a forced flow's use of it is its own `path_forced`.
+                           The destination folds to the strictest ingestion: if any member compiles the reply,
+                           the bytes must pass the code rule, so script-like (§2.2.5) wins; otherwise the line
+                           keeps what it has, since no consumer distinguishes, say, `image` from `font` (one
+                           that does needs the register keyed on the destination). Every offset and verdict is
+                           taken before the first write, and the five writes run back to front (credentials,
+                           witness, provenance, initiator, destination), because a rewrite shifts everything
+                           after its field. */
                         size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
                         size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
                         size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
