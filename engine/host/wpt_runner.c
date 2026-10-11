@@ -2063,55 +2063,37 @@ static bool wpt_answer_host_requests(JSContext *ctx)
     return answered;
 }
 
-/* ---- THE TEST FILE, WHICH IS OFTEN A DOCUMENT ----------------------------------------------------------
+/* ---- The test file, which is often a document ----------------------------------------------------------
  *
- * MORE THAN HALF THE CORPUS IS AN HTML FILE, and this gate ran none of them: it collected `.any.js` and
- * `.window.js` and nothing else, so 523 of the 778 test files checked out here were not run, not reported, and
- * not counted. That is an exclusion, and an excluded test is a failure whatever the reason for excluding it —
- * a directory whose files are never collected is the same defect as a directory that is never checked out,
- * except that the total LOOKS complete.
+ * Most of the corpus is markup documents, so collecting only `.any.js` and `.window.js` would exclude them. A
+ * `.window.js` is a script WPT's server wraps in a minimal document; an `.html` file is the document. The only
+ * difference is which bytes this runner parses: after that, both run their scripts against the same Window.
  *
- * A `.window.js` is a script WPT's server wraps in a minimal document. An `.html` file IS the document, and the
- * difference is only which one this runner parses: after that, both run their scripts against the same Window.
- *
- * IT IS FETCHED, NOT READ OFF DISK. A `.sub.html` is SUBSTITUTED by wptserve (hosts, ports, the local origin),
- * so the bytes on disk are a template and running them would test the template. The runner already speaks HTTP
- * to the corpus's own server for everything a test fetches; the document itself goes the same way, which is
- * also what a browser does. */
-/* WHICH IT IS, THE DRIVER SAYS — this runner does not guess from the file name. It guessed `.html` and only
- * `.html`, which was a second copy of engine/wpt.mjs's collection rule; the corpus spells a document `.htm`
- * and `.xhtml` too, so the two copies disagreed for 26 checked-out files and the disagreement would have been
- * a document executed as a script. The driver already decided — it collected the file BECAUSE it is a markup
- * document that loads testharness.js — so it passes `--test-document` and there is one rule, in one place. */
+ * The document is fetched, not read off disk: wptserve substitutes a `.sub.html` (hosts, ports, the local
+ * origin), so the bytes on disk are a template. The driver says which kind a test is (`--test-document`): it
+ * collected the file because it is a markup document that loads testharness.js, and the corpus spells one
+ * `.html`, `.htm` and `.xhtml`, so a second rule here would disagree with engine/wpt.mjs's collection rule. */
 static int    g_html_mode;      /* the test is a document, not a script */
-static char   g_test_url[512];  /* its address, server-relative — what to GET and what to resolve against */
-/* THE VARIANT IS PART OF THE ADDRESS, which is the whole of what a variant IS. WPT's manifest emits one test
-   per `<meta name=variant>` / `// META: variant=` declaration, each at the file's own URL with that query or
-   fragment appended (tools/manifest/sourcefile.py: `test_url + variant`), and the file reads it back off
-   `location.search` to decide which subtests to run. Running the bare URL instead runs a test the corpus does
-   not itself run — an excluded test wearing a counted name — so the driver names the variant and it lands
-   here, in the two addresses everything else is derived from: what to GET, and what `location` answers. */
+static char   g_test_url[512];  /* its address, server-relative: what to GET and what to resolve against */
+/* The variant is part of the address. WPT's manifest emits one test per `<meta name=variant>` / `// META:
+   variant=` declaration, at the file's own URL with that query or fragment appended (tools/manifest/sourcefile.py:
+   `test_url + variant`), and the file reads it back off `location.search` to choose its subtests. Running the bare
+   URL runs a test the corpus does not run, so the driver names the variant and it lands in the two addresses
+   everything else derives from: what to GET, and what `location` answers. */
 static char   g_variant[256];   /* "" or the "?…"/"#…" this run is */
 
-/* A PAGE ERROR, AS IT HAPPENS — an uncaught throw from one of the programs the scheduler runs (solver/result.h).
-   It used to be caught here, at the `while (JS_FlowResume)` that drove each program; with the programs on the
-   frontier there is no such place, and a diagnostic this gate cannot print is a diagnostic it does not have.
-   It is a report and NEVER a verdict: a browser's script that throws does not stop the document, so the flow
-   runs on to the next program exactly as it would in Chrome, and testharness's own subtest results decide the
-   file. */
-/* THE THROW SITE IS ITS OWN COLUMN, and it is not the test's address: a WPT document loads scripts from
-   `/resources/` and from its own directory, so "which file threw" and "which test was running" are different
-   questions and this line used to answer only the second. §8.1.4.6 "Runtime script errors"'s `filename` is ""
-   for a thrown value with no backtrace, which is that algorithm's own answer and is printed as `-`. */
-/* AND THE RETRACTION, WHICH ON A STREAM CAN ONLY BE A SECOND LINE — see solver/result.h. The `@WPTERR` above
-   is already in the report by the time §8.1.6.4 step 7.4 says the page handled that rejection after all, so
-   there is nothing to withdraw and the correction APPENDS under its own token. A distinct token rather than a
-   field, so a reader that consumed the first line matches the second to it by the pair. */
+/* A page error as it happens: an uncaught throw from one of the programs the scheduler runs (solver/result.h).
+   It is a report, never a verdict: a script that throws does not stop the document, so the flow runs on to the
+   next program as it would in Chrome, and testharness's subtest results decide the file. The throw site is its
+   own column, distinct from the test's address, because a WPT document loads scripts from `/resources/` and its
+   own directory. §8.1.4.6 "Runtime script errors"' `filename` is "" for a thrown value with no backtrace, printed
+   as `-`. A retraction is a second line (see solver/result.h): the `@WPTERR` is already in the stream when
+   §8.1.6.4 step 7.4 says the page handled the rejection after all, so the correction appends under its own token,
+   which a reader matches to the first line by the pair. */
 static void wpt_page_error(const char *msg, const char *filename, ResultPageErrorEdge edge)
 {
-    /* A SWITCH AND NOT A TERNARY, so an edge added to that enum is a COMPILER error here rather than a line
-       printed under the wrong token — a retracted error reading as an uncaught one for the rest of a corpus
-       run is exactly the wrong-but-plausible output this pair exists to end. */
+    /* A switch, not a ternary, so an edge added to that enum is a compiler error here rather than a line printed
+       under the wrong token. */
     const char *doc = g_test_url[0] ? g_test_url : "<document>";
     const char *at = filename && *filename ? filename : "-";
     switch (edge) {
@@ -2122,34 +2104,25 @@ static void wpt_page_error(const char *msg, const char *filename, ResultPageErro
     }
 }
 
-/* THIS DOCUMENT'S PROGRAM SEQUENCE — what a session is opened over (engine.h). Each entry is its own program
-   body and its own JS_FlowNew: classic scripts do not share a top-level scope, and concatenating them would
-   leak per-<script> let/const bindings between two files the page kept apart. The scheduler BORROWS the arrays
-   for the life of the session, so they outlive every statement that builds them and are freed with the run;
-   `body` is taken (owned here from this point), `name` is copied, and `type` is HTML §4.12.1.1's script type —
-   which of §8.1.4.4's two algorithms the scheduler runs this body through. A DOCUMENT test takes it from the
-   <script> element it came from; everything this runner supplies itself (the prologue, the epilogue, the
-   driver's META scripts and a `.any.js` test) is a CLASSIC script, which is a statement about those programs
-   rather than a default.
-   THE NAME AND THE ADDRESS ARE TWO COLUMNS, AND THIS RUNNER HAD ONE. `name` is what this host calls a program
-   when it looks for one (wpt_insert_report finds the harness by it) and `address` is HTML §8.1.4.1 "Scripts"'s
-   base URL — "the URL from which the script was obtained, for external scripts, or the document base URL of
-   the containing document, for inline scripts" — which the engine resolves and hands to §8.1.4.4 as the
-   script's base and, for a module, as its module map key. One column carried both, so EVERY program of every
-   run was handed the engine as a row with source text AND an address, `<wpt-prologue>` included; the seed's
-   invariant that a row is source-text-or-address (solver/engine.c) then aborted on the FIRST ROW OF EVERY
-   TEST FILE IN THE CORPUS. A synthesized program has NO address — no bytes came from one — and saying
-   otherwise would key a module map by a string that is not a URL. */
+/* This document's program sequence, what a session is opened over (engine.h). Each entry is its own program body
+   and its own JS_FlowNew: classic scripts do not share a top-level scope, and concatenating them would leak
+   per-<script> let/const bindings between files. The scheduler borrows the arrays for the life of the session,
+   so they are freed with the run. `body` is taken, `name` is copied, and `type` is HTML §4.12.1.1's script type,
+   which selects §8.1.4.4's algorithm. A document test takes it from its <script> element; every program this
+   runner supplies (prologue, report, epilogue, the driver's META scripts, a `.any.js` test) is classic.
+   `name` is what this host calls a program (wpt_insert_report finds the harness by it). `address` is HTML §8.1.4.1
+   "Scripts"' base URL, "the URL from which the script was obtained, for external scripts, or the document base
+   URL of the containing document, for inline scripts", which the engine hands to §8.1.4.4 as the script's base
+   and a module's map key. A synthesized program has no address, and a row is source text or an address
+   (solver/engine.c's seed asserts it). */
 static char **g_prog_bodies, **g_prog_names, **g_prog_srcs;
 static ScriptType *g_prog_types;
 static int    g_prog_n, g_prog_cap;
 
 static void wpt_program(char *body, const char *name, const char *address, ScriptType type)
 {
-    /* AN ADDRESS IS A URL OR IT IS ABSENT. This runner's own programs are named `<wpt-…>`, and that spelling
-       reaching the address column is exactly the conflation this pair of columns exists to make impossible —
-       the engine would resolve it as a `src`, hand it to §8.1.4.4 as the script's base URL, and for a module
-       key the module map by it. */
+    /* An address is a URL or absent. This runner's own programs are named `<wpt-…>`; that spelling in the address
+       column would be resolved as a `src`, used as the script's base URL and, for a module, as its map key. */
     DCHECK(address == NULL || address[0] != '<',
            "a program synthesized by this runner was given an ADDRESS — no bytes came from one, so the name "
            "this host calls it by has been passed as the base URL HTML §8.1.4.1 Scripts says a script is "
@@ -2174,23 +2147,20 @@ static void wpt_program(char *body, const char *name, const char *address, Scrip
     g_prog_n++;
 }
 
-/* THE REPORT'S POSITION, ASKED OF THE PROGRAM SEQUENCE RATHER THAN OF THE MODE. It goes immediately after
-   `/resources/testharness.js` — the slot WPT's own testharnessreport.js occupies — and that is ONE rule for a
-   document (whose <script src> the corpus wrote) and for a `.any.js` (whose harness the driver passes as
-   argv[1]). Two branches computing the same position is how the two come to disagree about it.
-   A SEQUENCE WITH NO HARNESS IN IT IS REPORTED, NOT CRASHED: the two ways to reach that are a document whose
-   `<script src>` 404'd — already printed above and already the driver's ABORT — and a file named on the command
-   line that is not a testharness test at all. Neither is a missing capability, so neither is a DCHECK; what
-   would be wrong is running the file with no report hook and letting it look like a file with no subtests. */
+/* The report's position, asked of the program sequence rather than of the mode: immediately after
+   `/resources/testharness.js`, the slot WPT's testharnessreport.js occupies. That is one rule for a document
+   (whose <script src> the corpus wrote) and a `.any.js` (whose harness the driver passes as argv[1]). A sequence
+   with no harness is reported, not crashed: it is a document whose `<script src>` 404'd (already printed, and
+   the driver's ABORT) or a file that is not a testharness test, neither a missing capability. Running it without
+   the hook would make it look like a file with no subtests. */
 static void wpt_insert_report(void)
 {
     static const char TAIL[] = "/resources/testharness.js";
     size_t m = sizeof TAIL - 1;
     int at = -1, k;
 
-    /* ASKED OF THE NAME COLUMN, WHICH IS THE ONE EVERY PROGRAM HAS. The address column is NULL for a program
-       no address supplied it, so a search there would silently skip the driver's own META scripts — and the
-       `.any.js` harness this position is defined against is exactly one of those. */
+    /* Asked of the name column, which every program has. The address column is NULL for programs no address
+       supplied, which includes the driver's META scripts and the `.any.js` harness this position is defined by. */
     for (k = 0; k < g_prog_n; k++) {
         size_t n = strlen(g_prog_names[k]);
         if (n >= m && !strcmp(g_prog_names[k] + n - m, TAIL)) { at = k + 1; break; }
@@ -2216,13 +2186,10 @@ static void wpt_insert_report(void)
 }
 
 
-/* ONE GET against the corpus server, resolved against the running document's address. */
-/* `pheaders`, when given, receives the RESPONSE'S WHOLE HEADER LIST rather than one header out of it — the
-   caller's to header_list_free. It used to hand back only the `Content-Security-Policy` string, and the rest of
-   the list was parsed here and thrown away one line later: a corpus test whose `.headers` sidecar or
-   `?pipe=header(...)` declares `Origin-Agent-Cluster`, `Cross-Origin-Opener-Policy` or
-   `Cross-Origin-Embedder-Policy` was measured against a Document that never saw it. A header list is what
-   §7.5.1 creates a Document from, so a header list is what leaves here. */
+/* One GET against the corpus server, resolved against the running document's address. `pheaders`, when given,
+   receives the response's whole header list, the caller's to header_list_free: §7.5.1 creates a Document from a
+   header list, and a corpus test's `.headers` sidecar or `?pipe=header(...)` can declare
+   `Origin-Agent-Cluster`, `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. */
 static char *wpt_get_headers(const char *url, size_t *plen, HeaderList *pheaders)
 {
     FetchRequest req;
@@ -2233,12 +2200,12 @@ static char *wpt_get_headers(const char *url, size_t *plen, HeaderList *pheaders
     memset(&req, 0, sizeof req);
     memset(&h, 0, sizeof h);
     req.method = "GET";
-    /* THIS RUNNER'S OWN FETCH OF A TEST RESOURCE, which is not a request any page made: `no-cors` is Fetch
-       §2.2.5's own "unless stated otherwise" and is the honest answer for a fetch no algorithm created. */
+    /* This runner's own fetch of a test resource, a request no page made: `no-cors` is Fetch §2.2.5's "unless
+       stated otherwise" and the answer for a fetch no algorithm created. */
     req.mode = FETCH_MODE_NO_CORS;
     req.url = url;
     body = wpt_http(&req, plen, &status, &h);
-    if (pheaders) *pheaders = h;   /* MOVED, not copied — the caller frees it */
+    if (pheaders) *pheaders = h;   /* moved, not copied; the caller frees it */
     else header_list_free(&h);
     if (body && (status < 200 || status >= 300)) { free(body); body = NULL; }
     return body;
@@ -2249,39 +2216,24 @@ static char *wpt_get(const char *url, size_t *plen)
     return wpt_get_headers(url, plen, NULL);
 }
 
-/* THE RUN'S OWN FILE DID NOT ARRIVE, WHICH IS A FACT ABOUT THE CORPUS AND NOT AN INVARIANT OF THIS ENGINE.
+/* The run's own file did not arrive: a fact about the corpus, not an invariant of this engine.
  *
- * Both sites below used to say it with `CHECK(… != NULL, "wpt: the corpus server did not serve …")` — an
- * ALWAYS-FATAL assert, which check.h reserves for "we must not PROCEED even in production": OOM, a physical
- * floor, a security boundary, data integrity. A server that answered nothing is none of those. It is this
- * program's INPUT being absent, and this file already has the shape for that at its other three inputs — a
- * `<script src>` the server does not have, a META script it cannot read, an argv that is not the corpus's
- * testharness.js — every one of which REPORTS and stops rather than asserting.
+ * A CHECK would be wrong here: check.h reserves always-fatal asserts for OOM, physical floors, security
+ * boundaries and data integrity, and an absent input is none of those. It is reported like this file's other
+ * absent inputs (a `<script src>` the server lacks, an unreadable META script, an argv that is not the corpus's
+ * testharness.js). Three states must not share one answer: the engine named a capability it lacks, the corpus
+ * could not present the test, and a resource backstop fired. engine/wpt.mjs reads the middle one off a marker,
+ * never off prose, and counts it as `corpus`.
  *
- * WHAT IT COST WAS AN ENTIRE RUN'S TAIL, READ AS 935 ENGINE CRASHES. `@E` is a MARKER the driver reads to
- * pick a column, and at the revision that measured it the driver matched only `@WHY` — so every one of these
- * fell to its final `else` and printed "died on SIGABRT and named NOTHING". Seven areas came back 100 % dead
- * in one report (storage, streams, url, wai-aria, webidl, webmessaging, xhr), and the engine was FINE: the
- * same binary, re-run against a live server, passes those files. Reading the marker fixes the wording and NOT
- * the verdict — `fatal` says "the ENGINE named an invariant it must not PROCEED past; build it" — so the
- * false red survives the driver's fix and dies only here, at the site that knows which of the two it is.
- *
- * THREE STATES MUST NOT SHARE ONE ANSWER: the engine named a capability it lacks, the corpus could not
- * present the test, and a resource backstop fired. engine/wpt.mjs already has a column for the middle one and
- * reads it off a MARKER rather than off prose (prose is displayed and may never move a run between columns),
- * so this emits the marker and the driver counts it as `corpus`.
- *
- * IT IS ONE FUNCTION BECAUSE IT IS ONE QUESTION ASKED AT TWO ENTRIES — a document run fetches the test file
- * inside wpt_build_document and a script run fetches it beside its programs — and an entry that answered it
- * differently is exactly how one missing capability comes to wear two names. */
+ * One function because it is one question asked at two entries: a document run fetches the test file inside
+ * wpt_build_document and a script run fetches it beside its programs. */
 static void wpt_unserved_test_file(void)
 {
     fprintf(report_out(), "@WPTERR %s: the corpus server did not serve this run's own file\n", g_test_url);
-    /* NOTHING WAS MEASURED, so there is nothing to tear down and no result to print. Exiting HERE rather than
-       threading a failure back is the same statement main's `usage:` arm makes: a program whose input is
-       absent has no work to do. `exit` flushes stdio, which is what puts the line above in front of the
-       driver. The status is 0 deliberately — a signal or a non-zero code is how this driver recognises its OWN
-       interventions, and claiming one would put the run back in a column it does not belong in. */
+    /* Nothing was measured, so there is nothing to tear down and no result to print; a program whose input is
+       absent has no work to do, as main's `usage:` arm says. `exit` flushes stdio, which puts the line above in
+       front of the driver. The status is 0 because a signal or a non-zero code is how the driver recognises its
+       own interventions. */
     exit(0);
 }
 
@@ -2291,26 +2243,20 @@ static void wpt_derive_addresses(int argc, char **argv)
     const char *test = argv[argc - 1];
     size_t n = tail ? (size_t)(tail - h) : 0;
 
-    /* THE CORPUS ROOT IS DERIVED FROM THE HARNESS PATH, so a first argument that is not the corpus's
-       testharness.js leaves it EMPTY — and every address below then carries the runner's own filesystem path
-       into a URL, which the server answers with a 404 nobody can read backwards. */
+    /* The corpus root is derived from the harness path, so a first argument that is not the corpus's
+       testharness.js would leave it empty, and every address below would carry a filesystem path into a URL. */
     CHECK(tail != NULL, "wpt: argv[1] is not the corpus's resources/testharness.js, so the corpus root is unknown");
     CHECK(n < sizeof g_wpt_root, "wpt: the corpus root is longer than this runner holds");
     memcpy(g_wpt_root, h, n);
     g_wpt_root[n] = 0;
-    /* THE LAST argument is the test; the ones between are its META scripts. Reading argv[2] made a file with a
-       META script resolve its data against that script's directory instead of its own.
-       ONE ADDRESS, BOTH KINDS. A document test and a script test each live at their own path in the corpus, so
-       each has the same one address — what to GET, and what a relative URL resolves against. This was two
-       branches computing the same string, of which only the document one also kept it; the script branch threw
-       it away and the test was then read off disk, which is how a `.sub.` script test came to run with its
-       `{{host}}` placeholders intact. */
+    /* The last argument is the test; the ones between are its META scripts. A document test and a script test
+       each live at their own corpus path, so both have one address: what to GET, and what a relative URL resolves
+       against. Both are fetched from the server, so a `.sub.` script test runs substituted. */
     CHECK(!strncmp(test, g_wpt_root, n), "wpt: a test outside the corpus root has no server address");
     {
-        /* WHERE THE CORPUS IS SERVED FROM. The driver starts wptserve and names its loopback port here; the
-           runner speaks HTTP to it and sends the URL's own authority as the Host header, which is what a
-           hosts-file mapping does for a real browser. A run with no server has nothing to fetch from, and that
-           is a GATE defect rather than a result, so it fails loud. */
+        /* Where the corpus is served from. The driver starts wptserve and names its loopback port; the runner
+           sends the URL's own authority as the Host header, as a hosts-file mapping does for a real browser. A run
+           with no server is a gate defect rather than a result, so it fails loud. */
         const char *sv = getenv("WPT_SERVER");
         CHECK(sv && *sv && strchr(sv, ':'),
               "wpt: WPT_SERVER names no host:port — the driver must start engine/wptserve.py and pass it");
@@ -2318,14 +2264,11 @@ static void wpt_derive_addresses(int argc, char **argv)
         snprintf(g_server, sizeof g_server, "%s", sv);
     }
     {
-        /* AND WHAT IT IS SERVED AS — the authority the corpus's own documents are written against, which the
-           server states because the server is what decides it: engine/wptserve.py composes this out of the very
-           config object wptserve's `sub` pipe substitutes `{{host}}` and `{{ports[http][0]}}` from. It is not
-           derivable here and must not be composed here, because the port half is EPHEMERAL — reserved by the
-           server at startup and different every run — so a second author of this string is an author who can
-           only be right by accident. NO DEFAULT: a run whose origin is not established would resolve every
-           test's URLs against an authority nothing served them from, which is a wrong number in every area at
-           once rather than a missing one in this run. */
+        /* What it is served as: the authority the corpus's documents are written against, composed by
+           engine/wptserve.py from the config wptserve's `sub` pipe substitutes `{{host}}` and
+           `{{ports[http][0]}}` from. It is not composed here because the port is ephemeral, bound per run. There
+           is no default: an unestablished origin would resolve every test's URLs against an authority nothing
+           served them from. */
         const char *og = getenv("WPT_TOP_ORIGIN");
         const char *colon = strchr(g_server, ':');
         int server_port = colon ? atoi(colon + 1) : -1;
@@ -2337,14 +2280,10 @@ static void wpt_derive_addresses(int argc, char **argv)
                          "instead: the port in it is bound per run");
         CHECK(strlen(og) < sizeof g_top_origin, "wpt: WPT_TOP_ORIGIN is longer than this runner holds");
         snprintf(g_top_origin, sizeof g_top_origin, "%s", og);
-        /* AND IT AGREES WITH THE SOCKET THE DOCUMENTS COME OFF. The two facts arrive on two environment
-           variables and they are one server: wptserve binds `ports[http][0]` and substitutes that same number
-           into every `.sub` document. A port here that is not the port this runner dials is a document
-           asserting one authority against bytes fetched from another — the exact shape of the wrong number the
-           literal produced, with a stale value instead of an absent one.
-           PARSED, NOT SCANNED: the port is a URL component and WHATWG URL §4.4 "URL parsing" is what decides
-           where it begins; `port` is -1 for the spec's null port, which is what a port-less origin gives and
-           what this assert exists to catch. */
+        /* And it agrees with the socket the documents come off. The two facts arrive on two environment variables
+           and describe one server: wptserve binds `ports[http][0]` and substitutes that number into every `.sub`
+           document. It is parsed, not scanned: WHATWG URL §4.4 "URL parsing" decides where the port begins, and
+           `port` is -1 for the spec's null port, which a port-less origin gives and this assert catches. */
         url_record_init(&o);
         parsed = url_parse(&o, g_top_origin, strlen(g_top_origin), NULL);
         DCHECK(parsed, "wpt: WPT_TOP_ORIGIN is not a URL, so the authority every test in this run resolves "
@@ -2362,109 +2301,75 @@ static void wpt_derive_addresses(int argc, char **argv)
 
 static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
 
-/* EVERYTHING A DOCUMENT IS, built once — and built by ONE function because there is more than one kind of
- * document now. A TEST document and a CHILD document (the navigable an <iframe> or a popup created, which
- * SECURITY.md puts in an instance of its own) differ in exactly three things: the NAME the world registry
- * knows them by, their ORIGIN, and which bytes their tree is parsed from. Everything else — the platform
- * surface, the browsing context, the prototype chain, the event loop — is the same document machinery, and
- * two copies of it would be two browsers that drift.
+/* What a document is, built by one function for every kind. A test document and a child document (the navigable
+ * an <iframe> or a popup created) differ in three things: the name the world registry knows them by, their
+ * origin, and which bytes their tree is parsed from. The platform surface, browsing context, prototype chain
+ * and event loop are the same machinery.
  *
  * `html`/`html_n` is the document to parse; NULL means the minimal wrapper WPT puts around a .window.js.
- * `g_base_url` and `g_server` must already name where this document lives — see wpt_derive_addresses. */
+ * `g_base_url` and `g_server` must already name where this document lives (see wpt_derive_addresses). */
 static JSRuntime *g_rt;
 
-/* THIS BUILD'S AGENT AND THIS BUILD'S DOCUMENT, SPLIT — because they are two different lifetimes and were one
- * function. An AGENT is a JSRuntime: the class registry every component registers into, the world registry that
- * names documents, the flow frontier. A DOCUMENT is a JSContext in it: a global with the platform installed on
- * it, a parsed tree, an address. A SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN THIS AGENT, so "what a
- * document is" has to be one description that can run twice — while it was one function, a second document
- * meant a second PROCESS and there was no third option to reach for.
+/* The agent and the document are split because they have different lifetimes. An agent is a JSRuntime: the
+ * class registry every component registers into, the world registry that names documents, the flow frontier. A
+ * document is a JSContext in it: a global with the platform installed, a parsed tree, an address. A same-origin
+ * child navigable is a second document in this agent, so a document's description runs more than once.
  *
- * AND WHAT EACH HALF *IS* IS NOT WRITTEN HERE — core/platform.h holds the one list, because three hosts each
- * writing out their own copy is the same defect one level up from the one core/realm.h fixed, and it had
- * already cost this gate four standards. What stays in this function is this runner's own: the solver
- * bootstrap it needs to exercise real components, and its network edge. */
+ * What each half is lives in core/platform.h's one list, shared by every host. This function keeps only what is
+ * this runner's own: the solver bootstrap it needs to exercise real components, and its network edge. */
 static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *origin,
                            const char *top_level_url, bool requests_oac, OpenerPolicyValue opener_policy)
 {
-    /* THE COMPONENTS UNDER TEST ARE NOT NAMED HERE ANY MORE, and that is the fix rather than a convenience.
-       This list used to be typed out one component at a time, "because a component that is not installed
-       makes its tests fail LOUDLY on a missing global — which is the honest report". It is not the honest
-       report: a component missing from THIS copy of the list is missing from the GATE, and the gate then
-       publishes a number for the area as though it had run it. Five were missing — navigator, screen,
-       storage_manager, unhandled_rejection, module_loader — and so were §8.1.7.2's Window event handlers, so
-       every unqualified `onload = …` in the corpus wrote a property nothing fires. `navigator` is the
-       expensive one: the-navigator-object was collected and failing on a missing global, and Permissions
-       §6.2, Storage §3, the File System Access surface `navigator.storage` reaches and HTML §6.4.4's
-       UserActivation had no door into this runner at all. There is ONE list now (core/platform.h) and this
-       host cannot express an omission — it can only add. */
+    /* The components under test are not named here. core/platform.h holds the one list, so this host cannot
+       omit a component and publish a number for an area it never ran; it can only add. */
 
-    /* NAME THIS DOCUMENT. A WindowProxy answers "is this navigable remote?" by comparing against the one
-       document identity the world registry owns, so the registry has to be up before the first proxy exists. */
+    /* Name this document. A WindowProxy answers "is this navigable remote?" against the document identity the
+       world registry owns, so the registry is up before the first proxy exists. */
     world_registry_init(doc_name);
-    /* THE CONCOLIC VALUE CLASS. This runner exercises the REAL components, and several of them answer with a
-       concolic value where the spec's answer is genuinely unknown input — `window.name` survives navigation, so
-       an attacker who can open the document sets it. The class has to be registered before any component can
-       mint one; without it every file here aborted at the first such read, and location.c's two attacker
-       SOURCES are declared out of it. */
+    /* The concolic value class. This runner exercises the real components, and several answer with a concolic
+       value where the spec's answer is unknown input (`window.name` survives navigation, so an attacker who can
+       open the document sets it). The class is registered before any component can mint one, and location.c's
+       two attacker sources are declared out of it. */
     concolic_init(ctx);
-    /* THE VALUE SEMANTICS, WITHOUT THE ABSENT-GLOBAL SOURCE. A conformance run reaches concolic values — the
-       two Location sources are the document's own address — and every operator over one needs the hooks or it
-       throws at the first coercion. What it must NOT have is a global that was never set becoming unknown
-       input: the spec answers that with a ReferenceError, and the corpus tests exactly that. */
+    /* The value semantics, without the absent-global source. A conformance run reaches concolic values (the two
+       Location sources are the document's own address), and every operator over one needs the hooks. A global
+       that was never set must not become unknown input: the spec answers it with a ReferenceError, and the corpus
+       tests that. */
     concolic_install_hooks();
-    /* …AND THE ANSWER TO THE OTHER HALF, SAID RATHER THAN LEFT UNSAID. This host wants the spec's own values,
-       and it used to get them by never speaking — which made "this host does not explore" and "no host has
-       decided yet" the same state, so a solver host that brought its agent up before installing the overlay
-       got the conformance answer frozen into its first realm with nothing anywhere to notice. Declaring it
-       here is what lets core/realm.c refuse a realm built before the question is answered. It must precede
-       platform_agent_init below, which ends by running every per-realm intrinsic. */
+    /* This host declares that it wants the spec's own values, so "this host does not explore" is a stated answer
+       rather than the same state as "no host has decided yet"; core/realm.c refuses a realm built before the
+       question is answered. It must precede platform_agent_init, which ends by running every per-realm
+       intrinsic. */
     concolic_declare_browser_only();
-    /* THE SOLVER FRONTIER, because a member that SUSPENDS parks on a flow's pending register and that register
-       is the frontier's. WHAT IS IN IT IS THE SCHEDULER'S — engine_sched_begin seeds it and asserts that it
-       finds it empty, so an agent init that put a flow there could never be the agent of a session. This one
-       did: it added ONE flow and left it switched in for the whole run, which is what let every drive-to-
-       completion loop in this file exist without anything crashing — flow_running() answered a flow that ran
-       nothing and parked never. A host that fabricates the scheduler's state is a second scheduler with the
-       loop left out. */
+    /* The solver frontier, because a member that suspends parks on a flow's pending register and that register
+       is the frontier's. Its contents are the scheduler's: engine_sched_begin seeds it and asserts it finds it
+       empty, so an agent init that put a flow there could not be the agent of a session. */
     flow_registry_init(doc_name);
-    /* THE DOM CHOKEPOINT'S CONTEXT. §4.2.3's insertion and removing steps are fired from the solver's tree
-       chokepoint, which needs the runtime they run in — and this runner never named one, so it ran NONE of
-       them: no <script> preparation, no custom-element upgrade, no §4.8.5 child navigable. It failed
-       silently, three layers away, as an iframe whose contentWindow was null. */
+    /* The DOM chokepoint's context. §4.2.3's insertion and removing steps are fired from the solver's tree
+       chokepoint, which needs the runtime they run in; without it no <script> is prepared, no custom element
+       upgrades and no §4.8.5 child navigable is created. */
     dom_cow_set_ctx(ctx);
-    /* THIS HOST'S NETWORK EDGE — WHO answers, which is the one thing that is legitimately this runner's and
-       not the platform's: it serves the checked-out corpus over wptserve's own socket. An edge is a
-       PARAMETER, and fetch.c aborts on a fetch issued with none, which is what asserts this line is here.
-       WHAT IT DOES WITH THE FLOW is the product's park (wpt_owe): the request goes on that flow's own pending
-       register, and the two lines below are the other half of it — what this host still owes the frontier, and
-       who reports a page error while the programs are the scheduler's rather than this file's. */
+    /* This host's network edge: who answers, the one thing that is this runner's rather than the platform's. An
+       edge is a parameter, and fetch.c aborts on a fetch issued with none. What it does with the flow is the
+       product's park (wpt_owe): the request goes on that flow's own pending register. The page error hook names
+       who reports a page error while the programs are the scheduler's. */
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
     result_set_page_error_hook(wpt_page_error);
-    /* THERE IS NO STRING-HANDLER EDGE TO STATE ANY MORE, and its removal is the general form of the defect
-       this line was the repair for. HTML §8.7's timer initialization steps compile a DOMString handler as a
-       classic script WHEN THE TIMER FIRES — substeps 9.8.7-9.8.8, inside step 9's task — and
-       core/timing/timer.c now does exactly that in the task's own step machine, so there is no registration
-       for a host to omit. When there was one, this host omitted it and every `setTimeout("…")` in the corpus
-       took its document down here while the two hosts that did register it ran the same code correctly: an
-       edge absent from one host is not a weaker host, it is an area this gate publishes a number for without
-       having run it. An edge that cannot be absent is better than an edge three hosts remember to state. */
+    /* No string-handler edge is stated: HTML §8.7's timer initialization steps compile a DOMString handler as a
+       classic script when the timer fires (substeps 9.8.7-9.8.8, inside step 9's task), and core/timing/timer.c
+       does that in the task's own step machine, so there is nothing for a host to register or omit. */
 
-    /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's, from the response the caller
-       fetched — a WPT test document IS fetched from the corpus's own wptserver, so it has a response, and
-       `html/browsers/origin/origin-keyed-agent-clusters/` delivers this header through `?pipe=header(...)` and
-       `.headers` sidecars and nothing else. `opener_policy` is §7.1.3's, which §7.3.2.3's group is created
-       with. This host reads neither header itself: the list goes through §7.4.2.1 "Supporting concepts"'
-       navigation params — created from the response by §7.4.5 "Populating a session history entry", and NOT
-       §7.4.6, which is "Applying the history step" — like the
-       product host's. They used to be assignments into a struct this function DECLARED UNINITIALIZED and
-       filled field by field, as did the two other hosts — see core/platform.h for why there is no such struct
-       outside that file now. */
+    /* Then the facts, stated rather than assigned. `requests_oac` is §7.5.1's, from the response the caller
+       fetched: a WPT test document is fetched from wptserve, so it has a response, and
+       `html/browsers/origin/origin-keyed-agent-clusters/` delivers this header only through `?pipe=header(...)`
+       and `.headers` sidecars. `opener_policy` is §7.1.3's, which §7.3.2.3's group is created with. This host reads
+       neither header itself: the list goes through §7.4.2.1 "Supporting concepts"' navigation params, created from
+       the response by §7.4.5 "Populating a session history entry", as the product host's does. */
     platform_agent_init(ctx, origin, top_level_url, requests_oac, opener_policy);
 }
 
-/* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
-   a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
+/* One document. Runs once per document including the first, so it is the one description of a document of this
+   build; a same-origin child navigable gets exactly this. */
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                               DocumentKind kind,
                               SerializedPolicyContainer policy,
@@ -2475,37 +2380,32 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
-    /* `self` IS NOT SET HERE. It is §7.2.2's [Replaceable] Window member and the platform's window_install
-       installs it as one; a plain own value written first was a STAND-IN for the member under test, and a
-       stand-in is how a gate comes to agree with itself — this one would have hidden the member being absent
-       entirely. */
+    /* `self` is not set here. It is §7.2.2's [Replaceable] Window member and window_install installs it as one; a
+       plain own value written first would stand in for the member under test and hide its absence. */
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_wpt_print, "print", 1));
-    /* `gc` — what /common/gc.js reaches for first, and the only way a test that asserts a stream survives
-       COLLECTION can assert anything at all. It is the runner's, never the browser's: a page-visible collector
-       is fingerprintable and this engine does not ship one. quickjs's own JS_RunGC is the whole of it. */
+    /* `gc`, what /common/gc.js reaches for first, and the only way a test that asserts a stream survives
+       collection can assert anything. It is the runner's, never the browser's: a page-visible collector is
+       fingerprintable and this engine does not ship one. quickjs's JS_RunGC is the whole of it. */
     JS_SetPropertyStr(ctx, global, "gc", JS_NewCFunction(ctx, js_wpt_gc, "gc", 0));
-    /* `wptTestComplete` — the vendor hook's other half, called from the completion callback WPT_REPORT
-       registers. It is this runner's own like the two above, and like them it is never the browser's. */
+    /* `wptTestComplete`, the vendor hook's other half, called from the completion callback WPT_REPORT registers.
+       It is this runner's own, like the two above. */
     JS_SetPropertyStr(ctx, global, "wptTestComplete",
                       JS_NewCFunction(ctx, js_wpt_test_complete, "wptTestComplete", 0));
 
-    /* AND THEN THE PLATFORM — every component, in the one order, from core/platform.h. The two lines above are
-       the runner's own and are ADDED to it; there is nothing here that can subtract from it.
-       §4.8.5 IS WHY `document` COMES LAST IN THAT LIST rather than in this file's order: installing it runs
-       the insertion steps for every <iframe> in the markup, which CREATES a child navigable and therefore
-       needs the WindowProxy class and §7.4's create-a-navigable to exist first. This runner had it backwards
-       and the assert in window_proxy_new_remote said so the moment a parsed iframe reached it.
-       THE ADDRESS, NOT THE ORIGIN, is what a Window is installed at — this host passed `origin` where the
-       other two passed the address, which is the substitution two separate facts make unspellable. */
+    /* Then the platform: every component, in core/platform.h's one order. The lines above are added to it and
+       nothing here subtracts from it. `document` comes last in that list because of §4.8.5: installing it runs the
+       insertion steps for every <iframe> in the markup, which creates a child navigable and so needs the
+       WindowProxy class and §7.4's create a navigable first. A Window is installed at the address, not the
+       origin; the two are separate parameters. */
     platform_document_install(ctx, global, dom, url, origin, kind, policy, permissions_policy, sandbox_flags,
                               doc_id, nav_proxy, about_base_url, is_iframe_srcdoc);
 
     JS_FreeValue(ctx, global);
 }
 
-/* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime, which is what HTML's
-   similar-origin window agent is. It gets the identical per-document install the first document got; there is
-   no smaller variant of it, because a child whose `window` is smaller is a different browser. */
+/* A same-origin child navigable's realm: a second JSContext in the same JSRuntime, which is HTML's similar-origin
+   window agent. It gets the identical per-document install the first document got; a child with a smaller
+   `window` would be a different browser. */
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                   const char *top_level_url, const char *origin, DocumentKind kind,
                                   SerializedPolicyContainer policy,
@@ -2517,95 +2417,40 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
     JSContext *ctx = JS_NewContext(rt);
 
     CHECK(ctx != NULL, "wpt: a same-origin child navigable's realm could not be created");
-    /* §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a
-       child sharing the agent realm's EventTarget.prototype would resolve every unqualified
-       `addEventListener` against the PARENT's window. They come from the ONE list the components declared
-       themselves into, so a component added anywhere is installed in every realm with no host to edit.
-       §7.4 decided the CHILD's top-level creation URL and handed it over; a builder that used `url` here
-       would make an about:blank iframe of an http page a secure context. */
+    /* §3.7: a realm gets its own intrinsics. Members run in the realm that defined them, so a child sharing the
+       agent realm's EventTarget.prototype would resolve every unqualified `addEventListener` against the parent's
+       window. They come from the one list components declare themselves into. §7.4 decided the child's top-level
+       creation URL; using `url` here would make an about:blank iframe of an http page a secure context. */
     /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
     realm_install_intrinsics(ctx, top_level_url, "Window", false);
     wpt_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
                       nav_proxy, about_base_url, is_iframe_srcdoc);
-    /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
-       than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
-       THEY ARE QUEUED ONTO THE FRONTIER, NOT RUN HERE. A realm is built from inside §7.4 step 14's load job —
-       a C activation in the middle of some flow's own program — so running the child's scripts at this point
-       is a nested drive-to-completion re-entering JS from C: exactly the shape this engine refuses everywhere
-       else, and it surfaced as `JS_ToPrimitiveFree reached with a real object` the moment a popup's script
-       coerced anything.
-       THEY GO ON THE RUNNING FLOW, NAMING THIS DOCUMENT, which is what the scheduler gained and what this host
-       had a queue of its own for. A document's scripts are PROGRAMS, and a program is a work item of the ONE
-       frontier: preemptible, parkable, ranked, and — because the queue entry names the DOCUMENT — compiled in
-       the realm just built above rather than in the session's. They belong to the flow that CREATED the
-       navigable because that is whose timeline this child exists in: a sibling arm that never navigated here
-       has no such document, and a host-side queue could not have said so. */
-    /* THE SEEDING IS THE DOCUMENT'S OWN AND NO LONGER THIS HOST'S. It used to be here, and here ONLY — of the
-       three hosts that build a child realm, this one wrote the line and `main.c` and `test_forced.c` did not,
-       so a same-origin child was inert in the shipped extension and alive in the corpus. That is the per-host
-       drift `core/realm.h` exists to abolish, recurring through the one seam still copied per host, and it is
-       why a same-origin iframe reported "the child is never analysed at all" on real Chrome while every WPT
-       row that depends on a child's scripts passed. `navigable_seed_scripts` (core/frame/navigable.c) is that
-       statement made once, for every host, and the copy that stood here queued each child program a SECOND
-       time the moment it landed. */
+    /* The child's scripts run in its realm, and they are not run here. A realm is built from inside a navigation's load
+       job, a C activation in the middle of some flow's program, so running them now would re-enter JS from C.
+       navigable_seed_scripts (core/frame/navigable.c) queues them, for every host, as programs of the one
+       frontier on the flow that created the navigable, naming this document: that flow's timeline is the one this
+       child exists in, and the queue entry naming the document compiles them in the realm just built. */
     return ctx;
 }
 
-/* THE FIRST DOCUMENT, which is also what brings the agent up. A REAL LEXBOR PARSE — the same one the engine
-   runs — of the test's own bytes when the test is an HTML file, and otherwise of the minimal document WPT's
-   server wraps a `.window.js` in. One parse either way; the only difference is whose bytes. */
-/* `inherited_csp` AND `inherited_csp_self_origin` ARE HTML §7.1.7 "Policy containers"' CLONE OF THE CREATOR'S
-   CONTAINER, for a document this process did not root itself — which for this runner means a `--document`
-   child, provisioned from another process's `navigable.create`. Both halves are empty for the top-level
-   document, which has no creator. THEY WERE `(void)csp;` in wpt_child_main, which is the shape CLAUDE.md
-   makes greppable: a field a producer writes, a consumer casts away, and nothing anywhere to say the child's
-   inherited policy was never applied — every CSP question in a child instance answered "no policy". */
-/* `html_headers` IS THE RESPONSE `html` IS THE BODY OF, and the two travel together or neither does — the same
-   pairing core/frame/navigable.c's child_document asserts, for the same reason: a Document is created from a
-   RESPONSE, and bytes with no headers is a load that never asked what it fetched while headers with no bytes
-   are a response somebody else's. NULL for both is a caller with no response at all, which is HTML §7.4's
-   initial about:blank and is an HTML document BY §7.4 rather than by anything defaulting here. */
-/* `inherited_coep` AND ITS THREE COMPANIONS ARE THAT SAME CONTAINER'S §7.1.4 EMBEDDER POLICY ITEM. §7.1.7's
-   clone-a-policy-container moves EVERY item of a container — "set clone's embedder policy to a copy of
-   policyContainer's embedder policy" — so a clone that arrived without it would put a cross-origin-isolated
-   creator's child under `unsafe-none`, with no header anywhere to say so because the child's own response
-   never carried one. The values are §7.1.4's own TOKENS, which is what a `--document` child reads off its
-   command line and what a `navigable.create` notice writes. */
-/* AND `parent_navigable` IS HTML §7.3.1.3 "Child navigables"' PARENT, in remote_object.h's identity form. It
-   is NOT an item of the container above — a policy container is five policies and says nothing about a tree —
-   and it is the fact this process cannot recover for itself: §7.3.1.3 makes "is a child navigable" mean "its
-   parent is non-null", so a `--document` child that was told nothing would root its document in a navigable
-   that presents as a top-level traversable. `u` is that grammar's undefined and is what the top-level test
-   document passes: this runner loaded it from the corpus and nothing embeds it. */
-/* AND `container_policy` IS §7.3.1.3's OTHER LINK — the CONTAINER of that same navigable, which for a
-   `--document` child is an element in the PARENT PROCESS's tree. What crosses is not the element but what it
-   ANSWERED: Permissions Policy §9.5's result, in the text core/permissions_policy/permissions_policy.h
-   serializes an inherited policy into. §9.5 takes "null or an element (container) and an origin (origin)" and
-   both of those belong to the creator — it holds the `<iframe>` and it computed the child's origin — so the
-   creator runs §9.5 once and this is its answer. The top-level test document passes that grammar's "there is
-   no container", which is the same fact its `u` parent states one link along. */
-/* AND `ancestor_origins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the
-   Document about to be built — a THIRD cross-process answer and not a derivation of the two above. §3.1.3's
-   steps read the PARENT DOCUMENT's own recorded list (step 5), that Document's ORIGIN RECORD (steps 9 and 10)
-   and the CONTAINER ELEMENT (step 6). The parent field names a NAVIGABLE and carries no Document's recorded
-   ancestry; the container field is a different algorithm's answer over two of the same inputs. Neither yields
-   this one, and a serialization could not stand in for the origin record either — §7.1.1 decides an opaque
-   origin by IDENTITY while every opaque origin is the three bytes `null`, so a process re-running step 10 over
-   carried text would mask an ancestor that is not the parent's whenever the parent is opaque. That is the
-   ORDINARY case on this route rather than a corner: a `data:` iframe is in another process BECAUSE its origin
-   is opaque. So the creator runs §3.1.3 once, where all three inputs are, and this is its result. The
-   top-level test document passes that grammar's "there are no ancestors", which is the same fact its `u`
-   parent states one link along: this runner loaded it from the corpus and nothing embeds it. */
-/* AND `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s SET FOR THAT SAME NAVIGABLE — a FOURTH statement
-   and not an item of the container above it, since §7.1.7's policy container is a CSP list, an embedder
-   policy, a referrer policy and two integrity policies and no sandboxing flag set is among them. §7.1.5's
-   inputs are the embedder ELEMENT's iframe sandboxing flag set and that element's node document's active set,
-   both in the process that CREATED this navigable, and an element crosses no process at all — so the
-   algorithm runs there and this is its RESULT, in that section's own flag names. It is what §7.4.2.1's
-   snapshot target snapshot params answers with for every navigation this process performs from its root, and
-   §7.4.2.2 unions it with the response's CSP-derived flags to get the Document's set. The top-level test
-   document passes §7.1.5's word for the EMPTY set, which is the standard's answer for a top-level traversable
-   and the same fact its `u` parent states one link along. */
+/* The first document, which also brings the agent up. A real Lexbor parse, the one the engine runs, of the test's
+   own bytes when the test is an HTML file and otherwise of the minimal document WPT's server wraps a `.window.js`
+   in. `html_headers` is the response `html` is the body of, and the two travel together or not at all, as
+   core/frame/navigable.c's child_document asserts: a Document is created from a response. NULL for both is HTML
+   §7.4's initial about:blank, an HTML document by §7.4 rather than by a default here. */
+/* The inherited arguments are HTML §7.1.7 "Policy containers"' clone of the creator's container, for a
+   `--document` child provisioned from another process's `navigable.create`; the top-level document has no
+   creator and passes empty values. `inherited_csp` and `inherited_csp_self_origin` are its CSP list. The four
+   `inherited_coep*` are its §7.1.4 embedder policy item, as §7.1.4's tokens: clone a policy container sets
+   "clone's embedder policy to a copy of policyContainer's embedder policy", so a clone without it would put a
+   cross-origin-isolated creator's child under `unsafe-none`. The remaining four are not container items (the
+   container is five policies) and are computed by the creating process, which holds their inputs:
+   `parent_navigable` is HTML §7.3.1.3 "Child navigables"' parent in remote_object.h's identity form (`u` for the
+   top-level document, which nothing embeds); `container_policy` is the container element's Permissions Policy
+   §9.5 result; `ancestor_origins` is HTML §3.1.3 "Ancestor origins"' internal ancestor origin objects list,
+   which a serialization cannot recompute because every opaque origin serializes to `null`; and
+   `creation_sandbox_flags` is HTML §7.1.5 "Sandboxing"'s set, which §7.4.2.2 unions with the response's
+   CSP-derived flags. The top-level document passes each grammar's word for "none". */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n, const HeaderList *html_headers,
                                      const char *inherited_csp, const char *inherited_csp_self_origin,
@@ -2615,31 +2460,28 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                      const char *parent_navigable, const char *container_policy,
                                      const char *ancestor_origins, const char *creation_sandbox_flags)
 {
-    /* §7.1.5's SET, PARSED BEFORE ANYTHING IS BUILT FROM IT — see the read below. */
+    /* §7.1.5's set, parsed before anything is built from it; see the read below. */
     SandboxFlags creation_flags = 0;
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
     char *fetched = NULL;
     HeaderList response_headers;
-    /* THE RESPONSE THIS DOCUMENT IS CREATED FROM — the caller's when it fetched one, this function's own when
-       it fetched the test file itself, and NULL when there is no response. It is one name rather than two
-       branches because §7.4.5 reads a response and does not care which zone obtained it. */
+    /* The response this document is created from: the caller's when it fetched one, this function's own when it
+       fetched the test file itself, and NULL when there is none. One name, because §7.4.5 reads a response
+       whichever zone obtained it. */
     const HeaderList *response = NULL;
-    /* §7.4.5's COMPUTED TYPE for the document about to be built, and whether there is one at all. NO RESPONSE
-       is not a default and not a guess: §7.4's initial about:blank — and an address whose fetch failed, for
-       which a browser still shows a document — has no response to compute a type from and IS an HTML document
-       by that section, so the parse below runs §7.4 rather than §7.4.5's dispatch for it. It lives across the
-       whole function because the type and the bytes travel TOGETHER to the loader; a record computed and freed
-       before the parse is a type this document was never loaded under. */
+    /* §7.4.5's computed type for the document about to be built, and whether there is one. With no response (§7.4's
+       initial about:blank, or an address whose fetch failed) there is no type to compute and the document is HTML
+       by §7.4, so the parse runs §7.4 rather than §7.4.5's dispatch. It lives across the whole function because
+       the type and the bytes travel together to the loader. */
     MimeType computed;
     bool computed_defined = false;
-    /* §7.5.1's TYPE AND CONTENT TYPE for the document this runner loads, decided by the same §7.4.5 dispatch
-       the parse runs and carried to the install rather than restated there. */
+    /* §7.5.1's type and content type for the document this runner loads, decided by the §7.4.5 dispatch the parse
+       runs and carried to the install rather than restated there. */
     DocumentKind root_kind;
     /* HTML §13.2.3.2 "Determining the character encoding"'s answer for this response, and the characters its
-       decode produced. `decoded` REPLACES `src` at the parse when there is a response, and it lives across the
-       whole function for `computed`'s reason: core/loader/document_load.h borrows the characters for the life
-       of the load. -1 is the no-response arm — §7.4's initial about:blank keeps DOM §4.5 "Interface Document"'s
-       utf-8 default because there is nothing to sniff. */
+       decode produced. `decoded` replaces `src` at the parse when there is a response, and lives across the whole
+       function because core/loader/document_load.h borrows the characters for the life of the load. -1 is the
+       no-response arm: §7.4's initial about:blank keeps DOM §4.5 "Interface Document"'s utf-8 default. */
     int root_encoding = -1;
     char *decoded = NULL;
     size_t decoded_n = 0;
