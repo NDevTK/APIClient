@@ -166,6 +166,7 @@ async function main() {
     await fire("dnr.wrongmethod", "B", "dnr", inc, cond({ requestMethods: ["post"] }));
     await fire("dnr.post", "B", "dnr", post, cond({ requestMethods: ["post"] }));
   }
+  if (hasDnr) await zoneRows({ browser, page, sw, off, extId, route, results });
   await sleep(1500);
   const log = JSON.parse(await get(A + "/log"));
   fs.writeFileSync(outPath, JSON.stringify({ controlled, hasDnr, results, log }, null, 1));
@@ -173,6 +174,79 @@ async function main() {
   await popup.close();
   browser.disconnect();
   printTable(results, log);
+}
+
+/* The zone send: the offscreen document's own fetch speaking as an identity, through lib/request-identity.js
+   and lib/speak-as.js. `spec` names the identity (a frame by documentId, or an engine origin and URL), the
+   request, and the identity's document referrer policy. The page sets `Referrer-Policy: unsafe-url`. */
+function zoneSend(off, spec) {
+  return off.evaluate(async (s) => {
+    const id = s.engine ? engineIdentity(s.engine.origin, s.engine.docUrl) : await frameIdentity(s.tabId, s.documentId);
+    const facts = identityFor(id, { url: s.url, requestInit: s.requestInit }, s.documentPolicy);
+    const c = await cookieHeaderFor(facts, s.url);
+    const mode = s.requestInit.mode === null ? "cors" : s.requestInit.mode;
+    const rules = [{ method: s.method, headers: speakAsHeaders(facts, s.method, mode, "", s.url, c) }];
+    // A preflighted send: the OPTIONS rule rides with the request's, as Fetch §4.8 sends it first.
+    if (s.preflightUnsafe) rules.push({ method: "OPTIONS",
+      headers: speakAsPreflightHeaders(facts, s.method, "", s.url, s.preflightUnsafe) });
+    return withSpeakAsRules(facts.origin, s.url, rules, async () => {
+      if (s.pageFetchDuring) await new Promise((r) => setTimeout(r, 1500));   // the tab's own fetch lands here
+      if (s.preflightUnsafe) await fetch(s.url, { method: "OPTIONS", credentials: "omit" });
+      const r = await fetch(s.url, { method: s.method, credentials: c.wire, headers: s.headers, body: s.body });
+      return { status: r.status };
+    });
+  }, spec).catch((e) => ({ error: String(e) }));
+}
+
+async function zoneRows({ browser, page, sw, off, extId, route, results }) {
+  const echo = (t, id) => ({ A, B }[t]) + "/echo?id=" + id;
+  const ri = (credentials, extra) => Object.assign({ credentials, mode: null, referrer: null, referrerPolicy: null }, extra);
+  const asTop = (t, id, extra) => Object.assign({ tabId: route.tabId, documentId: route.documentId, url: echo(t, id),
+    method: "GET", requestInit: ri("include"), documentPolicy: "unsafe-url" }, extra);
+  for (const t of ["A", "B"]) {
+    for (const cr of ["same-origin", "include"]) {
+      const id = "zone." + (cr === "include" ? "inc" : "so") + "." + t;
+      results[id] = await zoneSend(off, asTop(t, id, { requestInit: ri(cr) }));
+    }
+    let id = "zone.ref.same." + t;
+    results[id] = await zoneSend(off, asTop(t, id, { requestInit: ri("include", { referrer: A + "/other/path?r=1" }) }));
+    id = "zone.ref.nopol." + t;
+    results[id] = await zoneSend(off, asTop(t, id, { requestInit: ri("include", { referrerPolicy: "no-referrer" }) }));
+  }
+  results["zone.post.B"] = await zoneSend(off, asTop("B", "zone.post.B", { method: "POST", body: "{}",
+    headers: { "Content-Type": "application/json", "X-Probe": "1" }, preflightUnsafe: ["content-type", "x-probe"] }));
+  results["zone.put.B"] = await zoneSend(off, asTop("B", "zone.put.B", { method: "PUT", body: "{}",
+    headers: { "Content-Type": "application/json" }, preflightUnsafe: ["content-type"] }));
+  results["page.put.B"] = await page.evaluate((u) => fetch(u, { method: "PUT", credentials: "include", body: "{}",
+    headers: { "Content-Type": "application/json" } }).then((r) => r.status), echo("B", "page.put.B"));
+  // An engine send whose stated referrer is another origin's URL arrives with the document's URL.
+  results["zone.engine.crossref.B"] = await zoneSend(off, { engine: { origin: A, docUrl: A + "/page?x=secret" },
+    url: echo("B", "zone.engine.crossref.B"), method: "GET",
+    requestInit: ri("include", { referrer: "http://evil.example/x" }), documentPolicy: "unsafe-url" });
+  // Two concurrent sends of one URL as two identities: each must arrive with its own Origin.
+  const same = B + "/echo?id=zone.concurrent";
+  const [r1, r2] = await Promise.all([
+    zoneSend(off, Object.assign(asTop("B", "x"), { url: same })),
+    zoneSend(off, { engine: { origin: "http://localhost:18433", docUrl: "http://localhost:18433/doc" }, url: same,
+                    method: "GET", requestInit: ri("include"), documentPolicy: "strict-origin-when-cross-origin" })]);
+  results["zone.concurrent"] = { first: r1, second: r2 };
+  // The tab's own fetch of a URL while a rule for it is installed must arrive untouched.
+  const during = echo("B", "zone.duringrule");
+  const zp = zoneSend(off, Object.assign(asTop("B", "x"), { url: during, pageFetchDuring: true }));
+  await sleep(500);
+  results["zone.duringrule.page"] = await page.evaluate((u) => fetch(u, { credentials: "include" })
+    .then((r) => r.status), during).catch((e) => String(e));
+  results["zone.duringrule"] = await zp;
+  // A rule a killed offscreen document left: installed directly, then the offscreen document reloads and
+  // its first send must remove it.
+  await sw.evaluate(() => chrome.declarativeNetRequest.updateSessionRules({ addRules: [{ id: 1500000, priority: 1,
+    condition: { urlFilter: "|http://127.0.0.1:18432/echo?id=zone.leftover|", tabIds: [-1] },
+    action: { type: "modifyHeaders", requestHeaders: [{ header: "x-leftover", operation: "set", value: "1" }] } }] }));
+  await off.reload({ waitUntil: "load" });
+  await sleep(1500);
+  results["zone.leftover"] = await zoneSend(off, asTop("B", "zone.leftover"));
+  results["zone.leftover.rulesAfter"] = await sw.evaluate(async () =>
+    (await chrome.declarativeNetRequest.getSessionRules()).map((r) => r.id));
 }
 
 const SHOWN = ["origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-storage-access",

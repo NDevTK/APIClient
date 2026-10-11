@@ -10,7 +10,7 @@ const REFERRER_POLICIES = ["no-referrer", "no-referrer-when-downgrade", "same-or
 
 /* Secure Contexts §3.1 "Is origin potentially trustworthy?" and §3.2 for a URL. `chrome-extension:` is the one
    scheme this user agent considers authenticated a priori (§7.1 Packaged Applications). */
-function _urlPotentiallyTrustworthy(u) {
+function urlPotentiallyTrustworthy(u) {
   if (u.href === "about:blank" || u.href === "about:srcdoc" || u.protocol === "data:") return true;
   if (u.origin === "null") return false;
   if (u.protocol === "https:" || u.protocol === "wss:" || u.protocol === "file:" ||
@@ -73,7 +73,7 @@ function determineRequestReferrer(referrer, policy, clientUrl, currentUrl) {
   if (referrerURL.href.length > 4096) referrerURL = referrerOrigin;
   const current = new URL(currentUrl);
   const sameOrigin = referrerURL.origin === current.origin && referrerURL.origin !== "null";
-  const downgrade = _urlPotentiallyTrustworthy(referrerURL) && !_urlPotentiallyTrustworthy(current);
+  const downgrade = urlPotentiallyTrustworthy(referrerURL) && !urlPotentiallyTrustworthy(current);
   switch (policy) {
     case "no-referrer": return null;
     case "origin": return referrerOrigin.href;

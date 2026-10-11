@@ -242,6 +242,45 @@ the rule set the `Origin` to an arbitrary site. That is an origin-forging capabi
 - Untrusted to trusted (the reply) is attacker data. Nothing binds the returned `{status, headers, body}` to
   the request, and the offscreen files it under the URL it asked for (a residual, below).
 
+## Sends that speak as a document
+
+The trusted zone can make its own fetch carry the request headers a document of a given identity would
+send. An identity is a document: its origin and URL, and its cookie partition key. A frame's identity
+comes from browser-stamped facts (`webNavigation`'s record and `cookies.getPartitionKey`, by
+`documentId`). An engine instance's identity is the cluster origin the zone assigned and the URL it loaded.
+- `lib/request-identity.js` and `lib/speak-as.js` compute the headers:
+  - `Origin` by Fetch §3.2 "append a request `Origin` header";
+  - `Referer` by Fetch §5.4's referrer rule, so a referrer not same-origin with the identity is "client",
+    and then Referrer Policy §8.3;
+  - the cookies the identity would send, by RFC 6265bis §5.2 and §5.8.3;
+  - `Sec-Fetch-Site`/`-Mode`/`-Dest` by Fetch Metadata §2;
+  - `Sec-Fetch-Storage-Access` by Storage Access Headers §4.1.
+  A preflighted send's OPTIONS request gets Fetch §4.8's own set.
+- `speak-as-rule.js`, in the service worker, sets them through one `declarativeNetRequest` session rule per
+  method the send puts on the wire. The rule is scoped to `tabIds: [TAB_ID_NONE]`, `initiatorDomains` (this
+  extension), the method, and the exact URL (an escaped, anchored `regexFilter` when the URL holds `*`, `^`
+  or `|`). Measured, a tab's own request to the same URL during a rule arrives untouched, and rules scoped to
+  another initiator, tab or method do not apply.
+- Only the offscreen document reaches the install arm (`__rpc`, `sender.url === OFFSCREEN_HREF`), and it
+  sends the computed headers with the identity's origin. The service worker CHECKs that `Origin` equals that
+  origin (or is `null`), and that `Referer` is absent or same-origin with it. A send can therefore speak
+  only as an origin a document has. It cannot name an arbitrary site, which a bare rule can: measured, a
+  rule set `Origin: https://bank.example`.
+- The zone runs one send per URL at a time. That send's rules are installed together, the zone CHECKs that
+  they are exactly the rules installed for the URL, and they are removed in a `finally`. So a preflight and
+  its request are one unit, and two identities never share a rule.
+- The offscreen document removes every rule of the family before its first send, because session rules
+  outlive it. The service worker does not do this at its own start: it can be evicted while a send is in
+  flight.
+
+Residuals, each a difference from the document's own request:
+- The header names a rule adds arrive lower-case and after the browser's own headers.
+- The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
+  `chrome.cookies` states no creation time.
+- The storage access status is assumed `active`.
+- The document's service worker does not see the send.
+- The document's CSP `connect-src` does not bind it.
+
 ## Every way bytes leave
 
 An egress is any path by which bytes this extension composed reach a peer it did not author. Three questions
@@ -330,8 +369,12 @@ subresource load a drive reaches still fires by its destination arm, which is th
   (`lib/persistence.js`) for the learned store, and `apiclient-frontier` (`idbOpen` in `bridge.js`) for the
   cross-session frontier and the `prefs` store. The request log is in memory for the offscreen's lifetime.
   Content scripts have no read path into either.
-- `manifest.json` requests `offscreen`, `cookies`, `webNavigation`, `scripting`, `tabs` and `unlimitedStorage`,
-  and not `storage`, so `chrome.storage` is undefined in every context and a compromised renderer cannot read
+- `declarativeNetRequestWithHostAccess` exists so a zone send can carry a document's headers (below, "Sends
+  that speak as a document"). It is the variant that acts only where host permission exists, and that adds
+  no install-time warning. `speak-as-rule.js` is its only caller, and every rule it installs passes the
+  identity CHECKs there.
+- `manifest.json` requests `offscreen`, `cookies`, `declarativeNetRequestWithHostAccess`, `webNavigation`,
+  `scripting`, `tabs` and `unlimitedStorage`, and not `storage`, so `chrome.storage` is undefined in every context and a compromised renderer cannot read
   keys through it. `unlimitedStorage` lifts the origin's quota and grants no read API. The security claim is that
   `git grep -n 'chrome\.storage' extension/` finds no call site, only comments.
 - `cookies` exists so a send that speaks as a document can carry exactly that document's cookies

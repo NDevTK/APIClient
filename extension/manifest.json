@@ -6,6 +6,7 @@
   "permissions": [
     "offscreen",
     "cookies",
+    "declarativeNetRequestWithHostAccess",
     "webNavigation",
     "scripting",
     "tabs",

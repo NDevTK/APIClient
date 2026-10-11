@@ -87,6 +87,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self.rfile.read(n)
         self.do_GET()
 
+    do_PUT = do_POST
+
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path)
         p = u.path

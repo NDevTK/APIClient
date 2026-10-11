@@ -10,6 +10,8 @@
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
 // broadcast reaches the offscreen); the SW stays out of those messages.
 
+importScripts("check.js", "speak-as-rule.js");
+
 const EXT_ORIGIN = "chrome-extension://" + chrome.runtime.id;
 const OFFSCREEN_URL = "ast-worker.html";
 /* THE OFFSCREEN DOCUMENT'S ADDRESS, ASKED OF THE API THAT OWNS IT rather than concatenated here.
@@ -258,6 +260,10 @@ async function _swRpc(msg) {
     // offscreen document is the only sender this arm serves.
     case "cookies.getAll": return chrome.cookies.getAll(...args);
     case "cookies.getPartitionKey": return chrome.cookies.getPartitionKey(...args);
+    // One declarativeNetRequest rule per zone send that speaks as a document (speak-as-rule.js).
+    case "speakAs.install": return speakAsInstall(args[0]);
+    case "speakAs.release": return speakAsRelease(args[0]);
+    case "speakAs.clearFamily": return speakAsClearFamily();
     // chrome.storage.session.* RPC handlers removed — the brain no longer
     // mirrors request logs to session storage (the offscreen document's
     // stable lifetime makes the in-memory log authoritative). If a caller
