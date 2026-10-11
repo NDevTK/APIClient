@@ -2062,19 +2062,9 @@ async function replayRequest(reqId, sourceTabId) {
           continue;
         }
 
-        // 2. Match by methodId AND HTTP verb — the same methodId covers
-        //    both GET and POST probe variants of an endpoint, so a methodId-
-        //    only match picks the first declared variant (often POST) even
-        //    when replaying a captured GET, misattributing the schema.
-        if (req.methodId && opt.dataset.discoveryId === req.methodId &&
-            opt.dataset.method === req.method) {
-          opt.selected = true;
-          found = true;
-          break;
-        }
-
-        // 3. Fallback for path-based matching (Non-batch only) — also
-        //    filtered by HTTP verb, same rationale as (2).
+        // 2. Path-based matching (non-batch only), filtered by HTTP verb: one
+        //    path can carry both GET and POST probe variants of an endpoint, and
+        //    a path-only match would pick the first declared one.
         if (!isBatch) {
           try {
             const reqPath = new URL(req.url).pathname;
@@ -2281,7 +2271,11 @@ async function replayRequest(reqId, sourceTabId) {
       headers: req.responseHeaders,
       timing: 0,
       service: req.service,
-      methodId: req.methodId,
+      /* A captured request was composed by the page, not against a discovery method, and no store was asked
+         for its document: both are stated absent, which renderResultBody resolves against the endpoint this
+         replay selected above and the popup's cached document for the service. */
+      methodId: null,
+      discovery: null,
       body: null,
     };
 
