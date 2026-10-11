@@ -2542,22 +2542,17 @@ const CONTENT_TYPES = new Set([
   "POC_RAN",
 ]);
 
-// The brain runs in the OFFSCREEN document and receives messages DIRECTLY:
-// chrome.runtime.sendMessage broadcasts to every extension context, so both our
-// content scripts (in web renderers) and the popup reach this document without
-// the SW relaying anything. The thin SW forwards only ONE browser event the
-// offscreen can't observe and that no document message carries: __evt TAB_REMOVED
-// (so per-tab transient state is freed when a tab closes). Navigation/activation
-// are NOT forwarded — prioritization is driven by each document's CONTENT_SEED.
+// The brain runs in the OFFSCREEN document and receives messages DIRECTLY: content scripts and the popup
+// reach it by broadcast, and the SW forwards only browser events no document message carries (navigation is
+// not one: a document's CONTENT_SEED drives its priority).
 //   • __evt TAB_REMOVED (from the SW, extension origin) → _onTabRemoved
+//   • __evt WEB_REQUEST (from the SW, extension origin) → webRequestEvent (lib/web-request.js)
 //   • CONTENT_TYPES from a web-page origin   → handleContentMessage (UNTRUSTED;
 //                    real browser-verified sender = tab/frame/url)
 //   • extension-page origin (popup)          → handlePopupMessage
-// sender.id is NOT a trust signal (every onMessage sender carries our id). The
-// boundary is sender.url: extension-origin = trusted (popup/SW); a web URL = an
-// untrusted content script. __evt is honored ONLY from the extension origin, so a
-// compromised renderer can't forge a browser event (e.g. TAB_REMOVED for a
-// victim tab) by broadcasting one straight to this document.
+// sender.id is NOT a trust signal (every onMessage sender carries our id). The boundary is the sender's
+// browser-set url or origin, and __evt is honored ONLY from the extension origin, so a compromised renderer
+// can't forge a browser event (a TAB_REMOVED, a webRequest record) by broadcasting one to this document.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
   if (!msg) return;
@@ -2581,6 +2576,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // browser-set carrier of the extension origin.
     if (!fromExtUrl) return;
     if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
+    else if (msg.__evt === "WEB_REQUEST") webRequestEvent(msg.ev);
+    else DFAIL("the service worker sent the event `" + msg.__evt + "`, which this document does not take");
     return;
   }
 
@@ -2662,6 +2659,7 @@ function _onTabRemoved(tabId) {
     d.closedAt = Date.now();
     _wsConnState.delete(d.documentId);
   }
+  webRequestTabRemoved(tabId);
   // A tab close frees NOTHING else. The document's own analysis buffer is freed by the review reclaim (when
   // its run returns), not by the tab going away, and the cross-session continuation of a closed tab's learning
   // is the GLOBAL frontier's parked recipes rather than a page source held in RAM. Keyed by documentId.

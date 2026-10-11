@@ -94,10 +94,11 @@ Each permission in `extension/manifest.json` and what it is for:
 | `webNavigation` | Frame identities (`getAllFrames`) for the document a send speaks as, and navigation events the popup follows. |
 | `tabs` | The active tab, the live-verify attacker tab, and messages to content scripts. |
 | `scripting` | Arming the live-verify attacker tab: a predefined injector run in that tab's main world, refused for any tab the service worker did not open. |
+| `webRequest` | The browser's own record of each fetch() and XHR a document makes (request line, headers, body, status), joined by `documentId` to the response body `intercept.js` captures (`lib/web-request.js`). It blocks and modifies nothing. |
 | `unlimitedStorage` | The IndexedDB store, which holds the cross-session frontier and cold snapshots. |
 | `<all_urls>` host access | The content scripts on every page, and `safeFetch`'s requests. |
 
-**Not held:** `webRequest`, `debugger` and a proxy. The page's traffic is captured in the page itself (`intercept.js`, which wraps `fetch`, XHR, WebSocket and EventSource in the main world). Without `webRequest` the zone cannot read a reply's `Set-Cookie` or a redirect's `Location` on its own sends: `fetch`'s `redirect: "manual"` answers an opaque redirect with no headers. With the permission, `webRequest` does report the offscreen document's requests, so it is the route that would let the zone follow each redirect hop itself under every gate. [SECURITY.md](SECURITY.md) states what its absence leaves uncovered.
+**Not held:** `debugger` and a proxy. A page's response bodies, WebSocket frames and EventSource messages are captured in the page itself (`intercept.js`, which wraps `fetch`, XHR, WebSocket and EventSource in the main world); `webRequest` reports none of them. The `webRequest` listeners take documents' traffic only, so the zone cannot read a reply's `Set-Cookie` or a redirect's `Location` on its own sends: `fetch`'s `redirect: "manual"` answers an opaque redirect with no headers. `webRequest` does report the offscreen document's requests, so a listener on them is the route that would let the zone follow each redirect hop itself under every gate. [SECURITY.md](SECURITY.md) states what its absence leaves uncovered.
 
 ## Storage and security
 

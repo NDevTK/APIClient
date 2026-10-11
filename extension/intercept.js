@@ -1,8 +1,9 @@
-// Main-world script: wraps fetch() and XMLHttpRequest to passively capture
-// request headers/bodies and response bodies.  Communicates back to the
-// isolated-world content script via CustomEvent on the shared document.
-//
-// Single capture point — replaces chrome.webRequest for all request data.
+// Main-world script: wraps fetch() and XMLHttpRequest to capture what chrome.webRequest cannot report, the
+// response body and the call site, and wraps WebSocket and EventSource for their frames. Communicates back
+// to the isolated-world content script via CustomEvent on the shared document. A fetch()/XHR capture names
+// its request by (method, URL, ordinal), and the trusted zone takes every other field of that request from the
+// browser's own webRequest record of it (lib/web-request.js); this realm is the page's, so nothing it reports
+// about a request is believed.
 // Its one write is the person's WebSocket console frame, sent on a socket the page opened (below).
 
 (function () {
@@ -129,40 +130,14 @@
   });
 
 
-  // ─── Request header/body capture helpers ──────────────────────────────────
+  // ─── Request key helpers ──────────────────────────────────────────────────
 
-  /* Fetch §2.2.1 "Methods"' NORMALIZE A METHOD, WHICH IS NOT `toUpperCase()`. Verbatim: "To normalize a
-     method, if it is a byte-case-insensitive match for `DELETE`, `GET`, `HEAD`, `OPTIONS`, `POST`, or `PUT`,
-     byte-uppercase it." SIX NAMES, AND EVERY OTHER VERB GOES OUT AS THE PAGE SPELLED IT — the same section
-     says so twice, once as a warning ("Using `patch` is highly likely to result in a `405 Method Not
-     Allowed`. `PATCH` is much more likely to succeed.") and once as a rule ("Other than those that are
-     normalized there are no casing restrictions either. `Egg` or `eGg` would be fine"). So
-     `fetch(u, {method:"patch"})` puts `patch` on the wire, and the blanket uppercase that stood at both emit
-     sites below wrote `PATCH` into the one record whose entire job is to say what the network carried.
-
-     IT IS ONE OPERATION WITH TWO CALLERS AND NOT AN EXPRESSION AT EACH OF THEM, because the two producers
-     ask the identical question: Fetch §5.4 "Request class" step 25 runs "Normalize method" over
-     `init["method"]`, and XMLHttpRequest §3.5.1 "The open() method" step 4 is the bare instruction
-     "Normalize method." over `open()`'s first argument — one rule, reached through two APIs.
-
-     AND THE ENGINE ALREADY SPELLS IT THIS WAY, WHICH IS WHY THE UPPERCASE WAS NOT MERELY COSMETIC. The C
-     half implements §2.2.1 exactly (`method_normalize` in browser/core/fetch/request.c, the six names
-     uppercased and everything else byte-for-byte), so the AST/@H surface has been recording `patch` while
-     this observer recorded `PATCH` — TWO SPELLINGS OF ONE RULE, which is two rules. Both write the same
-     `httpMethod` field on the same learned-method record (lib/learn.js writes it from the engine's call site
-     and from this file's log entry), and three consumers compare that field with `===`: the templated-method
-     match, the same-path verb-collision branch beside it, and the popup's replay dropdown. For a `patch`
-     endpoint all three disagreed with themselves — the template merge that exists to keep one endpoint from
-     splitting into an `[ast]` record plus a `[live]` one silently did not fire, the collision branch then
-     renamed the AST entry and deleted the base name, and the replay dropdown could not select the endpoint
-     the log record named. Nothing crashed and nothing said so.
-
-     THE FOLD IS ASCII AND NOT `String.prototype.toUpperCase`. §2.2.1 says "byte-case-insensitive", and
-     Unicode case mapping is wider than ASCII case: U+017F LATIN SMALL LETTER LONG S uppercases to `S`, so
-     `toUpperCase()` calls `pOſt` a match for `POST` when no byte comparison does. That string cannot reach
-     here today — a method must be a token, and §5.4 step 25 and §3.5.1 step 2 throw for one that is not —
-     but being right only because a different rule holds upstream is not a property worth resting on when the
-     honest fold costs one loop. */
+  /* Fetch §2.2.1 "Methods"' normalize a method, which XMLHttpRequest §3.5.1 "The open() method" step 4 runs
+     over open()'s method: "if it is a byte-case-insensitive match for `DELETE`, `GET`, `HEAD`, `OPTIONS`,
+     `POST`, or `PUT`, byte-uppercase it", and every other verb goes out as the page spelled it. The fold is
+     ASCII, because Unicode case mapping is wider than a byte comparison (U+017F uppercases to `S`). The
+     result is a capture's key, which must equal the method webRequest reports for the request; a fetch()
+     capture's key is the Request constructor's own (§5.4 "Request class" step 25 runs the same step). */
   const _NORMALIZED_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"];
   function _normalizeMethod(m) {
     var up = "";
@@ -173,58 +148,6 @@
     for (var j = 0; j < _NORMALIZED_METHODS.length; j++)
       if (up === _NORMALIZED_METHODS[j]) return _NORMALIZED_METHODS[j];
     return m;
-  }
-
-  function _captureHeaders(input, init) {
-    var h = {};
-    try {
-      var src = (init && init.headers) || (input instanceof Request ? input.headers : null);
-      if (!src) return h;
-      if (src instanceof Headers) {
-        src.forEach(function (v, k) { h[k] = v; });
-      } else if (Array.isArray(src)) {
-        for (var i = 0; i < src.length; i++) h[src[i][0].toLowerCase()] = src[i][1];
-      } else if (typeof src === "object") {
-        for (var k in src) h[k.toLowerCase()] = src[k];
-      }
-    } catch (_) {}
-    return h;
-  }
-
-  function _captureBody(bodySource) {
-    var reqBody = null, reqBase64 = false;
-    try {
-      if (bodySource == null) return { body: null, base64: false };
-      if (typeof bodySource === "string") {
-        reqBody = bodySource;
-      } else if (bodySource instanceof ArrayBuffer) {
-        reqBody = uint8ToBase64(new Uint8Array(bodySource));
-        reqBase64 = true;
-      } else if (ArrayBuffer.isView(bodySource)) {
-        /* Fetch §5.2 BodyInit unions admits a BufferSource, which is ANY ArrayBufferView — every typed array
-           and DataView, not just Uint8Array. The `instanceof Uint8Array` test that stood here left
-           `fetch(u, {method:"POST", body: new Int32Array(…)})` and every DataView body returning a null
-           reqBody, which the log record then reported as a POST that carried none. A view is read through its
-           own window on the buffer (byteOffset/byteLength), never the whole buffer, or a subarray would
-           capture bytes the request did not send. */
-        reqBody = uint8ToBase64(new Uint8Array(bodySource.buffer, bodySource.byteOffset, bodySource.byteLength));
-        reqBase64 = true;
-      } else if (typeof URLSearchParams !== "undefined" && bodySource instanceof URLSearchParams) {
-        reqBody = bodySource.toString();
-      } else if (typeof FormData !== "undefined" && bodySource instanceof FormData) {
-        var parts = [];
-        bodySource.forEach(function (value, key) {
-          if (typeof File !== "undefined" && value instanceof File) {
-            parts.push(encodeURIComponent(key) + "=" + encodeURIComponent("[File:" + value.name + "]"));
-          } else {
-            parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(value));
-          }
-        });
-        reqBody = parts.join("&");
-      }
-      // Blob, ReadableStream — can't serialize simply, skip
-    } catch (_) {}
-    return { body: reqBody, base64: reqBase64 };
   }
 
   // ─── fetch() wrapper ───────────────────────────────────────────────────────
@@ -283,6 +206,7 @@
   }
 
   const _fetch = window.fetch;
+  const _Request = window.Request;
 
   /* The four request facts a replay must reproduce, as Fetch §5.4 "Request class" sets them: an `init`
      member that exists wins over `input`'s, and a member neither supplies is null, which a replay passes
@@ -293,6 +217,42 @@
   const _requestGet = {};
   for (var _i = 0; _i < _INIT_MEMBERS.length; _i++)
     _requestGet[_INIT_MEMBERS[_i]] = Object.getOwnPropertyDescriptor(Request.prototype, _INIT_MEMBERS[_i]).get;
+  const _requestUrl = Object.getOwnPropertyDescriptor(Request.prototype, "url").get;
+  const _requestMethod = Object.getOwnPropertyDescriptor(Request.prototype, "method").get;
+  const _requestSignal = Object.getOwnPropertyDescriptor(Request.prototype, "signal").get;
+  const _requestBody = Object.getOwnPropertyDescriptor(Request.prototype, "body").get;
+  const _requestClone = Request.prototype.clone;
+  const _requestArrayBuffer = Request.prototype.arrayBuffer;
+  const _Response = window.Response;
+  const _responseArrayBuffer = Response.prototype.arrayBuffer;
+
+  /* The request body is the browser's for POST and PUT and this realm's for every other method, because
+     webRequest reports `requestBody` for those two methods alone (measured in Chrome 148: PATCH, DELETE,
+     OPTIONS and an extension method each sent a body and carried none). So a capture states the body bytes,
+     base64, only for a method webRequest leaves silent, and null otherwise; lib/web-request.js takes the
+     body from the browser for POST and PUT.
+     Named residual. Not covered: a PATCH or DELETE body is the page's statement, and an XHR FormData body is
+     serialized here with a boundary of its own rather than the one on the wire. Next diff builds: the body
+     of every method from a browser-stated source. Absence shows as: a PATCH or DELETE record whose body
+     differs from the bytes a proxy saw. */
+  function _bodyIsCaptured(method) {
+    return method !== "POST" && method !== "PUT";
+  }
+  async function _bytesB64(response) {
+    return uint8ToBase64(new Uint8Array(await _apply(_responseArrayBuffer, response, [])));
+  }
+  const _signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted").get;
+
+  /* The ordinal a capture names its request by: how many requests with this method and URL this document
+     made before it, counted at the call, in the order the browser starts them. lib/web-request.js counts the
+     same population off webRequest's onBeforeRequest and joins on (documentId, method, URL, ordinal). */
+  const _seqNext = new Map();
+  function _seqTake(method, url) {
+    var k = method + " " + url;
+    var n = _seqNext.has(k) ? _seqNext.get(k) : 0;
+    _seqNext.set(k, n + 1);
+    return n;
+  }
   const _xhrWithCredentials = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "withCredentials").get;
 
   /* Fetch §5.4's init["referrer"] step: "" is no-referrer; a URL parsed against the document's base that
@@ -324,64 +284,27 @@
     var callStack = _captureCallStack();
     // Read at the call: the page may mutate its own `init` while the request is in flight.
     var requestInit = _pageOwned(function () { return _fetchRequestInit(input, init); });
-    // Snapshot request data before calling fetch (body may be consumed)
-    var reqHeaders = _captureHeaders(input, init);
-    var bodySource = (init && init.body !== undefined) ? init.body : null;
-    var captured = _captureBody(bodySource);
-    var reqBody = captured.body;
-    var reqBase64 = captured.base64;
+    /* Fetch §5.6 "Fetch methods" step 2, "Let requestObject be the result of invoking the initial value of
+       Request as constructor with input and init as arguments", performed here with that initial value, and
+       the Request handed to fetch() in its place. So the URL and method a capture keys on are the
+       constructor's own (§5.4 "Request class" parses the URL and normalizes the method), read through getters
+       captured before any page script ran, and an argument the constructor refuses rejects this call exactly
+       as fetch() would, with no request made and none counted. A request whose signal is already aborted is
+       never started (§5.6 step 5) and is not counted either. */
+    var request = new _Request(input, init);
+    const url = _apply(_requestUrl, request, []);
+    const method = _apply(_requestMethod, request, []);
+    const seq = _apply(_signalAborted, _apply(_requestSignal, request, []), []) ? null : _seqTake(method, url);
+    /* The body bytes for a method webRequest leaves silent, read off a clone taken before fetch() takes the
+       request's body (Fetch §5.4 "Request class": clone() clones the body, teeing its stream). */
+    const bodyClone = _bodyIsCaptured(method) && _apply(_requestBody, request, []) !== null
+      ? _apply(_requestClone, request, []) : null;
 
-    const response = await _fetch.apply(this, arguments);
+    const response = await _fetch.call(this, request);
 
-    /* THE REQUEST'S ADDRESS AND VERB, AS Fetch §5.4 "Request class" COMPUTES THEM. This is a STATEMENT of
-       that constructor's own precedence, not a hole three defaults fill:
-         - "If input is a string ... Set request to a new request whose URL is parsedURL", and a new request's
-           method is Fetch §2.2.5 "Requests" verbatim — "A request has an associated method (a method). Unless
-           stated otherwise it is `GET`." So the trailing "GET" is the SPEC's answer, never an invented one.
-         - "Otherwise: Assert: input is a Request object. Set request to input's request." — so both answers
-           come off the Request, read through §5.4's own getters ("The url getter steps are to return this's
-           request's URL, serialized"; "The method getter steps are to return this's request's method").
-         - and last in the constructor steps, "If init["method"] exists, then: ... Set request's method to
-           method" — which is why an init method WINS over the other two.
-       AN ABSENT `init.method` IS THEREFORE NOT A MISSING DATUM. It is the page declaring that the answer is
-       one of the other two, and this expression reads it as that. `init.method === ""` cannot reach here at
-       all: §5.4 throws a TypeError for a value that "is not a method", so the await above would have rejected
-       and this line would never run.
-
-       "EXISTS" IS WEB IDL'S QUESTION AND NOT A TRUTH TEST, WHICH IS THE DIFFERENCE A `||` GOT WRONG. §5.4's
-       step reads "If init["method"] exists", and a `RequestInit` member with no default exists when it is
-       present and not `undefined` — so `fetch(u, {method: 0})` DOES exist, converts to the DOMString "0",
-       which is a token and not a forbidden method, and goes out as the verb `0`. The `||` that stood here
-       skipped it for being falsy and reported `GET`: a verb the request did not carry, in the field the
-       firing and provenance rules key on. `!== undefined` asks §5.4's question instead, and the conversion
-       is spelled here because Web IDL performs it before the constructor steps run — the member is a
-       DOMString, so `String()` is what the browser itself saw. It reaches the page's own `toString` and
-       therefore belongs inside this page-owned read, beside the `String(input)` above it. */
-    const seen = _pageOwned(function () {
-      const raw =
-        typeof input === "string"
-          ? input
-          : input instanceof Request
-            ? input.url
-            : String(input);
-      const initMethod = init ? init.method : undefined;
-      return {
-        url: new URL(raw, location.href).href,
-        method: _normalizeMethod(
-          initMethod !== undefined
-            ? String(initMethod)
-            : input instanceof Request
-              ? input.method
-              : "GET",
-        ),
-      };
-    });
     /* THE PAGE'S OWN CODE REFUSED TO BE READ — a positive answer, and the only one available: this request
        cannot be observed, so NOTHING is emitted for it. A partially-read record would be a plausible datum. */
-    if (seen === _PAGE_THREW || requestInit === _PAGE_THREW) return response;
-
-    const url = seen.url;
-    const method = seen.method;
+    if (requestInit === _PAGE_THREW) return response;
 
     if (_isInternalUrl(url)) return response;
 
@@ -407,41 +330,17 @@
 
     // Read body asynchronously — never blocks the caller
     (async () => {
-      /* THE RESPONSE'S OWN FACTS ARE FOUR PAGE-OWNED READS AND THEY BELONG IN `_pageOwned` LIKE THE TWO
-         ABOVE — the paragraph-wide `try` that used to hold them was the exact construct this file's
-         `_pageOwned` paragraph says was retired, still standing one function down. Its one `catch` covered
-         three unrelated conditions at once: a page-replaced prototype getter, a body stream that errored,
-         and THIS FILE'S OWN record composition — so a defect in `emit`'s record was indistinguishable from
-         a page defending itself, in the half of the tool CLAUDE.md calls a thermometer.
-         NONE OF THE FOUR CAN BE ABSENT, which is why their concealment was purely a misplaced guard and not
-         a missing field. Fetch §5.5 "Response class" declares them non-nullable —
-         `[SameObject] readonly attribute Headers headers`, `readonly attribute unsigned short status`,
-         `readonly attribute ByteString statusText`, `readonly attribute ResponseType type` — so on a real
-         Response every one of them answers. What can fail is the LOOKUP, because intercept.js runs in the
-         page's own realm and `Response.prototype` is the page's: a replaced getter throws, and that is the
-         page refusing to be observed. `_PAGE_THREW` is this file's word for that, and it is now said before
-         the body read rather than after it, so a hostile prototype costs no body decode.
-         READING THEM EARLY IS SPEC-IDENTICAL. All four are facts of the response, not of its body (§2.2.6
-         Responses states each on the response itself), so consuming the body afterwards cannot change any
-         of them; ordering them before `arrayBuffer()`/`text()` only moves the refusal earlier. */
+      /* The response's status and type, page-owned reads like the two above: Fetch §5.5 "Response class"
+         declares both non-nullable, so only a page-replaced getter can fail, and that is the page refusing to
+         be observed. Both are facts of the response and not of its body, so reading them before the body
+         changes neither. */
       const meta = _pageOwned(function () {
-        const h = {};
-        clone.headers.forEach(function (v, k) { h[k] = v; });
-        return { headers: h, status: clone.status, statusText: clone.statusText, responseType: clone.type };
+        return { status: clone.status, responseType: clone.type };
       });
       if (meta === _PAGE_THREW) return;
-      const headers = meta.headers;
+      /* The status this realm observed, which the trusted zone checks against the browser's record of the
+         request it joins this capture to; the record's own status is the browser's. */
       const respStatus = meta.status;
-      /* Fetch §2.2.6 Responses' STATUS MESSAGE, read off the same Response the status came from. The
-         consumer that needs it is the HAR export, whose `response.statusText` it used to synthesize as
-         `"OK"` for every 200 and `""` for everything else — a reason phrase no server ever sent, written
-         into a document a reviewer reads as the server's own words. THE EMPTY STRING IS A REAL ANSWER AND
-         THE SYNTHESIS WAS WRONG EXACTLY WHERE IT LOOKED RIGHT: §2.2.6 says "Responses over an HTTP/2
-         connection will always have the empty byte sequence as status message as HTTP/2 does not support
-         them", so on every h2 origin — which is most of them — the export was inventing "OK" for a field
-         the protocol had deliberately emptied. An opaque cross-origin response is `""` for the same
-         reason: the browser refusing to state one, travelling as itself. */
-      const respStatusText = meta.statusText;
       /* Fetch §2.2.6 Responses' TYPE. The spec's list is SIX, not the five that stood here: a response's
          type is "basic", "cors", "default", "error", "opaque", or "opaqueredirect", and "Unless stated
          otherwise, it is 'default'" — which is exactly the one this site can see and the one the old
@@ -452,31 +351,6 @@
          stood here could not fire; what it DID do was tell the reader that absence was possible, and the
          offscreen wrote a matching `|| null` on the far side. */
       const respType = meta.responseType;
-
-      // If body wasn't captured synchronously (Request with stream body),
-      // try reading from a cloned Request
-      if (reqBody === null && input instanceof Request && !init) {
-        try {
-          var rc = input.clone();
-          var ct2 = reqHeaders["content-type"] || "";
-          if (isBinary(ct2)) {
-            var ab = await rc.arrayBuffer();
-            reqBody = uint8ToBase64(new Uint8Array(ab));
-            reqBase64 = true;
-          } else {
-            reqBody = await rc.text();
-          }
-        } catch (e) {
-          /* A REQUEST BODY THAT WAS ALREADY A STREAM. Fetch §5.4 "Request class": "The clone() method
-             steps are: If this is unusable, then throw a TypeError", and §5.3 "Body mixin" defines unusable
-             as "its body is non-null and its body's stream is disturbed or locked" — the ordinary outcome
-             when the page handed `fetch()` a Request it had already begun to consume. That is a request
-             whose body this file cannot see, not a defect in it: `reqBody` stays null, which the record
-             already states as "no body captured", and saying so at debug volume is what separates that
-             from a bug here. */
-          console.debug("[apiclient:req body]", (e && e.message) || e);
-        }
-      }
 
       /* THE RESPONSE BODY READ IS THE ONE THING LEFT THAT LEGITIMATELY FAILS, AND THE `try` NOW HOLDS IT
          AND NOTHING ELSE. `clone.arrayBuffer()`/`.text()` reject when the underlying stream errors or the
@@ -506,20 +380,26 @@
         return;
       }
 
+      let requestBodyB64 = null;
+      if (bodyClone !== null) {
+        try {
+          requestBodyB64 = uint8ToBase64(new Uint8Array(await _apply(_requestArrayBuffer, bodyClone, [])));
+        } catch (e) {
+          console.debug("[apiclient:req body]", url, (e && e.message) || e);
+          return;
+        }
+      }
+
       emit({
         url,
         transport: "fetch",
         method,
-        status: respStatus,
-        statusText: respStatusText,
+        seq,
+        requestBodyB64,
+        observedStatus: respStatus,
         responseType: respType,
-        contentType: ct,
-        responseHeaders: headers,
         body,
         base64Encoded,
-        requestHeaders: reqHeaders,
-        requestBody: reqBody,
-        requestBodyBase64: reqBase64,
         requestInit: requestInit,
         callStack: callStack,
       });
@@ -532,19 +412,11 @@
 
   const _xhrOpen = XMLHttpRequest.prototype.open;
   const _xhrSend = XMLHttpRequest.prototype.send;
-  const _xhrSetHeader = XMLHttpRequest.prototype.setRequestHeader;
 
   XMLHttpRequest.prototype.open = function (method, url) {
     this.__uasr_method = method;
     this.__uasr_url = url;
-    this.__uasr_reqHeaders = {};
     return _xhrOpen.apply(this, arguments);
-  };
-
-  XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-    if (!this.__uasr_reqHeaders) this.__uasr_reqHeaders = {};
-    this.__uasr_reqHeaders[name.toLowerCase()] = value;
-    return _xhrSetHeader.apply(this, arguments);
   };
 
   XMLHttpRequest.prototype.send = function (sendBody) {
@@ -552,54 +424,38 @@
     this.__uasr_hooked = true;
 
     var callStack = _captureCallStack();
-    // Capture request body before sending
-    var captured = _captureBody(sendBody);
-    var _reqHeaders = this.__uasr_reqHeaders || {};
-    var _reqBody = captured.body;
-    var _reqBase64 = captured.base64;
+    /* The key is read before the send and the ordinal taken only once the send has not thrown: send() throws
+       for an object that is not opened or already sent (XMLHttpRequest §3.5.6 steps 1-2), which starts no
+       request. A synchronous request fires `load` inside send(), so the ordinal is known before the call.
+       The URL is parsed against the document's base URL, which is XMLHttpRequest §3.5.1's "relevant settings
+       object" for open(). An open() this wrapper never saw leaves no key, and the request is not captured. */
+    /* Named residual. Not covered: `xhr.open(undefined, u)` sends the verb `undefined` (Web IDL converts the
+       argument to a ByteString), and the property this wrapper stores reads as an open it never saw, so that
+       request is not captured. Next diff stores a value this file mints at open() (`{ raw: method }`). Absence
+       shows as: a request the network tab lists and the log does not, for a literal `undefined` method. */
+    var self = this;
+    var key = this.__uasr_method === undefined ? null : _pageOwned(function () {
+      var m = _normalizeMethod(String(self.__uasr_method));
+      return { method: m, url: new URL(String(self.__uasr_url), document.baseURI).href };
+    });
+    var seq = key === null || key === _PAGE_THREW ? null
+            : (_seqNext.has(key.method + " " + key.url) ? _seqNext.get(key.method + " " + key.url) : 0);
+    /* The body bytes for a method webRequest leaves silent. XMLHttpRequest §3.5.6 step 3 drops a GET or HEAD
+       body, and step 4 "safely extracts" any other (Fetch), the extraction the Response constructor performs
+       over the same value; a Document body is serialized by §3.5.6 itself and is not captured. */
+    var bodyBytesP = seq === null || !_bodyIsCaptured(key.method) || key.method === "GET" ||
+                     key.method === "HEAD" || sendBody == null ||
+                     (typeof Document !== "undefined" && sendBody instanceof Document)
+      ? Promise.resolve(null)
+      : _pageOwned(function () { return _bytesB64(new _Response(sendBody)); });
 
     this.addEventListener("load", function () {
       try {
-        /* THE VERB AND ADDRESS THIS `send()`'s OWN `open()` WAS GIVEN, OR NO RECORD AT ALL. `undefined` here
-           is not a page value this wrapper read — it is the property this wrapper never wrote, which happens
-           when the `open()` that opened this object bypassed the prototype patch (a page holding a saved
-           reference to the original, or an `XMLHttpRequest` minted in another realm). That is a request whose
-           verb and address were never observed, and the `(this.__uasr_method || "GET")` and
-           `String(this.__uasr_url || "")` that stood at the two reads answered it with `GET` against
-           `location.href` — a complete round trip, wholly fabricated, filed beside real ones. The fetch
-           wrapper already states the same thing the same way at `_PAGE_THREW`: a request that could not be
-           observed produces nothing.
-           WITH THE OBSERVATION ESTABLISHED, BOTH DEFAULTS ARE DEAD RATHER THAN LOAD-BEARING. `open()` writes
-           the two together, and XMLHttpRequest §3.5.1 "The open() method" had already thrown before the state
-           reached `opened` — step 2 for a method that is not a method, step 3 for `CONNECT`/`TRACE`/`TRACK`,
-           step 6 for a URL that does not parse — so a `load` event is proof that both arguments were ones the
-           browser accepted, and `send()` on an unopened object throws `InvalidStateError` and fires nothing.
-           §3.5.1 step 4 is "Normalize method.", the same operation `_normalizeMethod` performs for fetch.
-           RESIDUAL — ONE PAGE VALUE IS INDISTINGUISHABLE FROM THE ABSENCE, AND THIS TEST DROPS IT. Web IDL
-           converts `open()`'s `method` argument to a ByteString, so `xhr.open(undefined, u)` really sends the
-           verb `undefined` — a token, and not one §2.2.1 forbids — and this wrapper stored the value
-           `undefined` for it, which reads here as an unobserved open. The record is dropped rather than
-           fabricated, so nothing states anything false; it is narrower than §3.5.1, not wrong. The next diff
-           stores a wrapper this file mints (`{ raw: method }`), so a property this file never wrote and a
-           page value of `undefined` stop sharing one answer. Its absence shows as a request the network tab
-           lists and the log does not, for a page whose method argument is literally `undefined`. */
-        if (this.__uasr_method === undefined) return;
-        const method = _normalizeMethod(String(this.__uasr_method));
-
-        const url = new URL(String(this.__uasr_url), location.href).href;
+        if (seq === null) return;
+        const method = key.method;
+        const url = key.url;
 
         if (_isInternalUrl(url)) return;
-
-        const ct = this.getResponseHeader("content-type") || "";
-        // Collect response headers
-        const rawHeaders = this.getAllResponseHeaders();
-        const headers = {};
-        for (const line of rawHeaders.trim().split(/\r?\n/)) {
-          const idx = line.indexOf(":");
-          if (idx > 0)
-            headers[line.slice(0, idx).trim().toLowerCase()] =
-              line.slice(idx + 1).trim();
-        }
 
         let body,
           base64Encoded = false;
@@ -636,31 +492,22 @@
           return; // blob, document — skip
         }
 
-        emit({
-          url,
-          transport: "xhr",
-          method,
-          status: this.status,
-          // XMLHttpRequest §3.6.3 `The statusText getter` — the same field the fetch wrapper reads off its
-          // Response, so one HTTP log record shape covers both transports.
-          statusText: this.statusText,
-          contentType: ct,
-          responseHeaders: headers,
-          body,
-          base64Encoded,
-          requestHeaders: _reqHeaders,
-          requestBody: _reqBody,
-          requestBodyBase64: _reqBase64,
-          // XMLHttpRequest §3.5.6 "The send() method": mode "cors", credentials "include" when
-          // withCredentials is true and "same-origin" otherwise; XHR has no referrer or policy to state.
-          requestInit: { credentials: _apply(_xhrWithCredentials, this, []) ? "include" : "same-origin",
-                         mode: "cors", referrer: null, referrerPolicy: null },
-          callStack: callStack,
-        });
+        const observedStatus = this.status;
+        // XMLHttpRequest §3.5.6 "The send() method": mode "cors", credentials "include" when
+        // withCredentials is true and "same-origin" otherwise; XHR has no referrer or policy to state.
+        const requestInit = { credentials: _apply(_xhrWithCredentials, this, []) ? "include" : "same-origin",
+                              mode: "cors", referrer: null, referrerPolicy: null };
+        if (bodyBytesP === _PAGE_THREW) return;
+        bodyBytesP.then(function (requestBodyB64) {
+          emit({ url, transport: "xhr", method, seq, requestBodyB64, observedStatus, body, base64Encoded,
+                 requestInit, callStack });
+        }, function (e) { console.debug("[apiclient:req body]", url, (e && e.message) || e); });
       } catch (_) {}
     });
 
-    return _xhrSend.apply(this, arguments);
+    var ret = _xhrSend.apply(this, arguments);
+    if (seq !== null) _seqTake(key.method, key.url);
+    return ret;
   };
 
   // ─── WebSocket wrapper ──────────────────────────────────────────────────────

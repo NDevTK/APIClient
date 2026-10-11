@@ -4,8 +4,8 @@
 // lifetime + IndexedDB. The SW holds NO state — it is evicted freely. Its only
 // jobs:
 //   1. own the offscreen document's lifecycle (create it; wake it on startup),
-//   2. forward browser events the offscreen can't observe (webNavigation +
-//      content-script messages + tab updates) to the brain,
+//   2. forward browser events the offscreen can't observe (tab removal, and the webRequest events of a
+//      document's fetch() and XMLHttpRequest traffic) to the brain,
 //   3. perform privileged chrome.tabs.* calls the offscreen can't, as RPC, and own the live-verify attacker
 //      tab: it opens ATTACKER_PAGE_URL itself and keeps, in memory only, which tabs it opened for it.
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
@@ -79,6 +79,44 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   _attackerTabs.delete(tabId);
   toBrain({ __evt: "TAB_REMOVED", tabId: tabId });
 });
+
+/* The webRequest events of a document's fetch() and XMLHttpRequest traffic (type `xmlhttprequest`), relayed one
+   by one to lib/web-request.js. An event with no tab or no documentId is not a document's request (the
+   offscreen's own safeFetch, another service worker), and is not relayed. The relays run through one chain, so
+   the offscreen receives them in the browser's order, which lib/web-request.js's ordinals rest on. Request body
+   bytes cross as base64, since chrome.runtime messages do not carry an ArrayBuffer. */
+const _WR_FILTER = { urls: ["<all_urls>"], types: ["xmlhttprequest"] };
+let _wrChain = Promise.resolve();
+function _wrB64(buf) {
+  const u = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < u.length; i += 8192) bin += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
+  return btoa(bin);
+}
+function _wrRelay(name) {
+  return (d) => {
+    if (d.tabId < 0 || !d.documentId) return;
+    const ev = { ev: name, requestId: d.requestId, documentId: d.documentId, tabId: d.tabId, frameId: d.frameId,
+                 url: d.url, method: d.method };
+    if (d.requestBody) {
+      ev.requestBody = d.requestBody.raw
+        ? { raw: d.requestBody.raw.map((p) => (p.bytes ? { b64: _wrB64(p.bytes) } : { file: p.file })) }
+        : d.requestBody.formData ? { formData: d.requestBody.formData } : { error: d.requestBody.error };
+    }
+    for (const k of ["requestHeaders", "responseHeaders", "statusCode", "statusLine", "redirectUrl", "error"])
+      if (d[k] !== undefined) ev[k] = d[k];
+    const m = { __evt: "WEB_REQUEST", ev };
+    _wrChain = _wrChain.then(() => ensureOffscreen()).then(() => chrome.runtime.sendMessage(m)).catch((e) =>
+      console.warn("[bg:webRequest] relay failed for %s %s: %s", name, d.url, e && e.message || e));
+  };
+}
+chrome.webRequest.onBeforeRequest.addListener(_wrRelay("onBeforeRequest"), _WR_FILTER, ["requestBody"]);
+chrome.webRequest.onSendHeaders.addListener(_wrRelay("onSendHeaders"), _WR_FILTER, ["requestHeaders", "extraHeaders"]);
+chrome.webRequest.onHeadersReceived.addListener(_wrRelay("onHeadersReceived"), _WR_FILTER,
+                                                ["responseHeaders", "extraHeaders"]);
+chrome.webRequest.onBeforeRedirect.addListener(_wrRelay("onBeforeRedirect"), _WR_FILTER, ["responseHeaders"]);
+chrome.webRequest.onCompleted.addListener(_wrRelay("onCompleted"), _WR_FILTER, ["responseHeaders"]);
+chrome.webRequest.onErrorOccurred.addListener(_wrRelay("onErrorOccurred"), _WR_FILTER);
 
 // ─── Privileged chrome.* RPC for the offscreen brain ──────────────────────────
 // The brain runs in a document and can't call chrome.tabs.*; it sends a {__rpc} message and the SW performs

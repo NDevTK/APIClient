@@ -59,26 +59,32 @@ function _relayMessageUnserved(msg) {
      transport and not a hole. */
   if (typeof msg.url !== "string" || msg.url === "") return "url";
   if (typeof msg.method !== "string" || msg.method === "") return "method";
-  if (typeof msg.status !== "number") return "status";
-  if (typeof msg.contentType !== "string") return "contentType";
-  if (typeof msg.responseHeaders !== "object" || msg.responseHeaders === null) return "responseHeaders";
   if (msg.body !== null && typeof msg.body !== "string") return "body";
   if (typeof msg.base64Encoded !== "boolean") return "base64Encoded";
   if (msg.transport === "fetch" || msg.transport === "xhr") {
-    /* The HTTP half: a request to describe and a status line to have read a reason phrase from. `requestBody`
-       is `string | null` because a GET carries none, and `callStack` is `""` where the stack walk came back
-       empty — both are answers, which is why neither may arrive absent. */
-    if (typeof msg.statusText !== "string") return "statusText";
-    if (typeof msg.requestHeaders !== "object" || msg.requestHeaders === null) return "requestHeaders";
-    if (msg.requestBody !== null && typeof msg.requestBody !== "string") return "requestBody";
-    if (typeof msg.requestBodyBase64 !== "boolean") return "requestBodyBase64";
+    /* The capture half of an HTTP record: the (method, URL, ordinal) it names its request by, the status the
+       page saw, and what webRequest cannot state. Every other field comes from the browser's own record of
+       the request (lib/web-request.js). `callStack` is `""` where the stack walk came back empty. */
+    if (!Number.isInteger(msg.seq) || msg.seq < 0) return "seq";
+    if (!Number.isInteger(msg.observedStatus)) return "observedStatus";
+    // A body for POST or PUT is the browser's to state (lib/web-request.js), so a capture carrying one is
+    // refused; for every other method it is this capture's, base64 or null.
+    if (msg.requestBodyB64 !== null && typeof msg.requestBodyB64 !== "string") return "requestBodyB64";
+    if (msg.requestBodyB64 !== null && webRequestStatesBody(msg.method)) return "requestBodyB64";
     if (typeof msg.callStack !== "string") return "callStack";
     if (!_requestInitServed(msg.requestInit)) return "requestInit";
     // Only the fetch wrapper can produce a filtered-response kind; XHR's own spec fails a cross-origin
     // response CORS did not allow rather than handing back an opaque one, so for XHR absence is the answer.
     if (msg.transport === "fetch" && (typeof msg.responseType !== "string" || msg.responseType === ""))
       return "responseType";
-  } else if (msg.transport === "eventsource") {
+    return null;
+  }
+  /* The other transports state their own status (0 where there is no status line), content type and header
+     list; none of them has a webRequest record to take them from. */
+  if (typeof msg.status !== "number") return "status";
+  if (typeof msg.contentType !== "string") return "contentType";
+  if (typeof msg.responseHeaders !== "object" || msg.responseHeaders === null) return "responseHeaders";
+  if (msg.transport === "eventsource") {
     if (!_requestInitServed(msg.requestInit)) return "requestInit";
   } else if (msg.transport === "websocket") {
     if (typeof msg.wsId !== "string" || msg.wsId === "") return "wsId";
@@ -345,14 +351,20 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     return;
   }
 
-  // ─── HTTP (fetch / XHR): unified request + response ─────────────────────
+  // ─── HTTP (fetch / XHR): the browser's record of the request, joined to the page's body capture ─
+  webRequestJoin(documentId, tabId, msg, (wr) => _httpRecord(tabId, msg, wr, frameId, documentId));
+}
 
+/* One fetch()/XHR round trip: `wr` is lib/web-request.js's record of the request, every field of it stated by
+   the browser, and `msg` the page's capture of the response body, joined on (documentId, method, URL,
+   ordinal). */
+function _httpRecord(tabId, msg, wr, frameId, documentId) {
   // Non-network URL schemes. Page-local blobs/data URIs go through fetch()
   // but produce an empty hostname, which breaks service grouping ("" bucket)
   // and isn't reverse-engineerable API traffic.
-  if (/^(blob|data|file|chrome(-extension)?|about):/i.test(msg.url)) return;
+  if (/^(blob|data|file|chrome(-extension)?|about):/i.test(wr.url)) return;
 
-  const url = new URL(msg.url);
+  const url = new URL(wr.url);
 
   // Filter internal extension requests
   if (url.hash.includes("_internal_probe")) return;
@@ -373,55 +385,44 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   const tab = _docForLearning(documentId);
   let service = extractInterfaceName(url);
 
-  // Build request header map from intercept.js capture
-  const headerMap = msg.requestHeaders;
+  /* The page-settable request headers, which a replay sends; the browser's own (Cookie, Origin, Referer) are
+     read off the on-wire list and recorded only as the facts below, never as values. */
+  const headerMap = wr.requestHeaders;
 
   // Key scanning: URL + request headers. Record the SPECIFIC header name
   // (lowercased) so on replay we can re-emit the key in the same location
   // instead of defaulting to X-Goog-Api-Key on every non-Google host.
-  extractKeysFromText(documentId, msg.url, msg.url, "url");
+  extractKeysFromText(documentId, wr.url, wr.url, "url");
   for (const [k, v] of Object.entries(headerMap)) {
-    extractKeysFromText(documentId, `${k}: ${v}`, msg.url, "header:" + k.toLowerCase());
+    extractKeysFromText(documentId, `${k}: ${v}`, wr.url, "header:" + k);
   }
 
   // Extract key header values
-  let authorization = null, cookie = null, contentType = null;
-  let origin = null, referer = null, apiKey = null;
-  for (const [name, value] of Object.entries(headerMap)) {
-    const lname = name.toLowerCase();
-    if (lname === "cookie") { cookie = "[PRESENT]"; headerMap[lname] = "[REDACTED]"; }
-    if (lname === "authorization") authorization = value;
-    if (lname === "origin") origin = value;
-    if (lname === "referer") referer = value;
-    if (lname === "content-type") contentType = value;
-    if (lname === "x-goog-api-key" || lname === "x-api-key" || lname === "apikey") apiKey = value;
-  }
+  const authorization = headerMap["authorization"] !== undefined ? headerMap["authorization"] : null;
+  const cookie = wr.requestHeadersOnWire["cookie"] !== undefined ? "[PRESENT]" : null;
+  const origin = wr.requestHeadersOnWire["origin"] !== undefined ? wr.requestHeadersOnWire["origin"] : null;
+  const contentType = headerMap["content-type"] !== undefined ? headerMap["content-type"] : null;
+  let apiKey = null;
+  for (const name of ["x-goog-api-key", "x-api-key", "apikey"])
+    if (headerMap[name] !== undefined) apiKey = headerMap[name];
 
-  // Compute rawBodyB64 from request body
-  let rawBodyB64 = null;
-  if (msg.requestBody) {
-    if (msg.requestBodyBase64) {
-      rawBodyB64 = msg.requestBody;
-    } else {
-      rawBodyB64 = uint8ToBase64(new TextEncoder().encode(msg.requestBody));
-    }
-  }
+  const rawBodyB64 = wr.rawBodyB64;
 
   // Create entry atomically — request + response together
   const entry = {
     id: "http_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
-    url: msg.url,
-    method: msg.method,
+    url: wr.url,
+    method: wr.method,
     service: service,
     timestamp: Date.now(),
-    status: msg.status,
+    status: wr.status,
     /* THE SERVER'S OWN REASON PHRASE, CARRIED RATHER THAN RECONSTRUCTED. intercept.js reads it off the very
        Response/XHR the status came from and content.js relays it per-transport; the HAR export used to
        synthesize `r.statusText || (r.status === 200 ? "OK" : "")` from a field NO producer on this record has
        ever written, so every exported entry carried a reason phrase nothing observed. It is `""` whenever the
        server stated none — Fetch §2.2.6 Responses makes that the ALWAYS-case over HTTP/2 — and the empty
        string travels as itself rather than becoming the synthesis. */
-    statusText: msg.statusText,
+    statusText: wr.statusText,
     completedAt: Date.now(),
     requestHeaders: headerMap,
     requestInit: _requestInitCopy(msg.requestInit),
@@ -429,8 +430,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     rawBodyB64: rawBodyB64,
     responseBody: msg.body,
     responseBase64: msg.base64Encoded,
-    mimeType: msg.contentType,
-    responseHeaders: msg.responseHeaders,
+    mimeType: wr.contentType,
+    responseHeaders: wr.responseHeaders,
     /* `frameId` IS NOT WRITTEN HERE, AND IT USED TO BE WRITTEN TWICE. This built it as `frameId ?? 0` and then
        handed the same `frameId` to `_pushGlobalLog`, whose first act is `if (entry.frameId == null)
        entry.frameId = frameId != null ? frameId : 0` — so the field had two writers with the same fallback,
@@ -486,11 +487,11 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
            is observable instead of silent (was `catch (_) { textBody = null }`,
            which dropped the diagnostic). The classifier below still runs on
            the raw bytes via magic-byte sniff. */
-        console.debug("[brain] response body text-decode failed:", e && e.message || e, "url=" + msg.url);
+        console.debug("[brain] response body text-decode failed:", e && e.message || e, "url=" + wr.url);
         textBody = null;
       }
     }
-    if (textBody) extractKeysFromText(documentId, textBody, msg.url, "response_body");
+    if (textBody) extractKeysFromText(documentId, textBody, wr.url, "response_body");
   }
 
   // Classify the captured response by CONTENT — magic bytes first, the server's
@@ -539,8 +540,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     responseType: msg.transport === "fetch" ? msg.responseType : null,
     /* The header list is always present; whether it NAMES a content type is the question, and `null` is
        this classifier's own vocabulary for "the response declared none". */
-    responseContentType: msg.responseHeaders["content-type"] ||
-                         msg.responseHeaders["Content-Type"] || null,
+    responseContentType: wr.responseHeaders["content-type"] !== undefined ? wr.responseHeaders["content-type"] : null,
   });
   const _isAsset = _assetClass.kind === "asset";
   /* AND THE LOG ENTRY CARRIES THE RULE, because it HAS a reader and the comment above got that half wrong.
@@ -555,7 +555,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      facts the entry already carries. */
   entry._assetReason = _isAsset ? _assetClass.label : null;
   const _isBoringFetch = _isAsset &&
-    msg.method === "GET" &&
+    wr.method === "GET" &&
     !url.search &&
     !rawBodyB64 &&
     !authorization &&
@@ -588,12 +588,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
             }
           } catch (e) {
             RETHROW_FATAL(e);
-            console.debug("[brain] JSPB-in-text body parse failed:", e && e.message || e, "url=" + msg.url);
+            console.debug("[brain] JSPB-in-text body parse failed:", e && e.message || e, "url=" + wr.url);
           }
         } else {
           entry.decodedBody = pbDecodeTree(bytes, 8, (val) => {
             if (typeof val === "string") {
-              extractKeysFromText(documentId, val, msg.url, "protobuf_body");
+              extractKeysFromText(documentId, val, wr.url, "protobuf_body");
             }
           });
         }
@@ -611,7 +611,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
           }
         } catch (e) {
           RETHROW_FATAL(e);
-          console.debug("[brain] form-urlencoded f.req decode failed:", e && e.message || e, "url=" + msg.url);
+          console.debug("[brain] form-urlencoded f.req decode failed:", e && e.message || e, "url=" + wr.url);
         }
       } else {
         // Try JSON parsing for any non-protobuf, non-form-encoded body.
@@ -635,12 +635,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
           }
         } catch (e) {
           RETHROW_FATAL(e);
-          console.debug("[brain] structural-JSON request-body parse failed:", e && e.message || e, "url=" + msg.url);
+          console.debug("[brain] structural-JSON request-body parse failed:", e && e.message || e, "url=" + wr.url);
         }
       }
     } catch (e) {
       RETHROW_FATAL(e);
-      console.debug("[brain] request-body decode outer failed:", e && e.message || e, "url=" + msg.url);
+      console.debug("[brain] request-body decode outer failed:", e && e.message || e, "url=" + wr.url);
     }
   }
 
@@ -804,7 +804,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
         _askIsNew = true;
       if (!_askIsNew)
         for (const _k of keysForService) if (!preLearnDiscovery._triedKeys.has(_k)) { _askIsNew = true; break; }
-      if (!_askIsNew && _seedIsProbeable(msg.url, msg.method) &&
+      if (!_askIsNew && _seedIsProbeable(wr.url, wr.method) &&
           !(preLearnDiscovery.seedMethod && _seedIsProbeable(preLearnDiscovery.seedUrl, preLearnDiscovery.seedMethod)))
         _askIsNew = true;
     }
@@ -817,11 +817,11 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
            and before anything has classified it — no rule is recorded for this bucket yet, and the entry says
            so rather than leaving the field absent for five copiers to each answer with a `|| null`
            (lib/discovery-entry.js). */
-        tab.discoveryDocs.set(service, { status: "pending", seedUrl: msg.url, grouping: null });
+        tab.discoveryDocs.set(service, { status: "pending", seedUrl: wr.url, grouping: null });
       }
       /* THE SEED'S METHOD TRAVELS WITH THE SEED. The tail of that call may fall back to the req2proto error
          probe, which is a POST of a deliberately-malformed body, so it may only probe a seed the page itself
-         POSTed — and this is the only frame that knows: `msg.method` sits beside `msg.url` here and is lost
+         POSTed — and this is the only frame that knows: `wr.method` sits beside `wr.url` here and is lost
          everywhere below. Passing the address without it is what sent a malformed POST to an endpoint the page
          had only GET'd. `_seedIsProbeable` aborts on the absence rather than guessing.
          AND THE GRADE TRAVELS THE SAME WAY, FOR THE SAME REASON. This frame is the only one that knows nobody
@@ -830,7 +830,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
          sweep sees only what a logged-out client sees — and stops the sweep's own POST error-probe tail from
          firing at all. The operator tier's exemption from the destructive-path deny list is scoped to acts a
          human initiated, and no human initiates this one, so it states no popup sender. */
-      fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url, msg.method,
+      fetchDiscoveryForService(documentId, service, url.hostname, keysForService, wr.url, wr.method,
                                PAGE_CONTEXT_TOOL_INITIATED, null);
     }
   }
@@ -867,8 +867,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      reply the PAGE's own request already received. */
 
   // Extract OAuth scopes from 403 www-authenticate response header
-  if (msg.status === 403 && msg.responseHeaders) {
-    const wwwAuth = msg.responseHeaders["www-authenticate"];
+  if (wr.status === 403 && wr.responseHeaders) {
+    const wwwAuth = wr.responseHeaders["www-authenticate"];
     if (wwwAuth) {
       const scopeMatch = wwwAuth.match(/scope="([^"]*)"/);
       if (scopeMatch) {
@@ -933,7 +933,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
                  per-service scope rows while the Send panel for that exact endpoint shows no "Scopes:" row. */
           const _scDoc = globalStore.discoveryDocs.get(service)?.doc;
           if (_scDoc) {
-            const _scMethod = findDiscoveryMethod(_scDoc, url.pathname, msg.method)?.method;
+            const _scMethod = findDiscoveryMethod(_scDoc, url.pathname, wr.method)?.method;
             if (_scMethod && (!Array.isArray(_scMethod.scopes) || !_scMethod.scopes.length)) {
               _scMethod.scopes = scopeList;
             }

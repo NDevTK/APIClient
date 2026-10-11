@@ -23,34 +23,19 @@
   // the RESPONSE_BODY type against the content-script allowlist. See SECURITY.md.
 
   /* THE FIELDS EVERY TRANSPORT WRITES, and then the ones only SOME of them do. intercept.js emits this event
-     from three wrappers with three different shapes — fetch, XMLHttpRequest and WebSocket — so a field's
-     absence here is a fact about WHICH TRANSPORT ran, and a relay that fills it in destroys the one thing
-     this side knows and the offscreen cannot re-derive.
-       responseType  Fetch §2.2.6 response's TYPE, read off `clone.type`. Only the fetch wrapper can produce
-                     one: XHR's own spec fails a cross-origin response CORS did not allow rather than handing
-                     back an opaque one, and a WebSocket frame is not a Response at all. It is also the one
-                     fact about an opaque no-cors response its bytes cannot carry — body null, header list
-                     empty, byte-identical to an empty readable response — so "absent" is NOT APPLICABLE and
-                     `null` was that statement rendered as the value the classifier reads for "not opaque".
-       wsId          written by the WebSocket wrapper alone; its absence is "this is not a socket frame", and
-                     lib/response-decode.js reads exactly that (`msg.channelId || msg.wsId`).
-       statusText    Fetch §2.2.6 Responses' status message / XMLHttpRequest §3.6.3 `The statusText getter` —
-                     written by the fetch and XHR wrappers, which have a status LINE to have read one from. A
-                     WebSocket frame and an EventSource message have none, so its absence is "no status line
-                     was observed" and NOT "the reason phrase was empty", which is a different and legal
-                     answer the h2 wrappers do report.
-       requestHeaders / requestBody / requestBodyBase64 / callStack
-                     written by the fetch and XHR wrappers, which have a request to describe. A WS_OPEN /
-                     WS_SEND / WS_RECV frame has none, and `null`/`false` said "the request carried no
-                     headers and no body", which is a claim about a request that does not exist.
-     AND THREE NAMES ARE GONE BECAUSE NOTHING ON THIS EVENT EVER WROTE THEM. `channelId`, `sourceOrigin` and
-     `targetOrigin` belong to the postMessage/MessageChannel records THIS FILE builds further down — a
-     different producer on a different path — and reading them off intercept.js's detail was a read with no
-     writer, with `|| null` as the reason it never crashed. */
-  const PER_TRANSPORT = ["responseType", "wsId", "statusText",
-                         "requestHeaders", "requestBody", "requestBodyBase64", "callStack", "requestInit"];
-  // requestInit: the request's credentials, mode, referrer and referrer policy, from the fetch, XHR and
-  // EventSource wrappers; a socket frame has no request to describe.
+     from four wrappers with different shapes, so a field's absence here is a fact about WHICH TRANSPORT ran,
+     and a relay that filled it in would destroy the one thing this side knows.
+       status / contentType / responseHeaders   the WebSocket and EventSource wrappers'. A fetch() or XHR
+                     capture carries none: the trusted zone takes them from the browser's webRequest record of
+                     the request (lib/web-request.js), which the page cannot state.
+       seq / observedStatus / requestBodyB64   the fetch and XHR wrappers': the ordinal the capture names its
+                     request by, the status this realm saw (checked against the browser's), and the body bytes
+                     of a method webRequest reports none for.
+       responseType  Fetch §2.2.6 response's TYPE, from the fetch wrapper alone.
+       wsId          written by the WebSocket wrapper alone (lib/response-decode.js reads it for the channel).
+       callStack / requestInit   the fetch and XHR wrappers', and requestInit the EventSource wrapper's too. */
+  const PER_TRANSPORT = ["status", "contentType", "responseHeaders", "seq", "observedStatus", "requestBodyB64",
+                         "responseType", "wsId", "callStack", "requestInit"];
   document.addEventListener("__uasr_resp", (e) => {
     if (!e.detail) return;
     const d = e.detail;
@@ -64,9 +49,6 @@
       transport: d.transport,
       url: d.url,
       method: d.method,
-      status: d.status,
-      contentType: d.contentType,
-      responseHeaders: d.responseHeaders,
       body: d.body,
       base64Encoded: d.base64Encoded,
     };
