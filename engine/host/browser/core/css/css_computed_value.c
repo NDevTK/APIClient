@@ -12,6 +12,7 @@
 #include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
+#include "core/css/css_display.h"
 #include "core/css/css_image.h"
 #include "core/css/css_length.h"
 #include "core/css/css_logical.h"
@@ -341,39 +342,6 @@ static char *computed_overflow(lxb_dom_element_t *el, const char *name, char *sp
 
 /* ---- CSS Display §2.7 and §2.8's computed value ----------------------------------------------------------- */
 
-/* §2.7's BLOCKIFICATION: "sets the box's computed outer display type to block". The values whose outer type is
-   already block are unchanged; a layout-internal box additionally has "its inner display type convert to flow
-   so that it becomes a block container", which is why every table-internal row below maps to plain `block`. */
-static char *blockified(char *spec)
-{
-    static const struct { const char *from, *to; } MAP[] = {
-        { "inline", "block" }, { "inline-block", "block" },   /* §2.7's legacy inline flow-root rule */
-        { "inline-table", "table" }, { "inline-flex", "flex" }, { "inline-grid", "grid" },
-        { "run-in", "block" },
-        { "table-row-group", "block" }, { "table-header-group", "block" }, { "table-footer-group", "block" },
-        { "table-row", "block" }, { "table-cell", "block" }, { "table-column-group", "block" },
-        { "table-column", "block" }, { "table-caption", "block" },
-        { "ruby-base", "block" }, { "ruby-text", "block" },
-        { "ruby-base-container", "block" }, { "ruby-text-container", "block" },
-    };
-    static const char *const BLOCK_OUTER[] = { "block", "flow", "flow-root", "flex", "grid", "table",
-                                               "list-item" };
-    unsigned i;
-
-    for (i = 0; i < sizeof(MAP) / sizeof(MAP[0]); i++)
-        if (strcmp(spec, MAP[i].from) == 0) { free(spec); return css_cv_strdup(MAP[i].to); }
-    for (i = 0; i < sizeof(BLOCK_OUTER) / sizeof(BLOCK_OUTER[0]); i++)
-        if (strcmp(spec, BLOCK_OUTER[i]) == 0) return spec;
-    DFAIL("CSS Display §2.7 blockifies a box whose computed `display` this file cannot map. The two forms it "
-          "does not carry are the TWO-VALUE `<display-outside> <display-inside>` syntax (`inline flow-root`, "
-          "`block flow list-item`), which lexbor parses into the three-slot value this file only ever sees "
-          "serialized, and `ruby`, whose blockified form is `block ruby` and NOT `block` (its inner type "
-          "survives — only a LAYOUT-INTERNAL box converts its inner type to flow). BUILD the outer/inner pair "
-          "as the value this file carries, so blockification sets the outer half and leaves the inner one "
-          "alone, instead of mapping whole keywords");
-    return spec;
-}
-
 /* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, because `display:
    contents` generates none and a flex item's container is therefore the first ancestor past it. The walk reads
    SPECIFIED values on purpose: blockification never makes a box a flex or grid container and never stops one being
@@ -403,7 +371,9 @@ char *css_box_parent_display(const lxb_dom_node_t *n)
 
         DCHECK(d != NULL, "§7's defaulting produced no `display` for an ancestor element — the UA layer answers "
                           "`inline` for every element it does not name, so this cannot be unset");
-        if (strcmp(d, "contents") != 0) return d;
+        CssDisplay v;
+
+        if (!css_display_parse(d, &v) || !css_display_is_box(v, CSS_KEYWORD_CONTENTS)) return d;
         free(d);
         /* §2.8: "a display of contents computes to block on the root element", so the root is a box parent
            however it is declared. */
@@ -412,10 +382,14 @@ char *css_box_parent_display(const lxb_dom_node_t *n)
     return NULL;
 }
 
+/* css-flexbox-1's and css-grid-1's containers: a box whose inner display type is `flex` or `grid`, whatever its
+   outer type or spelling. `d` is a specified value lexbor validated. */
 static bool display_is_flex_or_grid_container(const char *d)
 {
-    return css_cv_is(d, "flex") || css_cv_is(d, "inline-flex") ||
-           css_cv_is(d, "grid") || css_cv_is(d, "inline-grid");
+    CssDisplay v;
+
+    if (d == NULL || !css_display_parse(d, &v)) return false;
+    return v.kind == CSS_DISPLAY_PAIR && (v.inner == CSS_KEYWORD_FLEX || v.inner == CSS_KEYWORD_GRID);
 }
 
 /* ONE ELEMENT'S LOCAL NAME, compared EXACTLY. An HTML element's local name is lower case for every element a
@@ -563,8 +537,19 @@ static bool display_contents_computes_to_none(lxb_dom_element_t *el)
 static char *display_blockified_if(lxb_dom_element_t *el, char *spec, bool out_of_flow)
 {
     const lxb_dom_node_t *n = lxb_dom_interface_node(el);
-    bool root = css_is_root_element(n), blockify;
+    bool root = css_is_root_element(n), blockify, ok;
+    CssDisplay d;
 
+    /* A substituted value outside css-display-3 §2's grammar is invalid at computed-value time (css-values-5
+       "Resolving in Properties"), and `display` is not inherited, so `unset` is its initial value. */
+    if (!css_display_parse(spec, &d)) {
+        free(spec);
+        spec = cssom_initial_value("display");
+        DCHECK(spec != NULL, "§7.1 produced no INITIAL value for `display`");
+        ok = css_display_parse(spec, &d);
+        DCHECK(ok, "`display`'s initial value fails css-display-3 §2's own grammar");
+    }
+    free(spec);
     /* css-display-3 §2.5's LAST SENTENCE, ASKED BEFORE css-display-3 §2.8's ROOT RULE, AND THE ORDER IS A READING
        RATHER THAN A DEDUCTION. The two disagree about exactly one element: a `contents` DOCUMENT ROOT that Appendix
        B suppresses, which css-display-3 §2.8 would make `block`. Appendix B's `svg` row is the text that addresses
@@ -576,15 +561,10 @@ static char *display_blockified_if(lxb_dom_element_t *el, char *spec, bool out_o
        root is always `<html>` — an HTML element in none of the appendix's arms, so `<html>` takes
        css-display-3 §2.8's rule either way and the ordering is observable only in a document built some other
        way. */
-    if (strcmp(spec, "contents") == 0 && display_contents_computes_to_none(el)) {
-        free(spec);
+    if (css_display_is_box(d, CSS_KEYWORD_CONTENTS) && display_contents_computes_to_none(el))
         return css_cv_strdup("none");
-    }
     /* §2.8: "Additionally, a display of contents computes to block on the root element." */
-    if (root && strcmp(spec, "contents") == 0) { free(spec); return css_cv_strdup("block"); }
-    /* §2.7: blockification "has no effect on display types that generate no box at all, such as none or
-       contents". */
-    if (strcmp(spec, "none") == 0 || strcmp(spec, "contents") == 0) return spec;
+    if (root && css_display_is_box(d, CSS_KEYWORD_CONTENTS)) return css_cv_strdup("block");
     /* §2.8's root rule, and the three computed-value fixups §2.7 lists that the TREE decides: "Absolute
        positioning or floating an element blockifies the box's display type" and "A parent with a grid or flex
        display value blockifies the box's display type". The first two are the caller's `out_of_flow`; the
@@ -596,7 +576,7 @@ static char *display_blockified_if(lxb_dom_element_t *el, char *spec, bool out_o
         blockify = display_is_flex_or_grid_container(pd);
         free(pd);
     }
-    return blockify ? blockified(spec) : spec;
+    return css_display_serialize(blockify ? css_display_blockify(d) : d);
 }
 
 static char *computed_display(lxb_dom_element_t *el, char *spec)

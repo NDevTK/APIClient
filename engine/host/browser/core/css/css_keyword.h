@@ -54,7 +54,34 @@
     X(XXX_LARGE,   "xxx-large")            \
     X(LARGER,      "larger")               \
     X(SMALLER,     "smaller")              \
-    X(MATH,        "math")
+    X(MATH,        "math")                 \
+    X(BLOCK,              "block") \
+    X(INLINE,             "inline") \
+    X(RUN_IN,             "run-in") \
+    X(FLOW,               "flow") \
+    X(FLOW_ROOT,          "flow-root") \
+    X(TABLE,              "table") \
+    X(FLEX,               "flex") \
+    X(GRID,               "grid") \
+    X(RUBY,               "ruby") \
+    X(LIST_ITEM,          "list-item") \
+    X(TABLE_ROW_GROUP,    "table-row-group") \
+    X(TABLE_HEADER_GROUP, "table-header-group") \
+    X(TABLE_FOOTER_GROUP, "table-footer-group") \
+    X(TABLE_ROW,          "table-row") \
+    X(TABLE_CELL,         "table-cell") \
+    X(TABLE_COLUMN_GROUP, "table-column-group") \
+    X(TABLE_COLUMN,       "table-column") \
+    X(TABLE_CAPTION,      "table-caption") \
+    X(RUBY_BASE,          "ruby-base") \
+    X(RUBY_TEXT,          "ruby-text") \
+    X(RUBY_BASE_CONTAINER, "ruby-base-container") \
+    X(RUBY_TEXT_CONTAINER, "ruby-text-container") \
+    X(CONTENTS,           "contents") \
+    X(INLINE_BLOCK,       "inline-block") \
+    X(INLINE_TABLE,       "inline-table") \
+    X(INLINE_FLEX,        "inline-flex") \
+    X(INLINE_GRID,        "inline-grid")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -67,7 +94,9 @@ typedef enum {
 
 /* The keywords a property's `Value:` line admits, each set cited in css_keyword.c. A length row whose own
  * computed-value rule resolves a keyword to a number (`thin`, `x-large`) keeps the rest in its computed value.
- * ABSOLUTE_SIZE is no row's: it is css-fonts-4 §2.5's `<absolute-size>`, which FONT_SIZE contains. UNTYPED is a NAMED RESIDUAL: a TEXT-shaped row's computed value
+ * ABSOLUTE_SIZE is no row's: it is css-fonts-4 §2.5's `<absolute-size>`, which FONT_SIZE contains. The five
+ * DISPLAY_ sets are no row's either: they are css-display-3 §2's productions, which core/css/css_display.h
+ * composes into the property's grammar. UNTYPED is a NAMED RESIDUAL: a TEXT-shaped row's computed value
  * is still owned text, compared by spelling (core/css/css_computed_value.h's `css_computed_value`). The next
  * diffs move each `specified keyword` row to the KEYWORD shape over a set of its own, `display` with a typed
  * pair of its own. Until each text row has one, a page's case-folded or substituted spelling of such a keyword
@@ -86,7 +115,12 @@ typedef enum {
     CSS_KEYWORDS_CLEAR,
     CSS_KEYWORDS_LINE_WIDTH,
     CSS_KEYWORDS_FONT_SIZE,
-    CSS_KEYWORDS_ABSOLUTE_SIZE
+    CSS_KEYWORDS_ABSOLUTE_SIZE,
+    CSS_KEYWORDS_DISPLAY_OUTSIDE,
+    CSS_KEYWORDS_DISPLAY_INSIDE,
+    CSS_KEYWORDS_DISPLAY_INTERNAL,
+    CSS_KEYWORDS_DISPLAY_BOX,
+    CSS_KEYWORDS_DISPLAY_LEGACY
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

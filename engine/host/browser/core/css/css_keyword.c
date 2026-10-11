@@ -108,6 +108,28 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
         return k == CSS_KEYWORD_XX_SMALL || k == CSS_KEYWORD_X_SMALL || k == CSS_KEYWORD_SMALL ||
                k == CSS_KEYWORD_MEDIUM || k == CSS_KEYWORD_LARGE || k == CSS_KEYWORD_X_LARGE ||
                k == CSS_KEYWORD_XX_LARGE || k == CSS_KEYWORD_XXX_LARGE;
+    /* css-display-3 §2 "Box Layout Modes: the display property"'s productions. `<display-outside> = block |
+       inline | run-in`; `<display-inside> = flow | flow-root | table | flex | grid | ruby`; `<display-internal>
+       = table-row-group | table-header-group | table-footer-group | table-row | table-cell | table-column-group
+       | table-column | table-caption | ruby-base | ruby-text | ruby-base-container | ruby-text-container`;
+       `<display-box> = contents | none`; `<display-legacy> = inline-block | inline-table | inline-flex |
+       inline-grid`. */
+    case CSS_KEYWORDS_DISPLAY_OUTSIDE:
+        return k == CSS_KEYWORD_BLOCK || k == CSS_KEYWORD_INLINE || k == CSS_KEYWORD_RUN_IN;
+    case CSS_KEYWORDS_DISPLAY_INSIDE:
+        return k == CSS_KEYWORD_FLOW || k == CSS_KEYWORD_FLOW_ROOT || k == CSS_KEYWORD_TABLE ||
+               k == CSS_KEYWORD_FLEX || k == CSS_KEYWORD_GRID || k == CSS_KEYWORD_RUBY;
+    case CSS_KEYWORDS_DISPLAY_INTERNAL:
+        return k == CSS_KEYWORD_TABLE_ROW_GROUP || k == CSS_KEYWORD_TABLE_HEADER_GROUP ||
+               k == CSS_KEYWORD_TABLE_FOOTER_GROUP || k == CSS_KEYWORD_TABLE_ROW || k == CSS_KEYWORD_TABLE_CELL ||
+               k == CSS_KEYWORD_TABLE_COLUMN_GROUP || k == CSS_KEYWORD_TABLE_COLUMN ||
+               k == CSS_KEYWORD_TABLE_CAPTION || k == CSS_KEYWORD_RUBY_BASE || k == CSS_KEYWORD_RUBY_TEXT ||
+               k == CSS_KEYWORD_RUBY_BASE_CONTAINER || k == CSS_KEYWORD_RUBY_TEXT_CONTAINER;
+    case CSS_KEYWORDS_DISPLAY_BOX:
+        return k == CSS_KEYWORD_CONTENTS || k == CSS_KEYWORD_NONE;
+    case CSS_KEYWORDS_DISPLAY_LEGACY:
+        return k == CSS_KEYWORD_INLINE_BLOCK || k == CSS_KEYWORD_INLINE_TABLE || k == CSS_KEYWORD_INLINE_FLEX ||
+               k == CSS_KEYWORD_INLINE_GRID;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;
