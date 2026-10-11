@@ -655,7 +655,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
                         const char *parent_navigable, const char *container_policy,
-                        const char *ancestor_origins, const char *creation_sandbox_flags)
+                        const char *ancestor_origins, const char *creation_sandbox_flags,
+                        const char *arrival)
 {
     /* §7.1.5's set for this document's navigable, stated as in qjs_init. */
     SandboxFlags creation_flags = 0;
@@ -819,7 +820,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
        engine_join_document copies every body it queues and resolves every `src` it parks on. */
     scripts = document_exec_scripts(dom);
     engine_join_document(cctx, doc, scripts.bodies, scripts.srcs, scripts.types, scripts.sched, scripts.els,
-                         scripts.n);
+                         scripts.n, engine_provenance_of_token(arrival));
     doc_scripts_free(&scripts);
 
     navigation_params_free(&np);
@@ -949,6 +950,19 @@ QJS_EXPORT void qjs_set_referenced(int referenced)
     /* A 0 says the provisioning gave no reference. It leaves standing one the parse inside qjs_init already
        raised: markup that creates a cross-origin `<iframe>` makes this document the child's `parent`. */
     if (referenced) engine_set_referenced(1);
+}
+
+/* How this instance's document was reached (solver/engine.h's engine_set_arrival), as the provenance word the
+ * provisioning host composed: the trusted zone's reach grade for the navigation that produced the document, or
+ * `observed` for one a person named. Like the peer reference it is a provisioning fact, stated after qjs_init and
+ * before qjs_begin, and it survives qjs_teardown. */
+QJS_EXPORT void qjs_set_arrival(const char *provenance)
+{
+    DCHECK(g_ctx != NULL, "qjs_set_arrival ran before qjs_init built the context — the statement is about this "
+                          "instance's document, and there is no document yet");
+    DCHECK(!g_begun, "this document's arrival was stated after the frontier was seeded — the boot flow's grade "
+                     "is taken from it before its seed parks a request");
+    engine_set_arrival(engine_provenance_of_token(provenance));
 }
 
 /* Whether a peer holds a reference into this instance's document, read off solver/engine.c's one flag. It is

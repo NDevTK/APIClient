@@ -1669,7 +1669,8 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
                             const char *coep, const char *coep_endpoint,
                             const char *coep_report_only, const char *coep_report_only_endpoint,
                             const char *parent, const char *container_policy,
-                            const char *ancestor_origins, const char *creation_sandbox_flags)
+                            const char *ancestor_origins, const char *creation_sandbox_flags,
+                            const char *arrival)
 {
     int down[2], up[2];
     pid_t pid;
@@ -1727,7 +1728,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
               coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
-              ancestor_origins, creation_sandbox_flags, (char *)NULL);
+              ancestor_origins, creation_sandbox_flags, arrival, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1908,11 +1909,10 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            §3.1.3's list and §9.5's answer: §7.1.5's flag names CONTAIN SPACES ("sandboxed navigation browsing
            context flag"), so a space-joined set could not be taken apart at all.
            FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF (CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's
-           `observed`/`derived`/`forced`) AND THIS RUNNER DECIDES NOTHING FROM IT, WHICH IS NOT A DEFAULTED
-           FIELD. The field exists so a host can decide whether to spend the network — and whose SESSION — on
-           an address the page's own code chose; this host fetches only from the corpus's own wptserve, with no
-           cookie jar and no person to act as, so it has no such decision to make and states none.
-           BUT IT IS READ, AND WHAT IT IS READ FOR IS THE GRAMMAR RATHER THAN THE POLICY — the assert below,
+           `observed`/`derived`/`forced`) AND THIS RUNNER DECIDES NO FETCH FROM IT: it fetches only from the
+           corpus's own wptserve, with no cookie jar and no person to act as. It hands the word to the child
+           as its arrival grade (solver/engine.h's engine_set_arrival), a statement about the child's timelines.
+           AND IT IS READ FOR THE GRAMMAR — the assert below,
            which is the only thing standing between this walk and the drift that already happened twice in the
            prose above. Two fields were inserted before the policy (§7.1.5's flag set, then this one) and the
            sentences naming the policy's index were left saying 14 and 15 while the code moved to 16; the count
@@ -1943,7 +1943,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                "the create notice's eighteenth field is not a witness-mark token engine.h declares — the walk's "
                "indices and the record's fields have parted");
         wpt_spawn_child(f[1], f[3], f[4], f[19], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
-                        f[14]);
+                        f[14], f[15]);
         free(whole);
         return;
     }
@@ -1954,9 +1954,10 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        and the swapped-to navigable IS a top-level traversable, so HTML §8.1.3.1's top-level creation URL for
        its environments is its own address rather than something only the creator could state. Hence the empty
        policy and the address passed twice below — derived here, not sent twice and able to disagree.
-       THE LAST THREE FIELDS ARE THE NAVIGATION'S PROVENANCE AND TWO MARKS and this host reads them nowhere, for the create arm's
-       reason exactly: a corpus fetch spends no session. It is COUNTED and not read, which is what keeps a
-       record that grew from arriving here as a record that is merely long.
+       THE LAST THREE FIELDS ARE THE NAVIGATION'S PROVENANCE AND TWO MARKS. The provenance is the child's
+       arrival grade (engine.h's engine_set_arrival) and decides no fetch, since a corpus fetch spends no
+       session; both marks are COUNTED and not read, which is what keeps a record that grew from arriving
+       here as a record that is merely long.
        A NEW GROUP IS A NEW PROCESS HERE FOR THE SAME REASON A CROSS-ORIGIN CHILD IS: SECURITY.md keys an
        instance on `(browsing context group, origin)`, and a swap changes the first half. */
     if (nf == 7 && !strcmp(f[0], "navigable.swap")) {
@@ -1983,7 +1984,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, f[4]);
         free(whole);
         return;
     }
@@ -1992,12 +1993,13 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        nav_navigate_to_peer). The child this provisions is the swap's in every field: a top-level document with
        no creator-side container, no parent, no element presenting it and its own address as its environments'
        top-level creation URL — the browsing context is kept, but nothing a creator would clone exists for a
-       top-level navigation. The provenance and both marks are counted and not read, for the create arm's reason. */
+       top-level navigation. The provenance is the child's arrival grade, as the swap's is; both marks are
+       counted and not read. */
     if (nf == 7 && !strcmp(f[0], "navigable.navigate")) {
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, f[4]);
         free(whole);
         return;
     }
@@ -3363,6 +3365,9 @@ static int wpt_child_main(int argc, char **argv)
        frame's scripts, submits its forms and relaxes its `document.domain`, which is the whole of what the
        attribute removes. */
     const char *creation_sandbox_flags = argc > 15 ? argv[15] : NULL;
+    /* AND HOW THE PARENT REACHED THIS DOCUMENT, the create or swap notice's provenance word, APPENDED for the
+       same reason; engine_provenance_of_token refuses an absent or unknown one. */
+    const char *arrival = argc > 16 ? argv[16] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -3454,6 +3459,7 @@ static int wpt_child_main(int argc, char **argv)
        answer in. Stated by the HOST because provisioning is the host's fact: the engine cannot see its own
        embedder. */
     engine_set_referenced(1);
+    engine_set_arrival(engine_provenance_of_token(arrival));
 
     /* THE TWO INTRINSICS A PEER PERFORMS A WRITE AND A CALL THROUGH are captured by the component that performs
        them, at this realm's install — before this document's scripts run, which is the whole of what makes them
@@ -3771,6 +3777,8 @@ int main(int argc, char **argv)
        document rather than collected as its `<script>` elements, so no row of it came from one. §3.1.7's
        `currentScript` is null while each of them runs, which is that section's answer for a document that
        is not executing a script element. The OTHER entry above passes document_exec_scripts's column. */
+    /* The test document is the one this runner was named, as a person names a seed. */
+    engine_set_arrival(PROV_OBSERVED);
     engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, /*sched*/NULL, /*els*/NULL, g_prog_n,
                        /*forking*/0, NULL);
     for (;;) {

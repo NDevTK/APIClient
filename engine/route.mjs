@@ -175,7 +175,7 @@ let instanceSerial = 0;
    documents state — nothing embeds them — and is the same fact `u` and `null` state one link along. Without
    it the engine installs the EMPTY list, which is the positive claim that the Document is at the top of its
    own tree. */
-async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf,
+async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arrival, inheritedCsp, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
                           parentNavigable = 'u', containerPolicy = 'null', ancestorOrigins = 'none',
@@ -250,6 +250,11 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
      is the language cold_park_recipes both writes and reads; the extension joins the stored ARRAY the same
      way, so this zone stores what that one stores. */
+  /* HOW THIS DOCUMENT WAS REACHED (solver/engine.h's engine_set_arrival): the notice's provenance for a peer,
+     `observed` for a root this driver names. Stated before the seed, since every timeline's grade starts there. */
+  if (!['observed', 'derived', 'forced'].includes(arrival))
+    fail(`an instance for ${url} was made with the arrival \`${arrival}\`, which is no provenance word`);
+  M.ccall('qjs_set_arrival', null, ['number'], [cs(arrival)]);
   M.ccall('qjs_begin', 'void', ['number'], [cs(recipes || '')]);
   return { M, cs, str, provide, answer, docId, tag: `${docId}/s${++instanceSerial}`,
            docUrl: url, origin: new URL(url).origin, done: false };
@@ -697,7 +702,7 @@ async function drainNotices(e) {
          parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
          either of them into the container beside them could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(19).join('\t'),
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f[15], f.slice(19).join('\t'),
                                          f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin> <provenance> <driven> <pinned>`. The same act as
@@ -713,7 +718,7 @@ async function drainNotices(e) {
        does not match. That is one line in HTML_A and one URL-keyed header in the reply this driver serves. */
     else if (f[0] === 'navigable.swap') {
       /* SEVEN FIELDS, the last three being the provenance and two marks of the navigation that caused the
-         swap — counted here and read nowhere, for the create arm's reason. */
+         swap. The provenance is the new instance's arrival; both marks are counted and read nowhere. */
       if (f.length < 7 || !f[1] || !f[2] || !f[4] || !f[5] || !f[6])
         fail(`a navigable.swap notice was short of its fields: ${n}`);
       if (holderOf(f[1])) fail(`§7.1.3.2's swap named a document an instance already holds: ${f[1]}`);
@@ -725,7 +730,7 @@ async function drainNotices(e) {
          AND §3.1.3's LIST DEFAULTS TO `none` BY THAT SAME SENTENCE READ ONE ALGORITHM ALONG: its steps 2-3
          return an empty output for a Document with no CONTAINER DOCUMENT, and a navigable with no parent has
          none. Both are defaults because both are what the section says, not because nothing was known. */
-      engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2], undefined, '', ''));
+      engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2], undefined, f[4], '', ''));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
@@ -833,7 +838,7 @@ async function drainNotices(e) {
 
 /* THE ROOT DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so its environment's top-level creation URL is its
    own address. */
-engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', undefined, '', ''));
+engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', undefined, 'observed', '', ''));
 
 /* PHASE 1 — run `a` out, collecting its posts. Nothing is routed yet, so `b` holds no record and each one below
    can be delivered on its own; two records on one flow is a merge of possibly-contradictory senders, which the
@@ -976,7 +981,7 @@ parked.M.ccall('qjs_teardown', 'void', [], []);
    a register or an instance for it to land in. */
 const orphanCompletions = [...answers.keys()];
 withholdReads = false;
-engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, '', '');
+engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, 'observed', '', '');
 const resumedTag = engines[0].tag;
 console.log(`phase 4: resumed as [${resumedTag}] from the residue; [${engines[1].tag}] never left memory`);
 /* THE RESUMED SESSION, PUMPED WITH ITS OWN ROUTING INTERLEAVED — which is why this is not a `pumpUntil`: the

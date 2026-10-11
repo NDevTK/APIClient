@@ -852,6 +852,9 @@ async function child(docPath, schedName) {
          between two fills is a difference between two runs of one document that no flow decided. The block is
          the instance's lifetime either way — the module is torn down whole. */
     }
+    /* Each fixture is a document this gate names, as a person names a seed (solver/engine.h's
+       engine_set_arrival). */
+    e.M.ccall("qjs_set_arrival", null, ["number"], [e.cs("observed")]);
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);
     /* THE HOST'S OWN LEVEL-1 YIELD, SET FROM THE DECLARED FLOOR AND NOT FROM A NAME. Nothing is dropped across
        it — engine.c returns YIELD with `g_sess_cur` held and the frontier untouched — which is exactly the

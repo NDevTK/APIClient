@@ -192,6 +192,8 @@ async function drive(gluePath, html, steps) {
     parentNavigable: 'u', containerPolicy: 'null', ancestorOrigins: 'none', creationSandboxFlags: 'none',
   }, cs);
   M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
+  /* A document this driver names, as a person names a seed (solver/engine.h's engine_set_arrival). */
+  M.ccall('qjs_set_arrival', null, ['number'], [cs('observed')]);
   M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
 
   /* `qjs_pending` is a SET keyed on the request's identity and is re-reported every step, so accumulating it

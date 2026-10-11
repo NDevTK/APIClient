@@ -399,8 +399,9 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    completion}` per native operation settling on a completion other than its machine's declared real one,
    as `op(operand)` and the completion index. A decision states the arm, never a value satisfying it.
    Named residual. Not covered: an assumed arm whose predicate has no spellable identity, a declined request's
-   failure arm and a modelled close request mark the path forced and file no decision. Next diff: a decision
-   row for each, keyed by the act's own name. How its absence shows: a `forced` row whose every witness
+   failure arm, a modelled close request and a document's forced arrival (engine.h's engine_set_arrival) mark
+   the path forced and file no decision. Next diff: a decision row for each, keyed by the act's own name (for
+   an arrival, the creating instance's witness crossing beside the arrival grade). How its absence shows: a `forced` row whose every witness
    element has an empty `assumed`. */
 /* `verification` is what firing the witness established (solver/witness_verify.h): `verified` when a run with
    its value delivered through the source's real transform reached this method and path assuming nothing of

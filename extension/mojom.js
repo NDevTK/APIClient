@@ -336,6 +336,12 @@
          "host states. NOT retained: main.c parses it into a SandboxFlags word within the call and keeps no " +
          "pointer into these bytes" };
 
+  var ARRIVAL = { name: "arrival", type: "string", retained: false,
+    why: "how this document was reached, as one of the three provenance words (`observed`, `derived`, " +
+         "`forced`): the trusted zone's reach grade for the navigation that produced it. A document reached past " +
+         "a forced gate starts every timeline forced (solver/engine.h's engine_set_arrival), so what it learns " +
+         "carries the fork. The engine CHECKs the word. NOT retained: it is read within the call" };
+
   var ANCESTOR_ORIGINS = { name: "ancestorOrigins", type: "string", retained: false,
     why: "HTML §3.1.3's internal ancestor origin objects list for this document, composed by the renderer that " +
          "holds its ancestors and serialized as §7.1.1 origin serializations joined by SPACE (URL §3.2 \"Host " +
@@ -381,7 +387,7 @@
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
-                 CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS],
+                 CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS, ARRIVAL],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +
@@ -706,6 +712,12 @@
          and sending `null` for one of those tells the flow the server was unreachable for a request nobody
          sent. A boolean on `Provide` would put those two in one record with a field deciding which, which is
          exactly the fold ordinal 4's own `why` describes as a fold no host can undo. */
+      /* The root document's arrival, stated beside SetReferenced and for its reason: a provisioning fact the
+         engine cannot see, crossing after `Init` and before `Begin` (qjs_set_arrival asserts both). */
+      { ordinal: 26, name: "SetArrival",
+        params: [{ name: "provenance", type: "string", retained: false, why: ARRIVAL.why }],
+        reply: [WORKING_SET] },
+
       { ordinal: 23, name: "Decline",
         params: [
           { name: "method", type: "string", retained: false,

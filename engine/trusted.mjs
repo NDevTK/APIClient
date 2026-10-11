@@ -715,8 +715,10 @@ async function main() {
                     'this line — its stderr is this process\'s — and they are the diagnosis; this is the ' +
                     'pipe noticing afterwards.');
     });
+    /* The reach grade rides last as the document's arrival (solver/engine.h's engine_set_arrival): a document
+       reached past a forced gate starts every timeline `forced`, so its learned endpoints carry the fork. */
     e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts,
-           String(referenced)].join('\t'));
+           String(referenced), docReach].join('\t'));
     instances.push(e);
     loops.push(drive(e));
     retryHeld();
@@ -849,8 +851,8 @@ async function main() {
                          '<origin>` to widen it, and note what that obliges: §@H makes the reply to a forced ' +
                          'request evidence about what a server says to a request no client makes, so its ' +
                          'values are carried as FORCED and never merged into the observed pool. Until then ' +
-                         'the address is DERIVED IN FULL and REPORTED, which §Attacker-sources says is not a ' +
-                         'gap in the report but IS the report' };
+                         'the address is an @H `navigation` row at the grade of the path that named it ' +
+                         '(core/frame/navigable.c records it before this policy is asked)' };
     /* Fetch §2.2.5's `document` DESTINATION — this is HTML's navigate algorithm's own fetch, which is that
        section's own `document` row. Not script-like, so no CORB: an HTML parser is what reads these bytes. */
     /* AND THE RECORD'S WITNESS MARK — the same word the refusal ask above this call states, because a grade
@@ -1261,7 +1263,7 @@ async function main() {
         holder.docs.push(f[1]);
         holder.docReach = ZONE.safeFetchReachJoin(holder.docReach, reach);
         holder.ready.push(['join', loaded.url, f[1], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
-                           ...createFacts(f)].join('\t'));
+                           ...createFacts(f), reach].join('\t'));
         retryHeld();
         flush();
         return;

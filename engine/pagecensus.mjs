@@ -293,6 +293,8 @@ const operands = abiOperands("Init", "qjs_init", {
   ...topLevelFacts(finalUrl),
 }, cs);
 M.ccall("qjs_init", "number", operands.map(() => "number"), operands);
+/* The page is the one a person named on this command line (solver/engine.h's engine_set_arrival). */
+M.ccall("qjs_set_arrival", null, ["number"], [cs("observed")]);
 M.ccall("qjs_begin", "void", ["number"], [cs("")]);
 
 emit({ at: "start", url: finalUrl, docBytes: docBytes.length, sampleMs: SAMPLE_MS, artifact: WASM });

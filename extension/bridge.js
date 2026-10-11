@@ -2398,6 +2398,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      C flag is never left at its static initialiser. `qjs_set_referenced` survives a `Teardown`, so it is not
      restated after one. */
   await rend.renderer.setReferenced({ referenced: eng.referenced });
+  /* And how this zone reached the document, stated in the same window for the same reason: every timeline's
+     grade starts from it (solver/engine.h's engine_set_arrival), so a document reached past a forced gate learns
+     its endpoints as `forced`. `msg.provenance` is that reach grade, asserted where the root is built. */
+  await rend.renderer.setArrival({ provenance: msg.provenance });
   /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
      one frontier entry. */
   /* `>>> 0` because the wire carries an i32 (mojom `int32 bundleId`) for a C `unsigned`; the reader
@@ -2978,7 +2982,7 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
     inheritedCoep: inherited.embedder.value, inheritedCoepEndpoint: inherited.embedder.endpoint,
     inheritedCoepReportOnly: inherited.embedder.reportOnlyValue,
     inheritedCoepReportOnlyEndpoint: inherited.embedder.reportOnlyEndpoint,
-    parentNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags });
+    parentNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags, arrival: msg.provenance });
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");

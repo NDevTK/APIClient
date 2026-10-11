@@ -39,7 +39,9 @@
 
 /* PHASE 1 — root an agent at a document, or JOIN a second document of that same origin-keyed agent cluster.
    The two take the identical parameter list because they answer the identical questions about a document that
-   arrives from outside; main.c's bodies say which of them is a fact of the OPERATION and which of the TARGET. */
+   arrives from outside; main.c's bodies say which of them is a fact of the OPERATION and which of the TARGET.
+   qjs_join adds one, the joined document's arrival grade, which a rooted instance states through
+   qjs_set_arrival instead because its boot flow does not exist until qjs_begin. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
@@ -55,7 +57,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
                         const char *parent_navigable, const char *container_policy,
-                        const char *ancestor_origins, const char *creation_sandbox_flags);
+                        const char *ancestor_origins, const char *creation_sandbox_flags,
+                        const char *arrival);
 QJS_EXPORT void qjs_unload(const char *doc_id);
 QJS_EXPORT const char *qjs_check_request_policy(const char *doc_id, const char *url, const char *destination);
 QJS_EXPORT unsigned qjs_bundle_id(void);
@@ -97,6 +100,8 @@ QJS_EXPORT int qjs_host_decline(unsigned req, const char *reason);
    decides whether this instance's last timeline may finish at all. Everything below it is a record arriving at
    a document that is still there to receive one; without it there eventually is not. */
 QJS_EXPORT void qjs_set_referenced(int referenced);
+/* How the document was reached, as a provenance word, stated before qjs_begin (main.c). */
+QJS_EXPORT void qjs_set_arrival(const char *provenance);
 QJS_EXPORT int qjs_referenced(void);
 QJS_EXPORT void qjs_route(const char *record, const char *sender_origin);
 QJS_EXPORT void qjs_world_gone(const char *world);

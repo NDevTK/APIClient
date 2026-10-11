@@ -3044,6 +3044,15 @@ const char *engine_provenance_of_running_path(void)
     return engine_provenance_token(engine_prov_of_running_path());
 }
 
+int engine_provenance_of_token(const char *token)
+{
+    CHECK(token != NULL, "engine: a host stated a provenance and handed no word");
+    if (!strcmp(token, PENDING_PROVENANCE_OBSERVED)) return PROV_OBSERVED;
+    if (!strcmp(token, PENDING_PROVENANCE_DERIVED)) return PROV_DERIVED;
+    if (!strcmp(token, PENDING_PROVENANCE_FORCED)) return PROV_FORCED;
+    CHECK_FAILF("engine: a host stated the provenance `%s`, which is none of the three engine.h spells", token);
+}
+
 /* See engine.h. The witness mark's wire spelling, in the one place the bit becomes the line's token. */
 const char *engine_pinned_token(int pinned)
 {
@@ -6116,9 +6125,25 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
 /* The root document's seeding: a fresh timeline of this instance's document. It is the seed hook flow_add asks
    (solver/flow.h), so the boot flow, every cold-resumed replay and every @S candidate session get one sequence by
    construction. */
+/* How the root document was reached (engine.h's engine_set_arrival); -1 until a host states it. */
+static int g_arrival = -1;
+
+void engine_set_arrival(int prov) {
+    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
+            "a document's arrival was stated as %d, which is none of solver/pending.h's three grades", prov);
+    DCHECKF(g_arrival == -1 || g_arrival == prov,
+            "this instance's arrival was restated from %d to %d — it is a fact about the navigation that "
+            "provisioned the instance, and one instance has one", g_arrival, prov);
+    g_arrival = prov;
+}
+
+/* Every fresh timeline of the root document comes through here (flow.c's flow_seed), so a document reached past
+   a forced gate has every timeline marked before its seed parks a request — the boot flow, a cold-resumed one
+   and an @S candidate alike. */
 static void engine_seed_root_flow(Flow *f) {
     DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the table "
                         "exists only while a session is open");
+    if (g_arrival == PROV_FORCED) flow_mark_arrival_forced(f);
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
 }
 
@@ -9624,6 +9649,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                         const ScriptSchedule *sched, lxb_dom_element_t **els, int n, int forking,
                         const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
+    DCHECK(g_arrival != -1,
+           "a session began on an instance whose host never stated how its document was reached — every "
+           "timeline's grade starts from it, so call engine_set_arrival (the ABI's qjs_set_arrival) first, with "
+           "the trusted zone's reach grade or `observed` for a document a person named");
     /* The document install's own work is the first flow's. §4.8.5's insertion steps run for an <iframe src> in
        the initial markup when the host installs the document, before this session exists, and queue §7.4 step
        14's navigation through JS_EnqueueCallTask; with no enqueue hook installed that is quickjs's baseline list,
@@ -9833,11 +9862,13 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
  * refusals included. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
-                          int n) {
+                          int n, int arrival) {
     Flow *f;
     RootScript *rows;
     int i, rown = 0;
 
+    DCHECKF(arrival == PROV_OBSERVED || arrival == PROV_DERIVED || arrival == PROV_FORCED,
+            "a document was joined with the arrival grade %d, which is none of solver/pending.h's three", arrival);
     DCHECK(g_sess_live, "a document was joined to an instance with no live session");
     DCHECK(cctx != NULL, "a document was joined with no realm to compile its programs in");
     DCHECK(doc != 0, "a document was joined naming no document (the world registry's NONE)");
@@ -9854,6 +9885,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
        world of its own because it stands on no other flow's decisions. Every timeline this document has is a fork
        of it, as every timeline of the root is a fork of engine_sched_begin's flow. */
     f = flow_add_unseeded(g_sess_ctx, JS_UNDEFINED, WORLD_NONE);
+    if (arrival == PROV_FORCED) flow_mark_arrival_forced(f);
     /* The same table shape as the root document's seed, built here because §4.12.1.1's encoding-parse belongs to
        this document: §8.1.3.2 "Environment settings objects"' API base URL is the joined document's, so
        `<script src=app.js>` in a document at `/app/child.html` is `/app/app.js`. `cctx`, the joined document's

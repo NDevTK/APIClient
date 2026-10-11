@@ -1049,6 +1049,17 @@ void flow_mark_forced_arm(void) {
     g_running->path_forced = 1;
 }
 
+void flow_mark_arrival_forced(Flow *f) {
+    DCHECK(f != NULL && f != g_running,
+           "a document's arrival grade was written onto the running flow or onto none — it is a fact about a "
+           "timeline being minted, and flow_mark_forced_arm is the writer for the running one");
+    DCHECKF(f->dyn_n == 0,
+            "a document's arrival grade was written onto a flow already holding %d program row(s) — the seed "
+            "parks those rows' requests off this bit, so marking after it grades them as the page's own",
+            f->dyn_n);
+    f->path_forced = 1;
+}
+
 int flow_path_driven(const Flow *f) {
     DCHECK(f != NULL, "a flow was asked whether it is this tool's own act, of no flow");
     DCHECK(f->orphan == 0 || f->orphan == 1,

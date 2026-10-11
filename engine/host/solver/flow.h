@@ -286,12 +286,13 @@ typedef struct Flow {
      * request this flow builds must declare: the value's bytes are the same either way, so the fact is recorded
      * where it happens. It is the contradiction, not the fork: forced execution forks both arms of nearly every
      * branch, while this marks an arm the concrete example disagrees with (an example-less branch marks nothing).
-     * One writer, flow_mark_forced_arm, reached by four acts:
+     * Two writers. flow_mark_forced_arm marks the running flow, reached by four acts:
      *   - a branch whose arm the concrete example contradicts (solver/decide.c);
      *   - a request the trusted zone declined, whose failure arm runs the page's `catch` over an outcome nobody
      *     sent (solver/engine.c's flow_decline_fork);
      *   - a modelled potential close request, an arrival no user performed (solver/engine.c's close-request arm);
      *   - a witness verification delivering the value a pin chose (solver/concolic.c's concolic_deliver).
+     * flow_mark_arrival_forced marks a new timeline of a document reached on such an arm (engine_set_arrival).
      * A new producer is a line in this list, not a second bit.
      * Monotone, since a path cannot un-take an arm, and never a weight term. Carried by a fork (flow_fork_inherit
      * asserts it). Not cold-tier state: a resumed flow re-observes each contradiction against current examples
@@ -1511,6 +1512,10 @@ typedef struct { int forced, pinned; } FlowPathMarks;
 /* The running flow just took an arm its concrete example contradicts: `path_forced`'s one writer. Idempotent and
    monotone. Not a credit or a charge: a fork is rank-neutral, so it does not bump the frontier generation. */
 void  flow_mark_forced_arm(void);
+/* `f` is a new timeline of a document reached past a forced gate in the instance that created it: the other
+   writer of `path_forced`, called before the flow's seed so its program parks carry the grade. `f` is not the
+   running flow and holds no programs yet (asserted). */
+void  flow_mark_arrival_forced(Flow *f);
 /* Has this flow's path stood on one? Read at the park, because a parked request is a work item that takes its
    provenance with it: it was built on the path the flow had then. */
 int   flow_path_forced(const Flow *f);

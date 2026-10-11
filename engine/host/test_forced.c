@@ -27566,6 +27566,8 @@ static int abi_pay(void)
             const char *jcontainer = abi_take(&p, "container permissions policy");
             const char *jancestors = abi_take(&p, "ancestor origins");
             const char *jsandbox = abi_take(&p, "creation sandboxing flags");
+            /* How the zone reached this document, a provenance word qjs_join CHECKs. */
+            const char *jarrival = abi_take(&p, "arrival grade");
             char **grown;
             int jr;
 
@@ -27580,7 +27582,7 @@ static int abi_pay(void)
                    "a document was joined into an instance no peer references — the zone joins a create "
                    "notice's child, which a peer holds a WindowProxy for, so this frontier may not drain");
             jr = qjs_join(jhtml, (unsigned)jb_n, jurl, jdoc, jheaders, jtlu, jcsp, jcsp_self, jcoep, jcoep_ep,
-                          jcoep_ro, jcoep_ro_ep, jparent, jcontainer, jancestors, jsandbox);
+                          jcoep_ro, jcoep_ro_ep, jparent, jcontainer, jancestors, jsandbox, jarrival);
             DCHECK(jr == 0, "qjs_join refused the document this zone routed here");
             free(jheaders);
             free(jcsp);
@@ -28328,7 +28330,7 @@ static int abi_main(int argc, char **argv)
     char *rec, *p;
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
     const char *coep_ro, *coep_ro_ep, *parent, *container_policy, *ancestor_origins;
-    const char *creation_sandbox_flags, *referenced_f;
+    const char *creation_sandbox_flags, *referenced_f, *arrival_f;
     char *headers, *html, *csp;
     size_t headers_n = 0, html_n = 0, csp_n = 0;
     int r, referenced;
@@ -28472,6 +28474,9 @@ static int abi_main(int argc, char **argv)
            "provisioned this instance either created it for a navigable another agent holds a WindowProxy for "
            "or it did not, and a third spelling is a field read at the wrong tab", referenced_f);
     referenced = referenced_f[0] == '1';
+    /* And how the zone reached this document, the other provisioning fact: a provenance word qjs_set_arrival
+       CHECKs, the zone's own reach grade for the navigation that produced it. */
+    arrival_f = abi_take(&p, "arrival grade");
     /* AND NOTHING AFTER IT. A record with a field this driver does not read is a writer NEWER than this reader,
        which a left-to-right walk is structurally silent about — it only ever asks for what it was told to
        expect — so the value would be computed, sent, and consumed by nothing while its author believed it
@@ -28498,6 +28503,7 @@ static int abi_main(int argc, char **argv)
        true: the flag decides whether this instance's LAST timeline finishes, and a session that has begun may
        already have taken that decision. */
     qjs_set_referenced(referenced);
+    qjs_set_arrival(arrival_f);
 
     /* NO RESIDUE, STATED. `qjs_begin`'s argument is the parked frontier a previous session left, and the empty
        string is the positive statement that this session continues none. A cross-session resume is a field on
@@ -29432,6 +29438,8 @@ int main(int argc, char **argv) {
        session installs neither: its document drains, and its rows are about what the tier REBUILT. */
     if (cold_park_path)            engine_set_park_hook(fixture_want_park);
     else if (!cold_resume_path)    engine_set_park_hook(fixture_have_answers);
+    /* The fixture document is the one this process was named, the way a person names a seed. */
+    engine_set_arrival(PROV_OBSERVED);
     engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.els, lifecycle ? 0 : scripts.n,
                cold_residue);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
