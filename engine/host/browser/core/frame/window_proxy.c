@@ -1,36 +1,24 @@
-/* WindowProxy — HTML §7.2.3 "The WindowProxy exotic object", and the reason it is not a formality here.
+/* WindowProxy: HTML §7.2.3 "The WindowProxy exotic object".
  *
- * WHAT IT IS. `window`, `self`, `parent`, `top`, `frames[i]`, `opener` and `iframe.contentWindow` are not
- * Window objects. Every one of them is a WindowProxy: an exotic object that FORWARDS to the current active
- * Window of a NAVIGABLE. The distinction exists because a navigable outlives the documents in it — navigate an
- * iframe and its Window is replaced, while the WindowProxy a page is holding stays the same object. HTML says
- * so in one line, and everything else in this file follows from it.
+ * `window`, `self`, `parent`, `top`, `frames[i]`, `opener` and `iframe.contentWindow` are WindowProxy objects, not
+ * Window objects: exotic objects that forward to the current active Window of a navigable. A navigable outlives the
+ * documents in it, so navigating an iframe replaces its Window while the WindowProxy a page holds stays the same
+ * object.
  *
- * WHY IT IS NOT A FORMALITY IN THIS ENGINE. With one navigable and no navigation, a WindowProxy that forwards
- * to the one global is observationally identical to that global, and I had it written down as exactly that —
- * a piece of machinery to build when there was a second window to point at. That is wrong, and TIME TRAVEL is
- * what makes it wrong:
- *
- *   - THE BINDING IS PER-FLOW. One forked arm navigates the frame and its `contentWindow` targets the new
- *     Window; its sibling never navigated and still targets the old one. Both hold the SAME proxy object,
- *     because that is what a proxy is for. So proxy -> Window is per-flow state, and it has to ride the COW
- *     delta like every other piece of shared state a flow writes — which is what cow_capture_host_record is,
- *     and which a global "the window is the global" cannot express at all.
- *   - SO IS THE SAME-ORIGIN CHECK. §7.2.3's [[Get]] is filtered by whether the ACCESSOR and the target's
- *     active document are same origin, and the target's origin is whatever the flow navigated it to. A check
- *     against a fixed origin answers for a world the flow is not in.
- *   - AND A FLOW HOLDING ONE MUST BE SUSPENDABLE. A parked flow resumes with its delta, so the proxy it holds
- *     must resolve through that delta rather than through whatever the engine last did. A binding kept
- *     anywhere else is read at resume time from the wrong world.
- *
- * CROSS-INSTANCE. One WASM instance is one document, so a proxy may name a Window in another instance. Then the
- * binding is not a JSValue at all — it is (document, world), and the world is the sending flow's decision
- * vector, because two arms of a fork that navigated a frame differently must not resolve to one Window.
- *
- * AND THE NAVIGABLE IS STILL THIS INSTANCE'S. A remote proxy is not a proxy this engine knows nothing about:
- * this engine CREATED that navigable, named it, nested it and can destroy it. What lives in the peer is the
- * ACTIVE DOCUMENT. The member table below is organised by exactly that line, and it is the difference between
- * `otherW.self` costing nothing and `otherW.self` parking a flow on a host that may never answer. */
+ * Under time travel the proxy is not a formality, even with one navigable:
+ *   - the binding is per flow: one forked arm navigates the frame and its `contentWindow` targets the new Window,
+ *     its sibling still targets the old one, and both hold the same proxy, so proxy -> Window rides the COW delta
+ *     (cow_capture_host_record);
+ *   - so is the same-origin check: §7.2.3's [[Get]] is filtered by whether the accessor and the target's active
+ *     document are same origin, and the target's origin is whatever the flow navigated it to;
+ *   - a parked flow resumes with its delta, so the proxy it holds resolves through that delta, not through whatever
+ *     the engine last did. */
+/* Cross-instance: a WASM instance is one origin-keyed agent cluster (SECURITY.md), so a proxy may name a Window in
+ * another instance. Then the binding is (document, world), not a JSValue, and the world is the sending flow's
+ * decision vector, because two arms that navigated a frame differently must not resolve to one Window.
+ * The navigable is still this instance's: this engine created, named and nested it and can destroy it; what lives
+ * in the peer is the active document. The member table below is organised by that line, which is the difference
+ * between `otherW.self` costing nothing and `otherW.self` parking a flow on a host that may never answer. */
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,315 +42,248 @@
 #include "core/frame/navigable.h"
 #include "core/frame/window.h"
 #include "core/frame/location.h"
-#include "core/frame/remote_location.h"   /* §7.2.4's cross-origin arms — `location` of a PEER's document */
+#include "core/frame/remote_location.h"   /* §7.2.4's cross-origin arms: `location` of a peer's document */
 #include "core/frame/document_lifecycle.h"
 #include "core/dom/document.h"
 #include <stdio.h>
 
-/* §7.2.3's [[Window]] and the origin its same-origin check reads. BOTH are per-flow — see the file comment —
-   which is the whole reason this is a record behind a class rather than a property on an object. */
+/* §7.2.3's [[Window]] and the origin its same-origin check reads. Both are per flow (see the file comment), which
+   is why this is a record behind a class rather than a property on an object. */
 typedef struct {
     JSValue window;    /* the navigable's active Window, or JS_UNDEFINED when the document is remote (owned) */
-    /* THE ACTIVE DOCUMENT'S REALM, when this agent holds it — NULL when the document is a peer's. It is what a
-       member that reads THROUGH to the active document is answered from: `length` counts the child navigables
-       of THAT document, and asking it of the READING realm counts the wrong document's frames.
-       BORROWED, AND WHAT IT IS BORROWED FROM IS THE FIELD ABOVE IT. This said "the AGENT owns every realm it
-       built and releases them with itself (navigable.c)", and navigable.c says the OPPOSITE in as many words —
-       "THE AGENT MUST NOT OWN ONE, and that is the whole mechanism rather than a preference", because an
-       agent-held reference is an EXTERNAL ROOT that would make the realm, and therefore the very WindowProxy
-       whose collection says the navigable is gone, permanently reachable. Its list is borrowed pointers,
-       nav_create_finish drops the builder's own reference (JS_FreeContext) the moment the navigable has the
-       realm, and navigable_free frees the list while explicitly releasing no realm. So NOTHING holds a counted
-       reference to a child realm by name: what keeps it alive is `window` — the Window's C function objects
-       each hold the realm that defined them (js_call_c_function reads `p->u.cfunc.realm`) — and this pointer
-       is a raw borrow that is only ever valid while that field is set. The two are written and cleared
-       together for that reason, and HTML §7.5.10 "Destroying documents" step 7 clearing them is the whole of
-       this engine's reclamation edge (window_proxy_set_destroyed). A stale claim about WHO OWNS A REALM is not
-       a wording detail here: a reader chasing a leak would go looking for the agent's release, find none, and
-       conclude the reclamation is unbuilt.
-       A proxy is a GC object and a realm is not, so an owning reference here would have to be released from a
-       finalizer — which frees JSValues during collection — and the realm's own Document teardown would still
-       never run.
-       NULL UNTIL THE DOCUMENT IS MATERIALIZED — see proxy_realm and navigable.h. `url` is what it is built
-       from; a navigable that has been NAVIGATED is materialized at creation, one that still holds its initial
-       about:blank Document only when something reads through it. */
+    /* The active document's realm, when this agent holds it; NULL when the document is a peer's. Members that read
+       through to the active document are answered from it: `length` counts the child navigables of that document,
+       and the reading realm would count the wrong document's frames.
+       Borrowed from `window` above. navigable.c's agent owns no realm (an agent-held reference is an external root
+       that would keep the realm, and so this proxy whose collection says the navigable is gone, reachable): its
+       list is borrowed pointers, nav_create_finish drops the builder's reference (JS_FreeContext) once the
+       navigable has the realm, and navigable_free releases no realm. What keeps a child realm alive is `window`,
+       whose C function objects each hold the realm that defined them (js_call_c_function reads
+       `p->u.cfunc.realm`), so this pointer is valid only while that field is set. The two are written and cleared
+       together, and HTML §7.5.10 "Destroying documents" step 7 clearing them is the reclamation edge
+       (window_proxy_set_destroyed). An owning reference here would have to be released from a finalizer, which
+       frees JSValues during collection, and the realm's Document teardown would still never run.
+       NULL until the document is materialized (see proxy_realm and navigable.h): `url` is what it is built from; a
+       navigated navigable is materialized at creation, one still holding its initial about:blank Document only
+       when something reads through it. */
     JSContext *realm;
     char      *url;    /* the navigable's address, for a realm not yet materialized (owned) */
-    /* THE ACTIVE DOCUMENT'S ORIGIN — §7.1.1's RECORD, for §7.2.1's same-origin check. BORROWED: an origin is
-       immutable and lives for the agent (core/url/origin.h), which is what lets it sit inside the bytes
-       proxy_of captures — a navigation REPLACES this pointer rather than mutating what it points at, so a
-       parked flow's saved copy still names the origin its world had. It is a RECORD and not a serialization
-       because §7.1.1's step 1 compares IDENTITY: every opaque origin serializes to "null", so a string could
-       not tell one opaque origin read twice from two distinct ones, and this component guessed "two" — which
-       made a `data:` document's own about:blank child cross-origin to it. */
+    /* The active document's origin, §7.1.1's record, for §7.2.1's same-origin check. Borrowed: an origin is
+       immutable and lives for the agent (core/url/origin.h), so it can sit inside the bytes proxy_of captures; a
+       navigation replaces this pointer rather than mutating its target, so a parked flow's copy still names its
+       world's origin. A record, not a serialization, because §7.1.1's step 1 compares identity: every opaque origin
+       serializes to "null", so a string cannot tell one opaque origin read twice from two distinct ones (a `data:`
+       document's own about:blank child would read as cross-origin to it). */
     const Origin *origin;
-    /* THE NAVIGABLE'S OWN STATE — see the member table below for why it is here and not in the peer. All four
-       are per-flow: a flow that closed the window or renamed it is the only one whose timeline contains that,
-       and `parent`/`opener` are values a fork must carry. */
+    /* The navigable's own state (see the member table below for why it is here and not in the peer). All of it is
+       per flow: a flow that closed or renamed the window is the only one whose timeline contains that, and
+       `parent`/`opener` are values a fork must carry. */
     JSValue parent;    /* the parent navigable's proxy (or the creator's Window); JS_UNDEFINED = top-level */
-    JSValue opener;    /* §7.2.2.4's opener — the navigable that opened this one, or JS_NULL */
-    /* HTML §7.3.1.3's CONTAINER — the navigable container ELEMENT this navigable is presented by, as its
-       wrapper, or JS_NULL for one nested through nothing. §7.3.1.3 defines it as a DERIVED relation ("the
-       navigable container whose content navigable is navigable"), which a browser answers with a stored back
-       pointer and this engine could otherwise only answer by walking a document tree looking for the element
-       whose slot names this proxy — a search whose cost is the tree and whose answer is already known at the
-       one place that can state it: create-a-new-child-navigable is GIVEN the element.
-       IT IS A STRONG REFERENCE AND IT CLOSES A CYCLE, deliberately: the element's wrapper holds this proxy in
-       its own hidden slot, so the two name each other and neither can be collected while the other is reachable
-       from a root. That is what proxy_gc_mark is for, and the pair is no different in kind from `window`, which
-       holds the proxy back through the realm's global.
-       THE READER CONFIRMS IT AGAINST THAT FORWARD SLOT (window_proxy_container) rather than trusting it, which
-       is what makes this per-flow with nothing to capture: §7.3.1.6's destroy-a-child-navigable severs the
-       relation by clearing the ELEMENT's content navigable, and that clear is an ordinary property write the
-       DOM COW delta already isolates. */
+    JSValue opener;    /* §7.2.2.4's opener: the navigable that opened this one, or JS_NULL */
+    /* HTML §7.3.1.3's container: the navigable container element this navigable is presented by, as its wrapper,
+       or JS_NULL for one nested through nothing. §7.3.1.3 defines it as a derived relation ("the navigable
+       container whose content navigable is navigable"), which a browser answers with a stored back pointer;
+       walking the tree for the element whose slot names this proxy would cost the tree, and
+       create-a-new-child-navigable is given the element.
+       A strong reference that closes a cycle on purpose: the element's wrapper holds this proxy in its own hidden
+       slot, which proxy_gc_mark accounts for, as `window` holds the proxy back through the realm's global.
+       The reader confirms it against that forward slot (window_proxy_container), which makes it per flow with
+       nothing to capture: §7.3.1.6's destroy-a-child-navigable severs the relation by clearing the element's
+       content navigable, an ordinary property write the DOM COW delta isolates. */
     JSValue container;
-    /* WHAT THAT CONTAINER ANSWERED, FOR THE ONE NAVIGABLE WHOSE CONTAINER IS IN ANOTHER HEAP — Permissions
-       Policy §9.5's result for this navigable, as the text core/permissions_policy/permissions_policy.h
-       serializes an inherited policy into, or that grammar's "there is no container".
-       IT IS NOT THE SLOT ABOVE SAID TWICE. That one is an ELEMENT, and an element is exactly what this
-       instance does not have: SECURITY.md keys an instance on `(browsing context group, origin)`, so the
-       navigable an instance is ROOTED in may be a cross-origin `<iframe>` whose element lives in the creating
-       instance's tree. §9.5's two arguments are that element and this Document's origin, both of them the
-       CREATOR's, so the creator runs §9.5 and its ANSWER travels; nothing here could compute it, and a
-       cross-instance read is a SUSPEND POINT that a Document's install has no flow under it to take.
-       NULL IS "NOBODY STATED IT" AND IS NOT AN ANSWER. A navigable whose parent is a remote proxy is a child
-       navigable by §7.3.1.3 and therefore HAS a container, so the absence is a host that owes a statement —
-       core/dom/document.c crashes on it rather than reading it as §9.7 step 1's null container, which would
-       return `Enabled` for every supported feature.
-       POD AND OWNED BY THE COMPONENT, exactly like `top_level_url`: proxy_strdup'd, inside the bytes proxy_of
-       captures, never freed on a navigation because a parked flow's saved bytes still name it. */
+    /* What that container answered, for a navigable whose container is in another heap: Permissions Policy §9.5's
+       result for this navigable, in the text core/permissions_policy/permissions_policy.h serializes an inherited
+       policy into, or that grammar's "there is no container".
+       Not the slot above said twice: that one is an element, which this instance does not have when the navigable
+       it is rooted in is a cross-origin `<iframe>` whose element lives in the creating instance (SECURITY.md keys
+       an instance on `(browsing context group, origin)`). §9.5's two arguments, that element and this Document's
+       origin, are the creator's, so the creator runs §9.5 and its answer travels; a cross-instance read is a
+       suspend point, and a Document's install has no flow under it to take one.
+       NULL means nobody stated it, not an answer: a navigable whose parent is a remote proxy is a child navigable
+       by §7.3.1.3 and has a container, so core/dom/document.c crashes on the absence rather than reading it as
+       §9.7 step 1's null container, which would return `Enabled` for every supported feature.
+       POD and owned by the component, like `top_level_url`: proxy_strdup'd, inside the bytes proxy_of captures,
+       and never freed on a navigation because a parked flow's saved bytes still name it. */
     char   *remote_container;
-    /* AND WHAT §3.1.3's STEPS ANSWERED FOR THAT SAME NAVIGABLE, FOR THAT SAME NAVIGABLE ONLY — HTML §3.1.3
-       "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST, as core/dom/document.h serializes one.
-       IT IS THE SLOT ABOVE'S SIBLING AND NOT ITS DUPLICATE: both are facts the creating instance computed
-       because both of §3.1.3's and §9.5's inputs live in its heap, and both are results rather than inputs for
-       the same reason — a peer given the inputs would be a second site running one algorithm, and here it
-       would run it WRONG. §3.1.3's step 10 compares an ancestor against "parentDoc's origin" and §7.1.1's same
-       origin decides an opaque origin by IDENTITY, which a serialization does not carry; every opaque origin
-       is the same three bytes `null`. Steps 6-8 read the CONTAINER ELEMENT, which is in the creator's tree and
-       does not cross at all.
-       NULL IS "NOBODY STATED IT" AND IS NOT AN ANSWER, exactly as above. A navigable whose parent is a remote
-       proxy is a child navigable by §7.3.1.3, so its Document HAS ancestors; core/dom/document.c crashes on the
-       absence rather than reading it as the empty list, which would tell a cross-origin frame it is the top of
-       its own tree — a fact no page can distinguish from the truth and one nothing else would report.
-       POD AND OWNED BY THE COMPONENT, like every other string here: proxy_strdup'd into the never-released
-       list, inside the bytes proxy_of captures, so a parked flow's saved bytes still name live memory. It is
-       NOT on PROXY_VALS, which names only this record's JSValues. */
+    /* What §3.1.3's steps answered, for that same navigable only: HTML §3.1.3 "Ancestor origins"' internal ancestor
+       origin objects list, as core/dom/document.h serializes one.
+       The slot above's sibling: both are results the creating instance computed because their inputs live in its
+       heap. A peer given the inputs would run the algorithm wrong: §3.1.3's step 12.1 compares an ancestor against
+       "parentDoc's origin", and §7.1.1's same origin decides an opaque origin by identity, which a serialization
+       (every opaque origin is `null`) does not carry; steps 6-8 read the container element, which does not cross.
+       NULL means nobody stated it, as above: a navigable whose parent is a remote proxy has ancestors, so
+       core/dom/document.c crashes on the absence rather than reading it as the empty list, which would tell a
+       cross-origin frame it is the top of its own tree.
+       POD and owned by the component: proxy_strdup'd into the never-released list, inside the bytes proxy_of
+       captures, so a parked flow's saved bytes name live memory. It is not on PROXY_VALS, which names only this
+       record's JSValues. */
     char   *remote_ancestor_origins;
-    char   *name;      /* §7.2.2.1's name: the BROWSING CONTEXT's, not the element's (owned; see proxy_of) */
-    /* WHETHER ANYONE STATED THIS NAVIGABLE'S NAME, which is what decides whether `name` is a computed value or
-       unknown external input. §7.4 STATES it — `open(url, "chan42")` names the navigable it creates, and the
-       popup's own `window.name` is that string — so a navigable this engine created knows its name, "" or
-       otherwise. The navigable the instance STARTS in is the one nobody here created: a real page may have been
-       opened by a cross-origin document that set `name` before navigating, which is exactly how window.name
-       became a classic attacker source, so a host that cannot state it leaves it unknown and the read is
-       concolic. A host that CAN state it (a runner that loaded the document itself) says so and gets the
-       spec's "". The distinction is DATA the creator supplies, never inferred from which mint was used. */
+    char   *name;      /* §7.2.2.1's name: the browsing context's, not the element's (owned; see proxy_of) */
+    /* Whether anyone stated this navigable's name, which decides whether `name` is a computed value or unknown
+       external input. §7.4 states it (`open(url, "chan42")` names the navigable it creates, and the popup's own
+       `window.name` is that string), so a navigable this engine created knows its name. The navigable the
+       instance starts in is the one nobody here created: a real page may have been opened by a cross-origin
+       document that set `name` before navigating, which is how window.name became an attacker source, so a host
+       that cannot state it leaves it unknown and the read is concolic. A host that can (a runner that loaded the
+       document itself) says so and gets the spec's "". The creator supplies this as data; it is never inferred
+       from which mint was used. */
     uint8_t name_known;
-    /* §7.4's "popup window is requested", decided from the `features` argument at creation and then a FACT
-       ABOUT THE NAVIGABLE for as long as it exists — which is what every BarProp's `visible` is the negation
-       of. It is not per-flow: no flow can turn a tab into a popup, so unlike `closed` and `name` there is
-       nothing here for the delta to capture. */
+    /* §7.4's "popup window is requested", decided from the `features` argument at creation and then a fact about
+       the navigable for as long as it exists, which every BarProp's `visible` negates. Not per flow: no flow can
+       turn a tab into a popup, so unlike `closed` and `name` the delta has nothing to capture. */
     uint8_t is_popup;
-    /* HTML §7.1.7's POLICY CONTAINER THE CREATOR HANDED THIS NAVIGABLE, taken at CREATION and kept in the form
-       it crosses a seam in — which is what §7.1.7's "clone a policy container" is here, since
-       policy_container_clone re-parses these same bytes.
-       It is here rather than read off whichever realm materializes the document because a navigable created
-       with no address is materialized LAZILY, on the first read that reaches through it — and the reader may
-       be a different same-origin document with a different container, which would give the child whichever
-       document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
-       ONE VALUE, NOT ONE FIELD PER ITEM. It was the CSP list's two halves as two `char *`, which is a container
-       flattened, and an item added to the container reached this struct and stopped with nothing to say so.
-       §7.1.4's embedder policy is the item that proved it: it landed on the container and the compiler stopped
-       HERE, at a mint that had to state where its answer comes from. Every string the value names is
-       proxy_strdup'd and outlives every flow; a parked flow resuming onto its saved copy of this POD struct
-       resumes onto live memory.
+    /* HTML §7.1.7's policy container the creator handed this navigable, taken at creation and kept in the form it
+       crosses a seam in, which is what §7.1.7's "clone a policy container" is here (policy_container_clone
+       re-parses these bytes). Here rather than read off whichever realm materializes the document, because a
+       navigable created with no address is materialized lazily on the first read through it, and that reader may
+       be a different same-origin document with a different container. A creation fact, so like `is_popup` no
+       flow changes it.
+       One value rather than one field per item, so an item added to the container reaches every mint that must
+       state where its answer comes from. Every string it names is proxy_strdup'd and outlives every flow, so a
+       parked flow resuming onto its saved copy of this POD struct resumes onto live memory.
        serialized_policy_container_none for a navigable with an address (its container comes with its response)
        and for the root. */
     SerializedPolicyContainer creator_policy;
-    /* HTML §7.3.2.1 "Creating browsing contexts"' `creatorBaseURL` — "Set creatorBaseURL to creator's
-       document base URL", which the create-a-new-browsing-context-and-document steps hand the initial
-       `about:blank` as its
-       ABOUT BASE URL. Without it a relative URL inside a srcless frame or a bare `open()` resolves against
-       `about:blank`, which has an opaque path and cannot be a base, so the parse FAILS outright.
-       IT IS TAKEN AT CREATION, for exactly the reason `creator_policy` above is: the Document is materialized
-       lazily, by whichever same-origin document reads through this navigable first, and that reader's base
-       URL is not the creator's. It is also the CREATOR's base URL and not the creator's ADDRESS — a creator
-       carrying `<base href>` passes on the base, which is the whole content of the word in §7.3.2.1.
+    /* HTML §7.3.2.1 "Creating browsing contexts"' `creatorBaseURL` ("Set creatorBaseURL to creator's document base
+       URL"), which the create-a-new-browsing-context-and-document steps hand the initial `about:blank` as its
+       about base URL. Without it a relative URL in a srcless frame or a bare `open()` resolves against
+       `about:blank`, which has an opaque path and cannot be a base, so the parse fails.
+       Taken at creation for `creator_policy`'s reason: the reader that lazily materializes the Document need not
+       be the creator. It is the creator's base URL, not its address: a creator carrying `<base href>` passes on
+       the base.
        NULL for the root navigable (nothing created it) and for a navigable created with a real address (its
        Document comes from a response and §2.4.3's about base URL is null for it). Owned. */
     char   *creator_base_url;
-    /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS for this navigable, taken at CREATION for exactly the
-       reason `creator_policy` above is: §7.3.2.1 hands this set to the initial about:blank Document as
-       its ACTIVE
-       SANDBOXING FLAG SET, that Document's realm is materialized LAZILY, and the realm that materializes it
-       need not be its creator's. A creation fact like `is_popup` — no flow can re-sandbox a navigable that
-       exists — and one WORD, so the byte capture in proxy_of describes it completely. */
+    /* §7.1.5's determine the creation sandboxing flags for this navigable, taken at creation for `creator_policy`'s
+       reason: §7.3.2.1 hands this set to the initial about:blank Document as its active sandboxing flag set, and
+       the realm that lazily materializes that Document need not be its creator's. A creation fact like
+       `is_popup`, and one word, so the byte capture in proxy_of describes it completely. */
     SandboxFlags creation_sandbox_flags;
-    /* HTML §7.5.1's OPENER POLICY ROW OF THIS NAVIGABLE'S ACTIVE DOCUMENT — "opener policy … navigationParams's
-     * cross-origin opener policy" in create-and-initialize-a-Document's own creation table, beside "policy
-     * container" and "active sandboxing flag set", which are three separate items of one creation (§7.1.7's
-     * container has no such field — see core/frame/opener_policy.h).
-     *
-     * IT IS ON THE NAVIGABLE BECAUSE ITS TWO READERS BOTH ASK A NAVIGABLE. §7.1.3.2's obtain-a-browsing-
-     * context-to-use-for-a-navigation-response reads "browsingContext's active document's origin" and its
-     * opener policy to decide a group switch, and §7.3.2.1's create reads "creator's browsing context's
-     * top-level browsing context's ACTIVE DOCUMENT's opener policy". Neither ever holds a Document; both walk
-     * from a browsing context to whichever Document is active in it. And a navigable §7.4 created with no
-     * address holds the initial about:blank Document whose realm is materialized LAZILY, so a row kept only on
-     * a Document object could not be read at all for exactly the popup §7.1.3.2 is written about — the answer
-     * would depend on whether something had happened to touch the proxy first.
-     *
-     * PER-FLOW, AND THAT IS FREE: it is one enum word inside the bytes proxy_of captures, so an arm that
-     * navigated this navigable and a sibling that did not each read their own, and a parked flow resumes onto
-     * the value its world had. It moves with the rest of the binding in window_proxy_navigate — a navigation
-     * replaces the active document, and this is that document's row. */
+    /* HTML §7.5.1's opener policy row of this navigable's active document: "opener policy … navigationParams's
+     * cross-origin opener policy" in create-and-initialize-a-Document's creation table, beside "policy container"
+     * and "active sandboxing flag set" (§7.1.7's container has no such field; see core/frame/opener_policy.h).
+     * On the navigable because both readers ask a navigable: §7.1.3.2's obtain-a-browsing-context-to-use-for-a-
+     * navigation-response reads "browsingContext's active document's origin" and its opener policy to decide a
+     * group switch, and §7.3.2.1's create reads "creator's browsing context's top-level browsing context's active
+     * document's opener policy". Neither holds a Document, and a navigable §7.4 created with no address holds an
+     * initial about:blank Document whose realm is materialized lazily, so a row kept only on a Document could not
+     * be read for the popup §7.1.3.2 is written about.
+     * Per flow at no cost: one enum word inside the bytes proxy_of captures, so an arm that navigated this
+     * navigable and a sibling that did not each read their own. It moves with the rest of the binding in
+     * window_proxy_navigate, since a navigation replaces the active document and this is that document's row. */
     OpenerPolicyValue opener_policy;
-    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environments of this navigable's documents — kept beside
-       the policy container because it is the same KIND of fact and arrives the same way: decided by the
-       operation that created the navigable, read when a realm is finally built. §7.4 makes a CHILD navigable
-       inherit its creator's and gives an AUXILIARY one its own address, and §7.4.5's navigation of a top-level
-       traversable moves it to the new address while a nested navigable's stays where its creation put it.
-       IT IS PER-FLOW, exactly like `url`: navigating a top-level traversable moves it, so an arm that
-       navigated and an arm that did not must not share one. It is a POD pointer inside the bytes proxy_of
-       captures, and — like every other string here — it is never freed on a navigation, because a parked
-       flow's saved bytes still name the old one. */
+    /* HTML §8.1.3.1's top-level creation URL for the environments of this navigable's documents, beside the policy
+       container because it is the same kind of fact: decided by the operation that created the navigable, read
+       when a realm is built. §7.4 makes a child navigable inherit its creator's and gives an auxiliary one its own
+       address, and §7.4.5's navigation of a top-level traversable moves it while a nested navigable's stays where
+       its creation put it. Per flow like `url`, since navigating a top-level traversable moves it. A POD pointer
+       inside the bytes proxy_of captures, never freed on a navigation because a parked flow's saved bytes still
+       name the old one. */
     char   *top_level_url;
-    /* HTML §8.1.3.1's TOP-LEVEL ORIGIN — the OTHER field of that pair, and a separate one because the standard
-       says so in the field's own definition: "This is distinct from the top-level creation URL's origin when
-       sandboxing, workers, and worklets are involved." §7.3.2.1 "Creating browsing contexts" states them in
-       one breath and answers them differently — the URL is `about:blank` for a top-level browsing context
-       while the origin is the initial Document's own — and §4.7 over a URL cannot express the third case at
-       all, because §7.3.2.1's determine-the-origin hands ONE opaque origin to several Documents and an opaque
-       origin has no serialization it can be recreated from.
-       Permissions §5.1 step 5 reads THIS one: its key is generated from "settings's top-level origin", and
-       §3.2 compares two keys with §7.1.1's same origin, whose step 1 is an identity comparison.
-       BORROWED and POD, exactly like `origin` beside it: an origin lives for the agent, a navigation REPLACES
-       this pointer, and the byte capture in proxy_of is therefore a complete description of the binding. */
+    /* HTML §8.1.3.1's top-level origin, the other field of that pair, separate because its definition says "This
+       is distinct from the top-level creation URL's origin when sandboxing, workers, and worklets are involved."
+       §7.3.2.1 "Creating browsing contexts" answers them differently (the URL is `about:blank` for a top-level
+       browsing context while the origin is the initial Document's own), and §4.7 over a URL cannot express the
+       third case: §7.3.2.1's determine-the-origin hands one opaque origin to several Documents, and an opaque
+       origin has no serialization to recreate it from.
+       Permissions §5.1 step 5 reads this one: its key is generated from "settings's top-level origin", and §3.2
+       compares two keys with §7.1.1's same origin, whose step 1 is an identity comparison.
+       Borrowed and POD like `origin`: an origin lives for the agent and a navigation replaces this pointer, so
+       the byte capture in proxy_of describes the binding completely. */
     const Origin *top_level_origin;
-    /* §7.2.2.1's `closed` IS TWO FACTS AND THE GETTER IS THEIR OR — "true if this's browsing context is null or
-       its is closing is true". They are two because they happen at two TIMES. `close()` sets is-closing at its
-       own call site and QUEUES the destruction; §7.3.1.6 "Navigable destruction"'s destroy-a-child-navigable
-       queues one without setting is-closing at all; and the browsing context does not become null until
-       §7.5.10 step 6 runs, in a task.
-       Held as ONE byte those two times collapsed into the removal's, so a frame's WindowProxy reported a
-       destruction that had not happened — while its Document, its queued tasks and its entangled ports were
-       all still live, with nothing anywhere holding the fact that they had not been dealt with. */
-    /* THE NEGATION OF HTML §3.1.1 "The Document object"'s "is initial about:blank" — "Each Document has an is
-       initial about:blank, which is a boolean, initially false" — held on the NAVIGABLE because a navigable
+    /* The negation of HTML §3.1.1 "The Document object"'s "is initial about:blank" ("Each Document has an is
+       initial about:blank, which is a boolean, initially false"), held on the navigable because a navigable
        showing its initial Document has no realm to hold a Document-side field until something reaches through
-       it. §7.4.4 "Non-fragment synchronous \"navigations\"" step 4 and §7.1.3.2's group-switch check are two of
-       its readers; both ask the spec's flag, not this field's name. (§7.1.3.2 is "Browsing context group
-       switches due to opener policy".)
-       ITS NAME STATES THE FIRST WRITER AND THE FIELD IS BIGGER THAN THE NAME. §7.4 creates EVERY navigable with
-       the initial about:blank Document, and a navigation is the only thing that ever REPLACES a navigable's
-       active document — window_proxy_navigate below — so that write was for a while the whole of the flag. It
-       is not: §8.4.1 "Opening the input stream" step 13 sets the Document's flag false without replacing any
-       document at all, which is window_proxy_clear_initial_about_blank, and a `document.write` into a fresh
-       frame is the commonest arrival at it. TWO WRITERS, ONE FLAG — reading this field as "was navigated"
-       rather than as the standard's boolean is what would make that second write look like a lie.
-       The alternative storage, testing the document's ADDRESS, is WRONG in this tree and not merely imprecise:
-       navigable.c's load job navigates to `about:blank` for real ("the corpus does it while an initial load is
-       still pending"), and that document is not the initial one.
-       PER-FLOW like everything else in this record: an arm that navigated the frame and a sibling that did not
-       must not share the answer, which is what the capture in proxy_of gives it for free. */
+       it. §7.4.4 "Non-fragment synchronous \"navigations\"" step 4 and §7.1.3.2 "Browsing context group switches
+       due to opener policy"'s group-switch check read it, and both ask the spec's flag, not this field's name.
+       The name states the first writer only. A navigation replacing the active document (window_proxy_navigate)
+       sets it, and so does §8.4.1 "Opening the input stream" step 13, which sets the Document's flag false
+       without replacing any document (window_proxy_clear_initial_about_blank; a `document.write` into a fresh
+       frame is the commonest arrival). Testing the document's address instead would be wrong: navigable.c's load
+       job navigates to `about:blank` for real, and that document is not the initial one.
+       Per flow like the rest of this record, through the capture in proxy_of. */
     uint8_t ever_navigated;
-    /* HTML §7.3's "IS CREATED BY WEB CONTENT" — a top-level traversable's, and one of the two disjuncts of
-       §7.2.2.1's SCRIPT-CLOSABLE. §7.3's create-a-new-top-level-traversable is reached from `window.open()`,
-       which is this engine's navigable_open, so every navigable minted by window_proxy_new was created by web
-       content and the one minted by window_proxy_new_self — the navigable the instance STARTED in, which the
-       host loaded — was not. It is a CREATION fact, so like `is_popup` no flow can change it and the delta has
-       nothing to capture. */
+    /* HTML §7.3's "is created by web content", a top-level traversable's, one of the two disjuncts of §7.2.2.1's
+       script-closable. §7.3's create-a-new-top-level-traversable is reached from `window.open()` (navigable_open),
+       so every navigable window_proxy_new mints was created by web content, and the one window_proxy_new_self
+       mints (the navigable the instance started in, which the host loaded) was not. A creation fact, so like
+       `is_popup` the delta has nothing to capture. */
     uint8_t created_by_web_content;
-    uint8_t closing;     /* §7.3's IS CLOSING — §7.2.2.1's close(), and only ever a top-level traversable */
+    /* §7.2.2.1's `closed` is two facts and the getter is their or: "true if this's navigable is null or its is
+       closing is true". They happen at two times: `close()` sets is-closing at its own call and queues the
+       destruction; §7.3.1.6 "Navigable destruction"'s destroy-a-child-navigable queues one without setting
+       is-closing; and the browsing context becomes null only when §7.5.10 step 6 runs, in a task. One byte for
+       both would report a destruction that had not happened while the Document, its queued tasks and its
+       entangled ports were still live. */
+    uint8_t closing;    /* §7.3's is closing: §7.2.2.1's close(), and only ever a top-level traversable */
     uint8_t destroyed;   /* §7.5.10 step 6 ran on this navigable's active document: its browsing context is null */
-    /* §7.1.3.2 step 10's SWAP LEFT THIS BROWSING CONTEXT BEHIND — "browsingContext will not be used by the new
-       Document that we are about to create" — so §7.2.2.1's "this's browsing context is null" is true of it for
-       a reason that has nothing to do with destruction. It is a SECOND byte and not a second writer of the one
-       above, because the two states differ in everything except `closed`: a destroyed navigable has NO active
-       document (step 7 released the Window and nulled the realm), while a swapped-past one still has the exact
-       Document it had — which is what makes a read through the opener's handle answer about THAT document
-       rather than about the one the navigation went on to create in another instance. Reusing `destroyed` would
-       have told proxy_realm that a navigable with a live realm has no document, which is the assert it makes. */
+    /* §7.1.3.2 step 10's swap left this browsing context behind ("browsingContext will not be used by the new
+       Document that we are about to create"), so it is null for §7.2.2.1 without any destruction. A second byte
+       rather than a second writer of `destroyed`, because the two states differ in everything except `closed`: a
+       destroyed navigable has no active document (step 7 released the Window and nulled the realm), while a
+       swapped-past one still has the Document it had, so a read through the opener's handle answers about that
+       document and not the one the navigation created in another instance. proxy_realm asserts that a navigable
+       with a live realm is not `destroyed`. */
     uint8_t bc_discarded;
-    /* THE SUBTREE WAIT, COUNTED DOWN AND PER OPERATION — how many of this navigable's child navigables have
-       still to report before this one's own body may run, for each of the operations that walk a subtree
-       (§7.4.2.4's beforeunload check, §7.5.9's unload, §7.5.10's destroy). It is here because it is PER-FLOW
-       state of a navigable, exactly like `closed` and `name`: two forked arms tearing down the same subtree
-       each count in their own world, and a shared integer would let one arm's child complete the other arm's
-       wait. Zero for a navigable not running that operation, which is what makes a child's report identify the
-       ROOT of the operation rather than being a case its caller has to test for. */
+    /* The subtree wait, counted down per operation: how many of this navigable's child navigables have still to
+       report before this one's own body may run, for each operation that walks a subtree (§7.4.2.4's beforeunload
+       check, §7.5.9's unload, §7.5.10's destroy). Per flow like `closed` and `name`: two forked arms tearing down
+       the same subtree each count in their own world, and a shared integer would let one arm's child complete the
+       other's wait. Zero for a navigable not running that operation, which makes a child's report identify the
+       operation's root. */
     uint32_t child_wait[WP_SUBTREE_OP_N];
-    /* WHICH DOCUMENT the navigable's active document IS — the same id the world registry names worlds by, so
-       "is this remote?" is one comparison against one identity rather than a second naming scheme kept beside
-       it. A proxy whose doc is this instance's has a live `window`; any other doc is in a peer instance and
-       has none, and those two facts are asserted together because a proxy where they disagree would answer a
-       cross-document read with THIS document's Window — the exact failure the same-origin check exists to
-       prevent. */
+    /* Which document the navigable's active document is: the id the world registry names worlds by, so "is this
+       remote?" is one comparison against one identity. A proxy whose doc is this instance's has a live `window`;
+       any other doc is in a peer instance and has none. The two are asserted together, because a proxy where they
+       disagree would answer a cross-document read with this document's Window, the failure the same-origin check
+       exists to prevent. */
     uint32_t doc;
 } ProxyData;
 
-/* §7.2.2.1's `closed` GETTER, AS ONE EXPRESSION — "true if this's navigable is null or its is closing
-   is true". THE WORD IS `navigable` AND IT WAS `browsing context`, which is the calendar kind of corpus
-   staleness rather than anybody's mistake: the quotation was exact against the corpus that stood when it was
-   written, the standard renamed the operand in that one sentence, and the regen of the committed corpus is what
-   made the old spelling a divergence. It is repaired beside the two new sites that quote the same sentence
-   because N copies of one sentence are N chances to be stale and a site that differs from its siblings is a
-   finding whichever way it differs — and this one was individually resolved against the document rather than
-   swept to agree with them.
-   WRITTEN ONCE HERE so that no member can ask half of it: a `closed` that read only the destroy
-   flag would report a closing popup as open, and one that read only is-closing would report a removed frame
-   as open. Both of those were the single byte this replaced, in the two directions it could be wrong.
-   "BROWSING CONTEXT IS NULL" HAS TWO WRITERS AND THIS IS WHERE THEY MEET — §7.5.10 step 6's destruction and
-   §7.1.3.2 step 10's swap, which discards a browsing context without destroying anything. Reading either alone
-   is the same class of half-answer as the two above: after a COOP group swap the opener's handle would report
-   the window it can no longer reach as open, and the engine would model a page real Chrome has cut off.
- *
- * AND THE TWO BELOW ARE THE RECORDED FLAGS, WHICH IS NO LONGER THE WHOLE OF EITHER QUESTION. There is a THIRD
- * moment at which a navigable's browsing context is null and it is the one pages actually read — §7.3.1.6's
- * destroy-a-child-navigable step 3, which severs the container relation SYNCHRONOUSLY while both flags above
- * are written by the queued destruction. `window_proxy_browsing_context_null` is that whole fact, and
- * §7.2.2.1's `closed`, §7.2.2.4's `opener` and §7.2.4's relevant Document each read it there.
- *
- * SO WHAT IS LEFT HERE IS A DIFFERENT QUESTION AND THE SPLIT IS DELIBERATE: `wp_closed` now means "this heap
- * holds no ACTIVE DOCUMENT for this navigable", which is what its remaining readers are actually asking —
- * §7.2.3's forward to W, `document`, `location`, and §7.2.3.5 step 2's indexed access. Those must NOT
- * take the sever, because §7.2.3's internal methods are performed on W, the [[Window]] internal slot, and a
- * Window OUTLIVES its browsing context: `document-domain-removed-iframe.html` reads `contentWindow.status` on
- * the line after `iframe.remove()` and expects the value, not `undefined` (its own comment cites the Chromium
- * bug where those properties went undefined). Folding the sever into this predicate is how that regresses, and
- * it would be silent — the wrong answer is a plausible one. Three questions, three readers. */
+/* The two recorded flags of §7.2.2.1's `closed` ("true if this's navigable is null or its is closing is true"),
+   each written once so no member asks half of it: reading only the destroy flag would report a closing popup as
+   open, and reading only is-closing would report a removed frame as open. A null browsing context has two
+   recorded writers, §7.5.10 step 6's destruction and §7.1.3.2 step 10's swap (which discards a browsing context
+   without destroying anything); reading either alone, an opener's handle would report as open a window a COOP
+   group swap has cut it off from. */
+/* These are not the whole of either question. A third moment nulls a navigable's browsing context, and it is the
+   one pages read: §7.3.1.6's destroy-a-child-navigable step 3 severs the container relation synchronously, while
+   both flags are written by the queued destruction. window_proxy_browsing_context_null is that whole fact, and
+   §7.2.2.1's `closed`, §7.2.2.4's `opener` and §7.2.4's relevant Document each read it.
+   `wp_closed` answers a different question: this heap holds no active document for this navigable. Its readers
+   are §7.2.3's forward to W, `document`, `location`, and §7.2.3.5 step 2's indexed access, and they must not
+   take the sever: §7.2.3's internal methods are performed on W, the [[Window]] internal slot, and a Window
+   outlives its browsing context (`document-domain-removed-iframe.html` reads `contentWindow.status` on the line
+   after `iframe.remove()` and expects the value, not `undefined`). Three questions, three readers. */
 static bool wp_bc_null(const ProxyData *p) { return p->destroyed != 0 || p->bc_discarded != 0; }
 static bool wp_closed(const ProxyData *p) { return p->closing != 0 || wp_bc_null(p); }
 
-/* THIS COMPONENT'S NAME, spelled once — core/platform.c's row and every slot it declares to
-   core/agent_state.h. The registry's row pairing is keyed by it and neither spelling is checked by the
-   compiler, so a literal typed out once per declaration is exactly the misspelling that file's first walk
-   exists to catch, and one of them going wrong is a check that is never RUN rather than one that got weaker. */
+/* This component's name, spelled once for core/platform.c's row and every slot it declares to core/agent_state.h.
+   The registry's row pairing is keyed by it and the compiler checks neither spelling, so a literal typed once per
+   declaration is the misspelling that file's first walk exists to catch, and a wrong one is a check that never
+   runs rather than one that got weaker. */
 #define WP_COMPONENT "window_proxy"
 
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
 /* §7.2.3's member surface. It answers from the navigable's own state where that is what the member is, and
-   suspends on the host where the member reads the active document. See the member table lower down for which
-   is which.
-   EVERY NAME ON IT IS AN OWN PROPERTY OF THE PROXY, because §7.2.3 has no interface object: §7.2.3.5 answers
-   each of these names and §7.2.3.10 lists it, so this object is where the descriptor is READ FROM and never
-   what a prototype walk reaches for a same-origin W (proxy_surface_desc). The walk still reaches it for a
-   CROSS-ORIGIN one, which is §7.2.3.5 steps 4-6 and this engine's stand-in for §7.2.1.3.4's per-realm
-   anonymous functions — one object, two ways in, one answer either way.
-   IT IS PER REALM, in quickjs's own class-proto slot, and that is an ANSWER and not an identity: a member runs
-   in the realm that DEFINED it, so one shared object would answer `parent`, `name` and `close()` for every
-   document out of whichever realm built it first — and the whole point of these members is that they read the
-   asking document's side of a boundary. `a.postMessage === b.postMessage` still holds for two proxies of the
-   same realm, which is what §7.2.3's shared surface means; two REALMS have two, exactly as two realms have
-   two `Array.prototype.map`s. */
-/* TWO GETTER IDS OVER ONE STEP DECLARATION, and they are two because a pool entry carries the MEMBER MAGIC —
-   the step body reads it back with idl_step_magic to know which question it was asked. */
+   suspends on the host where the member reads the active document (see the member table below for which is
+   which).
+   Every name on it is an own property of the proxy, because §7.2.3 has no interface object: §7.2.3.5 answers each
+   of these names and §7.2.3.10 lists it, so this object is where the descriptor is read from, never what a
+   prototype walk reaches for a same-origin W (proxy_surface_desc). The walk does reach it for a cross-origin one,
+   which is §7.2.3.5 steps 4-6 and this engine's stand-in for §7.2.1.3.4's per-realm anonymous functions: one
+   object, two ways in, one answer.
+   It is per realm, in quickjs's own class-proto slot, as an answer rather than an identity: a member runs in the
+   realm that defined it, so one shared object would answer `parent`, `name` and `close()` for every document out
+   of whichever realm built it first. `a.postMessage === b.postMessage` holds for two proxies of one realm, which
+   is what §7.2.3's shared surface means; two realms have two, as they have two `Array.prototype.map`s. */
+/* Two getter ids over one step declaration, because a pool entry carries the member magic and the step body reads
+   it back with idl_step_magic to know which question it was asked. */
 static int g_wp_len_getter_id = -1, g_wp_closed_getter_id = -1;
 static int g_wp_name_setter_id = -1, g_wp_opener_setter_id = -1, g_wp_close_id = -1;
-/* §7.2.2 The Window object's `location` is [PutForwards=href], and this surface is that same interface — so it
-   carries the same forwarding setter the global's `location` does, minted from Web IDL's own declaration
+/* §7.2.2 "The Window object"'s `location` is [PutForwards=href], and this surface is that interface, so it carries
+   the forwarding setter the global's `location` does, minted from Web IDL's declaration
    (idl_setter_id_put_forwards) rather than from a body of this component's. */
 static int g_wp_location_setter_id = -1;
 
@@ -371,14 +292,12 @@ static int g_wp_location_setter_id = -1;
 static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(opener), WP_OFF(container) };
 static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 4 };
 
-/* THE CAPTURE IS IN THE ACCESSOR, as it is for every other component record: a record a flow has reached is one
-   it may write, and there is then no write site to miss. `origin` is a POD pointer and `doc` a POD id inside the
-   captured bytes — a navigation REPLACES them rather than mutating what they point at, so the byte copy is a
-   complete description of the binding at that moment.
-   THE STRINGS ARE THEREFORE NOT FREED ON NAVIGATION. A delta's saved bytes still name the old pointer, and
-   freeing it would leave a parked flow resuming onto freed memory. They are owned by the PROXY and released
-   with it, which costs one string per navigation and is the only arrangement in which a parked flow's binding
-   stays readable. */
+/* The capture is in the accessor, as for every other component record: a record a flow has reached is one it may
+   write, so there is no write site to miss. `origin` is a POD pointer and `doc` a POD id inside the captured bytes;
+   a navigation replaces them rather than mutating their targets, so the byte copy describes the binding completely.
+   So the strings are not freed on navigation: a delta's saved bytes still name the old pointer, and freeing it
+   would resume a parked flow onto freed memory. The component owns them and releases them at teardown, one string
+   per navigation, the only arrangement in which a parked flow's binding stays readable. */
 static ProxyData *proxy_of(JSValueConst v)
 {
     ProxyData *p = JS_GetOpaque(v, g_proxy_class);
@@ -386,18 +305,15 @@ static ProxyData *proxy_of(JSValueConst v)
     return p;
 }
 
-/* WRITE ONE OF THE FOUR, and never `JS_FreeValue(ctx, p->f); p->f = <build one>;` — see cow.h for the order and
-   the defect. Releasing this record's OLD value is the hazard from the release side and it is the one that
-   bites here: `window` names a global, so giving it back runs the page's own platform finalizers, and an
-   allocation anywhere in them IS a collection (js_trigger_gc has exactly one caller, JS_NewObjectFromShape) —
-   which reaches this record through proxy_gc_mark and decrefs whatever the slot still names. Publishing first
-   makes the slot correct throughout.
-   The record and its layout are bound HERE rather than at each call, so no site can pass a slot from one record
-   with the layout of another. Every write below goes through it; the two MINTS do not, and that is the one
-   honest exception: before JS_SetOpaque the record is unreachable by the collector and its slots hold no value
-   to release. */
-/* THE ADDRESS PASSES THROUGH: the asserts inside are about the SLOT, so they must name the WRITE and not this
-   line — see cow.h's THE SITE TRAVELS WITH THE OPERATION. */
+/* Write one of the four slots, never `JS_FreeValue(ctx, p->f); p->f = <build one>;` (see cow.h for the order).
+   Releasing the old value is the hazard here: `window` names a global, so giving it back runs the page's own
+   platform finalizers, and an allocation in them is a collection (js_trigger_gc's one caller is
+   JS_NewObjectFromShape), which reaches this record through proxy_gc_mark and decrefs whatever the slot still
+   names. Publishing first keeps the slot correct throughout.
+   The record and its layout are bound here, so no site can pass a slot of one record with another's layout. Every
+   write goes through it except the two mints: before JS_SetOpaque the record is unreachable by the collector and
+   its slots hold nothing to release. The caller's file and line pass through, so the asserts inside name the
+   write and not this line. */
 static void wp_set_at(JSContext *ctx, ProxyData *p, JSValue *slot, JSValue v,
                       const char *file, int line)
 {
@@ -405,20 +321,13 @@ static void wp_set_at(JSContext *ctx, ProxyData *p, JSValue *slot, JSValue v,
 }
 #define wp_set(ctx_, p_, slot_, v_) wp_set_at((ctx_), (p_), (slot_), (v_), __FILE__, __LINE__)
 
-/* §7.2.1's SAME-ORIGIN CHECK — §7.1.1's algorithm over two RECORDS, which is the whole of it: step 1 is the
- * nonce comparison and step 2 is the tuple comparison, both inside origin_same.
- *
- * IT USED TO BE A STRING COMPARE, AND THAT COULD NOT RUN STEP 1. "If A and B are the same opaque origin, then
- * return true" is an IDENTITY comparison, and identity is exactly what §7.1.1's serializer drops — every opaque
- * origin serializes to "null" — so this component could not tell one opaque origin looked at twice from two
- * distinct ones and guessed "two". That is right for two sandboxed frames and wrong for the case step 1 exists
- * for: §7.3.2.1's determine-the-origin hands ONE opaque origin to several Documents on purpose, so a `data:`
- * document's `about:blank` child was refused every member of its own navigable outside the fixed cross-origin
- * list, and its `contentDocument` was null. The origin is a record now (core/url/origin.h) and the guess is
- * gone with the assert that named it.
- *
- * THE ACCESSOR SIDE IS THE AGENT'S ORIGIN. An instance is an origin-keyed agent cluster, so the origin of
- * whoever is reading is this agent's, and there is exactly one of those. */
+/* §7.2.1's same-origin check: §7.1.1's algorithm over two records, step 1's nonce comparison and step 2's tuple
+ * comparison, both inside origin_same. Step 1 ("If A and B are the same opaque origin, then return true") is an
+ * identity comparison that a serialization cannot run, since every opaque origin serializes to "null"; it matters
+ * because §7.3.2.1's determine-the-origin hands one opaque origin to several Documents, so a `data:` document's
+ * `about:blank` child is same origin with it.
+ * The accessor side is the agent's origin: an instance is an origin-keyed agent cluster, so whoever is reading
+ * has this agent's origin, and there is one. */
 static bool proxy_same_origin(const ProxyData *p)
 {
     DCHECK(p->origin != NULL, "a WindowProxy carries no origin — §7.4 gives every navigable's document one "
@@ -427,35 +336,26 @@ static bool proxy_same_origin(const ProxyData *p)
     return origin_same(p->origin, origin_agent());
 }
 
-/* §7.1.1's SAME ORIGIN-DOMAIN over the same pair — §7.3.1.3 "Child navigables"' `content document` filter,
- * which is a DIFFERENT algorithm from the one above and not a laxer spelling of it.
- *
- * AND ITS ACCESSOR SIDE IS THE ASKING DOCUMENT'S ORIGIN, NOT THE AGENT'S. That is the one place the two checks
- * must be written differently, and the reason is §7.1.1.2: every origin in this heap is same ORIGIN with the
- * agent's by construction, so proxy_same_origin may compare against the agent's record and be exact — but a
- * DOMAIN is per Document. §7.3.1.3's content document filters "container document" against the content
- * document, and a child navigable's Document holds its own tuple record (§7.3.2.1's determine the origin
- * step 5 mints one per address), so a child that has relaxed its domain while its container has not is a
- * pair the standard's own table answers ❌ for. Reading the agent's record here would have answered ✅ —
- * right until the moment the member it exists to gate became implementable, which is what makes it worth
- * one argument. */
+/* §7.1.1's same origin-domain over the same pair, §7.3.1.3 "Child navigables"' `content document` filter: a
+ * different algorithm from the one above, not a laxer spelling of it.
+ * Its accessor side is the asking document's origin, not the agent's, because of §7.1.1.2: every origin in this
+ * heap is same origin with the agent's by construction, so proxy_same_origin may compare against the agent's
+ * record and be exact, but a domain is per Document. §7.3.1.3's content document filters "container document"
+ * against the content document, and a child navigable's Document holds its own tuple record (§7.3.2.1's determine
+ * the origin step 5 mints one per address), so a child that has relaxed its domain while its container has not is
+ * a pair the standard's table answers ❌ for, where the agent's record would answer ✅. */
 static bool proxy_same_origin_domain(JSContext *ctx, const ProxyData *p)
 {
     DCHECK(p->origin != NULL, "a WindowProxy carries no origin");
     return origin_same_origin_domain(p->origin, window_proxy_origin(document_window_proxy(ctx)));
 }
 
-/* IS THIS A NAVIGABLE'S PROXY — the type test every algorithm in this browser that has to tell a navigable
-   from an ordinary object branches on, and the one place a zeroed class id would be read as an ANSWER rather
-   than as a defect. The `g_proxy_class != 0 &&` that stood here made "this component is not declared" and
-   "that object is not a WindowProxy" one value, and the two became separate states the moment
-   window_proxy_free started giving the id back: after the release column every live proxy in the heap would
-   report itself as something else, silently, at every one of those sites — the plausible answer, which is
-   worse than a crash and indistinguishable from a measurement. It is a DCHECK because both states are
-   impossible rather than rare — this test is reached only from
-   an algorithm running in a realm the declaration pass built, and no collector entry and no other component's
-   release calls it (the finalizer and the gc_mark above read their record through JS_GetAnyOpaque, which is
-   the whole reason they can run after this id is gone). */
+/* Is this a navigable's proxy: the type test every algorithm that tells a navigable from an ordinary object
+   branches on. A zeroed class id is a defect here, not an answer: after window_proxy_free gives the id back, a
+   test against it would report every live proxy as something else, silently, at every site. A DCHECK because
+   both states are impossible rather than rare: the test is reached only from an algorithm running in a realm the
+   declaration pass built, and no collector entry or other component's release calls it (the finalizer and
+   gc_mark read their record through JS_GetAnyOpaque, which is why they can run after the id is gone). */
 bool window_proxy_is(JSValueConst v)
 {
     DCHECK(g_wp_rt != NULL,
@@ -472,8 +372,8 @@ bool window_proxy_is_window(JSContext *ctx, JSValueConst v)
 
     if (window_proxy_is(v))
         return true;
-    /* THE ASKING REALM STANDS FOR ITSELF AS ITS GLOBAL — win_or_proxy's mapping, asked as a type test rather
-       than performed as a substitution. Same object, same rule, one place it is decided. */
+    /* The asking realm stands for itself as its global: win_or_proxy's mapping, asked as a type test rather than
+       performed as a substitution, so one place decides it. */
     g = JS_GetGlobalObject(ctx);
     same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
     JS_FreeValue(ctx, g);
@@ -500,42 +400,36 @@ static char *proxy_strdup(const char *s)
     return c;
 }
 
-/* THE ONE WindowProxy PER REMOTE DOCUMENT — the importing half of a navigable's IDENTITY, and the reason it is
-   a table rather than a mint at each call site: `w[0] === w[0]`, `w.frames[0] === iframe.contentWindow` and
-   `event.source === event.source` are page-visible identities over ONE navigable, and every one of them
-   answers false the moment two sites each mint their own proxy for it.
-   THE ROW BORROWS, AND THAT IS WHAT MAKES THE TABLE ALLOWED TO EXIST. core/dom/document.h refuses a registry
-   keyed by document in as many words, and it is right about the OWNING kind: a navigable is created per
-   `open()` per flow, so an owning row would be an immortal root holding a proxy for every navigable a
-   forced-execution frontier ever created — the same shape as the realm-per-read that cost the frontier 43% of
-   its depth. A borrowed row is not that shape at all: an entry exists only while something ELSE holds the
-   proxy, and proxy_finalizer takes the row out at the moment the collector takes the object. So the table is
-   exactly the set of remote navigables that are still alive, there is no reclamation left to build, and
-   nothing is kept alive by being named. */
+/* The one WindowProxy per remote document: the importing half of a navigable's identity, a table rather than a
+   mint at each call site because `w[0] === w[0]`, `w.frames[0] === iframe.contentWindow` and
+   `event.source === event.source` are page-visible identities over one navigable, each false once two sites mint
+   their own proxy for it.
+   The row borrows, which is what allows the table. core/dom/document.h refuses a registry keyed by document, and
+   it is right about the owning kind: a navigable is created per `open()` per flow, so an owning row would be an
+   immortal root holding a proxy for every navigable a forced-execution frontier ever created. A borrowed entry
+   exists only while something else holds the proxy, and proxy_finalizer takes the row out when the collector
+   takes the object, so the table is exactly the set of live remote navigables and names keep nothing alive. */
 typedef struct { uint32_t doc; JSValueConst proxy; } RemoteNav;
 static RemoteNav *g_remote_navs;
 static int        g_remote_navs_n, g_remote_navs_cap;
 
-/* EVERY WindowProxy THIS AGENT HAS MINTED, SCANNED ON THE PROXY'S OWN PER-FLOW `doc` — the (document, world)
-   keying solver/world.c's realm row could not express, and the reason that row is gone. A document's realm is
-   a POD field inside the bytes proxy_of captures (PROXY_REC above), so two flows that each read through one
-   srcless navigable hold two realms for one name and NEITHER of them is wrong; a row with ONE slot per
-   document aborted rather than answer, by name, and that crash was doing protective work.
-   IT HAS NO `doc` COLUMN AT ALL, WHICH IS THE WHOLE OF THE FIX. A column would be a second copy of a field
-   that already rides the delta — the very thing solver/world.c's record now warns against — so the key is read
-   off the row's own record AT THE SCAN, under whichever delta is applied, and the answer is the asking
-   TIMELINE's. Two timelines each holding a realm for one name is then a question with two answers rather than
-   a collision.
-   BORROWED, exactly like the remote rows above: proxy_finalizer takes a row out, so this is exactly the set of
-   live proxies and nothing is kept alive by being named. */
+/* Every WindowProxy this agent has minted, scanned on the proxy's own per-flow `doc`: the (document, world) keying
+   a per-document registry row cannot express. A document's realm is a POD field inside the bytes proxy_of
+   captures (PROXY_REC above), so two flows that each read through one srcless navigable hold two realms for one
+   name and neither is wrong.
+   It has no `doc` column: a column would be a second copy of a field that already rides the delta (which
+   solver/world.c's record warns against), so the key is read off the row's own record at the scan, under
+   whichever delta is applied, and the answer is the asking timeline's. Two timelines each holding a realm for one
+   name is then a question with two answers rather than a collision.
+   Borrowed, like the remote rows above: proxy_finalizer takes a row out, so this is exactly the set of live
+   proxies and names keep nothing alive. */
 static JSValueConst *g_live_navs;
 static int           g_live_navs_n, g_live_navs_cap;
 
-/* BOTH MINTS RECORD, which is why this is a function and not three statements at each of them: a proxy that is
-   not in the table is a navigable live_nav_of_document cannot see, and its two readers would then report a
-   document this agent holds as UNMATERIALIZED — which is the honest answer for a navigable nothing has read
-   through, and a lie for one that was simply never recorded. One function, so a third mint cannot answer
-   differently by forgetting. */
+/* Both mints record, which is why this is a function: a proxy not in the table is a navigable
+   live_nav_of_document cannot see, and its two readers would report a document this agent holds as
+   unmaterialized, which is right for a navigable nothing has read through and wrong for one that was never
+   recorded. One function, so a third mint cannot answer differently by forgetting. */
 static void live_nav_record(JSValueConst proxy)
 {
     if (g_live_navs_n == g_live_navs_cap) {
@@ -548,21 +442,19 @@ static void live_nav_record(JSValueConst proxy)
         g_live_navs = g;
         g_live_navs_cap = cap;
     }
-    g_live_navs[g_live_navs_n++] = proxy;   /* BORROWED — proxy_finalizer takes the row out */
+    g_live_navs[g_live_navs_n++] = proxy;   /* borrowed: proxy_finalizer takes the row out */
 }
 
-/* WHICH OF THIS AGENT'S NAVIGABLES IS THE DOCUMENT NAMED `doc`, IN THE TIMELINE THAT IS ASKING — JS_UNDEFINED
-   when none of them is.
-   NO CONTEXT AND NO MATERIALIZATION, and both halves of that are load-bearing. Every read here is a bare
-   JS_GetOpaque: it does not go through proxy_of, so it captures nothing, and it does not reach proxy_realm, so
-   it builds nothing. That is what lets this stand inside a DCHECK CONDITION — three of solver/engine.c's
-   sixteen callers of the realm lookup are exactly that — where a materializing call would be the side effect
-   §Offensive-programming bans in a condition, building a realm in dev and not in release. The COW machinery
-   has already applied the running flow's delta, so the per-flow fields the scan reads are this timeline's
-   without a ctx being passed at all.
-   AT MOST ONE ROW MATCHES, AND THAT IS ASSERTED HERE RATHER THAN AT THE RECORD BECAUSE THE KEY IS PER-FLOW. A
-   row is recorded before its `doc` can be read in any other timeline, so there is no moment at which the table
-   holds the pair and the scan is the only place the invariant is expressible. */
+/* Which of this agent's navigables is the document named `doc`, in the timeline that is asking; JS_UNDEFINED when
+   none is.
+   No context and no materialization: every read is a bare JS_GetOpaque, which does not go through proxy_of (so it
+   captures nothing) and does not reach proxy_realm (so it builds nothing). That lets it stand inside a DCHECK
+   condition, as some of solver/engine.c's callers of the realm lookup do, where a materializing call would be a
+   side effect building a realm in dev and not in release. The COW machinery has applied the running flow's delta,
+   so the per-flow fields the scan reads are this timeline's without a ctx.
+   At most one row matches, asserted here rather than at the record because the key is per flow: a row is recorded
+   before its `doc` can be read in any other timeline, so the scan is the only place the invariant is
+   expressible. */
 static JSValueConst live_nav_of_document(uint32_t doc)
 {
     JSValueConst found = JS_UNDEFINED;
@@ -590,11 +482,11 @@ static JSValueConst live_nav_of_document(uint32_t doc)
     return found;
 }
 
-/* THE RECORD AS A COLLECTOR ENTRY SEES IT. JS_GetAnyOpaque AND NOT JS_GetOpaque(val, g_proxy_class):
-   core/agent_state.h states the rule and the reason — window_proxy_free gives the class id back, and the
-   collection that finalizes this agent's object graph runs AFTER the release column, so a lookup against that
-   id would answer NULL for every proxy a page still held and this component would silently free none of them.
-   The collector dispatched THROUGH the class, so the id is a fact it already has and must not look up. */
+/* The record as a collector entry sees it: JS_GetAnyOpaque, not JS_GetOpaque(val, g_proxy_class).
+   core/agent_state.h states the rule: window_proxy_free gives the class id back and the collection that finalizes
+   this agent's object graph runs after the release column, so a lookup against that id would answer NULL for every
+   proxy a page still held and free none of them. The collector dispatched through the class, so it already has
+   the id. */
 static ProxyData *proxy_collector_record(JSValueConst val)
 {
     JSClassID cid = 0;
@@ -607,26 +499,24 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
     ProxyData *p = proxy_collector_record(val);
     int i;
     (void)rt;
-    /* THE ROW GOES FIRST, and unconditionally: it names this object by POINTER, so a row left behind would
-       hand the next ask for that document a freed proxy. Above the `p` assert because the table's claim is
-       about the OBJECT, not about the record hanging off it. */
+    /* The row goes first, unconditionally: it names this object by pointer, so a row left behind would hand the
+       next ask for that document a freed proxy. Above the `p` assert because the table's claim is about the
+       object, not the record hanging off it. */
     for (i = 0; i < g_remote_navs_n; i++)
         if (JS_VALUE_GET_PTR(g_remote_navs[i].proxy) == JS_VALUE_GET_PTR(val)) {
             g_remote_navs[i] = g_remote_navs[--g_remote_navs_n];
             break;
         }
-    /* AND THE LIVE-NAVIGABLE ROW, for the same reason and in the same place: it names this object by POINTER,
-       so a row left behind would have the next scan read a freed record's `doc` and answer a realm for a
-       navigable that no longer exists. */
+    /* The live-navigable row, for the same reason and in the same place: a row left behind would have the next
+       scan read a freed record's `doc` and answer a realm for a navigable that no longer exists. */
     for (i = 0; i < g_live_navs_n; i++)
         if (JS_VALUE_GET_PTR(g_live_navs[i]) == JS_VALUE_GET_PTR(val)) {
             g_live_navs[i] = g_live_navs[--g_live_navs_n];
             break;
         }
-    /* Both mints attach the record with nothing between JS_NewObjectClass and JS_SetOpaque that allocates on
-       the JS heap or returns — proxy_strdup is malloc and JS_DupValue is a refcount — so a WindowProxy with no
-       record has never existed, and the `if (!p) return;` that used to stand here was reading a zeroed class
-       id rather than an absent record. */
+    /* Both mints attach the record with nothing between JS_NewObjectClass and JS_SetOpaque that allocates on the JS
+       heap or returns (proxy_strdup is malloc and JS_DupValue a refcount), so a WindowProxy with no record cannot
+       exist. */
     DCHECK(p != NULL, "a WindowProxy was finalized with no §7.2.3 record — both mints attach one before the "
                       "object can reach a collection");
     JS_FreeValueRT(rt, p->window);
@@ -639,45 +529,43 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
 static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     ProxyData *p = proxy_collector_record(val);
-    /* AN UNMARKED CHILD IS WORSE THAN A LEAKED PARENT — it keeps the internal reference gc_decref subtracts,
-       so gc_scan reads it as rooted from outside the heap and it is never collected at all. That is what a
-       record read through a released class id costs here, and it is silent (core/agent_state.h). */
+    /* An unmarked child is worse than a leaked parent: it keeps the internal reference gc_decref subtracts, so
+       gc_scan reads it as rooted from outside the heap and it is never collected. That is what reading the record
+       through a released class id would cost here, silently (core/agent_state.h). */
     DCHECK(p != NULL, "a WindowProxy was marked with no §7.2.3 record — both mints attach one before the "
                       "object can reach a collection");
-    /* The Window holds the proxy (as `window`) and the proxy holds the Window: a cycle, and one the collector
-       has to see or every navigable leaks its global. `parent` and `opener` close cycles of their own — a child
-       names its creator's Window, which reaches the child through the element wrapper that holds it. */
+    /* The Window holds the proxy (as `window`) and the proxy holds the Window: a cycle the collector has to see or
+       every navigable leaks its global. `parent` and `opener` close cycles of their own: a child names its
+       creator's Window, which reaches the child through the element wrapper that holds it. */
     JS_MarkValue(rt, p->window, mark_func);
     JS_MarkValue(rt, p->parent, mark_func);
     JS_MarkValue(rt, p->opener, mark_func);
-    /* §7.3.1.3's container closes a cycle of its own, and a tighter one than the three above: the element's
-       wrapper holds this proxy in a hidden own slot and this record holds the wrapper back, so an unmarked
-       container would leak every `<iframe>` a page ever inserted together with the navigable it presents. */
+    /* §7.3.1.3's container closes a tighter cycle: the element's wrapper holds this proxy in a hidden own slot and
+       this record holds the wrapper back, so an unmarked container would leak every `<iframe>` a page inserted
+       together with the navigable it presents. */
     JS_MarkValue(rt, p->container, mark_func);
 }
 
-/* MATERIALIZE THE ACTIVE DOCUMENT — THE ONE PLACE A REALM IS BUILT. Every member that reads THROUGH to the
-   active document goes through here, and so does §7.4's navigation, which calls window_proxy_realm to
-   materialize the navigable it just created. One build site, reached two ways; see navigable.h for which
-   navigable is materialized WHEN and why the difference is a spec sentence rather than a saving. */
+/* Materialize the active document: the one place a realm is built. Every member that reads through to the active
+   document comes here, and so does §7.4's navigation, which calls window_proxy_realm to materialize the navigable
+   it created. See navigable.h for which navigable is materialized when, and why the difference is a spec sentence
+   rather than a saving. */
 static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
 {
-    /* SAME-ORIGIN IMPLIES HOSTED, by construction: an instance is an ORIGIN-KEYED agent, so a navigable this
-       agent does not hold is one whose active document is cross-origin — and every same-origin-only member is
-       therefore answerable in this turn. Asserted here because it is the pairing the member table depends on:
-       if it ever stopped holding, a same-origin read would silently fall through to the cross-origin path. */
+    /* Same-origin implies hosted, by construction: an instance is an origin-keyed agent, so a navigable this agent
+       does not hold has a cross-origin active document, and every same-origin-only member is answerable in this
+       turn. Asserted because the member table depends on it: otherwise a same-origin read would fall through to
+       the cross-origin path. */
     DCHECK(world_doc_hosted(p->doc),
            "the realm of a navigable whose active document is a PEER's was asked for — a same-origin navigable "
            "is a realm of this agent by construction, so this proxy is cross-origin and the read that reached "
            "here should have been a SecurityError");
-    /* AND A DESTROYED NAVIGABLE IS NEVER MATERIALIZED. §7.5.10 step 7 nulled this navigable's active document,
-       so a NULL realm on a destroyed navigable means "there is no document" and not "there is not one YET" —
-       the two are the same field and only this tells them apart. Without it the next read through the proxy
-       would BUILD a fresh Document for a navigable whose browsing context is null: navigable.h's deferral
-       running backwards, a realm allocated by the very destruction that was meant to give one back, and a page
-       the destroy had torn down answering out of a document nothing had ever run. §7.2.1's cross-origin list is
-       what a page may still read on a destroyed navigable, and proxy_forward_window answers every one of those
-       from this record without a realm, so a caller that reaches here has asked for an ACTIVE DOCUMENT. */
+    /* A destroyed navigable is never materialized. §7.5.10 step 7 nulled its active document, so a NULL realm here
+       means "there is no document", not "not yet", and only this tells the two apart in one field. Otherwise the
+       next read through the proxy would build a fresh Document for a navigable whose browsing context is null.
+       §7.2.1's cross-origin list is what a page may still read on a destroyed navigable, and proxy_forward_window
+       answers all of it from this record without a realm, so a caller that reaches here asked for an active
+       document. */
     DCHECK(!p->destroyed,
            "the ACTIVE DOCUMENT of a navigable §7.5.10 destroyed was asked for — that navigable has none "
            "(step 7 nulls it), and materializing one here would build a Document for a browsing context that "
@@ -685,29 +573,20 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
-        /* THE INITIAL about:blank, WHICH CAME FROM NO RESPONSE — so no bytes, and §7.1.7's container is the
-           clone of its creator's this navigable was CREATED with (see creator_policy). Fetching anything here
-           is not deferred, it is IMPOSSIBLE: this runs inside the property read that reached through the navigable,
-           and a fetch suspends. The document an address serves arrives on the load job instead, which is a
-           flow and can park (navigable.c). */
-        /* THE ENVIRONMENT'S TOP-LEVEL CREATION URL IS THE NAVIGABLE'S, not the reading realm's — the read that
-           materializes an about:blank child may come from any same-origin document, and answering from `ctx`
-           would give the child whichever document happened to touch it first. The same sentence as
-           `creator_policy` beside it, and the same field for the same reason. */
-        /* §7.3.2.1's CREATE A NEW BROWSING CONTEXT AND DOCUMENT gives this Document its ACTIVE SANDBOXING
-           FLAG SET, and what it gives is `sandboxFlags` — the navigable's CREATION sandboxing flags, with NO
-           CSP-derived half. That absence is the spec's and it is what `allow-popups-to-escape-sandbox` is
-           for: a sandboxed page's popup inherits the creator's flags only when the propagate flag survived
-           the parse, and unioning the inherited policy's own CSP-derived flags in here would re-sandbox the
-           popup that keyword exists to free. The union belongs to §7.4.5's NAVIGATION (core/frame/navigable.c),
-           which is the other place a Document of this navigable is created. */
-        /* §7.4's ABOUT BASE URL travels with the creation exactly as the policy container does, and for the
-           identical reason stated one field over: this Document IS the initial about:blank, `creatorBaseURL`
-           is what §7.4 gives it, and the realm reading through this navigable is not necessarily the one that
-           created it. */
-        /* NO BODY AND THEREFORE NO CONTENT TYPE — this is §7.2's initial `about:blank`, materialized rather
-           than loaded, so there is no response for §7.4.5 to compute a type from and §7.4 makes it an HTML
-           document outright. The NULL is that statement, not an unknown. */
+        /* The initial about:blank, which came from no response: no bytes, and §7.1.7's container is the clone of
+           its creator's this navigable was created with (creator_policy). A fetch here is impossible, not
+           deferred: this runs inside the property read that reached through the navigable, and a fetch suspends.
+           The document an address serves arrives on the load job instead, a flow that can park (navigable.c). No
+           body means no content type: §7.4 makes the initial `about:blank` an HTML document outright, so the NULL
+           is that statement, not an unknown. */
+        /* The navigable's creation facts, not the reading realm's: the read that materializes an about:blank child
+           may come from any same-origin document, and `ctx` would give the child whichever document touched it
+           first. That holds for the top-level creation URL, the container and §7.4's about base URL
+           (`creatorBaseURL`). §7.3.2.1's create a new browsing context and document gives this Document
+           `sandboxFlags`, the navigable's creation sandboxing flags with no CSP-derived half: a sandboxed page's
+           popup inherits the creator's flags only when the propagate flag survived the parse, and unioning the
+           inherited policy's CSP-derived flags in here would re-sandbox the popup `allow-popups-to-escape-sandbox`
+           exists to free. The union belongs to §7.4.5's navigation (core/frame/navigable.c). */
         p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL, NULL,
                                    p->creator_policy, p->creator_base_url, p->creation_sandbox_flags);
         wp_set(ctx, p, &p->window, JS_GetGlobalObject(p->realm));
@@ -715,74 +594,61 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
     return p->realm;
 }
 
-/* §7.4.2.2's NAVIGATE — see window_proxy.h. Reached from navigable.c, which owns the fetch and the realm. */
+/* §7.4.2.2's navigate (see window_proxy.h), reached from navigable.c, which owns the fetch and the realm. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
                            const char *url, const char *top_level_url, const Origin *top_level_origin,
                            const Origin *origin, OpenerPolicyValue opener_policy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
 
     DCHECK(p != NULL, "something that is not a WindowProxy was navigated");
     DCHECK(realm != NULL, "a navigable was navigated to no realm — a Document this agent holds IS a realm, and "
                           "a cross-origin destination is a peer's document, which is a host route and not this");
     DCHECK(world_doc_hosted(doc), "a navigable was navigated to a document this agent does not hold");
-    /* A DESTROYED NAVIGABLE IS NOT NAVIGATED. §7.4.2.2 acts on the navigable's active document and §7.5.10
-       step 7 nulled it; the §7.4 step 14 load that could still have been in flight when the container was
-       removed is exactly what §7.5.10 step 5 takes off the queue without running (quickjs.c's
-       JS_DropJobsForContext walks the baseline list for that case by name). Reaching here means one of those
-       two stopped holding, and the write below would give a destroyed navigable a live Window again. */
+    /* A destroyed navigable is not navigated. §7.4.2.2 acts on the navigable's active document and §7.5.10 step 7
+       nulled it; a §7.4 step 14 load still in flight when the container was removed is what §7.5.10 step 5 takes
+       off the queue without running (quickjs.c's JS_DropJobsForContext walks the baseline list for that case).
+       Reaching here means one of those stopped holding, and the write below would give a destroyed navigable a
+       live Window again. */
     DCHECK(!p->destroyed,
            "a navigable whose active document §7.5.10 destroyed was NAVIGATED — §7.4.2.2 replaces an active "
            "document and this navigable has none, so either the load job outlived step 5's drop or a "
            "destroyed navigable was chosen as a navigation target");
-    /* AND A SWAPPED-PAST BROWSING CONTEXT IS NOT NAVIGATED EITHER, for a different reason with the same shape.
-       §7.1.3.2's swap moved this navigable's next Document into a browsing context in ANOTHER instance, so the
-       navigable a later `w.location = …` names is that one and not this record — which this instance cannot
-       navigate, because navigating another agent's navigable is a cross-instance OPERATION and there is none.
-       Writing the binding here instead would resurrect the window the swap closed. */
+    /* Nor is a swapped-past browsing context. §7.1.3.2's swap moved this navigable's next Document into a browsing
+       context in another instance, so a later `w.location = …` names that one, and navigating another agent's
+       navigable is a cross-instance operation this tree does not have. Writing the binding here would resurrect
+       the window the swap closed. */
     DCHECK(!p->bc_discarded,
            "a browsing context §7.1.3.2's group SWAP discarded was NAVIGATED — the navigable moved to the "
            "instance the swap provisioned, so this record is the one the page's handle reads `closed` off and "
            "never a navigation target. BUILD the cross-instance navigate: a navigation of a navigable another "
            "agent holds is an operation routed to that agent (core/frame/remote_op.h), not a local write");
-    /* THE OLD WINDOW'S REFERENCE IS THIS SLOT'S, and the delta already dupped its own copy when the capture
-       above ran — so releasing it here leaves the parked arm's copy intact and the live slot free to move.
-       IT IS PUBLISHED BEFORE IT IS RELEASED (wp_set): the release is what runs the OLD global's finalizers. */
-    /* AND THE OUTGOING NAME STOPS RESOLVING AT THIS LINE, SO WHATEVER STILL NAMES IT IS ASSERTED HERE RATHER
-       THAN WHERE IT IS NEXT READ. `doc_realm` answers a document name by asking the NAVIGABLE for its active
-       document's realm (window_proxy_realm_of_document), and the write below moves that answer — so from this
-       instant the OUTGOING document's name resolves to nothing in this timeline, while the Document, its realm
-       and every program row queued for it are all still perfectly alive. That is a NAMING failure and not a
-       lifetime one, which is why core/frame/navigable.c's realm-teardown assert does not catch it: no realm is
-       being torn down.
-       MEASURED, and it is why this assert is here instead of a comment. On app.gitpod.io a program row of the
-       outgoing document reached solver/engine.c's `doc_realm` from the docscript park and took the
-       WP_DOC_NO_NAVIGABLE arm — `@WHY … engine.c:3275 … asked at engine.c:8618` on a dev build — while the
-       SAME path on a release artifact, where that abort is compiled out, carried the row's BORROWED element
-       pointer on into §2.5.6's nonce read and killed the renderer with `RuntimeError: memory access out of
-       bounds` and nothing on it, 3 of 3 drives of two artifacts. The two are one defect seen at two regimes.
-       IT ASSERTS AND DOES NOT DROP, DELIBERATELY. HTML §7.4.4 "Aborting a document load" aborts a navigated-away
-       Document's fetch controllers, so DROPPING those rows is what a browser does and solver/flow.h already has
-       the primitive for it (`flow_programs_remove_for_document`, §7.5.10 step 5's removal, per flow). What is
-       NOT established is that every caller of this function is a real navigation: the initial about:blank
-       handover reaches here too, and a drop performed on that one would discard the rows of the document being
-       navigated TO. A wrong drop deletes work silently, which is worse than an abort that names the population,
-       so this diff moves the DETECTION to the origin and the next one drops — once this assert has said which
-       transition the rows belong to.
-       IT IS THE RUNNING FLOW'S ROWS because the question is per timeline: at the instant this flow navigates, a
-       sibling arm has not, and its rows for the outgoing document are rows of a document that is still its
-       navigable's active one. solver/flow.h states that argument for the per-flow count this asks. */
-    /* THE PRECONDITION IS ASSERTED AND NOT BRANCHED ON, because solver/quantum.h says in as many words that
-       `quantum_slice_open` is NEVER control flow: "a caller that BRANCHES on this is choosing between a
-       scheduled path and an unscheduled one, which is the fallback §C-stack bans". A navigation is state a page
-       OBSERVES, so it happens inside a slice or the thing that performed it is the defect — and this draft was
-       first written with `flow_running() == NULL ||` as an exemption, which is the spelling CLAUDE.md records as
-       having made an assert FALSE EXACTLY WHEN THE ENGINE WAS WORKING: the scheduler deliberately leaves that
-       stamp up across the host boundary, so a NULL test there is not the question. It is kept in these words
-       because the exemption is the reading a reader re-derives from `flow_programs_unstarted_for_document`
-       needing a `Flow *`. If THIS assert is what fires, that is a larger finding than the rows: it says a
-       navigation reached this line at host time, and `engine_unload_document`'s residual names that population
-       for a different lookup. */
+    /* The old Window's reference is this slot's, and the delta dupped its own copy when the capture above ran, so
+       releasing it leaves the parked arm's copy intact. It is published before it is released (wp_set): the
+       release runs the old global's finalizers. */
+    /* The outgoing name stops resolving at the write below, so whatever still names it is asserted here rather
+       than where it is next read. `doc_realm` answers a document name by asking the navigable for its active
+       document's realm (window_proxy_realm_of_document), and the write moves that answer while the outgoing
+       Document, its realm and every program row queued for it are still alive: a naming failure, not a lifetime
+       one, so core/frame/navigable.c's realm-teardown assert does not catch it. A row that survives reaches
+       `doc_realm`'s WP_DOC_NO_NAVIGABLE arm in a dev build and, in release, carries its borrowed element pointer
+       into a tree this navigable no longer presents.
+       The rows are the running flow's because the question is per timeline: a sibling arm that has not navigated
+       still holds rows of its navigable's active document (solver/flow.h states the argument). */
+    /* Named residual: the outgoing document's rows are asserted absent, not dropped. Not covered: HTML §7.4.4
+       "Aborting a document load" aborts a navigated-away Document's fetch controllers, so a browser drops these
+       rows, and solver/flow.h has the primitive (`flow_programs_remove_for_document`, §7.5.10 step 5's removal,
+       per flow); but not every caller is established as a real navigation, since the initial about:blank handover
+       reaches here too and a drop there would discard the rows of the document being navigated to. Next diff
+       builds: the drop, once this assert has named which transition the rows belong to. How its absence shows:
+       this assert fires on a page that navigates a frame with programs still queued for the outgoing document. */
+    /* Asserted, not branched on: solver/quantum.h states that a caller branching on `quantum_slice_open` chooses
+       between a scheduled path and an unscheduled one. A navigation is state a page observes, so it happens
+       inside a slice or its performer is the defect. A `flow_running() == NULL ||` exemption would be wrong: the
+       scheduler leaves that stamp up across the host boundary, so a NULL test is not this question, though
+       `flow_programs_unstarted_for_document` needing a `Flow *` invites it. If this assert fires, a navigation
+       reached here at host time, a larger finding than the rows; `engine_unload_document`'s residual names that
+       population for a different lookup. */
     DCHECK(quantum_slice_open(),
            "a navigable was NAVIGATED at host time — §7.4.2.2 replaces a navigable's active document, which is "
            "state a page observes, so it runs inside a flow's slice and under that flow's own delta. A caller "
@@ -799,48 +665,44 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
     p->realm  = realm;
     wp_set(ctx, p, &p->window, JS_GetGlobalObject(realm));
     p->doc    = doc;
-    /* THE OLD STRINGS ARE NOT FREED. A parked flow's saved bytes still name them (see proxy_of), so freeing
-       here would resume that flow onto freed memory; they are the PROXY's and are released with it. */
+    /* The old strings are not freed: a parked flow's saved bytes still name them (see proxy_of). */
     p->url    = proxy_strdup(url);
     DCHECK(origin != NULL, "a navigable was navigated to a document with no origin — §7.3.2.1's determine "
                            "the origin answers for every Document, and a navigation's answer is the one the "
                            "LOAD computed, never re-derived here from the address (that second answer is what "
                            "loses an inherited identity)");
-    p->origin = origin;   /* BORROWED, and REPLACED rather than mutated — see the field */
-    /* THE NEW DOCUMENT'S ENVIRONMENT MOVED WITH IT, and the caller states where to — a navigation of a
-       TOP-LEVEL traversable puts the environment at the new address, while a nested navigable's stays where
-       its creation put it (HTML §8.1.3.1). It is not re-derived here from `url`, because whether this
-       navigable is nested is a fact about the OPERATION's target and the realm the caller has ALREADY BUILT
-       was built under this exact string: deriving it a second time is the second answer that disagrees. */
+    p->origin = origin;   /* borrowed, and replaced rather than mutated; see the field */
+    /* The new document's environment moved with it, to where the caller states: a navigation of a top-level
+       traversable puts it at the new address, while a nested navigable's stays where its creation put it (HTML
+       §8.1.3.1). Not re-derived from `url`: whether this navigable is nested is a fact about the operation's
+       target, and the realm the caller built was built under this exact string, so a second derivation could
+       disagree. */
     DCHECK(top_level_url != NULL && *top_level_url,
            "a navigable was navigated with no top-level creation URL for the new document's environment — the "
            "realm the caller just built has one, and these two must be the same string");
     p->top_level_url = proxy_strdup(top_level_url);
-    /* AND ITS TOP-LEVEL ORIGIN MOVED WITH IT, from the same caller and for the same reason. §7.4.5's fetch
-       gives a top-level traversable's new environment the NEW DOCUMENT's origin and a nested navigable's the
-       parent environment's — the pair is one decision about the operation's target, so a navigation that
-       moved the URL and left the origin behind would key this document's permissions to the document it
-       replaced. */
+    /* Its top-level origin moved with it, from the same caller for the same reason: §7.4.5's fetch gives a
+       top-level traversable's new environment the new document's origin and a nested navigable's the parent
+       environment's, one decision about the operation's target, so moving the URL without the origin would key
+       this document's permissions to the document it replaced. */
     DCHECK(top_level_origin != NULL,
            "a navigable was navigated with no top-level origin for the new document's environment — §8.1.3.1 "
            "gives every environment one, and the realm the caller just built was built under it");
-    p->top_level_origin = top_level_origin;   /* BORROWED and REPLACED rather than mutated — see the field */
-    /* §7.5.1's OPENER POLICY ROW OF THE DOCUMENT THIS NAVIGATION IS CREATING — "opener policy …
-       navigationParams's cross-origin opener policy". It moves here with the rest of the binding because it is
-       a fact of the ACTIVE DOCUMENT and this call is what replaces one; the value is the OPERATION's (obtained
-       from the response the load fetched) and is never re-derived from anything reachable through this proxy,
-       which by the time this runs is the document being replaced. */
+    p->top_level_origin = top_level_origin;   /* borrowed, and replaced rather than mutated; see the field */
+    /* §7.5.1's opener policy row of the document this navigation creates ("opener policy … navigationParams's
+       cross-origin opener policy"). It moves with the binding because it is a fact of the active document and
+       this call replaces one; the value is the operation's (from the response the load fetched), never re-derived
+       through this proxy, which by now reaches the document being replaced. */
     p->opener_policy = opener_policy;
-    /* THE NAVIGABLE IS NO LONGER SHOWING WHAT §7.4 CREATED IT WITH — see `ever_navigated`. Written here
-       because this is the one site that replaces a navigable's active document, which is exactly what makes
-       the flag answerable at all. */
+    /* The navigable no longer shows what §7.4 created it with (see `ever_navigated`), written at the site that
+       replaces a navigable's active document. */
     p->ever_navigated = 1;
 }
 
 void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t doc, const char *url,
                                    const Origin *origin)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
 
     DCHECK(p != NULL, "something that is not a WindowProxy was navigated to a peer's document");
     DCHECK(!world_doc_hosted(doc),
@@ -858,16 +720,16 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
            "a navigable was navigated to a peer while this timeline still held an unstarted program row or a "
            "fetch of the document it is leaving — both name it by a handle that resolves to nothing after the "
            "write below. HTML §7.5.11 step 2 discards them, and the caller runs it before this");
-    /* THE BINDING THIS AGENT HELD IS RELEASED, NOT TORN DOWN: the outgoing Window's reference is this slot's and
-       goes, while the outgoing realm stays the agent's (navigable.c) because a flow parked in it resumes there.
-       A remote proxy holds neither, which window_proxy_is_remote asserts on every ask. */
+    /* The binding this agent held is released, not torn down: the outgoing Window's reference is this slot's and
+       goes, while the outgoing realm stays the agent's (navigable.c) because a flow parked in it resumes there. A
+       remote proxy holds neither, which window_proxy_is_remote asserts on every ask. */
     p->realm = NULL;
     wp_set(ctx, p, &p->window, JS_UNDEFINED);
     p->doc = doc;
     p->url = proxy_strdup(url);       /* the old strings stay: a parked flow's saved bytes still name them */
     DCHECK(origin != NULL, "a navigable was navigated to a peer's document with no origin — the load computed one");
-    p->origin = origin;               /* BORROWED and REPLACED rather than mutated — see the field */
-    /* A TOP-LEVEL traversable's environment moves with its document (HTML §8.1.3.1): its address and origin. */
+    p->origin = origin;               /* borrowed, and replaced rather than mutated; see the field */
+    /* A top-level traversable's environment moves with its document (HTML §8.1.3.1): its address and origin. */
     p->top_level_url = proxy_strdup(url);
     p->top_level_origin = origin;
     p->ever_navigated = 1;
@@ -875,18 +737,18 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
            "a navigable navigated to a peer's document still answers as one this agent hosts");
 }
 
-/* §7.5.1's OPENER POLICY ROW, READ FROM THE NAVIGABLE'S SIDE — see the field. THROUGH proxy_of like every
-   other read of this record, so the answer is the running flow's: an arm that navigated this navigable to a
-   `same-origin` document and a sibling that did not are two worlds with two answers. */
+/* §7.5.1's opener policy row, read from the navigable's side (see the field). Through proxy_of like every other
+   read of this record, so the answer is the running flow's: an arm that navigated this navigable to a
+   `same-origin` document and a sibling that did not have two answers. */
 OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the opener policy of something that is not a WindowProxy was asked for");
-    /* A PEER'S NAVIGABLE HAS NO ANSWER HERE, and this crashes rather than reporting `unsafe-none` — which is a
-       legal value, so a default would be indistinguishable from a measurement. §7.3.2.1's inheritance reaches
-       a REMOTE top-level browsing context in exactly one shape (a same-origin document nested through a
-       cross-origin one), and answering it needs the cross-instance read window_proxy_window names. */
+    /* A peer's navigable has no answer here, and this crashes rather than reporting `unsafe-none`, a legal value a
+       default would make indistinguishable from a measurement. §7.3.2.1's inheritance reaches a remote top-level
+       browsing context in one shape (a same-origin document nested through a cross-origin one), and answering it
+       needs the cross-instance read window_proxy_window names. */
     DCHECK(world_doc_hosted(p->doc),
            "the §7.5.1 opener policy of a navigable in ANOTHER WASM instance was asked for — §7.1.3.2 and "
            "§7.3.2.1 both read it off a browsing context's ACTIVE DOCUMENT, and that document is a peer's. "
@@ -896,8 +758,8 @@ OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy)
     return p->opener_policy;
 }
 
-/* HTML §7.4.4 step 4's "is initial about:blank", from the navigable's side — see `ever_navigated`. Read
-   THROUGH proxy_of like every other read of this record, so the answer is the running flow's. */
+/* HTML §7.4.4 step 4's "is initial about:blank", from the navigable's side (see `ever_navigated`), read through
+   proxy_of so the answer is the running flow's. */
 bool window_proxy_ever_navigated(JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
@@ -906,28 +768,24 @@ bool window_proxy_ever_navigated(JSValueConst proxy)
     return p->ever_navigated != 0;
 }
 
-/* HTML §8.4.1 "Opening the input stream" step 13's "Set document's is initial about:blank to false" — the
- * flag's SECOND writer, and the reason the field's comment says the name is smaller than the field.
- *
- * IT IS NOT A NAVIGATION AND MUST NOT BE WRITTEN AS ONE. §8.4.1 replaces the Document's CONTENT while keeping
- * the same Document object, so every other row of the binding window_proxy_navigate moves — the realm, the
- * Window, the document id, the address, the origin, the environment's top-level pair, the opener policy — is
- * unchanged, and routing this through that function would hand the navigable a second realm for a document it
- * already has. This writes the one byte §8.4.1 names and nothing else.
- *
- * THROUGH proxy_of, so the write lands in the RUNNING FLOW'S delta: an arm whose script opened the document
- * and a sibling standing on the unwritten page are two worlds, and §7.4.4 "Non-fragment synchronous
- * \"navigations\"" step 4 must answer each of them its own way. */
+/* HTML §8.4.1 "Opening the input stream" step 13's "Set document's is initial about:blank to false": the flag's
+ * second writer (see `ever_navigated`).
+ * It is not a navigation: §8.4.1 replaces the Document's content and keeps the Document object, so every other row
+ * of the binding window_proxy_navigate moves (realm, Window, document id, address, origin, the environment's
+ * top-level pair, opener policy) is unchanged, and routing through that function would give the navigable a second
+ * realm for a document it has. This writes the one byte §8.4.1 names.
+ * Through proxy_of, so the write lands in the running flow's delta: an arm whose script opened the document and a
+ * sibling on the unwritten page are two worlds, and §7.4.4 "Non-fragment synchronous \"navigations\"" step 4
+ * answers each its own way. */
 void window_proxy_clear_initial_about_blank(JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "§8.4.1 step 13 cleared the is-initial-about:blank of something that is not a WindowProxy");
-    /* A PEER'S NAVIGABLE CANNOT BE WRITTEN FROM HERE, for the reason window_proxy_opener_policy states on the
-       read side: the flag is a fact about the ACTIVE DOCUMENT and that document is another agent's heap.
-       §8.4.1 step 4's same-origin check makes this unreachable for a cross-ORIGIN document, so what would
-       arrive here is the same origin in another browsing-context group — which is a cross-instance OPERATION
-       (core/frame/remote_op.h) and not a local byte. */
+    /* A peer's navigable cannot be written from here, for window_proxy_opener_policy's reason: the flag is a fact
+       about the active document, which is in another agent's heap. §8.4.1 step 4's same-origin check makes a
+       cross-origin document unreachable here, so what would arrive is the same origin in another browsing-context
+       group, a cross-instance operation (core/frame/remote_op.h), not a local byte. */
     DCHECK(world_doc_hosted(p->doc),
            "§8.4.1 step 13 ran against a navigable in ANOTHER WASM instance — the document open steps replace "
            "the content of a Document this agent does not hold, so the flag they clear lives in the peer's "
@@ -936,8 +794,8 @@ void window_proxy_clear_initial_about_blank(JSValueConst proxy)
     p->ever_navigated = 1;
 }
 
-/* §7.3's IS CREATED BY WEB CONTENT — see the field. Read off the opaque directly rather than through proxy_of:
-   it is a creation fact no flow can change, so there is nothing here for a delta to isolate. */
+/* §7.3's is created by web content (see the field), read off the opaque rather than through proxy_of: a creation
+   fact no flow can change, so a delta has nothing to isolate. */
 bool window_proxy_created_by_web_content(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
@@ -946,8 +804,8 @@ bool window_proxy_created_by_web_content(JSValueConst proxy)
     return p->created_by_web_content != 0;
 }
 
-/* THE SELF PROXY'S REALM IS THE ONE ASKING — already built, so there is nothing to materialize. Stated as its
-   own step rather than folded into the mint because it is the one case where the realm precedes the proxy. */
+/* The self proxy's realm is the one asking and is already built, so nothing is materialized. Its own step because
+   it is the one case where the realm precedes the proxy. */
 static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *realm)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
@@ -956,7 +814,7 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
     DCHECK(p->realm == NULL, "a navigable was given a second realm through the ADOPT path — it already has an "
                              "active document, and replacing one is window_proxy_navigate, which moves all "
                              "five facts of the binding at once rather than handing this one a second realm");
-    p->realm  = realm;   /* BORROWED — the agent owns its realms */
+    p->realm  = realm;   /* borrowed: no agent-held reference owns a realm (see the field) */
     wp_set(ctx, p, &p->window, JS_GetGlobalObject(realm));
 }
 
@@ -970,48 +828,46 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     ProxyData *p;
 
     DCHECK(g_wp_rt != NULL, "a WindowProxy was minted before window_proxy_init ran");
-    /* A LOCAL PROXY NAMES A DOCUMENT THIS AGENT HOLDS THE REALM OF, and that is checked rather than assumed:
-       the whole member table below decides "answer now" from exactly this fact, so a proxy that carries a live
-       Window for a document living elsewhere would answer a cross-instance read out of the wrong heap. */
+    /* A local proxy names a document whose realm this agent holds, checked because the member table decides
+       "answer now" from this fact: a proxy carrying a live Window for a document elsewhere would answer a
+       cross-instance read out of the wrong heap. */
     DCHECK(world_doc_hosted(doc),
            "a local WindowProxy was minted for a document whose realm this agent does not hold — a document is "
            "adopted when §7.4 decides to host it (world_doc_adopt), and one that never was belongs to a peer");
-    /* JS_NewObjectClass TAKES THE PROTOTYPE FROM THE CLASS SLOT OF THIS REALM — there is no separate
-       JS_SetPrototype here, because a mint that had to remember one is a mint that can forget it. */
+    /* JS_NewObjectClass takes the prototype from this realm's class slot, so no mint has a JS_SetPrototype to
+       forget. */
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
-    /* §7.3's IS CREATED BY WEB CONTENT — this mint IS §7.4's create a new navigable, whose top-level form is
-       `window.open()`. See the field. */
+    /* §7.3's is created by web content: this mint is §7.4's create a new navigable, whose top-level form is
+       `window.open()` (see the field). */
     p->created_by_web_content = 1;
-    p->window = JS_UNDEFINED;   /* materialized by proxy_realm — at creation, or on the first read */
+    p->window = JS_UNDEFINED;   /* materialized by proxy_realm, at creation or on the first read */
     p->realm  = NULL;
     p->url    = url ? proxy_strdup(url) : NULL;   /* NULL only for the self proxy, whose realm is already built */
     DCHECK(origin != NULL, "a navigable was created with no origin — §7.3.2.1's determine-the-origin "
                            "answers for every Document, including the initial about:blank one §7.4 creates a "
                            "navigable with, and the answer is a RECORD whose identity the same-origin check "
                            "compares");
-    p->origin = origin;   /* BORROWED — an origin lives for the agent (core/url/origin.h) */
+    p->origin = origin;   /* borrowed: an origin lives for the agent (core/url/origin.h) */
     p->name   = name && *name ? proxy_strdup(name) : NULL;
-    /* §7.4 NAMED IT. This mint is the one §7.4's create-a-new-navigable reaches, so the name it was given is
-       the navigable's name — including the empty one a `open(url)` with no target gives. */
+    /* §7.4 named it: this mint is the one §7.4's create-a-new-navigable reaches, so its name is the navigable's,
+       including the empty one `open(url)` with no target gives. */
     p->name_known = 1;
     p->is_popup = is_popup ? 1 : 0;
-    /* §7.1.7's CLONE OF THE CREATOR'S CONTAINER, COPIED ITEM BY ITEM INTO STORAGE THAT OUTLIVES THE CREATOR'S
-       FRAME. The caller's bytes belong to the operation that is creating this navigable and the initial
-       about:blank is materialized long after it returns, so every item is proxy_strdup'd here. A CONTAINER
-       EXISTS even when it holds no policies — §2.2 gives a CSP list an origin whether or not it has any, and
-       this navigable's initial Document is installed with it either way — so the assert is that there IS a
-       container, never that it carries policy text. */
+    /* §7.1.7's clone of the creator's container, copied item by item into storage that outlives the creator's
+       frame: the caller's bytes belong to the creating operation, and the initial about:blank is materialized long
+       after it returns. A container exists even with no policies (§2.2 gives a CSP list an origin either way, and
+       the initial Document is installed with it), so the assert is that there is a container, never that it
+       carries policy text. */
     DCHECK(serialized_policy_container_exists(creator_policy),
            "§7.4 created a navigable with no §7.1.7 POLICY CONTAINER to clone — its initial about:blank "
            "Document has no response of its own, so a container is the only thing it can be created with, and "
            "without one it would resolve `'self'` against nothing: the one case §2.2's self-origin exists for");
-    /* §7.1.4'S TWO ENDPOINT STRINGS ARE COPIED HERE FOR EXACTLY THE SAME SENTENCE, and they are copied
-       UNCONDITIONALLY where the policy text is copied only when it is non-empty: §7.1.4 spells an absent
-       endpoint as the EMPTY STRING, so there is no NULL form of one for this to reproduce, and
-       serialized_embedder_policy refuses a NULL anyway. The two VALUES are scalars and ride the struct. */
+    /* §7.1.4's two endpoint strings are copied for the same reason, unconditionally where the policy text is copied
+       only when non-empty: §7.1.4 spells an absent endpoint as the empty string, so there is no NULL form to
+       reproduce, and serialized_embedder_policy refuses a NULL. The two values are scalars and ride the struct. */
     p->creator_policy =
         serialized_policy_container(creator_policy.csp && *creator_policy.csp
                                         ? proxy_strdup(creator_policy.csp) : NULL,
@@ -1021,82 +877,72 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
                                                                creator_policy.embedder.report_only_value,
                                                                proxy_strdup(creator_policy.embedder
                                                                                 .report_only_endpoint)),
-                                    /* …AND §7.1.7's INTEGRITY POLICY ITEM, DEEP-COPIED LIKE THE POLICY TEXT
-                                       BESIDE IT. This record outlives the call that built it, so an item that
-                                       borrowed the creator's bytes would be a dangling pointer by the time a
-                                       deferred realm materializes — which is the same reason `csp` is
-                                       proxy_strdup'd here and not kept. */
+                                    /* …and §7.1.7's integrity policy item, deep-copied like the policy text beside
+                                       it: this record outlives the call that built it, so a borrowed item would
+                                       dangle by the time a deferred realm materializes. */
                                     creator_policy.integrity_policy && *creator_policy.integrity_policy
                                         ? proxy_strdup(creator_policy.integrity_policy) : NULL);
-    /* §7.4's `let creatorBaseURL be null` is the ABSENCE of a creator, so NULL here is a real state and not a
-       caller that forgot: the root navigable has no creator, and a navigable created with an address takes its
-       Document from a response, which §2.4.3 gives a null about base URL. */
+    /* §7.4's `let creatorBaseURL be null` is the absence of a creator, so NULL is a real state: the root navigable
+       has no creator, and a navigable created with an address takes its Document from a response, which §2.4.3
+       gives a null about base URL. */
     p->creator_base_url = creator_base_url && *creator_base_url ? proxy_strdup(creator_base_url) : NULL;
-    /* §7.1.5's creation sandboxing flags, decided by §7.4's create — see the field. An EMPTY set is the
-       ordinary answer (no `<iframe sandbox>`, no propagating opener) and is not a "not yet known": §7.1.5
-       says a browsing context's popup sandboxing flag set starts empty and an absent `sandbox` attribute is
-       an empty iframe sandboxing flag set, so there is no third state here to spell. */
+    /* §7.1.5's creation sandboxing flags, decided by §7.4's create (see the field). An empty set is the ordinary
+       answer (no `<iframe sandbox>`, no propagating opener), not "not yet known": §7.1.5 says a browsing context's
+       popup sandboxing flag set starts empty and an absent `sandbox` attribute is an empty iframe sandboxing flag
+       set. */
     p->creation_sandbox_flags = creation_sandbox_flags;
-    /* §7.3.2.1's INHERITED OPENER POLICY, decided by the CREATOR and stated by it: "if creator's origin is same
-       origin with creator's relevant settings object's top-level origin, then set document's opener policy to
-       creator's browsing context's top-level browsing context's active document's opener policy" — and
-       `unsafe-none` otherwise, which is §7.1.3's initial value and a real answer rather than an absence. It is
-       an argument for the same reason the creator's policy container beside it is: which of §7.3.2.1's two arms
-       applies is a fact about the OPERATION creating this navigable, and no inspection of the navigable being
-       created could recover it. */
+    /* §7.3.2.1's inherited opener policy, decided and stated by the creator: "if creator's origin is same origin
+       with creator's relevant settings object's top-level origin, then set document's opener policy to creator's
+       browsing context's top-level browsing context's active document's opener policy", and `unsafe-none`
+       otherwise, §7.1.3's initial value and a real answer. An argument, like the creator's policy container,
+       because which arm applies is a fact about the creating operation that the navigable being created cannot
+       recover. */
     p->opener_policy = opener_policy;
-    /* EVERY ENVIRONMENT HAS A TOP-LEVEL CREATION URL, so unlike the policy container there is no "none" here
-       to spell: §7.4 either nests the navigable (inherit the creator's) or makes it a top-level traversable
-       (its own address), and both are addresses. A caller with nothing to pass has not decided which of the
-       two it is building, and every member gated on §8.1.3.5 would then be installed on a guess. */
+    /* Every environment has a top-level creation URL, so there is no "none" to spell: §7.4 either nests the
+       navigable (the creator's) or makes it a top-level traversable (its own address). A caller with nothing to
+       pass has not decided which it is building, and every member gated on §8.1.3.5 would be installed on a
+       guess. */
     DCHECK(top_level_url != NULL && *top_level_url,
            "a navigable was created with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
            "the documents of this navigable are SECURE CONTEXTS, and §7.4 says which url it is: the creator's "
            "for a nested navigable, this navigable's own address for an auxiliary one");
     p->top_level_url = proxy_strdup(top_level_url);
-    /* AND EVERY ENVIRONMENT HAS A TOP-LEVEL ORIGIN, asserted separately from the URL beside it because it is a
-       separate field with a separate answer: §7.3.2.1 gives a top-level browsing context the URL `about:blank`
-       and the ORIGIN of the initial Document it creates, which are not each other's derivation. A caller with
-       nothing to pass has not decided whether it is nesting this navigable or making it a top-level
-       traversable, and Permissions §5.1 step 5 would then key this navigable's grants to a guess. */
+    /* Every environment has a top-level origin too, asserted separately because it is a separate field with a
+       separate answer: §7.3.2.1 gives a top-level browsing context the URL `about:blank` and the origin of the
+       initial Document it creates, neither derived from the other. Without one, Permissions §5.1 step 5 would key
+       this navigable's grants to a guess. */
     DCHECK(top_level_origin != NULL,
            "a navigable was created with no TOP-LEVEL ORIGIN — HTML §8.1.3.1 gives every environment one and "
            "§7.3.2.1 says which it is: the creator's for a nested navigable, the origin of the initial "
            "about:blank Document for an auxiliary one, which is the origin this same call is being given");
-    p->top_level_origin = top_level_origin;   /* BORROWED — an origin lives for the agent */
+    p->top_level_origin = top_level_origin;   /* borrowed: an origin lives for the agent */
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
-    /* §7.3.1.3: A NAVIGABLE IS CREATED WITH NO CONTAINER AND IS GIVEN ONE, in that order and by that
-       algorithm — "Let navigable be a new navigable … Set element's content navigable to navigable" — so this
-       mint states the pre-operation value and §7.4's create writes the link (window_proxy_set_container).
-       It is the state an AUXILIARY navigable keeps: §7.3.1.7 step 8 creates one from a target name and there is
-       no element anywhere in that algorithm for it to be presented by. */
+    /* §7.3.1.3: a navigable is created with no container and then given one ("Let navigable be a new navigable …
+       Set element's content navigable to navigable"), so this mint states the pre-operation value and §7.4's
+       create writes the link (window_proxy_set_container). An auxiliary navigable keeps it: §7.3.1.7 step 8
+       creates one from a target name with no element to be presented by. */
     p->container = JS_NULL;
     p->doc = doc;
     JS_SetOpaque(obj, p);
-    /* AFTER JS_SetOpaque, because live_nav_of_document reads the RECORD off every row it walks and asserts that
-       every row has one — a row recorded before this line names an object that does not yet carry it. */
+    /* After JS_SetOpaque, because live_nav_of_document reads the record off every row and asserts every row has
+       one. */
     live_nav_record(obj);
     return obj;
 }
 
-/* §7.2.3's proxy for the REALM THAT IS ASKING — the one `window`, `self` and `e.source` are. Its realm is
-   this one, which the caller is standing in rather than creating: the three differences from a §7.4 child are
-   that the realm is handed over from the outside, that nobody here stated the navigable's name, and that
-   §7.3.1.3's PARENT is a statement the HOST makes rather than one this mint is in a position to make. */
+/* §7.2.3's proxy for the realm that is asking: the one `window`, `self` and `e.source` are. The caller stands in
+   this realm rather than creating it, so the three differences from a §7.4 child are that the realm is handed over
+   from outside, that nobody here stated the navigable's name, and that §7.3.1.3's parent is the host's
+   statement. */
 JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
                               JSValueConst parent, SandboxFlags creation_sandbox_flags)
 {
-    /* THE ORIGIN IS THE AGENT'S, and it is read from where §7.2.1's check reads it rather than passed in —
-       an agent is origin-keyed, so a caller-supplied one could only ever agree or be wrong. */
-    /* THE NAVIGABLE THE INSTANCE STARTS IN IS NOT A POPUP: no `open()` created it, so §7.4 decided
-       nothing about it and its chrome is whole. */
-    /* NO CREATOR'S POLICY EITHER, for the same reason: nothing here created this navigable, so there is no
-       container to clone. Its document's policy is the one it was installed with — the host's response. */
-    /* THE REALM IS ALREADY BUILT, SO ITS ENVIRONMENT ALREADY HAS THE ANSWER — and it is read from there rather
-       than passed in, for the same reason the origin is: a caller-supplied one could only ever agree or be
-       wrong. This is the navigable the HOST started the instance in, so the top-level creation URL its
-       documents were created under is the one the host handed realm_install_intrinsics. */
+    /* The origin is the agent's and the top-level creation URL is the realm's environment's (the one the host
+       handed realm_install_intrinsics), both read where they live rather than passed in, since a caller-supplied
+       one could only agree or be wrong. Not a popup: no `open()` created this navigable, so §7.4 decided nothing
+       about it and its chrome is whole. No creator's policy: nothing here created it, so there is no container to
+       clone; its document's policy is the one it was installed with, the host's response's. */
     JSValue tlu = realm_top_level_creation_url(ctx);
     const char *tlus = JS_ToCString(ctx, tlu);
     const Origin *tlo;
@@ -1105,24 +951,20 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
     ProxyData *p;
 
     CHECK(tlus != NULL, "the realm's top-level creation URL would not convert to a C string");
-    /* §8.1.3.1's TOP-LEVEL ORIGIN FOR THE ONE NAVIGABLE NO §7.3.2.1 RAN FOR — the instance's root, whose
-       environment the HOST built. The URL it built it with is above; the ORIGIN is §7.3.2.1 "Creating
-       browsing contexts"' determine the origin over that URL with THIS AGENT'S origin as the source origin,
-       which is the whole of what an origin-keyed agent cluster has to inherit from. That is not a
-       re-derivation dressed up: determine the origin IS the algorithm that answers "whose origin is a
-       Document at this address", and its two inheritance cases are exactly the addresses §4.7 cannot answer
-       for — `about:blank`, which is the address §7.3.2.1 creates EVERY top-level browsing context at, and
-       `about:srcdoc`. A host that started this instance at a real
-       address gets §4.7's tuple, which is the same origin as this agent's by construction. */
+    /* §8.1.3.1's top-level origin for the one navigable no §7.3.2.1 ran for: the instance's root, whose
+       environment the host built. The origin is §7.3.2.1 "Creating browsing contexts"' determine the origin over
+       that URL with this agent's origin as the source origin, the algorithm that answers "whose origin is a
+       Document at this address"; its two inheritance cases are the addresses §4.7 cannot answer for,
+       `about:blank` (where §7.3.2.1 creates every top-level browsing context) and `about:srcdoc`. A host that
+       started this instance at a real address gets §4.7's tuple, same origin as this agent's by construction. */
     url_record_init(&rec);
     tlo = url_parse(&rec, tlus, strlen(tlus), NULL) ? origin_determine(&rec, false, origin_agent())
                                                     : origin_determine(NULL, false, NULL);
     url_record_free(&rec);
-    /* THE ONE ANSWER §7.3.2.1'S DETERMINE THE ORIGIN CANNOT REACH FROM A URL, named where it would otherwise
-       be silent. A `data:` or `file:` top-level creation URL takes its step 5 to §4.7, which MINTS a new
-       opaque origin — and an opaque origin that is not this agent's own record is same origin with nothing,
-       so every environment of this instance would be keyed to a value no other environment can ever equal.
-       Which Document that origin belongs to is a fact only the zone that created this instance holds. */
+    /* The one answer §7.3.2.1's determine the origin cannot reach from a URL: a `data:` or `file:` top-level
+       creation URL takes its step 5 to §4.7, which mints a new opaque origin, same origin with nothing, so every
+       environment of this instance would be keyed to a value no other can equal. Which Document that origin
+       belongs to is a fact only the zone that created this instance holds. */
     DCHECK(!origin_is_opaque(tlo) || origin_same(tlo, origin_agent()),
            "this instance's root environment has a TOP-LEVEL CREATION URL whose §4.7 origin is OPAQUE and is "
            "not this agent's own, so §7.3.2.1's determine the origin minted a second one rather than "
@@ -1130,48 +972,34 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
            "cannot say WHOSE it is. STATE "
            "§8.1.3.1's TOP-LEVEL ORIGIN beside the top-level creation URL from the zone that created this "
            "instance — it is the same statement, made by the same party, for the same reason");
-    /* §7.1.5's CREATION SANDBOXING FLAG SET, STATED BY THE HOST AND NEVER ASSUMED HERE — for the parent's
-       reason one line along, and it USED TO BE A ZERO. The zero was two claims wearing one value. For a
-       TOP-LEVEL root it is the standard's own answer: determine-the-creation-sandboxing-flags gives a browsing
-       context with no embedder its POPUP SANDBOXING FLAG SET, which §7.1.5 says is empty at creation and which
-       only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever populate, and nothing chose
-       this one. For a root that is a CHILD NAVIGABLE it was not an answer at all — it held only because
-       core/frame/navigable.c REFUSED to announce a cross-instance child whose creation flags were non-empty.
-       The notice carries the set now, so both roots state it: the empty one in §7.1.5's own word for the empty
-       set, the sandboxed one as its flags. What the ROOT document's own `Content-Security-Policy: sandbox`
-       adds is the other half of §7.4.5's union, and it is added where a Document is created rather than here. */
-    /* NO POLICIES TO CLONE — this navigable is the one §7.4 did not create IN THIS AGENT, so there is no
-       creator here whose container to clone — but there IS a container, and CSP §2.2's SELF-ORIGIN of its CSP
-       list is this agent's own: the root Document is created from the response at this instance's address,
-       which is §2.2.2's answer. Nothing reads it through this proxy (its realm exists from the moment it is
-       adopted, so proxy_realm's lazy materialization is unreachable for it), and it is stated all the same
-       because the field is what makes "every navigable carries the container its Document runs under" an
-       invariant rather than a case analysis at each reader.
-       A CROSS-INSTANCE CHILD DOES HAVE A CREATOR AND ITS CLONE DOES NOT COME THROUGH HERE. The `navigable.create`
-       notice carries §7.1.7's clone and the HOST hands it to §7.1.7's own determine-navigation-params-policy-
-       container beside the response's container, so the Document is created with the right one; this field
-       would be that clone's second copy, and a second copy of a container is a second answer waiting to be read
-       by the lazy materialization that cannot reach this navigable anyway. */
-    /* NO CREATOR BASE URL either, and for the same sentence: §7.4 did not create this navigable, so there is
-       no creator whose base URL to pass on. Its Document comes from the response at this instance's address,
-       which §2.4.3 gives a null about base URL. */
-    /* AND §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" HERE, WHICH IS THE STANDARD'S ANSWER AND NOT A DEFAULT.
-       This field is the CREATOR's clone and this container is the one built without a creator in THIS agent —
-       §7.1.7 gives such a container an embedder policy "initially a new embedder policy", which is what this
-       states, and the creator's own item reaches the Document through the host's container as the paragraph
-       above describes rather than through a second copy here. The ROOT
-       DOCUMENT's own embedder policy is a different fact and comes from a different place: it is obtained from
-       the response this instance was started with and reaches the Document through the container
-       document_install is handed, never through this proxy (whose realm exists from the moment it is adopted,
-       so proxy_realm's lazy materialization is unreachable for it). */
-    /* §7.3.1.3's PARENT, STATED BY THE HOST AND NEVER ASSUMED HERE. This mint is reached for the navigable an
-       instance STARTED in, and that navigable is a top-level traversable only when the zone that provisioned
-       the instance says so: a cross-origin child navigable is provisioned as a peer instance of its own, and
-       its root is a CHILD navigable presented by an element in another heap. The value is checked rather than
-       trusted, because the two absences are spelled differently one slot apart — §7.2.2.4 makes a top-level
-       navigable's `parent` itself (JS_UNDEFINED in the record) and its `opener` null (JS_NULL beside it), and a
-       JS_NULL arriving here would make window_proxy_parent_navigable answer with something that is not a
-       navigable and is not the absence either. */
+    /* §7.1.5's creation sandboxing flag set, stated by the host and never assumed here, for the parent's reason
+       below. For a top-level root the empty set is the standard's answer: determine-the-creation-sandboxing-flags
+       gives a browsing context with no embedder its popup sandboxing flag set, which §7.1.5 says is empty at
+       creation and which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable populate. For a
+       root that is a child navigable, the `navigable.create` notice carries the set. What the root document's own
+       `Content-Security-Policy: sandbox` adds is the other half of §7.4.5's union, added where a Document is
+       created. */
+    /* No policies to clone: §7.4 did not create this navigable in this agent, so there is no creator's container,
+       but there is a container, and CSP §2.2's self-origin of its CSP list is this agent's own (the root Document
+       is created from the response at this instance's address, §2.2.2's answer). Nothing reads it through this
+       proxy (its realm exists from adoption, so proxy_realm's lazy materialization is unreachable for it); it is
+       stated so that every navigable carries the container its Document runs under, as an invariant rather than
+       a case at each reader. A cross-instance child does have a creator, and its clone does not come through
+       here: the `navigable.create` notice carries §7.1.7's clone and the host hands it to §7.1.7's
+       determine-navigation-params-policy-container beside the response's container, so a copy here would be a
+       second answer. */
+    /* No creator base URL, for the same reason: its Document comes from the response at this instance's address,
+       which §2.4.3 gives a null about base URL. §7.1.4's item is "a new embedder policy", the standard's answer
+       for a container built without a creator in this agent ("initially a new embedder policy"), not a default.
+       The root Document's own embedder policy comes from the response this instance started with and reaches the
+       Document through the container document_install is handed, never through this proxy. */
+    /* §7.3.1.3's parent, stated by the host and never assumed here. This mint is reached for the navigable an
+       instance started in, which is a top-level traversable only when the provisioning zone says so: a
+       cross-origin child navigable is provisioned as a peer instance of its own, and its root is a child
+       navigable presented by an element in another heap. Checked rather than trusted, because the two absences
+       are spelled differently one slot apart: §7.2.2.4 makes a top-level navigable's `parent` itself
+       (JS_UNDEFINED in the record) and its `opener` null (JS_NULL), and a JS_NULL here would make
+       window_proxy_parent_navigable answer with neither a navigable nor the absence. */
     DCHECK(JS_IsUndefined(parent) || window_proxy_is(parent),
            "a navigable was rooted with a §7.3.1.3 PARENT that is not a navigable — the section defines a child "
            "navigable as one whose parent is non-null, so the only two answers are a WindowProxy (this "
@@ -1180,9 +1008,9 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
     obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, creation_sandbox_flags, opener_policy,
                            serialized_policy_container(NULL, origin_serialized(origin_agent()),
                                                        serialized_embedder_policy_new(),
-                                                       /* a top-level navigable created from NO response
-                                                          states no integrity policy, which SRI §3.8 answers
-                                                          with "a new integrity policy" */
+                                                       /* a top-level navigable created from no response states
+                                                          no integrity policy, which SRI §3.8 answers with "a
+                                                          new integrity policy" */
                                                        NULL),
                            NULL, tlus, tlo, parent, JS_NULL);
     JS_FreeCString(ctx, tlus);
@@ -1191,17 +1019,17 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
     if (JS_IsException(obj)) return obj;
     p = JS_GetOpaque(obj, g_proxy_class);
     DCHECK(p != NULL, "the self WindowProxy was minted without its record");
-    /* THE ONE NAVIGABLE §7.4 DID NOT CREATE. A NULL name is the host saying it does not know this navigable's
-       name, which is the honest answer for a page the browser navigated to — see the field's comment. */
+    /* The one navigable §7.4 did not create. A NULL name is the host saying it does not know this navigable's
+       name, which is right for a page the browser navigated to (see the field). */
     p->name_known = name != NULL;
     proxy_adopt_realm(ctx, obj, ctx);
     return obj;
 }
 
 
-/* A proxy over a navigable whose active document lives in ANOTHER WASM instance. STATIC, and reached only
-   through window_proxy_for_document below: minting one is exactly where a navigable's identity can be lost,
-   so there is one site that does it and it records what it made. */
+/* A proxy over a navigable whose active document lives in another WASM instance. Static, reached only through
+   window_proxy_for_document below: minting one is where a navigable's identity can be lost, so one site does it
+   and records what it made. */
 static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
                                        JSValueConst parent, JSValueConst opener)
 {
@@ -1209,8 +1037,8 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     ProxyData *p;
 
     DCHECK(g_wp_rt != NULL, "a WindowProxy was minted before window_proxy_init ran");
-    /* A REMOTE PROXY THAT NAMES THIS DOCUMENT is a local one that lost its Window — it would resolve to
-       JS_UNDEFINED for a navigable this instance can actually answer for. */
+    /* A remote proxy naming a hosted document is a local one that lost its Window: it would resolve to
+       JS_UNDEFINED for a navigable this instance can answer for. */
     DCHECK(doc != 0 && !world_doc_hosted(doc),
            "a remote WindowProxy was minted for a document whose realm this agent holds — use window_proxy_new, "
            "which carries the live Window");
@@ -1221,7 +1049,7 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
     DCHECK(origin != NULL, "a remote navigable was minted with no origin — the peer's principal is what every "
                            "cross-origin filter over this proxy compares, and it is stated by the trusted zone");
-    p->origin = origin;   /* BORROWED, and never same origin with this agent's — see origin_parse */
+    p->origin = origin;   /* borrowed, and never same origin with this agent's; see origin_parse */
     p->name   = name && *name ? proxy_strdup(name) : NULL;
     p->name_known = 1;   /* §7.4 named it, in this instance, before the notice crossed */
     p->parent = JS_DupValue(ctx, parent);
@@ -1229,27 +1057,21 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->container = JS_NULL;   /* §7.3.1.3's link is written by the create, exactly as it is for a local one */
     p->doc = doc;
     JS_SetOpaque(obj, p);
-    /* A REMOTE PROXY IS IN BOTH TABLES, AND THEY ANSWER TWO QUESTIONS. The remote table answers a peer's
-       navigable's IDENTITY (`w[0] === w[0]` over a document another instance holds); this one answers WHICH
-       NAVIGABLE of this agent names a document in the asking timeline, and a remote one's answer to the realm
-       read is a NULL that `world_doc_hosted` already gates every caller on. Recording it keeps the
-       at-most-one-row-per-document invariant in live_nav_of_document TOTAL rather than true of a subset. */
+    /* A remote proxy is in both tables, which answer two questions. The remote table answers a peer's navigable's
+       identity (`w[0] === w[0]` over a document another instance holds); this one answers which navigable of
+       this agent names a document in the asking timeline, and a remote one's realm is a NULL that
+       `world_doc_hosted` already gates every caller on. Recording it keeps live_nav_of_document's
+       at-most-one-row-per-document invariant total. */
     live_nav_record(obj);
     return obj;
 }
 
-/* THE ROW THAT MAKES A PEER'S NAVIGABLE ONE OBJECT — "this instance's proxy for document `doc`". It exists
-   because identity is what a page tests: without the row the next ask MINTS a second proxy and
-   `w.frames[0] === iframe.contentWindow` is false about one window.
-   ONE CALLER, AND THE ASSERTS ARE WHY THIS IS A FUNCTION. An append that is three statements does not need
-   extracting; two INVARIANTS about the table do, because they hold for every row however it got there. A row
-   for a document this agent HOSTS is a second answer to a question the document's own realm already answers,
-   and a SECOND row for one document makes `w[0] === w[0]` decide by which row the scan reached first — both
-   are properties of the table, so they are asserted where a row is made rather than where a caller happens
-   to be. A future operation that also records a row (moving a proxy this instance held onto a peer's
-   document is the obvious one) inherits them by calling this; it is not described here, because CLAUDE.md
-   §Fix the ROOT is explicit that a comment is not a valid follow-up — such an operation must be built, and
-   until it is, this file must not read as though it exists. */
+/* The row that makes a peer's navigable one object: this instance's proxy for document `doc`. Without it the next
+   ask mints a second proxy and `w.frames[0] === iframe.contentWindow` is false about one window. A function for
+   its two invariants, which hold for every row however it got there: a row for a document this agent hosts is a
+   second answer to a question the document's own realm answers, and a second row for one document makes
+   `w[0] === w[0]` decide by which row the scan reached first. Both are properties of the table, so they are
+   asserted where a row is made. */
 static void remote_nav_record(JSValueConst proxy, uint32_t doc)
 {
     int i;
@@ -1273,21 +1095,20 @@ static void remote_nav_record(JSValueConst proxy, uint32_t doc)
         g_remote_navs_cap = cap;
     }
     g_remote_navs[g_remote_navs_n].doc = doc;
-    g_remote_navs[g_remote_navs_n].proxy = proxy;   /* BORROWED — proxy_finalizer takes the row out */
+    g_remote_navs[g_remote_navs_n].proxy = proxy;   /* borrowed: proxy_finalizer takes the row out */
     g_remote_navs_n++;
 }
 
-/* WHICH REALM OF THIS AGENT THE DOCUMENT NAMED `doc` IS, IN THE TIMELINE THAT IS ASKING — see the header, and
-   see solver/world.c for the instance-global row this replaced and why one must not come back. */
+/* Which realm of this agent the document named `doc` is, in the timeline that is asking (see the header, and
+   solver/world.c for why no instance-global row answers it). */
 JSContext *window_proxy_realm_of_document(uint32_t doc)
 {
     JSValueConst proxy = live_nav_of_document(doc);
     ProxyData *p;
 
-    /* NO NAVIGABLE OF THAT NAME IS A REAL ANSWER AND IT IS THE SAME ANSWER AS AN UNMATERIALIZED ONE, which is
-       what lets this be ctx-free: both mean "this timeline has no Document for that name", and only the CALLER
-       knows whether that is a state it can be in. A remote navigable lands here too and answers NULL, which is
-       correct — its Document is a peer's and no realm of this heap is it. */
+    /* No navigable of that name is a real answer and the same as an unmaterialized one, which lets this be
+       ctx-free: both mean "this timeline has no Document for that name", and only the caller knows whether it can
+       be in that state. A remote navigable answers NULL here too, correctly: its Document is a peer's. */
     if (JS_IsUndefined(proxy)) return NULL;
     p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the realm of a document was asked for and the navigable answering it carries no §7.2.3 "
@@ -1295,21 +1116,18 @@ JSContext *window_proxy_realm_of_document(uint32_t doc)
     return p == NULL ? NULL : p->realm;
 }
 
-/* WHAT THAT NULL MEANS, AS A PARTITION RATHER THAN AS A LIST OF CANDIDATES — see the header. Same scan, same
-   bare JS_GetOpaque, same absence of a ctx: it materializes nothing and captures nothing, so it stands
-   wherever the realm read above stands, including inside a DCHECK condition.
-   IT EXISTS BECAUSE ONE NULL WAS ANSWERING FOUR QUESTIONS AND EVERY CALLER THAT MET ONE HAD TO GUESS WHICH.
-   solver/engine.c's `doc_realm` abort listed three of them in its own message and the one it did NOT list is
-   the one that fires: §7.5.10 "Destroying documents"' set-the-Document's-browsing-context-to-null step runs
-   and this engine's window_proxy_set_destroyed nulls the navigable's realm with it, so a timeline that ran
-   `window.close()` holds a navigable of that name whose active document it HAS no more. That is neither "no
-   timeline opened it" nor "this timeline navigated away from it" — a navigation REPLACES an active document
-   and leaves a realm, which is why window_proxy_navigate refuses a destroyed navigable by name — and a reader
-   handed the three-candidate list goes to materialize a Document for a browsing context that is null, which
-   proxy_realm refuses by name one screen up.
-   THE REMOTE ARM IS NOT A FOURTH SPELLING OF ABSENT. A remote navigable is recorded in this same table
-   (window_proxy_new_remote says why), so the scan FINDS one and its realm is NULL for a reason no caller may
-   act on the way it acts on the others: its Document is a peer's and no realm of this heap ever will be. */
+/* What that NULL means, as a partition (see the header). Same scan, same bare JS_GetOpaque, no ctx: it
+   materializes and captures nothing, so it stands wherever the realm read above stands, including inside a
+   DCHECK condition.
+   The realm read's NULL has four readings, and this names which one holds. §7.5.10 "Destroying documents"'
+   set-the-Document's-browsing-context-to-null step runs with window_proxy_set_destroyed nulling the navigable's
+   realm, so a timeline that ran `window.close()` holds a navigable of that name with no active document. That is
+   neither "no timeline opened it" nor "this timeline navigated away from it" (a navigation replaces an active
+   document and leaves a realm, which is why window_proxy_navigate refuses a destroyed navigable), and a reader
+   that took it for one would materialize a Document for a null browsing context, which proxy_realm refuses.
+   The remote arm is not a fourth spelling of absent: a remote navigable is in this table (window_proxy_new_remote
+   says why), so the scan finds one, and its realm is NULL because its Document is a peer's and no realm of this
+   heap ever will be. */
 WindowProxyDocumentState window_proxy_document_state(uint32_t doc)
 {
     JSValueConst proxy = live_nav_of_document(doc);
@@ -1321,8 +1139,8 @@ WindowProxyDocumentState window_proxy_document_state(uint32_t doc)
                       "no §7.2.3 record — live_nav_of_document asserts the same thing of every row it walks");
     if (p == NULL) return WP_DOC_NO_NAVIGABLE;
     if (!world_doc_hosted(p->doc)) return WP_DOC_REMOTE;
-    /* THE DESTROYED TEST COMES FIRST, because `destroyed` and `realm == NULL` are both true of it and only
-       this order tells "there is no document" from "there is not one YET" — proxy_realm's own assert pair. */
+    /* The destroyed test comes first, because `destroyed` and `realm == NULL` are both true of a destroyed
+       navigable and only this order tells "there is no document" from "not yet" (proxy_realm's assert pair). */
     if (p->destroyed) return WP_DOC_DESTROYED;
     return p->realm != NULL ? WP_DOC_ACTIVE : WP_DOC_INITIAL;
 }
@@ -1333,14 +1151,11 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
 
     DCHECK(doc != 0, "the WindowProxy of document zero was asked for — zero is the world registry's NONE, so "
                      "the caller is holding a handle it never resolved rather than a document");
-    /* A DOCUMENT THIS AGENT HOSTS IS ANSWERED BY ITS OWN NAVIGABLE, never out of the remote table below: that
-       table is a map from a PEER's document to the one proxy that resolves it, and a row in it for a hosted
-       document would be a second answer to a question that already has one.
-       IT WENT THROUGH THE REALM UNTIL THIS DIFF — `document_window_proxy(world_doc_realm(doc))` — and the realm
-       was the authority because solver/world.c held an instance-global (document -> realm) row. It does not,
-       because no single value in such a row is right once two timelines have each materialized one; the
-       NAVIGABLE is the authority now, and the realm is read off it. The round trip is asserted below rather
-       than argued: the two directions of the binding must name one object. */
+    /* A document this agent hosts is answered by its own navigable, never out of the remote table below, which maps
+       a peer's document to the one proxy that resolves it; a row there for a hosted document would be a second
+       answer. The navigable is the authority and the realm is read off it (no instance-global document-to-realm
+       row is right once two timelines have each materialized one), and the round trip is asserted below: the two
+       directions of the binding must name one object. */
     if (world_doc_hosted(doc)) {
         JSValueConst held = live_nav_of_document(doc);
         JSContext *realm;
@@ -1351,38 +1166,26 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
                "(world_doc_adopt), so the two statements were made in the wrong order, or a proxy that answered "
                "for this document has been collected while a peer still held a reference into it");
         if (JS_IsUndefined(held)) return JS_UNDEFINED;
-        /* THE NAVIGABLE OUTLIVES ITS DOCUMENT, SO A REALM IS NOT HOW A NAVIGABLE IS IDENTIFIED. HTML §7.2.3
-           "The WindowProxy exotic object" states that lifetime in its own opening sentences — "Each browsing
-           context has an associated WindowProxy object", and on a navigation "the Window object wrapped by the
-           browsing context's associated WindowProxy object is changed". So the proxy is the long-lived half of
-           the pair, the realm read reaches the ACTIVE DOCUMENT, and this entry hands out the NAVIGABLE: a
-           document with no active document in THIS timeline still has an answer here, and it is `held`.
-           A `DCHECK(realm != NULL, …)` STOOD HERE NAMING ONE CAUSE FOR A POPULATION OF TWO. It is recorded
-           rather than deleted because its reasoning is what a reader re-derives: it read
-           `before THIS TIMELINE materialized that document's realm`, and the OTHER state is a navigable whose
-           active document HTML §7.5.10 "Destroying documents" has destroyed — its step 6, "Set document's
-           browsing context to null", reaches window_proxy_set_destroyed, which nulls this record's realm while
-           the row stays in the table, since only the collector takes one out. So a timeline that ran
-           `window.close()` fired an abort about materialization ORDER, and the two readings take OPPOSITE work:
-           a reader obeying that message goes to materialize a Document for a browsing context that is null,
-           which proxy_realm refuses by name one screen up. The header has said so since
-           window_proxy_document_state landed, in the words
-           `ABORTS on the destroyed third rather than answering it`.
-           ITS FINAL CLAUSE WAS THE WHOLE JUSTIFICATION AND IT IS FALSE OF BOTH STATES, which is why the assert
-           GOES rather than gaining a partition. That clause read
-           `a reference into a Document this timeline never built cannot have been lent to it`, an argument
-           about the PEER path alone — and a realm is PER FLOW, so a sibling arm that DID materialize one is
-           exactly who lent the reference, after which this timeline holds the navigable and no realm with
-           nothing out of order anywhere. What stays readable of either state is HTML §7.2.1 "Security
-           infrastructure for Window, WindowProxy, and Location objects"' cross-origin list, answered FROM THE
-           RECORD — and the record is what `held` names. */
+        /* The navigable outlives its document, so a realm is not how a navigable is identified. HTML §7.2.3 "The
+           WindowProxy exotic object" states the lifetime: "Each browsing context has an associated WindowProxy
+           object", and on a navigation "the Window object wrapped by the browsing context's associated
+           WindowProxy object is changed". The proxy is the long-lived half, the realm read reaches the active
+           document, and this entry hands out the navigable: one with no active document in this timeline still
+           answers with `held`.
+           Two states reach here with no realm: an initial about:blank this timeline has not materialized (a realm
+           is per flow, so a sibling arm that did materialize one can have lent the reference), and a navigable
+           whose active document HTML §7.5.10 "Destroying documents" destroyed (its step 6, "Set document's
+           browsing context to null", reaches window_proxy_set_destroyed, which nulls the realm while the row
+           stays until the collector takes it). What stays readable of either is HTML §7.2.1 "Security
+           infrastructure for Window, WindowProxy, and Location objects"' cross-origin list, answered from the
+           record `held` names. */
         realm = window_proxy_realm_of_document(doc);
         if (realm == NULL) {
 #if APICLIENT_DEV
-            /* WHICH OF THE FIVE, ASKED OF THE ONE COMPONENT THAT PARTITIONS IT — two of them are the states
-               answered above, and the other three are refused by the two tests above, so every arm here is a
-               GUARD over a closed enumeration this codebase owns and names what MOVED rather than what to
-               build. The state is read fresh beside the realm because the pair is what a disagreement is in. */
+            /* Which of the five states, asked of the component that partitions it: two are the states answered
+               above and the other three are refused by the two tests above, so every arm here is a guard over a
+               closed enumeration and names what moved. The state is read fresh beside the realm because the pair
+               is where a disagreement is. */
             switch (window_proxy_document_state(doc)) {
             case WP_DOC_INITIAL:
             case WP_DOC_DESTROYED:
@@ -1430,29 +1233,26 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
            "that navigable's active document is in, so reaching here means it holds NONE: hosting is decided "
            "by §7.4 before any navigable is minted (world_doc_adopt), and minting would give one navigable a "
            "second proxy that resolves nothing");
-    /* AND THE REFUSAL IS A GUARD AND NOT ONLY AN ASSERT, because `!world_doc_hosted(doc)` is the MINT'S OWN
-       PRECONDITION rather than a choice made here — window_proxy_new_remote asserts it and remote_nav_record
-       asserts it again — and all three are compiled out of the build that ships, so the dev abort fires first
-       and NO GATE IN THIS TREE CAN EXERCISE what release does next. What it does is `live_nav_record` a SECOND
-       row for `doc`, which makes live_nav_of_document's at-most-one-row invariant false, and hand the next scan
-       a record whose `window` is undefined and whose origin is a peer's — so a same-origin read of this
-       agent's own navigable answers CROSS-ORIGIN and §7.2.1's filter is applied against the wrong principal.
-       Propagating the absence is the one arm that leaves no such state behind, and it is already in the
-       contract the arriving-identity caller reads against (core/frame/remote_object.h: a navigable, remote or
-       local, "or JS_UNDEFINED").
-       NAMED RESIDUAL — WHAT IS NOT COVERED: the absence this propagates is a REFUSAL and not the answer §7.2.3
-       gives. A document this agent hosts and holds no navigable for has a WindowProxy in the standard and none
-       here, so a routed delivery gets no `source` and an arriving identity's parent or opener slot falls to its
-       `none` — which §7.2.2.4 "Accessing related windows" reads as a TOP-LEVEL navigable, so a cross-origin
-       child presents as top-level rather than as unknown. WHAT THE NEXT DIFF BUILDS: a LOCAL navigable
-       rebuildable from an arriving identity. window_proxy_new_self takes an opener policy and a §7.1.5
-       sandboxing flag set that no document NAME carries and that remote_object.c's record does not cross for a
-       HOSTED document, so the diff is those two fields on that record — or the remote reference holding the
-       borrowed live-navigable row alive, which is the other end of the same lifetime and is why this state
-       exists at all (the row is dropped by proxy_finalizer while a peer still names it). HOW ITS ABSENCE WOULD
-       SHOW: in dev, an abort at the hosted-no-navigable assert above on an instance whose peer held a reference
-       across a collection; in release, a delivered message whose `source` is undefined, or a navigable whose
-       `parent` answers itself while an element in another document presents it. */
+    /* The refusal is a guard as well as an assert, because `!world_doc_hosted(doc)` is the mint's own
+       precondition (window_proxy_new_remote and remote_nav_record assert it too), and all three asserts are
+       compiled out of the shipped build. Minting in release would `live_nav_record` a second row for `doc`,
+       breaking live_nav_of_document's at-most-one-row invariant, and hand the next scan a record whose `window`
+       is undefined and whose origin is a peer's, so a same-origin read of this agent's own navigable would answer
+       cross-origin under §7.2.1's filter. Propagating the absence leaves no such state, and is in the contract
+       the arriving-identity caller reads against (core/frame/remote_object.h: a navigable, remote or local, "or
+       JS_UNDEFINED"). */
+    /* Named residual: the absence this propagates is a refusal, not §7.2.3's answer. Not covered: a document this
+       agent hosts and holds no navigable for has a WindowProxy in the standard and none here, so a routed
+       delivery gets no `source` and an arriving identity's parent or opener slot falls to its `none`, which
+       §7.2.2.4 "Accessing related windows" reads as a top-level navigable, so a cross-origin child presents as
+       top-level rather than unknown. Next diff builds: a local navigable rebuildable from an arriving identity,
+       which needs the opener policy and §7.1.5 sandboxing flag set window_proxy_new_self takes (fields
+       remote_object.c's record does not cross for a hosted document), or the remote reference holding the
+       borrowed live-navigable row alive (proxy_finalizer drops the row while a peer still names it, which is
+       why this state exists). How its absence shows: in dev, an abort at the hosted-no-navigable assert above on
+       an instance whose peer held a reference across a collection; in release, a delivered message whose
+       `source` is undefined, or a navigable whose `parent` answers itself while an element in another document
+       presents it. */
     if (world_doc_hosted(doc)) return JS_UNDEFINED;
     obj = window_proxy_new_remote(ctx, doc, origin, name, parent, opener);
     if (JS_IsException(obj)) return obj;
@@ -1460,95 +1260,88 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
     return obj;
 }
 
-/* §7.2.2.1's `closed` AS THIS AGENT'S RECORD OF IT, read and written through the one place it lives HERE. It
-   is a fact about the NAVIGABLE, so `window.closed` and `iframe.contentWindow.closed` must be the same answer
-   — they were two bytes, and closing through one left the other reporting open. Captured through proxy_of, so
-   the flow that closed the window is the only one whose timeline contains it.
-   THIS AGENT'S, AND THE CALLERS ARE WHY THAT IS THE RIGHT QUESTION. Every one of them is an ENGINE WALK over
-   navigables this agent holds — §7.3.3 "Fully active documents"' ancestor chain, §7.1's named-target
-   search, the tree-order walk — and each is asking whether to keep walking THIS agent's tree, which is
-   exactly what this record answers. The JS-visible member is a different question and has a different answer
-   path: a traversable whose active document is in another instance is closed by whichever agent ran
-   §7.2.2.1's close(), so the
-   member suspends and asks that one (proxy_get_step). A caller that wants the standard's `closed` about an
-   arbitrary navigable must go through the member, because only the member can suspend.
-   IT IS AN OR OVER TWO FLAGS, which is the getter's own wording rather than a convenience: the two are set by
-   two different algorithms at two different times, and every read in this file goes through here so that no
-   member can accidentally ask only one of them. */
+/* §7.2.2.1's `closed` as this agent's record of it. A fact about the navigable, so `window.closed` and
+   `iframe.contentWindow.closed` are one answer, captured through proxy_of so the flow that closed the window is
+   the only one whose timeline contains it.
+   This agent's record is the right question for the callers: each is an engine walk over navigables this agent
+   holds (§7.3.3 "Fully active documents"' ancestor chain, §7.1's named-target search, the tree-order walk)
+   asking whether to keep walking this agent's tree. The JS-visible member has a different answer path: a
+   traversable whose active document is in another instance is closed by whichever agent ran §7.2.2.1's
+   close(), so the member suspends and asks it (proxy_get_step). A caller that wants the standard's `closed`
+   about an arbitrary navigable goes through the member, because only it can suspend.
+   An or over two facts, the getter's own wording: they are set by two algorithms at two times, and every read
+   in this file goes through here so no member asks only one. */
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the closed state of something that is not a WindowProxy was read");
-    /* §7.2.2.1's OR, over the FACT rather than over the two recorded flags — a frame removed from the tree has
-       a null browsing context from that line onward, which is the disjunct wp_bc_null cannot see (see its
-       definition). `closing` stays a flag: it is written by close() in whichever agent ran it. */
+    /* §7.2.2.1's or, over the fact rather than the two recorded flags: a frame removed from the tree has a null
+       browsing context from that line on, the disjunct wp_bc_null cannot see (see its definition). `closing`
+       stays a flag, written by close() in whichever agent ran it. */
     return p->closing != 0 || window_proxy_browsing_context_null(ctx, proxy);
 }
 
-/* THE ASK §7.5.10 STEP 7 IS, COUNTED WHERE IT IS PERFORMED — see window_proxy.h for why the OUTCOME cannot
-   be asserted and this can. Lifetime, per agent, and NOT on the record: it counts asks across arms, so a
-   rewound arm that destroys again is a second ask rather than the same one seen twice. */
+/* The ask §7.5.10 step 7 is, counted where it is performed (see window_proxy.h for why the outcome cannot be
+   asserted and this can). A lifetime count per agent, not on the record: it counts asks across arms, so a rewound
+   arm that destroys again is a second ask. */
 static long long g_step9_releases;
 
 long long window_proxy_destroy_releases(void) { return g_step9_releases; }
 
-/* §7.5.10 STEPS 6 AND 7 — the completion of a destruction, written only by the destroy job. See window_proxy.h
-   for why the two steps are one write and why the second of them is this engine's only reclamation edge.
-   Step 6 is also what §7.5.10 step 5's wait reads off each child, which is why it is asked separately from
-   `closed`: a navigable whose top-level traversable is merely CLOSING has not been destroyed, and a wait that
-   accepted `closed` would finish before its subtree had. */
+/* §7.5.10 steps 6 and 7, the completion of a destruction, written only by the destroy job (see window_proxy.h
+   for why the two steps are one write and why the second is this engine's only reclamation edge). Step 6 is also
+   what §7.5.10 step 5's wait reads off each child, so it is asked separately from `closed`: a navigable whose
+   top-level traversable is only closing has not been destroyed, and a wait that accepted `closed` would finish
+   before its subtree had. */
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
 
     DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context set to null");
-    /* ONCE PER DOCUMENT, ASSERTED, because step 7 hands a reference back and a second run would hand back one
-       it no longer holds. Every path that could reach here twice already refuses to: descend_enqueue returns
-       for a destroyed navigable, the fan-out reports a destroyed child instead of queuing it, and §7.3's
-       close chains unload-then-destroy over a subtree whose members destroyed themselves at §7.5.9 step 20.
-       So a second arrival is one of those paths having stopped refusing, and it is silent without this. */
+    /* Once per document, asserted, because step 7 hands a reference back and a second run would hand back one it
+       no longer holds. Every path that could reach here twice refuses to: descend_enqueue returns for a destroyed
+       navigable, the fan-out reports a destroyed child instead of queuing it, and §7.3's close chains
+       unload-then-destroy over a subtree whose members destroyed themselves at §7.5.9 step 20. A second arrival
+       is one of those paths having stopped refusing. */
     DCHECK(!p->destroyed,
            "§7.5.10 destroyed one navigable's active document TWICE — the second run releases a Window "
            "reference this record has already given back, and the first thing that reads the navigable "
            "afterwards reads a freed global");
-    /* A PEER'S NAVIGABLE HAS NOTHING LOCAL TO RELEASE, and it is not destroyed from here either: the agent that
-       HOLDS the document runs §7.5.10 over it, and this side learns the outcome the way it learns `closed`. */
+    /* A peer's navigable has nothing local to release and is not destroyed from here: the agent holding the
+       document runs §7.5.10 over it, and this side learns the outcome the way it learns `closed`. */
     DCHECK(world_doc_hosted(p->doc),
            "§7.5.10 was run over a navigable whose ACTIVE DOCUMENT is in another WASM instance — the ports, "
            "the queued tasks and the Window are all the peer's, so the destruction is the peer's to perform "
            "and this side has nothing to null");
     p->destroyed = 1;                                          /* step 6 */
-    /* STEP 7 — the navigable stops naming the Document. THE DELTA ALREADY HOLDS ITS OWN DUP of this Window
-       (the capture above ran before the write), so releasing the live slot leaves every parked arm's copy
-       intact and rewinding this flow restores the binding exactly. That is the same argument
-       window_proxy_navigate makes one screen up, for the same field, and it is the whole reason a destruction
-       can give memory back at all without a flow losing the document it is standing in. */
+    /* Step 7: the navigable stops naming the Document. The delta already holds its own dup of this Window (the
+       capture above ran before the write), so releasing the live slot leaves every parked arm's copy intact and
+       rewinding this flow restores the binding exactly, as in window_proxy_navigate. That is what lets a
+       destruction give memory back without a flow losing the document it stands in. */
     wp_set(ctx, p, &p->window, JS_UNDEFINED);
     p->realm  = NULL;
-    /* AND `materialized` NOW ANSWERS THE TRUTH: this navigable has no active document. proxy_realm asserts the
-       other side of that pair — a NULL realm on a DESTROYED navigable means "there is none", never "not yet". */
+    /* `materialized` now answers that this navigable has no active document; proxy_realm asserts the other side:
+       a NULL realm on a destroyed navigable means "there is none", never "not yet". */
     DCHECK(p->realm == NULL && JS_IsUndefined(p->window),
            "§7.5.10 step 7 left a destroyed navigable still naming a Document — the realm behind it can then "
            "never be reclaimed, because this reference is the one the collector cannot get past");
-    /* THE ASK IS RECORDED HERE AND NOWHERE ELSE, after the release has happened rather than at the call that
-       asked for it: this line is the release, so a count taken here cannot report a step that returned early.
-       It is the last statement for that reason and not for tidiness. */
+    /* The ask is recorded here, after the release rather than at the call that asked for it, so a count taken
+       here cannot report a step that returned early; it is the last statement for that reason. */
     g_step9_releases++;
 }
 
-/* §7.1.3.2 STEP 10's DISCARD — the OTHER writer of the state §7.2.2 "The Window object" spells
-   "if this's browsing context is null then return null", and it releases nothing.
-   §7.5.10's write above is a destruction and hands the Window back; this one records that a browsing context
-   was LEFT BEHIND by a group swap while its Document goes on existing exactly as it was. That asymmetry is the
-   spec's, not a shortcut: step 10's note says only that the user agent "might destroy it at this point", and
-   this engine keeps a superseded document alive on every navigation because a flow parked inside it resumes
-   there.
-   PER FLOW through proxy_of, like every other write to this record: a sibling arm whose response carried no
-   such policy never swapped, and its handle stays open. */
+/* §7.1.3.2 step 10's discard: the other writer of the state §7.2.2 "The Window object" spells "if this's browsing
+   context is null then return null", and it releases nothing. §7.5.10's write above is a destruction and hands
+   the Window back; this records that a group swap left a browsing context behind while its Document goes on
+   existing as it was. That asymmetry is the spec's: step 10's note says only that the user agent "might destroy
+   it at this point", and this engine keeps a superseded document alive on every navigation because a flow parked
+   in it resumes there.
+   Per flow through proxy_of: a sibling arm whose response carried no such policy never swapped, and its handle
+   stays open. */
 void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: the whole binding rides the delta */
     (void)ctx;
 
     DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context discarded");
@@ -1560,18 +1353,17 @@ void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy)
            "§7.1.3.2's group swap discarded one browsing context TWICE — one navigation swaps once, and the "
            "second announcement provisions a second instance for a document that already has one");
     p->bc_discarded = 1;
-    /* AND §7.2.2.1's `closed` READS IT — asserted here because this byte and that getter are the whole contract
-       between the swap and the page. A `closed` that did not include this disjunct would leave the opener's own
-       handle reporting a window real Chrome has already cut off as one it can still reach, and §@S would emit a
-       breakout the browser forbids: a byte written where nothing reads it, which is silent everywhere else. */
+    /* §7.2.2.1's `closed` reads it, asserted here because this byte and that getter are the whole contract between
+       the swap and the page: without the disjunct, the opener's handle would report as reachable a window real
+       Chrome has cut off, and the @S half would emit a breakout the browser forbids. */
     DCHECK(window_proxy_closed(ctx, proxy),
            "a browsing context §7.1.3.2's swap has just discarded still answers §7.2.2.1's `closed` as false — "
            "the getter's \"this's browsing context is null\" has THREE writers (this swap, §7.5.10's destroy "
            "and §7.3.1.6's synchronous sever) and is reading fewer than all of them");
 }
 
-/* THE WAIT'S STEP 3 — the number of child navigables this one is waiting on for this operation, recorded
-   BEFORE any of them is queued. Through proxy_of, so the count belongs to the flow performing the walk. */
+/* The wait's step 3: the number of child navigables this one waits on for this operation, recorded before any of
+   them is queued. Through proxy_of, so the count belongs to the flow performing the walk. */
 void window_proxy_child_wait_set(JSContext *ctx, JSValueConst proxy, int op, uint32_t n)
 {
     ProxyData *p = proxy_of(proxy);
@@ -1587,11 +1379,11 @@ void window_proxy_child_wait_set(JSContext *ctx, JSValueConst proxy, int op, uin
     p->child_wait[op] = n;
 }
 
-/* A CHILD REPORTED — the wait's incrementDestroyed/incrementUnloaded/completedTasks, counted down. Answers
-   WP_WAIT_LAST for the last child (the wait being over, and the only moment the waiting navigable's own body
-   may be queued), WP_WAIT_MORE while siblings are outstanding, and WP_WAIT_NONE when this navigable is not
-   running that operation at all — which is how the reporter learns it is the ROOT of the operation rather than
-   underflowing a count that was never raised. */
+/* A child reported: the wait's incrementDestroyed/incrementUnloaded/completedTasks, counted down. Answers
+   WP_WAIT_LAST for the last child (the wait is over, the only moment the waiting navigable's own body may be
+   queued), WP_WAIT_MORE while siblings are outstanding, and WP_WAIT_NONE when this navigable is not running that
+   operation, which tells the reporter it is the operation's root rather than underflowing a count never
+   raised. */
 int window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op)
 {
     ProxyData *p = proxy_of(proxy);
@@ -1604,9 +1396,9 @@ int window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op)
     return --p->child_wait[op] == 0 ? WP_WAIT_LAST : WP_WAIT_MORE;
 }
 
-/* §7.2.2.1 step 3's and §7.3's step 1's test — IS CLOSING alone, which is the half of `closed` that says a
-   close is under way rather than finished. Through proxy_of like every other read of this record: the flow
-   that called close() is the only one whose timeline contains it. */
+/* §7.2.2.1 step 3's and §7.3's step 1's test: is closing alone, the half of `closed` that says a close is under way
+   rather than finished. Through proxy_of, so the flow that called close() is the only one whose timeline contains
+   it. */
 bool window_proxy_closing(JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
@@ -1614,9 +1406,9 @@ bool window_proxy_closing(JSValueConst proxy)
     return p->closing != 0;
 }
 
-/* §7.3.2.2's FAMILIAR WITH — see window_proxy.h. A is the INCUMBENT realm's browsing context, which is this
-   agent's, so every "A's active document's origin" below is origin_agent() and every "is A" is this realm's
-   own Window or its proxy. */
+/* §7.3.2.2's familiar with (see window_proxy.h). A is the incumbent realm's browsing context, which is this
+   agent's, so every "A's active document's origin" below is origin_agent() and every "is A" is this realm's own
+   Window or its proxy. */
 static bool proxy_is_incumbent_window(JSContext *ctx, JSValueConst v)
 {
     JSValue g = JS_GetGlobalObject(ctx);
@@ -1626,11 +1418,11 @@ static bool proxy_is_incumbent_window(JSContext *ctx, JSValueConst v)
     return same || JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(document_window_proxy(ctx));
 }
 
-/* IS THIS LINK OF A NAVIGABLE CHAIN SAME ORIGIN WITH THE INCUMBENT? A link is either another navigable's proxy
-   or this agent's own Window, which is where the chain ENDS — window_proxy_new is handed the creator's Window
-   as a child or auxiliary navigable's parent. An agent is ORIGIN-KEYED, so its Window's origin IS the
-   incumbent's, and §7.1.1 step 1 then answers the end of the chain TRUE whatever that origin is: an origin is
-   same origin with itself, opaque included, which is why this is `true` and not a test against "null". */
+/* Is this link of a navigable chain same origin with the incumbent? A link is another navigable's proxy or this
+   agent's own Window, where the chain ends (window_proxy_new is handed the creator's Window as a child or
+   auxiliary navigable's parent). An agent is origin-keyed, so its Window's origin is the incumbent's, and §7.1.1
+   step 1 answers the end of the chain true whatever that origin is, opaque included, which is why this is `true`
+   and not a test against "null". */
 static bool link_same_origin_as_incumbent(JSContext *ctx, JSValueConst v)
 {
     ProxyData *q = JS_GetOpaque(v, g_proxy_class);
@@ -1645,26 +1437,26 @@ bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
     bool ok = false;
 
     DCHECK(window_proxy_is(proxy), "§7.3.2.2 was asked about something that is not a navigable's WindowProxy");
-    /* THE LOOP IS STEP 3's RECURSION, UNROLLED — "B is an auxiliary browsing context and A is familiar with
-       B's opener browsing context" is the same question about a different B, and an opener link is fixed when
-       the navigable is created (§7.2.2.4's setter only ever SEVERS one), so the chain is finite and acyclic:
-       every opener predates the navigable it opened. */
+    /* The loop is step 3's recursion unrolled: "B is an auxiliary browsing context and A is familiar with B's
+       opener browsing context" is the same question about a different B, and an opener link is fixed at creation
+       (§7.2.2.4's setter only severs one), so the chain is finite and acyclic: every opener predates the
+       navigable it opened. */
     for (;;) {
         ProxyData *p = JS_GetOpaque(b, g_proxy_class);
         JSValue anc;
 
         if (link_same_origin_as_incumbent(ctx, b)) { ok = true; break; }    /* step 1 */
-        /* Step 3's chain has reached a link that is not a navigable's proxy, which is this agent's own Window
-           — A itself, and step 1 has just answered for it. */
+        /* Step 3's chain has reached a link that is not a navigable's proxy: this agent's own Window, A itself,
+           which step 1 has just answered for. */
         if (!p) break;
-        {                                                                   /* step 2: A's top-level IS B */
+        {                                                                   /* step 2: A's top-level is B */
             JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
             bool is_b = JS_VALUE_GET_PTR(top) == JS_VALUE_GET_PTR(b);
             JS_FreeValue(ctx, top);
             if (is_b) { ok = true; break; }
         }
-        /* Step 4: an ANCESTOR browsing context of B whose active document is same origin with A's — which
-           includes the case where A is that ancestor, since the chain ends at this agent's Window. */
+        /* Step 4: an ancestor browsing context of B whose active document is same origin with A's, which includes
+           A being that ancestor, since the chain ends at this agent's Window. */
         anc = JS_DupValue(ctx, p->parent);
         while (!JS_IsUndefined(anc)) {
             ProxyData *q = JS_GetOpaque(anc, g_proxy_class);
@@ -1691,60 +1483,55 @@ bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
 
 bool window_proxy_destroyed(JSValueConst proxy)
 {
-    /* THROUGH proxy_of, LIKE EVERY OTHER READ OF THIS RECORD — the destruction of a child is written into the
-       destroying FLOW's delta, so a wait that read the baseline would never see the child it had just
-       destroyed and would park for ever. A read that reaches a record captures it; that is the contract, and
-       reading around it here would make the wait depend on which flow happened to run the child's job. */
+    /* Through proxy_of like every other read of this record: a child's destruction is written into the
+       destroying flow's delta, so a wait that read the baseline would never see the child it had just destroyed
+       and would park for ever, depending on which flow ran the child's job. */
     ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the destroyed state of something that is not a WindowProxy was read");
     return p->destroyed != 0;
 }
 
-/* IS THIS RECORD'S REALM BORROW DANGLING — see window_proxy.h for the question and for why it is neither
-   `destroyed` nor a plain "does it still name this realm". CAPTURE-FREE AND COLLECTION-SAFE, which is the
-   whole reason it is a second entry point and not a caller of the accessor one line up.
-   NOT proxy_of, AND THAT IS THE SAME DISTINCTION THE COLLECTOR ENTRIES ALREADY DRAW. proxy_of captures the
-   record into the running flow's delta, because a record a flow has REACHED is one it may write — and there is
-   no flow here at all: the caller is quickjs's realm-teardown hook, which fires from inside a collection, where
-   a capture would dup this record's JSValues onto an object being torn down. proxy_finalizer and proxy_gc_mark
-   are excluded from the capture for exactly that reason; this is the third caller with the same standing, and
-   the read it makes is strictly narrower than theirs — two field loads and no reference touched at all. */
+/* Is this record's realm borrow dangling (see window_proxy.h for the question, and why it is neither `destroyed`
+   nor a plain "does it still name this realm")? Capture-free and collection-safe, which is why it is a second
+   entry point and not a caller of the accessor above.
+   Not proxy_of, the distinction the collector entries draw: proxy_of captures the record into the running flow's
+   delta because a record a flow has reached is one it may write, and there is no flow here. The caller is
+   quickjs's realm-teardown hook, which fires inside a collection, where a capture would dup this record's
+   JSValues onto an object being torn down. proxy_finalizer and proxy_gc_mark skip the capture for that reason;
+   this read is narrower than theirs, two field loads and no reference touched. */
 bool window_proxy_realm_dangling(JSValueConst proxy, JSContext *realm)
 {
     JSClassID cid = 0;
-    /* proxy_collector_record's CALL WITH ITS SECOND OUTPUT KEPT. The collector may discard the class id
-       because it was DISPATCHED through the class and therefore already knows what it is holding; this caller
-       was handed a value and does not, so the id is the only thing that can say. It is JS_GetAnyOpaque and not
-       JS_GetOpaque(proxy, g_proxy_class) for the reason stated at proxy_collector_record — window_proxy_free
-       gives the class id back, and the collection that reaches a realm teardown runs AFTER the release column
-       (core/dom/document.c states it: a child navigable's document is released from that hook, "inside
-       JS_RunGC or inside JS_FreeRuntime, and BOTH of those are after platform_agent_free"). */
+    /* proxy_collector_record's call with its second output kept. The collector may discard the class id because
+       it was dispatched through the class; this caller was handed a value, so the id is the only thing that can
+       say what it holds. JS_GetAnyOpaque for the reason at proxy_collector_record: window_proxy_free gives the
+       class id back, and the collection that reaches a realm teardown runs after the release column
+       (core/dom/document.c: a child navigable's document is released from that hook, inside JS_RunGC or
+       JS_FreeRuntime, both after platform_agent_free). */
     const ProxyData *p = JS_GetAnyOpaque(proxy, &cid);
 
     DCHECK(realm != NULL, "a WindowProxy was asked whether it dangles at NO realm — the question is asked at "
                           "the teardown of one particular JSContext and is meaningless without it");
-    /* AND THE CLASS IS CHECKED WHERE THERE IS STILL A CLASS TO CHECK AGAINST. `g_wp_rt == NULL` is not an
-       exemption of convenience: window_proxy_free zeroes g_proxy_class by design, so after the release column
-       a LIVE proxy carries an id this component can no longer name, and comparing against zero would report
-       every one of them as something else. What stands in for the comparison there is the caller's own
-       argument — core/frame/navigable.c asks this of document_window_proxy(cctx), which core/dom/document.c
-       asserts is that realm's own §7.2.3 WindowProxy. A zero id with no record is the collector having already
-       finalized the proxy, which free_object writes as one pair (u.opaque and class_id are cleared together
-       after the finalizer returns). */
+    /* The class is checked where there is still a class to check against. window_proxy_free zeroes
+       g_proxy_class by design, so after the release column a live proxy carries an id this component cannot
+       name, and comparing against zero would report every one as something else. The caller's own argument
+       stands in there: core/frame/navigable.c asks this of document_window_proxy(cctx), which core/dom/document.c
+       asserts is that realm's own §7.2.3 WindowProxy. A zero id with no record is a proxy the collector already
+       finalized, which free_object writes as one pair (u.opaque and class_id are cleared together after the
+       finalizer returns). */
     DCHECK(g_wp_rt == NULL || cid == g_proxy_class || (cid == 0 && p == NULL),
            "the realm-borrow question was asked of an object that is not a §7.2.3 WindowProxy — it is answered "
            "by reading a ProxyData off the class opaque, so a foreign class's record would be read with this "
            "record's layout and the answer would be two fields of somebody else's struct");
-    /* THE COLLECTOR ALREADY TOOK THE RECORD — a POSITIVE ANSWER and not a hole a default fills. proxy_finalizer
-       frees a ProxyData whole, so a proxy with none holds no binding at all and no realm can be read through
-       it; §7.5.10's own note is why this is reachable rather than defensive ("Even after destruction, the
-       Document object itself might still be accessible to script, in the case where we are destroying a child
-       navigable"), so the proxy and the realm are two objects one collection may take in either order. */
+    /* The collector already took the record, a positive answer: proxy_finalizer frees a ProxyData whole, so a
+       proxy with none holds no binding and no realm can be read through it. §7.5.10's note makes this reachable
+       ("Even after destruction, the Document object itself might still be accessible to script, in the case where
+       we are destroying a child navigable"), so the proxy and the realm are two objects one collection may take
+       in either order. */
     if (p == NULL)
         return false;
-    /* THE TAG OF `window` AND NEVER ITS TARGET. The Window this slot names may itself have been finalized
-       earlier in the same sweep, so JS_IsUndefined — which reads the JSValue's own tag — is the whole of what
-       may be asked of it here. */
+    /* The tag of `window`, never its target: the Window this slot names may have been finalized earlier in the
+       same sweep, so JS_IsUndefined, which reads the JSValue's own tag, is all that may be asked of it. */
     return p->realm == realm && JS_IsUndefined(p->window);
 }
 
@@ -1753,17 +1540,17 @@ bool window_proxy_browsing_context_null(JSContext *ctx, JSValueConst proxy)
     ProxyData *p = proxy_of(proxy);   /* through the accessor, for window_proxy_destroyed's reason */
 
     DCHECK(p != NULL, "the browsing context of something that is not a WindowProxy was asked about");
-    /* THE THIRD WRITER, AND THE ONLY ONE THAT IS SYNCHRONOUS. Both flags are set by §7.5.10's queued
-       destruction, and every page that observes this observes it on the line after `iframe.remove()` —
-       §7.3.1.6 step 3's sever is what has happened by then. `embedded-opener-remove-frame.html` states the
-       difference in its own structure: it checks a removed FRAME's `opener` immediately and a closed POPUP's
-       behind a `step_timeout`, because the first is discarded synchronously and the second from a task. */
+    /* The third writer, and the only synchronous one. Both flags are set by §7.5.10's queued destruction, and a
+       page observes this on the line after `iframe.remove()`, when §7.3.1.6 step 3's sever has happened.
+       `embedded-opener-remove-frame.html` shows the difference in its structure: it checks a removed frame's
+       `opener` immediately and a closed popup's behind a `step_timeout`, because the first is discarded
+       synchronously and the second from a task. */
     return window_proxy_navigable_null(ctx, proxy) || wp_bc_null(p);
 }
 
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — this write rides the flow's delta */
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: this write rides the flow's delta */
 
     DCHECK(p != NULL, "something that is not a WindowProxy was asked to disown its opener");
     wp_set(ctx, p, &p->opener, JS_NULL);
@@ -1771,21 +1558,20 @@ void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
 
 void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst opener)
 {
-    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — this write rides the flow's delta */
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor: this write rides the flow's delta */
 
     DCHECK(p != NULL, "something that is not a WindowProxy was given an opener");
-    /* §7.2.2.4's `opener` IS A NAVIGABLE'S, so what is stored is the opener's PROXY and never its Window. The
-       two are not interchangeable here and the difference is exactly the bug window_proxy_new's own comment
-       records: a Window in this slot makes the `top` walk stop at the proxies and read a scriptable property
-       to continue, and makes a popup's `opener` a Window rather than the navigable it belongs to. */
+    /* §7.2.2.4's `opener` is a navigable's, so the slot stores the opener's proxy, never its Window: a Window here
+       would make the `top` walk stop at the proxies and read a scriptable property to continue, and would make a
+       popup's `opener` a Window rather than the navigable it belongs to. */
     DCHECK(window_proxy_is(opener),
            "§7.2.2.1 step 16.2 was given something that is not a WindowProxy as the opener browsing context — "
            "the step says \"sourceDocument's browsing context\", which is a NAVIGABLE, and every other reader "
            "of this slot (§7.2.2.4's `opener`, window_proxy_opener_navigable, the familiarity walk) is written "
            "against a proxy");
-    /* NULL IS NOT THIS FUNCTION'S TO SAY. §7.2.2.4's null branch DISOWNS, which is a different state change
-       with a different observable (no own property is defined), and it has its own entry point above. Reaching
-       this one with null would make the two spellings of "no opener" two, able to disagree. */
+    /* Null is not this function's to say. §7.2.2.4's null branch disowns, a different state change with a
+       different observable (no own property is defined), and has its own entry point above; null here would make
+       two spellings of "no opener" that could disagree. */
     wp_set(ctx, p, &p->opener, JS_DupValue(ctx, opener));
 }
 
@@ -1800,11 +1586,10 @@ bool window_proxy_is_remote(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "something that is not a WindowProxy was asked whether it is remote");
-    /* THE TWO FACTS MUST AGREE. Read together on every ask, because a proxy where they disagree hands a
-       cross-document read this document's Window and nothing downstream can tell. */
-    /* A PROXY OVER A PEER'S DOCUMENT MUST NEVER HAVE BUILT A REALM — a realm here would mean this agent
-       answered for a document it does not hold, which is the exact failure the same-origin check prevents. The
-       converse is NOT asserted: a hosted navigable legitimately has no realm until something reads through it. */
+    /* The two facts must agree, read together on every ask, because a proxy where they disagree hands a
+       cross-document read this document's Window and nothing downstream can tell. A proxy over a peer's document
+       never builds a realm (that would be this agent answering for a document it does not hold); the converse is
+       not asserted, since a hosted navigable has no realm until something reads through it. */
     DCHECK(world_doc_hosted(p->doc) || (p->realm == NULL && JS_IsUndefined(p->window)),
            "a WindowProxy over a PEER's document carries a local realm — a cross-instance read would then be "
            "answered out of this heap");
@@ -1822,21 +1607,17 @@ JSValue window_proxy_window(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the Window of something that is not a WindowProxy was asked for");
-    /* THE SEAM, and it crashes rather than answering. A proxy whose navigable lives in another WASM instance
-       has no local Window to hand back, and handing back this document's would be a cross-document read that
-       silently succeeded — the one failure mode the same-origin check exists to prevent. What has to be built
-       is named in the message: the binding is (document, world), and resolving it is a host round trip because
-       only the host knows which instance holds that document and which of its flows is in that world. */
+    /* The seam, which crashes rather than answering. A proxy whose navigable lives in another WASM instance has no
+       local Window, and handing back this document's would be a cross-document read that silently succeeded.
+       The message names what to build: the binding is (document, world), and resolving it is a host round trip
+       because only the host knows which instance holds that document and which of its flows is in that world. */
     DCHECK(world_doc_hosted(p->doc),
            "a WindowProxy names a navigable in ANOTHER WASM instance — build the cross-instance resolve: the "
            "flow SUSPENDS here (the same snapshot path as an await), the peer answers in its own scheduled turn "
            "under this flow's world, and the flow resumes with the value. The host owns the routing because "
            "only it knows which instance holds that document — window_proxy_doc names which one");
-    /* JS_GetGlobalObject ALREADY RETURNS A REFERENCE. Duplicating it took a second one and returned only one,
-       so every read through here leaked a Window — and with it, since a global roots a whole realm, the entire
-       child page: ~4000 objects surviving JS_FreeRuntime's walk with a single external ref on the Window
-       holding them. It went unseen while the only realm was the root's, because the root's global is freed
-       with the runtime whatever its count; it surfaced the moment §7.4 materialized a second one. */
+    /* JS_GetGlobalObject already returns a reference, so no dup: a second one would leak the Window and, since a
+       global roots a whole realm, the entire child page. */
     return JS_GetGlobalObject(proxy_realm(ctx, proxy, p));
 }
 
@@ -1874,42 +1655,39 @@ const char *window_proxy_name(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was asked for");
-    /* A DESTROYED navigable has no name — the same answer the `name` getter gives, from the same two fields,
-       so named access cannot find a frame the page has already removed. */
+    /* A destroyed navigable has no name, the answer the `name` getter gives from the same two fields, so named
+       access cannot find a frame the page has removed. */
     return wp_closed(p) || !p->name ? "" : p->name;
 }
 
-/* §7.2.2.1's `name`, AS A VALUE, and the ONE place it is computed. A Window and its WindowProxy are two spellings
-   of one navigable, so `window.name` inside a document and `w.name` from its opener are one attribute of one
-   record — they were two, computed from two unrelated sources: the proxy answered the navigable's name and the
-   global answered a source-only concolic with no example, so `w = open(u,"chan42")` gave "chan42" through the
-   proxy and an example-free unknown inside the popup. HTML §7.2.2.1 is unambiguous — "return
-   this's navigable's target name" — and the popup's own script reading it is the ordinary case, not a second attribute.
-   IT IS STILL AN ATTACKER SOURCE where the name is genuinely unknown, which is not "always": a navigable §7.4
-   created carries the name §7.4 gave it, and the code that wrote `open(url, "chan42")` DETERMINED it, so
-   reporting it as unknown would be inventing uncertainty the program does not have. The navigable nobody here
-   created is the one whose name a cross-origin opener may have set, and that read is concolic — carrying the
-   spec's "" as its example, so it forks control flow without losing the value. */
+/* §7.2.2.1's `name` as a value, computed in one place. A Window and its WindowProxy are two spellings of one
+   navigable, so `window.name` inside a document and `w.name` from its opener are one attribute of one record:
+   HTML §7.2.2.1 says "return this's navigable's target name", and the popup's own script reading it is the
+   ordinary case.
+   It is an attacker source only where the name is unknown. A navigable §7.4 created carries the name §7.4 gave
+   it, which the code that wrote `open(url, "chan42")` determined, so reporting it as unknown would invent
+   uncertainty the program does not have. The navigable nobody here created is the one whose name a cross-origin
+   opener may have set, and that read is concolic, carrying the spec's "" as its example, so it forks control
+   flow without losing the value. */
 JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was read");
-    /* HTML §7.2.2 "The Window object": "If this's navigable is null, then return the empty string." — the
-       predicate `closed` reads, so a frame removed from the tree answers "" on the next line, as it answers
-       `closed`; a closing top-level traversable still has its navigable and keeps its name. */
+    /* HTML §7.2.2 "The Window object": "If this's navigable is null, then return the empty string.", the predicate
+       `closed` reads, so a frame removed from the tree answers "" on the next line as it answers `closed`; a
+       closing top-level traversable still has its navigable and keeps its name. */
     if (window_proxy_browsing_context_null(ctx, proxy)) return JS_NewStringLen(ctx, "", 0);
     if (p->name_known) return JS_NewString(ctx, p->name ? p->name : "");
-    /* THE WORLD'S: §7.2.2.1's name is written by whoever NAVIGATED this navigable, which is another document
-       and often an attacker's. Nothing in this document's own served bytes states it. */
+    /* The world's: §7.2.2.1's name is written by whoever navigated this navigable, which is another document and
+       often an attacker's, and nothing in this document's served bytes states it. */
     return concolic_new(ctx, "{window.name}", "window.name", CONCOLIC_WHOSE_WORLD,
                         JS_NewStringLen(ctx, "", 0));
 }
 
-/* §7.2.2.1's `name` SETTER, and the ONE place it is written. It renames the BROWSING CONTEXT, which is why
-   `frameW.name = "B"` leaves the element's `name` content attribute alone — the spec files assert that pair
-   together, and an implementation that reflected one into the other would pass neither. Writing it is also what
-   makes the name KNOWN: a page that set it determined it, whatever it was before. */
+/* §7.2.2.1's `name` setter, the one place it is written. It renames the browsing context, so `frameW.name = "B"`
+   leaves the element's `name` content attribute alone (the spec files assert that pair together, and reflecting
+   one into the other would pass neither). Writing it makes the name known: a page that set it determined it. */
 JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v)
 {
     ProxyData *p = proxy_of(proxy);
@@ -1918,9 +1696,9 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was written");
     /* §7.2.2: "If this's navigable is null, then return." */
     if (window_proxy_browsing_context_null(ctx, proxy)) return JS_UNDEFINED;
-    /* A CONCOLIC NAME IS A CAPABILITY THAT DOES NOT EXIST YET, not a value to stringify. `name` is stored as C
-       bytes because named access compares it, so a concolic here would have to be de-tainted to be stored —
-       which is the one thing a concolic must never survive. Storing the triple instead is what to build. */
+    /* A concolic name is a capability not yet built, not a value to stringify. `name` is stored as C bytes
+       because named access compares it, so a concolic would have to be de-tainted to be stored, which a concolic
+       must never survive; the message names what to build. */
     DCHECK(!concolic_is(v),
            "a navigable was renamed to unknown external input — `name` is held as C bytes so named access can "
            "compare it, and a concolic cannot be stored there without de-tainting it; hold the navigable's name "
@@ -1933,9 +1711,9 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
     return JS_UNDEFINED;
 }
 
-/* §7.4's popup decision, read back — what §7.2.2.5's six BarProps answer from. A DESTROYED navigable keeps
-   the answer it was created with: `closed` is what a page checks, and a bar that changed its mind on close
-   would be a second fact where there is one. */
+/* §7.4's popup decision, read back: what §7.2.2.5's six BarProps answer from. A destroyed navigable keeps the
+   answer it was created with: `closed` is what a page checks, and a bar that changed its mind on close would be a
+   second fact where there is one. */
 bool window_proxy_is_popup(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
@@ -1951,8 +1729,8 @@ const Origin *window_proxy_origin(JSValueConst proxy)
     return p->origin;
 }
 
-/* Through the capturing accessor rather than the raw opaque: this is per-flow state, and a flow that reads it
-   is on its way to building a realm under it. */
+/* Through the capturing accessor rather than the raw opaque: this is per-flow state, and a flow that reads it is
+   on its way to building a realm under it. */
 const char *window_proxy_top_level_url(JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
@@ -1980,31 +1758,19 @@ SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy)
     ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the creation sandboxing flags of something that is not a WindowProxy were asked for");
-    /* A REMOTE PROXY HAS NONE TO GIVE, and answering the empty set would be worse than crashing: an empty set
-       is a real answer meaning "not sandboxed", so a cross-origin `<iframe sandbox>` would report itself
-       unsandboxed to whichever algorithm asked.
-       THIS ASSERT USED TO SAY THE `navigable.create` NOTICE DOES NOT CARRY THE SET AND TOLD ITS READER TO ADD
-       IT BESIDE THE POLICY. That was FALSE, and it is rewritten rather than deleted because a next-diff clause
-       is read once, by somebody who has already decided to build the thing it names — so a reader re-deriving
-       it from this accessor alone would add the field a second time. navigable.c writes §7.1.5's serialized
-       set as the create notice's FOURTEENTH field, one before the provenance token and two before the policy
-       remainder; both hosts take it off that field (wpt_runner.c hands it to the re-executed child as its last
-       argv, qjs_abi.h declares it on both rooting entries) and route.mjs counts it among the seventeen it
-       enumerates by name. MEASURED at origin/main with an armed control: `git grep -l creation_sandbox_flags
-       -- engine` answers 9 files and an invented sibling spelling answers 0.
-       WHAT IS ACTUALLY MISSING IS ON THIS SIDE OF THE SEAM, AND IT SPLITS BY WHERE THE PROXY CAME FROM. A
-       remote proxy this instance CREATED is minted on navigable.c's create arm, which ran §7.1.5 four
-       statements earlier — both of that algorithm's inputs are the `<iframe sandbox>` element and this
-       document's own active set, neither of which crosses — and the value it authored is dropped because
-       window_proxy_new_remote takes no such argument. A remote proxy DECODED from a peer's navigable identity
-       (core/frame/remote_object.c) or minted for a message's source (core/frame/window_message.c) was never
-       computed here at all, and only THAT population is a route.
-       AND THIS ARM IS A GUARD RATHER THAN A QUEUE ITEM: every reader of this entry is already refused upstream
-       by its own `window_proxy_is_remote` assert carrying its own remedy (navigable.c's navigate and reload),
-       and the third runs inside the load step of a navigable this agent holds. A reader counting this crash as
-       work is counting a proof.
-       RETIREMENT: this record goes when window_proxy_new_remote takes §7.1.5's set, because the retired clause
-       can no longer be re-derived from an accessor with nowhere to read one from. */
+    /* A remote proxy has no set to give, and answering the empty set would be worse than crashing: an empty set
+       means "not sandboxed", so a cross-origin `<iframe sandbox>` would report itself unsandboxed.
+       The peer has the set: navigable.c writes §7.1.5's serialized set on the `navigable.create` notice and both
+       hosts take it off (wpt_runner.c hands it to the re-executed child, qjs_abi.h declares it on both rooting
+       entries). What is missing is this instance's own record of it, which splits by where the proxy came from.
+       A remote proxy this instance created is minted on navigable.c's create arm, which ran §7.1.5 just before
+       (its inputs, the `<iframe sandbox>` element and this document's active set, do not cross), and the value
+       is dropped because window_proxy_new_remote takes no such argument. A remote proxy decoded from a peer's
+       navigable identity (core/frame/remote_object.c) or minted for a message's source
+       (core/frame/window_message.c) was never computed here, and only that population is a route.
+       The arm is a guard, not a work item: every reader is refused upstream by its own `window_proxy_is_remote`
+       assert carrying its own remedy (navigable.c's navigate and reload), and the third runs inside the load
+       step of a navigable this agent holds. */
     DCHECK(!window_proxy_is_remote(proxy),
            "the CREATION SANDBOXING FLAGS of a navigable whose Documents a PEER instance creates were asked "
            "for — §7.1.5's flag set is handed to a Document at its creation and this instance creates none for "
@@ -2015,73 +1781,55 @@ SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy)
 }
 
 
-/* §7.2.1's MEMBER SURFACE, and the one distinction that decides how each member is answered.
+/* §7.2.1's member surface, and the distinction that decides how each member is answered.
  *
- * A NAVIGABLE IS NOT ITS ACTIVE DOCUMENT. That sentence is the reason this interface exists at all — a proxy
- * outlives the documents in it — and it is also the reason most of the surface below never leaves this
- * instance. `name`, `opener`, `parent`, `top` and the four self-references are properties of the NAVIGABLE,
- * and a navigable belongs to the instance that CREATED it: this one made the child, named it and knows what it
- * was nested in.
+ * A navigable is not its active document: a proxy outlives the documents in it, and that is why most of the
+ * surface below never leaves this instance. `name`, `opener`, `parent`, `top` and the four self-references are
+ * properties of the navigable, and a navigable belongs to the instance that created it, which made the child,
+ * named it and knows what it was nested in. `otherW.self === otherW` is true by definition about a navigable
+ * nobody has to look inside, so answering the navigable's own state locally is where the state is, not an
+ * optimisation.
  *
- * THAT SPLIT WAS THE WHOLE BUG. Every member here used to be a host request, so an iframe's `contentWindow`
- * could answer nothing at all until a host could run a second document; `otherW.self === otherW` — which is
- * true by definition, in any browser, about a navigable nobody has to look inside — parked its flow. Answering
- * the navigable's own state locally is not an optimisation, it is where the state actually is.
- *
- * AND `closed` IS NOT ONE OF THEM, WHICH IS THE HALF OF THAT SPLIT THAT WAS WRONG. This comment used to name
- * it beside `name` and `opener` and say the creator "knows whether it has been destroyed", and that sentence
- * was true of every navigable except the one the member exists for. §7.2.2.1 opening and closing windows makes
- * `closed` the OR of two facts about the TOP-LEVEL TRAVERSABLE — its browsing context being null, and its is
- * closing — and `close()` sets is closing IN THE AGENT THAT RUNS IT. A popup that calls `window.close()` on
- * itself runs that in its OWN instance and writes its OWN record; the opener's copy of the same traversable
- * never hears, so `w.closed` answered false about a window that had closed itself, forever, in the one
- * direction a page actually polls. That is CLAUDE.md's ONE FACT ANSWERED FROM MANY PLACES exactly: two C
- * records for one traversable, and the fix is never to write the second from more places but to ASK the
- * instance whose record is the one the standard is talking about.
- *
- * IT IS MONOTONIC, AND THAT IS WHAT MAKES IT ANSWERABLE AT ALL. §7.2.2.1's close() step 3 returns early when
- * is closing is already true, and a null browsing context is terminal, so `closed` never goes back to false:
- * a record that says CLOSED is the answer wherever it is kept, and only a record that says OPEN leaves the
- * question to the peer. `length` has no such half — it is a live count of the peer's active document and must
- * be asked every time — so the two members share the step machine and differ in exactly this one branch.
- *
- * WHY THE REMOTE HALF IS A STEP MACHINE. `otherWindow.length` must answer at its own call site, and the answer
- * is not available in this turn. There is exactly one shape in this engine that can suspend and answer at the
- * same call site: post the question on the flow's pending register, return JS_STEP_YIELD, and the scheduler
- * parks the flow — byte-identical, at any depth — while its siblings run. The host routes it to the instance
- * holding that document, because SECURITY.md makes the trusted zone the only thing that knows which that is.
- *
- * THE WORLD TRAVELS WITH IT. The question is not "what is document 7's `length`" but "what is it in THIS
- * FLOW'S world" — two arms of a fork that framed it differently must get different answers, which is the same
- * reason a fork re-issues an unanswered request under its own world rather than sharing the id.
- *
- * A LOCAL PROXY forwards everything to its Window with an ordinary read, in this turn: it IS the same document,
- * so its Window is authoritative for every member including the navigable's own. */
+ * `closed` is not one of them. §7.2.2.1 makes `closed` the or of two facts about the top-level traversable, its
+ * browsing context being null and its is closing, and `close()` sets is closing in the agent that runs it. A
+ * popup that calls `window.close()` on itself writes its own instance's record and the opener's copy of the same
+ * traversable never hears, so the opener asks the instance whose record the standard is talking about. */
+/* `closed` is monotonic, which makes it answerable: §7.2.2.1's close() step 3 returns early when is closing is
+ * already true, and a null browsing context is terminal, so a record that says closed is the answer wherever it
+ * is kept and only one that says open leaves the question to the peer. `length` has no such half (it is a live
+ * count of the peer's active document, asked every time), so the two members share the step machine and differ
+ * in that one branch.
+ * The remote half is a step machine because `otherWindow.length` must answer at its own call site and the answer
+ * is not available in this turn: the question is posted on the flow's pending register, the step returns
+ * JS_STEP_YIELD, and the scheduler parks the flow, byte-identical at any depth, while its siblings run. The host
+ * routes it to the instance holding that document, since SECURITY.md makes the trusted zone the only thing that
+ * knows which that is. The world travels with it: the question is document 7's `length` in this flow's world, so
+ * two arms that framed it differently get different answers.
+ * A local proxy forwards everything to its Window with an ordinary read, in this turn: it is the same document,
+ * so its Window is authoritative for every member, the navigable's own included. */
 enum {
-    /* §7.2.2's four names for THIS navigable's own proxy. `window`, `self` and `frames` are on §7.2.1's
-       cross-origin whitelist; `globalThis` is the global object, which IS the proxy, and is same-origin only —
-       the distinction costs nothing here because both answers are the same object. */
+    /* §7.2.2's four names for this navigable's own proxy. `window`, `self` and `frames` are on §7.2.1's
+       cross-origin list; `globalThis` is the global object, which is the proxy, and same-origin only. The
+       distinction costs nothing here because both answers are the same object. */
     WP_WINDOW, WP_SELF, WP_FRAMES, WP_GLOBALTHIS,
     WP_PARENT, WP_TOP, WP_OPENER,
-    /* THE FIRST OF THE TWO MEMBERS THAT LEAVE THIS INSTANCE — the TOP-LEVEL TRAVERSABLE's is-closing, which
+    /* The first of the two members that leave this instance: the top-level traversable's is-closing, which
        §7.2.2.1's close() writes in whichever agent ran it, so the peer's record is the one the standard names
-       whenever this agent's own says OPEN. The enum ORDER is load-bearing (PROXY_MEMBER and
-       PROXY_CROSS_ORIGIN are indexed by it), so this sits where it always sat. */
+       whenever this agent's own says open. The enum order is load-bearing (PROXY_MEMBER and PROXY_CROSS_ORIGIN
+       are indexed by it). */
     WP_CLOSED,
     WP_NAME,
-    WP_LENGTH,   /* the ACTIVE DOCUMENT's child-navigable count — the other member that leaves this instance */
-    /* §7.2.2's `document`, SAME-ORIGIN ONLY. It answers with the OTHER realm's Document OBJECT, and it can
-       always do so in this turn: an agent is ORIGIN-KEYED, so a same-origin navigable is a realm of this agent
-       by construction and a proxy this agent cannot answer for is cross-origin, where the answer is a
-       SecurityError rather than a document. That pairing is asserted rather than assumed — see proxy_realm. */
+    WP_LENGTH,   /* the active document's child-navigable count: the other member that leaves this instance */
+    /* §7.2.2's `document`, same-origin only. It answers with the other realm's Document object, always in this
+       turn: an agent is origin-keyed, so a same-origin navigable is a realm of this agent by construction, and a
+       proxy this agent cannot answer for is cross-origin, where the answer is a SecurityError. proxy_realm
+       asserts the pairing. */
     WP_DOCUMENT,
-    /* §7.2.2's `location` — the LOCATION OBJECT OF THE ACTIVE DOCUMENT, and the first thing a page does with a
-       popup it just opened. It was missing entirely, so `w.location.pathname` read a property of undefined: 63
-       subtests in html/browsers failed on that one line, all of them after §7.4 started running popups.
-       IT IS ON §7.2.1's CROSS-ORIGIN LIST, which is what makes it different from `document` — the PROPERTY
-       is reachable across origins even though almost every member of the object it returns is not, because
-       `otherW.location.href = url` is how one document navigates another. This engine has no cross-origin
-       Location object to hand back, so that arm names itself rather than answering with this document's. */
+    /* §7.2.2's `location`: the active document's Location object, the first thing a page does with a popup it
+       just opened. Unlike `document` it is on §7.2.1's cross-origin list: the property is reachable across
+       origins though almost every member of the object it returns is not, because `otherW.location.href = url` is
+       how one document navigates another. Its cross-origin arm hands back core/frame/remote_location.h's filtered
+       Location for a document another instance holds. */
     WP_LOCATION,
     WP_MEMBER_N
 };
@@ -2089,29 +1837,24 @@ static const char *const PROXY_MEMBER[WP_MEMBER_N] = {
     "window", "self", "frames", "globalThis", "parent", "top", "opener", "closed", "name", "length",
     "document", "location"
 };
-/* §7.2.1's CROSS-ORIGIN PROPERTY NAMES — the fixed list a WindowProxy exposes whatever the origins are:
-   window, self, location, close, closed, focus, blur, frames, length, top, opener, parent, postMessage.
-   Everything else is same-origin ONLY, and reaching it across origins is a SecurityError.
- *
- * THE LIST IS DECLARED BESIDE THE MEMBERS rather than checked at each read, because the failure mode of the
- * alternative is silence: this surface had NO check at all, and it was safe only by the accident that the
- * members installed so far happen to be nearly the whole allowlist. The first member added without one —
- * `document`, `location`'s same-origin half, anything reached through them — would have leaked a cross-origin
- * document with nothing to say so. A member declared here cannot be added without answering the question. */
+/* §7.2.1's cross-origin property names, the fixed list a WindowProxy exposes whatever the origins: window, self,
+   location, close, closed, focus, blur, frames, length, top, opener, parent, postMessage. Everything else is
+   same-origin only, and reaching it across origins is a SecurityError.
+   The flags are declared beside the members rather than checked at each read, so a member cannot be added
+   without answering the question; a missing check would leak a cross-origin document with nothing to say so. */
 static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
     true,  /* window     */ true,  /* self       */ true,  /* frames     */
-    false, /* globalThis — the global OBJECT, and §7.2.1 does not list it */
+    false, /* globalThis: the global object, and §7.2.1 does not list it */
     true,  /* parent     */ true,  /* top        */ true,  /* opener     */
     true,  /* closed     */
-    false, /* name — a browsing context's name is NOT on the list; a cross-origin read of it is a SecurityError */
+    false, /* name: a browsing context's name is not on the list; a cross-origin read of it is a SecurityError */
     true,  /* length     */
-    false, /* document — §7.2.1 does not list it, so a cross-origin read is a SecurityError */
-    true,  /* location — §7.2.1 DOES list it; the filtering is the Location object's own, not this table's */
+    false, /* document: §7.2.1 does not list it, so a cross-origin read is a SecurityError */
+    true,  /* location: §7.2.1 lists it; the filtering is the Location object's own, not this table's */
 };
 
-/* §7.2.1: a read the origins do not permit is a SecurityError, and it is thrown at the READ rather than
-   answered with undefined — a page distinguishes the two, and undefined would say "this window has no such
-   member" about one it cannot see. */
+/* §7.2.1: a read the origins do not permit is a SecurityError thrown at the read, not undefined: a page
+   distinguishes the two, and undefined would say "this window has no such member" about one it cannot see. */
 static bool proxy_read_permitted(const ProxyData *p, int magic)
 {
     if (PROXY_CROSS_ORIGIN[magic])
@@ -2119,50 +1862,34 @@ static bool proxy_read_permitted(const ProxyData *p, int magic)
     return proxy_same_origin(p);
 }
 
-/* ---- §7.2.3.5's CROSS-ORIGIN BRANCH — the half of the filter that has no member to hang off ---------------
+/* ---- §7.2.3.5's cross-origin branch: the half of the filter that has no member to hang off ---------------
  *
- * THE TABLE ABOVE ANSWERS A DIFFERENT QUESTION FROM THIS ONE, and that is why both exist rather than one being
- * a copy of the other. `PROXY_CROSS_ORIGIN` is indexed by MEMBER MAGIC: it answers "may this INSTALLED accessor
- * be read across origins", and it is consulted from inside the accessor, which means it is only ever asked
- * about a name this component installed. Every other name — `alert`, `document.cookie`'s owner, anything a page
- * probes for — reaches no accessor at all, walks off the end of the prototype chain, and answers `undefined`.
+ * The table above answers a different question. `PROXY_CROSS_ORIGIN` is indexed by member magic and answers "may
+ * this installed accessor be read across origins", consulted from inside the accessor, so it is only asked about
+ * a name this component installed. Every other name (`alert`, anything a page probes for) reaches no accessor,
+ * walks off the end of the prototype chain and answers `undefined`, the one answer §7.2.1.3.2 forbids: its last
+ * step is "throw a SecurityError DOMException". A page distinguishes the two (`undefined` says the window has no
+ * such member, a fact about the peer's document; the SecurityError says "you may not look"), and a
+ * `try`/`catch` around the read is how a page feature-detects a cross-origin window.
  *
- * AND `undefined` IS THE ONE ANSWER §7.2.1.3.2 FORBIDS. Its last step is "throw a SecurityError DOMException",
- * and a page distinguishes the two: `undefined` says "that window has no such member", which is a fact about
- * the peer's document, while the SecurityError says "you may not look" — a `try`/`catch` around the read is how
- * a page feature-detects a cross-origin window at all. So the surface was not merely incomplete, it was
- * answering a security question with a datum, and it was silent by exactly the mechanism §CLAUDE.md's
- * defaulted-field rule names: the wrong value is a plausible one.
- *
- * SO THE LIST IS THE STANDARD'S OWN, AND IT IS NOT THE MEMBER TABLE. §7.2.1.3.1 names THIRTEEN cross-origin
- * accessible window property names, and four of them (`close`, `focus`, `blur`, `postMessage`) are not members
- * of the table above: `close` is installed as a method by this component, `postMessage` by window_message.c,
- * and `focus`/`blur` by core/html/focus.c, which owns §6.6.6's steps and installs its two Window members onto
- * BOTH §7.2.2's global and this surface from one list. The two tables are tied to each other by an assert at
- * capture rather than by a reader keeping them in step.
- *
- * THE THIRTEEN ARE ANSWERED FROM TWO ENDS AND BOTH ENDS ARE ASSERTED, WHICH TOOK TWO SEPARATE CORRECTIONS OF
- * THIS PARAGRAPH TO REACH — the shape is worth more than the incident. It first claimed `focus`/`blur` were
- * "honestly ABSENT", which was false about the Window; corrected, it then said a listed name is answered "by
- * whatever owns it, INCLUDING nothing", which reads as a design allowance and is not one: `undefined` at the
- * end of the prototype chain is the exact answer §7.2.1.3.2 CrossOriginPropertyFallback's last step rules out,
- * and it is what `otherW.focus` returned while both sentences stood. A claim about which surface owns what is
- * therefore not prose here — it is a loop, in proxy_get_own's steps 4-6, over this list.
- *
- * IT IS DECLARED HERE AND ASKED ONCE, at the object's own [[GetOwnProperty]], because that is where §7.2.3.5
- * puts it — before the prototype walk, so a name outside the list never reaches a member at all. Asking it
- * per-member is what produced the silence above. */
-/* AND EACH ENTRY IS A RECORD, NOT A NAME — §7.2.1.3.1 returns « { [[Property]]: "window", [[NeedsGetter]]:
- * true, [[NeedsSetter]]: false }, … » and the two flags are half of what each entry says. A name-only list
- * answers §7.2.3.5's question (does this name reach a member at all) and CANNOT answer §7.2.1.1's (is this
- * ACCESS to that name permitted), which is decided by `type` against those very flags: `location` is on the
- * list with BOTH flags so its getter and its setter both go through, while Location's `href` is on the list
- * with [[NeedsGetter]] FALSE so its SETTER goes through and its getter is a SecurityError. Two lists — one of
- * names here and one of flags wherever the second question was asked — is the second copy this file's own
- * capture-time loop exists to make impossible, so the flags live on the one list. */
-/* §7.2.1.3.1's Window arm VERBATIM, in the standard's own order. An entry written with neither flag is one
-   the standard writes as `{ [[Property]]: "close" }` — an OPERATION, which §7.2.1.1's "type is method and e
-   has neither [[NeedsGetter]] nor [[NeedsSetter]]" is exactly the test for. */
+ * So the list is the standard's own and not the member table. §7.2.1.3.1 names thirteen cross-origin accessible
+ * window property names, and four (`close`, `focus`, `blur`, `postMessage`) are not in the table above: `close`
+ * is a method of this component, `postMessage` is window_message.c's, and `focus`/`blur` are core/html/focus.c's,
+ * which owns §6.6.6's steps and installs them onto both §7.2.2's global and this surface from one list. An
+ * assert at capture ties the two tables together. */
+/* Every listed name is answered by an owner, and a listed name with none would fall off the prototype chain to
+ * `undefined`, which CrossOriginPropertyFallback's last step rules out; so which surface owns what is a loop, in
+ * proxy_get_own's steps 4-6, over this list. The list is asked once, at the object's own [[GetOwnProperty]],
+ * because §7.2.3.5 puts it there, before the prototype walk, so a name outside it never reaches a member. */
+/* Each entry is a record, not a name: §7.2.1.3.1 returns « { [[Property]]: "window", [[NeedsGetter]]: true,
+ * [[NeedsSetter]]: false }, … », and the flags are half of what each entry says. A name-only list answers
+ * §7.2.3.5's question (does this name reach a member) and cannot answer §7.2.1.1's (is this access to that name
+ * permitted), which is decided by `type` against the flags: `location` is on the list with both flags, so its
+ * getter and setter both go through, while Location's `href` has [[NeedsGetter]] false, so its setter goes
+ * through and its getter is a SecurityError. The flags live on the one list rather than in a second. */
+/* §7.2.1.3.1's Window arm verbatim, in the standard's order. An entry with neither flag is one the standard
+   writes as `{ [[Property]]: "close" }`, an operation, which §7.2.1.1's "type is method and e has neither
+   [[NeedsGetter]] nor [[NeedsSetter]]" tests for. */
 static const CrossOriginProperty CROSS_ORIGIN[] = {
     { "window",      true,  false },
     { "self",        true,  false },
@@ -2180,39 +1907,28 @@ static const CrossOriginProperty CROSS_ORIGIN[] = {
 };
 #define CROSS_ORIGIN_NAME_N ((int)(sizeof CROSS_ORIGIN / sizeof CROSS_ORIGIN[0]))
 static JSAtom g_xo_atom[CROSS_ORIGIN_NAME_N];
-/* §7.2.1.3.2 step 1's FOUR NAMES, which are the exception to the throw: `then` (so a cross-origin WindowProxy
-   is not mistaken for a thenable and awaited), and the three well-known symbols an engine touches while doing
-   something else entirely. They answer `undefined` as a real property descriptor rather than by falling off the
-   chain, because §7.2.3.10 lists them among the own keys. */
+/* §7.2.1.3.2 step 1's four names, the exception to the throw: `then` (so a cross-origin WindowProxy is not
+   mistaken for a thenable and awaited) and the three well-known symbols an engine touches while doing something
+   else. They answer `undefined` as a real property descriptor rather than by falling off the chain, because
+   §7.2.3.10 lists them among the own keys. */
 #define XO_FALLBACK_N 4
 static JSAtom g_xo_fallback[XO_FALLBACK_N];
-/* §7.2.1.3.4's getters for the entries above, ONE ARRAY PER REALM — see window_proxy.h. The array is indexed
-   by the CROSS_ORIGIN row, so the standard's own list is what says which slot is which and there is no second
-   ordering to keep in step. `-1` AND NOT 0, AND THE REASON IS NO LONGER THE ONE WRITTEN HERE: this said
-   "realm_value_set's own assert is `slot > 0`", and that entry now asks the RUNTIME whether the class was
-   minted instead, which refuses `0` and `-1` alike. What still picks `-1` is core/agent_state.c's own
-   realm-slot entry, whose `*slot > 0` is what a row declared above its assignment fires on. The reason is
-   rewritten rather than deleted because a reader who re-derives the old one will conclude the sentinel is
-   free to move while that assert still reads the sign. */
+/* §7.2.1.3.4's getters for the entries above, one array per realm (see window_proxy.h), indexed by the
+   CROSS_ORIGIN row so the standard's own list says which slot is which. JS_INVALID_CLASS_ID until
+   window_proxy_init declares the slot. */
 static JSClassID g_xo_getter_slot = JS_INVALID_CLASS_ID;
 
-/* §7.2.1.3.1 CrossOriginProperties ( O )'s WINDOW ARM, ASKED BY NAME — the one list answering one more caller.
- *
- * IT IS EXPORTED BECAUSE THE OTHER END OF THE CROSS-INSTANCE SEAM HAD NO WAY TO ASK IT. Everything above
- * decides what THIS agent hands out for a name a page wrote, and the asking half of a cross-document read is
- * correct by construction — it can only emit `PROXY_MEMBER[magic]`, an index into a fixed table. The
- * PERFORMING half receives that member as TEXT from another instance, through a routing zone whose whole
- * contract is that it does not read what it routes, and SECURITY.md makes every WASM instance untrusted. So
- * the name a peer performs `globalThis[name]` for is the one place on this seam where an unlisted member
- * would be read across origins and relayed, and until this entry existed there was nothing there to ask.
- *
- * IT IS A LOOKUP AND NOT A PREDICATE because the caller needs the RECORD: §7.2.1.3.1 writes each entry with
- * its [[NeedsGetter]] and [[NeedsSetter]], and a `bool` here would be the second copy this file's own
- * capture-time loop exists to make impossible — the flags would then have to be re-derived wherever the
- * second question is asked. NULL for a name the standard does not list, which is the caller's to crash on:
- * what a refusal MEANS differs by end (a page gets §7.2.1.3.2's SecurityError; a peer performing a record
- * gets an abort, because a record naming an unlisted member was written by something that is not this
- * engine's asking half). Side-effect-free, and the list is static, so it is answerable with no realm. */
+/* §7.2.1.3.1 CrossOriginProperties ( O )'s Window arm, asked by name: the one list answering one more caller.
+ * Exported for the other end of the cross-instance seam. The asking half of a cross-document read can only emit
+ * `PROXY_MEMBER[magic]`, an index into a fixed table; the performing half receives that member as text from
+ * another instance, through a routing zone that does not read what it routes, and SECURITY.md makes every WASM
+ * instance untrusted. So the name a peer performs `globalThis[name]` for is where an unlisted member would be
+ * read across origins and relayed, and this entry is what it asks.
+ * A lookup, not a predicate, because the caller needs the record: each entry carries [[NeedsGetter]] and
+ * [[NeedsSetter]], and a `bool` would force the flags to be re-derived wherever the second question is asked.
+ * NULL for a name the standard does not list, which the caller crashes on: a page gets §7.2.1.3.2's
+ * SecurityError, a peer performing a record gets an abort, because a record naming an unlisted member was not
+ * written by this engine's asking half. Side-effect-free over a static list, so it needs no realm. */
 const CrossOriginProperty *window_proxy_cross_origin_property(const char *name)
 {
     int i;
@@ -2226,10 +1942,10 @@ const CrossOriginProperty *window_proxy_cross_origin_property(const char *name)
     return NULL;
 }
 
-/* CAPTURED ONCE PER AGENT, from THIS realm's %Symbol%, before any page script runs — the same rule and the same
-   reason as remote_object.c's well-known table: `Symbol` is a global a page may replace, and a well-known
-   symbol resolved after that names whatever the page put there. Atoms are the RUNTIME's, and an agent is one
-   runtime, so one capture serves every realm this agent builds. */
+/* Captured once per agent, from this realm's %Symbol%, before any page script runs, as remote_object.c's
+   well-known table is: `Symbol` is a global a page may replace, and a well-known symbol resolved after that
+   names whatever the page put there. Atoms are the runtime's and an agent is one runtime, so one capture serves
+   every realm. */
 static void proxy_capture_names(JSContext *ctx)
 {
     static const char *const FALLBACK_SYM[XO_FALLBACK_N - 1] = { "toStringTag", "hasInstance",
@@ -2253,9 +1969,9 @@ static void proxy_capture_names(JSContext *ctx)
           "window proxy: this realm has no %Symbol% — §7.2.1.3.2's fallback is three well-known symbols, and a "
           "realm without the intrinsic can recognise none of them");
     for (i = 0; i < XO_FALLBACK_N - 1; i++) {
-        /* A DATA PROPERTY of %Symbol% (6.1.5 makes every well-known symbol one, non-writable and
-           non-configurable), so this read runs none of the page's code — which it must not, since it runs from
-           C with no flow base under it. */
+        /* A data property of %Symbol% (ECMAScript 6.1.5 makes every well-known symbol one, non-writable and
+           non-configurable), so this read runs none of the page's code, which it must not: it runs from C with no
+           flow base under it. */
         JSValue s = JS_GetPropertyStr(ctx, sym_ctor, FALLBACK_SYM[i]);
         CHECK(JS_IsSymbol(s), "window proxy: %Symbol% carries no well-known symbol under one of the three names "
                               "§7.2.1.3.2's fallback is defined over");
@@ -2265,10 +1981,10 @@ static void proxy_capture_names(JSContext *ctx)
     }
     JS_FreeValue(ctx, sym_ctor);
 
-    /* THE TWO TABLES ARE ONE FACT AND ARE CHECKED AGAINST EACH OTHER. A member marked cross-origin-readable
-       whose NAME is not on §7.2.1.3.1's list would be permitted by its own accessor and never reached, because
-       [[GetOwnProperty]] throws before the prototype walk; a member marked same-origin-only whose name IS on
-       the list would be reached and then refuse. Both are silent, and neither can survive this loop. */
+    /* The two tables are one fact, checked against each other. A member marked cross-origin-readable whose name
+       is not on §7.2.1.3.1's list would be permitted by its accessor and never reached, because [[GetOwnProperty]]
+       throws before the prototype walk; a member marked same-origin-only whose name is on the list would be
+       reached and then refuse. Both would be silent. */
     for (i = 0; i < WP_MEMBER_N; i++) {
         bool listed = false;
         int k;
@@ -2281,15 +1997,13 @@ static void proxy_capture_names(JSContext *ctx)
                "(§7.2.3.5 throws before the prototype walk) and the flag decides what the member then answers, "
                "so a disagreement is either a member that can never be read across origins however it is "
                "marked, or one that is reached and then refuses — both of them silent");
-        /* AND THE ENTRY'S [[NeedsGetter]] AGREES WITH HOW THIS SURFACE SHIPS THE MEMBER. Every member of
-           the table above is a §7.2.2 ATTRIBUTE, installed here as an accessor, so a listed one whose
-           record says [[NeedsGetter]] false would be a name §7.2.3.5 steps 4-6 hand out and §7.2.1.1
-           Integration with IDL then refuses the getter of — a descriptor a page can read and an accessor
-           it cannot call, which is neither of the two answers the standard has. Location's `href` is the
-           entry that shape is real for, and it is real THERE because §7.2.4 The Location interface writes its
-           `href` for the SETTER alone; nothing on this surface is.
-           IT IS THE HALF THE LOOP ABOVE CANNOT SEE: that one pairs a NAME against the list, and the flags
-           are what the list says about the name once it is found. */
+        /* And the entry's [[NeedsGetter]] agrees with how this surface ships the member. Every member of the
+           table above is a §7.2.2 attribute installed as an accessor, so a listed one with [[NeedsGetter]] false
+           would be a name §7.2.3.5 steps 4-6 hand out and §7.2.1.1 "Integration with IDL" then refuses the
+           getter of: a descriptor a page can read and an accessor it cannot call. Location's `href` is where
+           that shape is real, because §7.2.4 "The Location interface" lists its `href` for the setter alone;
+           nothing on this surface is. The loop above pairs a name against the list; this checks what the list
+           says about the name. */
         DCHECKF(!listed || CROSS_ORIGIN[listed_at].needs_get,
                 "HTML §7.2.1.3.1 CrossOriginProperties lists `%s` with [[NeedsGetter]] FALSE while §7.2.3 The "
                 "WindowProxy exotic object's own surface installs it as an ACCESSOR — so §7.2.3.5 "
