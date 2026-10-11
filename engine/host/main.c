@@ -298,7 +298,7 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
        the ones a live parse captures, which makes §8.4.3 `document.write()` a lifecycle change (solver/dom_cow.h).
        Which parser runs is §7.4.5's arm, routed by core/loader/document_load.h, which asserts the HTML parser is
        unreachable for a type it does not serve; the CHECK_FAIL below is this host's release half of an unbuilt arm.
-       §13.2.4.5 scripting is enabled: the boot flow drives this document's scripts, and the navigable and realm
+       §13.2.4.5's scripting flag is set: the boot flow drives this document's scripts, and the navigable and realm
        come after this returns (core/html/html_parse.h says why the flag is a parameter). The parser is given the
        decode, never the response's bytes (§13.2.3.1 "Parsing with a known character encoding"), with the
        encoding beside it so the loader can refuse a caller that determined none. */
