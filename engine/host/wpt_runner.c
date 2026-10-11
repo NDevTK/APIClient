@@ -1117,32 +1117,27 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
 
     DCHECK(ctx != NULL, "a reply completed for a flow before this host had a realm to deliver it into — only "
                         "the pre-session loads run without one, and none of them is delivered");
-    /* A NETWORK ERROR HAS NO HEADER LIST. What is on the request at this point is whatever arrived before the
-       framing failed, and §2.2.5's network error is a response with none — handing a page half a header
-       section beside a null body would be two answers about one reply. */
+    /* A network error has no header list. What is on the request now is whatever arrived before the framing
+       failed, and §2.2.5's network error is a response with none; half a header section beside a null body would
+       be two answers about one reply. */
     if (r->failed) header_list_free(&r->hdrs);
-    /* WHERE THE FRAMING IS READ, WHICH IS WHERE IT MUST HAVE BEEN DETERMINED. A reader that did not reach
-       COMPLETE has not been told by RFC 9112 §6.3 Message Body Length where this body ends, so the octets
-       below are a PREFIX of one — and a prefix of a document parses. */
+    /* The framing must be determined where it is read. A reader that did not reach COMPLETE has not been told by
+       RFC 9112 §6.3 Message Body Length where this body ends, so the octets below are a prefix of one, and a
+       prefix of a document parses. */
     DCHECK(r->failed || r->msg == WPT_MSG_COMPLETE,
            "a corpus reply is being delivered by a reader that never reached the end of its message — §6.3 "
            "Message Body Length decides where a body ends and this one is a prefix, which parses as a short "
            "document rather than reporting anything");
     if (r->deliver == WPT_DELIVER_DOCUMENT) {
-        /* THE ANSWER IS `{url, body, headers}`: a navigated Document is created from THIS response, so
-           everything §7.5.1 reads off a header list belongs in it. The block is the same field-line form
-           qjs_init takes, serialized by the component that parses it so the two cannot disagree.
-           §2.2.5's BODY IS A BYTE SEQUENCE and this answer carries one as one — `JS_NewStringLen` would be
-           quickjs's own UTF-8 decode, run by the zone that FETCHED on bytes HTML's encoding sniffing has not
-           looked at yet.
-           `url` IS Fetch §2.2.6 "Responses"' RESPONSE URL — the last of its URL list — and it is the ADDRESS
-           THIS RUNNER REQUESTED because this runner serves the checked-out corpus and FOLLOWS NO REDIRECT,
-           which is the same statement wpt_reply_value above makes for the same reason. That is a positive fact
-           about this host's network and not a default: HTML §7.4.5 determines a navigation's origin over the
-           response's URL, so the field exists in order that a host which DOES follow redirects reports a
-           different string here, and this one reports the string that its own behaviour makes correct.
-           STATED EVEN FOR A FETCH THAT FAILED, where `body` is null: the URL that was asked for is a fact even
-           when the reply is not, and §7.4.5 still creates a Document for a navigable whose load did not load. */
+        /* The answer is `{url, body, headers}`: a navigated Document is created from this response, so everything
+           §7.5.1 reads off a header list belongs in it. The block is the field-line form qjs_init takes, serialized
+           by the component that parses it so the two cannot disagree. §2.2.5's body is a byte sequence and crosses
+           as one; `JS_NewStringLen` would run quickjs's UTF-8 decode on bytes HTML's encoding sniffing has not
+           seen. `url` is Fetch §2.2.6 "Responses"' response URL, the last of its URL list, which is the address
+           requested because this runner follows no redirect (as wpt_reply_value says). HTML §7.4.5 determines a
+           navigation's origin over it, so a host that follows redirects reports a different string. It is stated
+           even when the fetch failed and `body` is null: §7.4.5 still creates a Document for a load that did not
+           load. */
         JSValue v = JS_NewObject(ctx);
         char *field_lines = header_list_field_lines(&r->hdrs);
         DCHECK(r->url != NULL && *r->url,
@@ -1154,7 +1149,7 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
                           body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
         JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));
         free(field_lines);
-        /* THE HOST'S OWN ANSWER, so a NORMAL completion: this zone fetched bytes, it did not run a peer's
+        /* The host's own answer, so a normal completion: this zone fetched bytes rather than running a peer's
            program, and a load that did not load is `{body: null}` rather than a throw. */
         engine_host_answer(ctx, r->id, NULL, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
         JS_FreeValue(ctx, v);
@@ -1168,32 +1163,23 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
             filled = 1;
         } else {
             filled = engine_provide(ctx, r->method, r->mode, r->referrer_policy, r->referrer, r->url, reply);
-            /* THE CALLER'S HALF OF THE PROVIDE EDGE'S CONTRACT, WHICH THIS HOST DID NOT HAVE. engine_provide
-               tells "answered twice" apart from "answered for nobody" and asserts only the first, delegating
-               the second to the caller BY NAME — because only the caller holds the credit that can excuse it
-               (engine.h: "0 with nothing matched is the host's pairing being off (or a sale —
-               engine_take_paged_owed), and it is the CALLER that tells those apart"). main.c has that assert
-               and this runner did not, so an assert contract with a writer and no reader stood at the one
-               seam a conformance gate drives hardest.
-               WHAT IT WAS HIDING IS NOT SILENCE, WHICH IS WHY IT MATTERS MORE HERE THAN IT READS. A record
-               that no reply fills stays OUTSTANDING, so the join keeps listing it and wpt_issue_pending asks
-               for it again at the very next slice — wpt_request_asked dedups against requests IN FLIGHT and
-               this one has just been released. So an unmatched reply is a REQUEST LOOP at the corpus server,
-               and the loop's own `did = 1` keeps the frontier from ever reaching the stall whose DCHECK would
-               have named it. Two states, one symptom, and the flow that IS parked never resumes either way.
-               A SALE IS THE OTHER WAY `filled == 0` HAPPENS AND IT IS NOT A BUG: the engine sold the flow that
-               was waiting on this reply to the cold tier, and its recipe re-issues the request. The take
-               CONSUMES one such credit, so it is a side effect and cannot live in a DCHECK's condition — the
-               `if` runs in every build and only the message is dev-only, exactly as main.c's does. */
+            /* The caller's half of engine_provide's contract. It tells "answered twice" from "answered for nobody"
+               and asserts only the first; the second is the caller's, because only the caller holds the credit
+               that can excuse it (engine.h: "it is the CALLER that tells those apart"), as main.c does. An
+               unmatched reply is not silent: the record stays outstanding, the join keeps listing it, and
+               wpt_issue_pending asks again at the next slice (wpt_request_asked dedups only against requests in
+               flight), so it becomes a request loop whose progress keeps the frontier from the stall DCHECK.
+               A sale is the other way `filled == 0` happens and is not a bug: the engine sold the waiting flow to
+               the cold tier, and its recipe re-issues the request. The take consumes one credit, so it cannot live
+               in a DCHECK's condition; the `if` runs in every build and only the message is dev-only. */
             if (filled == 0 && !engine_take_paged_owed())
                 DFAILF("a corpus reply was provided for a request no flow is parked on and none was paged "
                        "out — the pair this runner fetched under is not the pair the frontier parked on, so "
                        "the flow that IS parked waits for the rest of the run and this address is re-issued "
                        "at every slice. request=%s %s %s %s %s", r->method, r->mode, r->referrer_policy,
                        r->referrer, r->url);
-            /* THE REQUEST RECORD THIS ANSWERED, released only now: it holds the body and headers that made
-               the question, and a second flow parking the same pair before the answer landed is the case its
-               own DCHECK is there to catch. */
+            /* The request record this answered, released only now: it holds the body and headers of the question,
+               and a second flow parking the same pair before the answer landed is what its DCHECK catches. */
             for (i = 0; i < g_owed_n; i++)
                 if (!strcmp(g_owed[i].url, r->url) && !strcmp(g_owed[i].method, r->method)) {
                     wpt_owed_forget(i);
@@ -1212,11 +1198,10 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
 static int wpt_children_booting_fds(struct pollfd *pfd, int *which);
 static int wpt_child_take_unasked(int which);
 
-/* THE HOST'S HALF OF ONE SLICE BOUNDARY: move every connection as far as it goes, deliver the requests that
+/* The host's half of one slice boundary: move every connection as far as it goes, deliver the requests that
    finished, take what a booting child document wrote (its notices, routed, and its `S`), and answer how many
-   registers and routed notices that filled.
-   `block` is asked ONLY where the frontier has nothing runnable and this host has nothing else to pay — see
-   the loop in main. It is an INFINITE poll and never a deadline: §NO BOUNDS. */
+   registers and routed notices that filled. `block` is asked only where the frontier has nothing runnable and
+   this host has nothing else to pay (see the loop in main). It is an infinite poll, never a deadline. */
 static int wpt_net_pump(JSContext *ctx, int block)
 {
     struct pollfd pfd[WPT_CONN_MAX + WPT_CHILD_MAX];
@@ -1227,9 +1212,8 @@ static int wpt_net_pump(JSContext *ctx, int block)
     for (i = 0; i < g_conn_n; i++) {
         WptRequest *r = g_conn[i].owner ? wpt_request_find(g_conn[i].owner) : NULL;
         pfd[nf].fd = g_conn[i].fd;
-        /* WHAT EACH CONNECTION IS WAITING FOR. An IDLE one is watched for READ because the only thing it can
-           produce is the hang-up §9.2 says to close on — never for WRITE, which is always ready and would
-           spin. */
+        /* What each connection waits for. An idle one is watched for read, because all it can produce is the
+           hang-up §9.2 says to close on; never for write, which is always ready and would spin. */
         pfd[nf].events = (short)(g_conn[i].connecting || (r && r->state == WPT_REQ_SEND) ? POLLOUT : POLLIN);
         pfd[nf].revents = 0;
         map[nf++] = g_conn[i].id;
@@ -1245,8 +1229,8 @@ static int wpt_net_pump(JSContext *ctx, int block)
         CHECK(rc >= 0 || errno == EINTR, "wpt: poll over the corpus connections failed");
         for (i = 0; i < nc; i++)
             if (pfd[nf + i].revents) delivered += wpt_child_take_unasked(which[i]);
-        /* BY ID, NOT BY INDEX: advancing one connection can release it (a hang-up, a §9.3.1 retry) and the
-           pool compacts, so the slot this row named may now hold a different connection entirely. */
+        /* By id, not by index: advancing one connection can release it (a hang-up, a §9.3.1 retry), and the pool
+           compacts, so a slot may now hold a different connection. */
         for (i = 0; i < nf; i++) {
             WptConn *c;
             if (!pfd[i].revents) continue;
@@ -1262,13 +1246,11 @@ static int wpt_net_pump(JSContext *ctx, int block)
     return delivered;
 }
 
-/* Perform one request and return its BODY, or NULL — THE ONE WAIT LEFT IN THIS FILE, and it is not the one
-   that was deleted. It is reachable only BEFORE the session exists: the document this process was started to
-   run, and the external scripts of it. There is no flow to park, no frontier to starve and nothing else this
-   thread could be doing, so waiting is the whole of the work. It is the SAME request machine as everything
-   above — one HTTP implementation, entered here in "wait for this one" mode rather than a second one kept
-   beside it. A non-2xx is a body like any other; a NULL body is what the delivery turns into `fetch`'s
-   TypeError, the same answer a real network error gives. */
+/* Perform one request and return its body, or NULL: the one wait in this file. It is reachable only before the
+   session exists, for the document this process was started to run and its external scripts, when there is no
+   flow to park, no frontier to starve and nothing else for this thread to do. It is the same request machine as
+   above, entered in "wait for this one" mode. A non-2xx is a body like any other; a NULL body is what the
+   delivery turns into `fetch`'s TypeError, the answer a real network error gives. */
 static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, HeaderList *phdrs)
 {
     uint64_t seq = wpt_request_begin(req, WPT_DELIVER_SYNC, 0);
@@ -1286,43 +1268,38 @@ static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, Heade
     *pstatus = r->failed ? 0 : r->status;
     *plen = r->failed ? 0 : r->body_n;
     body = r->failed ? NULL : r->body;
-    if (body) r->body = NULL;                      /* MOVED to the caller, which frees it */
+    if (body) r->body = NULL;                      /* moved to the caller, which frees it */
     if (phdrs && !r->failed) { *phdrs = r->hdrs; memset(&r->hdrs, 0, sizeof r->hdrs); }
     for (i = 0; i < g_inflight_n; i++) if (g_inflight[i].seq == seq) { wpt_request_release(i); break; }
     return body;
 }
 
-/* ISSUE EVERY REPLY THE FRONTIER IS PARKED ON — the host's half of one slice boundary, and it is the same
- * operation the extension's `qjs_pending`/`qjs_provide` pair performs: read what the flows are waiting for and
- * ASK for it. It does not wait, and that is the whole of the change: the answer arrives at wpt_net_pump, on
- * whichever later slice boundary the bytes land, exactly as the extension's reply arrives when its Promise
- * settles. Returns how many requests it started, which is progress this host made and therefore not a stall.
+/* Issue every request the frontier is parked on: the host's half of one slice boundary, the operation the
+ * extension's `qjs_pending`/`qjs_provide` pair performs. It does not wait; the answer arrives at wpt_net_pump on
+ * whichever later boundary the bytes land, as the extension's reply arrives when its Promise settles. Returns how
+ * many requests it started, which is progress and therefore not a stall.
  *
- * IT DOES NOT ENTER JS. The delivery used to be `JS_CallAsFlow(deliver, reply)` out of the host's own time —
- * a call root outside any scheduled flow, settling a promise whose reactions then belonged to whichever flow
- * happened to be switched in. Now the resolve capability rides the flow's OWN pending entry: engine_provide
- * lands the reply there, the flow's next step drains it, and the reaction is enqueued on the flow that issued
- * the request. That is the whole reason the park is the product's park.
+ * It does not enter JS. The resolve capability rides the flow's own pending entry: engine_provide lands the
+ * reply there, the flow's next step drains it, and the reaction is enqueued on the flow that issued the request.
  *
- * A LINE WITH NO RECORD IN THE TABLE IS A REQUEST THE ENGINE ISSUED FOR CODE — an external document script, an
- * injected <script src>, a dynamic `import()` — and its METHOD IS ON THE LINE like every other. It used to be
- * defaulted to "GET" here, which was true and was still the wrong shape: the engine states the method at each
- * of those parks (engine.c) and the join carries it, so nothing on this side has to know which kind of park a
- * line came from. What the missing record does mean is that there are no headers and no body to re-send. */
+ * A line with no record in the table is a request the engine issued for code (an external document script, an
+ * injected <script src>, a dynamic `import()`). Its method is on the line like every other, so nothing here needs
+ * to know which kind of park a line came from; the missing record means only that there are no headers and no
+ * body to re-send. */
 static int wpt_issue_pending(void)
 {
     char *list, *p;
     int issued = 0;
 
     if (!*engine_pending_fetches()) return 0;
-    /* THE LIST IS COPIED BEFORE IT IS WALKED: engine_pending_fetches answers out of one buffer it reuses. */
+    /* Copied before it is walked: engine_pending_fetches answers out of one buffer it reuses. */
     list = strdup(engine_pending_fetches());
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
         const char *referrer_policy, *referrer;
-        FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the RUNNER's own
+        FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the runner's own
                                      HTTP client requests and reach no park, so a zero is the named abort a
                                      future reader gets rather than a stack address it would compare bytes at */
         HeaderList none = { 0 };
@@ -1330,14 +1307,12 @@ static int wpt_issue_pending(void)
 
         if (!end) break;
         *end = 0;
-        /* SPLIT WHERE IT WAS JOINED, by the engine's own splitter — three hosts each finding the TAB for
-           themselves is three places for the grammar to drift.
-           THIS RUNNER ISSUES EVERY PARK WHATEVER IT SAYS ABOUT ITSELF, and that is a property of its network
-           rather than a policy it is skipping: it serves the CHECKED-OUT CORPUS off wptserve's own loopback
-           socket, so there is no third party to spend anything at and no session to spend. The consumer of
-           WHO ASKED and of WHAT THE REQUEST IS EVIDENCE OF is the zone that talks to the real web
-           (engine/trusted.mjs); what is owed here is the vocabulary assert, because a runner that read a field
-           it never checked would be the first to see the producer drift. */
+        /* Split by the engine's own splitter, so the grammar has one reader. This runner issues every park
+           whatever it says about itself, because it serves the checked-out corpus off wptserve's loopback socket:
+           there is no third party to spend anything at and no session to spend. Who asked and what the request is
+           evidence of are consumed by the zone that talks to the real web (engine/trusted.mjs); what is owed here
+           is the vocabulary assert, since a runner reading a field it never checked would see the producer drift
+           first. */
         engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
                              &mode, &referrer_policy, &referrer, &url);
         DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
@@ -1350,35 +1325,29 @@ static int wpt_issue_pending(void)
                !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_FORCED),
                "the pending join stated a provenance that is none of the three tokens engine.h declares");
-        /* …AND FETCH §2.2.5's CREDENTIALS MODE, ASSERTED THE SAME WAY AND THROUGH THE ONE MAPPING THAT OWNS
-           THE THREE WORDS (core/fetch/fetch.h). This runner's loopback corpus has no session to spend, so it
-           issues every park whatever the mode says — but the vocabulary is the producer's contract and this
-           is one of the two hosts that would see it drift first. `fetch_credentials_of_token` is fatal on a
-           word §2.2.5 does not define, so the call IS the assert. */
+        /* Fetch §2.2.5's credentials mode, asserted the same way through the one mapping that owns the three
+           words (core/fetch/fetch.h). `fetch_credentials_of_token` is fatal on a word §2.2.5 does not define, so
+           the call is the assert. */
         (void)fetch_credentials_of_token(credentials);
-        /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this host now visits the list at every slice rather
-           than once per answer — so without this the page's one `fetch` would become one REQUEST PER SLICE at
-           the server, which is a different question asked repeatedly rather than the one the flow parked on. */
+        /* An entry stays listed until it is answered and this host visits the list at every slice, so without
+           this the page's one `fetch` would become one request per slice at the server. */
         if (wpt_request_asked(method, mode, referrer_policy, referrer, url)) { p = end + 1; continue; }
         for (i = 0; i < g_owed_n; i++)
             if (!strcmp(g_owed[i].url, url) && !strcmp(g_owed[i].method, method)) { rec = i; break; }
         req.method = method;
         req.url = url;
-        /* THE DESTINATION THE LINE STATED, PUT BACK ON THE REQUEST IT BELONGS TO. This runner does no CORB —
-           it serves the checked-out corpus off wptserve's loopback socket, where there is no cross-origin data
-           body to keep out of a compiler — but the record it builds is core/fetch/fetch.h's request and a
-           field left unwritten in it is an uninitialised read waiting for the first consumer that grows one. */
+        /* The destination the line stated, put back on its request. This runner does no CORB (the loopback corpus
+           has no cross-origin data body to keep out of a compiler), but the record is core/fetch/fetch.h's request,
+           and a field left unwritten is an uninitialised read for the first consumer that grows one. */
         req.destination = destination;
-        /* …AND THE CREDENTIALS MODE THE LINE STATED, PUT BACK FOR THE DESTINATION'S REASON WORD FOR WORD:
-           this record is core/fetch/fetch.h's request, whose zero for this field is the unplaced not-a-value
-           that `fetch_owe` and `pending_park_request` both abort on, so leaving it is an uninitialised read
-           waiting for the first consumer that grows one. */
+        /* The credentials mode the line stated, for the same reason: its zero is the unplaced not-a-value that
+           `fetch_owe` and `pending_park_request` both abort on. */
         req.credentials = fetch_credentials_of_token(credentials);
-        /* …AND FETCH §2.2.5's MODE THE LINE STATED, which is part of the key the reply is delivered on. This
-           runner applies no CORS check (its loopback corpus is the test's own origin set); the mode is carried
-           so the delivery names the request the frontier parked on. */
+        /* Fetch §2.2.5's mode, part of the key the reply is delivered on. This runner applies no CORS check (its
+           loopback corpus is the test's own origin set); the mode is carried so the delivery names the request the
+           frontier parked on. */
         req.mode = fetch_mode_of_token(mode);
-        /* …AND THE REFERRER PAIR, the rest of the key, carried back for the mode's reason. */
+        /* The referrer pair, the rest of the key, carried for the mode's reason. */
         req.referrer_policy = referrer_policy;
         req.referrer = referrer;
         /* a listed line's URL is bytes: the engine's join lists no other address class */
@@ -1394,39 +1363,20 @@ static int wpt_issue_pending(void)
     return issued;
 }
 
-/* THE HOST'S HALF, pumped between resumes.
+/* ---- A second document is a second process ---------------------------------------------------------------
  *
- * NOTICES ARE ONE-WAY and are drained here. `navigable.create` announces a document the engine has already
- * named and already handed the page a WindowProxy for, so there is nothing to answer — the engine mints its own
- * child document names (world.h), which is what makes §4.8.5's insertion-step creation synchronous.
+ * Notices are one-way and are drained here: `navigable.create` announces a document the engine has already named
+ * and handed the page a WindowProxy for, so there is nothing to answer. The engine mints its own child document
+ * names (world.h), which makes §4.8.5's insertion-step creation synchronous.
  *
- * WHAT THIS RUNNER STILL OWES A CHILD DOCUMENT IS AN INSTANCE, and it cannot provide one: one document per
- * instance, and the components hold per-document singletons, so a second document cannot live in this process.
- * The consequence is exact rather than vague — a read that needs the child's ACTIVE DOCUMENT parks its flow and
- * the file times out, which is visible; a read that needs only the NAVIGABLE (self, parent, top, opener,
- * closed, name) is answered inside the creating instance and never reaches here at all.
+ * A navigable the engine announces this way is held by another instance (a same-origin child is a second realm
+ * in this agent, built by wpt_child_realm). Here that instance is a child process: the same binary, re-executed
+ * with the child's name, address, origin and policy, talking over a pipe. The transport is what has to be
+ * tested, because the cross-instance COW delta and the origin stamp ride it.
  *
- * SO THERE IS NO REQUEST LOOP. There was one, and every branch in it has been deleted rather than emptied: a
- * loop that walks the owed requests and answers none of them is not a place to add the missing capability, it
- * is a place to be tempted into guessing an answer — which is what "not created" was. An unanswered request
- * stays on the flow's register and is reported by qjs_host_requests to whoever can eventually route it. */
-/* ---- A SECOND DOCUMENT IS A SECOND PROCESS ---------------------------------------------------------------
- *
- * SECURITY.md says one WASM instance per DOCUMENT, and CLAUDE.md says a document may be remote REGARDLESS OF
- * ORIGIN and must never be co-located to dodge the transport. This runner is a process rather than a wasm
- * instance, so the faithful reading is: a child navigable is a child PROCESS — the same binary, re-executed
- * with the child's name, address, origin and policy, talking over a pipe.
- *
- * CO-LOCATING IT WOULD HAVE BEEN EASIER AND WRONG. Twenty components hold per-document singletons, so a second
- * document in this process is not merely awkward — it is a second `document`, a second element-wrapper table
- * and a second world registry sharing one set of statics. But that is not the reason: the reason is that the
- * transport is the thing that has to work. The cross-instance COW delta rides it, the origin stamp rides it,
- * and a design that answers a cross-document read without one has tested nothing about either.
- *
- * WHAT CROSSES IS TEXT, and that is the same constraint the real seam has: a live JSValue crosses neither a
- * process, nor a wasm instance, nor a session, nor a park. The answer carries its TYPE because `otherW.length`
- * is a number and a page compares it with `===` — an answer that arrived as the string "0" would satisfy a
- * loose check and prove only that bytes moved. */
+ * What crosses is text, the constraint of the real seam: a live JSValue crosses no process, wasm instance,
+ * session or park. An answer carries its type, because `otherW.length` is a number that a page compares with
+ * `===`, and the string "0" would satisfy only a loose check. */
 /* `at_rest` is whether the child has written the `S` that ends its boot round. */
 typedef struct { char *name; char *origin; int to, from; pid_t pid; int at_rest; } ChildDoc;
 static ChildDoc g_children[WPT_CHILD_MAX];
@@ -1442,47 +1392,28 @@ static ChildDoc *wpt_child_for(const char *name)
     return NULL;
 }
 
-/* §7.4/§4.8.5's create, from the host's side: provision an instance for a document the engine has already
-   named and already handed the page a WindowProxy for.
-   `csp` AND `csp_self_origin` ARE ONE ARGUMENT IN TWO SLOTS — HTML §7.1.7 "Policy containers"' clone of the
+/* §7.4/§4.8.5's create, from the host's side: provision an instance for a document the engine has already named
+   and handed the page a WindowProxy for. The policy arguments are facts the child process cannot derive.
+   `csp` and `csp_self_origin` are one argument in two slots: HTML §7.1.7 "Policy containers"' clone of the
    creator's container, whose CSP list CSP §2.2 "Policies" makes "a struct consisting of policies (a list of
-   policies) and a self-origin". The child process is handed both because neither half is derivable there:
-   §2.2.2 "Parse response's Content Security Policies" states a self-origin from OUTSIDE the policy bytes, and
-   the only origin a child could state for itself is its own address's — which is the wrong one for an
-   inherited list by construction (CSP §2.2's note: the self-origin exists for documents "that have inherited
-   their policy").
-   AND THE FOUR `coep*` SLOTS ARE THAT SAME CONTAINER'S §7.1.4 EMBEDDER POLICY ITEM, which crosses for exactly
-   the reason the two above do: §7.1.7's clone-a-policy-container sets the clone's embedder policy to a COPY of
-   the source's, so an item this process kept to itself is an inheritance the child would silently replace with
-   `unsafe-none`. The two VALUES cross as §7.1.4's own tokens — a command line is a record, and a record
-   carrying this enum's integers is a contract whose ends agree only by declaration order. */
-/* AND `parent` IS HTML §7.3.1.3 "Child navigables"' PARENT NAVIGABLE, in the identity form core/frame/
-   remote_object.h crosses one in. It is not part of the container above it — §7.1.7's container is five
-   policies and says nothing about a tree — and it is the one fact a child PROCESS could never recover: a
-   navigable "is a child navigable", "which means that its parent is non-null", and this process is the only
-   party that knows the navigable it is about to provision hangs off one of its own. `u` is that grammar's
-   undefined and is the positive statement that there is none, which is what §7.1.3.2's swap sends.
-   AND `container_policy` IS §7.3.1.3's CONTAINER OF THAT SAME NAVIGABLE — the element is in THIS process's
-   tree and the child cannot see it, so what it carries is what the element ANSWERED: Permissions Policy
-   §9.5's result, serialized. A `navigable.create` carries the creator's; §7.1.3.2's swap has no container at
-   all (§7.3.2.3 makes the new browsing context "with null, null, and group") and says so in that grammar's
-   own word.
-   AND `ancestor_origins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the
-   Document that child will build — a THIRD statement about the same navigable, because §3.1.3's steps read
-   three things a child process cannot reach: the parent Document's own recorded list, that Document's ORIGIN
-   RECORD, and the container element. The `parent` field names a navigable and carries no ancestry; the origin
-   record is precisely what a serialization drops (§7.1.1 decides an opaque origin by IDENTITY, and every
-   opaque origin serializes to `null`), which is why the steps run HERE and the answer travels. A
-   `navigable.create` carries the composed list; §7.1.3.2's swap provisions a TOP-LEVEL traversable, which has
-   no container document, so it states that grammar's "there are no ancestors".
-   AND `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s SET FOR THAT SAME NAVIGABLE, a FOURTH statement
-   about it and not an item of the container above — §7.1.7's container is five policies and a sandboxing flag
-   set is none of them, which is why §7.3.2.1 sets the two from different algorithms. §7.1.5 reads the embedder
-   ELEMENT's iframe sandboxing flag set and that element's node document's active set, both of which are in
-   THIS process, so the algorithm runs here and its answer crosses in that section's own flag names
-   (core/frame/sandboxing.h). A `navigable.create` carries the creating document's answer; §7.1.3.2's swap
-   provisions a top-level traversable, whose §7.1.5 set comes from a POPUP sandboxing flag set nothing filled,
-   and states that grammar's word for the empty set. */
+   policies) and a self-origin". §2.2.2 "Parse response's Content Security Policies" states a self-origin from
+   outside the policy bytes, and the child's own address is the wrong one for an inherited list (CSP §2.2's note:
+   the self-origin exists for documents "that have inherited their policy").
+   The four `coep*` slots are that container's §7.1.4 embedder policy item: §7.1.7's clone sets the clone's
+   embedder policy to a copy of the source's, so keeping it here would leave the child `unsafe-none`. The two
+   values cross as §7.1.4's own tokens, not as enum integers whose ends agree only by declaration order. */
+/* `parent` is HTML §7.3.1.3 "Child navigables"' parent navigable, in core/frame/remote_object.h's identity form,
+   and `u` (undefined) states that there is none, which §7.1.3.2's swap sends. `container_policy` is §7.3.1.3's
+   container's Permissions Policy §9.5 result, serialized, because the element is in this process's tree; the
+   swap has no container (§7.3.2.3: "with null, null, and group") and says so in that grammar's word.
+   `ancestor_origins` is HTML §3.1.3 "Ancestor origins"' internal ancestor origin objects list for the child's
+   Document. Its steps read the parent Document's list, that Document's origin record and the container element,
+   and a serialization drops the origin record (§7.1.1 decides an opaque origin by identity, and every opaque
+   origin serializes to `null`), so the steps run here. The swap provisions a top-level traversable and states
+   "there are no ancestors". `creation_sandbox_flags` is HTML §7.1.5 "Sandboxing"'s set for the navigable, read
+   off the embedder element's iframe sandboxing flag set and its node document's active set, crossing in
+   core/frame/sandboxing.h's flag names; the swap's set comes from a popup sandboxing flag set nothing filled and
+   states the empty set's word. None of these is an item of §7.1.7's container, which is five policies. */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
                             const char *csp_self_origin, const char *top_level_url,
                             const char *coep, const char *coep_endpoint,
@@ -1494,30 +1425,27 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
     int down[2], up[2];
     pid_t pid;
 
-    /* §7.1.4'S FOUR ITEMS ARE STATED BY EVERY CALLER, never defaulted here. The two callers ARE the two
-       operations: a `navigable.create` carries the creator's, and §7.1.3.2's SWAP has no creator at all and
-       so states §7.1.4's "a new embedder policy" in its own words. A `?:` here would make those one answer. */
+    /* §7.1.4's four items are stated by every caller, never defaulted here. The two callers are the two
+       operations: a `navigable.create` carries the creator's, and §7.1.3.2's swap has no creator and states
+       §7.1.4's "a new embedder policy". A `?:` here would make those one answer. */
     DCHECK(coep != NULL && coep_endpoint != NULL && coep_report_only != NULL &&
            coep_report_only_endpoint != NULL,
            "a child document was about to be provisioned with no §7.1.4 EMBEDDER POLICY for its §7.1.7 "
            "container — every container has one, so this is a caller that did not state which of the two "
            "answers applies (the creator's clone, or a new embedder policy where there is no creator)");
-    /* §7.3.1.3's PARENT IS STATED BY EVERY CALLER FOR THE SAME REASON, and it has no empty spelling either: a
-       navigable either has a parent or is a top-level traversable, and both are answers. */
+    /* §7.3.1.3's parent is stated by every caller for the same reason, and has no empty spelling: a navigable
+       either has a parent or is a top-level traversable, and both are answers. */
     DCHECK(parent != NULL && *parent,
            "a child document was about to be provisioned with no §7.3.1.3 PARENT NAVIGABLE — the section makes "
            "\"is a child navigable\" mean \"its parent is non-null\", so a process started without the field "
            "would root its document in a navigable that presents as a TOP-LEVEL TRAVERSABLE, and every "
            "algorithm that walks up out of it would find nothing rather than crash");
-    /* §3.1.3's LIST IS STATED BY EVERY CALLER FOR THAT SAME REASON, and it has no empty spelling either: a
-       Document either has ancestors or is at the top of its tree, and both are answers. */
+    /* §3.1.3's list likewise: a Document either has ancestors or is at the top of its tree. */
     DCHECK(ancestor_origins != NULL && *ancestor_origins,
            "a child document was about to be provisioned with no §3.1.3 ANCESTOR ORIGINS — the steps return an "
            "empty list for a Document with no container document and a composed one otherwise, so an absent "
            "field is a caller that did not state which applies, and the child would report itself top-level");
-    /* §7.1.5's SET IS STATED BY EVERY CALLER FOR THAT SAME REASON, and it has no empty spelling either: a
-       navigable either carries sandboxing flags or carries none, and the section's own word for the second is
-       what a top-level traversable sends. */
+    /* §7.1.5's set likewise: the section's word for "no flags" is what a top-level traversable sends. */
     DCHECK(creation_sandbox_flags != NULL && *creation_sandbox_flags,
            "a child document was about to be provisioned with no §7.1.5 CREATION SANDBOXING FLAG SET — the "
            "empty set is an ANSWER and has a word of its own, so an absent field is a caller that did not "
