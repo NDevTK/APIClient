@@ -350,40 +350,19 @@ function _provenanceOf(opts) {
         "network. State `observed`, `derived` or `forced` and mean it");
   return opts.provenance;
 }
-/* How the document holding this request was itself reached. `provenance` is a fact about this request and
-   this is a fact about the document it was made from, and the two are independent: a page reached by a route
-   only its bundle names makes its own `fetch()`es, which the engine correctly grades `observed`.
-   It is a second row, not a join into `provenance`, so a person can tell "this tool forced this request" from
-   "the page made this request in a document this tool chose to open". It is this zone's word, not the
-   engine's, because this zone performed the load before any instance existed. A CHECK for the provenance
-   reason; an absent value would make the observed arm's conjunction unsatisfiable, and the refusal would name
-   a row the caller never meant to answer. */
-function _docReachOf(opts) {
-  CHECK(typeof opts.docReach === "string" && _PROVENANCE_TYPES.indexOf(opts.docReach) >= 0,
-        "safeFetch was called without stating how the DOCUMENT this request was made from was itself " +
-        "reached: " + JSON.stringify(opts.docReach) + " — it is none of the three CLAUDE.md " +
-        "§A-REQUEST-CARRIES-THE-PROVENANCE declares. This file decides whether to FIRE from it beside the " +
-        "request's own grade, and the two are independent: a page this tool chose to open makes its own " +
-        "`fetch()`es, which the engine grades `observed` because the page really made them. A caller that " +
-        "states only the request's grade is describing half the act");
-  return opts.docReach;
-}
-/* How two reach grades compose, declared once because both hosts compose one: a child navigable of a page
-   this tool chose to open is itself such a page, so the composition is the weaker grade. The order is an
-   explicit map, not array positions, so a word added to the vocabulary cannot silently re-rank the others;
-   the CHECKs make an unranked word a crash rather than an `undefined` that compares false. */
-var _REACH_RANK = { observed: 0, derived: 1, forced: 2 };
-function safeFetchReachJoin(outer, own) {
-  CHECK(_PROVENANCE_TYPES.indexOf(outer) >= 0 && _PROVENANCE_TYPES.indexOf(own) >= 0,
-        "two reach grades were composed and one of them is not a word this file declares (" +
-        JSON.stringify(outer) + ", " + JSON.stringify(own) + ") — the composition is what stops a child " +
-        "document of a page this tool chose to open reading as a page the person navigated to, and a word " +
-        "with no rank would compose to `undefined` and be refused by whichever caller stated it");
-  CHECK(typeof _REACH_RANK[outer] === "number" && typeof _REACH_RANK[own] === "number",
-        "a reach grade this file declares carries no rank — the vocabulary and the ordering are two " +
-        "statements and this is where they are made to agree, because a word added to one and not the " +
-        "other composes to nothing while every caller reads it as a grade");
-  return _REACH_RANK[outer] >= _REACH_RANK[own] ? outer : own;
+/* The zone's record of the document holding this request (lib/document-record.js): its reach grade, drive
+   mark and witness mark, written once when the zone provisioned it and never by the engine. It is a floor under
+   the engine's per-request words: the `doc-reach` row reads its grade, a `page` request from a driven document
+   reads `actor=tool`, and one from a pinned document reads `witness=pinned`, whatever the engine's record
+   states. A CHECK for the provenance reason: an absent record would make the observed arm's conjunction
+   unsatisfiable and let a driven or pinned document's request read as the page's own. */
+function _docOf(opts) {
+  CHECK(docRecordIs(opts.doc),
+        "safeFetch was called without the zone's record of the DOCUMENT this request was made from: " +
+        JSON.stringify(opts.doc) + " — mint it with docRecord where the document was provisioned. " +
+        "It is the floor under the engine's own words, and a caller that states only the request's marks is " +
+        "describing half the act");
+  return opts.doc;
 }
 /* The witness mark the engine states beside the provenance: solver/engine.h's `pinned`/`unpinned`, from
    solver/flow.h's `path_pinned`, composed at the park for a request that parks and at the act
@@ -461,7 +440,7 @@ function _drivenOf(opts) {
    body reads, and the drift direction is safe: an option added to the body and not here aborts on its
    author's first call. */
 var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "mode", "provenance", "pinned", "driven",
-                          "docReach", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
+                          "doc", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
                           "identity", "signal", "onChunk"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
    words `fetch_credentials_token` writes on the pending line. Written here because this zone is the other
@@ -651,21 +630,23 @@ var _SIGNALS = [
      one gating row that can say so: it is a literal in trusted-zone source at every asker, while the grades
      beside it are words the attacker-controlled engine composes. A `page` request the engine states it minted
      inside a flow this tool drives (`driven`: a drive of uncalled code or a candidate run, see
-     `_drivenOf`) reads `tool`: the engine's word can only
-     narrow the row, never widen it. */
+     `_drivenOf`), or made from a document this zone recorded as reached by one (`_docOf`), reads `tool`:
+     either word can only narrow the row, never widen it. */
   { name: "actor", gates: true, certainty: "certain", values: _ACTOR_WORDS,
-    of: function (f) { return f.actor === "page" && f.driven === "driven" ? "tool" : f.actor; } },
+    of: function (f) {
+      return f.actor === "page" && (f.driven === "driven" || f.doc.driven === "driven") ? "tool" : f.actor;
+    } },
   /* The request's provenance (see `_provenanceOf`). `stated`: the engine composes it at the park from the
      park's kind and the flow's `path_forced`, and the CHECK catches only a word outside the three. */
   { name: "provenance", gates: true, certainty: "stated", values: _PROVENANCE_TYPES,
     of: function (f) { return f.provenance; } },
-  /* How the document holding this request was reached (see `_docReachOf`): the same three words about a
+  /* How the document holding this request was reached (the grade of `_docOf`'s record): the same three words about a
      different act. A page this tool chose to open makes its own `fetch()`es, each `provenance=observed`, so
      this row is what stops one permission answering for both. It follows `provenance` so the one-level-out
      sentence comes next. `stated`: the zone that performed the load composes it, and the CHECK asserts only
      the vocabulary. */
   { name: "doc-reach", gates: true, certainty: "stated", values: _PROVENANCE_TYPES,
-    of: function (f) { return f.docReach; } },
+    of: function (f) { return f.doc.reach; } },
   /* Whether the person's cookie jar pays, and it means cookies and nothing wider: `credentials:"omit"` does
      not strip an `Authorization` header, authority in the address, or lineage, which is why those are their
      own rows. `certain`: `_credentialedOf` composes it from this zone's literal and an asserted mode, and it
@@ -682,9 +663,10 @@ var _SIGNALS = [
      observed before it built this address, so the address may carry a witness the engine picked. Composed at
      the park from `flow_path_pinned`, or at the act (`engine_pinned_of_running_path`) for a request the
      page's code made without parking. `unstated` is this zone's word for an act whose record carries no mark
-     (see `_pinnedOf`). */
+     (see `_pinnedOf`). A request from a document this zone recorded as reached on a pin reads `pinned`
+     whatever the engine states (`_docOf`). */
   { name: "witness", gates: true, certainty: "stated", values: _PINNED_MARKS,
-    of: function (f) { return f.pinned; } },
+    of: function (f) { return f.doc.pinned === "pinned" ? "pinned" : f.pinned; } },
   /* Authority in the address (see `_urlAuthorityMarker`). `partial`: `present` is a fact, and `unknown` is not
      the statement that there is none. */
   { name: "url-authority", gates: true, certainty: "partial", values: ["present", "unknown"],
@@ -781,7 +763,7 @@ function _requireFacts(facts) {
         "the signal vector was asked for with no facts — every signal is computed from them and a caller " +
         "that passed none would be answered by whichever arm each signal's predicate happens to reach first");
   CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
-        _PROVENANCE_TYPES.indexOf(facts.docReach) >= 0 &&
+        docRecordIs(facts.doc) &&
         _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
         _DRIVEN_MARKS.indexOf(facts.driven) >= 0 &&
         typeof facts.credentialed === "boolean" &&
@@ -1165,7 +1147,7 @@ function safeFetchFiringRefusal(facts) {
         "safeFetchFiringRefusal was asked without an absolute URL — the origin comparison is this file's to " +
         "make and a caller that parsed one for itself would be the second copy of that rule");
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
-                          provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
+                          provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
                           actor: facts.actor, driven: facts.driven,
                           credentialed: facts.credentialed, headers: facts.headers });
 }
@@ -1176,10 +1158,10 @@ function safeFetchSignalVector(facts) {
   CHECK(facts !== null && typeof facts === "object" && typeof facts.url === "string",
         "the signal vector was asked for without an absolute URL — `url-authority` is read off the parsed " +
         "address, so a caller with none would be shown a row about nothing");
-  /* Every fact is forwarded, `docReach` included; a field dropped here would compute outside its row's value
+  /* Every fact is forwarded, `doc` included; a field dropped here would compute outside its row's value
      space and render a row about nothing. */
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
-                         provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
+                         provenance: facts.provenance, pinned: facts.pinned, doc: facts.doc,
                          actor: facts.actor, driven: facts.driven,
                          credentialed: facts.credentialed, headers: facts.headers });
 }
@@ -1646,7 +1628,7 @@ async function _readBody(resp, sink, gated) {
    engine) is the SOP principal and every page request's origin. An opaque principal is same-origin with
    nothing. Credentialed callers are `bridge.js`'s `navigationLoad` and `frontierRederive`, only where
    `navigationCarriesSession` holds; the page's own requests (`fetched`, `fetchedXhr`) are uncredentialed.
-   Every caller states `destination`, `mode`, `provenance`, `pinned`, `docReach`, `actor`, `credentialed`
+   Every caller states `destination`, `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed`
    and `credentials`, asserted at the entry. */
 async function safeFetch(url, opts) {
   opts = opts || {};
@@ -1660,7 +1642,7 @@ async function safeFetch(url, opts) {
   var destination = _destinationOf(opts);
   var provenance = _provenanceOf(opts);
   var pinnedMark = _pinnedOf(opts);
-  var docReach = _docReachOf(opts);
+  var doc = _docOf(opts);
   var actor = _actorOf(opts);
   var driven = _drivenOf(opts);
   /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
@@ -1775,7 +1757,7 @@ async function safeFetch(url, opts) {
      the day the origin is widened, and the address is still reported. The reason names the signal and value
      that refused. */
   var _ptok = _firingRefusal({ url: parsed, destination: destination, provenance: provenance,
-                               pinned: pinnedMark, docReach: docReach, actor: actor, driven: driven,
+                               pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
                                credentialed: credentialed, headers: opts.headers });
   if (_ptok)
     return _refused("decline", "blocked-signal:" + _ptok, [parsed.href], {});
@@ -1922,7 +1904,7 @@ async function safeFetch(url, opts) {
      travel as one object, so a new signal is a key a caller omits and a CHECK names, never a shifted
      positional argument. */
   var _rptok = _firingRefusal({ url: _finalUrl, destination: destination, provenance: provenance,
-                                pinned: pinnedMark, docReach: docReach, actor: actor, driven: driven,
+                                pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
                                 credentialed: credentialed, headers: opts.headers });
   if (_rptok)
     return _refused("decline", "blocked-signal-redirect:" + _rptok,
@@ -2208,6 +2190,4 @@ if (typeof self !== "undefined") {
   self.safeFetchDefaultArms = safeFetchDefaultArms;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
-  /* The reach-grade ordering, exported so both hosts compose a child document's reach with one answer. */
-  self.safeFetchReachJoin = safeFetchReachJoin;
 }

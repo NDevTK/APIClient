@@ -193,7 +193,8 @@ const ZONE = (() => {
   createContext(sandbox);
   speakAsHost(sandbox);
   for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/safe-fetch.js'])
+                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/document-record.js',
+                   'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js did not install `safeFetch` — this zone loads that file ' +
@@ -219,13 +220,12 @@ const ZONE = (() => {
      `safeFetchWidenStated` took a list of origin strings, which this model reads as the shape the previous
      control persisted and refuses outright — so a zone assembled from a stale copy of that file fails on THIS
      line, loudly, rather than by silently stating nothing. */
-  /* `safeFetchReachJoin` IS ON THIS LIST FOR THE REASON THE TWO ABOVE IT ARE: it is the ORDERING of the
-     three grades, and this host composes one every time it provisions a child document. A zone that
-     obtained the chokepoint without it would compose `undefined` for every nested navigable — which the
-     chokepoint's own `_docReachOf` refuses, so the failure is loud; it is on the list so that it is loud
-     HERE, at assembly, rather than on the first child a run happens to reach. */
+  /* lib/document-record.js's writers are on this list for the reason the policy is: this host records every
+     document it provisions, and a zone assembled without them would hand the chokepoint no record, which
+     `_docOf` refuses on the first request rather than here at assembly. */
   for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal',
-                   'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'safeFetchReachJoin'])
+                   'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
+                   'docRecordArrival'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -233,6 +233,8 @@ const ZONE = (() => {
                       'grade while `--explore` authorized nothing');
   return sandbox;
 })();
+/* The record of a document a person named: the seed and the root it becomes. */
+const OBSERVED_DOC = ZONE.docRecord('observed', 'undriven', 'unpinned');
 
 /* EVERY FIELD OF EVERY REPLY, ASSERTED AND NEVER DEFAULTED — the same list `bridge.js` asserts at the same
    seam, because it is the same producer answering the same question and a second reader that checked less
@@ -514,7 +516,7 @@ async function main() {
   const seed = await ZONE.safeFetch(target, { pageUrl: target, destination: 'document', mode: 'navigate',
                                               provenance: 'observed', pinned: 'unpinned',
                                               actor: 'tool', driven: 'unstated',
-                                              docReach: 'observed', credentialed: false });
+                                              doc: OBSERVED_DOC, credentialed: false });
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
     throw new Error(`the chokepoint refused the seed: ${seed.statusText} — the document a session is rooted ` +
@@ -645,25 +647,26 @@ async function main() {
      it. Overstating it keeps a frontier alive until the session ends, which costs a process and truncates
      nothing. That is not a licence to guess high: it is why the rule is stated per arm with its reason, so
      the next arm has to answer the question rather than inherit an answer. */
-  /* engine.h's arrival word for a document: the reach grade, then the navigation's drive and witness marks. */
-  const arrivalWord = (reach, driven, pinned) => {
-    if (!['observed', 'derived', 'forced'].includes(reach) || !['driven', 'undriven'].includes(driven) ||
-        !['pinned', 'unpinned'].includes(pinned))
-      throw new Error(`an arrival was composed from \`${reach}\`, \`${driven}\` and \`${pinned}\` — the ` +
-                      'provisioning records carry a grade, a drive mark and a witness mark, each one word');
-    return `${reach},${driven},${pinned}`;
+  /* This zone's record of each document it provisioned (extension/lib/document-record.js): how the
+     navigation reached it, its drive mark and its witness mark, joined with the creating instance's record so
+     a document inherits every mark above it. Written once per document, here and nowhere else; a second
+     write is a refusal, because the record is the floor the chokepoint holds the engine's words to. */
+  const docRecords = new Map();
+  const recordDocument = (docId, doc) => {
+    if (docRecords.has(docId))
+      throw new Error(`the zone's record of ${docId} was written twice — it is written once, when the document ` +
+                      'is provisioned, and every request it makes is judged against it');
+    docRecords.set(docId, doc);
   };
-  async function provision({ docId, url, origin, headers, bytes, facts, referenced, docReach, arrival, group }) {
-    /* HOW THIS DOCUMENT WAS REACHED, STORED ON THE INSTANCE BECAUSE EVERY REQUEST IT EVER MAKES IS ASKED
-       ABOUT IT. It is composed by the caller — the JOIN of the issuing document's grade and the engine's
-       word for the navigation — and asserted HERE rather than at each of the request paths that read it,
-       because an instance provisioned without one would answer `undefined` to the chokepoint for the rest of
-       its life and the crash would land at whichever park happened to run first. */
-    if (!docReach)
-      throw new Error(`an instance was provisioned for ${url} without stating how that document was ` +
-                      'reached — every request it makes is judged against it beside the request\'s own ' +
-                      'grade, and the two are independent: a page this tool chose to open goes on making ' +
-                      'its own fetches, which the engine grades `observed` because the page really made them');
+  /* A document created by a navigation the instance `from` issued: its record is `from`'s joined with the
+     navigation's own words, so it can never be stronger than the instance that created it. */
+  const childDoc = (from, provenance, driven, pinned) =>
+    ZONE.docRecordJoin(from, ZONE.docRecord(provenance, driven, pinned));
+  async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, group }) {
+    /* The document's record, stored on the instance because every request it makes is judged against it.
+       Composed by the caller (childDoc, or the observed root's) and recorded here, so an instance is never
+       provisioned without one. */
+    recordDocument(docId, doc);
     if (referenced !== 0 && referenced !== 1)
       throw new Error(`an instance was provisioned for ${url} without stating whether a peer holds a ` +
                       'reference into its document — the flag decides whether its timelines may finish, so ' +
@@ -677,7 +680,7 @@ async function main() {
     const child = spawn(bin, paintDir === null ? ['--abi'] : ['--abi', '--paint-dir', paintDir],
                         { stdio: ['pipe', 'pipe', 'inherit'] });
     const e = {
-      docId, docUrl: url, origin, child, docReach, group, referenced,
+      docId, docUrl: url, origin, child, doc, group, referenced,
       /* Every document this instance holds: its root and each one joined into it (`join`). */
       docs: [docId],
       /* THE INSTANCE'S OWN NAME IN THIS ZONE'S NAMESPACE. A document NAME is stable by requirement (the
@@ -727,13 +730,10 @@ async function main() {
                     'this line — its stderr is this process\'s — and they are the diagnosis; this is the ' +
                     'pipe noticing afterwards.');
     });
-    /* The arrival rides last (solver/engine.h's engine_set_arrival): its grade is this document's reach, and the
-       navigation's drive and witness marks start every timeline, so what the document learns carries the fork. */
-    if (typeof arrival !== 'string' || !arrival.startsWith(`${docReach},`))
-      throw new Error(`an instance was provisioned for ${url} with the arrival \`${arrival}\` beside the reach ` +
-                      `\`${docReach}\` — the arrival's grade is the reach, composed by arrivalWord`);
+    /* The arrival rides last (solver/engine.h's engine_set_arrival) and is the record itself, so the marks every
+       timeline starts with and the floor this zone holds its requests to are one statement. */
     e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts,
-           String(referenced), arrival].join('\t'));
+           String(referenced), ZONE.docRecordArrival(doc)].join('\t'));
     instances.push(e);
     loops.push(drive(e));
     retryHeld();
@@ -800,15 +800,12 @@ async function main() {
   /* `driven` is the engine's drive mark for this navigation (`driven`/`undriven`, off the same record as
      `provenance`): the chokepoint's `actor` row reads it, so a drive's navigation is this tool's act. `pinned`
      is the witness mark off that record, which the navigation default reads.
-     `fromReach` IS HOW THE DOCUMENT ISSUING THIS NAVIGATION WAS ITSELF REACHED, AND IT IS A DIFFERENT FACT
-     FROM `provenance`. `provenance` is the ENGINE's word about this navigation act; `fromReach` is THIS
-     ZONE's word about a load it performed before the issuing document existed, and the chokepoint reads both.
-     A caller that forgets it composes `undefined`, which `_docReachOf` refuses with a fatal CHECK rather than
-     taking a permissive arm.
-     WHAT THE DOCUMENT THIS PRODUCES WILL BE REACHED UNDER IS NOT THIS VALUE — it is the JOIN of the two
-     (`safeFetchReachJoin`), composed by the caller at `provision`, because a child of a page this tool chose
-     to open is a page this tool chose to open however the engine graded the navigation that created it. */
-  async function navigate(url, fromDocUrl, what, provenance, driven, pinned, fromReach) {
+     `fromDoc` is this zone's record of the instance issuing this navigation, a different fact from
+     `provenance`: the engine's words describe this navigation act, and the record describes a load this zone
+     performed before the issuing document existed. The chokepoint reads both, and the record is the floor.
+     The document this produces is recorded under neither alone but under their join (childDoc), composed by
+     the caller at `provision`. */
+  async function navigate(url, fromDocUrl, what, provenance, driven, pinned, fromDoc) {
     const abs = new URL(url, fromDocUrl).href;
 
     /* THE PROVENANCE IS THE WHOLE DECISION AND IT IS STATED BY THE CALLER, never derived here, and one whose
@@ -855,7 +852,7 @@ async function main() {
        Stated on the hypothetical as well as on the load below, because a permission question answered from
        fewer facts than the real request states is a question about a different request. */
     const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination: 'document', provenance,
-                                                  pinned, docReach: fromReach, actor: 'page',
+                                                  pinned, doc: fromDoc, actor: 'page',
                                                   driven, credentialed: false, headers: null });
     if (refusal)
       return { declined: `${what} ${abs} — a DOCUMENT LOAD this origin's egress policy refuses on ` +
@@ -872,14 +869,14 @@ async function main() {
        section's own `document` row. Not script-like, so no CORB: an HTML parser is what reads these bytes. */
     /* AND THE RECORD'S WITNESS MARK — the same word the refusal ask above this call states, because a grade
        asked one way and a request made another way is the second copy of the rule. */
-    /* AND THE ISSUING DOCUMENT'S REACH GRADE, WHICH IS `fromReach` AND NOT THE JOIN — the question the
+    /* AND THE ISSUING DOCUMENT'S RECORD, WHICH IS `fromDoc` AND NOT THE JOIN — the question the
        chokepoint asks is about the document this request was made FROM, and for a navigation that is the
        document that initiated it. The join names the document this load will PRODUCE, which is a different
        document and is stated where that one is provisioned. Stating the join here would answer a permission
        question about a document that does not exist yet. */
     const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
                                                         mode: 'navigate',
-                                                        provenance, pinned, docReach: fromReach,
+                                                        provenance, pinned, doc: fromDoc,
                                                         actor: 'page', driven,
                                                         credentialed: false }),
                             `${what} ${abs}`);
@@ -918,7 +915,7 @@ async function main() {
     const abs = new URL(q.url, e.docUrl).href;
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination: '',
                                             mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
-                                            actor: 'page', docReach: e.docReach, credentialed: false,
+                                            actor: 'page', doc: e.doc, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined,
                                             identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
@@ -1041,7 +1038,7 @@ async function main() {
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination, mode,
                                             provenance, pinned, driven, credentials, useCorsPreflight: false,
                                             actor: 'page',
-                                            docReach: e.docReach, credentialed: false,
+                                            doc: e.doc, credentialed: false,
                                             identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
                                                                                credentials, mode,
                                                                                referrerPolicy, referrer) });
@@ -1069,7 +1066,7 @@ async function main() {
          passes and `headers: null` is what a park carries here. */
       const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
                                                     actor: 'page', driven,
-                                                    docReach: e.docReach, credentialed: false, headers: null });
+                                                    doc: e.doc, credentialed: false, headers: null });
       if (!refusal) {
         settle(declineRequest(method, mode, referrerPolicy, referrer, url,
                             `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
@@ -1247,7 +1244,7 @@ async function main() {
          mark whether its path chose one. The default fires the page's own `unpinned` child, as it fires the
          page's `fetch()`, and every other grade waits on `--explore`. */
       const loaded = await navigate(f[C.address], e.docUrl, `navigable.create ${f[C.child]}`, f[C.provenance],
-                                    f[C.driven], f[C.pinned], e.docReach);
+                                    f[C.driven], f[C.pinned], e.doc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
@@ -1256,16 +1253,15 @@ async function main() {
       /* A CLUSTER THAT ALREADY RUNS TAKES THE CHILD AS A SECOND DOCUMENT (`qjs_join`), because HTML puts every
          document of one origin-keyed agent cluster in one heap: A embeds cross-origin B and B embeds A, and the
          grandchild joins A's instance. The holder is referenced, since every instance of a group either was
-         provisioned for a peer's navigable or created one. The grade the holder judges requests under becomes
-         the weaker of its own and the joined document's.
-         The joined document's own requests carry its navigation's forced, drive and witness marks in their own
-         fields, because its timelines start with them (the arrival on the `join` line).
-         Named residual. Not covered: the `doc-reach` row is per instance, not per document, so the holder's own
-         requests read the joined document's reach too. Next diff builds: the reach keyed on the asking
-         document, which the bill would have to carry. Absence shows as: a holder's own request refused on
-         `doc-reach` at an origin whose table permits the holder's reach, after a forced-grade child joined it. */
+         provisioned for a peer's navigable or created one. The joined document is recorded under its own
+         record, and the holder's record, which its requests are judged against, becomes the join of the two.
+         Named residual. Not covered: the record a request is judged against is the instance's, not the asking
+         document's, so the holder's own requests read the joined document's marks too. Next diff builds: the
+         record keyed on the asking document, which the bill would have to carry. Absence shows as: a holder's
+         own request refused on `doc-reach`, `actor` or `witness` at an origin whose table permits the holder's
+         own record, after a child with a weaker record joined it. */
       const childOrigin = new URL(loaded.url).origin;
-      const reach = ZONE.safeFetchReachJoin(e.docReach, f[C.provenance]);
+      const doc = childDoc(e.doc, f[C.provenance], f[C.driven], f[C.pinned]);
       const holder = clusterOf(group, childOrigin);
       if (holder) {
         if (holder === e || holder.referenced !== 1)
@@ -1274,9 +1270,10 @@ async function main() {
                           'creator\'s heap' : 'holds no peer reference — every instance of a group was ' +
                           'provisioned for a peer\'s navigable or created one'}`);
         holder.docs.push(f[C.child]);
-        holder.docReach = ZONE.safeFetchReachJoin(holder.docReach, reach);
+        recordDocument(f[C.child], doc);
+        holder.doc = ZONE.docRecordJoin(holder.doc, doc);
         holder.ready.push(['join', loaded.url, f[C.child], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
-                           ...createFacts(f), arrivalWord(reach, f[C.driven], f[C.pinned])].join('\t'));
+                           ...createFacts(f), ZONE.docRecordArrival(doc)].join('\t'));
         retryHeld();
         flush();
         return;
@@ -1287,14 +1284,10 @@ async function main() {
          so this document's timelines may not run out before they do. */
       await provision({ docId: f[C.child], url: loaded.url, origin: childOrigin, group,
                         headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f),
-                        /* AND UNDER BOTH GRADES, WHICH IS WHAT `safeFetchReachJoin` IS FOR: this
-                           document exists because the creating one did, so it is reached under the weaker of
-                           the creating document's grade and the engine's word for the navigation. Taking the
-                           notice's word alone would let a child of a document this zone chose to open read
-                           as one the person navigated to, and every request that child makes would then be
-                           relayed by the default arm the grade exists to hold. */
-                        docReach: reach, arrival: arrivalWord(reach, f[C.driven], f[C.pinned]),
-                        referenced: 1 });
+                        /* Under the creating instance's record joined with the notice's words: taking the
+                           notice's alone would let a child of a document this zone chose to open read as one
+                           the person navigated to, or shed a mark the creator carries. */
+                        doc, referenced: 1 });
       return;
     }
     /* `navigable.swap <new document> <url> <origin> <provenance> <driven> <pinned>` — HTML §7.1.3.2 "Browsing context group switches due to
@@ -1315,7 +1308,7 @@ async function main() {
       /* AND IT IS THE SAME NAVIGATION'S WORD, which is what keeps a swap from being a door an address this
          zone declined at `document.fetch` could be fetched through one notice later. */
       const loaded = await navigate(f[P.address], e.docUrl, `navigable.swap ${f[P.document]}`, f[P.provenance],
-                                    f[P.driven], f[P.pinned], e.docReach);
+                                    f[P.driven], f[P.pinned], e.doc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE NAMED IT" IS THE WRONG READING. §7.1.3.2 step
          10's note says the old browsing context "will not be used by the new Document that we are about to
@@ -1325,15 +1318,8 @@ async function main() {
          open would park its last flow for a question no instance can ask. */
       await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
-                        /* AND UNDER BOTH GRADES, WHICH IS WHAT `safeFetchReachJoin` IS FOR: this
-                           document exists because the creating one did, so it is reached under the weaker of
-                           the creating document's grade and the engine's word for the navigation. Taking the
-                           notice's word alone would let a child of a document this zone chose to open read
-                           as one the person navigated to, and every request that child makes would then be
-                           relayed by the default arm the grade exists to hold. */
-                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]),
-                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]), f[P.driven],
-                                             f[P.pinned]),
+                        /* Under the creating instance's record joined with the notice's words (childDoc). */
+                        doc: childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]),
                         group: newGroup(), referenced: 0 });
       return;
     }
@@ -1352,13 +1338,11 @@ async function main() {
                         'load below is decided from the last three');
       if (holderOf(f[P.document])) return;
       const loaded = await navigate(f[P.address], e.docUrl, `navigable.navigate ${f[P.document]}`,
-                                    f[P.provenance], f[P.driven], f[P.pinned], e.docReach);
+                                    f[P.provenance], f[P.driven], f[P.pinned], e.doc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
-                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]),
-                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]), f[P.driven],
-                                             f[P.pinned]),
+                        doc: childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]),
                         group: e.group, referenced: 1 });
       return;
     }
@@ -1401,7 +1385,7 @@ async function main() {
       if (seededRoutes.has(seedAbs)) return;
       seededRoutes.add(seedAbs);
       const loaded = await navigate(seedAbs, e.docUrl, `document.seed ${seedAbs}`, f[2], f[3], f[4],
-                                    e.docReach);
+                                    e.doc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* A TOP-LEVEL TRAVERSABLE WITH NO CREATOR — nothing embedded this document and nothing opened it, so
          §7.1.7 has no container to clone, §7.3.1.3 gives it no parent and no container element, and §3.1.3's
@@ -1411,14 +1395,8 @@ async function main() {
          a route the bundle merely DECLARED — this zone named the document because no page ever held one. */
       await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
-                        /* AND UNDER BOTH GRADES, WHICH IS WHAT `safeFetchReachJoin` IS FOR: this
-                           document exists because the creating one did, so it is reached under the weaker of
-                           the creating document's grade and the engine's word for the navigation. Taking the
-                           notice's word alone would let a child of a document this zone chose to open read
-                           as one the person navigated to, and every request that child makes would then be
-                           relayed by the default arm the grade exists to hold. */
-                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[2]),
-                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[2]), f[3], f[4]),
+                        /* Under the declaring instance's record joined with the declaration's words. */
+                        doc: childDoc(e.doc, f[2], f[3], f[4]),
                         group: newGroup(), referenced: 0 });
       return;
     }
@@ -1754,7 +1732,7 @@ async function main() {
                             'fields on every path, the policy possibly empty, so this zone and that job no ' +
                             'longer share a grammar');
           const loaded = await navigate(args.slice(i + 1), e.docUrl, 'document.fetch', args.slice(0, t),
-                                        args.slice(t + 1, u), args.slice(u + 1, w), e.docReach);
+                                        args.slice(t + 1, u), args.slice(u + 1, w), e.doc);
           if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
              byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would
@@ -1851,8 +1829,7 @@ async function main() {
      tree beneath it. */
   const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
-                                 facts: topLevelFacts(docUrl), docReach: 'observed',
-                                 arrival: arrivalWord('observed', 'undriven', 'unpinned'), group: newGroup(),
+                                 facts: topLevelFacts(docUrl), doc: OBSERVED_DOC, group: newGroup(),
                                  referenced: 0 });
 
   /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its

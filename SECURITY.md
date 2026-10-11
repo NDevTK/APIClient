@@ -116,7 +116,7 @@ and the bridge relays each to `safeFetch`.
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
 | closed option set: an option `safeFetch` does not read (`method`, `body`, `as`, …) is refused, not dropped | `_refuseUnreadOptions` (DCHECK) | throws in dev; in release the option is dropped, which always lands on the GET this file sends |
-| facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docReachOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf` (CHECK) | throws in dev and release |
+| facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf` (CHECK) | throws in dev and release |
 | GET only: `init.method` is the literal `"GET"` | `safeFetch`; callers ask `safeFetchMethodRefusal` first | `blocked-method:<M>` |
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
 | no userinfo in the URL | `safeFetch` | `blocked-url-credentials` |
@@ -345,20 +345,33 @@ not. Nothing is refused at every setting.
 
 | Signal | Values | Reliability |
 |--------|--------|-------------|
-| `destination` | `program`, `subresource`, `navigation`, `value` | stated (engine) |
-| `actor` | `page`, `tool` | certain: a literal in trusted-zone source at every caller, narrowed to `tool` by the engine's drive mark |
+| `destination` | `program`, `subresource`, `value` | stated (engine) |
+| `actor` | `page`, `tool` | certain: a literal in trusted-zone source at every caller, narrowed to `tool` by the engine's drive mark or the document record's |
 | `provenance` | `observed`, `derived`, `forced` | stated (engine) |
-| `doc-reach` | `observed`, `derived`, `forced` | stated (the zone that loaded the document) |
+| `doc-reach` | `observed`, `derived`, `forced` | the zone's document record (`lib/document-record.js`) |
 | `cookies` | `yes`, `no` | certain |
 | `header-authority` | `none`, `unknown` | certain |
-| `witness` | `pinned`, `unpinned`, `unstated` | stated (engine) |
+| `witness` | `pinned`, `unpinned`, `unstated` | stated (engine), floored at `pinned` by the document record |
 | `url-authority` | `present`, `unknown` | partial: a miss is `unknown`, never "none" |
 | `lineage` | `unknown` | undetermined |
 | `method` (does not gate) | `GET` | certain |
 | `invalidity` (does not gate) | `unstated` | intent |
 
 `actor` is the one gating row the untrusted zone cannot reach; the `stated` rows are words the
-attacker-controlled engine composes and the chokepoint `CHECK`s only for vocabulary. A signal the chokepoint
+attacker-controlled engine composes and the chokepoint `CHECK`s only for vocabulary.
+
+Every request also carries the zone's record of the document it was made from (`lib/document-record.js`):
+the navigation's reach grade, its drive mark and its witness mark. The zone writes one per document when it
+provisions it, from the provisioning notice joined with the creating instance's record, so a document
+inherits every mark above it. A record is frozen, minted only by `docRecord`, and written once per document
+(a second write is a `CHECK` in the zone). `docRecordJoin`, the one function that derives a record from
+others, `CHECK`s that the result clears no mark and strengthens no reach, so nothing a document does relaxes
+what its navigation carried. The chokepoint reads the record as a floor under the engine's per-request words:
+`doc-reach` is its grade, a `page` request from a driven document reads `actor=tool`, and one from a pinned
+document reads `witness=pinned`, whatever the engine's record states. The engine's words can narrow these rows
+and never widen them, so an engine that states `undriven` or `unpinned` for a driven or pinned peer's requests
+does not launder them into the page's own. The record is the instance's today: an instance's record is the
+join of its documents' records (see the risk table). A signal the chokepoint
 cannot determine is shown as `unknown` rather than left out, because an absent row reads as a question that was
 answered. `_signalRegistryCheck` refuses a duplicate signal, an unknown reliability grade, a non-gating signal
 with more than one value, and a default arm naming a value the registry does not have.
@@ -528,7 +541,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Redirect to a less public host | `safeFetch` re-judges the landed host and refuses to ingest, but the hop that reached it was already sent | a walk judging each `Location` before it is followed, which needs the 3xx's `Location` that `redirect: "manual"` hides (see the row above) | a public host's 3xx onto an intranet address appearing in that host's logs |
 | Credential lineage | the chokepoint sees the credential state of the request in front of it and nothing about where the address came from | a `credentialed` bit on the response the engine ingests, carried into the concolic value's source identity and composed at the park beside the provenance word | every request at an origin reading `lineage=unknown`, including addresses the bundle built from a logged-in reply |
 | Authority in a path segment | `url-authority` matches capability-URL parameter names and the JWS prefix only; an opaque token in a path reads `unknown` | read the signal off the engine, whose park knows which source each segment came from | `url-authority=unknown` doing all the work at a widened origin whose addresses carry capability tokens |
-| Engine-stated signals | `destination`, `provenance` and `witness` are the engine's words, so an engine that states `observed` or `unpinned` falsely reaches the default arms. What fires is still an uncredentialed GET under every other gate | none in this design; `actor` is the row that does not rest on the engine | requests firing by default at an unwidened origin whose provenance the run's own log contradicts |
+| Engine-stated signals | `destination`, `provenance` and `witness` are the engine's words, so an engine that states `observed` or `unpinned` falsely for a request made on its own path reaches the default arms. A document's own drive and witness marks are not this case: the zone's record floors them. What fires is still an uncredentialed GET under every other gate | none in this design; `actor` and the document record are the parts that do not rest on the engine | requests firing by default at an unwidened origin whose provenance the run's own log contradicts |
 | The control is the safety | with nothing refused at every setting, a person who ticks a row without reading it permits its consequence | the surface stating each row's consequence and reliability (built); nothing removes the person's choice | a widened origin firing requests its owner did not expect |
 | Same-document probe-hit fabrication | `window.apiclientsink` lives in the delivered document's `MAIN` world, and every fact the hook could report about its caller comes from that world | irreducible by this mechanism | a fired verdict for a sink that never fired, on a page that reads its own address |
 | Hit attribution is not tied to the delivery witness | `_recordProbeHit` latches the first top-level document of the target origin to fire the marker; it does not require that document to be the one `_recordProbeDelivery` witnessed | compare `facts.documentId` against `ses.delivered.documentId` | an attributed hit whose `documentId` differs from the session's `delivered.documentId` |
@@ -539,7 +552,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Page requests are uncredentialed | `fetched` and `fetchedXhr` state `credentialed: false`, so the analysed page's own data requests see the logged-out reply. They already pass the page origin the credentialed SOP would need (`eng.origin`); the wrong origin would be `originOf(msg.sourceUrl)`, which gives a sandboxed iframe its embedder's | a per-origin credential decision over the request's own credentials mode | an app whose boot data differs by session analysed in its logged-out form |
 | A credentialed request cannot carry a header list | `_credentialedOf` `CHECK`s the combination, because nothing states whose header list it is | an ownership statement carried from the site that knows, as `provenance` is | that `CHECK` firing |
 | `same-origin` credentials mode where the zone is willing | `_credentialedOf` has no pre-request same-origin test, so it `CHECK_FAIL`s | the same-origin test on the request URL against `pageOrigin`, read before the wire | that `CHECK_FAIL` firing; every willing caller today states `include` |
-| A joined document is judged under its root's reach grade | `fetched` reads `msg.provenance` from the root's message, so a document joined through `engineJoin` is judged as its root was reached | the park's document name on the pending line, so the lookup is per document | at an origin widened for one grade, identical requests firing from a joined document and refused from a top-level one reached the same way |
+| A request is judged under its instance's document record | the pending line names no asking document, so `fetched`, `fetchedXhr` and trusted.mjs's relays read the instance's record, which is the join of every document it holds: a document joined through `engineJoin` or a `join` narrows its root's requests | the park's document name on the pending line, so the lookup is per document | at an origin whose table permits the root's own record, a root document's request refused on `doc-reach`, `actor` or `witness` after a document with a weaker record joined its instance |
 | An auxiliary opened without `noopener` | it shares its opener's group but lands in another tab, so `clusterKeyOf` splits the pair; `MessageSender` carries no opener | a browser-stated opener fact joined to the opener's group | an opener and its popup analysed in two instances |
 | Unused privileged primitives | the `tabs.remove` arm of `_swRpc` and the `readExecFlag`, `postMessage`, `seedStorage` and `dispatchEvents` injectors in `_PROBE_INJECTORS` have no caller; `scripting.exec` accepts any `tabId` and `allFrames`. Today they are reachable only by the offscreen (`OFFSCREEN_HREF` equality), so they are the blast radius of a hole in that gate | delete them; the `scripting` permission stays for `pocAttackerButton` | `git grep` finding the names in `background.js` and nowhere else |
 | Dev-build asserts on renderer-supplied input | `renderer-host.js`'s window handshake DCHECKs the frame's record. In dev a compromised renderer can make those handlers throw; in release a malformed reply reaches its consumers unvalidated | refuse a malformed record with the handshake's own error instead of asserting on it | a dev build throwing at those sites for a page's malformed reply |

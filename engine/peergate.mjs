@@ -234,7 +234,7 @@ function loadChokepoint(peerOrigin) {
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/safe-fetch.js'])
+  for (const f of ['check.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetch` — this gate asks that file whether ' +
@@ -508,7 +508,8 @@ async function main() {
                                           is built from a value this run computed, so no page's code is
                                           anywhere in the composition. */
                                        actor: 'tool', driven: 'unstated',
-                                       docReach: 'observed', credentialed: false });
+                                       doc: ZONE.docRecord('observed', 'undriven', 'unpinned'),
+                                       credentialed: false });
   if (!probe || typeof probe.status !== 'number')
     record('pna', 'missing', 'safeFetch returned no reply record at all');
   else if (probe.status === 0)
@@ -527,7 +528,7 @@ async function main() {
      trusted.mjs performs", and that file's `navigate` says twice that "an OBSERVED or DERIVED address is
      navigated freely ... and only a FORCED one waits on the per-origin widening". Asked of the real
      chokepoint with `navigate`'s own facts — `document`, `derived`, `pinned: 'unstated'`, `actor: 'page'`,
-     `docReach: 'observed'` — at an empty table the answer is REFUSED `destination=value`. No default arm
+     an observed document record — at an empty table the answer is REFUSED `destination=value`. No default arm
      carries it: the `provenance=observed` arm wants `observed`, and the `destination=value` arm wants
      `witness=unpinned` where a navigation composes no mark at all. Both sentences describe the
      single-switch control this model replaced, and the refusal message `navigate` itself writes has been

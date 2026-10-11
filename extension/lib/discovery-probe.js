@@ -189,7 +189,7 @@ function _chokepointGetFn(tab, who) {
          ran in it, which is the whole reason this function has a principal at all — so the context these
          addresses are derived in is the person's own act. The word beside it is about the ADDRESSES, which
          this sweep composed; the two are independent and the chokepoint reads both. */
-      docReach: "observed",
+      doc: docRecord("observed", "undriven", "unpinned"),
       /* `unstated`: the host comes from a reply's URL and the key from the keys this run learned, and neither
          list carries the engine's witness mark, so `unpinned` would be a claim nothing here can make. */
       pinned: "unstated",

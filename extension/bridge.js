@@ -1038,13 +1038,13 @@ function frontierPlace(e, when) {
 function frontierProvenance(e) {
   return e.provenance === undefined ? PROVENANCE_DERIVED : e.provenance;
 }
-/* engine.h's arrival word for a document: its reach grade, then the navigation's drive and witness marks. */
-function arrivalWord(reach, driven, pinned) {
-  DCHECK((reach === PROVENANCE_OBSERVED || reach === PROVENANCE_DERIVED || reach === PROVENANCE_FORCED) &&
-         (driven === DRIVEN_YES || driven === DRIVEN_NO) && (pinned === "pinned" || pinned === "unpinned"),
-         "an arrival was composed from `" + String(reach) + "`, `" + String(driven) + "` and `" + String(pinned) +
-         "` — the provisioning records carry a grade, a drive mark and a witness mark, each one word");
-  return reach + "," + driven + "," + pinned;
+/* A document created by a navigation the instance `eng` issued: the instance's record (lib/document-record.js)
+   joined with the navigation's own words, so the child inherits every mark above it and can never be stronger
+   than the instance that created it. */
+function childDocRecord(eng, provenance, driven, pinned) {
+  DCHECK(docRecordIs(eng.doc), "a child document was recorded under an instance with no record of its own — " +
+                               "engineRoot writes one before the instance can issue anything");
+  return docRecordJoin(eng.doc, docRecord(provenance, driven, pinned));
 }
 /* An entry's arrival. One written before the field states its grade and the strict marks: an `observed` entry is
    the ambient seed, which no drive or pin reached, and any other grade takes `driven` and `pinned`, the words
@@ -1052,8 +1052,8 @@ function arrivalWord(reach, driven, pinned) {
 function frontierArrival(e) {
   if (e.arrival !== undefined) return e.arrival;
   const reach = frontierProvenance(e);
-  return reach === PROVENANCE_OBSERVED ? arrivalWord(reach, DRIVEN_NO, "unpinned")
-                                       : arrivalWord(reach, DRIVEN_YES, "pinned");
+  return docRecordArrival(reach === PROVENANCE_OBSERVED ? docRecord(reach, DRIVEN_NO, "unpinned")
+                                                         : docRecord(reach, DRIVEN_YES, "pinned"));
 }
 function frontierDoc(e, when) {
   frontierPlace(e, when);
@@ -1431,8 +1431,8 @@ async function frontierRederive(e) {
   if (frontierRederivable(e)) {
     /* A document: Fetch §2.2.5 Requests' `document` destination ("HTML's navigate algorithm (top-level
        only)"), parsed by the engine's own parser. */
-    /* `provenance` and `docReach` are the entry's own parked word, since a re-derivation is the same load that
-       stored it; a different word would re-fetch under a permission nobody granted. `pinned` is `unstated`:
+    /* `provenance` and the document record are the entry's own parked words, since a re-derivation is the same
+       load that stored it; a different word would re-fetch under a permission nobody granted. `pinned` is `unstated`:
        the store parks no witness mark, and `unpinned` would be a false claim for a forced address whose flow
        pinned a witness. The mark only refines a refusal's sentence (`_firingRefusal` chooses between `forced`
        and `forced-witness`), never the decision. */
@@ -1446,7 +1446,7 @@ async function frontierRederive(e) {
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
                                                   destination: "document", mode: "navigate",
                                                   provenance: frontierProvenance(e),
-                                                  docReach: frontierProvenance(e),
+                                                  doc: docRecordOfArrival(frontierArrival(e)),
                                                   actor: "tool", driven: "unstated",
                                                   pinned: "unstated",
                                                   credentials: "include",
@@ -2098,10 +2098,10 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
    (`blocked-signal:`, `blocked-scheme:`, `blocked-local-network:`).
    Emptiness is not judged here: an OK zero-length body is an ordinary empty Document; refusing one is a seed's
    rule, stated at the seed. */
-/* `fromReach` is how the document issuing this navigation was itself reached, distinct from `provenance` (the
-   engine's word about this navigation act); safe-fetch.js reads both. It is trailing, and an omitted one is
-   `undefined`, which `_docReachOf` refuses with a fatal CHECK. The produced document's reach is the join of
-   the two (`safeFetchReachJoin`), composed by whoever states that document's analyze record. */
+/* `fromDoc` is this zone's record of the instance issuing this navigation (lib/document-record.js), distinct
+   from `provenance` (the engine's word about this navigation act); safe-fetch.js reads both, the record as a
+   floor. An omitted one is refused by `_docOf`. The produced document's record is the join of the two
+   (childDocRecord), composed by whoever states that document's analyze record. */
 /* What a caller of a §7.4 load does with a refusal, as a declared word rather than a boolean, because "holds a
    rendezvous" and "can carry a refusal" differ at the route seed:
      `rendezvous` — the engine is parked on a request id; the refusal is routed to it (engineDeliverDocument →
@@ -2116,7 +2116,7 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
    credential carries, or null when it has none, which loads without the session. */
-async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
+async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromDoc, refusalArm,
                               actor, driven, pinned, request, speakerOf) {
   DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
          (request.referrerPolicy === null || request.referrerPolicy === "" ||
@@ -2207,8 +2207,8 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
     /* `credentials: "include"` is the navigation's own credentials mode (HTML §7.4.5 Populating a session
        history entry: "destination `document` … credentials mode `include`"); `credentialed` is this zone's
        willingness to spend the session, and safe-fetch.js's `_credentialedOf` composes the two. */
-    /* `docReach` is `fromReach`, the grade of the document this request was made from (the initiator), not
-       the join, which names the document these bytes will become. */
+    /* `doc` is `fromDoc`, the record of the instance this request was made from (the initiator), not the
+       join, which names the document these bytes will become. */
     /* `actor` and `provenance` are independent: a page navigates itself on a forced arm as readily as on an
        observed one. */
     /* `mode: "navigate"`: HTML §7.4.5's fetch is the navigate algorithm's, whose reader is the instance the
@@ -2216,7 +2216,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: request.destination, mode: "navigate",
                                           provenance: provenance,
-                                          docReach: fromReach, actor: actor, driven: driven,
+                                          doc: fromDoc, actor: actor, driven: driven,
                                           pinned: pinned,
                                           credentials: "include", credentialed, identity });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
@@ -2486,7 +2486,10 @@ function engineReserve(cluster, docId, msg, referenced) {
      drain. engineRoot turns it into the ABI call. */
   /* The cold-tier lookup fields, null until engineRoot's frontier read decides them; a boot that dies first
      carries the nulls unchanged, which says when it died. */
+  /* `doc` is this zone's record of the instance (lib/document-record.js), the join of `records`, its documents'
+     own; both are written by engineRoot and engineJoin only. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
+                doc: null, records: new Map(),
                 groupId: msg && msg.groupId, _resumed: null, referenced,
                 _coldLookup: null, _coldOther: null, _bundleId: null,
                 origin: (msg && msg.origin) || "", _resolvers: [], _remoteAsked: new Set(),
@@ -2672,7 +2675,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   DCHECK(typeof msg.arrival === "string" && msg.arrival.startsWith(msg.provenance + ","),
          "a document is being rooted with the arrival `" + String(msg.arrival) + "` beside the reach grade `" +
          String(msg.provenance) + "` — every composer of an AST_ANALYZE states both, the arrival's grade being " +
-         "the reach (arrivalWord)");
+         "the reach (docRecordArrival)");
+  /* This zone's record of the document (lib/document-record.js), written once for the instance's life: the
+     arrival is its wire form, so the marks the engine starts every timeline with and the floor the chokepoint
+     holds the instance's requests to are one statement. Kept on the instance, since a Clear can drop it and
+     the browser's same document id can come back to a fresh one. */
+  CHECK(eng.doc === null && eng.records.size === 0,
+        "an instance's document record was written twice — it is written once, when the root is provisioned, " +
+        "and every request the instance makes is judged against it");
+  eng.doc = docRecordOfArrival(msg.arrival);
+  eng.records.set(eng.docId, eng.doc);
   await rend.renderer.setArrival({ arrival: msg.arrival });
   /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
      one frontier entry. */
@@ -2831,14 +2843,15 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `credentials` is the request's own mode (Fetch §2.2.5 Requests), relayed off the pending line; its
          conjunction with `credentialed` is safe-fetch.js's and can only narrow, so it makes `omit` parks
          refusable and `include` ones honest once the principal above is wired. */
-      /* `docReach` is how the document this park belongs to was reached (`msg.provenance`, this zone's word
-         about the load that produced it), distinct from `provenance` (the engine's word about the flow's path
-         inside the document): a page this tool opened makes requests the engine grades `observed`.
-         Named residual: a same-origin child that joins this instance (`engineJoin`) is judged under the root's
-         `msg.provenance`, since this closure holds the root's message. Next diff carries the park's document
-         name on the pending line so the lookup is per document (the engine already routes by that name). Absence
-         shows, at an origin widened for one grade and not another, as identical requests firing from a joined
-         document and refused from a top-level document reached the same way. */
+      /* `doc` is this zone's record of the instance this park belongs to (lib/document-record.js), distinct
+         from `provenance` (the engine's word about the flow's path inside the document): a page this tool
+         opened makes requests the engine grades `observed`. It is the join of every document the instance holds,
+         so a document joined into it narrows its root's requests too.
+         Named residual. Not covered: the record is the instance's, not the asking document's. Next diff carries
+         the park's document name on the pending line so the lookup is per document (the engine already routes
+         by that name). Absence shows, at an origin widened for one record and not another, as a root
+         document's request refused on `doc-reach`, `actor` or `witness` after a document with a weaker record
+         joined its instance. */
       /* `actor: "page"`: this frame answers a park the engine put on its pending line, and the engine parks on
          what the analysed document's code does. Stated so safe-fetch.js can assert it; with `witness` unpinned it
          is the row the owner's value arm turns on. */
@@ -2850,7 +2863,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          the chokepoint's `actor` row reads it. */
       const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
-                     docReach: msg.provenance, credentialed: false,
+                     doc: eng.doc, credentialed: false,
                      identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
@@ -2949,7 +2962,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "which none of these three does, so honouring one here would hand a declined record to a consumer " +
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
-    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
+    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, eng.doc,
                                    refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg));
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
@@ -3062,7 +3075,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                "it FIRES on, so a mark nothing can be read as may not be relayed as one");
         _xhrPinned = q.pinned;
       }
-      /* `docReach` is the document's own reach grade, for the reason `fetched` gives. */
+      /* `doc` is the instance's record, for the reason `fetched` gives. */
       /* `actor: "page"`: every XHR is made by running the page's code, the same population as the `fetch()`
          relay. With a real witness mark, an XHR whose path pinned nothing fires at an origin the person
          permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
@@ -3074,7 +3087,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination: "",
                                             mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                             driven: q.driven,
-                                            docReach: msg.provenance, actor: "page",
+                                            doc: eng.doc, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers,
                                             identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs,
@@ -3284,6 +3297,11 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   /* The name enters the routing table only once the engine holds it; a delivery in between is refused by the
      post branch's assert rather than routed to an agent that has never heard the name. */
   eng.joinedDocIds.push(docName);
+  /* The joined document's record, written once, and the instance's narrowed to include it. */
+  CHECK(!eng.records.has(docName) && docRecordIs(eng.doc),
+        "a joined document's record was written twice, or into an instance with no record of its own");
+  eng.records.set(docName, docRecordOfArrival(msg.arrival));
+  eng.doc = docRecordJoin(eng.doc, eng.records.get(docName));
   /* The round ends here, so it records: a join copies a whole document in and seeds its scripts as flows, so
      both Level-1 facts moved. */
   await engineRecordFacts(eng);
@@ -3831,16 +3849,14 @@ async function hostNotice(eng, line) {
            "carries is the one the creating engine ASKED for, and the principal this zone stamps on a peer " +
            "instance has to be the origin of the URL its bytes CAME from");
     const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
-    /* How this document was reached is the join (`safeFetchReachJoin`) of the creating document's grade and the
-       engine's word for the navigation, the weaker of the two, so a child of a document this tool opened is
-       never graded as one the person navigated to. It is on every analyze record, since `fetched` and the XHR
-       relay read it for every request the document makes. */
+    /* The document's record is the creating instance's joined with the notice's words (childDocRecord), so a
+       child of a document this tool opened is never graded as one the person navigated to and inherits every
+       mark above it. Its reach and its arrival are on every analyze record. */
+    const _childDoc = childDocRecord(eng, f[C.provenance], f[C.driven], f[C.pinned]);
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
                   origin: originOf(loaded.url),
                   groupId: _inCreatorGroup ? eng.groupId : "noopener:" + (_nextNoopenerGroup++),
-                  provenance: self.safeFetchReachJoin(eng.msg.provenance, f[C.provenance]),
-                  arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[C.provenance]), f[C.driven],
-                                       f[C.pinned]),
+                  provenance: _childDoc.reach, arrival: docRecordArrival(_childDoc),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* The response's own header list, whole; the creator's container is relayed separately below. */
     DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
@@ -4026,14 +4042,12 @@ async function hostNotice(eng, line) {
     DCHECK(typeof swapped.url === "string" && swapped.url !== "",
            "the swapped-to document load answered no RESPONSE URL — §7.1.3.2 provisions a new instance from " +
            "the address the Document is at, which after a redirect is not the address the swap requested");
-    /* The reach grade is the join of the creating document's grade and the engine's provenance field, as for a
-       created child, and is stated on every analyze record. */
+    /* The record is the creating instance's joined with the notice's words, as for a created child. */
+    const _swapDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const swapMsg = { type: "AST_ANALYZE", pageHtml: swapped.bytes === null ? new Uint8Array(0) : swapped.bytes,
                       sourceUrl: swapped.url, origin: originOf(swapped.url),
                       groupId: "swap:" + (_nextSwapGroup++),
-                      provenance: self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]),
-                      arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]), f[P.driven],
-                                           f[P.pinned]),
+                      provenance: _swapDoc.reach, arrival: docRecordArrival(_swapDoc),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
     /* No inherited policy: a swapped-to Document has no creator to clone a container from (HTML §7.3.2.1 with
@@ -4079,11 +4093,11 @@ async function hostNotice(eng, line) {
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
            "the instance is provisioned from all three");
+    /* The record is the creating instance's joined with the notice's words, as for a created child. */
+    const _navDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const navMsg = { type: "AST_ANALYZE", pageHtml: navd.bytes === null ? new Uint8Array(0) : navd.bytes,
                      sourceUrl: navd.url, origin: originOf(navd.url), groupId: eng.groupId,
-                     provenance: self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]),
-                     arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]), f[P.driven],
-                                          f[P.pinned]),
+                     provenance: _navDoc.reach, arrival: docRecordArrival(_navDoc),
                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(navd.headers)) navMsg.responseHeaders[_n] = navd.headers[_n];
     const _nkey = clusterKeyOf(navMsg);
@@ -4149,12 +4163,12 @@ async function hostNotice(eng, line) {
        navigation and stated as such. The principal is `eng.origin` (MessageSender.origin, the same value the
        seed carries as `principalOrigin`), never a URL-derived origin, which would answer `true` for a sandboxed
        document. */
-    /* `docReach` is the declaring document's own grade, not the join, since this asks about a request issued by
-       that document. */
+    /* `doc` is the declaring instance's record, not the join, since this asks about a request issued by that
+       document. */
     /* `actor: "page"`: the route was declared by this document's own code, as the load will state. */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: f[4],
-      docReach: eng.msg.provenance, actor: "page", driven: f[3],
+      doc: eng.doc, actor: "page", driven: f[3],
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -4171,7 +4185,7 @@ async function hostNotice(eng, line) {
     if (!_seeds.has(f[1]))
       /* The declaring document's reach grade travels with the item for the same reason. */
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
-                         provenance: f[2], driven: f[3], pinned: f[4], reach: eng.msg.provenance });
+                         provenance: f[2], driven: f[3], pinned: f[4], fromDoc: eng.doc });
     /* Nothing is kicked: this router runs inside serviceFetch within the one scheduling loop, so `_hostDriving`
        is true and a `_hostKick()` would return on its first line. `admit` ranks this entry next round. */
     return;
@@ -5070,15 +5084,14 @@ async function admitSeatLand(seat) {
        that happened. `topLevelUrl` is its own address after redirects (HTML §8.1.3.1, §7.5.1's `creationURL`). */
     /* The provenance carried into the residue this run parks: the load was decided from `seed.provenance`, so
        the stored grade must agree (at a widened origin a forced declaration passes `_seedRefusal`). */
+    const _seedDoc = docRecordJoin(seed.fromDoc, docRecord(seed.provenance, seed.driven, seed.pinned));
     const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
                   groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
                   topLevelUrl: loaded.url,
                   credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
-                  /* The join of the declaring document's grade and the declaration's word, as for a child
+                  /* The declaring instance's record joined with the declaration's words, as for a child
                      navigable. */
-                  provenance: self.safeFetchReachJoin(seed.reach, seed.provenance),
-                  arrival: arrivalWord(self.safeFetchReachJoin(seed.reach, seed.provenance), seed.driven,
-                                       seed.pinned),
+                  provenance: _seedDoc.reach, arrival: docRecordArrival(_seedDoc),
                   persist: true };
     DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
            "a declared route minted a browsing-context group this pool already runs an instance for — the " +
@@ -5431,7 +5444,7 @@ const _hostOps = {
            hostSchedule's failure arm. */
         admitLoadSeat({ kind: "seed", seed: seed },
                       () => navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
-                                           seed.principalOrigin, seed.provenance, seed.reach,
+                                           seed.principalOrigin, seed.provenance, seed.fromDoc,
                                            /* `report`: a route seed holds no rendezvous and has an arm
                                               (admitSeatLand drops the seat and prints the chokepoint's
                                               reason). A decline is reachable: the notice's `_seedRefusal`
@@ -5905,13 +5918,14 @@ self.astDispatch = async function astDispatch(msg) {
       /* A subject the chokepoint could not widen is not probed: `safeFetchFiringRefusal` takes an absolute URL and
          throws on an unparseable one. `null` states "this origin cannot be the subject", rendered as the reason. */
       const _subjectUsable = self.safeFetchWidenable(msg.subject);
-      /* The probe is the hardest case a person decides about: a forced (`provenance` and `docReach`),
+      /* The probe is the hardest case a person decides about: a forced (`provenance` and the record's reach),
          tool-composed (`actor: "tool"`; a page's own unpinned requests already fire by default), uncredentialed
          (as the learned-GET replay is) data request (`""`, never script-like) with `unstated` witness, at the
          origin's own root, the only address the surface has, so its `url-authority` row reads `unknown`. It
          claims nothing about how anything at this origin was actually reached or composed. */
       const _probe = { url: msg.subject + "/", destination: "", provenance: PROVENANCE_FORCED,
-                       pinned: "unstated", docReach: PROVENANCE_FORCED, actor: "tool", driven: "unstated",
+                       pinned: "unstated", doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned"),
+                       actor: "tool", driven: "unstated",
                        credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),
@@ -5997,7 +6011,8 @@ self.astDispatch = async function astDispatch(msg) {
                                            seed's address. It is unreachable while both destructive gates are
                                            scoped to `provenance !== "observed"` and the observed/observed
                                            arm fires at every address. */
-                                        PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
+                                        PROVENANCE_OBSERVED, docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned"),
+                                        /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
                                         DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg));
     const unavailable = seedUnavailable(loaded, originOf(msg.sourceUrl));
@@ -6023,7 +6038,7 @@ self.astDispatch = async function astDispatch(msg) {
     /* The word the load was performed under, written onto the record (this run persists, so its residue is
        re-fetched later from what this states); the same constant as the load, so the two cannot disagree. */
     msg.provenance = PROVENANCE_OBSERVED;
-    msg.arrival = arrivalWord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned");
+    msg.arrival = docRecordArrival(docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned"));
     /* The waiter carries both settlers, so a Clear can reject a document never seated with "cleared", which
        _dispatchDocument reads to abandon its tail without recording a page failure. No `code` is carried: no
        producer reaching this entry writes one. */
