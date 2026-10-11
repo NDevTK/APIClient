@@ -2955,106 +2955,55 @@ static double flow_queue_weight(const Flow *f) {
     return acct_family_val(f) + flow_queue_nonreward(f);
 }
 
-/* THE ONE TERM OF THE ORDER THAT IS A READING OF THE ITEM RATHER THAN A TAG ON THE QUEUE — which is why it is
-   outside flow_queue_weight above and inside flow_nonreward below. There is still exactly one comparator:
-   every caller ranks by flow_weight, and the two splits name two different halves of it for two different
-   questions — the queue coordinate is what an ARRIVAL can be placed at, and the non-reward remainder is what a
-   RANGE can be asserted over. This term is on the far side of the first split and the near side of the second.
-   §@S'S FITNESS, READ WHERE A FITNESS IS READ. "The search is DISTANCE-DIRECTED (a fitness of
-   {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)" — and this function read
-   `val`, so what the WFQ actually read was a LEDGER of what each search had learned. The two are different
-   quantities and the difference is not academic: a ledger must be paid at most once per observation or it
-   reorders the frontier on repetition, and that same rule makes every candidate that merely EQUALS an
-   earlier one worth exactly what an unstarted flow is worth. So a search's second, third and tenth
-   breakouts — the ones a derivation produced precisely because the first did not fire — ran with the
-   ordering blind to how far each of them got, and §@S's "a near-miss is mutated toward the gap; a dead
-   candidate starves" had no comparison anywhere to be true of. This term is that comparison, and the
-   ledger above is untouched by it: nothing is paid here, nothing accumulates, and two flows standing at
-   the same distance rank equal, which is the correct answer and the one a once-only credit cannot give.
-   IT IS BOUNDED BY THE OPTIMISM TERM'S OWN RANGE for the reason that term is bounded by one emission: a
-   fitness says how promising an item is, not how much it has produced, so it may never outweigh a finding.
-   At its maximum a candidate whose bytes arrive intact ranks with a never-run flow — enough to be picked
-   out of a saturated frontier, not enough to hold the thread against a flow that has emitted. It is
-   charged the same aging as everything else, so it buys a candidate turns, never a monopoly.
-   ZERO FOR EVERY FLOW THAT IS NOT A CANDIDATE, which is not a special case in the arithmetic: a flow with
-   no payload has no ladder to stand on, and both fitness writers assert that rather than allowing
-   one to be recorded.
-   AND IT IS THE WHOLE LADDER, WHICH IS WHAT MAKES THE PARAGRAPH ABOVE TRUE OF MORE THAN ONE MOMENT. Read only
-   the survival rung and the term is a constant across every candidate of any search whose page does not
-   transform the payload — the fraction is 1.0 for all of them the instant their bytes surface — so "two flows
-   standing at the same distance rank equal" would be the answer for a whole population that is emphatically
-   not standing at the same distance. The rungs are what tell them apart, and flow.h's `cand_rung` says why
-   they had to move onto the flow to do it.
-   THE DENOMINATOR IS FLOW_RUNGS_N AND NOT A LITERAL, WHICH IS WHY THE LADDER COULD GAIN A RUNG BENEATH THE
-   OTHERS WITHOUT ANY ARITHMETIC HERE OR IN flow_silence_us_to_sink MOVING. Both read the macro and both bound
-   themselves by `FLOW_RUNGS_N - 1`, so the range stays exactly 1.0 by construction rather than by a number
-   somebody re-checked. What the extra rung DOES change is what every reading is WORTH: an arrival was a third
-   of the range and is now half of it, and a flow that has delivered and nothing else — which used to read 0,
-   the same as a flow that had never run — reads a quarter. That rescale is order-preserving among candidates
-   (every one of them that has any reading at all has delivered, so every numerator gained the same 1), and the
-   ordering it newly creates is precisely the one the rung exists for. It is a comparator, held per flow and
-   never accumulated, so there is no stored reading anywhere that was written under the old denominator: the
-   parked-candidate record ('c', cold.c) carries the substitution and not the ladder, and a resumed candidate
-   re-earns every rung by replaying to its own source read. A renumbering here is therefore not a format
-   change, and it would be one the moment a rung crossed the tier.
-   THE DENOMINATOR HAS MOVED AGAIN SINCE, AND THE WORKED NUMBERS ABOVE ARE THE OLD LADDER'S. With the runway
-   fraction beneath it (flow.h) there are five rungs, so a delivery is two fifths of the range rather than a
-   quarter and the bands are [0, 0.2] undelivered, [0.4, 0.6] delivered, [0.6, 0.8] arrived, [0.8, 1.0]
-   escaped. The rescale is order-preserving among candidates for the same reason it was the last time — every
-   one that has any reading at all has the same rung added beneath it — and the ordering it newly creates,
-   between two candidates at different points of the SAME runway, is the one the whole rung exists for. */
+/* The one term of the order that is a reading of the item rather than a tag on the queue: outside flow_queue_weight
+   (what an arrival is placed at) and inside flow_nonreward (what a range is asserted over). There is one comparator;
+   every caller ranks by flow_weight.
+   The @S fitness, read where a fitness is read: "The search is DISTANCE-DIRECTED (a fitness of {filter-survived,
+   sink-reached, context-escaped, handler-fires} the WFQ reads)". It is a comparator, not a ledger: a ledger is paid
+   at most once per observation, which makes every candidate that merely equals an earlier one worth what an
+   unstarted flow is worth, so a search's later breakouts would run with the order blind to how far each got. Here
+   nothing is paid or accumulated, and two flows at the same distance rank equal.
+   Bounded by the optimism term's range, for the reason that term is bounded by one emission: a fitness says how
+   promising an item is, not what it produced. At its maximum a candidate ranks with a never-run flow, enough to be
+   picked out of a saturated frontier and not enough to hold the thread against a flow that emitted; it is aged
+   like everything else. Zero for every non-candidate, since a flow with no payload has no ladder (both fitness
+   writers assert it).
+   It is the whole ladder: the survival rung alone is 1.0 for every candidate of a page that does not transform the
+   payload, so the rungs are what tell those candidates apart (flow.h's `cand_rung` says why they live on the flow).
+   With the runway fraction beneath them there are five rungs (FLOW_RUNGS_N) and the bands are [0, 0.2]
+   undelivered, [0.4, 0.6] delivered, [0.6, 0.8] arrived, [0.8, 1.0] escaped. The denominator is the macro, not a
+   literal, so a rung added beneath the others moves no arithmetic here or in flow_silence_us_to_sink; the rescale
+   is order-preserving among candidates, since every candidate with a reading has the same rungs beneath it. It is
+   held per flow and never accumulated, and the parked-candidate record ('c', cold.c) carries the substitution and
+   not the ladder (a resumed candidate re-earns every rung by replaying to its source read), so a renumbering is not
+   a format change unless a rung crosses the tier. */
 double flow_distance(const Flow *f) {
     DCHECK(f != NULL, "the fitness term was asked of no flow — it is a reading OF an item, so there is no item "
                       "here for it to be a reading of");
-    /* THE PAIR INVARIANT — "a flow with no payload stands at exactly 0" — IS NOT ASSERTED HERE, and that is a
-       decision about WHERE rather than about whether. It is transiently false BY CONSTRUCTION: an arm of a
-       candidate takes its parent's account first (flow_fork_inherit decides where it enters the queue) and its
-       parent's substitution a few lines later, and the rank-neutrality equality between those two points calls
-       this function. So the invariant is asserted at engine.c's fork, where both halves are in place and where
-       a field added to the candidate identity is already an obligation. */
+    /* The pair invariant ("a flow with no payload stands at exactly 0") is asserted at engine.c's fork rather than
+       here: it is transiently false by construction, because an arm of a candidate takes its parent's account
+       (flow_fork_inherit) before its parent's substitution, and the rank-neutrality equality between those points
+       calls this function. */
     return (f->cand_replay + f->cand_surv + (double)f->cand_rung) / (double)FLOW_RUNGS_N;
 }
 
-/* THE BUCKET'S CONTRIBUTION TO THE ORDER, ASKED OF THE BUCKET — the one entry in this file that reads the
-   branch term WITHOUT HOLDING A MEMBER, and therefore the whole of what an ask that does not walk would need
-   from this scope.
-   IT IS THE POINT OF THE FIELD RATHER THAN AN ACCESSOR FOR IT. flow_pick's banner says the branch term "is
-   carried as a per-BUCKET OFFSET read at query time or the index is not sub-linear", and what stood between
-   that sentence and anything built was that the term had no spelling in which the BUCKET IS THE OPERAND:
-   flow_branch_bonus takes a Flow, so a candidate set could only ever bake it into a per-member key and pay
-   O(live members of the bucket) per fork. This takes the bucket, so one read covers a whole arm — and today
-   its only caller is flow_branch_bonus, which asks it once per member.
-   THE REASON THAT CLAUSE GAVE WAS FALSE AND IS KEPT IN ITS OWN WORDS, BECAUSE IT IS AN ABSENCE AND THE ONLY
-   READER OF A NAMED ABSENCE IS SOMEBODY ABOUT TO GO AND BUILD IT. It read "because there is nothing that
-   enumerates buckets for it to be asked by", and `branch_take` IS that enumeration: it opens each distinct
-   `branch` node into the census ONCE PER SCAN however many doors reach it, through a per-node generation mark
-   held apart from the census and fan marks for exactly that reason, and its completeness over the live-bearing
-   ones is ASSERTED rather than described (`br_live_sum == members`, a live bucket holding at least one member
-   by construction). Its count is PUBLISHED — `branches`, declared a gauge, emitted by result.c.
-   WHAT IS ACTUALLY ABSENT IS NARROWER BY ONE WORD AND IT IS THE WORD THE DESIGN TURNS ON: nothing enumerates
-   them WITHOUT WALKING THE MEMBERS. A walk-free enumeration is what an ask that does not walk would need; a
-   walking one prices the fold and cannot perform it. The difference is not pedantry — a reader who greps for
-   an enumeration, finds `branch_take`, and believes the retired sentence builds a SECOND one beside it, which
-   is the dual system §A-superseded-system-is-DELETED forbids, reached by trusting a stale absence over a grep.
-   AND THE CONSUMER IS WHAT IS MISSING BEFORE EITHER OF THEM: a walk-free count is consumed only by a
-   per-bucket index fold at the pick, which does not exist, so building the count alone is a write with no
-   reader. The residual at flow_index_key says what the WALK costs; it is not a licence to land the count by
-   itself. Measured by the lane that refuted this, from the field writers rather than from the clause: `branch`
-   and `sub_born` have two writers each, `sub_gone` and `f->acct` two each, over exactly three functions.
-   THE GUARD IS THIS DIFF'S ONE REAL CHECK AND IT IS TWO WRITERS AGAINST ONE READER. The stored double is
-   maintained at flow_new and at flow_fork_inherit's join; the quotient on the right is recomputed HERE from
-   the integer those same statements wrote. They are the same expression on the same operand at ONE INSTANT,
-   so the equality is exact for the reason flow_member_key's already is and not a tolerance, and exactly two
-   things can break it: a third writer of `sub_born` that does not write the offset, and a host whose
-   FLT_EVAL_METHOD is 2, which would evaluate the right side wider than binary64 and compare it against a
-   field the store has already rounded. Both hosts this project builds for are binary64 throughout; a fire
-   says loudly which of the two has arrived rather than re-ranking an arm in silence.
-   IT IS NOT A SECOND SPELLING OF THE DENOMINATOR, AND THE SENTENCE THAT WOULD SAY IT IS IS ABOUT A STAMP.
-   solver/flow.h publishes `flow_branch_born`, the INTEGER, and gives as its reason that "a double would be
-   compared with `==` against a quotient recomputed at ANOTHER INSTANT" — which is true of engine.c's rival
-   snapshot and is the whole of why that comparison is over the integer. This is a double compared at ONE
-   instant against the integer it was itself derived from, which is the case that sentence does not reach.
-   Read them together or the reasoning for each reads as an argument against the other. */
+/* The bucket's contribution to the order, asked of the bucket: the one entry that reads the branch term without
+   holding a member, which is what an ask that does not walk would need from this scope. flow_pick's banner says
+   the branch term "is carried as a per-BUCKET OFFSET read at query time or the index is not sub-linear";
+   flow_branch_bonus takes a Flow, so a candidate set could only bake it into a per-member key and pay O(live
+   members of the bucket) per fork. Today its only caller is flow_branch_bonus, once per member.
+   `branch_take` already enumerates the buckets, once per scan however many doors reach each (a per-node generation
+   mark), with completeness asserted (`br_live_sum == members`) and the count published as `branches`. What is absent
+   is an enumeration that does not walk the members, and before it the consumer: a per-bucket index fold at the
+   pick, which does not exist, so a walk-free count alone would be a write with no reader. The residual at
+   flow_index_key says what the walk costs.
+   The guard is two writers against one reader: the stored double is maintained at flow_new and at
+   flow_fork_inherit's join, and the quotient is recomputed here from the integer those statements wrote, the same
+   expression on the same operand, so the equality is exact. It breaks only for a third writer of `sub_born` that
+   leaves the offset, or a host with FLT_EVAL_METHOD 2 (evaluating wider than binary64 against a rounded store);
+   both hosts this project builds for are binary64 throughout. solver/flow.h publishes `flow_branch_born` as the
+   integer because a double "would be compared with `==` against a quotient recomputed at ANOTHER INSTANT" (engine.c's
+   rival snapshot); this compares at one instant against the integer it was derived from. */
 static double acct_branch_offset(const FlowAcct *br) {
     DCHECK(br != NULL,
            "a branch bucket's own contribution to the order was asked for with no bucket to ask — flow_new "
@@ -3074,24 +3023,20 @@ static double acct_branch_offset(const FlowAcct *br) {
     return br->sub_offset;
 }
 
-/* THE RANGE OF EVERYTHING THE ORDER IS MADE OF EXCEPT THE REWARD — written as the DERIVATION and not as the
-   number it folds to, term by term against flow_nonreward's own summands, exactly as wfq_accounted_spread is
-   written against flow_weight's. Each line is one term at the end of its range that pushes the sum UP:
-     - the optimism bonus is 1/(1+visits), decreasing in a count that cannot go below zero, so its maximum is
-       its reading at zero visits — the value a never-run flow carries and the unit §scheduler prices one
-       emission against;
-     - the fitness distance is (cand_surv + cand_rung)/FLOW_RUNGS_N with cand_surv asserted in [0,1] at
-       flow_observe_survival and cand_rung asserted on the ladder at flow_observe_rung, whose top is
-       FLOW_RUNGS_N - 1, so its maximum is (1 + (N-1))/N = 1 exactly for ANY N — which is why the denominator
-       is read here rather than a literal, and why the day a rung is added beneath the others nothing in this
-       expression moves;
-     - the aging enters NEGATIVELY at FLOW_AGE_QUANTUM per notch and the notch is a floor of a sum of
-       microsecond counts that flow_age_running asserts non-negative, so the most it can contribute is nothing.
-   IT IS ONE-SIDED, AND THAT IS §NO BOUNDS AND NOT AN OMISSION. There is no floor here because the aging is
-   unbounded by design: a flow that burns the thread without emitting must be able to sink arbitrarily far, and
-   a lower bound on this quantity would be precisely the clamp §scheduler forbids — "a bound truncates distinct
-   work". What is bounded is how far a term may LIFT an item, because that is what decides whether a member can
-   be put behind something other than a finding. */
+/* The range of everything the order is made of except the reward, written as the derivation, term by term against
+   flow_nonreward's summands (as wfq_accounted_spread is written against flow_weight's). Each line is one term at
+   the end of its range that pushes the sum up:
+     - the optimism bonus 1/(1+visits) decreases in a count that cannot go below zero, so its maximum is its reading
+       at zero visits, the value a never-run flow carries and the unit one emission is priced against;
+     - the fitness distance is (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N with the two fractions asserted in
+       [0,1] (flow_observe_replay, flow_observe_survival) and cand_rung on the ladder (flow_observe_rung), whose top
+       is FLOW_RUNGS_N - 2, so its maximum is (1 + 1 + (N-2))/N = 1 for any N;
+     - the branch bonus is 1/sub_born with `sub_born >= 1`, so its maximum is a member alone in its bucket;
+     - the aging enters negatively at FLOW_AGE_QUANTUM per notch, and the notch is a floor of non-negative microsecond
+       counts (flow_age_running asserts the charge), so it contributes at most nothing.
+   One-sided by design: a flow that burns the thread without emitting must be able to sink arbitrarily far, and a
+   floor would be a clamp ("a bound truncates distinct work"). What is bounded is how far a term may lift an item,
+   because that decides whether a member can be put behind something other than a finding. */
 #define FLOW_NONREWARD_MAX ( 1.0 / (1.0 + 0.0)                                          /* optimism, zero visits */ \
                            + (1.0 + 1.0 + (double)(FLOW_RUNGS_N - 2)) / (double)FLOW_RUNGS_N /* distance: two   */ \
                                                                                         /* fractions + the top  */ \
@@ -3099,101 +3044,31 @@ static double acct_branch_offset(const FlowAcct *br) {
                            + 1.0 / 1.0                                                  /* branch: alone in it  */ \
                            - 0.0 * FLOW_AGE_QUANTUM )                                   /* aging, no silence    */
 
-/* WHAT THE ORDER IS MADE OF BESIDES THE REWARD, AND THE ONE PLACE THE CLAIM "THE REWARD IS THE ONLY UNRANGED
-   TERM" IS ACTUALLY ASKED. Every ordering assertion in this file is derived from that claim and NONE of them
-   could ask it: each was written as a comparison against a REFERENCE MEMBER whose non-reward terms all stand
-   at zero, and that population empties (flow_pick says exactly when and why) — so on a frontier that has
-   stopped emitting, which is the state §scheduler's guarantee is about, the claim was asserted by nothing at
-   all. This is the same claim asked of ONE item, so its population is "every flow whose weight is read", which
-   is non-empty whenever the scheduler is doing anything whatever. A guard that cannot be reached is not a
-   weaker guard than one that can; it is the §Testing engagement ratio's empty denominator, and it reports the
-   same silence as a system that is correct.
-   IT SUPERSEDES THE PAIRWISE FORM RATHER THAN STANDING BESIDE IT, and the arithmetic says so rather than a
-   preference. flow_pick used to assert `w(best) − w(unrun) <= R(best) − R(unrun) + 1.0` over a reference
-   member `u` with every non-reward term at zero. Write N for this quantity: that inequality IS
-   `N(best) − N(u) <= 1.0`, and `N(u) = 1.0 + D_u >= 1.0` for such a `u`, so it says `N(best) <= 2.0 + D_u` —
-   which is this bound, weakened by `D_u` and gated on `u` existing. Nothing it caught is outside this, so
-   keeping both would be the dual system §Disposition forbids, with the weaker copy the one that runs.
-   WHAT IT CATCHES IS AN EDIT TO THE FORMULA, NOT A STATE OF TODAY'S FRONTIER — the three range facts the
-   pairwise form named, now each checkable on its own: an optimism term whose ceiling stops being 1, a fitness
-   comparator that stops being a fraction of FLOW_RUNGS_N, and an aging term allowed to go NEGATIVE (a
-   "freshness" bonus, a credit for waiting, a rank-lifting term for the tail — the shape every fix for a buried
-   backlog reaches for first). It also catches the shape none of them could: a term ADDED to the order that
-   nobody bounded, because a new summand here with no line in FLOW_NONREWARD_MAX fires on its first non-zero
-   reading.
-   THE BOUND IS EXACT AT ITS CORNER AND TAKES NO EPSILON, which is what keeps it a check rather than a
-   tolerance. The maximum is reached by a real member — a candidate at zero visits and zero silence whose bytes
-   have SURVIVED whole and ESCAPED — and every term of it is exact in binary at that corner: `1.0/(1.0+0.0)`
-   is 1.0, `(1.0 + (N-1))/N` is `N/N` for the small integral N this ladder has, and a zero notch times any
-   price is zero. So the comparison is `<=` against a value the arithmetic can actually produce, and any
-   epsilon added here would be room for the next unranged term to hide in — which is the same sentence the
-   pairwise form's own derivation ends on.
-   THE SITE IS THIS FUNCTION AND THE ADDRESS DOES NOT TRAVEL, which is §AN-ASSERT-THAT-NAMES-A-REMEDY asked
-   and answered rather than skipped. The rule's test is to count the call sites that can reach the abort and to
-   thread the caller's __FILE__/__LINE__ when that number is larger than one would read by hand — and the
-   reason it does not bite here is not the count, it is the REMEDY: every route into this function is a request
-   to RANK a flow, and the fix for a fired range is always an edit to the terms summed on the line below, in
-   this file. A caller's address would name which flow was being ranked at the moment, which is not the object
-   of the instruction. The tell that the rule does apply is the one absent here — a message whose remedy names
-   an action with no object; this one names a place, and the place is where the crash already points. */
-/* HOW MANY ARMS THIS MEMBER'S BRANCH HAS EVER TAKEN — the reading that tells the FIRST arm of an unexplored
-   branch from the thirty-eight-thousandth arm of one already taken, which no other term of this order can.
-   WHY IT IS NEEDED, MEASURED ON A DOCUMENT NOBODY DESIGNED rather than on a fixture. A 4.5 MB real bundle
-   replayed from its own mirror: 71452 members and 71451 forks out of FIFTY branch sites at depth 6 over
-   THIRTY-NINE source reads, one bucket holding 38836; `families: 1`, so the reward is one value every member
-   holds; the whole order spanning 0.036 points; 64605 members never picked with `neverPickedGap` 0. ZERO jobs
-   ran, so nothing behind an await, a `.then`, a timer or a delivery was ever answered. Every existing term was
-   common to the
-   two sides of the branch that made that frontier, which is the state absent.c's own banner ends by naming:
-   "what must exist afterward is a frontier on which the two sides of an example-free branch are COMPARABLE AT
-   ALL". A bucket's occupancy is that reading, and it is about the SEARCH rather than about either arm.
-   IT IS A BONUS FOR A SPARSE BUCKET AND NOT A PENALTY FOR A CROWDED ONE, AND THE SIGN IS THE WHOLE REASON THIS
-   IS ADMISSIBLE. The crossing bound below ends its own list of what would break it with "an optimism term keyed
-   on something a never-run flow does not stand at zero of" — and a crowding PENALTY is exactly that: it would
-   drop an unrun member's weight beneath the 1.0 the derivation rests on and fire the assert, correctly. Read
-   the other way round nothing is ever lowered, an unrun flow still carries at least its optimism, and the only
-   consequence is that this term's own range joins FLOW_NONREWARD_MAX and loosens the silence bound by one
-   point — the same shape, and the same arithmetic, as the fitness comparator already there.
-   IT IS FORK-NEUTRAL BY CONSTRUCTION AND NOT BY ARGUMENT. A forked sibling JOINS ITS PARENT'S BUCKET (the
-   inheritance above moves its membership there, raising `sub_born` BEFORE the equality one line down is
-   evaluated), and this is READ AT THE PICK rather than stored at birth, so at every instant after the branch
-   both arms read ONE number and rank equal — which is what the equality at the fork asserts. It also passes
-   the two-instants test the equality cannot see: two arms of one parent forked at different moments read the
-   bucket as it is NOW, not as it was when each was born. The ROOT-ARM case is equal for the other reason the
-   inheritance states: a root's own bucket is `sub_born == 1` for the life of the root, which is asserted where
-   it is decided rather than argued here.
-   THE DENOMINATOR IS THE LIFETIME MINT COUNT AND IT USED TO BE THE LIVE GAUGE `sub_born - sub_gone`. THE
-   RETIRED READING IS WRITTEN OUT BECAUSE IT IS THE INTUITIVE ONE AND WILL OTHERWISE BE RE-DERIVED: it was
-   "a bucket's OCCUPANCY is that reading", and occupancy FALLS when an arm departs, so the bonus a bucket
-   carries is RESTORED IN FULL by its own arms finishing. A branch that minted a hundred arms and shed
-   ninety-nine of them read 1.0 — exactly what a branch that has taken no arm at all reads — so the order
-   said a walk a hundred positions deep was as fresh as one that had not started. THAT IS A RANK A FLOW
-   CHANGES BY BRANCHING, arriving through the DEPARTURE rather than through the fork, which is why the
-   equality at the fork cannot see it and why every check in this file stayed green. It is the same hole the
-   per-arm `cpu` charge had and that FlowAcct's `fam_us` closed with the departed-arm hand-up, one scope over:
-   there the departing arm handed its SERVICE up, and here it took its OCCUPANCY away with it. `sub_born` is
-   the hand-up already built — a LIFETIME counter that never falls, maintained at the fork and untouched by
-   any departure — so the repair is a reading and not a mechanism.
-   AND `sub_us` IS THE ROW A READER REACHES FOR FIRST AND IT IS INADMISSIBLE HERE. Receipt is the question
-   this scope's rows are FOR, and every per-bucket quantity in the weight must be equal on BOTH sides of a
-   fork off a ROOT, where the arm opens a bucket of its own instead of joining one. `sub_born` and `sub_gone`
-   are (1, 0) on both sides by construction; `sub_us` is not, because a root's own bucket accumulates every
-   microsecond the root itself burns (flow_age_running charges `branch`, and a root's `branch` is itself)
-   while the arm's fresh bucket stands at zero. A term over it would make forking off a root a PROMOTION of
-   up to its whole range, and seeding the arm's bucket with the parent's total is a COPY AT THE FORK INSTANT,
-   which two arms of one root forked at two instants read differently — birth order, which is the LIFO the
-   two-instants test exists to refuse. `depth` fails the same way (0 against 1). So the branch scope admits
-   exactly the membership pair as a weight term, and its receipt rows stay observations.
-   WHAT IT COSTS THE GUARANTEE, STATED RATHER THAN DISCOVERED. §scheduler's "a never-run flow is never starved"
-   stays true — this term only ever adds, and the reward still dominates — but two never-run members are no
-   longer indistinguishable: one whose branch has taken no other arm outranks one of N by (1 - 1/N), bounded
-   by a single point. That is the ordering saying a fresh branch is worth more than another arm of a cross
-   product, which is the one comparison the frontier above had no way to make. Its RANGE is unchanged, so
-   FLOW_NONREWARD_MAX's `branch: alone in it` line and flow_silence_us_to_sink's `+ 2.0` are untouched:
-   `sub_born >= 1` and 1 is attainable, so this is still a bonus in (0, 1] that only ever adds.
-   RETIREMENT: this record goes when no reading of a branch bucket's LIVE count can be re-derived as a term
-   of the order — which is when `sub_gone` no longer exists, or when the code makes an occupancy reading
-   impossible rather than merely absent. */
+/* How many arms this member's branch has ever taken: the reading that tells the first arm of an unexplored branch
+   from the many-thousandth arm of one already taken, which no other term can. On a real bundle whose frontier is one
+   family (one reward for every member) every other term is common to the two sides of the branches that made the
+   frontier, the state absent.c's banner names: "what must exist afterward is a frontier on which the two sides of an
+   example-free branch are COMPARABLE AT ALL". This is a reading about the search, not about either arm.
+   A bonus for a sparse bucket, not a penalty for a crowded one, and the sign is what makes it admissible: a crowding
+   penalty would drop an unrun member beneath the 1.0 the crossing bound rests on ("an optimism term keyed on
+   something a never-run flow does not stand at zero of"). As a bonus nothing is lowered, and its range joins
+   FLOW_NONREWARD_MAX, loosening the silence bound by one point, the same shape as the fitness comparator.
+   Fork-neutral by construction: a forked sibling joins its parent's bucket (raising `sub_born` before the fork's
+   equality is evaluated), and this is read at the pick, so both arms read one number at every instant after the
+   branch, which also passes the two-instants test. A root's own bucket is `sub_born == 1` for its life, asserted
+   where the fork decides it.
+   The denominator is the lifetime mint count, not the live gauge `sub_born - sub_gone`: occupancy falls when an arm
+   departs, so a branch that minted a hundred arms and shed ninety-nine would read 1.0, like a branch that took none,
+   a rank changed by branching through the departure, which the fork's equality cannot see. `sub_us` is inadmissible
+   too: a root's own bucket accumulates every microsecond the root burns while an arm's fresh bucket stands at zero,
+   so a term over it would make forking off a root a promotion, and seeding the arm with the parent's total is a copy
+   at the fork instant (birth order). `depth` fails the same way (0 against 1). So the branch scope admits only the
+   membership pair as a weight term, and its receipt rows stay observations.
+   The cost to the guarantee: a never-run flow is still never starved (this only adds), but two never-run members
+   now differ: one whose branch took no other arm outranks one of N by (1 - 1/N), at most a point. The range is
+   unchanged, (0, 1], so FLOW_NONREWARD_MAX's `branch: alone in it` line and flow_silence_us_to_sink's `+ 2.0` stand.
+   This record retires when no reading of a bucket's live count can be re-derived as a term: when `sub_gone` no
+   longer exists, or the code makes an occupancy reading impossible. */
 static double flow_branch_bonus(const Flow *f) {
     const FlowAcct *br;
     long live;
@@ -3208,25 +3083,18 @@ static double flow_branch_bonus(const Flow *f) {
            "a member's own branch bucket reports fewer than one live member while that member is standing in "
            "it — `sub_born`/`sub_gone` are a matched pair moved in one statement, so a count below the member "
            "doing the reading is a departure charged to a bucket the flow had already left");
-    /* AND THE DENOMINATOR IS THE OTHER HALF OF THAT PAIR. The precondition above is kept and is NOT what this
-       returns: it is the pair's own invariant, and it is what makes `sub_born >= 1` a consequence rather than
-       a second thing to believe — `sub_born = live + sub_gone` with `live >= 1` and `sub_gone >= 0`.
-       AND THE RETURN IS NOW THE BUCKET'S OWN READING RATHER THAN A QUOTIENT TAKEN HERE, which is a change of
-       ROUTE and not of VALUE: acct_branch_offset returns the double flow_new and the fork derived from that
-       same `sub_born` by that same expression, so flow_weight, flow_nonreward, flow_member_key and
-       flow_index_surrogate return the bits they returned before. What the route buys is that the term has a
-       caller-side form in which the bucket is the operand; this function is the PER-MEMBER adapter over it
-       and stays the only thing the order calls. */
+    /* And the denominator is the other half of that pair. The precondition above is the pair's own invariant and
+       makes `sub_born >= 1` a consequence (`sub_born = live + sub_gone`, `live >= 1`, `sub_gone >= 0`). The return
+       is the bucket's own reading: acct_branch_offset returns the double flow_new and the fork derived from that
+       `sub_born` by the same expression, so flow_weight, flow_nonreward, flow_member_key and flow_index_surrogate
+       read the bits a quotient here would give. This is the per-member adapter, the only thing the order calls. */
     return acct_branch_offset(br);
 }
 
-/* THE DENOMINATOR THAT TERM DIVIDES BY, AND NOTHING ELSE — see solver/flow.h for why it is published and why
-   it is the INTEGER rather than the quotient. Read through the same two indirections flow_branch_bonus reads,
-   so the two cannot come to disagree about which bucket the member is in; a second spelling that walked to the
-   bucket some other way would be exactly the drift this file refuses everywhere else.
-   THE PRECONDITIONS ARE ASSERTED HERE AND NOT BORROWED FROM flow_branch_bonus, because this is an entry from
-   OUTSIDE this file and a caller of it has no other statement of them. They are the same two, in the same
-   order, and a member that fails either is one the branch census cannot reach either. */
+/* The denominator that term divides by (solver/flow.h says why it is published as the integer). Read through the
+   same two indirections flow_branch_bonus reads, so the two agree on which bucket the member is in. The
+   preconditions are asserted here because this is an entry from outside this file, whose callers have no other
+   statement of them. */
 long flow_branch_born(const Flow *f) {
     DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
            "a member's branch bucket was asked for with no bucket to ask — flow_new opens one for every node "
@@ -3635,6 +3503,21 @@ static double flow_index_margin(const Flow *f) {
 }
 #endif
 
+/* What the order is made of besides the reward, and the one place "the reward is the only unranged term" is asked.
+   Every ordering assertion in this file is derived from that claim; asked against a reference member whose
+   non-reward terms all stand at zero, it is asserted by nothing once that population empties (flow_pick says
+   when), which is the stalled frontier the never-starved guarantee is about. Asked of one item, its population is
+   every flow whose weight is read. It supersedes the pairwise form `w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`:
+   with N for this quantity that is `N(best) − N(u) <= 1.0`, and `N(u) = 1.0 + D_u >= 1.0`, so it says
+   `N(best) <= 2.0 + D_u`, this bound weakened by `D_u` and gated on `u` existing.
+   It catches an edit to the formula, not a state of the frontier: an optimism ceiling that stops being 1, a fitness
+   that stops being a fraction of FLOW_RUNGS_N, an aging term allowed to go negative (a freshness bonus, a credit
+   for waiting), and a summand added with no line in FLOW_NONREWARD_MAX, which fires on its first non-zero reading.
+   Exact at its corner with no epsilon: the maximum is reached by a real member (a candidate at zero visits and zero
+   silence whose bytes survived whole and escaped, alone in its bucket), and every term is exact in binary there
+   (`1.0/(1.0+0.0)`, `(1 + 1 + (N-2))/N` as `N/N` for this small integral N, `1.0/1.0`, a zero notch times any
+   price), so an epsilon would only be room for the next unranged term. The caller's address is not threaded: every
+   route in is a request to rank a flow, and the remedy is always an edit to the terms summed below, here. */
 static double flow_nonreward(const Flow *f) {
     /* THE TWO READINGS AND THE ONE TAG, which is what this sum is now made of explicitly: the optimism
        bonus and the fitness distance are facts about THIS FLOW, and the aging is the queue coordinate it
