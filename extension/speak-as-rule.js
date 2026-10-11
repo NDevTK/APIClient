@@ -27,17 +27,18 @@ function _speakAsCondition(method, url) {
   return c;
 }
 
-/* Installs the rules for one send: `o` is {url, origin, rules: [{ruleId, method, headers}]}, one rule per
+/* The rules for one send, checked: `o` is {url, origin, rules: [{ruleId, method, headers}]}, one rule per
    method the send puts on the wire (its own, and OPTIONS when it is preflighted). `headers` maps a request-
    header name to the value to set, or to null to remove it. The CHECKs are the boundary this capability
    stops at: the Origin set is the identity's own, and a Referer is of that origin or absent, so no send can
-   name another site. Returns the family's rule ids now installed for this URL, whatever their method. */
-async function speakAsInstall(o) {
+   name another site. Answers [{ruleId, method, requestHeaders}] in declarativeNetRequest's header vocabulary;
+   a host with no declarativeNetRequest (engine/trusted.mjs) applies the same answer to its own fetch. */
+function speakAsCheckedRules(o) {
   CHECK(typeof o.url === "string" && /^https?:/.test(o.url) && !o.url.includes("#"),
         "a speak-as rule names " + JSON.stringify(o.url) + ", which is not a fragment-less http(s) URL");
   CHECK(typeof o.origin === "string" && (o.origin === "null" || new URL(o.origin).origin === o.origin),
         "a speak-as rule names the identity origin " + JSON.stringify(o.origin) + ", which is not a serialized origin");
-  const addRules = o.rules.map((r) => {
+  return o.rules.map((r) => {
     CHECK(_speakAsInFamily(r.ruleId), "a speak-as rule id " + r.ruleId + " is outside the family");
     const origin = r.headers.Origin, referer = r.headers.Referer;
     CHECK(origin === undefined || origin === null || origin === o.origin || origin === "null",
@@ -46,9 +47,16 @@ async function speakAsInstall(o) {
           "a speak-as rule sets a Referer " + JSON.stringify(referer) + " not of the identity " + o.origin);
     const requestHeaders = Object.keys(r.headers).map((h) => r.headers[h] === null
       ? { header: h, operation: "remove" } : { header: h, operation: "set", value: r.headers[h] });
-    return { id: r.ruleId, priority: 1, condition: _speakAsCondition(r.method, o.url),
-             action: { type: "modifyHeaders", requestHeaders } };
+    return { ruleId: r.ruleId, method: r.method, requestHeaders };
   });
+}
+
+/* Installs `speakAsCheckedRules(o)` as session rules. Returns the family's rule ids now installed for this
+   URL, whatever their method. */
+async function speakAsInstall(o) {
+  const addRules = speakAsCheckedRules(o).map((r) => ({ id: r.ruleId, priority: 1,
+    condition: _speakAsCondition(r.method, o.url),
+    action: { type: "modifyHeaders", requestHeaders: r.requestHeaders } }));
   await chrome.declarativeNetRequest.updateSessionRules({ addRules });
   const want = _speakAsCondition("get", o.url);
   return (await chrome.declarativeNetRequest.getSessionRules())

@@ -145,21 +145,54 @@ import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = join(ENGINE, '..', 'extension');
 
+/* A page request speaks as its document (extension/lib/speak-as.js): the extension sets the identity's
+   headers with one declarativeNetRequest rule per request, which a process has no equivalent of. This host
+   keeps the same rules in a table instead, checked by the same `speakAsCheckedRules`, and applies them to its
+   own fetch, which (unlike a browser's) sends any header it is given. `swRpc` answers the three speak-as
+   calls lib/speak-as.js makes, and nothing else. */
+function speakAsHost(sandbox) {
+  const rules = new Map();   // ruleId -> { method, url, requestHeaders }
+  sandbox.swRpc = async (api, arg) => {
+    if (api === 'speakAs.clearFamily') { const n = rules.size; rules.clear(); return n; }
+    if (api === 'speakAs.install') {
+      for (const r of sandbox.speakAsCheckedRules(arg))
+        rules.set(r.ruleId, { method: r.method, url: arg.url, requestHeaders: r.requestHeaders });
+      return [...rules].filter(([, r]) => r.url === arg.url).map(([id]) => id);
+    }
+    if (api === 'speakAs.release') { for (const id of arg) rules.delete(id); return undefined; }
+    throw new Error('engine/trusted.mjs serves no rpc ' + JSON.stringify(api) + ' — only speak-as rules');
+  };
+  sandbox.fetch = (input, init) => {
+    const u = new URL(String(input));
+    u.hash = '';
+    const method = sandbox.speakAsDnrMethod(init && init.method ? init.method : 'GET');
+    const headers = new Headers(init && init.headers ? init.headers : undefined);
+    for (const r of rules.values()) {
+      if (r.url !== u.href || sandbox.speakAsDnrMethod(r.method) !== method) continue;
+      for (const h of r.requestHeaders)
+        if (h.operation === 'remove') headers.delete(h.header); else headers.set(h.header, h.value);
+    }
+    return fetch(u.href, Object.assign({}, init, { headers }));
+  };
+}
+
 /* THE CHOKEPOINT, LOADED VERBATIM INTO A REALM OF ITS OWN. The isolated context is `engine/route.mjs`'s
    reasoning applied one file over: evaluating `check.js` over THIS realm would install `DCHECK`/`CHECK` into a
    driver whose own code does not expect them, and a zone silently gaining assert machinery is a difference
    between what it runs and what production runs. The load order is `ast-worker.html`'s, because safe-fetch
    asserts through check.js.
    ONLY THE HOST OBJECTS ARE INJECTED. A fresh vm context has the ECMAScript intrinsics and nothing else, so
-   `fetch`, `URL`, `TextDecoder` and `TextEncoder` come from this realm — which is also why nothing below may
-   `instanceof` a value that came back out of it: a Uint8Array minted in that realm is not this realm's
-   Uint8Array, and `ArrayBuffer.isView` is the cross-realm question. */
+   `URL`, `TextDecoder`, `TextEncoder` and the `fetch` speakAsHost wraps come from this realm — which is also
+   why nothing below may `instanceof` a value that came back out of it: a Uint8Array minted in that realm is
+   not this realm's Uint8Array, and `ArrayBuffer.isView` is the cross-realm question. */
 const ZONE = (() => {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder };
+  const sandbox = { console, URL, TextDecoder, TextEncoder };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/safe-fetch.js'])
+  speakAsHost(sandbox);
+  for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
+                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js did not install `safeFetch` — this zone loads that file ' +
@@ -888,7 +921,9 @@ async function main() {
                                             mode: q.mode, provenance: q.provenance, pinned: q.pinned,
                                             actor: 'page', docReach: e.docReach, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
-                                            headers: q.headers.length ? q.headers : undefined });
+                                            headers: q.headers.length ? q.headers : undefined,
+                                            identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
+                                                                               q.credentials, q.mode) });
     if (raw.refusal && raw.refusal.kind === 'decline') {
       e.ready.push(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
       return;
@@ -1006,7 +1041,9 @@ async function main() {
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination, mode,
                                             provenance, pinned, credentials, useCorsPreflight: false,
                                             actor: 'page',
-                                            docReach: e.docReach, credentialed: false });
+                                            docReach: e.docReach, credentialed: false,
+                                            identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
+                                                                               credentials, mode) });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
        the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
        its failure path having been told the server could not be reached, which for a request nobody sent is a

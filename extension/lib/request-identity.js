@@ -72,6 +72,19 @@ function identityFor(identity, request, documentPolicy) {
            partitionKey: { topLevelSite: identity.partitionKey.topLevelSite, hasCrossSiteAncestor: status === "cross-site" } };
 }
 
+/* The identity an engine's page request speaks as on the wire, for both hosts (bridge.js, engine/trusted.mjs):
+   the cluster origin the zone assigned the instance and the document URL it loaded, never a word the engine
+   states.
+   Not covered: the pending line states no referrer and no document referrer policy, so the referrer is
+   "client" and the policy is Referrer Policy §3's default, strict-origin-when-cross-origin. The next diff
+   reads both off the pending line once the engine states them there. Its absence shows as a Referer that
+   differs from the page's own, for a page that states a referrer or sets a referrer policy. */
+function pageRequestIdentity(origin, docUrl, url, credentials, mode) {
+  return identityFor(engineIdentity(origin, docUrl),
+                     { url, requestInit: { credentials, mode, referrer: null, referrerPolicy: null } },
+                     "strict-origin-when-cross-origin");
+}
+
 /* The cookies a document of this identity sends with `url`, as {wire, cookie}: `wire` is the credentials
    mode the zone's own fetch uses, and `cookie` a Cookie value the send sets, or null.
    - omit, and same-origin to another origin: nothing.

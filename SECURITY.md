@@ -240,8 +240,9 @@ send. An identity is a document: its origin and URL, and its cookie partition ke
 comes from browser-stamped facts (`webNavigation`'s record and `cookies.getPartitionKey`, by
 `documentId`). An engine instance's identity is the cluster origin the zone assigned and the URL it loaded.
 Two callers speak as a document:
-- every page request `bridge.js` hands `safeFetch` (`pageRequestIdentity`). These are uncredentialed under
-  the egress default, so they carry the identity's Origin, Referer and `Sec-Fetch-*` and no cookies;
+- every page request `bridge.js` or `engine/trusted.mjs` hands `safeFetch` (`pageRequestIdentity`). These
+  are uncredentialed under the egress default, so they carry the identity's Origin, Referer and
+  `Sec-Fetch-*` and no cookies;
 - every operator send (above).
 Neither a message nor the engine can state an identity.
 - `lib/request-identity.js` and `lib/speak-as.js` compute the headers:
@@ -268,6 +269,8 @@ Neither a message nor the engine can state an identity.
 - The offscreen document removes every rule of the family before its first send, because session rules
   outlive it. The service worker does not do this at its own start: it can be evicted while a send is in
   flight.
+- `engine/trusted.mjs` has no service worker and no `declarativeNetRequest`. It keeps the same rules in a
+  table, checked by the same `speakAsCheckedRules`, and sets them on its own fetch, which sends any header.
 
 Residuals, each a difference from the document's own request:
 - The header names a rule adds arrive lower-case and after the browser's own headers.

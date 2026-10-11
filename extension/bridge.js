@@ -1998,18 +1998,6 @@ function embedderPolicyWhole(e) {
          typeof e.reportOnlyEndpoint === "string";
 }
 
-/* The identity a page request speaks as on the wire (lib/request-identity.js): the cluster origin this zone
-   assigned the instance and the document URL it loaded, never a word the engine states.
-   Not covered: the pending line states no referrer and no document referrer policy, so the referrer is
-   "client" and the policy is Referrer Policy §3's default, strict-origin-when-cross-origin. The next diff
-   reads both off the pending line once the engine states them there. Its absence shows as a Referer that
-   differs from the page's own, for a page that states a referrer or sets a referrer policy. */
-function pageRequestIdentity(origin, docUrl, url, credentials, mode) {
-  return identityFor(engineIdentity(origin, docUrl),
-                     { url, requestInit: { credentials, mode, referrer: null, referrerPolicy: null } },
-                     "strict-origin-when-cross-origin");
-}
-
 // ---- Engine lifecycle over one wasm instance (one agent cluster) ----
 /* `docName` is set only for a document another engine created: its name arrived in that engine's
    navigable.create notice (HTML §4.8.5 The iframe element creates a child navigable inside the insertion
