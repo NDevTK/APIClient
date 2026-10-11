@@ -130,71 +130,77 @@ function renderDiscoveryPanel() {
   const docId = currentDocumentId();
   const pageUrl = _discPageUrl();
   const services = _discServices(pageUrl);
-  let html = "";
+  const out = [];
+  const hint = (children) => domElement("div", { class: "hint" }, children);
+  const disabled = docId ? {} : { disabled: "" };
 
   /* WHY A BUTTON MAY BE OFF, SAID OUT LOUD. These requests are issued BY THE PAGE (the page-context relay), so
      they need a live document to be issued from — the same pin the Send panel gates on. */
   if (!docId) {
-    html += '<div class="hint">No live document is pinned. Every probe below is issued <em>as the page</em> ' +
-            'through its own document, so it needs one that is currently loaded — open the target page (or ' +
-            're-confirm the pin in the Send panel) and these become available.</div>';
+    out.push(hint(["No live document is pinned. Every probe below is issued ", domElement("em", {}, ["as the page"]),
+                   " through its own document, so it needs one that is currently loaded — open the target page " +
+                   "(or re-confirm the pin in the Send panel) and these become available."]));
   }
   if (_discRefused) {
-    html += '<div class="hint">The offscreen refused <code>' + esc(_discRefused) + '</code> — it answered with ' +
-            'no result. That is the document being gone or the endpoint not being one it holds, never a probe ' +
-            'that quietly did nothing.</div>';
+    out.push(hint(["The offscreen refused ", domElement("code", {}, [_discRefused]), " — it answered with no " +
+                   "result. That is the document being gone or the endpoint not being one it holds, never a " +
+                   "probe that quietly did nothing."]));
   }
 
   if (services.size === 0) {
-    html += '<div class="empty">No service has been learned for this document yet — nothing to probe.</div>';
+    out.push(domElement("div", { class: "empty" },
+                        ["No service has been learned for this document yet — nothing to probe."]));
   } else if (docId && !pageUrl) {
-    html += '<div class="hint">The pinned document has not reported an address, so no endpoint can be ' +
-            'attributed to it. Only endpoints THIS document learned are probeable from it.</div>';
+    out.push(hint(["The pinned document has not reported an address, so no endpoint can be attributed to it. " +
+                   "Only endpoints THIS document learned are probeable from it."]));
   }
 
   for (const [svc, info] of [...services.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const docEntry = tabData.discoveryDocs[svc] || null;   // a service named only by a learned endpoint has no document yet — that ABSENCE is what the panel offers to fetch
-    const docState = docEntry ? esc(String(docEntry.status)) : "none";
-    html += '<div class="card"><div class="card-label"><code>' + esc(svc) + '</code>' +
-            ' <span class="badge badge-status">discovery doc: ' + docState + '</span></div>';
+    const docState = docEntry ? String(docEntry.status) : "none";
+    const card = domElement("div", { class: "card" }, [
+      domElement("div", { class: "card-label" }, [
+        domElement("code", {}, [svc]), " ",
+        domElement("span", { class: "badge badge-status" }, ["discovery doc: " + docState]),
+      ]),
+    ]);
+    out.push(card);
     // FETCH_DISCOVERY — service level. The hostname is one the page actually reached; a service known only by
     // a discovery document carries no endpoint of ours to name a host, and none is invented.
     if (info.hostname) {
-      html += '<div class="card-meta"><button class="btn-small btn-disc" data-disc="fetch" data-svc="' +
-              esc(svc) + '" data-host="' + esc(info.hostname) + '"' + (docId ? "" : " disabled") + '>' +
-              (_discInFlight === "fetch:" + svc ? "fetching…" : "Fetch discovery doc") + '</button>' +
-              ' <span class="card-meta">from <code>' + esc(info.hostname) + '</code></span></div>';
+      card.appendChild(domElement("div", { class: "card-meta" }, [
+        domElement("button", Object.assign({ class: "btn-small btn-disc", "data-disc": "fetch", "data-svc": svc,
+                                             "data-host": info.hostname }, disabled),
+                   [_discInFlight === "fetch:" + svc ? "fetching…" : "Fetch discovery doc"]),
+        " ", domElement("span", { class: "card-meta" }, ["from ", domElement("code", {}, [info.hostname])]),
+      ]));
     } else {
-      html += '<div class="card-meta">no endpoint of this service was learned here, so there is no host of ' +
-              'its own to fetch a document from</div>';
+      card.appendChild(domElement("div", { class: "card-meta" }, ["no endpoint of this service was learned " +
+                                                                   "here, so there is no host of its own to " +
+                                                                   "fetch a document from"]));
     }
 
     for (const key of info.endpointKeys) {
       const ep = tabData.endpoints[key];
       const isPost = ep.method === "POST";
-      html += '<div class="card-meta"><code>' + esc(ep.method + " " + ep.host + ep.path) + '</code>';
+      const row = domElement("div", { class: "card-meta" }, [domElement("code", {}, [ep.method + " " + ep.host + ep.path])]);
       if (isPost) {
-        html += ' <button class="btn-small btn-disc" data-disc="probe" data-key="' + esc(key) + '"' +
-                (docId ? "" : " disabled") + '>' +
-                (_discInFlight === "probe:" + key ? "probing…" : "Probe fields") + '</button>' +
-                ' <button class="btn-small btn-disc" data-disc="svcinfo" data-key="' + esc(key) + '"' +
-                (docId ? "" : " disabled") + '>' +
-                (_discInFlight === "svcinfo:" + key ? "probing…" : "Service info") + '</button>';
+        const probeBtn = (action, idle) => domElement("button", Object.assign(
+          { class: "btn-small btn-disc", "data-disc": action, "data-key": key }, disabled),
+          [_discInFlight === action + ":" + key ? "probing…" : idle]);
+        domAppendChildren(row, [" ", probeBtn("probe", "Probe fields"), " ", probeBtn("svcinfo", "Service info")]);
       } else {
         // The req2proto probes ARE a POST of a deliberately-malformed body. Offering them on a GET endpoint
         // would introduce a method the page never used against somebody else's server.
-        html += ' <span class="badge badge-source">probe is POST-only</span>';
+        domAppendChildren(row, [" ", domElement("span", { class: "badge badge-source" }, ["probe is POST-only"])]);
       }
-      html += "</div>";
-      html += _discHolesHtml(ep, key);
-      html += _discResultHtml(key, ep);
+      domAppendChildren(card, [row, _discHolesNodes(ep, key), _discResultNodes(key, ep)]);
     }
-    html += _discAutoProbesHtml(svc);
-    html += "</div>";
+    domAppendChildren(card, _discAutoProbesNodes(svc));
   }
 
-  html += _discChangesHtml();
-  el.innerHTML = html;
+  out.push(_discChangesNodes());
+  domReplaceChildren(el, out);
 }
 
 /* WHAT A PROBE LEARNED — one renderer per ANSWER SHAPE, because `tab.probeResults` holds two of them under four
@@ -255,21 +261,23 @@ function _discProbeFieldLabel(f) {
   return "(the rejection named neither a name nor a number)";
 }
 
-function _discFieldProbeHtml(label, probe) {
+function _discFieldProbeNodes(label, probe) {
   const names = Object.values(probe.fields).map((f) => _discProbeFieldLabel(f) + ":" + f.type);
-  let html = '<div class="card-meta">' + esc(label) + ": <strong>" + esc(String(probe.fieldCount)) +
-             "</strong> field(s)" + (names.length ? " — <code>" + esc(names.join(", ")) + "</code>" : "") + "</div>";
+  const out = [domElement("div", { class: "card-meta" }, [
+    label + ": ", domElement("strong", {}, [String(probe.fieldCount)]), " field(s)",
+    names.length ? [" — ", domElement("code", {}, [names.join(", ")])] : [],
+  ])];
   if (probe.metadata && (probe.metadata.service || probe.metadata.method)) {
-    html += '<div class="card-meta">canonical: <code>' +
-            esc(String(probe.metadata.service || "?") + "." + String(probe.metadata.method || "?")) + "</code></div>";
+    out.push(domElement("div", { class: "card-meta" }, ["canonical: ", domElement("code", {},
+      [String(probe.metadata.service || "?") + "." + String(probe.metadata.method || "?")])]));
   }
   if (probe.scopes && probe.scopes.length) {
-    html += '<div class="card-meta">scopes: <code>' + esc(probe.scopes.join(" ")) + "</code></div>";
+    out.push(domElement("div", { class: "card-meta" }, ["scopes: ", domElement("code", {}, [probe.scopes.join(" ")])]));
   }
-  return html;
+  return out;
 }
 
-function _discSvcInfoHtml(label, svcInfo) {
+function _discSvcInfoNodes(label, svcInfo) {
   const bits = [];
   if (svcInfo.service) bits.push("service " + svcInfo.service);
   if (svcInfo.method) bits.push("method " + svcInfo.method);
@@ -280,10 +288,11 @@ function _discSvcInfoHtml(label, svcInfo) {
      says which content types the endpoint accepted at all. An empty list is still a real answer (nothing the
      probe sent was accepted) and reads as such below. */
   if (svcInfo.contentTypes.length) bits.push("accepts " + svcInfo.contentTypes.join(", "));
-  return '<div class="card-meta">' + esc(label) + ": " +
-         (bits.length ? "<code>" + esc(bits.join(" | ")) + "</code>"
-                      : "the endpoint answered, and its error envelope named no service, method or scope") +
-         "</div>";
+  return domElement("div", { class: "card-meta" }, [
+    label + ": ",
+    bits.length ? domElement("code", {}, [bits.join(" | ")])
+                : "the endpoint answered, and its error envelope named no service, method or scope",
+  ]);
 }
 
 /* WHAT THE RUN LEARNED TO PUT IN THIS ADDRESS'S TEMPLATED SEGMENTS — BOTH POOLS, ON TWO ROWS, IN THE ONE
@@ -330,9 +339,9 @@ function _discSvcInfoHtml(label, svcInfo) {
        is a change to what the Send panel actually sends.
      HOW ITS ABSENCE SHOWS: an endpoint carrying `{orgId}` with both pools empty prints one bare address line,
        the same line a hole-free address prints. */
-function _discHolesHtml(ep, endpointKey) {
+function _discHolesNodes(ep, endpointKey) {
   const holes = endpointHolePairs(ep, "the discovery panel's endpoint row, key " + JSON.stringify(endpointKey));
-  if (!holes.size) return "";   // both lists stated their absence: no segment was filled at either grade
+  if (!holes.size) return [];   // both lists stated their absence: no segment was filled at either grade
   const offered = [], forced = [];
   for (const [name, pools] of holes) {
     /* A NAME WITH TWO EMPTY POOLS WOULD PRINT A SEGMENT AS LEARNED WITH NOTHING BEHIND IT. `endpointHolePairs`
@@ -344,36 +353,43 @@ function _discHolesHtml(ep, endpointKey) {
            JSON.stringify(endpointKey) + ") — `endpointHolePairs` builds a pair only out of a {name, values} " +
            "entry it asserted non-empty, so this is that walk broken and the row would report a segment as " +
            "learned while naming no value for it");
-    if (pools.valid.length) offered.push(_discHoleValuesHtml(name, pools.valid));
-    if (pools.forced.length) forced.push(_discHoleValuesHtml(name, pools.forced));
+    if (pools.valid.length) offered.push(_discHoleValuesNodes(name, pools.valid));
+    if (pools.forced.length) forced.push(_discHoleValuesNodes(name, pools.forced));
   }
-  let html = "";
+  const joined = (list) => list.map((n, i) => (i === 0 ? n : [" \u00b7 ", n]));
+  const out = [];
   if (offered.length) {
     /* THE LABEL NAMES THE GRADE AND NOT MERELY THE FACT THAT SOMETHING WAS LEARNED. Both rows are things the
        run learned, so "learned" on one of them and "forced" on the other reads as a scale of confidence
        rather than as the two different claims they are — this row says a real path of the app's own code
        computed the value, which is what `provenanceOffersExample` admits and the forced row denies. */
-    html += '<div class="card-meta"><span class="ast-values-label" title="values this run computed for the ' +
-            'templated segments of this address on a path that forced nothing — what the app itself puts ' +
-            'here">path segments the app&#39;s own code computes:</span> ' + offered.join(" &middot; ") +
-            "</div>";
+    out.push(domElement("div", { class: "card-meta" }, [
+      domElement("span", { class: "ast-values-label",
+                           title: "values this run computed for the templated segments of this address on a " +
+                                  "path that forced nothing — what the app itself puts here" },
+                 ["path segments the app's own code computes:"]),
+      " ", joined(offered),
+    ]));
   }
   if (forced.length) {
-    html += '<div class="card-meta"><span class="ast-forced-label" title="every sighting of these values ' +
-            'stood on an arm the forced execution took, so a real client is not known to compose this ' +
-            'address — a reply to it is evidence about a request no client makes">path segments reached ' +
-            'only by FORCING a gate (a request no client makes):</span> ' + forced.join(" &middot; ") +
-            "</div>";
+    out.push(domElement("div", { class: "card-meta" }, [
+      domElement("span", { class: "ast-forced-label",
+                           title: "every sighting of these values stood on an arm the forced execution took, " +
+                                  "so a real client is not known to compose this address — a reply to it is " +
+                                  "evidence about a request no client makes" },
+                 ["path segments reached only by FORCING a gate (a request no client makes):"]),
+      " ", joined(forced),
+    ]));
   }
-  return html;
+  return out;
 }
 
 /* ONE SEGMENT'S NAME AND THE VALUES OF ONE POOL. The name is printed as the record spells it, with no braces
    added around it: writing `{name}` would be this file asserting how a hole appears inside a path, which is
    the grammar the residual above declines to copy. The address in the row above carries the braces. */
-function _discHoleValuesHtml(name, values) {
-  return "<code>" + esc(name) + "</code> = " +
-         values.map((v) => "<code>" + esc(String(v)) + "</code>").join(", ");
+function _discHoleValuesNodes(name, values) {
+  return [domElement("code", {}, [name]), " = ",
+          values.map((v, i) => [i === 0 ? "" : ", ", domElement("code", {}, [String(v)])])];
 }
 
 // Per ENDPOINT: the two on-demand answers, plus `svcinfo:POST <path>` records this extension NO LONGER MINTS.
@@ -388,7 +404,7 @@ function _discHoleValuesHtml(name, values) {
 // It keys by the request PATH alone, so a TEMPLATED endpoint path (`/users/{id}`, what the engine learned)
 // never equals the concrete pathname of the live request that triggered the probe; those stayed unattributed
 // then and stay unattributed now. The live capability is the "Service info" button, keyed `svc:<endpointKey>`.
-function _discResultHtml(endpointKey, ep) {
+function _discResultNodes(endpointKey, ep) {
   /* `(tabData && tabData.probeResults) || {}` stood here twice. Both callers run inside the per-service loop,
      which `_discServices` can only fill from a non-null `tabData`, and `serializeTabData` writes
      `probeResults` on every reply — so the guard could not fire and the default could only hide the map that
@@ -398,20 +414,20 @@ function _discResultHtml(endpointKey, ep) {
          "GET_STATE answer, so an absent one is that projection broken and every probe this document ran " +
          "would render as one that learned nothing");
   const results = tabData.probeResults;
-  let html = "";
+  const out = [];
   const probe = results[endpointKey];
-  if (probe) html += _discFieldProbeHtml("probe", probe);
+  if (probe) out.push(_discFieldProbeNodes("probe", probe));
   const svcInfo = results["svc:" + endpointKey];
-  if (svcInfo) html += _discSvcInfoHtml("service info", svcInfo);
+  if (svcInfo) out.push(_discSvcInfoNodes("service info", svcInfo));
   const autoSvcInfo = results["svcinfo:POST " + ep.path];
-  if (autoSvcInfo) html += _discSvcInfoHtml("service info (automatic, from an earlier build)", autoSvcInfo);
-  return html;
+  if (autoSvcInfo) out.push(_discSvcInfoNodes("service info (automatic, from an earlier build)", autoSvcInfo));
+  return out;
 }
 
 // Per SERVICE: the field probes keyed `auto:<service>::<url>` by lib/discovery-probe.js's
 // `performProbeAndPatch` — reached from the operator's FETCH_DISCOVERY, never automatically (the prefix names
 // the KEY SHAPE, service+URL rather than endpoint key, and is a persisted dispatch spelling; see above).
-function _discAutoProbesHtml(svc) {
+function _discAutoProbesNodes(svc) {
   /* `(tabData && tabData.probeResults) || {}` stood here twice. Both callers run inside the per-service loop,
      which `_discServices` can only fill from a non-null `tabData`, and `serializeTabData` writes
      `probeResults` on every reply — so the guard could not fire and the default could only hide the map that
@@ -422,25 +438,27 @@ function _discAutoProbesHtml(svc) {
          "would render as one that learned nothing");
   const results = tabData.probeResults;
   const prefix = "auto:" + svc + "::";
-  let html = "";
+  const out = [];
   for (const k of Object.keys(results).sort()) {
     if (!k.startsWith(prefix)) continue;
-    html += '<div class="card-meta">error probe of <code>' + esc(k.slice(prefix.length)) + "</code></div>" +
-            _discFieldProbeHtml("learned", results[k]);
+    out.push(domElement("div", { class: "card-meta" },
+                        ["error probe of ", domElement("code", {}, [k.slice(prefix.length)])]),
+             _discFieldProbeNodes("learned", results[k]));
   }
-  return html;
+  return out;
 }
 
 // API DRIFT — the diff history that was recorded forever and shown to no one.
-function _discChangesHtml() {
-  if (discoveryChanges === null) return "";   // not answered yet — not "nothing changed"
+function _discChangesNodes() {
+  if (discoveryChanges === null) return [];   // not answered yet — not "nothing changed"
   const svcs = Object.keys(discoveryChanges).sort();
+  const header = domElement("div", { class: "section-header" }, ["API drift"]);
   if (!svcs.length) {
-    return '<div class="section-header">API drift</div><div class="hint">No published API surface has changed ' +
-           'between two fetches yet. This is the whole history, never a window — the first change a service ' +
-           'ever made is still here.</div>';
+    return [header, domElement("div", { class: "hint" }, ["No published API surface has changed between two " +
+            "fetches yet. This is the whole history, never a window — the first change a service ever made is " +
+            "still here."])];
   }
-  let html = '<div class="section-header">API drift</div>';
+  const out = [header];
   for (const svc of svcs) {
     /* THREE READS, NO OPINION. Two DCHECKs stood here — one that the per-service value is an array, one that
        a record carries a `timestamp`/`changes` pair — and a `rec.fetchUrl || ""` beside them, which is the
@@ -451,16 +469,19 @@ function _discChangesHtml() {
        printing it raw is reading the producer's statement rather than supplying one for it. The `|| ""` could
        only ever have rendered a drift record as a change to an address nobody can name. */
     const recs = discoveryChanges[svc];
-    html += '<details class="card"><summary><code>' + esc(svc) + "</code> — " + esc(String(recs.length)) +
-            " change record(s)</summary>";
+    const details = domElement("details", { class: "card" }, [
+      domElement("summary", {}, [domElement("code", {}, [svc]), " — " + String(recs.length) + " change record(s)"]),
+    ]);
     for (const rec of recs) {
-      html += '<div class="card-meta">' + esc(new Date(rec.timestamp).toLocaleString()) +
-              " — <code>" + esc(rec.fetchUrl) + "</code></div>";
-      for (const c of rec.changes) html += '<div class="card-meta"><code>' + esc(_discChangeLine(c)) + "</code></div>";
+      details.appendChild(domElement("div", { class: "card-meta" }, [
+        new Date(rec.timestamp).toLocaleString() + " — ", domElement("code", {}, [rec.fetchUrl]),
+      ]));
+      for (const c of rec.changes)
+        details.appendChild(domElement("div", { class: "card-meta" }, [domElement("code", {}, [_discChangeLine(c)])]));
     }
-    html += "</details>";
+    out.push(details);
   }
-  return html;
+  return out;
 }
 
 /* THE ONE CLICK PATH. Each action posts the command the offscreen already handles, then re-reads state: the

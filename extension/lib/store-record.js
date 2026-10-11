@@ -110,7 +110,7 @@ const _SR_APIKEY = _srRecord(
    `_srParkedSinkCurrent` asks of a parked @S entry, and the second and last place in this table where the
    answer was no. `fields: _srObj` said "is a non-array object" and nothing about the field records inside it,
    while lib/popup-discovery.js's `_discProbeFieldLabel` DCHECKs `f.name` on every one it labels and
-   `_discFieldProbeHtml` renders `f.type` with no guard at all. So a field probe stored by a build before
+   `_discFieldProbeNodes` renders `f.type` with no guard at all. So a field probe stored by a build before
    either name travelled passed this door and ABORTED the discovery card — abort for `name`, and a silent
    `undefined` in the rendered list for `type`, which is the quieter half of the same skew.
    TWO NAMES AND NOT SEVEN, BECAUSE THE CONSUMER DECIDES THE REQUIREMENT AND NOT THE PRODUCER. All five of
