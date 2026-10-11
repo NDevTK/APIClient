@@ -500,7 +500,14 @@ async function main() {
      hold it — that is why the notice exists at all — so a prefix match routes a post straight back to its
      sender, which the engine catches at its arrival entry rather than silently performing. */
   const instances = [];
-  const holderOf = (doc) => instances.find((i) => i.live && i.docId === doc) ?? null;
+  const holderOf = (doc) => instances.find((i) => i.live && i.docs.includes(doc)) ?? null;
+  /* The instance of one origin-keyed agent cluster, keyed as SECURITY.md keys it: (browsing context group,
+     origin). A group is minted where a top-level traversable with no opener is, so a child, an auxiliary
+     navigable and a top-level navigation stay in their creator's group, and a swap or a seed starts one. */
+  const clusterOf = (group, origin) =>
+    instances.find((i) => i.live && i.group === group && i.origin === origin) ?? null;
+  let groupSerial = 0;
+  const newGroup = () => `g${++groupSerial}`;
   const loops = [];
   let serial = 0;
   /* THE ADDRESSES THIS SESSION HAS ALREADY PROVISIONED AN INSTANCE FOR OUT OF A ROUTE DECLARATION, and the
@@ -597,7 +604,7 @@ async function main() {
      it. Overstating it keeps a frontier alive until the session ends, which costs a process and truncates
      nothing. That is not a licence to guess high: it is why the rule is stated per arm with its reason, so
      the next arm has to answer the question rather than inherit an answer. */
-  async function provision({ docId, url, origin, headers, bytes, facts, referenced, docReach }) {
+  async function provision({ docId, url, origin, headers, bytes, facts, referenced, docReach, group }) {
     /* HOW THIS DOCUMENT WAS REACHED, STORED ON THE INSTANCE BECAUSE EVERY REQUEST IT EVER MAKES IS ASKED
        ABOUT IT. It is composed by the caller — the JOIN of the issuing document's grade and the engine's
        word for the navigation — and asserted HERE rather than at each of the request paths that read it,
@@ -613,10 +620,17 @@ async function main() {
                       'reference into its document — the flag decides whether its timelines may finish, so ' +
                       'an unstated one is a peer that either drains before it is asked anything or waits ' +
                       'for a question nobody can ask, and neither is visible from here');
+    if (typeof group !== 'string' || clusterOf(group, origin))
+      throw new Error(`an instance was provisioned for ${url} ${typeof group !== 'string' ? 'naming no ' +
+                      'browsing context group' : `in group ${group}, whose ${origin} cluster already has one`} ` +
+                      '— an instance IS its (group, origin) agent cluster, so a second one splits one heap in ' +
+                      'two and a missing group would merge every group of that origin into one');
     const child = spawn(bin, paintDir === null ? ['--abi'] : ['--abi', '--paint-dir', paintDir],
                         { stdio: ['pipe', 'pipe', 'inherit'] });
     const e = {
-      docId, docUrl: url, origin, child, docReach,
+      docId, docUrl: url, origin, child, docReach, group, referenced,
+      /* Every document this instance holds: its root and each one joined into it (`join`). */
+      docs: [docId],
       /* THE INSTANCE'S OWN NAME IN THIS ZONE'S NAMESPACE. A document NAME is stable by requirement (the
          routing depends on it) while an instance is one session of it, and a rendezvous token has to name the
          second: without the serial a resumed instance's request 1 would land on the rendezvous of the ended
@@ -1131,6 +1145,9 @@ async function main() {
          object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent and
          which nothing downstream could tell from the routing. */
       if (holderOf(f[1])) return;
+      /* The creator is referenced from now on: the peer hosting this navigable holds a WindowProxy for it, and
+         its engine raised its own flag at the emission (core/frame/navigable.c). This is the zone's record. */
+      e.referenced = 1;
       /* FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF, AND IT IS WHY THIS ARM STOPPED BEING A BLANK REFUSAL.
          `null` here meant "the record does not state it", and §Attacker-sources makes an unestablished
          provenance a crash at the decision — so every cross-origin child navigable any page ever created was
@@ -1149,11 +1166,37 @@ async function main() {
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
          may be minted by the untrusted side because it is only a name, while the ORIGIN is what every
          bundle's cross-origin check is written against. */
+      /* A CLUSTER THAT ALREADY RUNS TAKES THE CHILD AS A SECOND DOCUMENT (`qjs_join`), because HTML puts every
+         document of one origin-keyed agent cluster in one heap: A embeds cross-origin B and B embeds A, and the
+         grandchild joins A's instance. The holder is referenced, since every instance of a group either was
+         provisioned for a peer's navigable or created one. The grade the holder judges requests under becomes
+         the weaker of its own and the joined document's.
+         Named residual. Not covered: the grade is per instance, not per document, so the holder's own requests
+         are judged under the joined document's grade too. Next diff builds: the grade keyed on the asking
+         document, which the bill would have to carry. Absence shows as: a holder's own request declined at an
+         unwidened origin after a forced-grade child joined it. */
+      const childOrigin = new URL(loaded.url).origin;
+      const reach = ZONE.safeFetchReachJoin(e.docReach, f[15]);
+      const holder = clusterOf(e.group, childOrigin);
+      if (holder) {
+        if (holder === e || holder.referenced !== 1)
+          throw new Error(`navigable.create ${f[1]} would join instance [${holder.tag}], which ` +
+                          `${holder === e ? 'is its own creator — a same-origin child never leaves its ' +
+                          'creator\'s heap' : 'holds no peer reference — every instance of a group was ' +
+                          'provisioned for a peer\'s navigable or created one'}`);
+        holder.docs.push(f[1]);
+        holder.docReach = ZONE.safeFetchReachJoin(holder.docReach, reach);
+        holder.ready.push(['join', loaded.url, f[1], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
+                           ...createFacts(f)].join('\t'));
+        retryHeld();
+        flush();
+        return;
+      }
       /* REFERENCED, AND THE CREATE NOTICE IS ITSELF THE PROOF: the creating engine minted `f[1]` because its
          page already holds a WindowProxy for this navigable, which is the only reason a delivery has to be
          routed here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document,
          so this document's timelines may not run out before they do. */
-      await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
+      await provision({ docId: f[1], url: loaded.url, origin: childOrigin, group: e.group,
                         headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f),
                         /* AND UNDER BOTH GRADES, WHICH IS WHAT `safeFetchReachJoin` IS FOR: this
                            document exists because the creating one did, so it is reached under the weaker of
@@ -1161,7 +1204,7 @@ async function main() {
                            notice's word alone would let a child of a document this zone chose to open read
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
-                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[15]),
+                        docReach: reach,
                         referenced: 1 });
       return;
     }
@@ -1198,7 +1241,7 @@ async function main() {
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
                         docReach: ZONE.safeFetchReachJoin(e.docReach, f[4]),
-                        referenced: 0 });
+                        group: newGroup(), referenced: 0 });
       return;
     }
     /* `navigable.navigate <new document> <url> <origin> <provenance>` — a TOP-LEVEL traversable navigated to a
@@ -1218,7 +1261,7 @@ async function main() {
       await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
                         docReach: ZONE.safeFetchReachJoin(e.docReach, f[4]),
-                        referenced: 1 });
+                        group: e.group, referenced: 1 });
       return;
     }
     /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
@@ -1276,7 +1319,7 @@ async function main() {
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
                         docReach: ZONE.safeFetchReachJoin(e.docReach, f[2]),
-                        referenced: 0 });
+                        group: newGroup(), referenced: 0 });
       return;
     }
     /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances, relayed
@@ -1676,7 +1719,8 @@ async function main() {
      tree beneath it. */
   const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
-                                 facts: topLevelFacts(docUrl), docReach: 'observed', referenced: 0 });
+                                 facts: topLevelFacts(docUrl), docReach: 'observed', group: newGroup(),
+                                 referenced: 0 });
 
   /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its
      driver to this queue, and an `all` taken over the queue as it stood would return before that peer's
@@ -1698,7 +1742,7 @@ async function main() {
      performed on the one report that says what this zone could not do. The routing table still holds the
      ended instance, so the answer is a lookup and never an inference. */
   if (held.length) {
-    const everHeld = (h) => instances.filter((i) => i.docId === h.doc);
+    const everHeld = (h) => instances.filter((i) => i.docs.includes(h.doc));
     const orphaned = held.filter((h) => everHeld(h).length);
     const unknown = held.filter((h) => !everHeld(h).length);
     if (orphaned.length)
