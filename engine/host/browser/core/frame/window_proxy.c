@@ -326,7 +326,7 @@ typedef struct {
  *
  * SO WHAT IS LEFT HERE IS A DIFFERENT QUESTION AND THE SPLIT IS DELIBERATE: `wp_closed` now means "this heap
  * holds no ACTIVE DOCUMENT for this navigable", which is what its remaining readers are actually asking —
- * §7.2.3's forward to W, `document`, `location`, `name`, and §7.2.3.5 step 2's indexed access. Those must NOT
+ * §7.2.3's forward to W, `document`, `location`, and §7.2.3.5 step 2's indexed access. Those must NOT
  * take the sever, because §7.2.3's internal methods are performed on W, the [[Window]] internal slot, and a
  * Window OUTLIVES its browsing context: `document-domain-removed-iframe.html` reads `contentWindow.status` on
  * the line after `iframe.remove()` and expects the value, not `undefined` (its own comment cites the Chromium
@@ -1895,9 +1895,10 @@ JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
     ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was read");
-    /* §7.2.2.1: a destroyed navigable has no name, and the destruction is what determined that — the spec files
-       assert the empty string rather than the name it had. */
-    if (wp_closed(p)) return JS_NewStringLen(ctx, "", 0);
+    /* HTML §7.2.2 "The Window object": "If this's navigable is null, then return the empty string." — the
+       predicate `closed` reads, so a frame removed from the tree answers "" on the next line, as it answers
+       `closed`; a closing top-level traversable still has its navigable and keeps its name. */
+    if (window_proxy_browsing_context_null(ctx, proxy)) return JS_NewStringLen(ctx, "", 0);
     if (p->name_known) return JS_NewString(ctx, p->name ? p->name : "");
     /* THE WORLD'S: §7.2.2.1's name is written by whoever NAVIGATED this navigable, which is another document
        and often an attacker's. Nothing in this document's own served bytes states it. */
@@ -1915,7 +1916,8 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
     const char *n;
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was written");
-    if (wp_closed(p)) return JS_UNDEFINED;   /* a destroyed navigable has nothing to rename */
+    /* §7.2.2: "If this's navigable is null, then return." */
+    if (window_proxy_browsing_context_null(ctx, proxy)) return JS_UNDEFINED;
     /* A CONCOLIC NAME IS A CAPABILITY THAT DOES NOT EXIST YET, not a value to stringify. `name` is stored as C
        bytes because named access compares it, so a concolic here would have to be de-tainted to be stored —
        which is the one thing a concolic must never survive. Storing the triple instead is what to build. */
