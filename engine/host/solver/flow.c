@@ -3407,22 +3407,15 @@ void flow_clear_host_owed_all(void) {
     frontier_rank_changed();
 }
 
-/* THE IMAGE A MEMBER OWES THE HOST — @PERWORLD; see flow.h for what the mark means and why it is a flag where
- * the host-owed mark above is a generation.
- *
- * NEITHER SETTER NOR CLEARER RAISES `frontier_rank_changed`, AND THAT IS THE LOAD-BEARING DIFFERENCE FROM THE
- * PAIR DIRECTLY ABOVE. Those two raise it because a host-owed mark is a term of the ranking: it takes a member
- * out of the ELIGIBLE SET, so the WFQ's answer — "the best eligible flow" — changes when one is laid down or
- * lifted, and the two consumers that cache on that generation were measurably wrong in opposite directions
- * until it was raised. This mark is not in the eligible set, not in flow_weight and not in flow_pick's filter:
- * a member that owes an image is picked exactly when it would have been picked without one. Raising the
- * generation here would tell the preempt hook and the value-yield assertion that the ranking moved when
- * nothing about it did, which is a claim about the frontier that is not true. */
+/* The image a member owes the host (@PERWORLD); flow.h says what the mark means and why it is a flag where the
+ * host-owed mark is a generation. Neither setter nor clearer raises `frontier_rank_changed`, unlike the pair above:
+ * a host-owed mark takes a member out of the eligible set, so the WFQ's answer changes when one is laid or lifted,
+ * while this mark is not in the eligible set, flow_weight or flow_pick's filter, and a member owing an image is
+ * picked exactly when it would have been without one. Raising the generation here would tell the preempt hook and
+ * the value-yield assertion that the ranking moved when it did not. */
 void flow_set_paint_owed(Flow *f) {
-    /* THE MARK IS LAID DOWN ON TWO ROADS AND A NULL MEANS A DIFFERENT THING ON EACH, so this message names
-       both rather than the one its author was standing on. The roads are this entry's own call sites and
-       are found by grepping them; naming a COUNT here would be a number that goes wrong the day a third
-       caller lands, while naming what each road IS stays true. */
+    /* The mark is laid on two roads (this entry's call sites) and a NULL means a different thing on each, so the
+       message names both. */
     DCHECK(f != NULL, "an image was asked of no flow at all — either paint_mark_standing_members, which "
                       "walks the frontier's own members, has read past its end, or flow_new has reached "
                       "the mint with no flow to mark, which its own allocation CHECK makes impossible");
@@ -3431,16 +3424,12 @@ void flow_set_paint_owed(Flow *f) {
 
 void flow_clear_paint_owed(Flow *f) {
     DCHECK(f != NULL, "an image ask was discharged against no flow at all");
-    /* A DISCHARGE THAT WAS NEVER ASKED FOR IS A SCHEDULER HANDING THE HOST A TURN NOBODY BOUGHT. Every caller
-       is inside engine_sched_slice and each clears the mark it has just tested, so an unmarked flow reaching
-       here is that test and this clear having come apart — and the cost is a YIELD per pick for the rest of
-       the session, which from outside is a scheduler that stopped stepping.
-       THERE ARE TWO SUCH SITES AND THEY ARE THE TWO CLOSING EDGES OF A TURN, which is worth saying here
-       because this DCHECK used to say "the one caller" and a reader counting callers would now find it wrong
-       about the tree while still right about the rule. One is the FLOW_STEP_DONE arm, which buys a return so
-       a member's last world can be rendered before flow_finish unapplies it; the other is the slice-end
-       yield, which buys nothing because the host is already being handed that member standing. A mark is
-       spent by whichever comes first, so "at most one image per ask" is unchanged. */
+    /* A discharge never asked for is the scheduler handing the host a turn nobody bought. Every caller is inside
+       engine_sched_slice and clears the mark it has just tested, so an unmarked flow here is that test and this
+       clear having come apart, at the cost of a yield per pick for the rest of the session. The two sites are the
+       two closing edges of a turn: the FLOW_STEP_DONE arm, which buys a return so a member's last world can be
+       rendered before flow_finish unapplies it, and the slice-end yield, which hands the host that member
+       standing. A mark is spent by whichever comes first, so there is at most one image per ask. */
     DCHECK(f->paint_owed,
            "an image ask was discharged on a member that owed none — every discharge tests the mark and clears "
            "the one it tested, so this is a discharge reached by a route that never took the ask, and every "
@@ -3457,45 +3446,24 @@ int flow_paint_owed(const Flow *f) {
     return f->paint_owed;
 }
 
-/* THE ONE ORDER, ASKED THROUGH ONE SCAN. Four questions are put to the ranking — who should be running, who
-   the running flow is defending against, what this document's best weight is for the host's Level-1 order, and
-   which member the pager gives up first — and they are a SEED, FILTERS and a DIRECTION over ONE comparator,
-   never separate rankings (§scheduler: ONE WFQ policy at both levels). Written out per question, the order
-   would have a place to drift per copy and the monopolizer assertion below would guard whichever copy happened
-   to carry it; written once, every pick is made under it.
-   THE INCUMBENT IS THE SEED, NOT A CANDIDATE LIKE THE REST, and that is the difference between "which flow is
-   best" and "which flow should be RUNNING". The scan takes a STRICT comparison, so seeding it with the flow
-   that already holds the thread states the rule exactly: the thread moves only for a flow that is strictly
-   better — the identical rule the preempt hook's value clause applies, now applied at the other end of the same
-   decision. Without the seed the pick returned the first maximum in REGISTRY ORDER, so a field of flows on
-   equal weight (the ordinary state of a frontier whose members have all emitted the same amount, which is very
-   often none) handed the thread to g_flows[0] on every single iteration and paid a full COW delta swap for a
-   ranking that had not changed at all. It is not a hysteresis margin, a minimum service or a switch budget:
-   there is no number in it, and a strictly better flow takes the thread at the very next opcode. */
-/* WHICH SUB-QUANTUM RESIDUES THE FRONTIER ACTUALLY OCCUPIES — one byte per possible value of
-   flow_silence_phase, stamped during the census walk and read once at its end to produce `sil_phases`. It is
-   the census's own scratch and never a term: nothing ranks by it and no flow points at it.
-   AN ARRAY OVER THE KEY DOMAIN AND NOT A SET OVER THE MEMBERS, because the domain is FIXED at one cooperative
-   quantum while the frontier is not, so this stays 12 KB while `members` reaches tens of thousands — which is
-   also the shape the index this row exists to size would take. CLEARED PER CENSUS rather than generation-
-   stamped: a census is taken per sample and a `memset` of the domain is not the term anybody is paying here,
-   where a stamp would cost four bytes per slot to save it.
-   THE SIZE IS A COMPILE-TIME RELATION AND NOT A HOPE. The domain is ENGINE_QUANTUM_MS * 1000, so a quantum
-   measured in seconds rather than milliseconds would silently ask for a megabyte of static per instance; this
-   is the one thing no run can tell you broke, so it is a compile error instead. */
+/* Which sub-quantum residues the frontier occupies: one byte per possible value of flow_silence_phase, stamped
+   during the census walk and read at its end for `sil_phases`. The census's own scratch, never a term. An array
+   over the key domain rather than a set over the members, because the domain is fixed at one cooperative quantum
+   (12 KB) while the frontier grows, which is also the shape the index this row sizes would take. Cleared per census
+   by `memset`, cheaper than a four-byte stamp per slot. The size is a compile-time relation: the domain is
+   ENGINE_QUANTUM_MS * 1000, so a quantum in seconds would ask for a megabyte of static per instance. */
 typedef char flow_phase_domain_is_affordable[(FLOW_SERVICE_US > 0 && FLOW_SERVICE_US <= 65536) ? 1 : -1];
 static unsigned char g_phase_seen[(size_t)FLOW_SERVICE_US];
 
-/* WHAT ASKING THE ORDER COSTS — see solver/flow.h's FLOW_SCANS for why the entries are counted apart, why the
-   quantity is a COUNT and not a clock, and why nothing may read these. Lifetime, never reset, and `long`
-   because they are compared against `steps` and `forks`, which are. */
+/* What asking the order costs; solver/flow.h's FLOW_SCANS says why the entries are counted apart, why the quantity
+   is a count and not a clock, and why nothing may read these. Lifetime, never reset, and `long` because they are
+   compared against `steps` and `forks`. */
 static long g_scan_runs[FLOW_SCAN_N];
 static int64_t g_scan_weights[FLOW_SCAN_N];   /* per member per scan — see FlowKeyChecks in flow.h */
-/* …AND WHAT THE ONE ASSERTION IN THAT SAME WALK DID WITH THOSE WEIGHTS — solver/flow.h states the partition,
-   the kind, why the four are read through ONE call, and why all four reading zero beside a nonzero scan row
-   is a build that makes no check rather than a check that never armed. Raised only inside the dev block in
-   flow_pick; the STORAGE and the ACCESSOR are unconditional because solver/result.c publishes them in every
-   build and that composer has no dev arm to put them behind. */
+/* And what the one assertion in that walk did with those weights; solver/flow.h states the partition, the kind, why
+   the four are read through one call, and why all four at zero beside a nonzero scan row is a build that makes no
+   check. Raised only in flow_pick's dev block; the storage and accessor are unconditional because solver/result.c
+   publishes them in every build. */
 static FlowKeyChecks g_key_checks;
 FlowKeyChecks flow_key_checks(void) { return g_key_checks; }
 
@@ -3520,179 +3488,100 @@ int64_t flow_scan_weights(FlowScan s) {
     return g_scan_weights[s];
 }
 
-/* THE THREE SKIPS THE ORDER'S WALK MAKES, WRITTEN ONCE BECAUSE THERE ARE NOW TWO WALKS — the dispatch scan
-   below and the dev-only band walk after it, which must weigh EXACTLY the population the scan weighed or the
-   count it publishes is a numerator over a denominator it does not have. Two copies of a three-armed
-   predicate is the drift shape §Architecture's auditor rule names one scope up: the day a fourth skip is
-   added, a copy that did not get it makes the band a share of the wrong set and nothing anywhere says so.
-   IT IS A PURE PREDICATE AND `seed_live` IS NOT PART OF IT, which is what makes it the same function as the
-   block it replaces rather than a tidying of that block. THAT BLOCK'S OWN COMMENT SAID `SEED BEFORE EXCLUDE,
-   WHICH PRESERVES WHAT THE OLD BLOCK DID RATHER THAN TIDYING IT`, and its point is kept rather than deleted
-   because a reader will re-derive it: the seed arm ran first so a pointer that was BOTH the seed and the
-   exclusion was marked live and folded in afterwards, and no caller passes both today. That is unchanged —
-   the caller sets the flag and then asks this — and the arms' ORDER was never observable in the first place,
-   because all three of them end in `continue`. */
+/* The three skips the order's walk makes, written once because two walks use them: the dispatch scan and the dev
+   band walk, which must weigh exactly the population the scan weighed or its published count is over a different
+   denominator. A pure predicate; `seed_live` is set by the caller first, so a pointer that is both the seed and the
+   exclusion is marked live and then skipped, and the arms' order is unobservable because all three end in
+   `continue`. */
 static int flow_pick_skipped(const Flow *m, const Flow *seed, const Flow *exclude, int runnable_only) {
     return m == seed || m == exclude || (runnable_only && flow_host_owed(m));
 }
 
+/* The one order, asked through one scan. Four questions are put to the ranking (who should be running, who the
+   running flow is defending against, this document's best weight for the host's Level-1 order, and which member the
+   pager gives up first), and they are a seed, filters and a direction over one comparator, never separate rankings
+   (one WFQ policy at both levels), so every pick is made under the assertions below.
+   The incumbent is the seed, not a candidate like the rest: the scan compares strictly, so seeding it with the flow
+   that holds the thread states the rule that the thread moves only for a strictly better flow, the rule the preempt
+   hook's value clause applies at the other end. Without the seed the pick returns the first maximum in registry
+   order, so a field of equal weights (the ordinary state) would hand the thread to g_flows[0] every iteration and
+   pay a COW swap for an unchanged ranking. It is not a hysteresis margin, minimum service or switch budget: there
+   is no number in it, and a strictly better flow takes the thread at the next opcode. */
 static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only, int worst, FlowScan why) {
     Flow *best = NULL; double bw = 0.0;
-    /* THE SCAN IS ABOUT TO HAPPEN, SO IT IS COUNTED HERE AND NOT AT ITS RETURN. Every exit of this function is
-       one scan performed, including the one that finds nothing, and a count taken at a return would miss
-       whichever exit somebody adds next. `why` is the CALLER's, threaded in rather than derived from the four
-       argument flags: two entries share a flag shape today (`flow_best` and the census read differ in nothing
-       but their question), so deriving it would be a second list that agrees with the call sites only by
-       luck — the same reason solver/step_unit.h's arm is assigned at each arm rather than inferred.
-       CHECKED IN RANGE BEFORE IT INDEXES, and as a CHECK rather than a DCHECK for solver/cold.c's reason at
-       its own histogram: the increment below is a WRITE in every build, so a dev-only guard vanishes in
-       exactly the build where the store happens, and a store past the end of this array lands in whatever the
-       link put after it. */
+    /* The scan is counted here, not at its return, so every exit counts, including one added later. `why` is the
+       caller's, threaded in rather than derived from the flags, since two entries share a flag shape (`flow_best`
+       and the census read differ only in their question), as solver/step_unit.h's arm is assigned at each arm. A
+       CHECK rather than a DCHECK, for solver/cold.c's reason at its histogram: the increment is a write in every
+       build, so a dev-only guard would vanish exactly where the store happens. */
     CHECK((unsigned)why < (unsigned)FLOW_SCAN_N,
           "engine: the order was asked through a scan entry that is not in solver/flow.h's list — the value is "
           "only ever written from that enum at a flow_pick call site, so this is a cast or an uninitialised "
           "read, and the counters below would be written outside their array in every build");
     g_scan_runs[why]++;
-    /* A MEMBER CARRYING THE FULL BONUS AND NO AGING — its weight is its reward + 1.0 and hence at least 1.0,
-       which is the only property the assertions below need, and the test is written as exactly that premise:
-       EVERY non-reward term of flow_weight at zero, read through the same functions the weight reads.
-       IT USED TO BE `cpu == 0` ALONE, which was the whole test while `cpu` was the whole of both non-reward
-       terms. The family charge made it two coordinates and the visit count made it three, and each time,
-       testing fewer than all of them left the assertions resting on a premise the frontier stops satisfying —
-       a flow at `cpu == 0` inside a family a SIBLING has since burned is worth `val + 1.0 − aging`, which can
-       be deeply negative — so the guard would have started firing on healthy runs. Reading the notch rather
-       than its summands is what makes this survive the next such change: the population named here is the one
-       the derivation is about, however many quantities the notch is built from.
-       AND IT IS THE BEST MEMBER OF THAT POPULATION RATHER THAN A BOOLEAN OVER IT, which is the difference
-       between naming §scheduler's guarantee and stating it. "A never-run flow is never starved" is a claim
-       about a DISTANCE — how far the best untouched member stands behind the flow the pick returns — and a
-       bit can only say that such a member exists. The census makes the same distinction one level up and
-       makes it deliberately: `jobs_ready` is a count and `job_w_gap` is the reading the count cannot make,
-       "denominated in the order's own unit" (flow.h). The population §scheduler's sentence is actually about
-       had the count and not the reading, so the guard below it could only ever restate a floor.
-       AND THE POPULATION EMPTIES — WHICH IS A FACT ABOUT THIS TEST, NOT ABOUT THE FRONTIER, AND IT IS WHY THE
-       RANGE CLAIM THESE GUARDS RESTED ON NOW LIVES AT flow_nonreward INSTEAD. `flow_silence_notch` reads the
-       SHARED `fam_us`, so the second clause is a question about the whole FAMILY: once a family has burned one
-       cooperative quantum since any of its arms last emitted, `acct_family_us` alone exceeds FLOW_SERVICE_US
-       and NO member of it can answer this, whatever its own `cpu` is. On a real page the whole frontier is one
-       family, so `unrun` is NULL for all of it. NOR CAN A BIRTH REFILL IT: both doors copy the incumbent's
-       coordinates verbatim — a fork takes the parent's own silence and its window mark and joins its family
-       (flow_fork_inherit), an arrival takes `flow_own_silence(g_running)` and its family's `fam_us` as values
-       (flow_arrive_at_virtual_time) — so a
-       newborn's notch and visit count are EXACTLY the incumbent's, and on a quiet frontier the incumbent is
-       not in this population either. The only writer that puts the SILENCE half back is flow_credit_emit,
-       which through the account's generation zeroes the own AND family silence of every member of that family
-       at once. So this population is non-empty only
-       within one quantum of an emission, and the two guards below — each of which short-circuits on it —
-       assert NOTHING on a frontier that has gone quiet, which is precisely the frontier §scheduler's sentence
-       is about. That is the §Testing empty-denominator defect standing in the guard written to catch it.
-       THE ARRIVAL DOOR NO LONGER AGREES WITH THAT SENTENCE, AND THE CORRECTION IS WORTH MORE THAN THE
-       PARAGRAPH IT AMENDS. The clause above says "both doors copy the incumbent's coordinates verbatim", and
-       for an ARRIVAL that is now false: a from-baseline flow copies NOTHING (flow_arrive_at_virtual_time), so
-       it stands at zero own silence, zero family silence and zero completed units, and it ANSWERS this test.
-       Every unplaced account therefore refills this population and keeps it non-empty for as long as one of
-       them stands, which is exactly the interval in which §scheduler's never-starved guarantee is a claim
-       about somebody. The guards below are correspondingly LIVE where they used to short-circuit, and that is
-       a forcing function rather than a result: what they assert is an identity under flow_weight as it stands,
-       so they fire only on an edit that breaks the derivation — and they now get the chance to.
-       WHAT IS STILL UNCOVERED IS A FRONTIER WHOSE ACCOUNTS HAVE ALL BEEN SERVED, which is the residual at the
-       bottom of this function and is narrower than it was by exactly this population.
-       AND THE VISIT-COUNT CLAUSE IS NOW A NARROWER TEST THAN IT WAS, WHICH IS A HONEST POPULATION AND NOT A
-       WIDER HOLE. flow_credit_emit used to zero the EMITTER's `visits` as well, so within a quantum of any
-       emission the emitter itself answered this test however many programs it had finished — a member that had
-       just PRODUCED counted as one that had never run, which is the same flaw `never_picked` (flow.h) exists
-       because of. With that write gone the clause means what it reads: a member whose own prefix has completed
-       no unit of work. What that does NOT do is fix the vacuity above — the silence clause is what empties this
-       set on a quiet frontier and it is untouched — so the residual below covers strictly more picks than it
-       did, and it is stated there rather than left to be re-derived here. */
+    /* The best member carrying the full bonus and no aging: its weight is its reward + 1.0, at least 1.0, which is
+       the property the assertions below need. The test is that premise, every non-reward term of flow_weight at
+       zero read through the weight's own functions (the notch rather than its summands, so the population follows
+       however many quantities the notch is built from). It is the best member rather than a boolean, because "a
+       never-run flow is never starved" is a claim about a distance (how far the best untouched member stands
+       behind the pick), as the census's `job_w_gap` is the reading `jobs_ready` cannot make.
+       The population empties, which is why the range claim lives at flow_nonreward. `flow_silence_notch` reads the
+       shared `fam_us`: once a family has burned one cooperative quantum since any arm last emitted,
+       `acct_family_us` alone exceeds FLOW_SERVICE_US and no member of it answers this, and on a real page the
+       frontier is one family. A fork does not refill it (the arm takes its parent's silence, window mark and
+       family). An arrival does: a from-baseline flow copies nothing (flow_arrive_at_virtual_time), so it stands at
+       zero silence and zero units, and every unplaced account keeps the population non-empty while it stands,
+       which is when the never-starved guarantee is about somebody. flow_credit_emit refills it within a family
+       for one quantum. The visit clause means what it reads, a member whose prefix has completed no unit, since an
+       emission no longer zeroes the emitter's `visits`. A frontier whose accounts have all been served is the
+       residual at the bottom of this function. */
     const Flow *unrun = NULL;   /* the best-weighted member with EVERY non-reward term of flow_weight at zero */
     double unrun_w = 0.0;
-    /* …AND THE BEST WEIGHT ANY NEVER-DISPATCHED MEMBER OFFERS, WHICH IS A DIFFERENT POPULATION AND A DIFFERENT
-       QUESTION. `unrun` above needs every non-reward term at zero, which flow_credit_emit's forgiveness gives
-       to members that have PRODUCED; `picks == 0` is the population §scheduler's razor is about and the only
-       field in a Flow that nothing resets. Held here rather than derived at the return because the maximum is
-       not known until the scan ends. */
+    /* And the best weight any never-dispatched member offers, a different population: `unrun` needs every
+       non-reward term at zero, which flow_credit_emit's forgiveness gives to members that produced, while
+       `picks == 0` is the population starvation is about and the one field nothing resets. Held here because the
+       maximum is known only when the scan ends. */
     const Flow *never = NULL;
     double never_w = 0.0;
     DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
                              "keeps the THREAD, and the flow the pager gives up is not a question about that");
-    /* IS THE SEED STILL STANDING — ANSWERED BY THE SCAN BELOW AND NOT BY A SECOND WALK OF THE FRONTIER, which
-       is the whole of why the eligibility block now sits AFTER the loop. This function already visits every
-       member and already compares each one against `seed`, so membership is decided at no cost at all; asking
-       flow_is_member for it made ASKING THE ORDER cost TWO walks per dispatch, of which only one was ever
-       priced — `g_scan_weights` counts weight EVALUATIONS and that walk evaluates none, so the frontier-weighing
-       rows understated the dispatch pick by a factor of two and said nothing about it.
-       IT NEEDS NO STATEMENT THAT THE SEED IS LIVE, WHICH IS WHERE THE RETIRED RESIDUAL'S REMEDY CLAUSE WAS
-       WRONG AND IS RECORDED HERE RATHER THAN DELETED WITH IT. That residual (at flow_is_member) named the next
-       diff as making the pick's membership question O(1), and said what had to exist first was a claim that
-       the seed is not dangling. Neither is needed, and both were reached the same way: its author pictured the
-       HANDLE being read, which does require the pointer to be live, instead of noticing that the answer was
-       already passing through the loop. What decides membership below is an ADDRESS comparison against members
-       the registry is holding — exactly what flow_is_member compares, for exactly its reason — so a dangling
-       seed matches nothing and is never dereferenced, and O(1) never arises because the walk it would have
-       replaced is one the pick performs anyway. A remedy clause is a claim about this tree written by somebody
-       who knew what was missing and was guessing at what fills it; this one is what that looks like.
-       WHY THIS IS STILL A WALK AT ALL, AND IT IS ARITHMETIC RATHER THAN A PREFERENCE. The obvious repair is a
-       heap keyed on flow_weight, and on this engine's frontier it is invalidated faster than it can be kept.
-       Every term of flow_weight except the aging moves only on an event that raises the frontier generation or
-       that touches the RUNNING member; the aging is `-FLOW_AGE_QUANTUM * ((own_silence + fam_us) /
-       FLOW_SERVICE_US)`, and `fam_us` is SHARED by the fork family, advances on EVERY step (flow_age_running)
-       and raises no generation. Adding one constant to both operands of a division preserves their order, so
-       the shared advance reorders nothing CONTINUOUSLY — what reorders is the FLOOR's PHASE, each member
-       straddling its own boundary at its own instant because each carries its own `own_silence`. Over one
-       FLOW_SERVICE_US of family time every member crosses exactly once, FLOW_SERVICE_US IS ENGINE_QUANTUM_MS
-       (the definition above says so), and the cooperative quantum is the slice a dispatch holds — so that is N
-       heap updates per dispatch, which is this loop plus a logarithm. It is the same straddle solver/engine.c's
-       rival cache records having been aborted by, read as a cost instead of as a staleness.
-       WHAT RETIRES THIS, AND THIS CLAUSE USED TO DEMAND A WEIGHT CHANGE FOR IT — REWRITTEN RATHER THAN
-       DELETED, BECAUSE THE DEMAND IS THE READING A READER RE-DERIVES AND IT IS THE ONE THAT FORECLOSES THE
-       REPAIR. It read: an aging term whose PER-MEMBER quantity does not move between generation bumps;
-       flooring the two halves apart is one shape of that and `flow_family_notch` is already the half that
-       would be a common offset within a family — but it is a WEIGHT CHANGE and worth a whole notch of an order
-       this file has measured spanning four hundredths of a point, so it is argued at flow_silence_notch or
-       nowhere, never as an indexing decision. `flow_silence_phase` RETIRED THAT and says so at its own site:
-       the notch is exactly `k + K + (p + R >= S)`, so the per-member quantity that moves with no bump is ONE
-       BIT against a threshold the FAMILY owns and sweeps — a RESIDUE indexed by `p`, not a re-keying — and
-       that pair states in its own words that flow_weight is untouched by it. Two blocks of this file disagreed
-       about whether an index costs a weight change, and a reader reaching THIS one last concluded it does.
-       AND NEITHER BLOCK NAMES THE SUMMAND THAT DECIDES THE UPDATE COST, WHICH IS WHY THE TEST ABOVE IS THE
-       WRONG TEST RATHER THAN A FALSE ONE. "Moves only on an event that raises the frontier generation" is TRUE
-       of every term and it is a CACHE's test: a bump costs a cache O(1), because it DROPS the answer. An index
-       is MAINTAINED across the bump, so what it pays is how many KEYS that event moved, and the summands are
-       not alike in that. `acct_family_val` and the family notch are per-ACCOUNT, `flow_optimism`,
-       `flow_distance` and the own notch are per-MEMBER — each an offset or an O(1) update.
-       `flow_branch_bonus` is neither: it is `1.0 / sub_born` read through `f->acct->branch`, the
-       `br->sub_born++` at the fork below raises it for the bucket the arm JOINS, and every live member of that
-       bucket changes weight in that one statement. solver/engine.c's `g_rival_branch_born` says exactly this
-       — "one sibling forking re-ranks every member of the arm simultaneously" — and nothing connected the two
-       sites. So an index that bakes this term into a per-member key pays O(live members of the bucket) PER
-       FORK, which on a forking page is the cost moved rather than removed: the very thing this clause warns
-       against, reached by obeying it. It is carried as a per-BUCKET OFFSET read at query time or the index is
-       not sub-linear, and `br_fan_max`/`br_fan_sum` on the census are what price that choice before anybody
-       builds one. Until then a heap here is not a cheaper spelling of this loop.
-       RETIREMENT: this record goes when the ask no longer walks the frontier, or when no per-bucket quantity
-       can be summed into flow_weight at all. */
+    /* Is the seed still standing: answered by the scan below rather than a second walk, which is why the
+       eligibility block sits after the loop. This function visits every member and compares each against `seed`,
+       by address against members the registry holds (flow_is_member's comparison), so a dangling seed matches
+       nothing and is never dereferenced, and `g_scan_weights` prices the only walk the pick makes.
+       Why this is still a walk: a heap keyed on flow_weight is invalidated faster than it can be kept. Every term
+       except the aging moves only on an event that raises the generation or touches the running member; the aging
+       is `-FLOW_AGE_QUANTUM * ((own_silence + fam_us) / FLOW_SERVICE_US)`, and `fam_us` is shared by the family,
+       advances every step and raises no generation. The shared advance reorders nothing continuously; the floor's
+       phase does, each member straddling its boundary at its own instant, once per FLOW_SERVICE_US of family time,
+       which is one dispatch's slice: N heap updates per dispatch. flow_silence_phase makes that a count of
+       crossings: the notch is exactly `k + K + (p + R >= S)`, so what moves with no bump is one bit against a
+       threshold the family sweeps, a residue indexed by `p` with flow_weight untouched.
+       The update cost is decided by scope, not by "moves only on an event that raises the generation", which is a
+       cache's test (a bump drops a cached answer in O(1)); an index is maintained across the bump and pays for the
+       keys the event moved. `acct_family_val` and the family notch are per account; `flow_optimism`,
+       `flow_distance` and the own notch per member. `flow_branch_bonus` is neither: it is `1.0 / sub_born` through
+       `f->acct->branch`, the fork's `br->sub_born++` raises it for the bucket the arm joins, and every live member
+       of that bucket changes weight in that one statement (solver/engine.c's `g_rival_branch_born`: "one sibling
+       forking re-ranks every member of the arm simultaneously"). So an index baking it into a per-member key pays
+       O(live members of the bucket) per fork; it is carried as a per-bucket offset read at query time or the index
+       is not sub-linear, and `br_fan_max`/`br_fan_sum` on the census price that choice. This record retires when
+       the ask no longer walks the frontier, or when no per-bucket quantity can be summed into flow_weight. */
     int seed_live = 0;
-    /* WHETHER THE SEED WAS A CANDIDATE AT ALL, WRITTEN AT THE ONE SITE THAT DECIDES IT AND NOT RE-DERIVED.
-       The fold below admits the incumbent only if it is still in the registry AND is not host-owed on a
-       runnable-only scan, and the plateau rows at the end of this function need exactly that population: the
-       question "did the incumbent keep the thread" is not askable about a seed the scan never weighed. Written
-       inside that `if` rather than recomputed beside the raise, because a second spelling of a two-clause
-       condition is the second copy that drifts, and the clause that would drift is the one nobody re-reads. */
+    /* Whether the seed was a candidate at all, written at the one site that decides it: the fold admits the
+       incumbent only if it is still registered and not host-owed on a runnable-only scan, and the plateau rows
+       at the end ask "did the incumbent keep the thread" only of a seed the scan weighed. */
     int seed_weighed = 0;
 #if APICLIENT_DEV
-    /* THE TWO SIDES OF THE ONE IDENTITY THAT MAKES THE ARMING COUNT A MEASUREMENT RATHER THAN A SUM OF ITS OWN
-       SUMMANDS — snapshotted here and compared where the loop ends. See solver/flow.h's FlowKeyChecks. */
+    /* The two sides of the identity that makes the arming count a measurement rather than a sum of its own
+       summands, snapshotted here and compared where the loop ends (solver/flow.h's FlowKeyChecks). */
     int64_t kc_before = key_checks_total(), sw_before = g_scan_weights[why];
-    /* …AND THE MEMBER AN INDEX OVER THE MEMBER KEY WOULD HAVE RETURNED, folded beside the comparator's own
-       maximum over exactly the same population and with exactly the same tie-break. See solver/flow.h's
-       FlowIndexChecks for what the comparison licenses and why it is a reading rather than an argument. */
+    /* And the member an index over the member key would have returned, folded beside the comparator's maximum over
+       the same population with the same tie-break (solver/flow.h's FlowIndexChecks). */
     const Flow *sur_best = NULL; double sur_w = 0.0;
-    /* …AND THE WIDEST MARGIN ANY MEMBER OF THIS SCAN CARRIES, which is what the band's edge is set from. It
-       is a MAXIMUM over the folded population and not a per-member reading, because the band has to admit the
-       comparator's own extremum and the two members that argument is about — the surrogate's pick and the
-       comparator's — are not known until the fold ends. See the band walk below for the proof it is what
-       makes that set exact. */
+    /* And the widest margin any member of this scan carries, from which the band's edge is set: a maximum over the
+       folded population, because the band must admit the comparator's extremum and the two members that argument
+       concerns are known only when the fold ends. The band walk below proves the set exact. */
     double sur_mmax = 0.0;
 #endif
     for (int i = 0; i < g_flows_n; i++) {
