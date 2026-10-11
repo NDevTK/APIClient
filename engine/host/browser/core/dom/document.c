@@ -2272,13 +2272,12 @@ static JSValue js_doc_implementation(JSContext *ctx, JSValueConst this_val, int 
    because a page that missed the event reads it instead. Both are per-FLOW: the scheduler asks once per stage
    for each flow that has run everything the document gave it, so an arm that reached the end of the document
    fires its own listeners in its own world. */
-/* The parsed document's ROOT node — what a whole-tree walk starts from. One component owns which document a
-   realm parsed; a second copy of that pointer is how the two drift apart. NULL before the install, which is a
-   real state a Window member reads (`window.document` before there is one). */
+/* The document element of the realm's parsed document, read from the tree (DOM §4.2.1 "Document tree"). NULL
+   before the install, which `window.document` is entitled to see, and NULL once the page removes its root. */
 lxb_dom_node_t *document_root_node(JSContext *ctx)
 {
     Document *d = doc_of(ctx);
-    return d ? lxb_dom_interface_node(d->dom->dom_document.element) : NULL;
+    return d ? document_document_element_of(lxb_dom_interface_node(d->dom)) : NULL;
 }
 
 /* THIS REALM'S ASSOCIATED DOCUMENT, AND WHY IT IS NOT REACHED THROUGH THE ROOT NODE ABOVE.
@@ -3206,18 +3205,13 @@ static lxb_dom_node_t *doc_child_named(lxb_dom_node_t *parent, const char *a, co
     return NULL;
 }
 
-/* §4.5 "document element": the ELEMENT child of the document. There is at most one, and NULL is a real answer —
-   a document §4.5's createDocument built with no qualified name has none. */
+/* DOM §4.2.1 "Document tree"'s document element, through lexbor's one reading of the tree. NULL is a real
+   answer: a document §4.5's createDocument built with no qualified name has none, and a page may remove it. */
 lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc)
 {
-    lxb_dom_node_t *n;
-
     if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
         return NULL;
-    for (n = doc->first_child; n; n = n->next)
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
-            return n;
-    return NULL;
+    return lxb_dom_interface_node(lxb_dom_document_element(lxb_dom_interface_document((lxb_dom_node_t *)doc)));
 }
 
 /* §3.1.7's `body`, AS A LOOKUP ANOTHER COMPONENT CAN MAKE. HTML §6.6.6's `activeElement` ends in exactly these
@@ -5723,7 +5717,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        whose flag is false (`createHTMLDocument`, `DOMParser`, XHR's `responseXML`) are built by document_new
        and never reach here, which is why they keep their `<template>` elements. */
     declarative_shadow_parsed(ctx, lxb_dom_interface_node(dom),
-                              lxb_dom_interface_node(dom->dom_document.element), /*allow*/ true);
+                              document_document_element_of(lxb_dom_interface_node(dom)), /*allow*/ true);
     /* HTML §4.8.11.2 FOR THE TREE THE PARSER BUILT — "if a media element is created with a src attribute, the
        user agent must immediately invoke the media element's resource selection algorithm". §13.2.6.1's
        "create an element for a token" ends by appending the token's attributes to the element, so a parsed

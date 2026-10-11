@@ -209,7 +209,6 @@ lxb_dom_document_clean(lxb_dom_document_t *document)
 
     document->node.first_child = NULL;
     document->node.last_child = NULL;
-    document->element = NULL;
     document->doctype = NULL;
 
     return LXB_STATUS_OK;
@@ -259,13 +258,6 @@ lxb_dom_document_attach_doctype(lxb_dom_document_t *document,
                                 lxb_dom_document_type_t *doctype)
 {
     document->doctype = doctype;
-}
-
-void
-lxb_dom_document_attach_element(lxb_dom_document_t *document,
-                                lxb_dom_element_t *element)
-{
-    document->element = element;
 }
 
 lxb_dom_element_t *

@@ -77,9 +77,7 @@ static void bp_decline(BpState *st, BoxPaintDecline why)
                         (1u << (unsigned)BOX_PAINT_DECLINE_UNBUILT_STEP))
 
 /* "The root element", asked of the document: DOM §4.2.1 "Document tree"'s document element, "the element whose
-   parent is that document, if it exists; otherwise null", which core/dom/document.h computes from the tree.
-   lexbor's `lxb_dom_document_element` is not that answer: it is the node the parse attached, and a page that
-   removes or replaces its root leaves it naming the old one. */
+   parent is that document, if it exists; otherwise null", which core/dom/document.h computes from the tree. */
 static bool bp_is_root_element(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);

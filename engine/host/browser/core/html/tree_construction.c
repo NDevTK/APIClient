@@ -286,9 +286,6 @@ void html_tree_construction_copy(const lxb_html_tree_t *src, lxb_dom_node_t *src
            "§13.4's temporary document does not hold the parse's root element as its only child — the copy "
            "walks that document's children, so a second one is a subtree it would silently place under the "
            "wrong parent");
-    DCHECK(src_doc->element == lxb_dom_interface_element(src_root),
-           "§13.4's temporary document does not name the parse's root element as its document element — "
-           "chunk_begin attaches it, and lexbor's tree builder reads it back");
 
     /* THE COPY'S OWN TEMPORARY DOCUMENT, made exactly as chunk_begin makes the original's: against the REAL
        document, so it inherits the same arenas and the same name hashes. It has to be its own, because
@@ -310,7 +307,6 @@ void html_tree_construction_copy(const lxb_html_tree_t *src, lxb_dom_node_t *src
     DCHECK(out->root == map_get(&map, src_root),
            "the copy of §13.4's root element is not the copy document's first child — the walk copies the "
            "source document's children in order into a tree that starts empty");
-    lxb_dom_document_attach_element(copy_doc, lxb_dom_interface_element(out->root));
 
     copy = lxb_html_tree_create();
     CHECK(copy != NULL, "the fragment-parse copy could not create its tree builder");

@@ -439,11 +439,11 @@ static bool img_uses_srcset_or_picture(lxb_dom_element_t *el)
    PARSED — requests a browser does not make, and which a `<template>`'s contents do not make either. */
 static bool img_document_fully_active(JSContext *ctx, lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *root = document_root_node(ctx);
+    lxb_dom_document_t *active = document_associated(ctx);
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
 
     DCHECK(n != NULL, "§7.3.3's fully active was asked about no element");
-    if (!root || root->owner_document != n->owner_document) return false;
+    if (!active || active != n->owner_document) return false;
     return document_fully_active(ctx);
 }
 

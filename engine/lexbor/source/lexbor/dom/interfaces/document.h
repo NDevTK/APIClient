@@ -68,7 +68,6 @@ struct lxb_dom_document {
     lxb_dom_document_dtype_t                  type;
 
     lxb_dom_document_type_t                   *doctype;
-    lxb_dom_element_t                         *element;
 
     lxb_dom_interface_create_f                create_interface;
     lxb_dom_interface_clone_f                 clone_interface;
@@ -159,10 +158,6 @@ LXB_API void
 lxb_dom_document_attach_doctype(lxb_dom_document_t *document,
                                 lxb_dom_document_type_t *doctype);
 
-LXB_API void
-lxb_dom_document_attach_element(lxb_dom_document_t *document,
-                                lxb_dom_element_t *element);
-
 LXB_API lxb_dom_element_t *
 lxb_dom_document_create_element(lxb_dom_document_t *document,
                                 const lxb_char_t *local_name, size_t lname_len,
@@ -243,10 +238,21 @@ lxb_dom_document_destroy_text(lxb_dom_document_t *document, lxb_char_t *text)
     return lexbor_mraw_free(document->text, text);
 }
 
+/* DOM §4.2.1 "Document tree": "The document element of a document is the element whose parent is that
+   document, if it exists; otherwise null." Read from the tree, and the document keeps no copy: a page's
+   removal or replacement of its root would leave one naming a node that has left. */
 lxb_inline lxb_dom_element_t *
 lxb_dom_document_element(lxb_dom_document_t *document)
 {
-    return document->element;
+    lxb_dom_node_t *node;
+
+    for (node = document->node.first_child; node != NULL; node = node->next) {
+        if (node->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            return (lxb_dom_element_t *) node;
+        }
+    }
+
+    return NULL;
 }
 
 lxb_inline bool

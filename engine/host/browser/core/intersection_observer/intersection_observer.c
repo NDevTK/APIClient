@@ -247,7 +247,7 @@ static JSContext *io_root_document_realm(JSContext *ctx, JSValueConst root)
 static bool io_root_in_tree(JSContext *ctx, JSValueConst state)
 {
     JSValue root = JS_GetPropertyUint32(ctx, (JSValue)state, IO_S_ROOT);
-    lxb_dom_node_t *doc = document_root_node(ctx), *n;
+    lxb_dom_node_t *doc = lxb_dom_interface_node(document_associated(ctx)), *n;
     bool in;
 
     if (JS_IsNull(root)) {
@@ -481,7 +481,7 @@ static IoRect io_root_bounds(JSContext *ctx, JSValueConst state)
                document is THIS one — `io_root_in_tree` has already refused an observer whose Document root is
                not this realm's — so the viewport asked for is `ctx`'s, and the assert is what keeps that a
                derivation rather than a second lookup free to disagree. */
-            DCHECK(n == document_root_node(ctx),
+            DCHECK(n == lxb_dom_interface_node(document_associated(ctx)),
                    "§2.2's root intersection rectangle was asked for a DOCUMENT root that is not the document "
                    "being walked — §3.2.10 step 1 collects only observers whose root is in this tree");
             r = io_viewport_rect(ctx);

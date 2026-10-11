@@ -158,8 +158,5 @@ lxb_html_tree_insertion_mode_before_html_html(lxb_html_tree_t *tree,
                               node_html,
                               LXB_HTML_TREE_INSERTION_POSITION_CHILD);
 
-    lxb_dom_document_attach_element(&tree->document->dom_document,
-                                    lxb_dom_interface_element(node_html));
-
     return LXB_STATUS_OK;
 }

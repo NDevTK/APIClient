@@ -305,20 +305,14 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
        its site, because a crash that outlives the absence it names is the failure mode this project rates
        worst. */
     document_replace_selection(ctx, doc_obj);
-    /* …AND THE FOUR POINTERS LEXBOR CACHES INTO THE TREE THAT JUST WENT, which are part of the same step and
-       not bookkeeping after it. A Document node's children ARE its doctype and its document element, and
-       lexbor additionally caches `head` and `body`; every one of them now names a node that is no longer in
-       the tree. Two consumers read them and both would be wrong in a way that does not look like a stale
-       pointer: §13.2.6.4.7 'The "in body" insertion mode' re-attributes a written `<body>` token's attributes
-       onto `document->body`, so the next write's attributes would land on the REMOVED body; and
-       core/dom/document.h's document_root_node hands out `dom_document.element` as the root a whole-tree walk
-       starts from. The re-parse refills all four (§13.2.6.4.2 'The "before html" insertion mode' calls
-       `lxb_dom_document_attach_element`), so this is the window between step 11 and the first token — which is
-       exactly where a `document.open()` with no write yet leaves the page. Through the POD latch for the
-       reason step 15 is: they are fields of the shared Lexbor document. */
-    cow_capture_host_state(ctx, doc_obj, &dom->element, sizeof dom->element);
+    /* …AND THE THREE POINTERS LEXBOR CACHES INTO THE TREE THAT JUST WENT, which are part of the same step and
+       not bookkeeping after it: the doctype, and the parser's `head` and `body`. Each now names a node that is
+       no longer in the tree, and §13.2.6.4.7 'The "in body" insertion mode' re-attributes a written `<body>`
+       token's attributes onto `document->body`, so the next write's attributes would land on the REMOVED
+       body. The re-parse refills them, so this is the window between step 11 and the first token. The
+       document element is not among them: lexbor reads it from the tree. Through the POD latch for the reason
+       step 15 is: they are fields of the shared Lexbor document. */
     cow_capture_host_state(ctx, doc_obj, &dom->doctype, sizeof dom->doctype);
-    lxb_dom_document_attach_element(dom, NULL);
     lxb_dom_document_attach_doctype(dom, NULL);
     {
         lxb_html_document_t *html_doc = lxb_html_interface_document(dom);

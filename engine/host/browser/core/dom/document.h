@@ -513,8 +513,10 @@ bool document_record_names(lxb_html_document_t *dom);
    reaches them on a DIFFERENT document from the one whose implementation was asked. `doc` is that document's
    wrapper; `argv` is (namespace, qualifiedName). */
 JSValue document_create_element_ns(JSContext *ctx, JSValueConst doc, int argc, JSValueConst *argv);
-/* The parsed document's root node, for a component that walks the whole tree. NULL in a realm that has no
-   document yet, which `window.document` is entitled to see. */
+/* The DOCUMENT ELEMENT of the realm's parsed document (DOM §4.2.1 "Document tree"), for a component that walks
+   the whole tree. NULL in a realm that has no document yet, which `window.document` is entitled to see, and
+   NULL once a page removes its root. A caller asking about the Document node itself reads
+   `document_associated`. */
 lxb_dom_node_t *document_root_node(JSContext *ctx);
 
 /* THIS REALM'S ASSOCIATED DOCUMENT — "current global object's associated Document", the operand DOM §4.7
