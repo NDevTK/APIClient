@@ -4473,57 +4473,37 @@ void flow_wfq_census(WfqCensus *out) {
             else if (!flow_stack_empty(f)) out->deliv_framed++;
             else {
                 out->deliv_ready++;
-                /* THE BEST OF THEM, against which `deliv_w_gap` is taken below — a maximum and not a first
-                   hit, for the reason the job holder's is: the question is how far the backlog's BEST claim
-                   stands from the front of the queue, and every other holder is further still. */
+                /* The best of them, against which `deliv_w_gap` is taken, a maximum for the job holder's reason. */
                 if (!have_deliv_holder || w > deliv_w_max) {
                     deliv_w_max = w; have_deliv_holder = 1; deliv_holder = f;
                 }
             }
         }
         if (s > out->svc_max) out->svc_max = s;
-        /* …AND THE SUB-QUANTUM REMAINDER `s` THREW AWAY, WHICH IS WHAT DECIDES WHETHER ASKING THE ORDER HAS
-           TO WALK AT ALL. `s` is `own / S` and this is `own % S`: the member's PHASE against the family's,
-           and the only per-member quantity in flow_weight that moves between two frontier generations
-           (flow_silence_phase states the decomposition). Counted here because the walk is already holding the
-           member and has already paid for the read `s` came from.
-           DISTINCT VALUES AND NOT A SPREAD, because the two answer different questions and only one of them
-           is about an index. A spread says how far apart two members stand; what an index over this key needs
-           to know is HOW MANY GROUPS the frontier partitions into, and `sil_phases: 1` is the strongest
-           answer the ARITHMETIC permits — every member crosses the carry boundary at the same instant, so the
-           bit is a COMMON OFFSET, nothing reorders between generation bumps at all, and a single cached
-           maximum is exact. Any larger reading is the number of ranges a sweep has to move through.
-           THIS USED TO READ `the strongest possible answer` FLAT, AND THE ARCHIVE CONTRADICTS THAT AS A CLAIM
-           ABOUT THIS ENGINE — every `sil_phases == 1` in this repository's logs stands at `members == 1`, and
-           a live page reads about half its frontier. solver/flow.h carries the measurement, the corpus it was
-           taken over and the retirement condition; it is repaired HERE TOO because one sentence held at three
-           sites is three chances to be stale, and repairing the one a reader happens to find is how the other
-           two get certified. */
+        /* And the sub-quantum remainder `s` threw away, which decides whether asking the order has to walk at all:
+           `s` is `own / S` and this `own % S`, the member's phase against the family's and the one per-member
+           quantity in flow_weight that moves between two frontier generations (flow_silence_phase). Distinct
+           values rather than a spread, because an index needs to know how many groups the frontier partitions into:
+           `sil_phases: 1` is the strongest answer the arithmetic permits (every member crosses the carry boundary
+           at once, so the bit is a common offset and a single cached maximum is exact), and a larger reading is the
+           number of ranges a sweep moves through. It is not a typical engine reading; solver/flow.h carries the
+           measurement, its corpus and the retirement condition. */
         {
             int64_t ph = flow_silence_phase(f);
             if (!g_phase_seen[(size_t)ph]) { g_phase_seen[(size_t)ph] = 1; out->sil_phases++; }
             out->sil_carry += flow_silence_carry(f);
         }
-        /* …AND THE FAMILY THIS MEMBER BELONGS TO, in the SAME notch — which is now the notch the AGING term
-           actually reads, so `svc_fam_max` against `svc_max` is no longer a diagnostic beside the order, it is
-           the order's own denominator against one member's share of it. Read per member rather than per family
-           because a family has no member of its own to be asked, and the maximum over members reaches every
-           family exactly as often as it has arms standing. */
+        /* And the family this member belongs to, in the same notch, the one the aging reads, so `svc_fam_max`
+           against `svc_max` is the order's denominator against one member's share. Read per member, since a family
+           has no member of its own to ask; the maximum reaches every family as often as it has arms standing. */
         {
             int64_t fam = flow_family_notch(f);
-            /* AND WHICH FAMILY THIS IS, WHICH IS THE FACT THE TWO EXTREMA BELOW CANNOT SUPPLY. `svc_fam_min ==
-               svc_fam_max` is produced by two states that take OPPOSITE actions: on a frontier that is ONE
-               family it is an identity of the structure — every member reads the same `fam_us` through the
-               same pointer (flow_fork_inherit joins the parent's), so the equality holds whatever the run does
-               and the family half can NEVER order this document's frontier; on a frontier of several families
-               it is the contingent observation that one instant's service happened to agree, and the next
-               charge moves it. Nothing in a pair of extrema separates "structurally an offset" from
-               "currently an offset", and the second of those is a term that IS ordering and is momentarily
-               level. It reads equal at a genuine split too: a from-baseline flow founds its own family but
-               ARRIVES at the running family's service (flow_arrive_at_virtual_time), so two families are born
-               EQUAL and diverge only once one of them is charged (flow_age_running bills the running flow's
-               family alone) or credited (flow_credit_emit zeroes its own alone).
-               COUNTED BY IDENTITY AND NOT BY VALUE, because two families at one service are two families. */
+            /* And which family this is, which the extrema cannot supply: `svc_fam_min == svc_fam_max` holds by
+               structure on a one-family frontier (every member reads one `fam_us` through one pointer), where the
+               family half can never order, and only contingently on several families, where it is ordering and
+               momentarily level. Families can also be born level: a from-baseline flow founds its own family at zero
+               silence and diverges once charged (flow_age_running bills the running family alone) or forgiven
+               (flow_credit_emit's window bump). Counted by identity, not value. */
             DCHECK(f->family != NULL,
                    "a live member of the frontier belongs to no fork family — the aging term reads its "
                    "family's service, so this flow is charged zero for every microsecond its chain burns and "
@@ -4531,21 +4511,16 @@ void flow_wfq_census(WfqCensus *out) {
             if (f->family && f->family->census_gen != g_wfq_census_gen) {
                 f->family->census_gen = g_wfq_census_gen;
                 out->families++;
-                /* …AND THIS FAMILY'S MAINTAINED AWAY COUNT, FOLDED AT THE ONE DOOR THAT VISITS EACH FAMILY
-                   EXACTLY ONCE. `census_gen` is what makes this a SUM over distinct families rather than a
-                   weighted count, and it is the mark this door already sets — so the fold costs nothing and
-                   cannot double-count a family however many of its members the walk reaches. */
+                /* And this family's maintained away count, folded at the one door that visits each family exactly
+                   once: `census_gen` makes it a sum over distinct families. */
                 out->epoch_away_live += f->family->away_n;
-                /* …AND THE ROOT'S OWN BRANCH BUCKET, OPENED HERE BECAUSE THIS IS WHERE THE ROOT IS ALREADY IN
-                   HAND AND ALREADY GUARDED. A root's bucket holds exactly ONE member — the root flow itself,
-                   since every arm it forks opens a bucket of its own — so the instant the root flow departs,
-                   its node is still held alive by its children's `up` references while NOTHING names it
-                   through `branch` any more, and the thread time the root burned (boot's, on a real page)
-                   would be in neither the live sum nor the retired term for the rest of the session. That is
-                   the one way the burn identity below could fail on a healthy frontier, and it is closed by
-                   the door rather than by a term in the identity. Once per distinct family per census, which
-                   is the frequency a root bucket wants; the node's own mark makes it idempotent against the
-                   member door below, which reaches the same node while the root flow is still standing. */
+                /* And the root's own branch bucket, opened here where the root is in hand and guarded. A root's
+                   bucket holds exactly one member, the root flow (every arm it forks opens a bucket of its own), so
+                   once the root flow departs its node is held alive by its children's `up` references while nothing
+                   names it through `branch`, and its burn (boot's, on a real page) would be in neither the live sum
+                   nor the retired term: the one way the burn identity could fail on a healthy frontier. Once per
+                   distinct family per census; the node's own mark makes it idempotent against the member door below,
+                   which reaches the same node while the root flow stands. */
                 DCHECK(f->family->branch == f->family,
                        "a family ROOT is not a branch bucket of its own — flow_new points a fresh node's "
                        "`branch` at itself and only a fork ever moves it, so this root has been through an "
@@ -4554,34 +4529,19 @@ void flow_wfq_census(WfqCensus *out) {
                 branch_take(out, f->family);
             }
             if (fam > out->svc_fam_max) out->svc_fam_max = fam;
-            /* …AND ITS FLOOR, WHICH IS WHAT SAYS THE TERM IS ORDERING RATHER THAN OFFSETTING — see flow.h.
-               A maximum states how LARGE the family half is; only the pair states how much of it any
-               comparison in this frontier can see, and on a single-family frontier that is exactly zero. */
+            /* And its floor, which says whether the term orders or offsets (flow.h): the pair states how much of the
+               family half any comparison can see, exactly zero on a one-family frontier. */
             if (i == 0 || fam < out->svc_fam_min) out->svc_fam_min = fam;
         }
-        /* AND THE BRANCH BUCKET THIS MEMBER'S SUBTREE IS COUNTED IN — the accounting scope BETWEEN the two the
-           rows above read, and the one this census could not previously reach at all. `svc_max`/`svc_min` are
-           the MEMBER's silence and `svc_fam_max`/`svc_fam_min` are the FAMILY ROOT's, and on a page whose
-           flows all descend from boot the second pair is a common offset that orders nothing — so neither of
-           them can say how much of the thread each SIDE of a branch received, which is the one question a
-           frontier that grows without draining poses.
-           COUNTED BY IDENTITY AND NOT BY VALUE, in the same walk and by the same mark trick the family count
-           beside it uses: two buckets standing at one burn are two buckets. Each distinct bucket is opened
-           exactly once per census however many arms it has standing, which is what makes the sum below a
-           partition of the frontier rather than a weighted count of it.
-           THE READING, STATED HERE SO IT IS NOT RE-DERIVED AT EVERY SITE. `br_live_max` against `members` is
-           how concentrated the frontier is in one side of one top-level branch; `br_us_max` against
-           `charged_us` is how concentrated the THREAD is; `br_born_max` against `br_live_max` separates a
-           bucket that MINTS unboundedly from one that merely HOLDS a lot right now, and those two take
-           opposite diffs.
-           AND THIS SAID `THE OTHER SIDE OF THAT BRANCH IS THE REMAINDER OF EACH', WHICH IS THREE MAXIMA OVER
-           THREE POPULATIONS READ AS ONE ARM'S THREE PROPERTIES. Each is a fact about whichever bucket happens
-           to own it, and on a frontier with more than two buckets they need not be one bucket at all — the
-           burn maximum in particular is routinely a DEPARTED family root holding no live member, which the
-           door above takes deliberately, so a reader dividing that receipt by the live maximum's membership
-           was reporting boot's thread time as the crowd's. The crowd rows read after this walk are what make
-           the sentence true: they state ONE bucket's membership, mint and receipt, and each published total
-           is what the remainder is taken from. */
+        /* And the branch bucket this member's subtree is counted in, the scope between the member's silence
+           (`svc_max`/`svc_min`) and the family root's (`svc_fam_*`, a common offset when everything descends from
+           boot): how much of the thread each side of a branch received. Counted by identity with the same mark, each
+           bucket opened once per census, so the sum is a partition of the frontier. `br_live_max` against `members`
+           is how concentrated the frontier is in one side of one top-level branch; `br_us_max` against `charged_us`
+           how concentrated the thread is; `br_born_max` against `br_live_max` separates a bucket that mints without
+           bound from one that holds a lot now, which take opposite diffs. Each maximum belongs to whichever bucket
+           owns it (the burn maximum is often a departed family root with no live member), so one bucket's
+           membership, mint and receipt are read from the crowd rows after this walk. */
         {
             FlowAcct *br;
             DCHECK(f->acct != NULL,
@@ -4593,69 +4553,33 @@ void flow_wfq_census(WfqCensus *out) {
                    "a live member's fork-tree node names no branch bucket — flow_new points every node at "
                    "one and flow_fork_inherit only ever re-points it at another, so this member's thread "
                    "time is being charged to no side of any branch");
-            /* THROUGH TWO DOORS, AND THE SECOND ONE IS THE BURN IDENTITY'S WHOLE SOUNDNESS. Every live
-               bucket must be reached by this walk or its lifetime burn is in neither the live sum nor the
-               retired term, and the identity below then fails on a healthy frontier. A NON-ROOT bucket is
-               reached by its own subtree: a node is alive only while it has a live-owner descendant, and
-               every descendant of a non-root bucket names that bucket. A FAMILY ROOT is the exception, and
-               it is a structural one rather than a corner: the root's bucket holds exactly ONE member — the
-               root flow itself, since every arm it forks opens a bucket of its own — so the moment the root
-               flow departs, its node is still held alive by its children's `up` references while NOTHING
-               names it through `branch` any more. Its own thread time (boot's, on a real page) would then be
-               charged to no published bucket for the rest of the session.
-               `Flow.family` IS that door — it points straight at the root, a root's `branch` is itself, and
-               any live member of the family reaches it — and the door is opened in the FAMILY-ROOT block
-               above rather than here, deliberately. That block already tests `f->family` before dereferencing
-               it and already fires exactly once per distinct family per census, which is exactly the
-               frequency a root bucket wants; opening it HERE would have been this file's FIRST release-mode
-               dereference of a pointer that only a DCHECK guards, which is a promotion an observation has no
-               business making. Marking through the node's OWN generation is what stops the root being counted
-               twice while its own flow is still standing — one bucket reached two ways, not two buckets. */
+            /* Through two doors, which is the burn identity's soundness: every live bucket must be reached or its
+               lifetime burn is in neither the live sum nor the retired term. A non-root bucket is reached by its
+               subtree (a node lives only while it has a live-owner descendant, and every descendant names it). A
+               family root's is reached through `Flow.family` (it points at the root, whose `branch` is itself),
+               opened in the family-root block above, which already tests `f->family` before dereferencing and fires
+               once per distinct family; opening it here would dereference in release a pointer only a DCHECK
+               guards. The node's own generation stops the root being counted twice while its flow stands. */
             branch_take(out, br);
-            /* …AND HOW DEEP IN THE FORK TREE THE DEEPEST LIVE MEMBER SITS, which is not a fact about buckets
-               and is taken here because this is where the node is already in hand. It is what says whether the
-               tree this engine builds is a STAR or a CHAIN.
-               IT WAS ADDED AS A PRECONDITION AND THE PRECONDITION IS DISCHARGED, which is a different standing
-               from the one it had. The residual at FlowAcct's `up` asked it whether a per-node aggregate could
-               be maintained by walking to the root; it answered STAR — 5..6 against a frontier of 75113 — so
-               the walk is affordable, and the clause was refuted on a cost it had not named (RETENTION, which
-               depth cannot see) and on a scope that would have moved a weight term. What the row is FOR now is
-               the shape itself, which every other row here is blind to, and the fan below is what answers the
-               question the retired clause was reaching for. */
+            /* And how deep the deepest live member sits in the fork tree, taken where the node is in hand: whether
+               the tree this engine builds is a star or a chain, a shape every other row is blind to. */
             if (f->acct->depth > out->br_depth_max) out->br_depth_max = f->acct->depth;
-            /* …AND WHICH FORK MINTED THIS MEMBER, WHICH IS THE ONE THING THE BUCKET ABOVE SUMS AWAY. A
-               bucket is a TOP-LEVEL ARM, so every fork taken deeper lands in its ancestor's bucket and the
-               rows above cannot say whether an arm minted the crowd at the first branch or four levels down.
-               The fan says exactly that, and it is counted here because the node is already in hand.
-               THE KEY IS `up` AND IT IS THE TRUE FORK PARENT, not an approximation of one. `up` has two
-               writers: flow_fork_inherit, at the fork, and acct_compress_dead, which runs only from
-               acct_depart and only on the DEPARTING flow's own node — so a LIVE member's edge is written once
-               and never moved, and the compression only ever shortens the chain above a node that has already
-               left. The parent may itself be DEAD and retained by this very member, which is the informative
-               case rather than a corner: a walker that forked N arms and then finished is exactly the shape
-               this row exists to name.
-               NON-ROOT PARENTS ONLY, WHICH IS THE UNCOVERED POPULATION AND NOT A NARROWING FOR CONVENIENCE. A
-               fork off a ROOT opens a bucket of its own (flow_fork_inherit's `br` expression), so the rows
-               above already separate it; a fork off anything else is summed into its ancestor's bucket and has
-               no row anywhere. The gate is spelled with the SAME predicate that decides the bucket, so the two
-               cannot drift into disagreeing about which forks the buckets already cover.
-               IT IS A GAUGE over the members standing now and may FALL between samples, like `br_live_*` and
-               unlike everything on this line carrying `Life`: a fan is how wide a fork stands AT THIS INSTANT,
-               and the arms it minted and shed are not in it. `br_born_max` is the lifetime question and it is
-               asked at the bucket. */
+            /* And which fork minted this member, which the bucket sums away: a bucket is a top-level arm, so the
+               rows above cannot say whether an arm minted the crowd at its first branch or four levels down. Keyed on
+               `up`, the true fork parent: its writers are flow_fork_inherit at the fork and acct_compress_dead, which
+               runs only from acct_depart on the departing flow's own node, so a live member's edge is written once.
+               The parent may be dead and retained by this member, the informative case (a walker that forked N arms
+               and finished). Non-root parents only: a fork off a root opens its own bucket (flow_fork_inherit's `br`
+               expression), so the rows above separate it; the gate uses the same predicate. A gauge over standing
+               members that may fall between samples; `br_born_max` is the lifetime question. */
             {
                 FlowAcct *up = f->acct->up;
-                /* THE BUCKET A CHILD INHERITS, READ BACK AT THE SITE THAT COUNTS THE CHILDREN — the write
-                   side is flow_fork_inherit's `br = parent->acct->up ? parent->acct->branch : sib->acct`, and
-                   this asks its NON-ROOT arm at a second instant, long after the fork. Both operands are real
-                   program state: a compression that moved a LIVE member's edge, or a `branch` re-pointed by
-                   something that is not the fork, separates them. It is what makes the fan identity at the
-                   end of this function true by construction rather than by hope — every member the fan counts
-                   under a non-root parent is a live member of that parent's bucket, so a fan can never
-                   outnumber the bucket holding it.
-                   THE ROOT ARM IS NOT ASKED HERE AND THAT IS NOT AN OMISSION: flow_fork_inherit asserts it
-                   where it is decided (a root's own `sub_born` staying at 1), and nothing the fan publishes
-                   rests on it, because a root-parented member is excluded from the fan by the gate below. */
+                /* The bucket a child inherits, read back where the children are counted: the write side is
+                   flow_fork_inherit's `br = parent->acct->up ? parent->acct->branch : sib->acct`, asked here at a
+                   second instant. A compression that moved a live member's edge, or a `branch` re-pointed by
+                   something other than the fork, separates them. This makes the fan identity at the end hold by
+                   construction: a fan cannot outnumber the bucket holding it. The root arm is asserted where the
+                   fork decides it, and root-parented members are excluded from the fan by the gate below. */
                 DCHECK(up == NULL || up->up == NULL || f->acct->branch == up->branch,
                        "a live member's branch bucket is not the one its fork parent carries — a fork off a "
                        "non-root joins its parent's bucket and nothing else ever re-points `branch`, so this "
@@ -4665,10 +4589,8 @@ void flow_wfq_census(WfqCensus *out) {
                     if (up->fan_gen != g_wfq_census_gen) { up->fan_gen = g_wfq_census_gen; up->fan_n = 0; }
                     up->fan_n++;
                     out->br_fan_sum++;
-                    /* THE DEPTH IS TAKEN WITH THE MAXIMUM AND NOT SEPARATELY, because it is a fact about the
-                       node that HOLDS the maximum and a second extremum over depths would be a fact about a
-                       different node. `>` and not `>=` keeps the shallowest such fork when two tie, which is
-                       the one nearer the bucket the other rows are about. */
+                    /* The depth is taken with the maximum, since it is a fact about the node holding it; `>` keeps
+                       the shallowest of two tied forks, the one nearer the bucket. */
                     if (up->fan_n > out->br_fan_max) {
                         out->br_fan_max = up->fan_n;
                         out->br_fan_depth = up->depth;
@@ -4676,57 +4598,32 @@ void flow_wfq_census(WfqCensus *out) {
                 }
             }
         }
-        /* THE FLOOR, TAKEN OVER EVERY MEMBER AND NOT ONLY THE SERVED ONES — see flow.h. A frontier holding one
-           never-run flow reads 0 here and that is the answer, not a hole in it: the aging term is then charging
-           the rest of the frontier against a member that has burned nothing, which is exactly the case the term
-           was priced for. It is `svc_max` read the other way, so it shares its scan and its unit. */
+        /* The floor, over every member (flow.h): a frontier holding one never-run flow reads 0, and that is the
+           answer, the case the aging term was priced for. `svc_max` read the other way, same scan and unit. */
         if (i == 0 || s < out->svc_min) out->svc_min = s;
         if (i == 0 || w < out->w_min) out->w_min = w;
-        /* THE FITNESS TERM'S RANGE — the fourth term of flow_weight and the last one this scan could not see.
-           Its floor is 0 by the type rather than by measurement (flow.h says why), so the maximum IS the
-           range. Taken over every member and not only the candidates, because the bound below is over the
-           weights of every member and a candidate's distance is what lifts it above the rest of them. */
+        /* The fitness term's range: its floor is 0 by the type (flow.h), so the maximum is the range. Over every
+           member, because the bound below is over every member's weight. */
         { double d = flow_distance(f); if (d > out->dist_max) out->dist_max = d; }
-        /* AND THE SAME QUESTIONS ASKED OF THE CANDIDATES ALONE — see flow.h. `cand_src` is what a candidate
-           session IS (the substitution it carries), and engine.c copies it to a sibling, so this counts the
-           search's whole live population rather than its roots. */
+        /* And the same questions of the candidates alone (flow.h). `cand_src` is what a candidate session is, and
+           engine.c copies it to a sibling, so this counts the search's whole live population. */
         if (f->cand_src) {
             if (!out->cand_members || w > out->cand_w_max) out->cand_w_max = w;
             out->cand_members++;
             if (flow_own_silence(f) == 0) out->cand_unrun++;   /* the order's quantity, as the row above */
             if (s > out->cand_svc_max) out->cand_svc_max = s;
-            /* THE CURSOR AND NOT THE LENGTH — the correction this row waited for. Fed from `dec` it was the
-               DENOMINATOR reported as the numerator: constant from the instant a candidate was seeded, so
-               "how far the best of them has GOT" was a number that could not move, and the readings built on
-               it named states that cannot occur. See flow.h for the three that were retired. */
+            /* The cursor, not the length: the length is constant from the instant a candidate is seeded, so it
+               cannot say how far the best of them has got (flow.h). */
             if (cur > out->cand_dec_max) out->cand_dec_max = cur;
         }
     }
-    /* THE CONSERVATION IDENTITY THE PICK ROWS ARE DEFINED BY, ASSERTED RATHER THAN LEFT TO A READER. CLAUDE.md:
-       a quantity whose KIND you cannot name from its output is one you are not entitled to do arithmetic on,
-       and the identity that defines a counter is the one property of it a reader can actually check.
-       IT WAS A ONE-SIDED INEQUALITY AND THE ARGUMENT FOR THAT IS RETIRED RATHER THAN DELETED, BECAUSE IT IS
-       THE ARGUMENT A READER RE-DERIVES FROM THE TWO ROWS ALONE. It read: "the side it is one-sided on IS the
-       statement … the gauge can never exceed the counter, and the DIFFERENCE between them is exactly what the
-       retired members took with them". The first clause is true and the second is a claim the inequality does
-       NOT make: `live <= lifetime` holds for every distribution of that difference, including one in which no
-       departed member ever held a dispatch and the shortfall is a member's `picks` written from somewhere
-       else. So the sentence a reader acts on — flow.h's `(picks_lifetime - picks_live) / departures` is what a
-       departed member held on average — was stated in the register of something checked and was checked by
-       nothing, which is the shape a reader trusts hardest.
-       IT IS EXACT NOW BECAUSE THE MISSING ARM EXISTS: every dispatch is credited to exactly one member at
-       flow_credit_pick, a member's count starts at 0 at flow_new and is carried by no fork, and flow_remove
-       moves it into `g_picks_departed` on the one line that can still read it — so the two halves PARTITION
-       the total and the reading above divides a numerator by its own population.
-       BOTH ASSERTS STAND AND THEY ARE NOT ONE COPY TWICE: the equality holds with a NEGATIVE departed total
-       and the inequality does not, so the pair is what separates a lost credit from a fabricated one, and each
-       message names a different next diff. Two comparisons of integers already in hand.
-       IT READS THE PUBLISHED FIELD AND NOT THE FILE-STATIC, WHICH IS A DIFFERENCE OF ONE TOKEN AND IS THE WHOLE
-       POINT OF THE ROW. The departed total is emitted now (flow.h's `picks_departed`, result_wfq_json's
-       `picksDeparted`), so asserting over `g_picks_departed` would check a quantity no reader outside this
-       process holds while the one they DO hold went unchecked — two numbers wearing one name, with the identity
-       standing over whichever of them the assignment above did not carry. Asserted over `out->`, the dev build
-       and the document are checking the same three integers. */
+    /* The conservation identity the pick rows are defined by, asserted: every dispatch is credited to exactly one
+       member at flow_credit_pick, a member's count starts at 0 at flow_new and no fork carries it, and flow_remove
+       moves it into `g_picks_departed` on the one line that can still read it, so the halves partition the total
+       and flow.h's `(picks_lifetime - picks_live) / departures` divides a numerator by its own population. Both
+       asserts stand: the equality holds with a negative departed total and the inequality does not, so the pair
+       separates a lost credit from a fabricated one. Over the published fields (`out->`), so the dev build and the
+       document check the same three integers. */
     DCHECKF(out->picks_live + out->picks_departed == out->picks_lifetime,
             "solver/flow.c: the frontier's live members hold %lld dispatches and departed members took %lld, "
             "against %lld the scheduler has ever made — every dispatch is credited to exactly one member at "
@@ -4741,23 +4638,17 @@ void flow_wfq_census(WfqCensus *out) {
            "flow_credit_pick raises both in one statement and is the only writer of either, so a member's "
            "`picks` has been written from somewhere else and every reading derived from these rows is about "
            "dispatches that did not happen");
-    /* AND THE SAME IDENTITY FOR THE SUBSET OF THOSE DISPATCHES THAT REACHED AN UNFRAMED MEMBER, which is the
-       one property of it a reader can check and is therefore what makes it a counter rather than a digit.
-       CLAUDE.md records the defect this refuses: a count offered as a share of another, raised at a different
-       event from its denominator, whose free tell is a subset exceeding the population it claims to be drawn
-       from. Here the two are raised in ONE statement block of flow_credit_pick — an `if` beside a `++` — so
-       the inequality is by construction and can fail only on an edit that gives one of them a second writer,
-       which is precisely the edit that would make every reading of the pair a statement about two different
-       dispatch paths. It costs one comparison of two integers already in hand. */
+    /* And the same for the unframed subset: raised in one statement block of flow_credit_pick (an `if` beside a
+       `++`), so the inequality fails only on an edit giving one of them a second writer, which would make every
+       reading of the pair about two dispatch paths. */
     DCHECK(out->unframed_picks_lifetime <= out->picks_lifetime,
            "the scheduler has dispatched an UNFRAMED member more often than it has dispatched at all: "
            "flow_credit_pick raises both in one statement block, the second conditionally on the first, so "
            "one of them now has a writer elsewhere and the row that separates `memUnframed`'s two readings "
            "is a fraction over the wrong denominator");
-    /* AND THE INNER ONE, WHICH IS WHAT MAKES THE NEW ROW A SUBSET RATHER THAN A SECOND OPINION. It is raised
-       inside the outer `if` of flow_credit_pick, so this can fail only on an edit that lifts it out — which is
-       precisely the edit that would make `readyPicksLifetime` a count over a population `unframedPicksLifetime`
-       is not drawn from, and the pair would then be two dispatch paths wearing one ratio. Two integers in hand. */
+    /* And the inner one: the ready count is raised inside the outer `if`, so this fails only on an edit that lifts
+       it out, which would make `readyPicksLifetime` a count over a population `unframedPicksLifetime` is not drawn
+       from. */
     DCHECK(out->ready_picks_lifetime <= out->unframed_picks_lifetime,
            "the scheduler has dispatched a READY JOB HOLDER more often than it has dispatched an UNFRAMED "
            "member at all: the ready count is raised inside the unframed count's own `if` in flow_credit_pick, "
