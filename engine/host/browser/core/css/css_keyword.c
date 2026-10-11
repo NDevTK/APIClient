@@ -135,6 +135,14 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
                css_keyword_set_has(CSS_KEYWORDS_DISPLAY_INSIDE, k) ||
                css_keyword_set_has(CSS_KEYWORDS_DISPLAY_INTERNAL, k) ||
                css_keyword_set_has(CSS_KEYWORDS_DISPLAY_BOX, k) || css_keyword_set_has(CSS_KEYWORDS_DISPLAY_LEGACY, k);
+    /* css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property": `row | row-reverse | column |
+       column-reverse`. */
+    case CSS_KEYWORDS_FLEX_DIRECTION:
+        return k == CSS_KEYWORD_ROW || k == CSS_KEYWORD_ROW_REVERSE || k == CSS_KEYWORD_COLUMN ||
+               k == CSS_KEYWORD_COLUMN_REVERSE;
+    /* css-flexbox-1 §5.2 "Flex Line Wrapping: the flex-wrap property": `nowrap | wrap | wrap-reverse`. */
+    case CSS_KEYWORDS_FLEX_WRAP:
+        return k == CSS_KEYWORD_NOWRAP || k == CSS_KEYWORD_WRAP || k == CSS_KEYWORD_WRAP_REVERSE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

@@ -13,27 +13,6 @@
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_item.h"
 
-static char *fi_computed(lxb_dom_element_t *el, const char *name)
-{
-    char *v = css_computed_value(el, name);
-    char nbuf[160];
-
-    DCHECKF(v != NULL,
-            "%s, property `%s`: the cascade produced no computed value for a property this engine models — "
-            "every one of them is in lexbor's registry with an initial value, so the last layer always answers",
-            box_subject(el, nbuf, sizeof nbuf), name);
-    return v;
-}
-
-static bool fi_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = fi_computed(el, name);
-    bool same = strcmp(v, kw) == 0;
-
-    free(v);
-    return same;
-}
-
 bool flex_item_display_is_flex_container(CssDisplay display)
 {
     return css_display_spells(display, CSS_KEYWORD_FLEX) || css_display_spells(display, CSS_KEYWORD_INLINE_FLEX);
@@ -61,31 +40,24 @@ static void fi_require_container(lxb_dom_element_t *el, const char *section)
 
 FlexMainAxis flex_container_main_axis(lxb_dom_element_t *el)
 {
-    char *v;
-    FlexMainAxis axis;
-    char nbuf[160];
+    CssKeyword v;
 
     fi_require_container(el, "§5.1 \"Flex Flow Direction: the flex-direction property\"");
-    v = fi_computed(el, "flex-direction");
-    /* §5.1's `Value:` line is `row | row-reverse | column | column-reverse`: `row` takes "the same orientation as
-       the inline axis of the current writing mode", `column` "the block axis of the current writing mode", and
-       each `-reverse` swaps main-start and main-end, an order this answer cannot carry. */
-    if (strcmp(v, "row") == 0 || strcmp(v, "row-reverse") == 0) {
-        axis = FLEX_MAIN_AXIS_INLINE;
-    } else if (strcmp(v, "column") == 0 || strcmp(v, "column-reverse") == 0) {
-        axis = FLEX_MAIN_AXIS_BLOCK;
-    } else {
-        axis = FLEX_MAIN_AXIS_INLINE;
-        DFAILF("%s, computed `flex-direction` `%s`: css-flexbox-1 §5.1 \"Flex Flow Direction: the "
-               "flex-direction property\"' `Value:` line is `row | row-reverse | column | column-reverse` and "
-               "admits nothing else, so this is a declaration that reached the cascade without its grammar — "
-               "core/css/css_shorthand.c is where §5.3 \"Flex Direction and Wrap: the flex-flow shorthand\"'s "
-               "expansion validates the two keyword sets, and lexbor's own property parser is where a longhand "
-               "declaration is validated",
-               box_subject(el, nbuf, sizeof nbuf), v);
+    v = css_computed_keyword(el, "flex-direction");
+    /* §5.1: `row` takes "the same orientation as the inline axis of the current writing mode", `column` "the
+       block axis of the current writing mode", and each `-reverse` swaps main-start and main-end, an order this
+       answer cannot carry. */
+    switch (v) {
+    case CSS_KEYWORD_ROW:
+    case CSS_KEYWORD_ROW_REVERSE:
+        return FLEX_MAIN_AXIS_INLINE;
+    case CSS_KEYWORD_COLUMN:
+    case CSS_KEYWORD_COLUMN_REVERSE:
+        return FLEX_MAIN_AXIS_BLOCK;
+    default:
+        DFAILF("computed `flex-direction` is keyword %u, outside the row's set", (unsigned)v);
+        return FLEX_MAIN_AXIS_INLINE;
     }
-    free(v);
-    return axis;
 }
 
 bool flex_container_axis_is_vertical(lxb_dom_element_t *container, FlexAxis axis)
@@ -108,27 +80,22 @@ bool flex_container_axis_is_vertical(lxb_dom_element_t *container, FlexAxis axis
 
 bool flex_container_is_multi_line(lxb_dom_element_t *el)
 {
-    char *v;
-    bool multi;
-    char nbuf[160];
+    CssKeyword v;
 
     fi_require_container(el, "§5.2 \"Flex Line Wrapping: the flex-wrap property\"");
-    v = fi_computed(el, "flex-wrap");
+    v = css_computed_keyword(el, "flex-wrap");
     /* §6 "Flex Lines" defines both words over §5.2's keywords: single-line is "one with flex-wrap: nowrap",
        multi-line "one with flex-wrap: wrap or flex-wrap: wrap-reverse". */
-    if (strcmp(v, "nowrap") == 0) {
-        multi = false;
-    } else if (strcmp(v, "wrap") == 0 || strcmp(v, "wrap-reverse") == 0) {
-        multi = true;
-    } else {
-        multi = false;
-        DFAILF("%s, computed `flex-wrap` `%s`: css-flexbox-1 §5.2 \"Flex Line Wrapping: the flex-wrap "
-               "property\"' `Value:` line is `nowrap | wrap | wrap-reverse` and admits nothing else, so this "
-               "is a declaration that reached the cascade without its grammar",
-               box_subject(el, nbuf, sizeof nbuf), v);
+    switch (v) {
+    case CSS_KEYWORD_NOWRAP:
+        return false;
+    case CSS_KEYWORD_WRAP:
+    case CSS_KEYWORD_WRAP_REVERSE:
+        return true;
+    default:
+        DFAILF("computed `flex-wrap` is keyword %u, outside the row's set", (unsigned)v);
+        return false;
     }
-    free(v);
-    return multi;
 }
 
 /* Nodes invisible to contiguity: css-display-3 §1 "Introduction"'s "for the purposes of CSS, all of these

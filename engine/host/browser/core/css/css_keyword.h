@@ -81,7 +81,14 @@
     X(INLINE_BLOCK,       "inline-block") \
     X(INLINE_TABLE,       "inline-table") \
     X(INLINE_FLEX,        "inline-flex") \
-    X(INLINE_GRID,        "inline-grid")
+    X(INLINE_GRID,        "inline-grid") \
+    X(ROW,                "row") \
+    X(ROW_REVERSE,        "row-reverse") \
+    X(COLUMN,             "column") \
+    X(COLUMN_REVERSE,     "column-reverse") \
+    X(NOWRAP,             "nowrap") \
+    X(WRAP,               "wrap") \
+    X(WRAP_REVERSE,       "wrap-reverse")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -121,7 +128,9 @@ typedef enum {
     CSS_KEYWORDS_DISPLAY_INTERNAL,
     CSS_KEYWORDS_DISPLAY_BOX,
     CSS_KEYWORDS_DISPLAY_LEGACY,
-    CSS_KEYWORDS_DISPLAY
+    CSS_KEYWORDS_DISPLAY,
+    CSS_KEYWORDS_FLEX_DIRECTION,
+    CSS_KEYWORDS_FLEX_WRAP
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

@@ -2082,26 +2082,8 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        border longhands' for the identical reason, and core/css/css_style_declaration.c states their `Initial:`
        values, without which §7.1 had nothing to fall to and the cascade answered NULL for every element that
        declares none — which is every element on almost every page.
-       css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property" (`row | row-reverse | column |
-       column-reverse`) and §5.2 "Flex Line Wrapping: the flex-wrap property" (`nowrap | wrap | wrap-reverse`)
-       both state `Computed value: specified keyword` over a keyword-only `Value:` line, so the as-specified
-       arm is the whole of both rules.
-       THEY ARE HERE BECAUSE ONE ALGORITHM ASKS FOR BOTH AND COULD NOT ASK FOR EITHER. css-flexbox-1 §9.9
-       "Intrinsic Sizes" is a DISPATCH before it is a sum: which of a flex container's two axes is the main
-       axis decides whether the INLINE size it is asked for is §9.9.1 "Flex Container Intrinsic Main Sizes"' or
-       §9.9.2 "Flex Container Intrinsic Cross Sizes"', and §5.1 is the whole of that question — "The flex
-       container's main axis has the same orientation as the inline axis of the current writing mode" for
-       `row`, and the same sentence with "the block axis of the current writing mode" for `column`. The two
-       sections share no operation, so this is a dispatch and not a case: §9.9.1 sums along the main axis and
-       §9.9.2 takes a maximum across the cross one. §5.2 is the second half of it, because §9.9.1.3
-       "Multi-line Min-content Algorithm" and §9.9.2 each state a DIFFERENT operation for a multi-line
-       container than for a single-line one, and §6 "Flex Lines" is what ties the property to those two words:
-       "A single-line flex container (i.e. one with flex-wrap: nowrap) lays out all of its children in a single
-       line, even if that would cause its contents to overflow." Neither question has a defensible default:
-       reading `flex-direction`'s initial `row` off a box that declared `column` answers the wrong SECTION, not
-       a wrong number, and nothing downstream could tell.
-       §7.2.1 "The flex-grow property" and §7.2.2 "The flex-shrink property" say `Computed value: specified
-       number` and `Computed value: specified value` over a `Value:` line of `<number [0,∞]>`, which is the
+       css-flexbox-1 §7.2.1 "The flex-grow property" and §7.2.2 "The flex-shrink property" say `Computed value:
+       specified number` and `Computed value: specified value` over a `Value:` line of `<number [0,∞]>`, which is the
        as-specified rule under two spellings — a `<number>` has no unit, no percentage and no environment fact,
        so nothing about it is resolved between the specified value and the computed one. THEY ARE HERE BECAUSE
        §9.9.3 "Flex Item Intrinsic Size Contributions" READS BOTH BY NAME and could read neither: its
@@ -2134,8 +2116,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     case CSS_PROPERTY_CAPTION_SIDE:
     case CSS_PROPERTY_TABLE_LAYOUT:
     case CSS_PROPERTY_BORDER_COLLAPSE:
-    case CSS_PROPERTY_FLEX_DIRECTION:
-    case CSS_PROPERTY_FLEX_WRAP:
     case CSS_PROPERTY_VISIBILITY:
     case CSS_PROPERTY_Z_INDEX:
     case CSS_PROPERTY_BORDER_TOP_STYLE:
