@@ -107,7 +107,9 @@
     X(GROOVE,             "groove") \
     X(RIDGE,              "ridge") \
     X(INSET,              "inset") \
-    X(OUTSET,             "outset")
+    X(OUTSET,             "outset") \
+    X(INSIDE,             "inside") \
+    X(OUTSIDE,            "outside")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -157,7 +159,8 @@ typedef enum {
     CSS_KEYWORDS_CAPTION_SIDE,
     CSS_KEYWORDS_VISIBILITY,
     CSS_KEYWORDS_LINE_STYLE,
-    CSS_KEYWORDS_POINTER_EVENTS
+    CSS_KEYWORDS_POINTER_EVENTS,
+    CSS_KEYWORDS_LIST_STYLE_POSITION
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

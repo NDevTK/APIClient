@@ -2078,12 +2078,10 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        `<integer>` carried as text; core/layout/flex_line.c parses it for order-modified document order. */
     case CSS_PROPERTY_ORDER:
     /* css-lists-3 §3.4 "Text-based Markers: the list-style-type property" (`Computed value: specified value`;
-       a `<counter-style-name>` arrives canonicalized by core/css/css_shorthand.c) and §3.5 "Positioning
-       Markers: The list-style-position property" (`keyword, but see prose`, the prose being a layout rule).
-       core/layout/list_marker.h reads both off the originating element, after `list-style-image`, which
-       §3.2 "Generating Marker Contents" orders first. */
+       a `<counter-style-name>` arrives canonicalized by core/css/css_shorthand.c). core/layout/list_marker.h
+       reads it off the originating element, after `list-style-image`, which §3.2 "Generating Marker
+       Contents" orders first. */
     case CSS_PROPERTY_LIST_STYLE_TYPE:
-    case CSS_PROPERTY_LIST_STYLE_POSITION:
         return spec;
     default:
         DFAILF("`%s` reached the text derivation and is not a text-shaped row — css_computed_value refuses "

@@ -173,6 +173,9 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-ui-4 §6.2 "Exclusion from Hit-testing: the pointer-events property": `auto | none`. */
     case CSS_KEYWORDS_POINTER_EVENTS:
         return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_NONE;
+    /* css-lists-3 §3.5 "Positioning Markers: The list-style-position property": `inside | outside`. */
+    case CSS_KEYWORDS_LIST_STYLE_POSITION:
+        return k == CSS_KEYWORD_INSIDE || k == CSS_KEYWORD_OUTSIDE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

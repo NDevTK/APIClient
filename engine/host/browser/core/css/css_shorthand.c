@@ -1010,7 +1010,6 @@ static bool flex_triple(const char *value, CssShSpan out[3])
  * inside` is a counter style named `inside` — which is why the two directions ask the PRODUCTIONS and not one
  * shared classifier: one predicate answering both would be deciding §3.6's `||` assignment and §3.4's own
  * `Value:` line with one bit, and the stricter question would silently decide the looser one. */
-static const char *const LIST_STYLE_POSITION_KEYWORDS[] = { "inside", "outside" };
 /* §3.6's `Value:` line order — POSITION, IMAGE, TYPE — which is the order the serialization reads positionally
    and the expansion writes, with each longhand's own `Initial:` line beside it: §3.5 "Positioning Markers: The
    list-style-position property"' `outside`, §3.3 "Image Markers: the list-style-image property"' `none` and
@@ -1042,7 +1041,7 @@ static bool list_style_owns(const char *longhand)
    them first would answer -1 for §3.6's own examples. */
 static int list_style_term_of(const char *w, size_t n, const char **canon)
 {
-    *canon = css_sh_keyword(LIST_STYLE_POSITION_KEYWORDS, CSS_SH_N(LIST_STYLE_POSITION_KEYWORDS), w, n);
+    *canon = css_sh_keyword_in(CSS_KEYWORDS_LIST_STYLE_POSITION, w, n);
     if (*canon != NULL) return 0;
     if (css_word_is(w, n, "none")) { *canon = "none"; return 3; }
     if (css_image_is_image(w, n)) return 1;
@@ -1114,10 +1113,6 @@ static char *list_style_longhand_value(const char *longhand, const char *value)
     /* Each of the three `Value:` lines is a single component value with NO multiplier over it, so a second one
        is an invalid declaration, which the split reports by refusing to write past `max`. */
     if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
-    if (strcmp(longhand, "list-style-position") == 0) {
-        kw = css_sh_keyword(LIST_STYLE_POSITION_KEYWORDS, CSS_SH_N(LIST_STYLE_POSITION_KEYWORDS), w[0], wl[0]);
-        return kw ? css_sh_strdup(kw) : NULL;
-    }
     /* §3.3's and §3.4's `none` is each property's own term and is answered before either production, because
        neither admits it: core/css/css_image.h refuses `none` by name and css-counter-styles-3 §3 excludes it
        from a `<counter-style-name>`. */
@@ -1125,14 +1120,15 @@ static char *list_style_longhand_value(const char *longhand, const char *value)
     if (strcmp(longhand, "list-style-image") == 0)
         return css_image_is_image(w[0], wl[0]) ? css_sh_dupn(w[0], wl[0]) : NULL;
     DCHECK(strcmp(longhand, "list-style-type") == 0,
-           "a longhand outside css-lists-3 §3.6's three reached the list-style grammar. This function and "
+           "a longhand outside css-lists-3 §3.6's image and type reached the list-style grammar (the position is "
+           "a keyword row, parsed above). This function and "
            "`css_shorthand_validates_longhand`'s §3.6 arm are one list and have come apart, and the failure is "
            "silent in the direction that matters: a property with a grammar of its own would have that grammar "
            "replaced by `<counter-style> | <string> | none`");
     /* §3.4's `<counter-style>` ARM IS ASKED BEFORE ITS `<string>` ONE and the two are disjoint by construction
        — a `<counter-style-name>` is an ident sequence and a `<string>` begins with a quote — so the order is
        readability and not grammar. `inside` IS admitted here, which §3's own sentence permits and §3.6's `||`
-       does not: see the paragraph above `LIST_STYLE_POSITION_KEYWORDS`. */
+       does not: see the paragraph above `LH_LIST_STYLE`. */
     if (css_counter_style_is_counter_style(w[0], wl[0])) {
         kw = css_counter_style_canonical_name(w[0], wl[0]);
         return kw ? css_sh_strdup(kw) : css_sh_dupn(w[0], wl[0]);
@@ -1650,7 +1646,7 @@ typedef enum {
     CSS_SH_LIST_STYLE,  /* css-lists-3 §3.6's `list-style`: CSS_SH_ALL_OF's `||` in the SERIALIZATION direction
                            — which is why its row still carries the per-longhand `initial` list that rule reads
                            — over an EXPANSION whose `none` is distributed across two terms rather than
-                           assigned to one. See that section's block above `LIST_STYLE_POSITION_KEYWORDS` */
+                           assigned to one. See that section's block above `LH_LIST_STYLE` */
     CSS_SH_BACKGROUND   /* css-backgrounds-3 §2.10's `background`, whose grammar is a LIST OF LAYERS and lives
                            in core/css/css_background_shorthand.h */
 } CssShKind;

@@ -157,8 +157,6 @@ bool list_marker_box_generated(lxb_dom_element_t *el)
 
 ListMarkerPosition list_marker_position(lxb_dom_element_t *list_item)
 {
-    char *v;
-    bool inside;
     char bbuf[160];
 
     DCHECK(list_item != NULL && list_marker_box_generated(list_item),
@@ -171,12 +169,6 @@ ListMarkerPosition list_marker_position(lxb_dom_element_t *list_item)
             "box, and this list item's computed `display` is not block-level — BUILD §3.5's inline-box arm here",
             box_subject(list_item, bbuf, sizeof bbuf));
     (void) bbuf;
-    v = lm_computed(list_item, "list-style-position");
-    inside = strcmp(v, "inside") == 0;
-    DCHECKF(inside || strcmp(v, "outside") == 0,
-            "%s has `list-style-position: %s`, outside css-lists-3 §3.5's `Value:` line of `inside | outside`, "
-            "which is core/css/css_shorthand.c's grammar for it — so the cascade holds a value no declaration "
-            "could have put there", box_subject(list_item, bbuf, sizeof bbuf), v);
-    free(v);
-    return inside ? LIST_MARKER_POSITION_INSIDE : LIST_MARKER_POSITION_OUTSIDE;
+    return css_computed_keyword_is(list_item, "list-style-position", CSS_KEYWORD_INSIDE)
+               ? LIST_MARKER_POSITION_INSIDE : LIST_MARKER_POSITION_OUTSIDE;
 }
