@@ -140,7 +140,11 @@ Which extension context can open a connection at all is enforced by CSP in all b
 - The wire leaves from the worker because webRequest observes it there. The extension's pages are cross-origin
   isolated (COEP `require-corp` with COOP `same-origin`, for `SharedArrayBuffer`), and under that Chrome 148
   reports none of the offscreen document's requests to webRequest, and it reports the worker's own
-  (measured). The offscreen document has no `chrome.webRequest` at all (it holds `chrome.runtime` alone).
+  (measured). Chromium's `WebRequestEventRouter::ListenerMatchesRequest` drops a request from an extension
+  process for every listener in another renderer process, and isolation puts the extension's pages in a
+  process apart from its worker (measured: chrome://process-internals and the renderers'
+  `--renderer-client-id`; a listener in an isolated extension tab saw the offscreen document's fetches). The
+  offscreen document has no `chrome.webRequest` at all (it holds `chrome.runtime` alone).
 - The zone follows every redirect itself (Fetch §4.5 "HTTP-redirect fetch"), so each hop is judged by every
   gate before it is sent and goes out as its own request, under its own speak-as rule. The worker's fetch is
   asked for `redirect: "manual"`, which never sends the hop and answers an opaque-redirect without

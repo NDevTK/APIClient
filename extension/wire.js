@@ -2,12 +2,13 @@
 // request in the offscreen document and hands this worker only the call that reaches the network, one port
 // per send ("wire"). The worker's fetch is the only platform fetch the extension spends on the network; the
 // offscreen document's is sealed (lib/safe-fetch.js), and webRequest reports none of that cross-origin
-// isolated document's requests while it does report this worker's (measured in Chrome 148).
+// isolated document's requests to this worker, since Chromium's WebRequestEventRouter::ListenerMatchesRequest
+// drops an extension process's request for a listener in another process and isolation puts the extension's
+// pages in a process apart from this worker (measured in Chrome 148).
 // A send is asked for with redirect "manual", which never sends the hop and answers an opaque-redirect with no
 // headers; the 3xx itself is what webRequest reported here, and it is answered to the zone as the response, so
 // the zone follows each hop itself (Fetch §4.5 "HTTP-redirect fetch"). lib/web-request.js keeps documents'
-// traffic, joined in the offscreen document to a page's capture; this file keeps the worker's own, joined
-// here, where both the fetch and the events are.
+// traffic, joined in the offscreen document to a page's capture; this file keeps the worker's own, joined here.
 // Messages carry JSON only (a Uint8Array arrives as an object of indices, an ArrayBuffer as {}, measured), so
 // bodies cross as base64 chunks. The worker is ended after 30 s with no message even with a fetch pending
 // (measured), so the zone pings each send; a worker that ends anyway disconnects the port, which the zone
@@ -112,7 +113,8 @@ async function _wireSend(port, m, signal) {
     await _wireRuleReady;
     const headers = (m.init.headers || []).concat([[_WIRE_NONCE_HEADER, nonce]]);
     const init = { method: m.init.method, headers, credentials: "omit", redirect: "manual", signal };
-    if (m.init.body !== null) init.body = m.init.body.text !== undefined ? m.init.body.text : _wireBytes(m.init.body.b64);
+    if (m.init.body !== null)
+      init.body = m.init.body.text !== undefined ? m.init.body.text : _wireBytes(m.init.body.b64);
     let resp;
     try { resp = await fetch(m.href, init); }
     catch (e) { post({ error: String((e && e.message) || e) }); return; }
