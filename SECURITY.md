@@ -157,9 +157,13 @@ where only this tool declines, so the flow parks instead of running its failure 
 
 `pageContextGet`, `pageContextSend` and `pageContextFetch` in `lib/schema.js` send `PAGE_FETCH` through
 `swRpc("tabs.sendMessage", …, {documentId})`; `handlePageFetch` in `content.js` runs
-`fetch(url, {credentials: "same-origin", …})` in the page's realm after stripping `Cookie`, `Origin` and
-`Referer` from the header list. The request goes out as the page, and the browser's SOP and CORS govern it
-rather than ours.
+`fetch(url, {credentials: "same-origin", …})` from the content script's isolated world. The request goes out
+as the page: `Cookie`, `Origin` and `Referer` are Fetch's forbidden request-headers, which the browser sets
+itself and ignores when a script supplies them, so the `delete`s `handlePageFetch` applies to the caller's
+header list change nothing on the wire. The browser's SOP and CORS govern the request rather than ours.
+Not covered: `credentials: "same-origin"` is fixed, so a replay of a cross-origin request the page itself made
+with `credentials: "include"` goes out without the person's cookies; `intercept.js` does not record the page's
+credentials mode.
 
 - Trusted to untrusted (the request) confers no privilege. A content script can already fetch anything its page
   can fetch with its own cookies; the relay asks for a subset of that. `pageContextFetch` refuses non-http(s)
