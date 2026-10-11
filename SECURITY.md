@@ -120,6 +120,7 @@ and the bridge relays each to `safeFetch`.
 | GET only: `init.method` is the literal `"GET"` | `safeFetch`; callers ask `safeFetchMethodRefusal` first | `blocked-method:<M>` |
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
 | no userinfo in the URL | `safeFetch` | `blocked-url-credentials` |
+| a reply whose final URL does not parse (URL Standard §6.1 "URL class" throws) is not read | `safeFetch` | `blocked-final-url-unparseable`, graded `network` |
 | origin-relative SSRF on the requested and the landed host: a target whose Local Network Access §2.1 "IP Address Space" is less public than the page's | `_ipAddressSpace`, `_lessPublicThan` against `opts.pageUrl` | `blocked-local-network:<target>-from-<page>`, `blocked-local-network-redirect:<target>-from-<page>` |
 | per-origin egress policy, before the wire and on the landed URL | `_firingRefusal` | `blocked-signal:<signal>=<value>`, `blocked-signal-redirect:` |
 | destructive-path deny list where the session pays and the request is not `observed`, before the wire and after a redirect | `_destructiveToken` | `blocked-destructive:<token>`, `blocked-destructive-redirect:` |
@@ -310,8 +311,9 @@ Residuals, each a difference from the document's own request:
 - The document's service worker does not see the send.
 - The document's CSP binds an engine page request inside the engine, not here. `fetch_main_blocked`
   (Fetch §4.1 "Main fetch" step 7) runs for `fetch()`, XHR, images, links and scripts before a pending line
-  exists. A request whose URL is concolic is not checked, since no policy matches a shape. An operator send
-  is not checked against the frame's policy at all.
+  exists, and `fetch_main_report_csp` (step 4, "report Content Security Policy violations for request")
+  reports the list's report-only policies first. A request whose URL is concolic is not checked, since no
+  policy matches a shape. An operator send is not checked against the frame's policy at all.
 
 ## Every way bytes leave
 
@@ -456,12 +458,15 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   passes them to `safeFetch` per call. It has no network and no `chrome.*` (see the engine frame, above): its
   `fetch()`, XHR and `import()` targets are untrusted URLs the chokepoint judges.
 - One instance per origin-keyed agent cluster, `(browsing-context group, origin)`, never per tab or per page.
-  `clusterKeyOf` in `bridge.js` builds the key from browser-stated halves: the group is `sender.tab.id` and the
-  origin is `_senderOrigin`'s, so two sandboxed iframes of one page are two clusters. A document the zone
-  provisions takes its principal from its record (`principalOf`, HTML §7.3.2.1's determine the origin): a
-  record carrying the sandboxed origin flag gets a fresh `null:` token, so it is its own cluster, never joins
-  an instance of its URL's origin, loads and fetches with no session, and speaks to pages as `"null"`; the
-  engine computes `"null"` from the same flag set (`qjs_init`). A same-origin child is a
+  `clusterKeyOf` in `bridge.js` builds the key from the message's `groupId` and `origin`. For a document the
+  browser reported, both halves are browser-stated: the group is `_browserFacts`' `tabId` (`sender.tab.id`)
+  and the origin is `_senderOrigin`'s, so two sandboxed iframes of one page are two clusters. A document the
+  zone provisions itself takes its creator's group, or a group the zone mints for a `noopener` auxiliary, a
+  swap, a seed or a cold resume, and never one the engine states; it takes its principal from its record
+  (`principalOf`, HTML §7.3.2.1's determine the origin): a record carrying the sandboxed origin flag gets a
+  fresh `null:` token, so it is its own cluster, never joins an instance of its URL's origin, loads and
+  fetches with no session, and speaks to pages as `"null"`; the engine computes `"null"` from the same flag
+  set (`qjs_init`). A same-origin child is a
   second realm in its creator's heap (`child_in_this_agent` in `navigable.c`); a second cross-origin document of
   one cluster, or a navigation replacing a group's top, joins the running instance (`engineJoin`, over the
   engine's `qjs_join`) instead of getting a second heap.
@@ -526,10 +531,11 @@ payload's code ran in the delivered document, not that the sink produced the cal
   frame-ancestors 'none'; form-action 'none'` (`manifest.json`), with COEP `require-corp` and COOP
   `same-origin`. No resource is web-accessible, and `frame-ancestors 'none'` stops any page framing the popup or
   the offscreen.
-- The popup renders page-derived strings into `innerHTML` after escaping them with `esc`
-  (`lib/popup-response.js`). Escaping is a convention at each site; the CSP bounds a miss. Injected markup
-  cannot run script (no `'unsafe-inline'`), load an off-origin image or stylesheet, or submit a form; it can
-  still show spoofed text or a link the person might click.
+- `popup.html` and `dev.html` require Trusted Types with no policy (`require-trusted-types-for 'script';
+  trusted-types 'none'`), so every HTML sink throws when handed a string. Page-derived text reaches them only
+  as text nodes and allowlisted attribute values built by `lib/dom-builder.js`, which parses no markup;
+  `domLink` is its one writer of `href`, and only for an http(s) URL. A page-derived string can still read as
+  spoofed text, or be a link the person might click.
 - Page-claimed fields are labelled as claims: `_claimedOriginPair` and `PAGE_CLAIMED_ORIGINS_TITLE`
   (`lib/popup-reqlog.js`) for postMessage and MessageChannel origins, and the `browserStated` / `pageClaimed`
   split for probe hits.
@@ -610,4 +616,4 @@ Each residual states what is not covered, what would close it, and how its absen
 | A sandboxed extension page impersonates a trusted extension document | mitigated: its origin is `"null"`, which fails every document→document check |
 | The bundle escapes the WASM sandbox into its host realm | out of model; the realm is `renderer.html` at a unique opaque origin with no `chrome.*`, no principal and no `connect-src`, reachable to the trusted zone only through validated `content.mojom.Renderer` records. See the residual on channels CSP does not govern |
 | A second instance is provisioned for an agent cluster that already has one | mitigated: `registerRenderer` refuses it with a `CHECK` in dev and release |
-| Injected markup in the popup runs script or exfiltrates | mitigated by CSP: no inline script, no off-origin images, styles or forms; spoofed text or a clickable link remains possible |
+| Injected markup in the popup runs script or exfiltrates | mitigated: the popup parses no page-derived markup (Trusted Types with no policy throws at every HTML sink), and its CSP refuses inline script and off-origin images, styles and forms; spoofed text or an http(s) link remains possible |
