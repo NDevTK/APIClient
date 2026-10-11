@@ -131,35 +131,124 @@ static int css_px_mono_cmp(const void *x, const void *y)
     return memcmp(a->e, b->e, CSS_ENV_FACT_COUNT);
 }
 
-/* The counter an atom's name is drawn from. Names are never reused, so two atoms are one only where one opaque
-   result was carried to both places. */
-static unsigned g_css_px_atom;
+/* THE ATOM'S NAME IS ITS DEFINITION: the operation and the forms of its operands, which are normal forms (sorted
+   and merged), so two derivations of one function compose one key and one name wherever they run, and two
+   different functions never share one. A fact enters a key as its index and never as its value, so the name is
+   of the function and not of this realm's number. Interned for the process; the number is not spelled across
+   sessions (core/frame/viewport.c's boundary). */
+typedef struct { char *key; unsigned id; } CssPxAtomSlot;
+static CssPxAtomSlot *g_css_px_atoms;
+static size_t g_css_px_atoms_cap;
+static unsigned g_css_px_atoms_n;
 
-/* `out`'s form becomes one fresh atom: an opaque function of the facts in `out.env`, named so that every place
-   this one result is carried to can still subtract it. A non-finite example has no form and stays opaque. */
-static void css_px_form_atom(CssPx *out)
+static size_t css_px_atom_hash(const char *k)
+{
+    size_t h = 1469598103934665603u;
+
+    for (; *k; k++) h = (h ^ (unsigned char)*k) * 1099511628211u;
+    return h;
+}
+
+/* The name `key` (owned, consumed) is interned under. */
+static unsigned css_px_atom_intern(char *key)
+{
+    size_t i;
+
+    if (2 * (g_css_px_atoms_n + 1) > g_css_px_atoms_cap) {
+        size_t cap = g_css_px_atoms_cap ? 2 * g_css_px_atoms_cap : 64, j;
+        CssPxAtomSlot *t = calloc(cap, sizeof *t);
+
+        CHECK(t, "css_length: OOM growing the atom table");
+        for (j = 0; j < g_css_px_atoms_cap; j++) {
+            if (!g_css_px_atoms[j].key) continue;
+            for (i = css_px_atom_hash(g_css_px_atoms[j].key) & (cap - 1); t[i].key; i = (i + 1) & (cap - 1)) {}
+            t[i] = g_css_px_atoms[j];
+        }
+        free(g_css_px_atoms);
+        g_css_px_atoms = t;
+        g_css_px_atoms_cap = cap;
+    }
+    for (i = css_px_atom_hash(key) & (g_css_px_atoms_cap - 1); g_css_px_atoms[i].key;
+         i = (i + 1) & (g_css_px_atoms_cap - 1))
+        if (!strcmp(g_css_px_atoms[i].key, key)) {
+            free(key);
+            return g_css_px_atoms[i].id;
+        }
+    DCHECK(g_css_px_atoms_n != UINT_MAX, "the atom table ran out of names");
+    g_css_px_atoms[i].key = key;
+    g_css_px_atoms[i].id = ++g_css_px_atoms_n;
+    return g_css_px_atoms[i].id;
+}
+
+/* One polynomial into a key: the constant and every monomial's atom, exponents and coefficient, doubles in `%a`
+   so the spelling is exact. */
+static void css_px_key_poly(FILE *f, double c, const CssPxMonomial *m, int n)
+{
+    int i, e;
+
+    fprintf(f, "%a", c);
+    for (i = 0; i < n; i++) {
+        fprintf(f, "|%u:", m[i].atom);
+        for (e = 0; e < CSS_ENV_FACT_COUNT; e++) fprintf(f, "%u,", m[i].e[e]);
+        fprintf(f, "*%a", m[i].k);
+    }
+}
+
+/* `out`'s form becomes the atom named `key` (owned, consumed). A non-finite example has no form and stays
+   opaque. */
+static void css_px_form_atom_named(CssPx *out, char *key)
 {
     DCHECK(out->env != CSS_ENV_NONE, "an atom was minted for a length derived from no fact");
-    DCHECK(g_css_px_atom != UINT_MAX, "the atom counter ran out of names");
     out->form.known = false;
-    if (!isfinite(out->px)) return;
+    if (!isfinite(out->px)) {
+        free(key);
+        return;
+    }
     out->form.known = true;
     out->form.n = 1;
     out->form.c = 0.0;
     memset(&out->form.m[0], 0, sizeof out->form.m[0]);
-    out->form.m[0].atom = ++g_css_px_atom;
+    out->form.m[0].atom = css_px_atom_intern(key);
     out->form.m[0].k = 1.0;
     out->form.m[0].aval = out->px;
 }
 
-CssPx css_px_atom(CssPx of, double px)
+/* `out`'s form becomes the atom that is `op` over `args`: an opaque function of the facts in `out.env`, named by
+   its definition so every derivation of it subtracts it. An operand with no form leaves `out` opaque, since
+   there is then no definition to name. */
+static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int nargs)
+{
+    char *key = NULL;
+    size_t len = 0;
+    FILE *f;
+    int i;
+
+    for (i = 0; i < nargs; i++)
+        if (args[i].env != CSS_ENV_NONE && !args[i].form.known) {
+            out->form.known = false;
+            return;
+        }
+    f = open_memstream(&key, &len);
+    CHECK(f, "css_length: OOM naming an atom");
+    fprintf(f, "%s(", op);
+    for (i = 0; i < nargs; i++) {
+        if (i) fputc(';', f);
+        if (args[i].env == CSS_ENV_NONE) fprintf(f, "%a", args[i].px);
+        else css_px_key_poly(f, args[i].form.c, args[i].form.m, args[i].form.n);
+    }
+    fputc(')', f);
+    CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
+    css_px_form_atom_named(out, key);
+}
+
+CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px)
 {
     CssPx out = css_px(px);
+    int i;
 
-    if (of.env == CSS_ENV_NONE) return out;
-    out.env = of.env;
-    out.realm = of.realm;
-    css_px_form_atom(&out);
+    for (i = 0; i < nargs; i++) out = css_px_combine(out, args[i], px);
+    if (out.env == CSS_ENV_NONE) return out;
+    css_px_form_atom(&out, op, args, nargs);
     return out;
 }
 
@@ -185,7 +274,8 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
 
         while (i < p->n && css_px_mono_cmp(&t, &p->m[i]) == 0) {
             DCHECK(!t.atom || t.aval == p->m[i].aval,
-                   "one atom reached a sum with two values — an atom is one opaque result, minted once");
+                   "one atom reached a sum with two values — an atom is one function named by its definition, "
+                   "and a definition over one realm's facts has one value");
             t.k += p->m[i++].k;
         }
         if (t.k != 0.0) p->m[n++] = t;
@@ -195,7 +285,16 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
         return;
     }
     if (n > CSS_PX_FORM_MAX) {
-        css_px_form_atom(out);
+        char *key = NULL;
+        size_t len = 0;
+        FILE *f = open_memstream(&key, &len);
+
+        CHECK(f, "css_length: OOM naming an atom");
+        fputs("poly(", f);
+        css_px_key_poly(f, p->c, p->m, n);
+        fputc(')', f);
+        CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
+        css_px_form_atom_named(out, key);
         return;
     }
     out->form.known = true;
@@ -351,8 +450,10 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
        atom so that every place this one result is carried to can still subtract it. */
     if (win == NULL) {
+        CssPx ab[2] = { a, b };
+
         DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
-        css_px_form_atom(&out);
+        css_px_form_atom(&out, want_hi ? "max" : "min", ab, 2);
         return out;
     }
     tol = 1e-9 * fmax(1.0, fmax(fabs(a.px), fabs(b.px)));
@@ -395,7 +496,9 @@ CssPx css_px_mul(CssPx a, CssPx b)
 
                 /* A monomial holds one atom, so a product of two is one atom of its own. */
                 if (a.form.m[i].atom && b.form.m[j].atom) {
-                    css_px_form_atom(&out);
+                    CssPx ab[2] = { a, b };
+
+                    css_px_form_atom(&out, "mul", ab, 2);
                     return out;
                 }
                 memset(&m, 0, sizeof m);
@@ -423,8 +526,13 @@ CssPx css_px_div(CssPx a, CssPx b)
            "non-zero' and answers 1 or 0 otherwise — so a zero arriving means the caller skipped its own "
            "branch rather than that this operation needs one");
     out = css_px_combine(a, b, a.px / b.px);
-    if (b.env != CSS_ENV_NONE) css_px_form_atom(&out);
-    else if (a.env != CSS_ENV_NONE && a.form.known) css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
+    if (b.env != CSS_ENV_NONE) {
+        CssPx ab[2] = { a, b };
+
+        css_px_form_atom(&out, "div", ab, 2);
+    } else if (a.env != CSS_ENV_NONE && a.form.known) {
+        css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
+    }
     return out;
 }
 
@@ -995,10 +1103,9 @@ CssPx css_length_snap_line_width(JSContext *realm, CssPx len)
     else                                      snapped = trunc(device);
     out = snapped / ratio;
     /* The three steps are a step function of the ratio, which no polynomial states: the result is one atom,
-       and a computed value is derived once per cascade record (core/css/css_computed_style.h), so every
-       reader of this width under one record subtracts the same one. */
+       named by the snap over `len`, so every derivation of this width subtracts the same one. */
     res = css_px_combine(len, css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, realm, out), out);
-    css_px_form_atom(&res);
+    css_px_form_atom(&res, "snap-line-width", &len, 1);
     return res;
 }
 

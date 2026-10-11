@@ -770,6 +770,18 @@ static void mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
     mth_block(out, MTH_UNRESOLVED_TREE);
 }
 
+/* A function's result value: css_length.h's atom for the function `name` (`nlen` bytes, the notation as written)
+   over `args`, with `qual` naming what else picks the function (a strategy, an argument's unit) or NULL. It
+   carries every operand's facts, the union a sum carries, for the reason css_length.h gives for `css_px_max`. */
+static CssPx mth_atom(const char *name, size_t nlen, const char *qual, const CssPx *args, int nargs, double px)
+{
+    char op[64];
+    int w = snprintf(op, sizeof op, "%.*s%s%s", (int)nlen, name, qual ? ":" : "", qual ? qual : "");
+
+    DCHECK(w > 0 && (size_t)w < sizeof op, "a math function's atom name outgrew its buffer");
+    return css_px_atom(op, args, nargs, px);
+}
+
 /* §10.8's `/`, as §10.9 states it: "let left type be the result of finding the types of its left argument, and
    right type be the result of finding the types of its right argument AND THEN INVERTING IT. The
    sub-expression's type is the result of multiplying the left type and right type." §10.10.1's Invert reduces
@@ -791,8 +803,7 @@ static void mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
         inv.pct = 0.0;
         mth_block(&inv, MTH_UNRESOLVED_TREE);
     } else {
-        inv.num = b->num;
-        inv.num = css_px_atom(inv.num, 1.0 / b->num.px);
+        inv.num = mth_atom("inv", 3, NULL, &b->num, 1, 1.0 / b->num.px);
         inv.pct = 0.0;
         inv.pct_term = false;
     }
@@ -862,18 +873,6 @@ static bool mth_sum(Mth *m, MthVal *out)
    calculation is NaN." Asked before every ordering and every libm call, because C's own library does not have
    that property (`Math.hypot(Infinity, NaN)` is the example the note itself gives). */
 static bool mth_is_nan(const MthVal *v) { return v->num.px != v->num.px; }
-
-/* A function's result value, carrying the environment facts of every operand — the union, exactly as a sum
-   does, and for the same reason core/css/css_length.h gives for `css_px_max`: the operand that lost at this
-   viewport is the one that wins at another, so a `min(50vw, 400px)` is a function of the viewport whichever
-   arm the modelled number takes. */
-static CssPx mth_join(CssPx a, CssPx b, double n)
-{
-    CssPx out = css_px_mul(a, b);   /* the union of the two fact sets, with the realm assertion */
-
-    out = css_px_atom(out, n);
-    return out;
-}
 
 /* §10.3's `<rounding-strategy> = nearest | up | down | to-zero | line-width`, and §10.3's own default: "If
    <rounding-strategy> is omitted, it defaults to nearest." */
@@ -1024,6 +1023,18 @@ static bool mth_argument(Mth *m, MthVal *out, bool *last)
     return false;
 }
 
+/* mth_variadic's value over its `n` operands. */
+static CssPx mth_variadic_result(int kind, const CssPx *args, int n, bool saw_nan, bool saw_inf, double fold,
+                                 CssPx best)
+{
+    /* §10.5.1: "In hypot(A, …), if any of the inputs are infinite, the result is +∞" — after the NaN rule, which
+       §10.5.1's note makes strictly stronger ("Math.hypot(Infinity, NaN) will return Infinity" is named there as
+       the JS behavior CSS does not share). */
+    if (kind == 2) return mth_atom("hypot", 5, NULL, args, n, saw_nan ? NAN : (saw_inf ? INFINITY : sqrt(fold)));
+    if (saw_nan) return mth_atom(kind == 0 ? "min" : "max", 3, NULL, args, n, NAN);
+    return best;
+}
+
 /* §10.2's min()/max() and §10.5's hypot(), which share one shape: "one or more comma-separated calculations",
    a type that is "the result of adding the types of its comma-separated calculations", and a fold over the
    values. `kind` is 0 for min, 1 for max, 2 for hypot. */
@@ -1033,12 +1044,15 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
     unsigned n = 0;
     bool last = false, saw_nan = false, saw_inf = false, any_pct = false;
     double fold = 0.0;
-    CssPx facts = css_px(0.0), best = css_px(0.0);
+    CssPx best = css_px(0.0), *args = NULL;
 
     for (;;) {
         MthVal a;
 
-        if (!mth_argument(m, &a, &last)) return false;
+        if (!mth_argument(m, &a, &last)) {
+            free(args);
+            return false;
+        }
         if (n == 0) {
             acc = a;
         } else {
@@ -1049,7 +1063,9 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
         if (a.pct_term) any_pct = true;
         acc.blocked = mth_worse(acc.blocked, a.blocked);
         if (m->res != NULL) {
-            facts = mth_join(facts, a.num, 0.0);
+            args = realloc(args, (size_t)(n + 1) * sizeof *args);
+            CHECK(args, "css_math: OOM keeping a math function's operands");
+            args[n] = a.num;
             if (mth_is_nan(&a)) saw_nan = true;
             else if (isinf(a.num.px)) saw_inf = true;
             if (kind == 2) fold += a.num.px * a.num.px;
@@ -1078,22 +1094,14 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
        `min(50%)` is `50%` and needs no comparison at all. hypot() has no such arm: with one argument it "gives
        the ABSOLUTE VALUE of its input" (§10.5), which is a sign question a percentage cannot answer either. */
     if (any_pct) {
+        free(args);
         if (n > 1 || kind == 2) mth_block(out, MTH_UNRESOLVED_TREE);
         return true;
     }
     out->pct = 0.0;
     out->pct_term = false;
-    if (kind == 2) {
-        /* §10.5.1: "In hypot(A, …), if any of the inputs are infinite, the result is +∞" — after the NaN rule,
-           which §10.5.1's note makes strictly stronger ("Math.hypot(Infinity, NaN) will return Infinity" is
-           named there as the JS behavior CSS does not share). */
-        fold = saw_nan ? NAN : (saw_inf ? INFINITY : sqrt(fold));
-        out->num = css_px_atom(facts, fold);
-    } else if (saw_nan) {
-        out->num = css_px_atom(facts, NAN);
-    } else {
-        out->num = best;
-    }
+    out->num = mth_variadic_result(kind, args, (int)n, saw_nan, saw_inf, fold, best);
+    free(args);
     return true;
 }
 
@@ -1160,20 +1168,21 @@ static bool mth_clamp(Mth *m, MthVal *out)
     }
     {
         bool nan = mth_is_nan(&arg[1]);
-        CssPx facts = arg[1].num, v = arg[1].num;
+        CssPx ops[3] = { arg[1].num }, v = arg[1].num;
+        int nops = 1;
 
         /* §10.2's max(MIN, min(VAL, MAX)), over the lengths' own extremes and after §10.5.1's NaN. */
         if (present[2]) {
-            facts = mth_join(facts, arg[2].num, 0.0);
+            ops[nops++] = arg[2].num;
             nan = nan || mth_is_nan(&arg[2]);
             if (!nan) v = css_px_min(v, arg[2].num);
         }
         if (present[0]) {
-            facts = mth_join(facts, arg[0].num, 0.0);
+            ops[nops++] = arg[0].num;
             nan = nan || mth_is_nan(&arg[0]);
             if (!nan) v = css_px_max(arg[0].num, v);
         }
-        out->num = nan ? css_px_atom(facts, NAN) : v;
+        out->num = nan ? mth_atom("clamp", 5, NULL, ops, nops, NAN) : v;
         out->pct = 0.0;
         out->pct_term = false;
     }
@@ -1239,8 +1248,12 @@ static bool mth_round(Mth *m, MthVal *out)
     if (how == MTH_ROUND_LINE_WIDTH && !have_b) {
         out->num = css_length_snap_line_width(m->res->realm, a.num);
     } else {
-        out->num = have_b ? mth_join(a.num, b.num, 0.0) : a.num;
-        out->num = css_px_atom(out->num, mth_round_value(how, a.num.px, have_b ? b.num.px : 1.0));
+        CssPx ab[2] = { a.num, b.num };
+        char qual[16];
+
+        snprintf(qual, sizeof qual, "%d", (int)how);
+        out->num = mth_atom("round", 5, qual, ab, have_b ? 2 : 1,
+                            mth_round_value(how, a.num.px, have_b ? b.num.px : 1.0));
         if (how == MTH_ROUND_LINE_WIDTH) out->num = css_length_snap_line_width(m->res->realm, out->num);
     }
     out->pct = 0.0;
@@ -1316,10 +1329,11 @@ static bool mth_function(Mth *m, MthVal *out)
         out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
         if (m->res != NULL) {
             if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
-            out->num = mth_join(arg[0].num, arg[1].num, 0.0);
-            out->num = css_px_atom(out->num, mth_name_is(name, nlen, "mod")
-                                                   ? mth_mod_value(arg[0].num.px, arg[1].num.px)
-                                                   : mth_rem_value(arg[0].num.px, arg[1].num.px));
+            CssPx ab[2] = { arg[0].num, arg[1].num };
+
+            out->num = mth_atom(name, nlen, NULL, ab, 2, mth_name_is(name, nlen, "mod")
+                                                          ? mth_mod_value(arg[0].num.px, arg[1].num.px)
+                                                          : mth_rem_value(arg[0].num.px, arg[1].num.px));
             out->pct = 0.0;
             out->pct_term = false;
         }
@@ -1345,10 +1359,11 @@ static bool mth_function(Mth *m, MthVal *out)
             /* §10.4.1: "In sin(A), cos(A), or tan(A), if A is infinite, the result is NaN." C's `sin` already
                answers NaN there, and its NaN propagation is the same; the guard is written so the rule is
                visible where the reader looks for it rather than left to a library's conformance. */
-            if (r != r || isinf(r)) out->num = css_px_atom(out->num, NAN);
-            else if (mth_name_is(name, nlen, "sin")) out->num = css_px_atom(out->num, sin(r));
-            else if (mth_name_is(name, nlen, "cos")) out->num = css_px_atom(out->num, cos(r));
-            else out->num = css_px_atom(out->num, tan(r));
+            if (r != r || isinf(r)) r = NAN;
+            else if (mth_name_is(name, nlen, "sin")) r = sin(r);
+            else if (mth_name_is(name, nlen, "cos")) r = cos(r);
+            else r = tan(r);
+            out->num = mth_atom(name, nlen, is_angle ? "angle" : "number", &arg[0].num, 1, r);
             out->pct = 0.0;
             out->pct_term = false;
         }
@@ -1374,7 +1389,7 @@ static bool mth_function(Mth *m, MthVal *out)
             else if (mth_name_is(name, nlen, "acos")) r = acos(v);
             else r = atan(v);                                        /* §10.4.1: ±∞ is ±90deg, which C gives */
             /* §7.1's canonical unit for an `<angle>` is `deg` */
-            out->num = css_px_atom(out->num, r * 180.0 / MTH_PI);
+            out->num = mth_atom(name, nlen, NULL, &arg[0].num, 1, r * 180.0 / MTH_PI);
             out->pct = 0.0;
             out->pct_term = false;
         }
@@ -1393,9 +1408,10 @@ static bool mth_function(Mth *m, MthVal *out)
         out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
         if (m->res != NULL) {
             if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
-            out->num = mth_join(arg[0].num, arg[1].num, 0.0);
-            out->num = css_px_atom(out->num, (mth_is_nan(&arg[0]) || mth_is_nan(&arg[1]))
-                                                   ? NAN : atan2(arg[0].num.px, arg[1].num.px) * 180.0 / MTH_PI);
+            CssPx ab[2] = { arg[0].num, arg[1].num };
+
+            out->num = mth_atom(name, nlen, NULL, ab, 2, (mth_is_nan(&arg[0]) || mth_is_nan(&arg[1]))
+                                         ? NAN : atan2(arg[0].num.px, arg[1].num.px) * 180.0 / MTH_PI);
             out->pct = 0.0;
             out->pct_term = false;
         }
@@ -1426,10 +1442,11 @@ static bool mth_function(Mth *m, MthVal *out)
                 ok = true;
                 goto done;
             }
-            out->num = have_b ? mth_join(arg[0].num, arg[1].num, 0.0) : arg[0].num;
-            out->num = css_px_atom(out->num,
-                                     is_pow ? mth_pow_value(arg[0].num.px, arg[1].num.px)
-                                            : mth_log_value(arg[0].num.px, have_b ? arg[1].num.px : 0.0, have_b));
+            CssPx ab[2] = { arg[0].num, arg[1].num };
+
+            out->num = mth_atom(name, nlen, NULL, ab, have_b ? 2 : 1,
+                                is_pow ? mth_pow_value(arg[0].num.px, arg[1].num.px)
+                                       : mth_log_value(arg[0].num.px, have_b ? arg[1].num.px : 0.0, have_b));
             out->pct = 0.0;
             out->pct_term = false;
         }
@@ -1447,8 +1464,8 @@ static bool mth_function(Mth *m, MthVal *out)
         out->type = ty;
         if (m->res != NULL) {
             if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
-            out->num = css_px_atom(out->num, mth_name_is(name, nlen, "sqrt") ? sqrt(arg[0].num.px)
-                                                                               : exp(arg[0].num.px));
+            out->num = mth_atom(name, nlen, NULL, &arg[0].num, 1,
+                                mth_name_is(name, nlen, "sqrt") ? sqrt(arg[0].num.px) : exp(arg[0].num.px));
             out->pct = 0.0;
             out->pct_term = false;
         }
@@ -1462,7 +1479,7 @@ static bool mth_function(Mth *m, MthVal *out)
             /* §10.6's own note: "an expression like 10% might be positive or negative once it's resolved,
                depending on what value it's resolved against", so a surviving percentage blocks the sign. */
             if (arg[0].pct_term) mth_block(out, MTH_UNRESOLVED_TREE);
-            else out->num = css_px_atom(out->num, fabs(arg[0].num.px));
+            else out->num = mth_atom(name, nlen, NULL, &arg[0].num, 1, fabs(arg[0].num.px));
         }
         ok = true;
     } else if (mth_name_is(name, nlen, "sign")) {
@@ -1478,10 +1495,8 @@ static bool mth_function(Mth *m, MthVal *out)
             double v = arg[0].num.px;
 
             if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
-            if (v != v) out->num = css_px_atom(out->num, NAN);
-            else if (v < 0.0) out->num = css_px_atom(out->num, -1.0);
-            else if (v > 0.0) out->num = css_px_atom(out->num, 1.0);
-            else out->num = css_px_atom(out->num, signbit(v) ? -0.0 : 0.0);
+            out->num = mth_atom(name, nlen, NULL, &arg[0].num, 1,
+                                v != v ? NAN : v < 0.0 ? -1.0 : v > 0.0 ? 1.0 : signbit(v) ? -0.0 : 0.0);
             out->pct = 0.0;
             out->pct_term = false;
         }
@@ -1626,7 +1641,7 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
        censored into a zero value" and "Signed zeroes do not escape a top-level calculation; they're censored
        into the 'unsigned' zero." An INFINITY is left alone — §10.9.2 clamps it "to the minimum or maximum value
        allowed in the context, as defined in §10.12 Range Checking", and the context is the caller's property. */
-    if (out->num.px != out->num.px) out->num = css_px_atom(out->num, 0.0);
+    if (out->num.px != out->num.px) out->num = mth_atom("nan-censor", 10, NULL, &out->num, 1, 0.0);
     /* Adding 0⁺ is the zero's censoring and keeps its form: under round-to-nearest, 0⁻ + 0⁺ is 0⁺. */
     if (out->num.px == 0.0) out->num = css_px_add(out->num, css_px(0.0));
     if (out->pct != out->pct) out->pct = 0.0;
@@ -1644,7 +1659,8 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
     /* §10.9: "math functions that resolve to <number> can be used in any place that only accepts <integer>; the
        value is rounded to the nearest integer as it resolves." */
     if (gate == MTH_GATE_PRODUCTION && want == CSS_MATH_PROD_INTEGER)
-        out->num = css_px_atom(out->num, mth_round_value(MTH_ROUND_NEAREST, out->num.px, 1.0));
+        out->num = mth_atom("integer", 7, NULL, &out->num, 1,
+                            mth_round_value(MTH_ROUND_NEAREST, out->num.px, 1.0));
 
 done:
     lxb_css_syntax_tokenizer_destroy(m.tkz);

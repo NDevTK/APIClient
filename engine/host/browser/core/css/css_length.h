@@ -205,10 +205,10 @@ typedef unsigned CssEnvSet;
 
 /* One monomial of a length's form: `k · Π fact_f^e[f]`, times an ATOM `A` where `atom` is non-zero: an opaque
    function of the facts the form cannot state, named by `atom` and valued `aval` in this realm. A monomial
-   holds at most one atom and names an atom or a fact. An atom stands for one opaque result wherever that one
-   result is reused, so a sum that adds it and takes it away again cancels it. Its name is a counter's, which
-   no other process and no later session shares, so a form still holding an atom is opaque to anything that
-   outlives the layout that minted it (core/frame/viewport.c's boundary). */
+   holds at most one atom and names an atom or a fact. An atom is named by its definition, the operation over
+   its operands' forms, so every derivation of one function names one atom and a sum that adds it and takes it
+   away again cancels it. The name is interned per process and is no spelling another session shares, so a
+   form still holding an atom is opaque to anything that outlives the process (core/frame/viewport.c). */
 #define CSS_PX_FORM_MAX 8
 typedef struct {
     unsigned      atom;
@@ -248,10 +248,11 @@ CssPx css_px(double px);
 CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px);
 /* The fact itself: `value` is fact `fact`'s value in `realm`, and the length's form is `1·fact`. */
 CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value);
-/* A function of `of`'s facts the form has no term for, with example `px`: one fresh atom, or an opaque form
-   for a non-finite `px` — the one way to replace a length's number outside the arithmetic below (a math
-   function, a rounding, a clamp written by hand). */
-CssPx css_px_atom(CssPx of, double px);
+/* `op` over `args` (`nargs` of them, borrowed), a function of their facts the form has no term for, with example
+   `px`: the atom `op` and the operands' forms name, or an opaque form for a non-finite `px` or an operand with
+   none. `op` names the function whole (a strategy or an argument's unit included). The one way to replace a
+   length's number outside the arithmetic below (a math function, a rounding, a clamp written by hand). */
+CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px);
 /* The form, evaluated at its own facts' values: the number the layout computed, up to rounding. Asserts the
    form is known. */
 double css_px_form_eval(CssPx a);
