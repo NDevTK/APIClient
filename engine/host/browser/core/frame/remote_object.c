@@ -393,7 +393,7 @@ static char *dec_b64(const char *b64, size_t *plen)
                navigable the receiver has never seen (a grandparent in a third agent) is minted from this, so
                the chain crosses nearest first and the far end resolves the prefix it knows.
    Every field is base64 and terminated by '.', so an empty field reads as one and a dotted document name
-   ("<parent>.<n>") crosses intact: '.' is outside base64's alphabet. */
+   ("<parent>.<k>") crosses intact: '.' is outside base64's alphabet. */
 enum { NAV_DOC, NAV_ORIGIN, NAV_NAME, NAV_PARENT, NAV_OPENER, NAV_PARENT_ID, NAV_OPENER_ID, NAV_FIELD_N };
 
 /* The DOCUMENT NAME of the navigable a parent or opener slot holds, or "" when it holds none. */
@@ -731,7 +731,7 @@ JSValue remote_object_decode(JSContext *ctx, const char *text)
         if (!colon) return JS_UNDEFINED;
         id = (uint32_t)strtoul(colon + 1, NULL, 10);
         /* AND THE GENERATION IMMEDIATELY BEFORE IT. Scanned backwards rather than forwards for the same reason
-           the serial is taken from the LAST colon: a document name is "<parent>.<n>" over a root the host may
+           the serial is taken from the LAST colon: a document name is "<parent>.<k>" over a root the host may
            name anything, so only the two separators at the end are known to be the ones. */
         for (gen = colon; gen > text + 1 && gen[-1] != ':'; gen--)
             ;

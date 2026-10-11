@@ -108,10 +108,11 @@ uint32_t world_local_doc(void);
    every read through it suspends. Comparing against the root document instead answered "remote" for a
    same-origin child that is sitting in the same runtime. */
 bool world_doc_hosted(uint32_t doc);
-/* THIS AGENT HOLDS `doc` — said once, by §7.4, because deciding to host it is the fact that makes it true. It
-   is NOT "its realm has been built": a hosted navigable's realm is materialized on the first read that reaches
-   through to its active document (navigable.h), and a navigable nothing ever reads through is still this
-   agent's. Minting a name, hosting, and building the realm are three separate statements in that order. */
+/* THIS AGENT HOLDS `doc` — said by §7.4 in each timeline that creates it, because deciding to host it is the fact
+   that makes it true. It is NOT "its realm has been built": a hosted navigable's realm is materialized on the
+   first read that reaches through to its active document (navigable.h), and a navigable nothing ever reads
+   through is still this agent's. Minting a name, hosting, and building the realm are three separate statements in
+   that order. */
 void world_doc_adopt(uint32_t doc);
 
 /* AND THE THIRD OF THOSE THREE STATEMENTS IS NOT THIS REGISTRY'S, AND THIS RECORD IS WHY. WHICH REALM `doc` IS
@@ -154,7 +155,7 @@ void world_doc_adopt(uint32_t doc);
    table, 1-based so zero stays the NONE value. Handles are local and mean nothing to a peer; the NAME is what
    crosses the seam, which is why every request that carries a document carries world_doc_name.
  *
- * WHY NAMES AND NOT NUMBERS THE HOST HANDS OUT. A document created by this one is named "<my name>.<n>":
+ * WHY NAMES AND NOT NUMBERS THE HOST HANDS OUT. A document created by this one is named "<my name>.<k>":
  * unique by induction from the root name, with no allocator, no lock and no round trip — the identical argument
  * the WorldId above rests on, applied one level up. It has to be, because HTML §4.8.5 creates a child navigable
  * in the INSERTION STEPS: `frame.contentWindow` answers on the line after the append, and a round trip cannot
@@ -166,10 +167,16 @@ void world_doc_adopt(uint32_t doc);
 uint32_t    world_doc_intern(const char *name);
 const char *world_doc_name(uint32_t doc);
 
-/* MINT A DOCUMENT CREATED BY `parent` and return its handle. Synchronous and unbounded. The parent is named
-   rather than assumed to be the instance root: a same-origin child is a realm of this instance and creates
-   children of its own, and naming them "<root>.<n>" would collide the moment two realms both minted. */
+/* MINT A DOCUMENT CREATED BY `parent`, by the running flow, and return its handle. Synchronous and unbounded.
+   The name is "<parent>.<k>", k being "<ordinal>-<history>" (solver/decide.h's decide_history_name), so the
+   parent prefix is recoverable from it and a replay of the creating history mints the same name: a document is
+   identified by the history that created it, never by how many documents the instance minted before it. The
+   parent is named rather than assumed to be the instance root, since a same-origin child is a realm of this
+   instance and creates children of its own. Requires a running flow. */
 uint32_t world_mint_doc(uint32_t parent);
+/* Whether `w` is `a` or one of its descendants in this instance's minted table: the timeline `a` named
+   continued. Worlds of another document or session answer false. */
+bool world_descends_from(WorldId w, WorldId a);
 
 /* MINT a root world, for a flow created in this instance from the baseline. */
 WorldId world_mint(void);

@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "solver/world.h"
+#include "solver/decide.h"   /* decide_history_name: what a minted document name is identified by */
 
 /* A LOCALLY MINTED WORLD and the fork edge that produced it. Kept as a flat array indexed by serial-1, because
    serials are dense and monotonic: a world's parent is one load, and the ancestry walk is a pointer chase over
@@ -70,7 +71,7 @@ static uint32_t g_session;
    different document. It is small by construction — one entry per document this instance has ever named. */
 /* NO `JSContext *realm` COLUMN — see the record below, which is the whole of why and the only thing
    standing between the next reader and re-adding one. */
-typedef struct { char *name; uint32_t next_child; bool hosted; } DocEntry;
+typedef struct { char *name; bool hosted; } DocEntry;
 static DocEntry *g_docs;
 static uint32_t g_docs_n, g_docs_cap;
 
@@ -119,10 +120,9 @@ bool world_doc_hosted(uint32_t doc)
 void world_doc_adopt(uint32_t doc)
 {
     DCHECK(doc != 0 && doc <= g_docs_n, "this agent was said to HOLD a document handle that names no document");
-    DCHECK(!g_docs[doc - 1].hosted,
-           "this agent was said to HOLD one document twice — hosting is §7.4 deciding that the document's realms "
-           "are built in THIS heap rather than a peer's, which is a statement about the instance and is made "
-           "once; a second one is either a name interned twice or a creating operation run twice over one name");
+    /* Every timeline whose history creates the document says so, and a name is shared by all of them
+       (world_mint_doc), so a second statement from another timeline is the same fact. One timeline cannot make
+       it twice: its own ordinal makes each of its creations a different name. */
     g_docs[doc - 1].hosted = true;
 }
 
@@ -199,19 +199,22 @@ uint32_t world_mint_doc(uint32_t parent)
     char *buf;
     size_t cap;
     uint32_t doc;
+    uint64_t history;
+    int ordinal;
 
     DCHECK(parent != 0 && parent <= g_docs_n, "a document was created by a parent that names no document");
     DCHECK(g_doc != 0, "a document was created before world_registry_init named the one creating it");
     self = world_doc_name(parent);
-    /* "<my name>.<n>" — unique by induction from the root name, which is what lets this be synchronous. The
-       12 is the '.', a `uint32_t`'s ten digits and the NUL, which is the whole of what this call appends. */
-    cap = strlen(self) + 12;
+    /* "<parent>.<ordinal>-<history>": the creating timeline's consumed decisions and its count of creations
+       at them (decide_history_name), so a replay of that history re-mints the name and two timelines that
+       diverged at a recorded branch mint two. Unique within a timeline by the ordinal, and synchronous. The 30
+       is the '.', a `int`'s ten digits, the '-', sixteen hex digits and the NUL. */
+    decide_history_name(&history, &ordinal);
+    cap = strlen(self) + 30;
     buf = malloc(cap);
     CHECK(buf != NULL, "world registry: OOM minting a document name — a document that cannot be named can "
                        "never be routed to, so every read through it would park its flow forever");
-    snprintf(buf, cap, "%s.%u", self, ++g_docs[parent - 1].next_child);
-    CHECK(g_docs[parent - 1].next_child != 0, "the child-document counter wrapped — the next name it mints collides with a "
-                             "document that already exists, merging two documents into one identity");
+    snprintf(buf, cap, "%s.%d-%016llx", self, ordinal, (unsigned long long)history);
     doc = world_doc_intern(buf);   /* interning COPIES; this buffer is ours to release */
     free(buf);
     return doc;
@@ -625,7 +628,7 @@ static int world_parse_into(const char *s, WorldId *out, WorldId **buf_p, int *c
     while (q && *q) {
         char *comma = strchr(q, ','), *colon, *gen;
         if (comma) *comma = 0;
-        /* THE LAST TWO colons: a document name is minted as "<parent>.<n>" and a host may name the root
+        /* THE LAST TWO colons: a document name is minted as "<parent>.<k>" and a host may name the root
            anything, so only the serial's and the generation's separators are known to be final. */
         colon = strrchr(q, ':');
         /* EVERY FIELD THE WRITER WROTE IS A WORLD, so a field with no serial is not one to skip — skipping it
@@ -692,6 +695,19 @@ static bool world_anc_holds(const WorldId *anc, int n, WorldId needle)
     int k;
 
     for (k = 0; k < n; k++) if (world_eq(anc[k], needle)) return true;
+    return false;
+}
+
+bool world_descends_from(WorldId w, WorldId a)
+{
+    WorldId p;
+
+    if (world_eq(w, a)) return true;
+    if (w.doc != g_doc || w.session != g_session || a.doc != g_doc || a.session != g_session) return false;
+    DCHECK(w.serial != 0 && w.serial <= g_minted_n,
+           "a world never minted here was asked about its ancestry — the walk indexes the minted table by serial");
+    for (p = g_minted[w.serial - 1].parent; !world_is_none(p); p = g_minted[p.serial - 1].parent)
+        if (world_eq(p, a)) return true;
     return false;
 }
 
@@ -971,7 +987,7 @@ int world_segments_park(const char *const **vectors)
 
 static void world_gone_push(WorldId w)
 {
-    /* SIZED FROM THE NAME, never from a fixed buffer: a document name is "<root>.<n>" nested one component per
+    /* SIZED FROM THE NAME, never from a fixed buffer: a document name is "<root>.<k>" nested one component per
        navigable depth over whatever the host called the root, so any constant here is a cap on the frame tree.
        The rest of a field is two colons, two full-width uint32 decimals and the NUL — 2 + 20 + 1 = 23 — and
        world_name_write's own CHECK is what makes that arithmetic checkable rather than eyeballed. */

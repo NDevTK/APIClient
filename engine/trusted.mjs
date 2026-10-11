@@ -542,7 +542,7 @@ async function main() {
   /* ── THE ROUTING TABLE ────────────────────────────────────────────────────────────────────────────────────
      "Which instance holds which document" is the one fact only this zone has, and every line below is that
      fact being asked. It is a LIST scanned for an EXACT name and never a prefix match: a child document's name
-     is prefixed by its creator's (`<creator>.<n>`) and the creator is precisely the instance that does NOT
+     is prefixed by its creator's (`<creator>.<k>`) and the creator is precisely the instance that does NOT
      hold it — that is why the notice exists at all — so a prefix match routes a post straight back to its
      sender, which the engine catches at its arrival entry rather than silently performing. */
   const instances = [];
@@ -715,6 +715,9 @@ async function main() {
   };
   /* A refusal's words for this zone's decline records: the closed token's sentence, and the instance. */
   const askerRefusal = (e, refusal) => `${refusal.text}, as named by the engine of [${e.tag}]`;
+  /* The address each provisioned child was created at, by name: what a later create under that name is checked
+     against. */
+  const createdAddress = new Map();
   /* The record of the document created at `url` from the navigable record `doc`: its policy container's IP
      address space is its response's, or `creator`'s (null for none) for a local-scheme one (Local Network
      Access §3.5), which bridge.js states on the analyze record. */
@@ -1303,17 +1306,23 @@ async function main() {
                         '`new`), whose act it is, whether its path chose a witness, §7.2.2.4\'s opener, and the policy');
       /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
          against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
-         re-announcing it under the same name. A second instance would give one document two heaps and two
-         object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent and
-         which nothing downstream could tell from the routing. */
-      if (holderOf(f[C.child])) return;
+         re-announcing it under the same name (solver/world.c's world_mint_doc names a document by the history
+         that created it). A second instance would give one document two heaps, which SECURITY.md's
+         one-instance-per-cluster rule forbids. A create under a held name at ANOTHER address is two documents
+         claiming one identity, and is refused. */
+      if (holderOf(f[C.child])) {
+        if (createdAddress.get(f[C.child]) !== f[C.address])
+          e.ready.push(decline(`navigable.create ${f[C.child]} at ${f[C.address]} — ${askerRefusal(e,
+            ZONE.docRecordAskerRefusal('child', 'readdressed', f[C.child]))} (${createdAddress.get(f[C.child])})`));
+        return;
+      }
       /* The group: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing
          context group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's. In
          the creator's group the peer holds a WindowProxy for the creator, whose engine raised its own flag at
          the emission (core/frame/navigable.c); this is the zone's record of that. */
       /* The child's record, before anything is loaded for it: the creating document's record (askerRecord)
          composed with the notice's words by HTML's own rules (lib/document-record.js). The creator is refused
-         unless it is a document of this instance and the child's name is minted from it ("<creator>.<n>",
+         unless it is a document of this instance and the child's name is minted from it (docRecordNameParent,
          solver/world.c's world_mint_doc), the nesting the record of the child's own descendants walks. A
          navigable with no parent is an auxiliary one, which §7.3.1.7 does not create at all under the
          creator's sandboxed auxiliary navigation flag; that notice is refused here, whatever the engine that
@@ -1326,6 +1335,7 @@ async function main() {
         e.ready.push(decline(`navigable.create ${f[C.child]} — ${askerRefusal(e, createRefusal)}`));
         return;
       }
+      createdAddress.set(f[C.child], f[C.address]);
       const creatorDoc = created.doc;
       const own = ZONE.docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags],
                                  ZONE.docRecordAddressSpace(creatorDoc));

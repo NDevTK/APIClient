@@ -11,7 +11,7 @@
  * `content.mojom.Renderer`, validated at both ends of a MessagePort. Every ABI call is therefore a suspension
  * point at which another engine's round can interleave: two calls in a row are atomic only if written to be. */
 // The root document name for each engine this offscreen owns (see qjs_init below). A document an engine
-// creates (a child navigable, a popup) names itself "<parent>.<n>", so HTML §4.8.5 The iframe element can
+// creates (a child navigable, a popup) names itself "<parent>.<k>", so HTML §4.8.5 The iframe element can
 // create a child navigable inside the insertion steps without asking this zone.
 let nextDocumentId = 0;
 /* The run log and the crash count, declared at load so that their absence means this file did not load, an
@@ -3870,12 +3870,21 @@ function owedList(method, s) {
 }
 
 /* The instance holding a document, by exact name. A child's name is prefixed by its creator's
-   ("<creator>.<n>") and the creator is exactly the instance that does not hold it, so a prefix match would
+   ("<creator>.<k>") and the creator is exactly the instance that does not hold it, so a prefix match would
    route a message back to its sender. */
 /* It answers for every document the instance holds, not only its root: `qjs_join` adds documents to the live
    agent (main.c's `g_joined_ctx`/`g_joined_dom`) and the engine interns every document by name (`qjs_route`'s
    arrival assert is `world_doc_hosted(world_doc_intern(doc))`, solver/engine.c), so the two lists are one
    table on the other side of the boundary. */
+/* The address each provisioned child was created at, by name: the fact a later create under the same name is
+   checked against. */
+const _createdAddress = new Map();
+/* A refusal this zone made of something an engine asked, counted on the instance's histogram beside the declined
+   requests. The token is from a closed set (lib/document-record.js's `_ASKER_REFUSALS`). */
+function engineCountRefusal(eng, tok) {
+  if (!(tok in eng._egress.declined)) eng._egress.declined[tok] = 0;
+  eng._egress.declined[tok]++;
+}
 function hostHolderOf(docName) {
   for (const e of _pool) {
     if (e.docId === docName) return e;
@@ -3972,12 +3981,23 @@ async function hostNotice(eng, line) {
            "a navigable.create notice does not match lib/navigable-notice.js's table — navigable.c composes it "
            + "from navigable_notice.h, and noticegen.mjs writes the table from the same header, so the "
            + "extension's copy is stale or the engine is from another revision");
-    if (hostHolderOf(f[C.child])) return;   // already provisioned: the engine announces a document once
+    /* Already provisioned: every timeline whose history created the document announces it under one name
+       (solver/world.c's world_mint_doc), and the instance that holds it serves them all — unless this create is
+       at another address, which is two documents claiming one name. */
+    if (hostHolderOf(f[C.child])) {
+      if (_createdAddress.get(f[C.child]) !== f[C.address]) {
+        const _readdressed = docRecordAskerRefusal("child", "readdressed", f[C.child]);
+        console.warn("[bridge] navigable.create " + f[C.child] + " at " + f[C.address] + " is refused: " +
+                     _readdressed.text + " (" + _createdAddress.get(f[C.child]) + ")");
+        engineCountRefusal(eng, _readdressed.token);
+      }
+      return;
+    }
     /* The child's record, before anything is opened or loaded for it: the creating document's record
        (askerRecord) composed with the notice's words by HTML's own rules (lib/document-record.js), so a child
        of a document this tool opened is never graded as one the person navigated to and inherits every mark
        and flag the rules carry. The creator is refused unless it is a document of this instance and the
-       child's name is minted from it ("<creator>.<n>", solver/world.c's world_mint_doc), the nesting the
+       child's name is minted from it (docRecordNameParent, solver/world.c's world_mint_doc), the nesting the
        record of the child's own descendants walks. A navigable with no parent is an auxiliary one, which
        §7.3.1.7 does not create at all under the creator's sandboxed auxiliary navigation flag; that notice is
        refused here, whatever the engine decided. */
@@ -3986,8 +4006,10 @@ async function hostNotice(eng, line) {
       ? docRecordAskerRefusal("child", "not-minted", f[C.child]) : null);
     if (_createRefusal) {
       console.warn("[bridge] navigable.create " + f[C.child] + " is refused: " + _createRefusal.text);
+      engineCountRefusal(eng, _createRefusal.token);
       return;
     }
+    _createdAddress.set(f[C.child], f[C.address]);
     const _creatorDoc = _created.doc;
     const _childOwn = docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags],
                                 docRecordAddressSpace(_creatorDoc));

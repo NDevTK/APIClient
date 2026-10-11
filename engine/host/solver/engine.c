@@ -1488,7 +1488,7 @@ int engine_host_exhausted(JSContext *ctx, uint32_t req) {
 }
 
 /* The name of the document a register entry asks for (PEND_DOC), as the trusted zone knows it: the token a
-   provisioning record gave it, or the "<creator>.<n>" world_mint_doc composed. A name crosses inside a TAB- and
+   provisioning record gave it, or the "<creator>.<k>" world_mint_doc composed. A name crosses inside a TAB- and
    newline-separated line and, on the fetch bill, inside a comma-joined set, so it holds none of the three. */
 static const char *engine_asker_name(JSValueConst p) {
     uint32_t doc = (uint32_t)pending_get_int(p, PEND_DOC);

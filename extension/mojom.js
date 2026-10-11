@@ -162,7 +162,7 @@
   var DOCUMENT_ID = { name: "docId", type: "string", retained: false,
     why: "the name this document is known by inside the agent — the key qjs_route and the notice stream name a " +
          "target document with. It is minted by the trusted zone for a root and by the ENGINE for a child it " +
-         "creates (`<parent>.<n>`), which SECURITY.md permits precisely because it is only a name. NOT " +
+         "creates (`<parent>.<k>`), which SECURITY.md permits precisely because it is only a name. NOT " +
          "retained: its one sink is world_doc_intern (solver/world.c), which either matches a name the " +
          "registry already holds or strdup's its own copy — the same sink, and therefore the same ownership, " +
          "as the Unload parameter this record is shared with. Two entries taking one contract may not disagree " +

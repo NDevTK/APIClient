@@ -238,6 +238,12 @@ typedef struct {
        disagree would answer a cross-document read with this document's Window, the failure the same-origin check
        exists to prevent. */
     uint32_t doc;
+    /* Which timeline created this navigable: the creating flow's world, or WORLD_NONE for one made outside any
+       flow. A document's name is shared by every timeline whose history created it (solver/world.c's
+       world_mint_doc), and two of them create two navigables for it, so a lookup by document answers only the
+       rows whose creator the asking timeline descends from (proxy_of_this_timeline). A creation fact, never
+       written again. */
+    WorldId creator;
 } ProxyData;
 
 /* The two recorded flags of §7.2.2.1's `closed` ("true if this's navigable is null or its is closing is true"),
@@ -430,6 +436,23 @@ static int           g_live_navs_n, g_live_navs_cap;
    live_nav_of_document cannot see, and its two readers would report a document this agent holds as
    unmaterialized, which is right for a navigable nothing has read through and wrong for one that was never
    recorded. One function, so a third mint cannot answer differently by forgetting. */
+/* The creating timeline a new navigable records: the running flow's, or none outside every flow. */
+static WorldId proxy_creating_world(void)
+{
+    Flow *f = flow_running();
+
+    return f ? f->world : WORLD_NONE;
+}
+
+/* Is this navigable one the asking timeline can see? Made outside every flow, or by a timeline the running one
+   continues. With no flow running every row answers, which is what a lookup made between flows always read. */
+static bool proxy_of_this_timeline(const ProxyData *p)
+{
+    Flow *f = flow_running();
+
+    return world_is_none(p->creator) || f == NULL || world_descends_from(f->world, p->creator);
+}
+
 static void live_nav_record(JSValueConst proxy)
 {
     if (g_live_navs_n == g_live_navs_cap) {
@@ -469,7 +492,7 @@ static JSValueConst live_nav_of_document(uint32_t doc)
         DCHECK(p != NULL, "a row of the live-navigable table names an object with no §7.2.3 record — both mints "
                           "attach one before the object is recorded, so this row names something that is not a "
                           "WindowProxy at all");
-        if (p == NULL || p->doc != doc) continue;
+        if (p == NULL || p->doc != doc || !proxy_of_this_timeline(p)) continue;
         DCHECK(!hit,
                "TWO of this agent's navigables name ONE document IN ONE TIMELINE — a Document has one Window, "
                "so these are two of them wearing one name and `w[0] === w[0]` would decide by which row the "
@@ -936,6 +959,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
        creates one from a target name with no element to be presented by. */
     p->container = JS_NULL;
     p->doc = doc;
+    p->creator = proxy_creating_world();
     JS_SetOpaque(obj, p);
     /* After JS_SetOpaque, because live_nav_of_document reads the record off every row and asserts every row has
        one. */
@@ -1077,6 +1101,7 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->opener = JS_DupValue(ctx, opener);
     p->container = JS_NULL;   /* §7.3.1.3's link is written by the create, exactly as it is for a local one */
     p->doc = doc;
+    p->creator = proxy_creating_world();
     JS_SetOpaque(obj, p);
     /* A remote proxy is in both tables, which answer two questions. The remote table answers a peer's navigable's
        identity (`w[0] === w[0]` over a document another instance holds); this one answers which navigable of
@@ -1102,10 +1127,11 @@ static void remote_nav_record(JSValueConst proxy, uint32_t doc)
            "window_proxy_of_document answers a peer's identity from, and a hosted document is answered by its "
            "own realm instead, so a row for one is a second answer to a question that already has one");
     for (i = 0; i < g_remote_navs_n; i++)
-        DCHECK(g_remote_navs[i].doc != doc,
-               "a SECOND remote-navigable row was recorded for one document — the table is a map from a peer's "
-               "document to the one proxy that resolves it, so two rows make `w[0] === w[0]` decide by which "
-               "row the scan reached first");
+        DCHECK(g_remote_navs[i].doc != doc ||
+               !proxy_of_this_timeline(JS_GetOpaque(g_remote_navs[i].proxy, g_proxy_class)),
+               "a SECOND remote-navigable row was recorded for one document in one timeline — the table maps a "
+               "peer's document to the one proxy that resolves it in each timeline, so two rows make `w[0] === "
+               "w[0]` decide by which row the scan reached first");
     if (g_remote_navs_n == g_remote_navs_cap) {
         int cap = g_remote_navs_cap ? g_remote_navs_cap * 2 : 8;
         RemoteNav *g = realloc(g_remote_navs, (size_t)cap * sizeof *g);
@@ -1237,7 +1263,9 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
         return JS_DupValue(ctx, held);
     }
     for (i = 0; i < g_remote_navs_n; i++)
-        if (g_remote_navs[i].doc == doc) return JS_DupValue(ctx, g_remote_navs[i].proxy);
+        if (g_remote_navs[i].doc == doc &&
+            proxy_of_this_timeline(JS_GetOpaque(g_remote_navs[i].proxy, g_proxy_class)))
+            return JS_DupValue(ctx, g_remote_navs[i].proxy);
     return JS_UNDEFINED;
 }
 

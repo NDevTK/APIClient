@@ -449,13 +449,15 @@ does not launder them into the page's own.
 A request is judged under its asking document's record. The engine names the asking document on the pending
 line (`ASKERS`, every document whose park the line folds) and on the host request line, and the zone answers a
 name with the record it wrote when it provisioned that document; for a document the engine created inside its
-own heap, which the engine names `<creator>.<n>`, it answers with the nearest provisioned ancestor's
+own heap, which the engine names `<creator>.<k>`, it answers with the nearest provisioned ancestor's
 (`docRecordOfAsker`). A name whose walk meets another instance's document, or no provisioned document at all,
 is refused with `blocked-asker:<role>-<reason>` (`docRecordAskerRefusal`), which says which document failed and
 why: the `asker` of a request, the `creator` of a create, the `issuer` of a provisioning notice or the
 `navigable`'s current document, each `elsewhere` or `unprovisioned`; a create whose child name is not minted from
 its creator is `blocked-asker:child-not-minted`, and a navigation whose new name has no creator component is
-`blocked-asker:document-not-minted`. A provisioning notice is judged the same way by the document that issued
+`blocked-asker:document-not-minted`. `<k>` names the history that created the document (solver/world.c), so every
+timeline replaying that history announces the same name and one instance serves them all; a create under a held
+name at another address is two documents claiming one name, `blocked-asker:child-readdressed`. A provisioning notice is judged the same way by the document that issued
 it: a create by its creator, a `navigable.swap` or `navigable.navigate` by HTML §7.4.2.2's sourceDocument (whose record the
 new document's joins with that of the navigable's current document, the one its name is minted from), and a
 `document.seed` by the declaring document. An instance has no record of its own. A line that folds several

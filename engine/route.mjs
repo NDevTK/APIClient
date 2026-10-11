@@ -258,7 +258,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
 }
 
 const engines = [];
-/* EXACT. A child document's NAME is prefixed by its creator's ("<creator>.<n>") but the creator is precisely
+/* EXACT. A child document's NAME is prefixed by its creator's ("<creator>.<k>") but the creator is precisely
    the instance that does NOT hold it — that is why the notice exists. Prefix-matching routed the post straight
    back to the sender, which the engine caught twice over. */
 const holderOf = (doc) => engines.find((e) => e.docId === doc) ?? null;
@@ -602,8 +602,15 @@ async function drainNotices(e) {
       if (f.length !== C.parts)
         fail(`a navigable.create notice was short of its fields (${f.length} of ${C.parts}): ${n} — ` +
              'navigable.c composes it from navigable_notice.h, so this driver and that engine disagree');
-      if (holderOf(f[C.child]))
+      /* A held name is the same document created by another timeline's history (solver/world.c's
+         world_mint_doc); at another address it would be two documents claiming one name, which the zones refuse
+         (`blocked-asker:child-readdressed`) and this fixture, whose every open names one address, never asks. */
+      if (holderOf(f[C.child])) {
+        if (holderOf(f[C.child]).docUrl !== f[C.address])
+          fail(`a navigable.create named ${f[C.child]}, held at ${holderOf(f[C.child]).docUrl}, at another ` +
+               `address ${f[C.address]}`);
         console.log(`  [${e.tag}] create for ${f[C.child]}, already held — routing to the live instance`);
+      }
       /* The provenance is counted and read nowhere else here, for the `document.fetch` branch's reason: this
          driver serves a literal and spends no network.
          The parent is not part of the container beside it and is passed on its own: this fixture's `a` opens a

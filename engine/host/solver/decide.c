@@ -56,6 +56,9 @@ static int g_dec_below = 0;         /* slots in that chain — the head's index 
 static signed char *g_dec = NULL; static int g_dec_n = 0, g_dec_cap = 0;   /* the head: this flow's own */
 static uint32_t *g_dec_k = NULL;   /* …and which question each of its slots answers */
 static int g_c = 0;
+/* The names this timeline has minted at its current cursor (decide_history_name): `g_mints` of them, counted
+   since the cursor stood at `g_mint_c`. Per flow, so it rides every blob a flow's decision state does. */
+static int g_mint_c = 0, g_mints = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
 /* The arm the running flow was born owing: a handoff from the fork that minted it, not a recorded decision (see
@@ -376,6 +379,8 @@ void decide_enter(JSContext *ctx, Flow *f) {
     dec_clear();   /* whatever the previous flow was standing on is not this one's */
     g_dec_n = 0;
     g_c = 0;
+    g_mint_c = 0;
+    g_mints = 0;
     g_cur_fn = f->fn;   /* borrowed */
     g_running = 1;
     /* A fresh flow owes and is owed nothing: a handoff is minted only by a fork and reaches a sibling through its
@@ -849,11 +854,15 @@ void decide_refine_stats(long *asked, long *refined) {
    column on the park document's flow record, written where the pager emits the cursor and read in
    decide_blob_new (cold.c). How its absence would show: such a flow resumes at cursor 0, re-reaches its branch and
    forks, so both arms run and the cost is one duplicate flow per cold-resumed un-run sibling. */
-typedef struct { DecSeg *seg; int c; signed char pending; } DecideBlob;
+typedef struct { DecSeg *seg; int c; signed char pending; int mint_c, mints; } DecideBlob;
+/* What every blob a fork or suspend takes from the running flow besides its chain: the mint count at the cursor,
+   which the sibling shares because it shares the history up to here. */
+static void dec_blob_take_mints(DecideBlob *b) { b->mint_c = g_mint_c; b->mints = g_mints; }
 void *decide_suspend(void) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
     b->seg = dec_freeze();   /* the blob owns the reference the freeze hands back */
     b->c = g_c;
+    dec_blob_take_mints(b);
     /* Carried, never laundered: a sibling can be preempted between the frame clone and the branch it was forked
        over, and a park that dropped the handoff would delete the arm this fork exists to explore. */
     b->pending = g_pending;
@@ -869,6 +878,11 @@ void decide_resume(void *blob, JSValueConst fn) {
     g_c = b->c;
     DCHECK(g_c <= dec_total(), "a flow resumed with a cursor past the end of its own decision vector — the "
                                "next branch would read a slot nothing recorded");
+    DCHECK(b->mint_c >= 0 && b->mint_c <= g_c && b->mints >= 0,
+           "a flow resumed with a mint count taken at a cursor past its own — dec_blob_take_mints copies both "
+           "from the running flow, whose cursor only moves forward");
+    g_mint_c = b->mint_c;
+    g_mints = b->mints;
     g_pending = b->pending;
     DCHECK(g_pending == -1 || g_pending == 0 || g_pending == 1,
            "a flow resumed owing a handoff that is neither arm nor the nothing-owed marker — the value is "
@@ -971,8 +985,11 @@ void *decide_blob_new(void *seg) {
        document from the top (see DecideBlob's `pending`). */
     b->pending = -1;
     /* Cursor 0 makes this a replay: the flow re-runs the document and consumes one recorded arm at each branch it
-       re-reaches, and forks like any other flow once the cursor reaches the chain's end. */
+       re-reaches, and forks like any other flow once the cursor reaches the chain's end. It has minted nothing
+       yet, so it re-mints every name its recorded run minted (decide_history_name). */
     b->c = 0;
+    b->mint_c = 0;
+    b->mints = 0;
     return b;
 }
 
@@ -1020,6 +1037,40 @@ int decide_blob_cursor(const void *blob) {
     return b->c;
 }
 
+/* See decide.h. FNV-1a over each consumed slot's question and arm, bottom of the chain first; a replay consumes
+   the same slots in the same order, so it hashes to the same value. */
+void decide_history_name(uint64_t *identity, int *ordinal) {
+    const DecSeg *s, **segs = NULL;
+    uint64_t h = 1469598103934665603ULL;
+    int n_segs = 0, cap = 0, i, k;
+
+    DCHECK(g_running, "a name was minted from a timeline's history while no flow's decision state was loaded");
+    DCHECK(identity != NULL && ordinal != NULL, "a history name was asked with nowhere to put it");
+    for (s = g_dec_base; s; s = s->base) {
+        if (n_segs == cap) {
+            cap = cap ? cap * 2 : 16;
+            segs = realloc(segs, (size_t)cap * sizeof *segs);
+            CHECK(segs != NULL, "decide: OOM walking a flow's decision chain to name what it created");
+        }
+        segs[n_segs++] = s;
+    }
+    for (i = n_segs - 1; i >= 0; i--)
+        for (k = 0; k < segs[i]->n && segs[i]->below + k < g_c; k++) {
+            h = (h ^ segs[i]->k[k]) * 1099511628211ULL;
+            h = (h ^ (uint8_t)segs[i]->e[k]) * 1099511628211ULL;
+        }
+    free(segs);
+    for (k = 0; g_dec_below + k < g_c; k++) {
+        h = (h ^ g_dec_k[k]) * 1099511628211ULL;
+        h = (h ^ (uint8_t)g_dec[k]) * 1099511628211ULL;
+    }
+    if (g_mint_c != g_c) { g_mint_c = g_c; g_mints = 0; }
+    *identity = h;
+    *ordinal = ++g_mints;
+    CHECK(g_mints > 0, "decide: the per-history mint ordinal wrapped — the next name collides with one already "
+                       "minted");
+}
+
 void decide_live_stats(long *entries, long *bytes) {
     if (entries) *entries = dec_total();
     if (bytes) *bytes = (long)((size_t)g_dec_cap * DEC_SLOT_BYTES);   /* both head buffers; one capacity governs them */
@@ -1038,6 +1089,7 @@ static void *decide_fork_blob(int cursor, int arm, uint32_t asked) {
            "inherit decisions taken after the branch it is being forked at");
     b->seg = dec_seg_arm(dec_freeze(), arm, asked);   /* the sibling's arm over the shared prefix; O(1) */
     b->c = cursor;
+    dec_blob_take_mints(b);
     b->pending = -1;   /* the arm is recorded here, under the question both arms answer; see decide_fork_handoff */
     return b;
 }
@@ -1062,6 +1114,7 @@ static void *decide_fork_handoff(int arm) {
            "replaying them rather than at the branch it was minted over");
     b->seg = dec_freeze();   /* the shared immutable prefix, O(1), as the recording fork's freeze is */
     b->c = g_c;
+    dec_blob_take_mints(b);
     b->pending = (signed char)arm;
     return b;
 }
@@ -1091,6 +1144,7 @@ void *decide_fork_same_path(const char *why) {
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state");
     b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
     b->c = g_c;
+    dec_blob_take_mints(b);
     /* Nothing owed: this sibling diverges over a value that arrived, not a branch, so there is no arm to hand it;
        a handoff is minted only at a fork over an unspellable branch (decide_fork_handoff). */
     b->pending = -1;
@@ -1115,6 +1169,7 @@ void *decide_freeze_path(void) {
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM freezing a flow's decision path");
     b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
     b->c = g_c;
+    dec_blob_take_mints(b);
     b->pending = -1;   /* a path, not a member: nothing is minted here for a handoff to be owed to */
     return b;
 }

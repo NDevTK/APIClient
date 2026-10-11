@@ -20,7 +20,7 @@
  * contentWindow was null and the whole of html/browsers read members of null.
  *
  * WHAT MAKES IT SYNCHRONOUS IS THE NAME. A document is named, and a document created by this one is named
- * "<my name>.<n>" — unique by induction with no allocator and no round trip (world.h). So the engine MINTS the
+ * "<my name>.<k>" — unique by induction with no allocator and no round trip (world.h). So the engine MINTS the
  * child and the host is TOLD, as a one-way notice. The host still owns routing, because only the trusted zone
  * knows which instance holds which document; what it no longer owns is the identity, which it never needed to.
  *

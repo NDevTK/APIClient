@@ -3967,7 +3967,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     /* Before the agent split, so a same-origin and a cross-origin destination are one row kind. */
     navigable_record_destination(ctx, addr, prov, drives);
     /* MINTED FROM THE CREATOR, not from the instance root: this agent holds one realm per same-origin
-       document, and naming every child "<root>.<n>" would collide the moment two realms both created one. */
+       document, and naming every child "<root>.…" would collide the moment two realms both created one. */
     child = world_mint_doc(document_doc(ctx));
     /* The child's §7.4.5 request facts and its name, for the zone's own load of the same frame. */
     if (is_child)

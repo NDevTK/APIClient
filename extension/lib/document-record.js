@@ -205,18 +205,19 @@ function docRecordMeet(records) {
 }
 
 /* The name of the document `name` was minted from, or null for a name with no creator component: the engine
-   names every document it creates or navigates to "<creator>.<n>" (solver/world.c's world_mint_doc), from the
-   creating document for a new navigable and from the navigable's current document for a navigation. */
+   names every document it creates or navigates to "<creator>.<ordinal>-<history>" (solver/world.c's
+   world_mint_doc: a per-timeline ordinal and sixteen hex digits naming the creating history), from the creating
+   document for a new navigable and from the navigable's current document for a navigation. */
 function docRecordNameParent(name) {
   CHECK(typeof name === "string" && name !== "", "a document name's parent was asked of no name");
-  var m = /^(.+)\.[0-9]+$/.exec(name);
+  var m = /^(.+)\.[0-9]+-[0-9a-f]{16}$/.exec(name);
   return m ? m[1] : null;
 }
 
 /* The record a request is judged against, from the asking document's name as the engine states it on the
    pending line. A document this zone provisioned answers with its own record. One the engine created inside
    its own heap (a same-origin child or popup, or the next document of a navigable) was never provisioned;
-   the engine names it "<creator>.<n>" (solver/world.c's world_mint_doc), so the nearest provisioned ancestor
+   the engine names it from its creator (docRecordNameParent), so the nearest provisioned ancestor
    of its name is the document whose heap made it, and that record is the floor this zone holds it to.
    `lookup(name)` answers a record for a document of the asking instance, `false` for a document provisioned
    into another instance, and `undefined` for a name this zone never provisioned. Answers `{doc, refusal}`:
@@ -244,11 +245,13 @@ function docRecordOfAsker(name, lookup) {
    set) and a sentence naming the document. `role` says which document failed: the `asker` of a request, the
    `creator` of a create, the `issuer` of a provisioning notice, or the `navigable`'s current document that a
    navigation's new name is minted from. `reason` is docRecordOfAsker's, or `not-minted` for a `child` or
-   `document` name that is not minted from the document it must be. */
+   `document` name that is not minted from the document it must be, or `readdressed` for a `child` whose name is
+   already provisioned at another address. A name is shared by every timeline whose history created the
+   document, so a second create under it at another address is two documents claiming one identity. */
 var _ASKER_REFUSALS = {
   "asker-elsewhere": 1, "asker-unprovisioned": 1, "creator-elsewhere": 1, "creator-unprovisioned": 1,
   "issuer-elsewhere": 1, "issuer-unprovisioned": 1, "navigable-elsewhere": 1, "navigable-unprovisioned": 1,
-  "child-not-minted": 1, "document-not-minted": 1
+  "child-not-minted": 1, "document-not-minted": 1, "child-readdressed": 1
 };
 function docRecordAskerRefusal(role, reason, name) {
   var key = role + "-" + reason;
@@ -257,6 +260,7 @@ function docRecordAskerRefusal(role, reason, name) {
         "the closed refusals or names no document");
   var why = reason === "elsewhere" ? "a document of another instance"
           : reason === "unprovisioned" ? "no document this zone provisioned, nor one minted from such a document"
+          : reason === "readdressed" ? "already provisioned at another address"
           : "not minted from the document it must be";
   return { token: "blocked-asker:" + key, text: "blocked-asker:" + key + " (the " + role + " " + name + " is " +
            why + ")" };
