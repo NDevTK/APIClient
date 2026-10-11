@@ -55522,6 +55522,18 @@ static int js_async_await_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     r = step_promiseresolve_run(ctx, &m->hdr, &m->pr_phase, step_arg(&m->hdr, 0), &promise, m->cb,
                                 cb_result, out_cb, out_argc);
     if (r) return r;
+    /* The activation suspended at this await is per-flow state, and the continuations minted below take
+       ownership of it. This machine rests inside PromiseResolve, where a fork copies the machine and its handle
+       but not the activation, which is on no chain; so it passes the gate every resume of a suspended activation
+       passes, and an arm takes its own clone before it mints. */
+    s = js_async_resume_isolate(ctx, rec->data[0]);
+    if (unlikely(!s)) {
+        JS_FreeValue(ctx, promise);
+        return -1;
+    }
+    DCHECK(s->is_active,
+           "an Await machine finished for an activation another timeline already completed — the gate above "
+           "clones a shared one, so this activation was consumed while the machine rested");
     post.func = JS_UNDEFINED; post.value = JS_UNDEFINED;
     post.await_promise = promise;   /* consumed by the finish */
     post.st = s;
