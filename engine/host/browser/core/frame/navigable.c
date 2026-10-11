@@ -4148,6 +4148,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            IT SITS BEFORE THE POLICY FOR THE REASON EVERYTHING ELSE DOES: the policy is the record's remainder
            because a raw CSP header may contain HTAB, and this vocabulary is three words of ASCII lowercase
            letters (solver/engine.h), so it can never be the field that cannot be split. */
+        /* HTML §7.3.1.7 "the rules for choosing a navigable": with `noopener` the new top-level traversable is
+           created given a null opener, which §7.3.2.1 "Creating browsing contexts" builds in a new browsing
+           context group; a child and an auxiliary navigable with an opener are in this document's group. The
+           same fact decides whether the peer holds a WindowProxy for this document (below), and it crosses on
+           the notice because the zone keys an instance on (group, origin). */
+        const bool peer_in_creator_group = is_child || !(feat && feat->noopener);
         const char *const fields[] = {
             world_doc_name(child),
             world_doc_name(document_doc(ctx)),
@@ -4164,6 +4170,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             ancestor_origins,
             sandbox_flags,
             provenance,
+            peer_in_creator_group ? "creator" : "new",
             creator_policy.csp ? creator_policy.csp : "",
         };
 
@@ -4188,7 +4195,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            document may not run its timelines out before the peer reads it; the creator is the only party that
            knows this at the moment it becomes true, before any host round. The setter asserts the flag only
            rises. */
-        if (is_child || !(feat && feat->noopener)) engine_set_referenced(1);
+        if (peer_in_creator_group) engine_set_referenced(1);
     }
     /* §7.3.1.3's create-a-new-child-navigable: "Set element's content navigable to navigable." The ELEMENT's
        half of that link is the wrapper slot core/html/html_iframe.c writes when this returns; this is the

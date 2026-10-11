@@ -503,7 +503,8 @@ async function main() {
   const holderOf = (doc) => instances.find((i) => i.live && i.docs.includes(doc)) ?? null;
   /* The instance of one origin-keyed agent cluster, keyed as SECURITY.md keys it: (browsing context group,
      origin). A group is minted where a top-level traversable with no opener is, so a child, an auxiliary
-     navigable and a top-level navigation stay in their creator's group, and a swap or a seed starts one. */
+     navigable with an opener and a top-level navigation stay in their creator's group, and a `noopener`
+     popup, a swap and a seed each start one. */
   const clusterOf = (group, origin) =>
     instances.find((i) => i.live && i.group === group && i.origin === origin) ?? null;
   let groupSerial = 0;
@@ -567,14 +568,13 @@ async function main() {
      feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
      engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
      rather than by SPACE, because that section's flag names CONTAIN spaces.
-     THE POLICY IS THE REMAINDER FROM FIELD 16 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
+     THE POLICY IS THE REMAINDER FROM FIELD 17 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
      not fail, it silently joins the field before the policy onto the FRONT of it, which is a creator's CSP
-     arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. It
-     moved when the navigation's PROVENANCE was inserted at field 15, and the provenance is deliberately NOT
-     in this list: these are the facts the CHILD instance is built from, and what a navigation is evidence of
-     is a fact about the LOAD this zone performs rather than about the Document it produces. */
+     arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. The
+     PROVENANCE (field 15) and the GROUP (field 16) are not in this list: they decide the LOAD and which
+     instance hosts it, not the Document the child instance is built from. */
   const createFacts = (f) =>
-    [f[5], b64(f.slice(16).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
+    [f[5], b64(f.slice(17).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -1130,24 +1130,29 @@ async function main() {
     const f = record.split('\t');
 
     if (f[0] === 'navigable.create') {
-      /* SEVENTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one
+      /* EIGHTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one
          an unmoved count would let arrive as `undefined`, and every one of them below is read. */
-      if (f.length < 17)
+      if (f.length < 18 || (f[16] !== 'creator' && f[16] !== 'new'))
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
                         'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
                         '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s parent ' +
                         'navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ' +
                         'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION ' +
-                        'is evidence of, and the policy');
+                        'is evidence of, which browsing context group the navigable is in (`creator` or ' +
+                        '`new`), and the policy');
       /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
          against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
          re-announcing it under the same name. A second instance would give one document two heaps and two
          object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent and
          which nothing downstream could tell from the routing. */
       if (holderOf(f[1])) return;
-      /* The creator is referenced from now on: the peer hosting this navigable holds a WindowProxy for it, and
-         its engine raised its own flag at the emission (core/frame/navigable.c). This is the zone's record. */
-      e.referenced = 1;
+      /* FIELD 16: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing
+         context group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's. In
+         the creator's group the peer holds a WindowProxy for the creator, whose engine raised its own flag at
+         the emission (core/frame/navigable.c); this is the zone's record of that. */
+      const inCreatorGroup = f[16] === 'creator';
+      if (inCreatorGroup) e.referenced = 1;
+      const group = inCreatorGroup ? e.group : newGroup();
       /* FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF, AND IT IS WHY THIS ARM STOPPED BEING A BLANK REFUSAL.
          `null` here meant "the record does not state it", and §Attacker-sources makes an unestablished
          provenance a crash at the decision — so every cross-origin child navigable any page ever created was
@@ -1177,7 +1182,7 @@ async function main() {
          unwidened origin after a forced-grade child joined it. */
       const childOrigin = new URL(loaded.url).origin;
       const reach = ZONE.safeFetchReachJoin(e.docReach, f[15]);
-      const holder = clusterOf(e.group, childOrigin);
+      const holder = clusterOf(group, childOrigin);
       if (holder) {
         if (holder === e || holder.referenced !== 1)
           throw new Error(`navigable.create ${f[1]} would join instance [${holder.tag}], which ` +
@@ -1196,7 +1201,7 @@ async function main() {
          page already holds a WindowProxy for this navigable, which is the only reason a delivery has to be
          routed here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document,
          so this document's timelines may not run out before they do. */
-      await provision({ docId: f[1], url: loaded.url, origin: childOrigin, group: e.group,
+      await provision({ docId: f[1], url: loaded.url, origin: childOrigin, group,
                         headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f),
                         /* AND UNDER BOTH GRADES, WHICH IS WHAT `safeFetchReachJoin` IS FOR: this
                            document exists because the creating one did, so it is reached under the weaker of

@@ -3308,6 +3308,8 @@ let _nextRemoteToken = 1;
    an id no other group has. Minted here, never derived from an engine's word, since a group id decides which
    documents share a heap. */
 let _nextSwapGroup = 1;
+/* The same for a `noopener` popup, which HTML §7.3.1.7 creates given a null opener and so in a group of its own. */
+let _nextNoopenerGroup = 1;
 /* The same for a declared route, a top-level traversable in a group of its own (not nested in the declaring
    document, so it may not share its heap). A separate counter from the swap's so log lines stay readable;
    `seed:` prefixes it as `cold:` prefixes the cold tier's, because group ids are compared against tab ids and
@@ -3350,16 +3352,15 @@ async function hostNotice(eng, line) {
   if (f[0] === "navigable.create") {
     /* The count covers every field the reader below indexes and moves when the record grows, because the
        field added last is the one a stale count would let arrive as `undefined`. */
-    DCHECK(f.length >= 17, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, and the policy");
+    DCHECK(f.length >= 18 && (f[16] === "creator" || f[16] === "new"), "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, which browsing context group the navigable is in (`creator` or `new`), and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
-    /* The creator is referenced from now on: the peer hosting this navigable holds a WindowProxy for it (its
-       `parent`, or its `opener`), and the engine raised its own flag at the emission (core/frame/navigable.c).
-       This is the zone's record of that, read when the instance is re-rooted and by the join arms below.
-       Named residual. Not covered: an auxiliary navigable created with `noopener` has no opener, so its creator
-       is not referenced and this record overstates it; the notice does not say which. Next diff builds: the
-       notice carrying whether the new navigable has an opener. Absence shows as: a creator re-rooted after a
-       `noopener` popup stalling as referenced instead of finishing. */
-    eng.referenced = 1;
+    /* Field 16: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing context
+       group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's group, where the
+       peer holds a WindowProxy for the creator (its `parent`, or its `opener`) and the engine raised its own flag
+       at the emission (core/frame/navigable.c). This is the zone's record of that, read when the instance is
+       re-rooted and by the join arms below. */
+    const _inCreatorGroup = f[16] === "creator";
+    if (_inCreatorGroup) eng.referenced = 1;
     /* Field 15 is the engine's word for what this navigation is evidence of; navigationLoad and the chokepoint
        decide on it, and this arm passes it through without testing it. */
     /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
@@ -3392,7 +3393,8 @@ async function hostNotice(eng, line) {
        never graded as one the person navigated to. It is on every analyze record, since `fetched` and the XHR
        relay read it for every request the document makes. */
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
-                  origin: originOf(loaded.url), groupId: eng.groupId,
+                  origin: originOf(loaded.url),
+                  groupId: _inCreatorGroup ? eng.groupId : "noopener:" + (_nextNoopenerGroup++),
                   provenance: self.safeFetchReachJoin(eng.msg.provenance, f[15]),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* The response's own header list, whole; the creator's container is relayed separately below. */
@@ -3413,10 +3415,10 @@ async function hostNotice(eng, line) {
        fields: their values are fixed tokens, and `report-to` is a structured-field string (RFC 8941 §3.3.3
        Strings: printable ASCII %x20-%x7E, no tabs). Relayed verbatim; only the receiving engine maps the tokens,
        and it crashes on an unknown one (see NEW_EMBEDDER_POLICY). */
-    /* The policy is the remainder from field 16; every field added to the record is added in front of it, so
+    /* The policy is the remainder from field 17; every field added to the record is added in front of it, so
        this index and the count above move together. A wrong index would join a neighbouring field onto the
        creator's CSP, which CSP's parser drops as an unreadable directive without a crash. */
-    const inherited = { csp: f.slice(16).join("\t"), selfOrigin: f[6],
+    const inherited = { csp: f.slice(17).join("\t"), selfOrigin: f[6],
                         embedder: { value: f[7], endpoint: f[8],
                                     reportOnlyValue: f[9], reportOnlyEndpoint: f[10] } };
     /* HTML §7.3.1.3 Child navigables' parent navigable at field 11, separate from the container policy: an

@@ -1863,9 +1863,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 17; q++)
+    for (q = line, f[nf++] = q; *q && nf < 18; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 17 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 18 && !strcmp(f[0], "navigable.create")) {
         /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
            7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
            report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
@@ -1913,7 +1913,13 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                "declares — a field was inserted into the record and this walk's indices did not move with it, "
                "so the CSP container below is about to be taken from one field too early and the policy text "
                "carries the token that displaced it");
-        wpt_spawn_child(f[1], f[3], f[4], f[16], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
+        /* FIELD 16 IS WHICH BROWSING CONTEXT GROUP THE NEW NAVIGABLE IS IN, `creator` or `new` (HTML §7.3.1.7's
+           noopener arm). This runner provisions one child per notice and keys nothing on a group, so it reads
+           the token for the grammar only, as it reads field 15, and the policy is FIELD 17. */
+        DCHECK(!strcmp(f[16], "creator") || !strcmp(f[16], "new"),
+               "the create notice's sixteenth field is not `creator` or `new` — a field was inserted into the "
+               "record and this walk's indices did not move with it, so the policy below is one field early");
+        wpt_spawn_child(f[1], f[3], f[4], f[17], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
                         f[14]);
         free(whole);
         return;
