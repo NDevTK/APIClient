@@ -1017,6 +1017,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/platform.h"
 #include "fixture/windowclose.h"
 #include "fixture/fragfork.h"
+#include "fixture/fragplace.h"
+#include "fixture/fragxml.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
 
@@ -1438,6 +1440,8 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "platform", HTML_PLATFORM },
     { "windowclose", HTML_WINDOWCLOSE },
     { "fragfork", HTML_FRAGFORK },
+    { "fragplace", HTML_FRAGPLACE },
+    { "fragxml", HTML_FRAGXML },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
 };
@@ -11602,6 +11606,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&fragfork_tt, &fragfork_why,
              param_value_is(js, "/api/fragfork", "v", "200004") && param_value_is(js, "/api/fragfork", "t", "tail"),
              "the /api/fragfork record does not carry the whole parse — an arm finished it with bytes missing");
+    /* The same fork, asked after the feed while the setter clears its target, and inside §14.4's XML parse: both
+       arms finish the operation, so each record carries the whole result. */
+    const char *fragplace_why = NULL; int fragplace_tt = 1;
+    fold_row(&fragplace_tt, &fragplace_why, !!strstr(js, "\"/api/fragplace\""),
+             "NOT REACHED: there is no /api/fragplace record at all, so no arm finished the setter");
+    fold_row(&fragplace_tt, &fragplace_why,
+             param_value_is(js, "/api/fragplace", "v", "1") && param_value_is(js, "/api/fragplace", "t", "x"),
+             "the /api/fragplace record does not carry the replaced children — an arm finished the setter with "
+             "old children left or the new one missing");
+    const char *fragxml_why = NULL; int fragxml_tt = 1;
+    fold_row(&fragxml_tt, &fragxml_why, !!strstr(js, "\"/api/fragxml\""),
+             "NOT REACHED: there is no /api/fragxml record at all, so no arm finished the XML fragment parse");
+    fold_row(&fragxml_tt, &fragxml_why,
+             param_value_is(js, "/api/fragxml", "v", "50001") && param_value_is(js, "/api/fragxml", "t", "tail"),
+             "the /api/fragxml record does not carry the whole XML parse — an arm finished it with items missing");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15406,6 +15425,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "win-close", winclose_tt, "/api/winclose", SESS_EXPLORE, winclose_why },
         { "frag-fork", fragfork_tt, "/api/fragfork", SESS_EXPLORE, fragfork_why },
+        { "frag-place", fragplace_tt, "/api/fragplace", SESS_EXPLORE, fragplace_why },
+        { "frag-xml", fragxml_tt, "/api/fragxml", SESS_EXPLORE, fragxml_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
