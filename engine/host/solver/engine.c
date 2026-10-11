@@ -4667,7 +4667,8 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
 }
 
 uint64_t engine_flow_timeline(void) {
-    Flow *f = flow_running();
+    /* A named enqueue owner is the timeline the queued work belongs to (engine_enqueue_job reads it first). */
+    Flow *f = g_enqueue_owner ? g_enqueue_owner : flow_running();
 
     if (!f) return 0;
     return ((uint64_t)f->world.session << 48) ^ ((uint64_t)f->world.doc << 32) ^ (uint64_t)f->world.serial;
