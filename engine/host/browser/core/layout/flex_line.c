@@ -171,15 +171,21 @@ static CssPx fl_main_border_padding(lxb_dom_element_t *el, bool vertical)
                       css_px_add(used_value_px(el, "padding-left"), used_value_px(el, "padding-right")));
 }
 
-/* The item's main-axis margins. An `auto` one is not answered: css-flexbox-1 §9.5 "Main-Axis Alignment"'s first
-   step gives it the remaining free space ("If the remaining free space is positive and at least one main-axis
-   margin on this line is auto, distribute the free space equally among these margins"), which §9.7 has not yet
-   produced. core/layout/used_value.c refuses it by name on whichever physical axis is the main one. */
+/* One main-axis margin as §9.7 counts it: "During calculations of flex bases and flexible lengths, auto margins
+   are treated as 0" (§8.1 "Aligning with auto margins"); §9.5's first step gives an `auto` one its share of the
+   free space afterwards (core/layout/flex_position.h), so it is read as computed here and never asked, which
+   would ask that share before the free space it divides exists. */
+static CssPx fl_main_margin(lxb_dom_element_t *el, const char *name)
+{
+    return css_computed_length_is(el, name, CSS_KEYWORD_AUTO) ? css_px(0.0) : used_value_px(el, name);
+}
+
+/* The item's main-axis margins, `auto` ones as 0. */
 static CssPx fl_main_margins(lxb_dom_element_t *el, bool vertical)
 {
     if (el == NULL) return css_px(0.0);
-    if (vertical) return css_px_add(used_value_px(el, "margin-top"), used_value_px(el, "margin-bottom"));
-    return css_px_add(used_value_px(el, "margin-left"), used_value_px(el, "margin-right"));
+    if (vertical) return css_px_add(fl_main_margin(el, "margin-top"), fl_main_margin(el, "margin-bottom"));
+    return css_px_add(fl_main_margin(el, "margin-left"), fl_main_margin(el, "margin-right"));
 }
 
 /* One declared main-axis size of `el` as a content-box extent: true when the property states a size, false
