@@ -183,30 +183,20 @@ static const struct { const char *name; CssLogicalGroup group; LgRole role; } LG
 };
 #define LG_N(a) ((unsigned)(sizeof(a) / sizeof((a)[0])))
 
-static const char *const LG_WM_NAME[LG_WM_N] = {
-    "horizontal-tb", "vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr",
-};
-
 static LgWritingMode logical_writing_mode(lxb_dom_element_t *el)
 {
-    char *wm = css_computed_value(el, "writing-mode");
-    unsigned i;
+    CssKeyword wm = css_computed_keyword(el, "writing-mode");
 
-    DCHECK(wm != NULL, "the cascade produced no computed `writing-mode` — css-writing-modes-4 §3.2 \"Block "
-                       "Flow Direction: the writing-mode property\" gives it an `Initial:` line of "
-                       "`horizontal-tb` and lexbor's registry carries the row, so the last layer of the "
-                       "cascade always answers and a NULL here is a cascade that stopped early");
-    for (i = 0; i < LG_WM_N; i++)
-        if (strcmp(LG_WM_NAME[i], wm) == 0) { free(wm); return (LgWritingMode)i; }
-    free(wm);
-    /* A GUARD AND NOT A GAP. The operand is enumerated by THIS codebase — lexbor's property registry carries
-       `writing-mode`'s `Value:` line and its five keywords, and css-writing-modes-4 §3.2 declares exactly
-       those five — so a sixth value means the cascade produced something the registry cannot have parsed. */
-    DFAIL("a computed `writing-mode` is none of css-writing-modes-4 §3.2 \"Block Flow Direction: the "
-          "writing-mode property\"'s five values. Its `Value:` line is `horizontal-tb | vertical-rl | "
-          "vertical-lr | sideways-rl | sideways-lr` and lexbor's registry enumerates the same five, so this "
-          "is a cascaded value that no declaration of this property could have produced");
-    return LG_WM_HORIZONTAL_TB;
+    switch (wm) {
+    case CSS_KEYWORD_HORIZONTAL_TB: return LG_WM_HORIZONTAL_TB;
+    case CSS_KEYWORD_VERTICAL_RL:   return LG_WM_VERTICAL_RL;
+    case CSS_KEYWORD_VERTICAL_LR:   return LG_WM_VERTICAL_LR;
+    case CSS_KEYWORD_SIDEWAYS_RL:   return LG_WM_SIDEWAYS_RL;
+    case CSS_KEYWORD_SIDEWAYS_LR:   return LG_WM_SIDEWAYS_LR;
+    default:
+        DFAILF("computed `writing-mode` is keyword %u, outside the row's set", (unsigned)wm);
+        return LG_WM_HORIZONTAL_TB;
+    }
 }
 
 /* css-writing-modes-4 §6.4's USED direction, which is not always the computed one. §6.4's own closing Note:
@@ -217,8 +207,7 @@ static LgWritingMode logical_writing_mode(lxb_dom_element_t *el)
    every one of the five writing modes without it. */
 static LgDirection logical_used_direction(lxb_dom_element_t *el, LgWritingMode wm)
 {
-    char *dir;
-    LgDirection out;
+    CssKeyword dir;
 
     if (wm != LG_WM_HORIZONTAL_TB)
         DFAIL("css-writing-modes-4 §6.4 \"Abstract-to-Physical Mappings\"'s USED direction was asked for on "
@@ -229,25 +218,18 @@ static LgDirection logical_used_direction(lxb_dom_element_t *el, LgWritingMode w
               "abort one component over. BUILD that row: css-writing-modes-4 §5.1 \"Orienting Text: the "
               "text-orientation property\" gives `Value: mixed | upright | sideways`, `Initial: mixed`, "
               "`Inherited: yes` and `Computed value: specified value`, and lexbor's registry carries the "
-              "property — so it is ONE row of core/css/css_property_id.h's table, one case of "
-              "css_computed_value.c's as-specified arm and one of css_shorthand_complete_for, which is the same "
-              "row core/css/css_computed_value.c's `ch`-unit advance-direction crash already names. The BLOCK axis needs none of this and is answered for "
+              "property — so it is ONE KEYWORD-shaped row of core/css/css_property_id.h's table and one of "
+              "css_shorthand_complete_for, the same row core/css/css_computed_value.c's `ch`-unit "
+              "advance-direction crash already names. The BLOCK axis needs none of this and is answered for "
               "every writing mode above");
-    dir = css_computed_value(el, "direction");
-    DCHECK(dir != NULL, "the cascade produced no computed `direction` — css-writing-modes-4 §2.1 "
-                        "\"Specifying Directionality: the direction property\" gives it an `Initial:` line "
-                        "of `ltr` and lexbor's registry carries the row, so the last layer always answers");
-    if (strcmp(dir, "ltr") == 0) out = LG_DIR_LTR;
-    else if (strcmp(dir, "rtl") == 0) out = LG_DIR_RTL;
-    else {
-        /* A GUARD: `direction`'s `Value:` line is the two keywords and lexbor's registry enumerates them. */
-        DFAIL("a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 \"Specifying "
-              "Directionality: the direction property\" gives the property those two values and nothing "
-              "else, and lexbor's registry enumerates the same pair");
-        out = LG_DIR_LTR;
+    dir = css_computed_keyword(el, "direction");
+    switch (dir) {
+    case CSS_KEYWORD_LTR: return LG_DIR_LTR;
+    case CSS_KEYWORD_RTL: return LG_DIR_RTL;
+    default:
+        DFAILF("computed `direction` is keyword %u, outside the row's set", (unsigned)dir);
+        return LG_DIR_LTR;
     }
-    free(dir);
-    return out;
 }
 
 /* The table's two indexes, built once per process by css_logical_init from the immutable rows: by name, a

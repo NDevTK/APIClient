@@ -433,7 +433,7 @@ static void fl_require_horizontal_tb(lxb_dom_element_t *el, const char *what)
 {
     char nbuf[160], wbuf[64];
 
-    if (fl_computed_is(el, "writing-mode", "horizontal-tb")) return;
+    if (css_computed_keyword_is(el, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB)) return;
     DFAILF("%s, computed `writing-mode` `%s`: this %s's BLOCK dimension is not the vertical one, so "
            "css-writing-modes-4 §7.2 \"Dimensional Mapping\" does not put CSS 2.1 §10.6's rules on the "
            "vertical axis and §10.3's on the horizontal one — and this component chooses between exactly "

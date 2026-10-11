@@ -21,18 +21,9 @@
    a block_flow.c or intrinsic_size.c walk over the other physical direction. */
 static void ibs_require_horizontal_tb(lxb_dom_element_t *el)
 {
-    char *wm;
-    bool horizontal;
     char nbuf[160], wbuf[64];
 
-    wm = css_computed_value(el, "writing-mode");
-    DCHECK(wm != NULL,
-           "the cascade produced no computed `writing-mode` — css-writing-modes-4 §3.2 \"Block Flow Direction: "
-           "the writing-mode property\" gives it an initial value of `horizontal-tb`, so the last layer of the "
-           "cascade always answers");
-    horizontal = strcmp(wm, "horizontal-tb") == 0;
-    free(wm);
-    if (horizontal) return;
+    if (css_computed_keyword_is(el, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB)) return;
     DFAILF("%s, computed `writing-mode` `%s`: this box's BLOCK axis is not the vertical one, so the automatic "
            "size css-sizing-3 §3.2 \"Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch, "
            "min-content, max-content, and fit-content values\" sends both intrinsic keywords to in the BLOCK "

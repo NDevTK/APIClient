@@ -60,8 +60,8 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     case CSS_KEYWORDS_INSET:
         return k == CSS_KEYWORD_AUTO;
     /* css-sizing-3 §3.1.1 "Preferred Size Properties…" and §3.1.2 "Minimum Size Properties…": `auto |
-       <box-size>`, where §3.2 "Sizing Values: the <length-percentage>, auto | none, stretch, min-content,
-       max-content, and fit-content values" defines `<box-size> = <length-percentage [0,∞]> | stretch |
+       <box-size>`, where css-sizing-3 §3.2 "Sizing Values: the <length-percentage>, auto | none, stretch,
+       min-content, max-content, and fit-content values" defines `<box-size> = <length-percentage [0,∞]> | stretch |
        min-content | max-content | fit-content`. */
     case CSS_KEYWORDS_SIZE:
         return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_STRETCH || k == CSS_KEYWORD_MIN_CONTENT ||
@@ -143,6 +143,14 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-flexbox-1 §5.2 "Flex Line Wrapping: the flex-wrap property": `nowrap | wrap | wrap-reverse`. */
     case CSS_KEYWORDS_FLEX_WRAP:
         return k == CSS_KEYWORD_NOWRAP || k == CSS_KEYWORD_WRAP || k == CSS_KEYWORD_WRAP_REVERSE;
+    /* css-writing-modes-4 §2.1 "Specifying Directionality: the direction property": `ltr | rtl`. */
+    case CSS_KEYWORDS_DIRECTION:
+        return k == CSS_KEYWORD_LTR || k == CSS_KEYWORD_RTL;
+    /* css-writing-modes-4 §3.2 "Block Flow Direction: the writing-mode property": `horizontal-tb | vertical-rl
+       | vertical-lr | sideways-rl | sideways-lr`. */
+    case CSS_KEYWORDS_WRITING_MODE:
+        return k == CSS_KEYWORD_HORIZONTAL_TB || k == CSS_KEYWORD_VERTICAL_RL || k == CSS_KEYWORD_VERTICAL_LR ||
+               k == CSS_KEYWORD_SIDEWAYS_RL || k == CSS_KEYWORD_SIDEWAYS_LR;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

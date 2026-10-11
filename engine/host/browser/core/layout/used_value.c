@@ -78,24 +78,6 @@ typedef enum {
                                 css-flexbox-1 §9.7 "Resolving Flexible Lengths" or css-grid, not CSS 2.1 §10 */
 } UvBox;
 
-static char *uv_computed(lxb_dom_element_t *el, const char *name)
-{
-    char *v = css_computed_value(el, name);
-
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
-                      "them is in lexbor's registry with an initial value, so the last layer always answers");
-    return v;
-}
-
-static bool uv_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = uv_computed(el, name);
-    bool same = strcmp(v, kw) == 0;
-
-    free(v);
-    return same;
-}
-
 /* css-display §2.4's table display types, plus the two `<display-inside>`/`<display-legacy>` spellings that
    generate a table box. CSS 2.1 §17.5 owns every one of their sizes. */
 static bool uv_display_is_table(CssDisplay d)
@@ -1825,9 +1807,8 @@ static lxb_dom_element_t *uv_root_element(lxb_dom_element_t *el)
           "reached no root. Every containing-block answer above is reached from a tree that has one — "
           "`uv_cb`'s own last crash says so for the second case — so an element without a root has left "
           "through CSSOM §9 Resolved Values' computed-value escape before §10 was asked anything");
-    /* THE RELEASE ARM IS THE SUBJECT'S OWN VALUE, which is what this read was before §10.1's fourth case
-       made the two elements differ — a DEFINED wrong answer for a tree with no root, rather than the NULL a
-       `uv_computed` one line down would dereference. */
+    /* The release arm is the subject itself: a defined answer for a tree with no root, never a NULL the
+       caller's computed-value read would dereference. */
     return el;
 }
 
@@ -1844,18 +1825,7 @@ bool used_value_containing_block_is_rtl(lxb_dom_element_t *el)
        reads the ancestor whose content edge it is: `direction` is INHERITED (css-writing-modes-4 §2.1
        "Specifying Directionality: the direction property", `Inherited: yes`), and one element's principal
        box carries one computed value of it whichever of its edges the rectangle is drawn at. */
-    char *d = uv_computed(no_box ? uv_root_element(el) : cb.element, "direction");
-    bool rtl = strcmp(d, "rtl") == 0;
-    bool ltr = strcmp(d, "ltr") == 0;
-
-    free(d);
-    DCHECK(rtl || ltr,
-           "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 \"Specifying "
-           "Directionality: the direction property\" gives the property the `Value:` line `ltr | rtl` and "
-           "nothing else, and its `Computed value:` line is `specified value` — so a third spelling here is a "
-           "declaration that reached the cascade without its grammar, which lexbor's own `direction` state "
-           "machine refuses");
-    return rtl;
+    return css_computed_keyword_is(no_box ? uv_root_element(el) : cb.element, "direction", CSS_KEYWORD_RTL);
 }
 
 /* css-sizing-3 §3.2.1 "“Behaving as auto”" — THE QUESTION CSS 2.1 ASKS AS "a computed value of `auto`", ASKED
@@ -3362,11 +3332,7 @@ static bool uv_abs_static_cb_is_rtl(lxb_dom_element_t *el)
     lxb_dom_element_t *spcb = n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT
                                   ? scrolling_area_principal_writing_mode_element(n->parent)
                                   : block_flow_static_position_containing_block(el);
-    char *d = uv_computed(spcb, "direction");
-    bool rtl = strcmp(d, "rtl") == 0;
-
-    free(d);
-    return rtl;
+    return css_computed_keyword_is(spcb, "direction", CSS_KEYWORD_RTL);
 }
 
 /* Whether §10.6.4's solve over `size_len` reads the content-based height: the all-three-`auto` entry, rule 1

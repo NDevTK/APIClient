@@ -25,17 +25,11 @@
    a column flex container containing a vertical Japanese (vertical writing mode) flex item"). */
 static void fis_require_parallel(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
-    char *cw = css_computed_value(container, "writing-mode");
-    char *iw = css_computed_value(item, "writing-mode");
-    bool same;
+    CssKeyword cw = css_computed_keyword(container, "writing-mode");
+    CssKeyword iw = css_computed_keyword(item, "writing-mode");
     char nbuf[160], mbuf[160];
 
-    DCHECK(cw != NULL && iw != NULL,
-           "the cascade produced no computed `writing-mode` — css-writing-modes-4 §3.2 \"Block Flow Direction: "
-           "the writing-mode property\" gives it an initial value of `horizontal-tb`, so the last layer of the "
-           "cascade always answers");
-    same = strcmp(cw, iw) == 0;
-    if (!same)
+    if (cw != iw)
         DFAILF("%s (computed `writing-mode` `%s`) inside %s (`%s`): this FLEX ITEM's writing mode differs from "
                "its flex container's, so css-writing-modes-4 §7.3 \"Orthogonal Flows\" is what decides whether "
                "the item's own intrinsic INLINE size is an operand of css-flexbox-1 §9.9 \"Intrinsic Sizes\" at "
@@ -49,9 +43,8 @@ static void fis_require_parallel(lxb_dom_element_t *container, lxb_dom_element_t
                "\"the item's max-content main size\" after laying it out \"using the rules for a box in an "
                "orthogonal flow\". core/layout/flow_position.c refuses the same pair one question earlier, for "
                "a box's PLACEMENT rather than its size, and names the same mappings",
-               box_subject(item, mbuf, sizeof mbuf), iw, box_subject(container, nbuf, sizeof nbuf), cw);
-    free(cw);
-    free(iw);
+               box_subject(item, mbuf, sizeof mbuf), css_keyword_name(iw), box_subject(container, nbuf, sizeof nbuf),
+               css_keyword_name(cw));
 }
 
 /* One item's css-sizing-3 §5.2 "Intrinsic Contributions" outer contribution in the container's inline axis,

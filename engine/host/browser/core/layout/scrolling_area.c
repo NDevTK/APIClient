@@ -23,7 +23,7 @@
 /* THE SUBJECT OF EVERY CRASH IN THIS FILE, AND IT IS NOT ALWAYS `el`.
    §AN-ASSERT-THAT-NAMES-A-REMEDY's test is to count the call sites that can reach an abort. Measured by reverse
    reachability over every `.c` file under engine/host: `sa_descendants_extreme` is reached from 19 call sites
-   over 13 functions in 4 files and `sa_computed_is` from 33 over 18, the callers outside core/layout being
+   over 13 functions in 4 files, the callers outside core/layout being
    CSSOM VIEW §6's element members, §7's scroll algorithms and core/frame/viewport.c's own row. So the ADDRESS
    is part of these asserts rather than decoration on them.
    AND THE COUNT UNDERSTATES IT FOR THE SAME REASON core/layout/flow_position.c's does: the walk below runs ONCE
@@ -43,9 +43,8 @@
    the context, beside the two coordinates it reported; the text-run abort's is the text node's PARENT. Naming
    `el` at any of those would read as authoritative and be wrong, which is worse than naming nothing.
    THE COMPOSITION ITSELF IS core/layout/box_subject.h's, which is where the argument that it must be TOTAL now
-   lives, together with the ownership contract and the `%.*s` rule. Two things this file owes that component:
-   `box_subject_computed` is reached instead of `sa_computed_is` below, whose own DCHECK would be exactly that
-   replacement; and `replaced_element_of` is reached from no message here, which matters most at the text-run
+   lives, together with the ownership contract and the `%.*s` rule. This file owes that component that
+   `replaced_element_of` is reached from no message here, which matters most at the text-run
    abort — that function ABORTS by name for an `embed`, a `video`, a `canvas`, an `object`, an `audio` and an
    `input`, and a REPLACED INLINE parent (`<object>x</object>`) is one of the cases that abort exists to tell
    apart, so asking it would report core/layout/replaced_element.c's gap for precisely the case whose own gap is
@@ -54,21 +53,6 @@
    the element's descendants' boxes" and the walk below descends through TEXT nodes as well as elements — a
    text run's anonymous inline box is one of those descendants — so `box_subject_node` is what they ask and
    "(no element)" would be a wrong answer there rather than a missing one. */
-static bool sa_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = css_computed_value(el, name);
-    char nbuf[160];
-    bool same;
-
-    DCHECKF(v != NULL,
-            "%s, property `%s`: "
-            "the cascade produced no computed value for a property this engine models — every one of "
-            "them is in lexbor's registry with an initial value, so the last layer always answers",
-            box_subject(el, nbuf, sizeof nbuf), name);
-    same = strcmp(v, kw) == 0;
-    free(v);
-    return same;
-}
 
 /* CSS 2.1 §9.2.1 "Block-level elements and block boxes"' BLOCK CONTAINER BOX, for this file's one caller of it
    — core/layout/block_flow.h owns the list and is asked, so the two cannot disagree about whether an
@@ -94,7 +78,7 @@ static bool sa_is_block_container(lxb_dom_element_t *el)
    box depends not only on the writing-mode property but also the direction property". */
 bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vertical)
 {
-    bool horizontal_tb = sa_computed_is(el, "writing-mode", "horizontal-tb");
+    bool horizontal_tb = css_computed_keyword_is(el, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB);
     char nbuf[160], vbuf[64];
 
     DCHECKF(horizontal_tb,
@@ -106,20 +90,9 @@ bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool
            "the two tests have come apart",
            box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "writing-mode", vbuf, sizeof vbuf));
     if (vertical) return true;   /* block-end is downward in every horizontal writing mode */
-    /* inline-end is the line-right side for a used `direction` of `ltr` and the line-left side for `rtl`, and
-       the property admits no third value — asserted here rather than read as "not rtl", so a spelling the
-       cascade should have refused crashes instead of quietly meaning `ltr`. */
-    /* THE VALUE THE CASCADE ACTUALLY ANSWERED IS THE WHOLE OF WHAT THIS ONE HAD TO SAY AND DID NOT. Its
-       sentence is that the value is neither of the two the property admits, and a reader can only act on it by
-       learning WHICH third value arrived — so the message stated the negation of the fact it was standing on
-       top of. */
-    DCHECKF(sa_computed_is(el, "direction", "ltr") || sa_computed_is(el, "direction", "rtl"),
-           "%s, computed `direction` `%s`: "
-           "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 \"Specifying "
-           "Directionality: the direction property\" gives the property the `Value:` line `ltr | rtl` and "
-           "nothing else",
-           box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "direction", vbuf, sizeof vbuf));
-    return !sa_computed_is(el, "direction", "rtl");
+    /* inline-end is the line-right side for a used `direction` of `ltr` and the line-left side for `rtl`, the
+       row's two keywords. */
+    return css_computed_keyword_is(el, "direction", CSS_KEYWORD_LTR);
 }
 
 /* §2's "excluding boxes that have an ancestor of the element as their containing block". A box laid out

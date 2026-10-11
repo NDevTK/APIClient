@@ -25969,7 +25969,7 @@ static void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
     lxb_dom_document_t *d = lxb_dom_interface_document(dom);
     lxb_dom_node_t *body = tf_ib_body(dom);
     lxb_dom_element_t *vert, *horz;
-    char *wm_v, *wm_h;
+    CssKeyword wm_v, wm_h;
     unsigned held = 0;
     bool vblock, vinline, hblock, hinline, armed, gone;
 
@@ -25981,10 +25981,9 @@ static void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
        answer `horizontal-tb` correctly and the subject would answer it too, and sixteen agreements about one
        column would read as sixteen agreements about two. So the two computed values are read FIRST and the
        pair is asserted, which is what makes the vertical column the column that was selected. */
-    wm_v = css_computed_value(vert, "writing-mode");
-    wm_h = css_computed_value(horz, "writing-mode");
-    armed = wm_v != NULL && wm_h != NULL && strcmp(wm_v, "vertical-rl") == 0 &&
-            strcmp(wm_h, "horizontal-tb") == 0;
+    wm_v = css_computed_keyword(vert, "writing-mode");
+    wm_h = css_computed_keyword(horz, "writing-mode");
+    armed = wm_v == CSS_KEYWORD_VERTICAL_RL && wm_h == CSS_KEYWORD_HORIZONTAL_TB;
     CHECKF(armed,
            "the two elements this row writes computed `writing-mode` `%s` and `%s`, where it declares "
            "`vertical-rl` on the first and nothing on the second — css-writing-modes-4 §3.2 \"Block Flow "
@@ -25993,9 +25992,7 @@ static void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
            "carries the row, so the last layer of the cascade always answers. A pair that agrees is this row "
            "measuring css-writing-modes-4 §6.4's `horizontal-tb` column TWICE under two names, which every "
            "equality below would pass",
-           wm_v == NULL ? "(none)" : wm_v, wm_h == NULL ? "(none)" : wm_h);
-    free(wm_v);
-    free(wm_h);
+           css_keyword_name(wm_v), css_keyword_name(wm_h));
 
     /* 1. css-writing-modes-4 §6.4's BLOCK-START AND BLOCK-END ROWS, FORWARD. The document's own cells:
        `block-start` is `right` under the `vertical-rl, sideways-rl` column and `top` under `horizontal-tb`;

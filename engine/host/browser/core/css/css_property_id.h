@@ -48,9 +48,8 @@ typedef enum {
  * `flex-basis` (css-flexbox-1 §7.2.3 "The flex-basis property") take the first rows' rule whole but are neither
  * box-model lengths nor limits: a baseline shift's percentage refers to the used `line-height`, which no cascade
  * step holds, so it survives to the computed value; a flex basis adds `content` to `width`'s keywords.
- * `position`, `box-sizing`, `clear`, `flex-direction` and `flex-wrap` are css-position-3 §2's, css-sizing-3
- * §3.3's, css-page-floats-3 §4's and css-flexbox-1 §5.1's and §5.2's `Computed value: specified keyword`, each
- * held as its ID. */
+ * Each KEYWORD row's property states `Computed value: specified keyword`, or `specified value` over a
+ * keyword-only grammar, and is held as its ID; css_keyword.c cites the property with its set. */
 #define CSS_PROPERTY_LIST(X)                                                                          \
     X(MARGIN_TOP,          "margin-top",          LXB_CSS_PROPERTY_MARGIN_TOP,     LENGTH, ALL, MARGIN)           \
     X(MARGIN_RIGHT,        "margin-right",        LXB_CSS_PROPERTY_MARGIN_RIGHT,   LENGTH, ALL, MARGIN)           \
@@ -85,6 +84,8 @@ typedef enum {
     X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          KEYWORD, ALL, CLEAR)           \
     X(FLEX_DIRECTION,      "flex-direction",      LXB_CSS_PROPERTY_FLEX_DIRECTION, KEYWORD, ALL, FLEX_DIRECTION) \
     X(FLEX_WRAP,           "flex-wrap",           LXB_CSS_PROPERTY_FLEX_WRAP,      KEYWORD, ALL, FLEX_WRAP)       \
+    X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      KEYWORD, ALL, DIRECTION)       \
+    X(WRITING_MODE,        "writing-mode",        LXB_CSS_PROPERTY_WRITING_MODE,   KEYWORD, ALL, WRITING_MODE)    \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -94,8 +95,6 @@ typedef enum {
     X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     TEXT, ALL, UNTYPED)            \
     X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT, ALL, UNTYPED)            \
     X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT, ALL, UNTYPED)            \
-    X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      TEXT, ALL, UNTYPED)            \
-    X(WRITING_MODE,        "writing-mode",        LXB_CSS_PROPERTY_WRITING_MODE,   TEXT, ALL, UNTYPED)            \
     X(ALIGNMENT_BASELINE,  "alignment-baseline",  LXB_CSS_PROPERTY_ALIGNMENT_BASELINE, TEXT, ALL, UNTYPED)            \
     X(BASELINE_SOURCE,     "baseline-source",     LXB_CSS_PROPERTY_BASELINE_SOURCE, TEXT, ALL, UNTYPED)            \
     X(TEXT_ALIGN_ALL,      "text-align-all",      LXB_CSS_PROPERTY_TEXT_ALIGN_ALL, TEXT, ALL, UNTYPED)            \

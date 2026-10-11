@@ -2283,7 +2283,7 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
 {
     char nbuf[160], wbuf[64];
 
-    if (!bf_computed_is(el, "writing-mode", "horizontal-tb")) {
+    if (!css_computed_keyword_is(el, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB)) {
         DFAILF("%s, computed `writing-mode` `%s`: this FLEX CONTAINER's block axis is not the vertical one, so "
                "the HEIGHT this entry was asked for is not its block size and css-flexbox-1 §5.1 \"Flex Flow "
                "Direction: the flex-direction property\"' mapping below would send it to the wrong section — "

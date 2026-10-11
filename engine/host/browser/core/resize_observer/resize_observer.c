@@ -202,14 +202,9 @@ static int32_t ro_depth(JSContext *ctx, lxb_dom_node_t *n)
  * core/layout/flow_position.c, which crashes for exactly that value before any extent exists to measure. */
 static bool ro_axis_is_vertical(lxb_dom_element_t *el, bool block)
 {
-    char *wm = css_computed_value(el, "writing-mode");
-    bool horizontal_tb;
+    bool horizontal_tb = css_computed_keyword_is(el, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB);
     char nbuf[160], vbuf[64];
 
-    DCHECK(wm != NULL, "the cascade produced no computed `writing-mode` for an element — every property this "
-                       "engine asks for has an initial value in the UA sheet");
-    horizontal_tb = strcmp(wm, "horizontal-tb") == 0;
-    free(wm);
     DCHECKF(horizontal_tb,
             "%s, computed `writing-mode` `%s`: "
             "RESIZE OBSERVER §3.4.8's inline and block lengths were mapped onto the physical axes for a box "

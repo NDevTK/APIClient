@@ -358,7 +358,7 @@ static void fx_require_supported_container(lxb_dom_element_t *container)
        (§7.2 "Dimensional Mapping"), letting `fx_hypothetical_cross` choose §10.6 or §10.3 from it. In a
        vertical mode they come apart; what is missing then is splitting that bit into the two and measuring
        the intrinsic pair in the dimension rather than the inline axis. */
-    if (!fx_computed_is(container, "writing-mode", "horizontal-tb"))
+    if (!css_computed_keyword_is(container, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB))
         DFAILF("%s, computed `writing-mode` `%s`: this FLEX CONTAINER's BLOCK dimension is not the vertical "
                "axis, so the ONE bit this component threads cannot name both — css-writing-modes-4 §7.2 "
                "\"Dimensional Mapping\" reads it as `which physical pair of edges is the cross axis's` and "

@@ -74,7 +74,7 @@ static char *lb_strdup(const char *s)
    "Orthogonal Flows" is where they differ. */
 static void lb_require_horizontal_tb(lxb_dom_element_t *el)
 {
-    if (!lb_computed_is(el, "writing-mode", "horizontal-tb"))
+    if (!css_computed_keyword_is(el, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB))
         DFAIL("this box's computed `writing-mode` is not `horizontal-tb`, so CSS 2.2 §9.4.2's line boxes do not "
               "run along its physical horizontal axis and do not stack down its physical vertical one — "
               "css-writing-modes-4 §3.2 \"Block Flow Direction: the writing-mode property\" gives `vertical-rl` "
@@ -1367,7 +1367,7 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
            (line_box.h states the theorem). */
         CssPx widest = lb_widest_line(f->lines, f->n);
 
-        if (lb_computed_is(style, "direction", "rtl")) {
+        if (css_computed_keyword_is(style, "direction", CSS_KEYWORD_RTL)) {
             /* The start edge is line-right, so content grows toward the lower coordinate and the line box's
                right edge is the far one. Only this arm needs the line box's width, so the used content width is
                read here rather than beside the fill, where it would run CSS 2.1 §10.3 for every unbreakable run. */
@@ -1376,7 +1376,7 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
             *lo = css_px_min(*lo, css_px_sub(width, widest));
             *hi = css_px_max(*hi, width);
         } else {
-            DCHECK(lb_computed_is(style, "direction", "ltr"),
+            DCHECK(css_computed_keyword_is(style, "direction", CSS_KEYWORD_LTR),
                    "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 \"Specifying "
                    "Directionality: the direction property\" gives the property the `Value:` line "
                    "`ltr | rtl` and nothing else, so a third spelling is a declaration the cascade should have "
@@ -1473,12 +1473,12 @@ static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, 
                              size_t index, size_t n)
 {
     char *kw = lb_line_alignment(style, lb_line_is_last(m, line, index, n));
-    bool rtl = lb_computed_is(style, "direction", "rtl");
+    bool rtl = css_computed_keyword_is(style, "direction", CSS_KEYWORD_RTL);
     bool to_left, centered;
     CssPx width, slack;
 
     if (!rtl)
-        DCHECK(lb_computed_is(style, "direction", "ltr"),
+        DCHECK(css_computed_keyword_is(style, "direction", CSS_KEYWORD_LTR),
                "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 \"Specifying "
                "Directionality: the direction property\" gives the property the `Value:` line `ltr | rtl` and "
                "nothing else, so a third spelling is a declaration the cascade should have refused — asserted "

@@ -787,7 +787,7 @@ static lxb_dom_node_t *css_cv_root_element(lxb_dom_element_t *el)
    where the initial values apply and `writing-mode`'s initial value is `horizontal-tb`. */
 static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *el, uint32_t codepoint)
 {
-    char *wm;
+    CssKeyword wm;
     bool upright_possible;
 
     DCHECK(codepoint <= 0x10FFFF && !(codepoint >= 0xD800 && codepoint <= 0xDFFF),
@@ -797,12 +797,8 @@ static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *e
            "over scalar values, so a lone surrogate here is a caller that split a string between its halves "
            "rather than a character whose orientation is merely unknown");
     if (el == NULL) return FONT_METRICS_ADVANCE_HORIZONTAL;
-    wm = css_computed_value(el, "writing-mode");
-    DCHECK(wm != NULL, "the cascade produced no computed `writing-mode` — css-writing-modes-4 §3.2 gives the "
-                       "property an `Initial:` line of `horizontal-tb` and lexbor's registry carries it, so "
-                       "the last layer always answers");
-    upright_possible = strcmp(wm, "vertical-rl") == 0 || strcmp(wm, "vertical-lr") == 0;
-    free(wm);
+    wm = css_computed_keyword(el, "writing-mode");
+    upright_possible = wm == CSS_KEYWORD_VERTICAL_RL || wm == CSS_KEYWORD_VERTICAL_LR;
     if (upright_possible)
         DFAIL("css-values-4 §6.1.1's advance measure — the `ch` or `ic` unit — was resolved on an element "
               "whose computed `writing-mode` is `vertical-rl` or `vertical-lr`, which are the two modes in "
@@ -813,9 +809,8 @@ static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *e
               "wide by 1em tall\". css-writing-modes-4 §5.1 \"Orienting Text: the text-orientation property\" "
               "gives it `Value: mixed | upright | sideways`, `Initial: mixed`, `Inherited: yes` and `Computed "
               "value: specified value`, and lexbor's property registry carries it — so this is ONE ROW of "
-              "core/css/css_property_id.h's table, one case of css_cv_computed's as-specified arm and one of "
-              "css_shorthand_complete_for, exactly as "
-              "`writing-mode` and `direction` were. `sideways` and `mixed`-when-sideways then take the "
+              "core/css/css_property_id.h's table, KEYWORD-shaped over a keyword set of its own, and one of "
+              "css_shorthand_complete_for, exactly as `writing-mode` and `direction` are. `sideways` and `mixed`-when-sideways then take the "
               "HORIZONTAL advance and not a rotated vertical one — css-writing-modes-4 §5.1.1 \"Vertical "
               "Typesetting and Font Features\" defines sideways typesetting as character units \"typeset as a "
               "run rotated 90° clockwise from their upright orientation, USING HORIZONTAL METRICS and "
@@ -1305,7 +1300,7 @@ static bool computed_font_size(lxb_dom_element_t *el, char *spec, CssLength *out
 static char *computed_text_align(lxb_dom_element_t *el, const char *name, char *spec)
 {
     lxb_dom_element_t *parent;
-    char *inherited, *dir;
+    char *inherited;
     bool start, rtl;
 
     if (!css_cv_is(spec, "match-parent")) return spec;
@@ -1325,17 +1320,7 @@ static char *computed_text_align(lxb_dom_element_t *el, const char *name, char *
     free(inherited);
     /* "interpreted against the PARENT's direction value" — the parent's, not this element's, which is what
        makes the answer a fact about where the parent's own lines begin. */
-    dir = css_computed_value(parent, "direction");
-    DCHECK(dir != NULL, "css-writing-modes-4 §2.1 \"Specifying Directionality: the direction property\" "
-                        "produced no computed value for an element css-text-4 §7.1's `match-parent` is "
-                        "resolving against");
-    rtl = css_cv_is(dir, "rtl");
-    DCHECK(rtl || css_cv_is(dir, "ltr"),
-           "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 gives the property the "
-           "`Value:` line `ltr | rtl` and nothing else, so a third spelling is a declaration the cascade should "
-           "have refused — asserted rather than read as \"not rtl\", which would quietly mean `ltr` and put "
-           "this line's content at the wrong edge");
-    free(dir);
+    rtl = css_computed_keyword_is(parent, "direction", CSS_KEYWORD_RTL);
     /* css-writing-modes-4 §6.2 "Flow-relative Directions": the inline-start side of an `ltr` inline axis is
        its line-left one and of an `rtl` one its line-right. `start` is therefore `left` under `ltr` and
        `right` under `rtl`, and `end` is the mirror. */
@@ -1495,9 +1480,11 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            "For a KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, "
            "`alignment-baseline`, `baseline-source`, `caption-side`, `table-layout`, `border-collapse`, an "
            "overflow axis or a `border-*-style` — there is nothing to absolutize and nothing for a `CssPx` to "
-           "carry, so `css_computed_value` is the entry and asking this one would report a keyword as the "
-           "number zero. For `line-height` the line is a UNION of three shapes (css-inline-3 §5.1), which "
-           "neither of those entries can carry; `css_computed_line_height` is its own. For `border-spacing` it "
+           "carry, so the entry its row's shape names is the one to ask (`css_computed_keyword`, "
+           "`css_computed_display`, or `css_computed_value` for a text row) and asking this one would report "
+           "a keyword as the number zero. For `line-height` the line is a UNION of three shapes (css-inline-3 "
+           "§5.1), which neither of those entries can carry; `css_computed_line_height` is its own. For "
+           "`border-spacing` it "
            "is TWO absolute lengths (CSS 2.1 §17.6.1 \"The separated borders model\"), and this entry answers "
            "ONE `CssLength` with nowhere to put the second, so it would report the horizontal spacing as the "
            "whole of the property; `css_computed_border_spacing` answers the pair",
@@ -2042,18 +2029,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        inter-element white space is collapsed away — the one the block-flow walk asks of a text child. css-text-4
        redefines it as a shorthand of `white-space-collapse`/`text-wrap-mode`, neither of which lexbor's property
        registry carries, so §16.6's longhand is the one this engine can answer.
-       css-writing-modes-4 §2.1 "Specifying Directionality: the direction property" and §3.2 "Block Flow
-       Direction: the writing-mode property" both state `Computed value: specified value` over a keyword-only
-       `Value:` line (`ltr | rtl`, and `horizontal-tb | vertical-rl | vertical-lr | sideways-rl | sideways-lr`),
-       so the as-specified arm is the whole of their rule too. THEY ARE HERE BECAUSE THREE ALGORITHMS ASK FOR
-       ONE OF THEM BY NAME and could not: CSS 2.1 §10.3.3's over-constrained case ignores `margin-right` "if the
-       'direction' property of the containing block has the value 'ltr'" and `margin-left` if it is `rtl`, CSS 2
-       §9.4.1 touches a box's LEFT outer edge to its containing block's left edge "(for right-to-left
-       formatting, right edges touch)", and CSSOM VIEW §2's scrolling area is stated over a scrolling box's
-       OVERFLOW DIRECTIONS, which css-writing-modes-4 §6.2 "Flow-relative Directions" derives from the two
-       together — "determining the inline-start and inline-end sides of a box depends not only on the
-       writing-mode property but also the direction property". Each of those three crashed for want of this one
-       row.
        css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand" (`auto | first | last`)
        and §4.2.2 "Alignment Baseline Type: the alignment-baseline longhand" (`baseline | text-bottom |
        alphabetic | ideographic | middle | central | mathematical | text-top`) both state `Computed value:
@@ -2109,8 +2084,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        not tell them apart could place neither. */
     case CSS_PROPERTY_FLOAT:
     case CSS_PROPERTY_WHITE_SPACE:
-    case CSS_PROPERTY_DIRECTION:
-    case CSS_PROPERTY_WRITING_MODE:
     case CSS_PROPERTY_ALIGNMENT_BASELINE:
     case CSS_PROPERTY_BASELINE_SOURCE:
     case CSS_PROPERTY_CAPTION_SIDE:

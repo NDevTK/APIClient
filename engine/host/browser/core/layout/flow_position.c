@@ -59,7 +59,7 @@ static void fp_require_horizontal_tb(lxb_dom_element_t *el)
 {
     char nbuf[160], wbuf[64];
 
-    if (!fp_computed_is(el, "writing-mode", "horizontal-tb"))
+    if (!css_computed_keyword_is(el, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB))
         DFAILF("%s, computed `writing-mode` `%s`: "
               "this box's computed `writing-mode` is not `horizontal-tb`, so its BLOCK FLOW DIRECTION is not "
               "downwards and its inline axis is not horizontal — css-writing-modes-4 §3.2 \"Block Flow "
@@ -194,28 +194,7 @@ static void fp_table_frame_release(FpTableFrame *f)
    a document sets it on the table. */
 static bool fp_table_direction_is_rtl(lxb_dom_element_t *table)
 {
-    char *d = css_computed_value(table, "direction");
-    char nbuf[160], vbuf[64];
-    bool rtl, ltr;
-
-    DCHECKF(d != NULL,
-            "%s: the cascade produced no computed `direction` for a TABLE box whose grid a CSS 2.1 §17.5 "
-            "Visual layout of table contents placement is being read out of — the property is in lexbor's "
-            "registry with an initial value, so the last layer always answers",
-            box_subject(table, nbuf, sizeof nbuf));
-    rtl = strcmp(d, "rtl") == 0;
-    ltr = strcmp(d, "ltr") == 0;
-    free(d);
-    DCHECKF(rtl || ltr,
-            "%s, computed `direction` `%s`: a computed `direction` that is neither `ltr` nor `rtl`. "
-            "css-writing-modes-4 §2.1 \"Specifying Directionality: the direction property\" gives the property "
-            "the `Value:` line `ltr | rtl` and nothing else, and its `Computed value:` line is `specified "
-            "value` — so a third spelling is a declaration that reached the cascade without its grammar, and "
-            "CSS 2.1 §17.5's rules 3 "
-            "and 5 have no third answer for which end of the table logical column 0 is painted at",
-            box_subject(table, nbuf, sizeof nbuf),
-            box_subject_computed(table, "direction", vbuf, sizeof vbuf));
-    return rtl;
+    return css_computed_keyword_is(table, "direction", CSS_KEYWORD_RTL);
 }
 
 /* One rectangle of grid cells turned into the border-box corner of the box occupying it: §17.5's rules 1, 2
