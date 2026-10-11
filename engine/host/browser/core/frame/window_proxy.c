@@ -855,8 +855,7 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
            "a navigable was NAVIGATED at host time — the binding is per flow, so it moves inside a slice");
     DCHECK(flow_programs_unstarted_for_document(flow_running(), p->doc) == 0,
            "a navigable was navigated to a peer while this timeline still held UNSTARTED PROGRAM ROWS for the "
-           "document it is leaving — HTML §7.4.4 aborts a navigated-away Document's fetches, so these rows are "
-           "§7.5.10 step 5's to remove before the navigable stops presenting their document");
+           "document it is leaving — HTML §7.5.11 step 2 discards them, and the caller runs it before this");
     /* THE BINDING THIS AGENT HELD IS RELEASED, NOT TORN DOWN: the outgoing Window's reference is this slot's and
        goes, while the outgoing realm stays the agent's (navigable.c) because a flow parked in it resumes there.
        A remote proxy holds neither, which window_proxy_is_remote asserts on every ask. */
