@@ -152,13 +152,20 @@ static CssPx bf_run_value(BfRun r)
    repairs no number; what it repairs is which SENTENCE a reader is standing on, which is the whole of what
    §9.5's population is decided by. RETIREMENT: this note goes when no caller of `bf_no_collapse_through_edges`
    remains, since the fold is then one predicate again and there is nothing to re-derive. */
+bool block_flow_is_floated(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "CSS 2 §9.5.1's float question was asked of no element");
+    if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) return false;
+    return !bf_computed_is(el, "float", "none");
+}
+
 static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
 {
     char *d;
     bool bfc;
 
     if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) return true;
-    if (!bf_computed_is(el, "float", "none")) return true;
+    if (block_flow_is_floated(el)) return true;
     d = bf_computed(el, "display");
     bfc = strcmp(d, "inline-block") == 0 || strcmp(d, "flow-root") == 0 ||
           strcmp(d, "table-cell") == 0 || strcmp(d, "table-caption") == 0 ||
@@ -262,7 +269,7 @@ static lxb_dom_element_t *bf_subtree_float(lxb_dom_node_t *n, bool is_context_ro
            reaches them because this walk is over the element tree rather than over a box list. */
         if (bf_computed_is(e, "display", "none")) return NULL;
         if (bf_computed_is(e, "position", "absolute") || bf_computed_is(e, "position", "fixed")) return NULL;
-        if (!bf_computed_is(e, "float", "none")) return e;
+        if (block_flow_is_floated(e)) return e;
         if (bf_establishes_block_formatting_context(e)) return NULL;
     }
     for (c = n->first_child; c != NULL; c = c->next) {
@@ -513,7 +520,7 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
        a float with a different missing capability, so the refusal belongs at each of their own lines: this
        file's stack names §9.5.2's clearance below, core/layout/line_box.c names §9.4.2's shortened line box,
        and core/layout/intrinsic_size.c names what a shortened line box does to a contribution. */
-    if (!bf_computed_is(el, "float", "none")) {
+    if (block_flow_is_floated(el)) {
         free(d);
         return BLOCK_FLOW_CHILD_FLOAT;
     }
@@ -2643,6 +2650,11 @@ lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t
 {
     lxb_dom_node_t *n;
     char nbuf[160];
+
+    DCHECK(el != NULL && lxb_dom_interface_node(el)->parent != NULL &&
+               lxb_dom_interface_node(el)->parent->type != LXB_DOM_NODE_TYPE_DOCUMENT,
+           "the root element's static-position containing block was asked for; it is the initial containing "
+           "block, no element's box, and its callers answer the root before asking");
 
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's static-position containing block was asked for with no element");
     for (n = lxb_dom_interface_node(el)->parent; n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;

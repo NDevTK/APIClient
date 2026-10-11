@@ -143,4 +143,9 @@ CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w);
    with two answers, free to disagree about `<html><body dir=rtl>` in exactly the document where it matters. */
 bool scrolling_area_viewport_ending_edge_at_higher_coordinate(lxb_dom_node_t *doc, bool vertical);
 
+/* css-writing-modes-4 §8 "The Principal Writing Mode"'s element: the root's first `body` child where it has a
+   box, otherwise the root. Asserts `doc` has a document element. §8.1 "Propagation to the Initial Containing
+   Block" makes its values the initial containing block's and the viewport's. */
+lxb_dom_element_t *scrolling_area_principal_writing_mode_element(lxb_dom_node_t *doc);
+
 #endif

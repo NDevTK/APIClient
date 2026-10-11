@@ -644,7 +644,7 @@ void scrolling_area_walk_element(ScrollingAreaWalk *w, lxb_dom_element_t *el, bo
  * containing block on both axes, WITH NO DIRECTION IN IT". That last clause was the argument, and building §2's
  * viewport row below retires it: the scrolling area now has a direction in it, so the fact has two readers and
  * belongs beside the table that is the reason both of them ask. */
-static lxb_dom_element_t *sa_principal_writing_mode_element(lxb_dom_node_t *doc)
+lxb_dom_element_t *scrolling_area_principal_writing_mode_element(lxb_dom_node_t *doc)
 {
     lxb_dom_node_t *root = document_document_element_of(doc);
     lxb_dom_node_t *body = document_body_of(doc);
@@ -684,7 +684,8 @@ bool scrolling_area_viewport_ending_edge_at_higher_coordinate(lxb_dom_node_t *do
     /* §2 gives "a scrolling box of a viewport or element" ONE definition of its two overflow directions, so
        once §8 has named the element whose used values the viewport's are, this is the element form and not a
        second derivation of the same bit. */
-    return scrolling_area_ending_edge_at_higher_coordinate(sa_principal_writing_mode_element(doc), vertical);
+    return scrolling_area_ending_edge_at_higher_coordinate(scrolling_area_principal_writing_mode_element(doc),
+                                                            vertical);
 }
 
 void scrolling_area_walk_viewport(ScrollingAreaWalk *w, lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)

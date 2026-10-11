@@ -480,7 +480,7 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
        forced line break or soft wrap opportunity in the flow"). Its position is §9.3.2's over a static
        position. */
     if (lb_computed_is(el, "position", "absolute") || lb_computed_is(el, "position", "fixed")) return;
-    if (!lb_computed_is(el, "float", "none"))
+    if (block_flow_is_floated(el))
         DFAIL("CSS 2.2 §9.5 \"Floats\" takes this box out of the line and puts it beside the line boxes, which "
               "changes the WIDTH available to every one of them: §9.4.2 says line boxes \"may vary in width if "
               "available horizontal space is reduced due to floats\", and §9.5's own rule shortens the line "

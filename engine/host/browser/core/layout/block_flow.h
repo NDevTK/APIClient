@@ -499,6 +499,12 @@ typedef struct {
    come to disagree about where a margin collapsed. */
 size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out);
 
+/* Whether `el`'s box is floated: CSS 2 §9.5.1 "Positioning the float: the float property" "only applies to
+   elements that generate boxes that are not absolutely positioned", and this engine's cascade does not apply
+   §9.7's computed `float: none` for those. The root is floated like any element: §9.5.1 permits treating
+   `float` as `none` on it, and Chrome floats it. Every layout reader of the question asks here. */
+bool block_flow_is_floated(lxb_dom_element_t *el);
+
 /* The same enumeration without a drive of its own: false ("not yet") when the walk deferred a contribution,
    with nothing stored; true with the boxes at `*out` (the caller's to free) and their number at `*count`. */
 bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count);

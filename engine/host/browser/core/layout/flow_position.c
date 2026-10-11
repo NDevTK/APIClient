@@ -691,6 +691,10 @@ CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
     CssPx edge, cb_edge;
 
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's static position was asked for with no element");
+    /* The root's hypothetical static box is in the initial containing block, §10.1's first case, which is
+       also its containing block as an absolutely positioned box: the static position is that rectangle's own
+       edge on every arm. */
+    if (fp_is_root(lxb_dom_interface_node(el))) return css_px(0.0);
     DCHECK(!vertical || !trailing,
            "CSS 2.1 §10.6.4 names `top` in BOTH of the entries that use a static position — its "
            "all-three-`auto` case (\"set `top` to the static position and apply rule number three below\") and "
@@ -811,7 +815,25 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
        position, so this consumes §9.4.1's flow layout. */
     if (fp_computed_is(el, "position", "absolute") || fp_computed_is(el, "position", "fixed"))
         return (*out = fp_abs_origin(el), true);
-    if (!fp_computed_is(el, "float", "none"))
+    /* CSS 2 §9.5.1's placement for the root, the one float whose containing block (the initial containing
+       block) holds no other box: "a floating box's outer top may not be higher than the top of its containing
+       block" and "must be placed as high as possible", and "a left-floating box must be put as far to the left
+       as possible, a right-floating box as far to the right as possible", so its outer edges are the ICB's. */
+    if (block_flow_is_floated(el) && fp_is_root(n)) {
+        p.y = used_value_px(el, "margin-top");
+        if (fp_computed_is(el, "float", "left")) {
+            p.x = used_value_px(el, "margin-left");
+        } else {
+            DCHECKF(fp_computed_is(el, "float", "right"),
+                    "%s, computed `float` `%s`: CSS 2 §9.5.1's `Value:` line is `left | right | none`",
+                    box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "float", vbuf, sizeof vbuf));
+            p.x = css_px_sub(css_px_sub(fp_icb_width(el), used_value_px(el, "margin-right")),
+                             used_value_border_edge_px(el, false));
+        }
+        *out = p;
+        return true;
+    }
+    if (block_flow_is_floated(el))
         DFAILF("%s, computed `float` `%s`: "
               "CSS 2 §9.5 'Floats' positions a FLOATING box, and §9.4.1's rule does not: a float is shifted to "
               "the left or right edge of its containing block and then down past any earlier float it would "

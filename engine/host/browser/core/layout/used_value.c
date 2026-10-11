@@ -32,6 +32,7 @@
 #include "core/layout/table_height.h"
 #include "core/layout/table_width.h"
 #include "core/layout/table_wrapper.h"
+#include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 
 /* CSS 2.1 §10.3's OWN LIST OF BOX TYPES, which is the list of algorithms `width` has. The names are the
@@ -307,7 +308,7 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
         return UV_BOX_ITEM;
     }
     free(parent_display);
-    if (!uv_computed_is(el, "float", "none")) { free(display); return UV_BOX_FLOAT; }
+    if (block_flow_is_floated(el)) { free(display); return UV_BOX_FLOAT; }
     if (strcmp(display, "inline") == 0)                  kind = UV_BOX_INLINE;
     else if (strcmp(display, "inline-block") == 0)       kind = UV_BOX_INLINE_BLOCK;
     else if (uv_display_is_inline_flex_or_grid(display)) kind = UV_BOX_INLINE_FLEX_GRID;
@@ -3486,7 +3487,12 @@ static CssPx uv_abs_shrink_to_fit(lxb_dom_element_t *el, CssPx available)
    own §10.1-second-case walk. */
 static bool uv_abs_static_cb_is_rtl(lxb_dom_element_t *el)
 {
-    lxb_dom_element_t *spcb = block_flow_static_position_containing_block(el);
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    /* The root's static-position containing block is the initial containing block, whose `direction` is the
+       principal writing mode's (css-writing-modes-4 §8.1 "Propagation to the Initial Containing Block"). */
+    lxb_dom_element_t *spcb = n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT
+                                  ? scrolling_area_principal_writing_mode_element(n->parent)
+                                  : block_flow_static_position_containing_block(el);
     char *d = uv_computed(spcb, "direction");
     bool rtl = strcmp(d, "rtl") == 0;
 
