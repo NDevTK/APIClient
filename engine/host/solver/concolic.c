@@ -2269,11 +2269,12 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            "sinks ran carrying none", which otherwise all read `turns:N,reached:0,survived:0`. Not a credit:
            solve.c raises a counter and moves no ordering. */
         if (f->cand_sink) solve_observe_substitution(f);   /* a verification is no search's (solve_flow_begin) */
-        /* A verification delivers the value a witness's pin chose, so from here this path rests on bytes this
-           engine chose exactly as the pinning flow's did, and a request it builds is graded so (flow.h's
-           `path_forced` and `path_pinned`): otherwise the trusted zone would fire, as the page's own act, an
-           address it refuses on the flow that found it. */
-        if (f->cand_vfy) { flow_mark_forced_arm(); flow_mark_pinned_value(); }
+        /* Every candidate delivers bytes this engine chose (a breakout, or the value a witness's pin chose), so
+           from here an address the run composes may rest on them, and its requests say so (flow.h's
+           `path_forced` and `path_pinned`). Whose act the run is, which holds from its first opcode, is the
+           separate fact flow_path_driven answers. */
+        flow_mark_forced_arm();
+        flow_mark_pinned_value();
     }
     for (i = 0; i < g_srcs_n; i++)
         if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }

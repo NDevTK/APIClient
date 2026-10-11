@@ -347,8 +347,9 @@ function _modeOf(opts) {
 // "Processing model"'s parser-inserted script, a `script` whose parser document is non-null); a zone that
 // originated an act states it for itself. This file decides from it and may not re-derive it: nothing in an
 // address distinguishes a request a session would have made from one that exists because a gate was forced.
-// `driven` is a request minted inside the engine's own drive of a function the page never called: this tool's
-// act, whatever its path forced. The actor row reads it (see that row).
+// `driven` is a request minted inside a flow that is the engine's own act (a drive of a function the page never
+// called, or a candidate run re-executing the page with a payload the engine chose): this tool's act, whatever
+// its path forced. The actor row reads it (see that row).
 var _PROVENANCE_TYPES = ["observed", "derived", "forced", "driven"];
 // Every caller must state one, and it is a CHECK: the firing decision and the deny list's scope rest on it,
 // and a missing or invented word must not be answered by whichever arm it happens to fall to. The value
@@ -650,8 +651,8 @@ var _SIGNALS = [
      a person reads "and this is a request this tool composed rather than one your page made". `certain`, the
      one gating row that can say so: it is a literal in trusted-zone source at every asker, while the grades
      beside it are words the attacker-controlled engine composes. */
-  /* A request the engine states it minted inside its own drive of uncalled code (`provenance=driven`) is this
-     tool's act although the page's code composed it, so the row reads `tool` for it. The engine's word can
+  /* A request the engine states it minted inside its own act (`provenance=driven`: a drive of uncalled code or
+     a candidate run) is this tool's act although the page's code composed it, so the row reads `tool` for it. The engine's word can
      only narrow the row, never widen it: `page` still needs the asker's literal. */
   { name: "actor", gates: true, certainty: "certain", values: _ACTOR_WORDS,
     of: function (f) { return f.actor === "page" && f.provenance === "driven" ? "tool" : f.actor; } },

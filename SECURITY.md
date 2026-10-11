@@ -359,9 +359,10 @@ address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`); 
 named (`destination=navigation`, `actor=page`, `provenance=derived`). Probes, discovery and tool-composed data
 requests fire only at an origin a person widened.
 
-`driven` is the engine's word for a request minted inside its own drive of a function the page never called
-(`flow_path_driven`, asserted at `endpoint_record`). The page's code composed it, but it exists because this
-tool called that code, so it is this tool's act: the `actor` row reads `tool` for it, and neither the data-request
+`driven` is the engine's word for a request minted inside a flow that is its own act (`flow_path_driven`,
+asserted at `endpoint_record`): a drive of a function the page never called, or a candidate run that re-executes
+the page with a payload the engine chose (an @S breakout, or a witness value under verification). The page's
+code composed it, but it exists because this tool called that code or chose those bytes, so it is this tool's act: the `actor` row reads `tool` for it, and neither the data-request
 arm nor the navigation arm admits it. The engine's word can only narrow `actor`, never widen it. A program or
 subresource load a drive reaches still fires by its destination arm, which is the app's own public code.
 

@@ -3375,8 +3375,8 @@ const ROUTE_SEED_NOTICE = "document.seed";
 const PROVENANCE_OBSERVED = "observed";
 const PROVENANCE_DERIVED = "derived";
 const PROVENANCE_FORCED = "forced";
-/* Minted inside the engine's drive of a function the page never called: safe-fetch.js reads it as this tool's
-   act. */
+/* Minted inside a flow that is the engine's own act (a drive of uncalled code, or a candidate run): safe-fetch.js
+   reads it as this tool's act. */
 const PROVENANCE_DRIVEN = "driven";
 /* The witness mark's two words, solver/engine.h's `PENDING_PINNED_*`: a separate field from provenance
    (provenance says what a reply is worth; this says whether the act may be spent). `unstated` is not here: it

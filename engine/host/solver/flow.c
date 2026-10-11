@@ -1050,11 +1050,13 @@ void flow_mark_forced_arm(void) {
 }
 
 int flow_path_driven(const Flow *f) {
-    DCHECK(f != NULL, "a flow was asked whether it is a drive of uncalled code, of no flow");
+    DCHECK(f != NULL, "a flow was asked whether it is this tool's own act, of no flow");
     DCHECK(f->orphan == 0 || f->orphan == 1,
            "a flow's orphan mark is neither set nor clear — engine.c's orphan seed writes it as a constant and a "
            "fork copies it, so any other value is memory this field does not own");
-    return f->orphan;
+    DCHECK(!f->cand_src || (f->cand_payload && !f->cand_sink != !f->cand_vfy),
+           "a candidate session is missing its payload or names neither or both of a sink and a witness key");
+    return f->orphan || f->cand_src != NULL;
 }
 
 int flow_path_forced(const Flow *f) {

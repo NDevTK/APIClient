@@ -120,8 +120,9 @@
 #define PROV_OBSERVED 0
 #define PROV_DERIVED  1
 #define PROV_FORCED   2
-/*   DRIVEN   — it was minted inside a drive of a function the page never called (engine.c's orphan drive), so it
- *              is this tool's act, whatever arms its path forced. Weakest in the join's order: a request any
+/*   DRIVEN   — it was minted inside a flow that is this tool's own act (flow_path_driven: a drive of a function
+ *              the page never called, or a candidate session carrying a payload this engine chose), so it is
+ *              this tool's act, whatever arms its path forced. Weakest in the join's order: a request any
  *              member made outside a drive is one the page makes, and the drive's own copy adds nothing.
  *              NAMED RESIDUAL. Not covered: a drive that forced no arm computes its values from real inputs,
  *              which could be offered as examples as `derived` ones are. The next diff carries the forced bit

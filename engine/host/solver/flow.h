@@ -1517,8 +1517,11 @@ int   flow_path_forced(const Flow *f);
 void  flow_mark_pinned_value(void);
 /* Has this flow determined a value on such an arm? Read at the park, beside flow_path_forced and for its reason. */
 int   flow_path_pinned(const Flow *f);
-/* Is this flow a drive of a function the page never called (`orphan`, inherited by every fork of it)? Read at
-   the park and at every act, beside flow_path_forced: what such a flow requests is this tool's act. */
+/* Is this flow this tool's own act: a drive of a function the page never called (`orphan`), or a candidate
+   session re-running the document with a payload this engine chose (`cand_src`, an @S sink candidate or a
+   witness verification)? Both are inherited by every fork. Read at the park and at every act, beside
+   flow_path_forced: what such a flow requests is this tool's act, so it is graded `driven` and never fires as
+   the page's. */
 int   flow_path_driven(const Flow *f);
 /* Charge the running flow for the thread time a step just burned, in microseconds (the reward's currency), after
    the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `cpu`). A

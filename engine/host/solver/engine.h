@@ -644,7 +644,7 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
 #define PENDING_PROVENANCE_OBSERVED "observed" /* a real load of this document makes exactly this request */
 #define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
 #define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
-#define PENDING_PROVENANCE_DRIVEN   "driven"   /* minted inside a drive of a function the page never called */
+#define PENDING_PROVENANCE_DRIVEN   "driven"   /* minted inside a flow that is this tool's act (flow_path_driven) */
 
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
  * because provenance grades what a reply is worth while this decides whether the act may be spent, and a
