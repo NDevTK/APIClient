@@ -227,7 +227,8 @@ const ZONE = (() => {
   for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
-                   'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal'])
+                   'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal',
+                   'safeFetchSchemeData'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -561,14 +562,16 @@ async function main() {
      zone is where an address is ranked and legitimately fetched again, and it holds no set at all. */
   const seededRoutes = new Set();
   let seedSerial = 0;
-  /* A document's principal: HTML §7.3.2.1's determine the origin returns a new opaque origin when its record
-     carries the sandboxed origin browsing context flag, and the URL's origin otherwise. The opaque one is this
-     zone's "null:<n>" token (extension/lib/safe-fetch.js reads it as same-origin with nothing), unique per
+  /* A document's principal: HTML §7.3.2.1 "Creating browsing contexts"' determine the origin returns a new opaque
+     origin when its record carries the sandboxed origin browsing context flag, and the URL's origin otherwise,
+     which is itself a new opaque origin, serialized "null", for a data: URL (URL §4.7 "Origin"). Either opaque
+     one is this zone's "null:<n>" token (extension/lib/safe-fetch.js reads it as same-origin with nothing), unique per
      document, so clusterOf never joins it to an instance and it holds no session; the engine computes "null"
      from the same flag set (main.c's qjs_init). */
   let opaqueSerial = 0;
   const principalOf = (doc, url) =>
-    ZONE.docRecordOpaque(doc) ? `null:opaque${++opaqueSerial}` : new URL(url).origin;
+    ZONE.docRecordOpaque(doc) || new URL(url).origin === 'null' ? `null:opaque${++opaqueSerial}`
+                                                                : new URL(url).origin;
   /* An origin as HTML serializes it to a page: an opaque one is "null" (§7.1.1), never this zone's token. */
   const stampOrigin = (o) => (o.includes('://') ? o : 'null');
 
@@ -852,6 +855,13 @@ async function main() {
      the caller at `provision`. */
   async function navigate(url, fromDocUrl, what, provenance, driven, pinned, fromDoc) {
     const abs = new URL(url, fromDocUrl).href;
+    /* Fetch §4.3 "Scheme fetch"'s "data" arm, as bridge.js's navigationLoad takes it: the bytes are in the URL
+       and the load reaches no other party, so neither the egress question below nor safeFetch is asked. */
+    if (new URL(abs).protocol === 'data:') {
+      const data = replyRecord(await ZONE.safeFetchSchemeData(abs), `${what} ${abs}`);
+      if (!data) return { url: abs, headers: [], bytes: Buffer.alloc(0) };
+      return { url: abs, headers: data.meta.headers, bytes: data.bytes };
+    }
 
     /* THE PROVENANCE IS THE WHOLE DECISION AND IT IS STATED BY THE CALLER, never derived here, and one whose
        provenance is NOT ESTABLISHED crashes at the decision rather than proceeding.

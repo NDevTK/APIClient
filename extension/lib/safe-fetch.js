@@ -2069,6 +2069,40 @@ async function safeFetch(url, opts) {
            refusal: null, type: _type };
 }
 
+/* Fetch §4.3 "Scheme fetch"'s "data" arm, for a document load: "Let dataURLStruct be the result of running the
+   data: URL processor on request's current URL" (Fetch §6 "data: URLs"), a network error on failure, and
+   otherwise a response whose status message is `OK`, whose header list is the struct's serialized MIME type as
+   `Content-Type`, and whose body is the struct's body. It is not safeFetch: a data: URL's bytes are in the URL
+   and the load reaches no other party, so none of safeFetch's signals has a value to compute. The processor is
+   the realm's own, through `_wire`: the platform's fetch runs §4.3 for a data: URL without a network. The
+   record is safeFetch's shape, and its type is computed by the same sniff. */
+async function safeFetchSchemeData(url) {
+  var parsed = new URL(String(url));
+  var resp;
+  CHECK(parsed.protocol === "data:",
+        "safeFetchSchemeData was asked to load " + JSON.stringify(parsed.href) + " — only §4.3's \"data\" arm " +
+        "reaches no other party, so every other scheme goes through safeFetch");
+  try { resp = await _wire(parsed.href, {}); }
+  catch (e) {
+    /* Network: §4.3 answers a data: URL the processor refuses with a network error, which the platform's
+       fetch reports as a TypeError. */
+    RETHROW_FATAL(e);
+    return _refused("network", "data-url-failure", [parsed.href], {});
+  }
+  var headers = {};
+  resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
+  DCHECK(resp.status === 200 && resp.statusText === "OK" && typeof headers["content-type"] === "string",
+         "the realm's fetch answered a data: URL with status " + resp.status + " " +
+         JSON.stringify(resp.statusText) + " and no Content-Type — §4.3's \"data\" arm returns a response whose " +
+         "status message is `OK` and whose header list is the struct's MIME type, so this realm's fetch is " +
+         "not the processor this function binds to");
+  var body = new Uint8Array(await resp.arrayBuffer());
+  var computed = _computedType(headers["content-type"], _determineNosniff(headers["x-content-type-options"]),
+                               _sniff(body));
+  return { ok: true, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
+           urlList: [parsed.href], computedType: computed, refusal: null, type: "basic" };
+}
+
 /* Fetch §2.2.2 "Headers": a forbidden request-header is one "forbidden so the user agent remains in full
    control over them". A script's value for one is ignored, so a request this zone sends refuses it by name
    rather than letting the person believe it was sent. Returns the refused name, or null. */
@@ -2209,6 +2243,7 @@ async function safeFetchOperator(url, opts) {
 if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
   self.safeFetchOperator = safeFetchOperator;
+  self.safeFetchSchemeData = safeFetchSchemeData;
   self.safeFetchStatedRefusal = safeFetchStatedRefusal;
   self.safeFetchStatedShape = safeFetchStatedShape;
   self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;

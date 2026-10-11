@@ -1153,13 +1153,14 @@ function issuedRecords(eng, issuer, minted) {
 function childDocRecord(from, provenance, driven, pinned) {
   return docRecordJoin(from, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
 }
-/* A document's principal: HTML §7.3.2.1's determine the origin returns a new opaque origin when its record
-   carries the sandboxed origin browsing context flag, and `origin` (the URL's, or the browser-stated one)
-   otherwise. The opaque one is `_senderOrigin`'s "null:<uuid>" shape, unique per document, so clusterKeyOf
-   never joins it to an instance and navigationCarriesSession gives it no session; the engine computes "null"
-   from the same flag set (main.c's qjs_init). */
+/* A document's principal: HTML §7.3.2.1 "Creating browsing contexts"' determine the origin returns a new opaque
+   origin when its record carries the sandboxed origin browsing context flag, and `origin` (the URL's, or the
+   browser-stated one) otherwise, which is itself a new opaque origin, serialized "null", for a URL such as a
+   data: URL (URL §4.7 "Origin"). Either opaque one is `_senderOrigin`'s "null:<uuid>" shape, unique per
+   document, so clusterKeyOf never joins it to an instance and navigationCarriesSession gives it no session;
+   the engine computes "null" from the same flag set and URL (main.c's qjs_init). */
 function principalOf(doc, origin) {
-  return docRecordOpaque(doc) ? "null:" + crypto.randomUUID() : origin;
+  return docRecordOpaque(doc) || origin === "null" ? "null:" + crypto.randomUUID() : origin;
 }
 /* An entry's flag set. One written before the field has the empty set: until the zone recorded flags, every
    persisted document was a top-level root or seed created with `none`. */
@@ -2308,6 +2309,18 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      bytes, and an opaque origin is same-origin with nothing, as for a cross-origin child (SECURITY.md). */
   DCHECK(typeof readerOpaque === "boolean",
          "a §7.4 navigation was asked for without stating whether its reader is an opaque document");
+  /* Fetch §4.3 "Scheme fetch"'s "data" arm. A data: URL's bytes are in the URL and its load reaches no other
+     party, so it is not asked of safeFetch, whose every signal is about a party a request reaches; the realm's
+     data: URL processor answers it (safeFetchSchemeData). Its document's origin is opaque (principalOf), so no
+     session can travel either. HTML §7.4 states no data: step, so a top-level navigation the page initiates
+     loads too, where Chrome refuses it ("Not allowed to navigate top frame to data URL") and allows a child's. */
+  if (new URL(abs).protocol === "data:") {
+    const d = await self.safeFetchSchemeData(abs);
+    if (d.refusal)
+      return { url: abs, headers: {}, bytes: null, declined: null,
+               unavailable: { kind: "network", detail: d.statusText } };
+    return { url: abs, headers: d.headers, bytes: d.body, unavailable: null, declined: null };
+  }
   const speaker = !readerOpaque && navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
   const credentialed = speaker !== null;
   /* The request as the speaker's client composed it, where the speaker knows it (a sub-frame seed). */
