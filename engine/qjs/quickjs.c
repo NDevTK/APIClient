@@ -27338,18 +27338,27 @@ static void js_step_visit_free_tree(JSContext *ctx, void **root, void **cursors[
        cursor left naming destroyed memory is the one thing a later read of this state could still fault on. */
     for (i = 0; i < ncursors; i++) *cursors[i] = NULL;
 }
+/* A cache is shed by the copy, which rebuilds it, and destroyed by the teardown. */
+static void js_step_visit_dup_cache(JSContext *ctx, void **slot, void (*destroy)(JSContext *, void *)) {
+    (void)ctx; (void)destroy;
+    *slot = NULL;
+}
+static void js_step_visit_free_cache(JSContext *ctx, void **slot, void (*destroy)(JSContext *, void *)) {
+    DCHECK(destroy != NULL, "a step state declared a cache and handed its teardown nothing to destroy it with");
+    if (*slot) { destroy(ctx, *slot); *slot = NULL; }
+}
 static const JSStepVisit js_step_visit_dup  = { js_step_visit_dup_val,  js_step_visit_dup_strbuf,  js_step_visit_dup_props,
                                                 js_step_visit_dup_slots,  js_step_visit_dup_buf,
                                                 js_step_visit_dup_atom,  js_step_visit_dup_machine,
                                                 js_step_visit_dup_array,  js_step_visit_dup_shared,
                                                 js_step_visit_dup_maprec, js_step_visit_dup_reexec,
-                                                js_step_visit_dup_tree };
+                                                js_step_visit_dup_tree,   js_step_visit_dup_cache };
 static const JSStepVisit js_step_visit_free = { js_step_visit_free_val, js_step_visit_free_strbuf, js_step_visit_free_props,
                                                 js_step_visit_free_slots, js_step_visit_free_buf,
                                                 js_step_visit_free_atom, js_step_visit_free_machine,
                                                 js_step_visit_free_array, js_step_visit_free_shared,
                                                 js_step_visit_free_maprec, js_step_visit_free_reexec,
-                                                js_step_visit_free_tree };
+                                                js_step_visit_free_tree,  js_step_visit_free_cache };
 /* DELETED: tramp_step_visit_free, the per-machine call that discharged the declaration. Every one of the 137
    engine finis that called it — and the 46 host teardowns that spelled the same list out by hand — asked the
    ONE question "release what this state owns", at 183 places, one per machine. It is asked once now, in
@@ -27546,12 +27555,17 @@ static void js_step_visit_fp_array(JSContext *ctx, void **slot, size_t size, int
     if (!a) return;
     for (i = 0; i < n; i++) each(ctx, a + size * (size_t)i, (JSStepVisit *)&js_step_visit_fp);
 }
+static void js_step_visit_fp_cache(JSContext *ctx, void **slot, void (*destroy)(JSContext *, void *))
+{
+    (void)destroy;
+    js_step_fp_fold(ctx, (uint64_t)(uintptr_t)*slot);
+}
 static const JSStepVisit js_step_visit_fp = { js_step_visit_fp_val, js_step_visit_fp_strbuf, js_step_visit_fp_props,
                                               js_step_visit_fp_slots, js_step_visit_fp_buf,
                                               js_step_visit_fp_atom, js_step_visit_fp_machine,
                                               js_step_visit_fp_array, js_step_visit_fp_shared,
                                               js_step_visit_fp_maprec, js_step_visit_fp_reexec,
-                                              js_step_visit_fp_tree };
+                                              js_step_visit_fp_tree,  js_step_visit_fp_cache };
 
 uint64_t JS_StepVisitOwnedFingerprint(JSContext *ctx, JSStepVisitFn visit, void *state)
 {

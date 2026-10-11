@@ -98,6 +98,9 @@ enum { IDL_STEP_STAGE_BASE(FRAG_STAGES)
        FRAG_STAGES(JS_STEP_STAGE_ENUM) FRAG_STAGE_CLEAR(JS_STEP_STAGE_ENUM)
        SANITIZE_STAGES(JS_STEP_STAGE_ENUM) };
 
+/* The parse in progress, a cache over the markup — see fragment_parser.c. */
+typedef struct FragParseCache FragParseCache;
+
 typedef struct {
     uint8_t where;
     uint8_t clear_first;          /* innerHTML= empties the element before parsing, one child per step */
@@ -113,9 +116,9 @@ typedef struct {
        argument: once Trusted Types §3 exists, step 1 runs the default policy's callback and what the fragment
        is parsed from is what that callback RETURNED, which is a different value from the one passed in. */
     JSValue compliant;
-    lxb_html_parser_t *parser;    /* THIS parse's own — see fragment_parser.c */
+    FragParseCache *pc;           /* THIS parse's parser and position, NULL until FRAG_FEED builds it */
     char   *html;                 /* the markup, owned: the parser is handed slices of it across suspensions */
-    size_t  len, off;
+    size_t  len;
     lxb_dom_element_t *context;
     /* §8.5.5 STEP 5's / §8.5.6 STEP 4's / §8.5.7 STEP 6's `body`, when there is one: an element this machine
        CREATED to be the parse context and that is in no tree, so this machine has to destroy it. Owned, and

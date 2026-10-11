@@ -488,9 +488,9 @@ enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
  * and querySelectorAll through scope-match a selectors string, §4.9 for matches and closest). The match walks the
  * page's tree, so it rests at every node. The parse is one stage, because Lexbor's selector parser has no smaller
  * entry, so its length is the page's to choose. Splitting it means feeding the CSS tokenizer through
- * lxb_css_syntax_tokenizer_next_chunk and holding a live tokenizer across rests, which would make the machine
- * unforkable; that is the subproblem fragment_parse_unforkable names (a lexbor tokenizer that can be copied), and
- * until it exists this machine keeps the forkable walk. */
+ * lxb_css_syntax_tokenizer_next_chunk and holding a live tokenizer across rests, which a fork could only shed and
+ * re-feed, as core/html/fragment_parser.c does its HTML parser; until that is built this machine keeps the
+ * forkable walk. */
 #define QS_STAGES(X) \
     X(QS_PARSE, "DOM §1.3 steps 1-2 / §4.9 steps 1-2 (parse a selector; SyntaxError if it is failure)") \
     X(QS_MATCH, "DOM §1.3 step 3 (match a selector against a tree) / §4.9 matches step 3 / closest steps 3-5, " \

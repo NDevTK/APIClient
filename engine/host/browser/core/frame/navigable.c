@@ -2524,15 +2524,12 @@ static JSValue js_nav_load_fini(JSContext *ctx, void *st, bool take_result)
     return JS_UNDEFINED;
 }
 
-/* WHY THIS MACHINE MUST NOT BE FORKED WHILE IT IS CREATING A DOCUMENT — core/html/fragment_parser.c's
-   fragment parse states the TOKENIZER half of the argument at fragment_parse_unforkable and that half is the
-   same object: between two items of §7.5.2's fill, the machine holds an lxb_html_parser_t standing at a
-   position with an open-element stack and an insertion mode behind it, and lexbor exposes no copy of one.
-   THE OTHER HALF IS NOT THAT MACHINE'S AND MUST NOT BE READ AS IT. This one also holds the half-built
-   DOCUMENT, and a Document is not a detached subtree: `v->tree` copies a tree into a tree with the SAME owner,
-   and a Document is the owner, so no operation names one. That machine's tree is a DETACHED FRAGMENT, which
-   `v->tree` does name — what holds ITS fork is two per-node cases its own FRAG_FEED boundary creates, neither
-   of which this machine can reach, because §7.5.2's fill runs no parse-boundary walk.
+/* WHY THIS MACHINE MUST NOT BE FORKED WHILE IT IS CREATING A DOCUMENT: between two items of §7.5.2's fill it
+   holds an lxb_html_parser_t standing at a position with an open-element stack and an insertion mode behind
+   it, and lexbor exposes no copy of one. core/html/fragment_parser.c answers the same parser by shedding it as
+   a cache and re-feeding its markup, which holds there because §13.4 builds a detached private tree. THIS ONE
+   ALSO HOLDS THE HALF-BUILT DOCUMENT, and a Document is not a detached subtree: `v->tree` copies a tree into a
+   tree with the SAME owner, and a Document is the owner, so no operation names one and no shed rebuilds one.
    IT IS A PROPERTY OF THE ENGINE AND NOT OF THE PAGE: no page code runs across a fill, but RAM pressure, a
    cold-tier eviction and a cross-session resume never ask what the page is doing, and a fork can arrive from
    anywhere the scheduler puts one. */
@@ -2565,16 +2562,10 @@ static const char *js_nav_load_unforkable(const void *st)
            "one's: a second §7.5.1 Document in this agent holding the copy of the partial tree, its "
            "compat mode, its own DocumentType node rather than a shared pointer, and the five facts "
            "nav_create_finish takes back out of the creation record — after which the subtree under it is a "
-           "same-owner copy `v->tree` could make, and only then is a node->node map worth having. (2) HTML "
-           "§13.2.5's tokenizer as an engine component whose state is a spec-named enum rather than a raw code "
-           "pointer into lexbor's 182 static state functions — that half IS shared with "
-           "fragment_parse_unforkable and is named once, there. "
-           "WHAT IS NOT WHAT TO BUILD: `copy_subtree`. This message named it, and that was wrong twice over "
-           "— it is static to core/html/tree_construction.c, and it is the WRONG WALK, which both that file "
-           "and dom_private_tree_clone say in their own words: it is handed the two temporary DOCUMENT nodes "
-           "and starts at `src_top->first_child`, so a DETACHED root has no entry point into it, and it does "
-           "not descend into a shadow root. A reader who took the retired clause on trust would have exported "
-           "a walk that cannot be the clone for either machine. "
+           "same-owner copy `v->tree` could make, and only then is a node->node map worth having. (2) "
+           "THE PARSER: either the shed core/html/fragment_parser.c takes (re-feed the entity's bytes, one per "
+           "step, into the Document's copy), or §13.2.5's tokenizer as an engine component whose state is a "
+           "spec-named enum rather than a raw code pointer into lexbor's 182 static state functions. "
            "AND THIS STATE IS THREE CAPABILITIES AND NOT ONE, WHICH IS WHAT THE DECLARER COUNT HIDES AND IS "
            "HOW IT SHOULD BE PRICED — two of the three are shared with other machines and retire with them, "
            "and only one is this machine's own. "
@@ -2583,10 +2574,8 @@ static const char *js_nav_load_unforkable(const void *st)
            "two Origin records are deliberately NOT copied (an origin belongs to the agent, and a copy would "
            "mint a second record and make this document cross-origin to the one that navigated it), so they "
            "need no mechanism at all. "
-           "THE §7.5 LOAD'S PARSER IS THE SAME CAPABILITY fragment_parse_unforkable's second clause names, "
-           "and the answer there is the one that applies here: NOT a copy of lexbor's tokenizer — nobody here "
-           "owns the file a pair would be written in — but §13.2.5 as an engine component. It retires for both "
-           "machines at once and is named once, there. "
+           "THE §7.5 LOAD'S PARSER IS NOT a copy of lexbor's tokenizer — nobody here owns the file a pair "
+           "would be written in — and is (2) above. "
            "THE DOCUMENT IS THIS MACHINE'S OWN AND IS THE ONE NEITHER MECHANISM REACHES. A `{clone, destroy}` "
            "pair is written by whoever owns the allocation and this one IS owned here, so the pair is "
            "writable — and it would be the wrong thing, because a Document is not an allocation whose bytes "

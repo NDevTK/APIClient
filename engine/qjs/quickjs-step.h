@@ -145,6 +145,11 @@ struct JSStepVisit {
        THE ROOT IS THE OWNED THING AND THE CURSORS ARE NOT, which is why they are two arguments and not one
        array: getting that backwards is a double free of everything the structure owns. */
     void (*tree)(JSContext *ctx, void **root, void **cursors[], int ncursors, const JSStepTreeOps *ops);
+    /* A RE-DERIVABLE CACHE: a host allocation that is a function of what the machine declares otherwise, so the
+       machine rebuilds it from that state on its next step. The fork sheds it (the copy's slot is NULL), the
+       teardown hands it to `destroy`, and the fingerprint folds the pointer. It is never copied: a cache's
+       contents are re-derived, and a copy of a structure nobody can copy is the thing it stands in for. */
+    void (*cache)(JSContext *ctx, void **slot, void (*destroy)(JSContext *ctx, void *p));
 };
 
 /* A MACHINE'S DECLARATION. A host component writes one of these and hands it to JS_RegisterStepDef, which

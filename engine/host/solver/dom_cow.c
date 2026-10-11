@@ -1986,10 +1986,8 @@ static void *dom_private_tree_clone(JSContext *ctx, void *root, void **cursors[]
     CHECK(avl != NULL && lexbor_avl_init(avl, 128, sizeof(lexbor_avl_node_t)) == LXB_STATUS_OK,
           "a fork could not create the node map for the flow-private tree a step machine declared");
 
-    /* THE TOP IS COPIED HERE AND NOT BY THE LOOP, which is the whole difference between this walk and the one
-       core/html/tree_construction.c performs over a partial parse: that one is handed the two temporary
-       DOCUMENT nodes and starts at `src_top->first_child`, so a DETACHED root — which is what every private
-       tree a step machine owns is — has no entry point into it at all. */
+    /* THE TOP IS COPIED HERE AND NOT BY THE LOOP: every private tree a step machine owns is DETACHED, so its
+       root is no child of anything a walk from a parent would start at. */
     top = dom_private_copy_one(ctx, src->owner_document, src);
     dom_private_map_put(avl, &avl_root, src, top);
     croot = top;

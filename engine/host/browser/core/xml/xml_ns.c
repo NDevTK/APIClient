@@ -51,8 +51,8 @@ static void assert_owner(const XmlNsScope *s)
            "timelines writing one set of bindings. What has to be built is this state's JSStepVisit "
            "declaration in the step machine that holds the parse, and it is not a byte copy: a binding's "
            "prefix and namespace name are interior pointers into THIS stack's arena, so a copied binding names "
-           "the original arm's bytes. core/html/tree_construction.c is the same operation for the HTML tree "
-           "builder and core/dom/core/html/fragment_parser.c's fragment_parse_unforkable is what stands in until a state declares one");
+           "the original arm's bytes. core/html/xml_fragment.c's xml_fragment_unforkable is what stands in "
+           "until a state declares one");
 }
 
 const char *xml_ns_error_message(XmlNsError err)

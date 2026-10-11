@@ -3258,8 +3258,8 @@ static void clone_push(JSContext *ctx, NodeCloneState *s, int resume_stage)
    document, subtree set to true, and parent set to copy's template contents." A shallow clone of a template
    already HAS its own empty fragment, because lexbor's
    clone_interface builds the template interface, so both sides have somewhere to go.
-   EXPORTED, because a second tree walk needed the same question: core/html/tree_construction.c copies a
-   partial parse and has to descend into the same second tree for the same reason. Two spellings of `where a
+   EXPORTED, because other tree walks need the same question: solver/dom_cow.c's private-tree copy and
+   core/xml/xml_tree.c descend into the same second tree for the same reason. Two spellings of `where a
    template's markup actually is` is how one of them silently stops covering it. */
 lxb_dom_node_t *node_template_content(const lxb_dom_node_t *n)
 {
@@ -3276,9 +3276,9 @@ lxb_dom_node_t *node_template_content(const lxb_dom_node_t *n)
    IT IS THE ROUND TRIP THROUGH node_template_content AND NOT A TYPE TEST, because a shadow root is a
    DocumentFragment with a host too: `n` is this template's contents only if the template says so, so the two
    directions cannot answer differently about one node. Written here beside the forward question for the reason
-   that one is exported — THREE callers had transcribed this round trip (solver/dom_cow.c's parse-root walk,
-   core/html/tree_construction.c's partial-parse copy, and HTML §14.2's XML placement in core/xml/xml_tree.c),
-   and three spellings of one rule is two of them one edit away from stopping covering it. */
+   that one is exported — callers had transcribed this round trip (solver/dom_cow.c's parse-root walk and HTML
+   §14.2's XML placement in core/xml/xml_tree.c), and two spellings of one rule is one of them one edit away
+   from stopping covering it. */
 lxb_dom_node_t *node_template_content_host(const lxb_dom_node_t *n)
 {
     lxb_dom_element_t *host;

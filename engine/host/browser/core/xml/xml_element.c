@@ -47,8 +47,8 @@ static void assert_owner(const XmlElementWalk *w)
            "is about the other's tree. What has to be built is this state's JSStepVisit declaration in the "
            "step machine that holds the parse, and it is not a byte copy: every name on this stack is an "
            "interior pointer into the ENTITY the reader was initialised over. core/xml/xml_ns.c stands at the "
-           "same wall for the namespace scope stack and core/html/fragment_parser.c's fragment_parse_unforkable is what stands in "
-           "until a state declares one");
+           "same wall for the namespace scope stack and core/html/xml_fragment.c's xml_fragment_unforkable is what "
+           "stands in until a state declares one");
 }
 
 const char *xml_element_error_message(XmlElementError err)
