@@ -222,6 +222,7 @@
 
 #include "core/css/css_color.h"
 #include "core/css/css_length.h"
+#include "core/fonts/installed_font.h"
 
 /* WHAT A MARK SAYS. The enum is a VOCABULARY and its order carries no meaning whatever — CSS 2.1 §E.2's order
    is the LIST's, and a reader who takes a kind's ordinal for a paint order has read the wrong component. */
@@ -293,13 +294,13 @@ typedef struct {
    of the ROOT element's and therefore of whatever picked facts that one is a function of. A `double` here
    would drop that between the cascade that derived it and `display_list_env`, exactly as it would on a
    rectangle, and the union reads all three of these lengths.
-   THERE IS NO GLYPH ID AND NO FACE. css-fonts-4 §5.2 "Matching font styles"' first available font is
-   core/css/font_metrics.h's ONE face and the 'cmap' that selects a glyph for a code point is that file's, so
-   a mark carrying an id would be a second holder of the selection this engine answers from one place — and a
-   mark that named a face would be holding a pointer, which the header forbids outright. What rides is what
-   the DOCUMENT said, and which glyph it draws is answered where the face is. */
+   THE FACE RIDES AND THE GLYPH ID DOES NOT. css-fonts-4 §5.2 "Matching font styles" chooses a face per
+   character, and core/layout/line_box.h measured the character in that face, so the mark names it — as an
+   installed-font id, not a pointer, which the header forbids — and the glyph drawn is the one measured. The
+   'cmap' lookup that selects a glyph id stays core/css/font_metrics.h's, so no second holder answers it. */
 typedef struct {
     uint32_t cp;                 /* the code point, as css-text-3 §4.1.1's Phase I left it */
+    InstalledFont face;          /* the face css-fonts-4 §5.2 renders it with */
     CssPx    origin_x, origin_y; /* the PEN POSITION; `origin_y` is the BASELINE */
     CssPx    em;                 /* css-values-4 §6.1.1's em — the used `font-size` this glyph is scaled to */
 } DisplayGlyph;

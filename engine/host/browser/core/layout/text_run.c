@@ -152,6 +152,8 @@ void text_run_measure_init(TextRunMeasure *m)
     m->min_content = css_px(0.0);
     m->splits = false;
     m->atomic_sizes_differ = false;
+    m->faces_of = NULL;
+    m->faces.n = 0;
     m->finished = false;
     m->released = false;
 }
@@ -176,6 +178,7 @@ static TextRunItem *tr_append_item(TextRunMeasure *m, TextRunItemKind kind, lxb_
     it->kind = kind;
     it->style = style;
     it->cp = 0;
+    it->face = INSTALLED_FONT_COUNT;
     it->wraps = false;
     it->collapsible_space = false;
     it->size[TEXT_RUN_SIZE_MIN_CONTENT] = css_px(0.0);
@@ -187,7 +190,12 @@ static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, 
 {
     TextRunItem *c = tr_append_item(m, TEXT_RUN_ITEM_CHAR, style);
 
+    if (m->faces_of != style) {
+        css_font_fallback_list(style, &m->faces);
+        m->faces_of = style;
+    }
     c->cp = cp;
+    c->face = font_matching_font_for_character(&m->faces, cp);
     c->wraps = wraps;
     c->collapsible_space = space;
 }
@@ -513,7 +521,8 @@ static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_
            a line's edge is neither kept nor removed. */
         if (m->items[i].kind == TEXT_RUN_ITEM_FORCED_BREAK) continue;
         if (i < keep_lo || i >= keep_hi) continue;   /* §4.1.2 removed it from this line */
-        advance = css_font_advance_measure_px(tr_char_at(m, i)->style, tr_char_at(m, i)->cp);
+        advance = css_font_advance_measure_px(tr_char_at(m, i)->style, tr_char_at(m, i)->face,
+                                              tr_char_at(m, i)->cp);
         DCHECK(advance.px >= 0.0,
                "the first available font reported a NEGATIVE advance measure for a character on a line. "
                "OpenType 'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, and "
@@ -928,6 +937,18 @@ uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i)
            "author wrote — ask `text_run_measure_item_is_text` first, which is what every walk over a line's "
            "items already asks for CSS 2.2 §9.4.2's zero-height rule");
     return m->items[i].cp;
+}
+
+InstalledFont text_run_measure_item_face(const TextRunMeasure *m, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    DCHECK(m->items[i].kind == TEXT_RUN_ITEM_CHAR,
+           "the FACE of a collected item that is not a character was read — only a character is drawn");
+    DCHECK((unsigned)m->items[i].face < (unsigned)INSTALLED_FONT_COUNT,
+           "a collected character carries no face. `tr_append` chooses one for every character, so this is a "
+           "record reached before it was filled");
+    return m->items[i].face;
 }
 
 bool text_run_measure_splits(const TextRunMeasure *m)

@@ -7,7 +7,7 @@
 #include "check.h"
 #include "core/css/css_color.h"
 #include "core/css/css_length.h"
-#include "core/css/font_metrics.h"   /* the ONE face every advance in every layout was measured against */
+#include "core/css/font_metrics.h"   /* the face each glyph mark names, the one its advance was measured in */
 #include "core/graphics/raster_path.h"
 #include "core/graphics/raster_surface.h"
 #include "core/graphics/rasterizer.h"
@@ -517,11 +517,11 @@ static void dlr_border(const DisplayMark *m, double s, RasterSurface *surface,
  *   a named residual with the next diff spelled out. The crash message below names THAT, because a crash
  *   that went on naming the composite would send its next reader to build what is already here, which is the
  *   one failure mode CLAUDE.md gives this mechanism.
- *   `GLYPH_OUTLINE_MALFORMED` IS A `DCHECK` AND THE DIFFERENCE IS WHOSE BYTES SAID SO. core/css/font_metrics.c
- *   reads one face and it is this engine's own committed `DEFAULT_FONT_SFNT`, whose whole read is already a
- *   `CHECK` there; a page's own `@font-face` bytes do not reach it, which that file says in its own words. So
- *   a malformed outline here is a claim about bytes this repository ships and is an invariant, where the same
- *   outcome over a document's font would be input and could only ever be a refusal. */
+ *   `GLYPH_OUTLINE_MALFORMED` IS A `DCHECK` AND THE DIFFERENCE IS WHOSE BYTES SAID SO. A glyph mark names an
+ *   installed face (core/fonts/installed_font.h), this engine's own committed bytes, whose whole read is
+ *   already a `CHECK` there; a page's own `@font-face` bytes do not reach it. So a malformed outline here is a
+ *   claim about bytes this repository ships and is an invariant, where the same outcome over a document's font
+ *   would be input and could only ever be a refusal. */
 static void dlr_glyph(const DisplayMark *m, double s, RasterSurface *surface,
                       DisplayListRasterCount *count)
 {
@@ -530,7 +530,7 @@ static void dlr_glyph(const DisplayMark *m, double s, RasterSurface *surface,
     GlyphOutlineResult r;
 
     raster_path_init(&p);
-    r = font_metrics_glyph_outline(m->glyph.cp, m->glyph.em.px * s,
+    r = font_metrics_glyph_outline(m->glyph.face, m->glyph.cp, m->glyph.em.px * s,
                                    m->glyph.origin_x.px * s, m->glyph.origin_y.px * s, &p, &reject);
     if (r == GLYPH_OUTLINE_UNSUPPORTED)
         DFAILF("U+%04X selected a glyph built in a way this engine has no decoder for. core/fonts/"
@@ -545,12 +545,12 @@ static void dlr_glyph(const DisplayMark *m, double s, RasterSurface *surface,
                "because it writes segments as it walks",
                (unsigned)m->glyph.cp);
     DCHECKF(r != GLYPH_OUTLINE_MALFORMED,
-            "U+%04X's outline in the SHIPPED face broke a rule: %s. core/css/font_metrics.c holds exactly one "
-            "face and it is this repository's own `DEFAULT_FONT_SFNT`, whose table directory read is already "
-            "an always-fatal CHECK there — a page's own `@font-face` bytes do not reach it — so this is a "
-            "claim about bytes this tree committed and never about a document's. Re-run "
-            "engine/fontsubset.mjs rather than editing the bytes",
-            (unsigned)m->glyph.cp, reject == NULL ? "(no reason given)" : reject);
+            "U+%04X's outline in installed face %s broke a rule: %s. The face is this repository's own "
+            "bytes, whose table directory read is already an always-fatal CHECK in core/fonts/installed_font.c "
+            "— a page's own `@font-face` bytes do not reach it — so this is a claim about bytes this tree "
+            "committed and never about a document's. Re-run engine/fontsubset.mjs rather than editing them",
+            (unsigned)m->glyph.cp, installed_font_family(m->glyph.face),
+            reject == NULL ? "(no reason given)" : reject);
     if (r == GLYPH_OUTLINE_OK) dlr_fill(&p, &m->color, surface, count);
     raster_path_free(&p);
 }
@@ -766,8 +766,8 @@ void display_list_raster(const DisplayList *dl, double device_px_per_css_px, Ras
             break;
         /* THE ONE ARM THAT NEEDS THE LIST AND NOT JUST THE MARK, which is `DisplayImage`'s ownership answer
            arriving at its consumer: the pixels are the LIST's, so the mark's index is resolved against `dl`
-           here exactly as a glyph's code point is resolved against core/css/font_metrics.h's one face in the
-           arm above. */
+           here exactly as a glyph's code point is resolved against the face its mark names in the arm
+           above. */
         case DISPLAY_MARK_IMAGE:
             dlr_image(m, dl, s, surface, count);
             count->marks++;

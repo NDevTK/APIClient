@@ -137,11 +137,15 @@ double viewport_env_fact_value(JSContext *realm, CssEnvFact fact)
     case CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT: return viewport_height(realm);
     case CSS_ENV_DEVICE_PIXEL_RATIO:      return viewport_device_pixel_ratio(realm);
     case CSS_ENV_DEFAULT_FONT_SIZE:       return css_default_font_size_px();
-    case CSS_ENV_FONT_ASCENT:             return font_metrics_ascent_em();
-    case CSS_ENV_FONT_DESCENT:            return font_metrics_descent_em();
-    default:
+    default: {
+        InstalledFont face;
+        bool descent;
+
+        if (font_metrics_fact_face(fact, &face, &descent))
+            return descent ? font_metrics_descent_em(face) : font_metrics_ascent_em(face);
         DFAILF("environment fact %d has no value source", (int)fact);
         return 0.0;
+    }
     }
 }
 
@@ -228,12 +232,14 @@ static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_EN
        core/css/css_length.c resolves its `sv*`/`lv*`/`dv*` units by, giving §6.1.2.1's three viewport
        sizes the rows above though all three answer one rectangle today. `presented` is false for the reason it is false one row up: the user agent's installed face
        exists whether or not this document is on a screen. */
-    [CSS_ENV_FONT_ASCENT]        = { "fontAscent",                    false },
-    /* CSS 2.1 §10.8.1's `D`, the other half of the pair the row above picks. Two rows for one face is the
-       same answer this table gives the viewport, whose width and height are also one rectangle and also two
-       facts: what decides it is whether a page can read them APART, and `1cap` against `1lh` is exactly that
-       subtraction. */
-    [CSS_ENV_FONT_DESCENT]       = { "fontDescent",                   false },
+    /* CSS 2.1 §10.8.1's `D`, the other half of the pair. Two rows for one face is the same answer this table
+       gives the viewport, whose width and height are also one rectangle and also two facts: what decides it is
+       whether a page can read them APART, and `1cap` against `1lh` is exactly that subtraction. */
+#define VIEWPORT_FONT_FACT_NAMES(id, family, fact, bytes)            \
+    [CSS_ENV_FONT_ASCENT_##id]  = { "fontAscent." fact,  false },    \
+    [CSS_ENV_FONT_DESCENT_##id] = { "fontDescent." fact, false },
+    INSTALLED_FONT_LIST(VIEWPORT_FONT_FACT_NAMES)
+#undef VIEWPORT_FONT_FACT_NAMES
 };
 
 /* THE SOURCE KEY, SPELLED ONCE — the document is part of it for media_query_list.c's reason (viewport.h), and

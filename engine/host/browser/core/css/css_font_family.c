@@ -24,12 +24,8 @@
  * §2.7's tokenizer: `#` HAS NO UPPER BOUND, so a fixed buffer that dropped a long family list would be a CAP
  * wearing a parse error, and a bundle's own `font-family: A, B, C, …` stack is exactly the value that hits
  * it. */
-typedef struct {
-    const char *generic;   /* a row of GENERIC_FAMILY below, or NULL */
-    char *name;            /* the DECODED `<font-family-name>`, UTF-8, or NULL. OWNED. */
-} FfItem;
-
-typedef struct { FfItem *v; size_t n, cap; } FfList;
+typedef CssFontFamilyItem FfItem;
+typedef CssFontFamilyList FfList;
 
 /* css-fonts-4 §2.1.2 "Syntax of <generic-font-family>"'s TWO PLAIN-IDENT ARMS, transcribed in the standard's
  * own order: `<generic-font-complete> = serif | sans-serif | system-ui | cursive | fantasy | math | monospace`
@@ -592,11 +588,55 @@ static void ff_serialize_item(FfBuf *out, const FfItem *it)
     }
 }
 
+/* css-fonts-4 §2.1's `[ <font-family-name> | <generic-font-family> ]#` over comment-free `text`, into `out`.
+   FALSE, with `out` empty, for a value outside it. */
+static bool ff_parse_list(const char *text, FfList *out)
+{
+    const char *p = text, *end = text + strlen(text);
+
+    for (;;) {
+        uint32_t cp;
+
+        if (!ff_parse_item(&p, end, out, true)) { ff_list_free(out); return false; }
+        ff_skip_ws(&p, end);
+        cp = css_cp_at(p, end, NULL);
+        if (cp == CSS_CP_EOF) break;
+        DCHECK(cp == ',',
+               "css-fonts-4 §2.1's `#` walk stopped at a code point that is neither the end of the value nor "
+               "a comma. ff_parse_item returns only at one of those two, so this is the item parse and this "
+               "loop disagreeing about where an item ends — which silently drops the rest of a family list");
+        p++;                 /* U+002C COMMA is one byte, and css_cp_at answered it as one code point */
+    }
+    DCHECK(out->n > 0,
+           "css-fonts-4 §2.1's `#` produced an EMPTY list from a value every item parse accepted. `#` is "
+           "\"one or more\", so an empty list is not a `<'font-family'>` at all, and a caller would store a "
+           "declaration whose value serializes to nothing — which CSSOM reads back as UNDECLARED");
+    return true;
+}
+
+bool css_font_family_list(const char *value, CssFontFamilyList *out)
+{
+    char *text;
+    bool ok;
+
+    DCHECK(value != NULL && out != NULL && out->n == 0 && out->v == NULL,
+           "css-fonts-4 §2.1's list was asked of no value, or into a list that already holds items");
+    text = ff_strip_comments(value);
+    ok = !css_wide_keyword(text) && ff_parse_list(text, out);
+    free(text);
+    return ok;
+}
+
+void css_font_family_list_free(CssFontFamilyList *l)
+{
+    ff_list_free(l);
+}
+
 char *css_font_family_value(const char *value)
 {
     FfList list = { 0 };
     FfBuf out = { 0 };
-    const char *p, *end, *k;
+    const char *end, *k;
     char *text;
     size_t i, len;
 
@@ -634,25 +674,7 @@ char *css_font_family_value(const char *value)
         return v;
     }
 
-    p = text;
-    end = text + strlen(text);
-    for (;;) {
-        uint32_t cp;
-
-        if (!ff_parse_item(&p, end, &list, true)) { ff_list_free(&list); free(text); return NULL; }
-        ff_skip_ws(&p, end);
-        cp = css_cp_at(p, end, NULL);
-        if (cp == CSS_CP_EOF) break;
-        DCHECK(cp == ',',
-               "css-fonts-4 §2.1's `#` walk stopped at a code point that is neither the end of the value nor "
-               "a comma. ff_parse_item returns only at one of those two, so this is the item parse and this "
-               "loop disagreeing about where an item ends — which silently drops the rest of a family list");
-        p++;                 /* U+002C COMMA is one byte, and css_cp_at answered it as one code point */
-    }
-    DCHECK(list.n > 0,
-           "css-fonts-4 §2.1's `#` produced an EMPTY list from a value every item parse accepted. `#` is "
-           "\"one or more\", so an empty list is not a `<'font-family'>` at all, and a caller would store a "
-           "declaration whose value serializes to nothing — which CSSOM reads back as UNDECLARED");
+    if (!ff_parse_list(text, &list)) { free(text); return NULL; }
 
     /* CSSOM §2.1 "Common Serializing Idioms"' SERIALIZE A COMMA-SEPARATED LIST: "concatenate all items of the
        list in list order while separating them by ", ", i.e., COMMA (U+002C) followed by a single SPACE". */

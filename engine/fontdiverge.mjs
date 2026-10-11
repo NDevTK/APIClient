@@ -3,11 +3,10 @@
  *
  *   node engine/fontdiverge.mjs [mirror-dir]      (default testing/corpus/mirror)
  *
- * THE QUESTION. core/fonts/open_type_metrics.c measures text off ONE face — the metrics-only DejaVu subset
- * core/fonts/default_font_data.c ships — because css-fonts-4 §5.2 "Matching font styles" ends its first
- * available font definition with "or a user agent's default font if none are available" and this user agent
- * installs no faces and loads none. That is CORRECT and it is NARROWER than what the mirrored pages ask for,
- * and the gap between those two is a NUMBER rather than an opinion. This prints it.
+ * THE QUESTION. core/fonts/open_type_metrics.c measures text off the installed faces core/fonts/installed_font.h
+ * lists, with no shaping, and loads no page face. That is NARROWER than what the mirrored pages ask for, and
+ * the gap between those two is a NUMBER rather than an opinion. This prints it, calibrated against the
+ * DejaVu Sans face core/fonts/dejavu_sans_data.c ships.
  *
  * WHY IT EXISTS AT ALL, rather than as a paragraph somebody wrote once. CLAUDE.md: an instrument whose output
  * anyone quotes is COMMITTED, in the same diff as the first quotation of its number — a measurement that
@@ -18,7 +17,7 @@
  * work is done and has exactly one reader: the person about to invalidate it. The face list is DERIVED by
  * walking the mirror, so the day a page is added the census knows.
  *
- * WHAT CALIBRATES IT. core/fonts/default_font_data.c PUBLISHES three totals in its own generated header —
+ * WHAT CALIBRATES IT. core/fonts/dejavu_sans_data.c PUBLISHES three totals in its own generated header —
  * unitsPerEm, numGlyphs, numberOfHMetrics. This reproduces all three FROM THE BYTES and throws unless they
  * agree, before printing any breakdown of anything. A probe that cannot reproduce the subject's own published
  * figures is a second implementation of the subject's selector wearing a plausible larger number, and the
@@ -267,16 +266,16 @@ function gposKern(G) {
 
 /* ---- the shipped face, and the calibration against its own published totals ------------------------------- */
 
-const DEFAULT_FONT_C = 'engine/host/browser/core/fonts/default_font_data.c';
+const DEFAULT_FONT_C = 'engine/host/browser/core/fonts/dejavu_sans_data.c';
 
 function shippedFace(path) {
     const src = readFileSync(path, 'utf8');
-    const decl = src.match(/DEFAULT_FONT_SFNT\[(\d+)\]\s*=\s*\{/);
-    if (!decl) throw new Error(`${path} does not declare DEFAULT_FONT_SFNT[] — this is the generated artifact of engine/fontsubset.mjs; re-run the generator rather than editing it`);
-    const open = src.indexOf('{', src.indexOf('DEFAULT_FONT_SFNT['));
+    const decl = src.match(/DEJAVU_SANS_SFNT\[(\d+)\]\s*=\s*\{/);
+    if (!decl) throw new Error(`${path} does not declare DEJAVU_SANS_SFNT[] — this is the generated artifact of engine/fontsubset.mjs; re-run the generator rather than editing it`);
+    const open = src.indexOf('{', src.indexOf('DEJAVU_SANS_SFNT['));
     const bytes = Uint8Array.from(src.slice(open + 1, src.indexOf('};', open)).match(/0x[0-9a-fA-F]{2}/g).map((h) => parseInt(h, 16)));
     if (bytes.length !== Number(decl[1]))
-        throw new Error(`${path} declares DEFAULT_FONT_SFNT[${decl[1]}] and holds ${bytes.length} bytes — the generated array and its own length have come apart`);
+        throw new Error(`${path} declares DEJAVU_SANS_SFNT[${decl[1]}] and holds ${bytes.length} bytes — the generated array and its own length have come apart`);
 
     /* The generated header states these three in its own words. Reproducing them FROM THE BYTES is what makes
        every breakdown below worth reading; neither side is a constant typed here, so the check follows the

@@ -119,6 +119,7 @@
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform_function.h"
+#include "core/fonts/font_matching.h"
 #include "quickjs.h"
 
 /* THE COMPUTED VALUE of a KEYWORD-VALUED property on `el`, as text. OWNED: the caller frees. `name` must be one
@@ -330,14 +331,23 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el);
  * conversion and not one per reader: a page comparing `getComputedStyle(el).lineHeight` against a measured box
  * must not be able to read two different numbers for one element.
  *
- * THE TWO METRICS ARE ANSWERED PER ELEMENT AND NOT PER FACE because §10.8.1 states them that way — "the A and
- * D of the element's first available font", "for a given font AT A GIVEN SIZE" — so each is the picked ratio
- * core/css/font_metrics.h owns times THIS element's computed `font-size`, resolved in THIS element's
+ * THE TWO METRICS ARE ANSWERED PER ELEMENT because §10.8.1 states them that way — "the A and D of the
+ * element's first available font", "for a given font AT A GIVEN SIZE" — so each is the ratio of the face
+ * `css_first_available_font` names, times THIS element's computed `font-size`, resolved in THIS element's
  * document's realm. Both of those are this file's own derivations, which is why the product is formed here;
  * see the definitions for why font_metrics.c must not form it instead. */
 CssPx css_used_line_height_px(lxb_dom_element_t *el);
 CssPx css_font_ascent_px(lxb_dom_element_t *el);
 CssPx css_font_descent_px(lxb_dom_element_t *el);
+
+/* css-fonts-4 §5.2 "Matching font styles" over `el`'s computed `font-family`: the installed faces it names,
+   in order (core/fonts/font_matching.h), and its first available font. */
+void css_font_fallback_list(lxb_dom_element_t *el, FontFallbackList *out);
+InstalledFont css_first_available_font(lxb_dom_element_t *el);
+
+/* The same walk over the initial `font-family`, which css-values-4 §6.1.1 sends a font-relative unit to
+   "outside the context of an element (such as in media queries)" and on an element with no parent. */
+void css_initial_font_fallback_list(FontFallbackList *out);
 
 /* `el`'s OWN COMPUTED `font-size`, in CSS pixels — css-fonts-4 §2.5 "Font size: the font-size property"'s
    `Computed value:` line, which is "an absolute length" and nothing else, so this is a read and an assert
@@ -352,9 +362,11 @@ CssPx css_font_descent_px(lxb_dom_element_t *el);
    the computed value IS what every consumer reads, and core/layout/used_value.h correctly has no row for it. */
 CssPx css_font_size_px(lxb_dom_element_t *el);
 
-/* css-values-4 §6.1.1 "Font-relative Lengths…"'s ADVANCE MEASURE of one Unicode scalar value on `el` — "its
-   advance width or height, whichever is in the inline axis of the element" — at that element's own computed
-   `font-size`, in CSS pixels. It is the third product formed out of the same two operands as the two entries
+/* css-values-4 §6.1.1 "Font-relative Lengths…"'s ADVANCE MEASURE of one Unicode scalar value in `face` on
+   `el` — "its advance width or height, whichever is in the inline axis of the element" — at that element's
+   own computed `font-size`, in CSS pixels. `face` is the one css-fonts-4 §5.2 renders the character with
+   (font_matching_font_for_character over `css_font_fallback_list`), chosen by the caller once per character
+   so the glyph drawn is the glyph measured. It is the third product formed out of the same two operands as the two entries
    above, and it exists here for the same reason: the FACE's ratio is core/css/font_metrics.h's and the ELEMENT
    is this file's, so a layout component that took them apart would have to remember to multiply and could take
    the size from one element and the orientation from another.
@@ -363,7 +375,7 @@ CssPx css_font_size_px(lxb_dom_element_t *el);
    the definition, and font_metrics.h, for what answering either with the other reports.
    A VERTICAL WRITING MODE CRASHES in the direction resolution this shares with `ch` and `ic`, which is where
    css-writing-modes-4 §5.1's `text-orientation` is named as the row to add. */
-CssPx css_font_advance_measure_px(lxb_dom_element_t *el, uint32_t codepoint);
+CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint);
 
 /* CSS 2.1 §17.6.1 "The separated borders model" — THE FOURTH SHAPE A COMPUTED VALUE COMES IN, and the reason
  * this property gets an entry of its own rather than a row in either list above. §17.6.1's `Computed value:`

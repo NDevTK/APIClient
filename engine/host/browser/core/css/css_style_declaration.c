@@ -3058,19 +3058,11 @@ char *cssom_initial_value(const char *name)
        gap — it sets `font-family` on `listing, plaintext, pre, xmp` and on `code, kbd, samp, tt` and on no
        ancestor of theirs — so the root's family is this line and nothing else.
 
-       THE VALUE IS A GENERIC KEYWORD AND NOT A NAME, BECAUSE THE SHIPPED FACE HAS NO NAME. css-fonts-4 §2.1
-       gives `Computed value:` as "list, each item a string and/or <generic-font-family> keywords", so a
-       generic is a first-class item of that list rather than a stand-in for a real one; and the face this
-       user agent defaults to is a metrics-only sfnt whose 'name' table engine/fontsubset.mjs drops, so there
-       is no family name in core/fonts/default_font_data.c to report and a concrete string here would name a
-       face nothing in this engine can produce or match. WHICH GENERIC IS A FACT ABOUT THAT FACE and is
-       checkable from the generated file rather than chosen: its header names the bytes it copied, which are
-       DejaVu Sans, so the keyword that describes it is `sans-serif`. That is one of css-fonts-4 §2.1.2
-       "Syntax of <generic-font-family>"'s `<generic-font-complete>` arm, which that section's own example
-       calls "a universal generic font, which is guaranteed to match on all systems" — and that guarantee is
-       what makes it the one answer css-fonts-4 §5 "Font Matching Algorithm" cannot fail to resolve once it
-       exists, since that section's terminal arm is this user agent's default font and this keyword names
-       exactly the face that is.
+       THE VALUE IS THE FAMILY NAME CHROME REPORTS ON THIS PROJECT'S HOSTS, `"Times New Roman"`, quoted as
+       Chrome's `getComputedStyle(document.documentElement).fontFamily` reads it. css-fonts-4 §2.1's `Initial:`
+       line leaves the choice to the user agent; this is Chrome's default standard font, and
+       core/fonts/font_matching.c's alias table resolves it to Liberation Serif, the face Chrome renders it
+       with on those hosts, so css-fonts-4 §5.2's default font and this initial value are one face.
 
        NAMED RESIDUAL — THE VALUE IS A PICKED ENVIRONMENT FACT AND CROSSES TO THE PAGE AS A BARE STRING.
        core/frame/viewport.h's test is whether the model PICKED one point out of a range the environment
@@ -3102,7 +3094,7 @@ char *cssom_initial_value(const char *name)
                "if it is to be overridden rather than adopted the row belongs in CSSD_INITIAL_WRONG, which is "
                "the table for disagreeing with an answer the registry gives and which records the answer it is "
                "disagreeing with so the disagreement expires too");
-        out = strdup("sans-serif");
+        out = strdup("\"Times New Roman\"");
         CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
                            "which is a cascade that stopped before its last layer");
         return out;

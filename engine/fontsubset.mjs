@@ -1,13 +1,12 @@
-/* THE FIRST AVAILABLE FONT'S METRICS TABLES, TURNED INTO BYTES THE ENGINE SHIPS.
+/* THE INSTALLED FACES' TABLES, TURNED INTO BYTES THE ENGINE SHIPS.
  *
- * css-fonts-4 §5.2 "Matching font styles" defines the first available font as "the first font for which the
- * character U+0020 (space) is not excluded by a unicode-range, given the font families in the font-family list
- * (or a user agent's default font if none are available)". This user agent installs no faces and loads none, so
- * that clause is the whole answer for every element of every document: ONE face, shipped in the binary.
+ * css-fonts-4 §5 "Font Matching Algorithm" leaves "the set of installed fonts available to the Font Matching
+ * Algorithm" to the user agent. This one's set is the four faces in FACES below, shipped in the binary, and
+ * nothing else; which family and generic each answers is core/fonts/font_matching.c's table, and
  * core/css/font_metrics.h states why the bytes may not come from the host filesystem, the host realm's own text
  * measurement, or the network.
  *
- * WHAT THIS SCRIPT PRODUCES is core/fonts/default_font_data.c — an sfnt carrying exactly the tables REQUIRED
+ * WHAT THIS SCRIPT PRODUCES is one core/fonts/*_data.c per face — an sfnt carrying exactly the tables REQUIRED
  * names, as a byte array. WHICH SHAPE THAT IS, THE EMITTED HEADER DERIVES AND THIS SENTENCE DOES NOT: the
  * phrase here read `a metrics-only sfnt` while REQUIRED held five tables, and one edit to that list made it
  * false in a file nobody re-reads, which is why the emitted line now asks `keep` instead of restating it.
@@ -16,17 +15,35 @@
  * SHA-256 below is checked, not recorded afterwards), and emits a file whose every byte is a function of that
  * input. Re-running it on the same input reproduces the output byte for byte.
  *
- *   node engine/fontsubset.mjs <path-to-DejaVuSans.ttf>
+ *   node engine/fontsubset.mjs <face> <path-to-ttf>      (face: one of FACES' keys below)
  *
- * HOW TO OBTAIN THE INPUT — the exact command, so that "reproducible" is a thing a reader can do rather than a
- * claim they have to take:
+ * HOW TO OBTAIN THE INPUTS — the exact commands, so that "reproducible" is a thing a reader can do rather than a
+ * claim they have to take. Each archive's SHA-256 is stated, and each face's own SHA-256 is checked by this script:
  *
  *   curl -sSLo dejavu-fonts-ttf-2.37.zip \
  *     https://sourceforge.net/projects/dejavu/files/dejavu/2.37/dejavu-fonts-ttf-2.37.zip/download
  *   # sha256 7576310b219e04159d35ff61dd4a4ec4cdba4f35c00e002a136f00e96a908b0a
  *   unzip -j dejavu-fonts-ttf-2.37.zip dejavu-fonts-ttf-2.37/ttf/DejaVuSans.ttf
  *
- * WHICH FACE, AND WHY THIS ONE. DejaVu Sans 2.37. Three properties decided it and each is checkable:
+ *   curl -sSLo fonts-liberation_2.1.5-3_all.deb \
+ *     http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-liberation/fonts-liberation_2.1.5-3_all.deb
+ *   # sha256 065c2ab1abc9108b17d401016dc594b79750904390f095845c93bb06e1153acc
+ *   dpkg-deb -x fonts-liberation_2.1.5-3_all.deb fonts-liberation
+ *   # fonts-liberation/usr/share/fonts/truetype/liberation/Liberation{Serif,Sans}-Regular.ttf
+ *   # fonts-liberation/usr/share/doc/fonts-liberation/copyright is core/fonts/LICENSE.liberation, verbatim
+ *
+ *   curl -sSLo fonts-dejavu-mono_2.37-8_all.deb \
+ *     http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-dejavu/fonts-dejavu-mono_2.37-8_all.deb
+ *   # sha256 8a599d6553307db7ecb795d2f0e5a301e03234afc75c7358b0ba43466454c89a
+ *   dpkg-deb -x fonts-dejavu-mono_2.37-8_all.deb fonts-dejavu-mono
+ *   # fonts-dejavu-mono/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
+ *
+ * The three family faces come from Ubuntu 24.04's packages rather than the upstream archives because those are
+ * the bytes the reference browser on this project's hosts renders the generic families with, so a comparison
+ * against it is face for face. DejaVu Sans Mono's licence is DejaVu Sans's, so core/fonts/LICENSE.dejavu
+ * covers both.
+ *
+ * WHICH FALLBACK FACE, AND WHY THIS ONE. DejaVu Sans 2.37. Three properties decided it and each is checkable:
  *   LICENCE. The Bitstream Vera Fonts Copyright (the release's own LICENSE file, shipped verbatim beside the
  *     generated data as core/fonts/LICENSE.dejavu) grants "the rights to use, copy, merge, publish, distribute,
  *     and/or sell copies of the Font Software" on two conditions this fork meets: the notice travels with the
@@ -37,40 +54,23 @@
  *     mathematical operators. Every codepoint a face does NOT cover is answered by .notdef (css-fonts-4 §5.2's
  *     "the missing character glyph from a default font"), and a .notdef answer is a real measurement of the
  *     wrong glyph. Breadth is therefore not a nicety: it is how many of a page's characters get measured as
- *     themselves. The other free faces to hand cover far less (Liberation Sans, 2620 glyphs).
- *   IT IS NOT MONOSPACED, and that is a REQUIREMENT and not a preference. A face whose glyphs all advance the
- *     same makes a string's width a function of its LENGTH alone, which is the input css-text-3 §5 "Line
- *     Breaking and Word Boundaries" picks a soft wrap opportunity with — so every break position and every
- *     block container's height would come out wrong while every number stayed finite and plausible. It is the
- *     exact defect core/css/font_metrics.c's crash was written to prevent, and shipping a monospaced default
- *     would reintroduce it while looking like a face.
- *     THE PRICE IS PAID AT THE 'hmtx' REPEAT RULE, and it is named here rather than discovered later. OpenType
- *     'hmtx' — Horizontal Metrics Table says "the advance width value of the last record applies to all
- *     remaining glyph IDs" and adds that this "can be useful in monospaced fonts"; DejaVu Sans has
- *     numberOfHMetrics 6238 below numGlyphs 6253, so the shipped table really is in the short form (a face
- *     with the two equal cannot even express it), but no 'cmap' entry in it reaches glyph IDs 6238..6252 —
- *     the highest mapped glyph is 5920. So the shipped face proves the parser's numberOfHMetrics <= numGlyphs
- *     validation is a real constraint, and the repeat ARITHMETIC is exercised by a synthetic face built for
- *     it. The face that would exercise it from a page is DejaVuSansMono (numberOfHMetrics 4, numGlyphs 3377),
- *     which is disqualified by the paragraph above.
+ *     themselves. The other free faces to hand cover far less (Liberation Sans, 2620 glyphs), which is why it is
+ *     the per-character fallback behind them rather than a family of its own.
+ *   IT IS NOT MONOSPACED, because it is the face a codepoint no family covers falls to, and a monospaced
+ *     fallback would give every such character one advance whatever its shape.
+ * OpenType 'hmtx' — Horizontal Metrics Table's repeat rule ("the advance width value of the last record
+ * applies to all remaining glyph IDs") is reached from a page through DejaVu Sans Mono, whose short-form table
+ * gives most mapped glyphs the last record's advance; each generated file states its own face's case.
  *
  * WHAT IS DROPPED AND WHY DROPPING IT IS SOUND FOR THE QUESTIONS ASKED. The engine asks a face FOUR questions:
  * what is `unitsPerEm`, which glyph does this scalar value map to, what is that glyph's advance, and what
  * SHAPE is it. OpenType answers the first three from 'head', 'cmap', and 'hhea'+'hmtx'+'maxp' and from nothing
  * else, and the fourth from 'glyf'+'loca' — so the tables kept are those seven (plus 'vhea'/'vmtx' where a
- * face has them; DejaVu Sans does not, which is why a vertical advance is a NAMED unbuilt capability in
+ * face has them; no installed face does, which is why a vertical advance is a NAMED unbuilt capability in
  * core/fonts/open_type_metrics.c rather than a silent fallback to the horizontal number).
  *
- * THE FOURTH QUESTION IS NEW AND THE REASON THAT USED TO KEEP THE OUTLINE TABLES OUT IS RETIRED — REWRITTEN
- * HERE RATHER THAN DELETED, BECAUSE A READER WHO RE-DERIVES IT WILL DROP THEM AGAIN. This list used to send
- * 'glyf' and 'loca' the way of the rasterization tables, with the parenthesis `outlines — nothing here
- * rasterizes`, and core/fonts/default_font_data.h agreed with it in its own words. Both were true when they
- * were written. Something here rasterizes now: core/graphics/rasterizer.h fills a path,
- * core/paint/display_list_raster.h drives it from a display list, and core/fonts/glyph_outline.h turns one
- * glyph description into the segments that fill takes — so a face shipped without them is one every document
- * can measure and none can draw. The rule that replaces the retired sentence is not about rasterizing at all:
- * A TABLE IS KEPT WHEN THE ENGINE ASKS A QUESTION ONLY THAT TABLE ANSWERS, and the list grows when the
- * engine learns to ask, never when a table looks useful.
+ * A TABLE IS KEPT WHEN THE ENGINE ASKS A QUESTION ONLY THAT TABLE ANSWERS, and the list grows when the engine
+ * learns to ask, never when a table looks useful.
  *
  * SO WHAT STILL GOES IS 'CFF '/'MATH'/'cvt '/'fpgm'/'prep'/'gasp' — the first because outlines that are not
  * TrueType are a form the sfntVersion pin above refuses outright, and the rest because they are HINTING:
@@ -102,13 +102,50 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = join(HERE, "host", "browser", "core", "fonts", "default_font_data.c");
 
-/* THE INPUT, PINNED BY CONTENT. A generator that accepts whatever file it is pointed at produces output nobody
-   can re-derive, which is the same defect as a measurement quoted without its revision. */
-const SOURCE_NAME = "DejaVu Sans 2.37 (dejavu-fonts-ttf-2.37/ttf/DejaVuSans.ttf)";
-const SOURCE_URL = "https://sourceforge.net/projects/dejavu/files/dejavu/2.37/dejavu-fonts-ttf-2.37.zip/download";
-const SOURCE_SHA256 = "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954";
+/* THE INPUTS, PINNED BY CONTENT. A generator that accepts whatever file it is pointed at produces output nobody
+   can re-derive, which is the same defect as a measurement quoted without its revision. Each face names its
+   output, the symbol core/fonts/installed_font_data.h declares its bytes under, and its licence. */
+const LIBERATION_DEB = "http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-liberation/fonts-liberation_2.1.5-3_all.deb";
+const DEJAVU_MONO_DEB = "http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-dejavu/fonts-dejavu-mono_2.37-8_all.deb";
+const DEJAVU_LICENCE =
+`Licence: core/fonts/LICENSE.dejavu, verbatim. Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.
+   Bitstream Vera is a trademark of Bitstream, Inc. DejaVu changes are in public domain. Glyphs imported from
+   Arev fonts are (c) Tavmjong Bah. The 'name' table is dropped, so these bytes carry no font name.`;
+const LIBERATION_LICENCE =
+`Licence: core/fonts/LICENSE.liberation, the package's copyright file verbatim — SIL Open Font License 1.1.
+   Copyright (c) 2010 Google Corporation, (c) 2012 Red Hat, Inc., Reserved Font Name Liberation. A subset is a
+   Modified Version, which may not use a Reserved Font Name: the 'name' table is dropped, so these bytes carry none.`;
+const FACES = {
+  "dejavu-sans": {
+    name: "DejaVu Sans 2.37 (dejavu-fonts-ttf-2.37/ttf/DejaVuSans.ttf)",
+    url: "https://sourceforge.net/projects/dejavu/files/dejavu/2.37/dejavu-fonts-ttf-2.37.zip/download",
+    sha256: "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
+    out: "dejavu_sans_data.c", symbol: "DEJAVU_SANS_SFNT",
+    licence: DEJAVU_LICENCE,
+  },
+  "dejavu-sans-mono": {
+    name: "DejaVu Sans Mono 2.37 (Ubuntu fonts-dejavu-mono 2.37-8, DejaVuSansMono.ttf)",
+    url: DEJAVU_MONO_DEB,
+    sha256: "c805f9436dbc268644c1d9584f01a601a653e028e08fd74b9b949f6cf8304d88",
+    out: "dejavu_sans_mono_data.c", symbol: "DEJAVU_SANS_MONO_SFNT",
+    licence: DEJAVU_LICENCE,
+  },
+  "liberation-serif": {
+    name: "Liberation Serif 2.1.5 (Ubuntu fonts-liberation 1:2.1.5-3, LiberationSerif-Regular.ttf)",
+    url: LIBERATION_DEB,
+    sha256: "705903ae1382f0150f115d6f10a30f5b2f3d6ade649c474afe6366c39174fb65",
+    out: "liberation_serif_data.c", symbol: "LIBERATION_SERIF_SFNT",
+    licence: LIBERATION_LICENCE,
+  },
+  "liberation-sans": {
+    name: "Liberation Sans 2.1.5 (Ubuntu fonts-liberation 1:2.1.5-3, LiberationSans-Regular.ttf)",
+    url: LIBERATION_DEB,
+    sha256: "4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144",
+    out: "liberation_sans_data.c", symbol: "LIBERATION_SANS_SFNT",
+    licence: LIBERATION_LICENCE,
+  },
+};
 
 /* THE TABLES THE ENGINE READS. 'vhea'/'vmtx' are kept WHEN PRESENT and are not required: OpenType makes them
    optional, and css-writing-modes-4 §5.1.1 "Vertical Typesetting and Font Features" says the UA "must
@@ -122,12 +159,15 @@ const SOURCE_SHA256 = "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9e
 const REQUIRED = ["cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp"];
 const OPTIONAL = ["vhea", "vmtx"];
 
-const input = process.argv[2];
-if (!input) {
-  console.error("usage: node engine/fontsubset.mjs <path-to-DejaVuSans.ttf>");
-  console.error("       see this file's header for the exact curl+unzip that obtains it");
+const FACE = FACES[process.argv[2]];
+const input = process.argv[3];
+if (!FACE || !input) {
+  console.error(`usage: node engine/fontsubset.mjs <${Object.keys(FACES).join("|")}> <path-to-ttf>`);
+  console.error("       see this file's header for the exact commands that obtain each input");
   process.exit(1);
 }
+const OUT = join(HERE, "host", "browser", "core", "fonts", FACE.out);
+const SOURCE_NAME = FACE.name, SOURCE_URL = FACE.url, SOURCE_SHA256 = FACE.sha256;
 const src = readFileSync(input);
 const got = createHash("sha256").update(src).digest("hex");
 if (got !== SOURCE_SHA256) {
@@ -255,6 +295,51 @@ const facts = {
      a table cannot describe itself as one that kept it. */
   indexToLocFormat: out.readInt16BE(headAt + 50),
 };
+/* THE HIGHEST GLYPH ID ANY CHARACTER REACHES, over the 'cmap' subtable core/fonts/open_type_metrics.c selects
+   (its OT_CMAP_PREFERENCE order), so the generated file can say whether a page reaches the 'hmtx' repeat rule. */
+function highestMappedGlyph() {
+  const cmapAt = placed.find((p) => p.tag === "cmap").at;
+  const n = u16(out, cmapAt + 2);
+  for (const [platform, encoding, format] of [[3, 10, 12], [0, 4, 12], [3, 1, 4], [0, 3, 4]]) {
+    for (let i = 0; i < n; i++) {
+      const rec = cmapAt + 4 + 8 * i;
+      if (u16(out, rec) !== platform || u16(out, rec + 2) !== encoding) continue;
+      const sub = cmapAt + u32(out, rec + 4);
+      if (u16(out, sub) !== format) continue;
+      let top = 0;
+      if (format === 12) {
+        for (let g = 0, groups = u32(out, sub + 12); g < groups; g++) {
+          const at = sub + 16 + 12 * g;
+          top = Math.max(top, u32(out, at + 8) + u32(out, at + 4) - u32(out, at));
+        }
+        return top;
+      }
+      const segs = u16(out, sub + 6) / 2;
+      const ends = sub + 14, starts = ends + 2 * segs + 2, deltas = starts + 2 * segs, ranges = deltas + 2 * segs;
+      for (let k = 0; k < segs; k++) {
+        const start = u16(out, starts + 2 * k), end = u16(out, ends + 2 * k);
+        const delta = u16(out, deltas + 2 * k), range = u16(out, ranges + 2 * k);
+        for (let c = start; c <= end && c !== 0xffff; c++) {
+          let g = 0;
+          if (range === 0) g = (c + delta) & 0xffff;
+          else {
+            g = u16(out, ranges + 2 * k + range + 2 * (c - start));
+            if (g !== 0) g = (g + delta) & 0xffff;
+          }
+          top = Math.max(top, g);
+        }
+      }
+      return top;
+    }
+  }
+  console.error("[fontsubset] the face has none of the Unicode 'cmap' subtables the engine selects");
+  process.exit(1);
+}
+const highestMapped = highestMappedGlyph();
+const repeatReach = highestMapped >= facts.numberOfHMetrics
+  ? "a page's characters reach the repeat rule through this face."
+  : "no character reaches the repeat rule; a synthetic face exercises it.";
+
 /* WHAT THE OUTLINE TABLES COST, IN THE ARTIFACT'S OWN BYTES. A size in a comment is a number nobody can
    re-run; these are measured on the way past and printed on every run, so the price of keeping them is read
    off the thing that was built rather than taken on trust. */
@@ -267,43 +352,29 @@ for (let i = 0; i < out.length; i += 16) {
   lines.push("    " + [...out.subarray(i, i + 16)].map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ") + ",");
 }
 
-const text = `/* GENERATED BY engine/fontsubset.mjs — DO NOT EDIT. Re-run the generator instead; that file's header
-   carries the curl+unzip that obtains the input, the licence, and why each dropped table is sound to drop.
-
-   THE FIRST AVAILABLE FONT (css-fonts-4 §5.2 "Matching font styles") of every document this engine presents,
-   as ${keep.includes("glyf") ? "an OUTLINE-CARRYING sfnt" : "a metrics-only sfnt"}: ${keep.map((t) => `'${t}'`).join(", ")}, copied byte for byte out of
+const hmtxForm = facts.numberOfHMetrics === facts.numGlyphs
+  ? "numberOfHMetrics equals numGlyphs, so 'hmtx' is in the long form."
+  : `numberOfHMetrics is below numGlyphs: glyph IDs ${facts.numberOfHMetrics}..${facts.numGlyphs - 1} take 'hmtx''s last record; the
+   highest glyph a 'cmap' entry reaches is ${highestMapped}, so ${repeatReach}`;
+const text = `/* GENERATED BY engine/fontsubset.mjs — DO NOT EDIT. Re-run the generator, whose header carries the commands
+   that obtain the input, the licence, and why each dropped table is sound to drop.
+   ${FACE.name.split(" (")[0]}, an installed face (core/fonts/installed_font.h): ${keep.includes("glyf") ? "an outline-carrying" : "a metrics-only"} sfnt of
+   ${keep.map((t) => `'${t}'`).join(", ")}, copied byte for byte out of
    ${SOURCE_NAME}
      ${SOURCE_URL}
      sha256 ${SOURCE_SHA256}
    Dropped: ${dropped.map((t) => `'${t}'`).join(", ")}.
+   'head' unitsPerEm ${facts.unitsPerEm}, indexToLocFormat ${facts.indexToLocFormat} (${facts.indexToLocFormat ? "32" : "16"}-bit offsets); 'maxp' numGlyphs ${facts.numGlyphs}; 'hhea' numberOfHMetrics ${facts.numberOfHMetrics}.
+   ${hmtxForm}
+   The outline tables are ${outlineBytes} of the ${out.length} bytes below.${keep.includes("vmtx") ? "" : " No 'vmtx', so a vertical advance crashes."}
+   ${FACE.licence} */
+#include "core/fonts/installed_font_data.h"
 
-   WHAT IT ANSWERS, so a reader can check the parser without the font in front of them:
-     'head' — Font Header Table    unitsPerEm       ${facts.unitsPerEm}
-     'maxp' — Maximum Profile      numGlyphs        ${facts.numGlyphs}
-     'hhea' — Horizontal Header    numberOfHMetrics ${facts.numberOfHMetrics}
-     'head' — Font Header Table    indexToLocFormat ${facts.indexToLocFormat}  (${facts.indexToLocFormat ? "32-bit offsets" : "16-bit offsets"})
-   indexToLocFormat is the one field of this face a decoder cannot infer: read at the wrong width the offset
-   array still parses and still ascends, and every glyph it selects is the wrong bytes.
-   core/fonts/glyph_outline.h takes it as an argument rather than guessing, and this line is where the value
-   it must be given is stated. The outline tables are ${outlineBytes} of the ${out.length} bytes below.
-   numberOfHMetrics is BELOW numGlyphs, so this 'hmtx' is in the short form OpenType 'hmtx' — Horizontal
-   Metrics Table's "the advance width value of the last record applies to all remaining glyph IDs" is about:
-   glyph IDs ${facts.numberOfHMetrics}..${facts.numGlyphs - 1} take the last record's advance. NO 'cmap' ENTRY IN THIS FACE REACHES THEM
-   (the highest mapped glyph is 5920), so the repeat arithmetic is exercised by a synthetic face and not by a
-   page — engine/fontsubset.mjs's header says why a face that WOULD reach it is disqualified.
-   ${keep.includes("vmtx") ? "" : "There is no 'vmtx' — the face carries no vertical advances, and css-writing-modes-4 §5.1.1\n   \"Vertical Typesetting and Font Features\" makes synthesizing them a named capability rather than a\n   substitution: core/fonts/open_type_metrics.c crashes there instead of handing back the horizontal number."}
-
-   THE LICENCE travels with the bytes, which is a condition of it: core/fonts/LICENSE.dejavu is the release's
-   own LICENSE file, verbatim. Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. Bitstream Vera is a
-   trademark of Bitstream, Inc. DejaVu changes are in public domain. Glyphs imported from Arev fonts are
-   (c) Tavmjong Bah. The 'name' table is one of the dropped ones, so these bytes carry no font name at all. */
-#include "core/fonts/default_font_data.h"
-
-const unsigned char DEFAULT_FONT_SFNT[${out.length}] = {
+const unsigned char ${FACE.symbol}[${out.length}] = {
 ${lines.join("\n")}
 };
 
-const unsigned int DEFAULT_FONT_SFNT_LEN = ${out.length};
+const unsigned int ${FACE.symbol}_LEN = ${out.length};
 `;
 
 mkdirSync(dirname(OUT), { recursive: true });

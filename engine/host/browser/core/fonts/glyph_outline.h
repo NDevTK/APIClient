@@ -8,7 +8,7 @@
  * core/paint/display_list_raster.h already drives it from a display list, so the engine paints boxes, borders
  * and the canvas and cannot paint TEXT. This component is the half of that gap that is DECODING; the half
  * that is DATA was a residual at the foot of this file and is RETIRED: the shipped face now carries the two
- * tables, which core/fonts/default_font_data.h records at the place the record stood. THE POINTER IS
+ * tables, which engine/fontsubset.mjs records in each generated file. THE POINTER IS
  * REWRITTEN RATHER THAN CUT because a reader who finds none here and reads the paragraph above it will
  * conclude the data half is still open — a retired record's last falsehood is the sentence somewhere else
  * that still points at it.

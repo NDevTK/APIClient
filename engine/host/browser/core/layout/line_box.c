@@ -1607,6 +1607,7 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
             v = lb_glyphs_room(v, ng, &cap);
             v[ng].cp = text_run_measure_item_cp(&f->m, j);
             v[ng].style = text_run_measure_item_style(&f->m, j);
+            v[ng].face = text_run_measure_item_face(&f->m, j);
             /* The offset is `text_run_measure_line_offset` at this item, the walk `TextRunLine.size` is taken by,
                so a glyph's position and its line's width describe one text; no advance is accumulated here. */
             v[ng].origin_x = css_px_add(align, text_run_measure_line_offset(&f->m, f->lines[i], j));

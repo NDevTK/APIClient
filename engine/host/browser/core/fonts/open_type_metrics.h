@@ -8,7 +8,7 @@
  *   how far does that glyph go?   'hhea' — Horizontal Header Table's `numberOfHMetrics` + 'hmtx' — Horizontal
  *                                 Metrics Table (and 'vhea'/'vmtx' for the other axis), bounded by
  *                                 'maxp' — Maximum Profile's `numGlyphs`
- * Nothing else in a face is read here, which is why core/fonts/default_font_data.c can ship those tables alone.
+ * Nothing else in a face is read here, which is why every installed face ships those tables alone.
  *
  * IT IS OFFENSIVE FROM ITS FIRST LINE BECAUSE ITS INPUT IS ATTACKER-SUPPLIED. Today the only bytes handed to
  * it are the ones the engine ships; the moment a page's own `@font-face` bytes arrive through the fetch

@@ -11,12 +11,10 @@
  * page reads back. So the parse produces the LIST §2.1's `#` describes and the serializer is stated over that
  * list, which is the only arrangement in which the two agree by construction.
  *
- * THE LIST IS NOT EXPORTED, AND THAT IS A DECISION RATHER THAN AN OMISSION. Nothing outside this file consumes
- * a `<font-family-name>` yet: the cascade carries a specified value as TEXT (core/css/css_computed_value.h), and
- * font selection does not exist. A list handed out with no reader is a producer with no consumer — the shape
- * CLAUDE.md names, where the unread half is free to be wrong for as long as nobody misses it — so the list is
- * internal and the entry below answers the one question both callers actually ask. WHEN A FONT-MATCHING
- * COMPONENT EXISTS it takes the list; until then the parse and the serializer are one call.
+ * THE LIST IS EXPORTED FOR ONE READER, css-fonts-4 §5 "Font Matching Algorithm" (core/fonts/font_matching.h),
+ * which iterates "over the font families named by the font-family property". The cascade carries a computed
+ * value as TEXT (core/css/css_computed_value.h), so matching re-parses that text through the same grammar the
+ * serializer was stated over, and the two cannot disagree about what an item is.
  *
  * WHAT §2.1.1 STATES AND WHAT IT DOES NOT. `<font-family-name> = <string> | <custom-ident>+`, and "Font family
  * names other than generic families or system font families must either be given quoted as `<string>`s, or
@@ -62,6 +60,25 @@
  * `font: caption` declaration reads that word as a system font. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_FONT_FAMILY_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_FONT_FAMILY_H
+
+#include <stdbool.h>
+#include <stddef.h>
+
+/* ONE ITEM of §2.1's `[ <font-family-name> | <generic-font-family> ]#`, which is exactly one of the two:
+   `generic` is the canonical keyword (a static string) and `name` the decoded family name (UTF-8, OWNED). */
+typedef struct {
+    const char *generic;
+    char *name;
+} CssFontFamilyItem;
+
+/* §2.1's list. `#` has no upper bound, so it grows. */
+typedef struct { CssFontFamilyItem *v; size_t n, cap; } CssFontFamilyList;
+
+/* §2.1's list out of a `font-family` value into the empty `out`. FALSE, with `out` left empty, for a value
+   outside §2.1's grammar, a CSS-wide keyword included: CSS Cascade 5 §7's defaulting resolves those before a
+   computed value exists. Release with css_font_family_list_free. */
+bool css_font_family_list(const char *value, CssFontFamilyList *out);
+void css_font_family_list_free(CssFontFamilyList *l);
 
 /* The SPECIFIED value of a `font-family` declaration whose value is `value`, CSSOM-serialized — the answer
    CSSOM §6.6.1 "The CSSStyleDeclaration Interface"'s getPropertyValue reads back, and therefore the text the

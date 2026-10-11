@@ -13,6 +13,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
+#include "core/css/css_font_family.h"
 #include "core/css/css_image.h"
 #include "core/css/css_length.h"
 #include "core/css/css_logical.h"
@@ -26,6 +27,7 @@
 #include "core/css/css_var.h"
 #include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
+#include "core/fonts/font_matching.h"
 #include "core/dom/document.h"
 #include "core/dom/shadow_root.h"
 #include "core/frame/viewport.h"
@@ -854,7 +856,7 @@ CssPx css_used_line_height_px(lxb_dom_element_t *el)
            "a computed `line-height` is none of the three shapes css-inline-3 §5.1's `Computed value:` line "
            "admits — the entry that derives it answers exactly those, so this is that enumeration and this "
            "conversion having come apart");
-    return font_metrics_normal_line_height_px(css_cv_realm(el), size);
+    return font_metrics_normal_line_height_px(css_cv_realm(el), css_first_available_font(el), size);
 }
 
 /* CSS 2.2 §10.8.1 "Leading and half-leading"'s `A` AND `D` FOR ONE ELEMENT — "the A and D of the element's
@@ -872,12 +874,46 @@ CssPx css_used_line_height_px(lxb_dom_element_t *el)
    to resolve one, which is the cycle back into this file's own font-size derivation. */
 CssPx css_font_ascent_px(lxb_dom_element_t *el)
 {
-    return font_metrics_ascent_px(css_cv_realm(el), css_font_size_px(el));
+    return font_metrics_ascent_px(css_cv_realm(el), css_first_available_font(el), css_font_size_px(el));
 }
 
 CssPx css_font_descent_px(lxb_dom_element_t *el)
 {
-    return font_metrics_descent_px(css_cv_realm(el), css_font_size_px(el));
+    return font_metrics_descent_px(css_cv_realm(el), css_first_available_font(el), css_font_size_px(el));
+}
+
+void css_font_fallback_list(lxb_dom_element_t *el, FontFallbackList *out)
+{
+    char *family;
+
+    DCHECK(el != NULL, "css-fonts-4 §5.2's family walk was asked for no element");
+    family = css_computed_value(el, "font-family");
+    font_matching_resolve(family, out);
+    free(family);
+}
+
+InstalledFont css_first_available_font(lxb_dom_element_t *el)
+{
+    FontFallbackList l;
+
+    css_font_fallback_list(el, &l);
+    return font_matching_first_available(&l);
+}
+
+void css_initial_font_fallback_list(FontFallbackList *out)
+{
+    char *family = cssom_initial_value("font-family");
+
+    font_matching_resolve(family, out);
+    free(family);
+}
+
+/* §6.1.1's face for one font metric: the face of the element whose metrics the unit refers to, or of the
+   initial values when that is no element. `el` NULL is the latter. */
+static void css_cv_metric_faces(lxb_dom_element_t *el, FontFallbackList *out)
+{
+    if (el == NULL) css_initial_font_fallback_list(out);
+    else css_font_fallback_list(el, out);
 }
 
 /* css-values-4 §6.1.1's ADVANCE MEASURE OF ONE GLYPH ON ONE ELEMENT, in CSS pixels — the third product this
@@ -897,13 +933,14 @@ CssPx css_font_descent_px(lxb_dom_element_t *el)
    (`CSS_ENV_DEFAULT_FONT_SIZE` through the `em` chain), while whether the FACE is itself a picked fact — and
    how many facts one face is — is a change to css_length.h's vocabulary that font_metrics.h states it owns.
    Inventing one here would answer that question from the wrong file. */
-CssPx css_font_advance_measure_px(lxb_dom_element_t *el, uint32_t codepoint)
+CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint)
 {
     DCHECK(el != NULL, "css-values-4 §6.1.1's advance measure was asked for with no element. The section states "
                        "it over \"the element on which it is used\" — both the glyph's orientation and the size "
                        "it is measured at come from one, so there is no elementless form of this question");
     return css_px_scale(css_font_size_px(el),
-                        font_metrics_advance_measure_em(codepoint, css_cv_advance_direction(el, codepoint)));
+                        font_metrics_advance_measure_em(face, codepoint,
+                                                        css_cv_advance_direction(el, codepoint)));
 }
 
 /* §6.1.1's "THE COMPUTED METRICS CORRESPONDING TO THE INITIAL VALUES of the font and line-height properties",
@@ -913,7 +950,11 @@ CssPx css_font_advance_measure_px(lxb_dom_element_t *el, uint32_t codepoint)
    the same base case §7.2's inheritance and §6.1.1's own no-parent clause both name. */
 static CssPx css_cv_initial_line_height_px(JSContext *realm)
 {
-    return font_metrics_normal_line_height_px(realm, css_default_font_size(realm));
+    FontFallbackList l;
+
+    css_initial_font_fallback_list(&l);
+    return font_metrics_normal_line_height_px(realm, font_matching_first_available(&l),
+                                              css_default_font_size(realm));
 }
 
 static CssPx css_cv_font_metric(void *p, CssFontMetric which)
@@ -962,8 +1003,21 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
     if (which != CSS_FONT_METRIC_EM && which != CSS_FONT_METRIC_REM) {
         bool root_relative = css_cv_metric_is_root(which);
         CssPx base = css_cv_font_metric(p, root_relative ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
-        lxb_dom_element_t *on;
+        lxb_dom_element_t *on, *metrics_el;
+        FontFallbackList faces;
         uint32_t codepoint;
+
+        /* THE FACE IS THE ONE OF THE ELEMENT WHOSE `font-size` THE BASE ABOVE WAS, by the same two rules: the
+           root for an `r`-prefixed unit unless the declaration is on the root's own font-affecting property,
+           and otherwise the element, or its parent for a font-affecting property — the initial values where
+           that is no element. */
+        root = css_cv_root_element(f->el);
+        if (root_relative)
+            metrics_el = (root == NULL || (f->affecting && root == lxb_dom_interface_node(f->el)))
+                             ? NULL : lxb_dom_interface_element(root);
+        else
+            metrics_el = f->affecting ? css_parent_element(f->el) : f->el;
+        css_cv_metric_faces(metrics_el, &faces);
 
         /* §6.1.1's `cap` IS THE ONE THAT IS NOT A SPEC RATIO, so it leaves through its own component entry
            rather than through the table below: "in the cases where it is impossible or impractical to
@@ -971,7 +1025,7 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
            modelled face rather than a number §6.1.1 fixes. core/css/font_metrics.h forms the product so the
            reader's font size and this user agent's face are unioned there and not here. */
         if (which == CSS_FONT_METRIC_CAP || which == CSS_FONT_METRIC_RCAP)
-            return font_metrics_ascent_px(css_cv_realm(f->el), base);
+            return font_metrics_ascent_px(css_cv_realm(f->el), font_matching_first_available(&faces), base);
         /* §6.1.1's `ex` IS NOT AN ADVANCE MEASURE and leaves before the pair below: "the used x-height of the
            first available font" is a HEIGHT of the face, so no orientation selects between two numbers for it
            and there is no element to ask. */
@@ -998,7 +1052,8 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
            does not cover "水" — most Latin faces, this user agent's included — is that case; measuring
            .notdef there would report the width of a tofu box as the typical advance of a CJK letter. */
         return css_px_scale(base, font_metrics_typical_advance_measure_em(
-                                      codepoint, css_cv_advance_direction(on, codepoint)));
+                                      font_matching_font_for_character(&faces, codepoint), codepoint,
+                                      css_cv_advance_direction(on, codepoint)));
     }
     /* §6.1.1: `em` is "equal to the computed value of the font-size property of the element on which it is
        used" — EXCEPT that "when used in the value of any font-affecting property on the element they refer to,
@@ -1961,6 +2016,25 @@ bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out)
    `CssImageKind` lands `-Wswitch` names this site — which `-Wall` is not needed for and which the quiet list
    in engine/build.mjs does not suppress, both measured.
    OWNED: `spec` is this function's to return or to free. */
+/* css-fonts-4 §2.1 "Font family: the font-family property": `Computed value: list, each item a string and/or
+   <generic-font-family> keywords`, which is the specified list, so the specified text is the answer. A text
+   outside §2.1's grammar can reach here only through a substitution, and css-values-5 makes that invalid at
+   computed-value time: the property behaves as `unset`, which for an inherited property is the parent's
+   computed value, or the initial value at the root. Its reader is core/fonts/font_matching.h.
+   OWNED: `spec` is this function's to return or to free. */
+static char *computed_font_family(lxb_dom_element_t *el, char *spec)
+{
+    CssFontFamilyList list = { 0 };
+    lxb_dom_element_t *parent;
+    bool ok = css_font_family_list(spec, &list);
+
+    css_font_family_list_free(&list);
+    if (ok) return spec;
+    free(spec);
+    parent = css_parent_element(el);
+    return parent != NULL ? css_computed_value(parent, "font-family") : cssom_initial_value("font-family");
+}
+
 static char *computed_list_style_image(char *spec)
 {
     if (css_cv_is(spec, "none")) return spec;
@@ -2042,6 +2116,8 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        resolved value. */
     case CSS_PROPERTY_LIST_STYLE_IMAGE:
         return computed_list_style_image(spec);
+    case CSS_PROPERTY_FONT_FAMILY:
+        return computed_font_family(el, spec);
     /* `float` (CSS2 §9.5.1) states "Computed value: as specified", and a keyword has no absolutization to do —
        so the specified value IS the answer here rather than a stand-in for one. css-text-3's `white-space`
        carries the same line ("Computed value: specified keyword") and is asked for by CSS 2.1 §9.2.2.1's

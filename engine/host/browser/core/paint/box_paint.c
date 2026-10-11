@@ -649,6 +649,7 @@ static bool bp_glyph(BpState *st, const LineBoxGlyph *g, CssPx origin_x, CssPx o
 
     mark.kind = DISPLAY_MARK_GLYPH;
     mark.glyph.cp = g->cp;
+    mark.glyph.face = g->face;
     mark.glyph.origin_x = css_px_add(origin_x, g->origin_x);
     mark.glyph.origin_y = css_px_add(origin_y, g->baseline_y);
     mark.glyph.em = css_font_size_px(g->style);

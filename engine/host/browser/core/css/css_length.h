@@ -132,6 +132,7 @@
 #include <stddef.h>
 
 #include "core/css/css_keyword.h"
+#include "core/fonts/installed_font.h"
 #include "quickjs.h"
 
 /* ONE ENVIRONMENT FACT. Every entry is a fact core/frame/viewport.h has already decided is PICKED rather than
@@ -178,19 +179,16 @@ typedef enum {
        this model determines it, the spec calls it the reader's own preference, and a `rem`-sized layout puts
        its entire responsive ladder behind it. */
     CSS_ENV_DEFAULT_FONT_SIZE,
-    /* CSS 2.1 §10.8.1 (Leading and half-leading)'s `A` — "a characteristic height above the baseline" of the
-       first available font, which core/css/font_metrics.h picks and says why. It is a SEPARATE fact from the
-       default font size beside it and not a refinement of it: the size is the reader's preference and the
-       ascent is the installed FACE, so a page that measures `1cap` against `fontSize` is reading the ratio
-       between them and would get one arm out of a single key. It is also separate from §6.1.1's assumed
-       x-height, which is a spec constant with no freedom in it and therefore no fact at all. */
-    CSS_ENV_FONT_ASCENT,
-    /* CSS 2.1 §10.8.1's `D` — "a depth below [the baseline]" of the same face, read by the same component
-       and a SEPARATE fact from `A` beside it for the same test: a page reads `1cap` for the ascent and `1lh`
-       for their sum, so their difference is independently observable and one key for both would decide it on
-       the example. §10.8.1 defines the pair together and this engine picks them together; that is why they
-       are two rows and not one, not a reason to make them one. */
-    CSS_ENV_FONT_DESCENT,
+    /* CSS 2.1 §10.8.1 (Leading and half-leading)'s `A` — "a characteristic height above the baseline" — and
+       `D` — "a depth below [the baseline]" — of each installed face (core/fonts/installed_font.h), which
+       core/css/font_metrics.h reads and says why. They are SEPARATE facts from the default font size and not a
+       refinement of it: the size is the reader's preference and the ascent is the FACE, so a page that
+       measures `1cap` against `fontSize` is reading the ratio between them. `A` and `D` are two rows because a
+       page reads `1cap` for one and `1lh` for their sum, so their difference is independently observable; and
+       each face has its own pair because two elements of one page that select two faces read two ascents. */
+#define CSS_ENV_FONT_FACT_ROWS(id, family, fact, bytes) CSS_ENV_FONT_ASCENT_##id, CSS_ENV_FONT_DESCENT_##id,
+    INSTALLED_FONT_LIST(CSS_ENV_FONT_FACT_ROWS)
+#undef CSS_ENV_FONT_FACT_ROWS
     CSS_ENV_FACT_COUNT
 } CssEnvFact;
 
@@ -391,7 +389,7 @@ static inline bool css_length_is_keyword(CssLength len, CssKeyword k)
    table.
    `cap` IS HERE ON THE SAME ARITHMETIC BUT NOT ON THE SAME FOOTING: §6.1.1 states no must-assume value for a
    cap-height, only that an undeterminable one takes "the font's ascent", and CSS 2.2 §10.8.1's note says to
-   read that ascent off the face — so it carries CSS_ENV_FONT_ASCENT. Of the three above, `ex` carries nothing
+   read that ascent off the face — so it carries the face's ascent fact. Of the three above, `ex` carries nothing
    of its own because §6.1.1 FIXES it; `ch` and `ic` carry nothing of their own only because the fact vocabulary
    has not yet been extended to the face's advances, which core/css/font_metrics.h states as an open decision.
    The row is the same shape because the multiplication is.

@@ -14,6 +14,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_code_point.h"
+#include "core/css/css_computed_value.h"
 #include "core/css/css_dimension.h"
 #include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
@@ -235,7 +236,8 @@ typedef struct {
     double dev_width, dev_height;
     double dppx;
     double font_size;          /* css-values-4 §6.1.1's "initial values of the font ... properties" */
-    double ascent;             /* CSS 2.1 §10.8.1's `A` at that size — core/css/font_metrics.h's picked face */
+    double ascent;             /* CSS 2.1 §10.8.1's `A` at that size, of the initial family's first face */
+    FontFallbackList faces;    /* the initial `font-family`'s faces (core/fonts/font_matching.h) */
     double line_height;        /* §6.1.1's `lh` base — the same clause's "line-height" half, `normal` resolved */
     int    color_bits;
 } MqEnv;
@@ -266,12 +268,13 @@ static void mq_env(JSContext *ctx, MqEnv *e)
        1920/1080 two lines up was. core/css/font_size_functions.h picks the number; what is read here is its
        EXAMPLE, for the reason stated above this function: the comparison below is a C `if`. */
     e->font_size = css_default_font_size(ctx).px;
-    /* §6.1.1's `cap` falls back to "the font's ascent", which is the SAME modelled face outside an element as
-       inside one — §6.1.1's clause redirects the SIZE to the initial value and says nothing about the face.
-       Its EXAMPLE is read here for the reason stated above this function, exactly as the font size's is: the
+    /* §6.1.1's `cap` falls back to "the font's ascent", and the clause quoted above sends the face to the
+       initial values too, since `font-family` is one of "the font ... properties": the initial family's first
+       available font. Its EXAMPLE is read here for the reason stated above this function, exactly as the font size's is: the
        comparison below is a C `if`, and core/css/font_metrics.c is where the fact behind the number is minted
        for the readers that cross to a page. */
-    e->ascent = font_metrics_ascent_px(ctx, css_px(e->font_size)).px;
+    css_initial_font_fallback_list(&e->faces);
+    e->ascent = font_metrics_ascent_px(ctx, font_matching_first_available(&e->faces), css_px(e->font_size)).px;
     /* §6.1.1's clause quoted above names TWO initial values, not one — "the initial values of the font AND
        LINE-HEIGHT properties" — and the second is what `lh` is a multiple of. css-inline-3 §5.1 "Line Spacing:
        the line-height property" gives `Initial: normal`, and §6.1.1 states the conversion for exactly that
@@ -281,7 +284,8 @@ static void mq_env(JSContext *ctx, MqEnv *e)
        it is READ here rather than re-derived for the reason the two lines above are: the ratio would then be
        one fact in two places, and a page could read two different answers for `line-height: normal` through
        `getComputedStyle` and through `1lh`. */
-    e->line_height = font_metrics_normal_line_height_px(ctx, css_px(e->font_size)).px;
+    e->line_height = font_metrics_normal_line_height_px(ctx, font_matching_first_available(&e->faces),
+                                                        css_px(e->font_size)).px;
     /* THE ENVIRONMENT'S OWN INVARIANT, ASSERTED WHERE IT IS BORN. Every viewport-percentage and container
        length below is a FRACTION of one of these two extents, so a NaN or a non-positive one does not fail
        loudly there — it produces a plausible number that rides on as a concolic's EXAMPLE, which is strictly
@@ -1128,10 +1132,12 @@ static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
        then the glyph's advance WIDTH. */
     if (!strcmp(u, "ch") || !strcmp(u, "rch"))
         return n * e->font_size *
-               font_metrics_typical_advance_measure_em(0x0030, FONT_METRICS_ADVANCE_HORIZONTAL);
+               font_metrics_typical_advance_measure_em(font_matching_font_for_character(&e->faces, 0x0030),
+                                                       0x0030, FONT_METRICS_ADVANCE_HORIZONTAL);
     if (!strcmp(u, "ic") || !strcmp(u, "ric"))
         return n * e->font_size *
-               font_metrics_typical_advance_measure_em(0x6C34, FONT_METRICS_ADVANCE_HORIZONTAL);
+               font_metrics_typical_advance_measure_em(font_matching_font_for_character(&e->faces, 0x6C34),
+                                                       0x6C34, FONT_METRICS_ADVANCE_HORIZONTAL);
     if (!strcmp(u, "cap") || !strcmp(u, "rcap")) return n * e->ascent;
     if (!strcmp(u, "cm")) return n * 96.0 / 2.54;
     if (!strcmp(u, "mm")) return n * 96.0 / 25.4;

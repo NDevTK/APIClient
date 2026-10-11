@@ -48,7 +48,7 @@
    Not measured, and asserted in text_run.c: css-text-3 §7.1 "Word Spacing: the word-spacing property", §7.2
    "Tracking: the letter-spacing property" and §2.1 "Case Transforms: the text-transform property", none of
    which the cascade computes; the assert fires when one gains a computed value. Kerning and ligatures are absent
-   because core/fonts/default_font_data.c ships no 'GSUB' or 'GPOS', so advances simply sum (as
+   because no installed face (core/fonts/installed_font.h) ships 'GSUB' or 'GPOS', so advances simply sum (as
    core/layout/line_box.c says of heights); that changes when such a face is loaded. */
 
 #include <stdbool.h>
@@ -58,6 +58,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/fonts/font_matching.h"
 #include "core/layout/line_break.h"
 
 /* The run is a sequence of items, four kinds of which only one is text.
@@ -120,6 +121,9 @@ typedef struct {
     /* The code point [UAX14] decides this item's boundaries from: the character itself, a forced break's
        U+000A, or an atomic inline's U+FFFC (class CB). An edge has none and its slot is never read. */
     uint32_t cp;
+    /* The installed face css-fonts-4 §5.2 renders a character with, chosen once at collection so the advance
+       summed and the glyph painted are one face's. Only a character has one. */
+    InstalledFont face;
     /* css-text-3 §3's `nowrap` "suppresses line breaks (text wrapping) within the source" while leaving white
        space collapsible, so whether an opportunity exists is a second per-element fact (§5.5). */
     bool wraps;
@@ -165,6 +169,10 @@ typedef struct {
        `text_run_measure_line_offset` refuse. Recorded at the append because the offset entry is called per box,
        and a scan there would be quadratic. */
     bool atomic_sizes_differ;
+    /* The fallback list of the last character's inline box, so a run of characters in one box resolves its
+       `font-family` once. Scoped to this measurement, during which no computed value moves. */
+    lxb_dom_element_t *faces_of;
+    FontFallbackList faces;
     bool finished;
     /* `release` has run: the answers derive from freed memory, so reads assert this is false. */
     bool released;
@@ -282,6 +290,10 @@ bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i);
    inline"): neither is a character the document contains, and drawing them would render .notdef for a `br`.
    A character the face lacks is still its code point; core/css/font_metrics.h answers .notdef for it. */
 uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i);
+
+/* Item `i`'s face, for the character kind only: the one its advance was measured in and its glyph is drawn
+   from (core/fonts/font_matching.h). */
+InstalledFont text_run_measure_item_face(const TextRunMeasure *m, size_t i);
 
 /* css-sizing-3 §2.1's max-content and min-content inline sizes, in CSS pixels, read through entries that assert
    the relation between them. */

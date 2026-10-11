@@ -58,6 +58,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/fonts/installed_font.h"
 #include "core/layout/block_flow.h"
 
 /* CSS 2.2 §9.4.2's "The width of a line box is determined by a containing block and the presence of floats",
@@ -186,6 +187,7 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
 typedef struct {
     uint32_t cp;                /* the code point that draws — always a css-text-3 §4.1.1 Phase I character */
     lxb_dom_element_t *style;   /* the inline box it is in, whose `font-size` and `color` it has */
+    InstalledFont face;         /* the face it was measured in and is drawn from (core/fonts/font_matching.h) */
     CssPx origin_x;             /* the pen position, from the content box's left edge (horizontal-tb, asserted) */
     CssPx baseline_y;           /* its baseline, from the content box's top edge (horizontal-tb, asserted) */
 } LineBoxGlyph;
