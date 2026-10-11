@@ -28580,12 +28580,21 @@ static int abi_main(int argc, char **argv)
        both would be choosing between two answers to one question every round. */
     if (paint_dir != NULL) qjs_request_paint_every_world();
 
+    /* Whether this host has asked the engine to page its frontier out. An exit over a live frontier (a
+       referenced instance at rest, or a payer gone) asks for the park instead of leaving the loop, so the
+       teardown releases flows written out as recipes rather than flows still holding work (flow_release's
+       assert); the step that takes the park answers DONE, as wpt_runner.c's park does. */
+    int parking = 0;
     for (;;) {
         int step = qjs_step();
 
         /* THE NOTICES ARE DRAINED ON EVERY ROUND, including the one that ends the session: an emission the
            last step produced is exactly the one a drain placed before the terminator would lose. */
         abi_notices();
+        DCHECK(!parking || step == ENGINE_STEP_DONE,
+               "this host asked the engine to page its frontier out and the step that followed did not take "
+               "the park — the residue is still live, so the teardown is about to release flows whose recipes "
+               "were never written");
         if (step == ENGINE_STEP_DONE) break;
         /* WHAT THE FRONTIER LOOKS LIKE RIGHT NOW — @SWAP/@COLD/@HEAP/@WFQ/@FORKAT, from solver/engine.c's one
            emitter, which decides for itself whether this round is a sample. This driver's output IS a stream
@@ -28726,7 +28735,7 @@ static int abi_main(int argc, char **argv)
                distrusts wherever the alternative costs one comparison. A `paid` of zero is still dropped, for
                the reason `abi_pay`'s own header gives: the zone answers a poll with whatever is READY, so an
                empty round is "your bytes have not landed yet" and not a refusal. */
-            if (abi_pay() == ABI_PAY_CHANNEL_ENDED) break;
+            if (abi_pay() == ABI_PAY_CHANNEL_ENDED) { qjs_request_park(); parking = 1; continue; }
         }
         if (step == ENGINE_STEP_STALLED) {
             int paid;
@@ -28747,7 +28756,7 @@ static int abi_main(int argc, char **argv)
                session ahead of both, through the exit
                path a drained frontier already takes — which is what puts this run's refusals, its `@RESULT`,
                its last image and its teardown on the same road rather than skipping all four by aborting. */
-            if (paid == ABI_PAY_CHANNEL_ENDED) break;
+            if (paid == ABI_PAY_CHANNEL_ENDED) { qjs_request_park(); parking = 1; continue; }
             if (paid == 0) {
                 /* …UNLESS NOTHING WAS OWED, WHICH IS A DIFFERENT SENTENCE AND ONLY A REFERENCED INSTANCE CAN
                    SAY IT. A document a peer holds a WindowProxy for does not finish: its last timeline reports
@@ -28763,7 +28772,11 @@ static int abi_main(int argc, char **argv)
                    that is abi_stalled's case exactly as it is for any other instance. The flag is the engine's
                    (`qjs_referenced`), not the record's field: this document also becomes referenced when it
                    creates a navigable another instance hosts. */
-                if (qjs_referenced() && *qjs_pending() == '\0' && *qjs_host_requests() == '\0') break;
+                if (qjs_referenced() && *qjs_pending() == '\0' && *qjs_host_requests() == '\0') {
+                    qjs_request_park();
+                    parking = 1;
+                    continue;
+                }
                 abi_stalled();
                 break;
             }
