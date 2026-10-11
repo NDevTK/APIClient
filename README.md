@@ -1,6 +1,6 @@
 # API Security Researcher
 
-A Chrome extension (MV3) that maps a site's API surface and finds client-side XSS by **running the page's own JavaScript bundle** under forced multi-path exploration, on a forked QuickJS-ng engine over a spec-built Lexbor DOM. It uses no debugger, no proxy and no `webRequest`.
+A Chrome extension (MV3) that maps a site's API surface and finds client-side XSS by **running the page's own JavaScript bundle** under forced multi-path exploration, on a forked QuickJS-ng engine over a spec-built Lexbor DOM. It needs no proxy and no `debugger` permission: requests are captured inside the page, and the extension's own sends get their headers from `declarativeNetRequest` rules (see [Permissions](#permissions)).
 
 In one sentence: **a browser with a BFS time-travel solver.** The browser half (Lexbor and QuickJS-ng, in C) follows the specs. The solver half — forced multi-path concolic execution over copy-on-write snapshots — exists to do two things a scanner cannot:
 
@@ -57,12 +57,14 @@ extension/
   content.js           Isolated-world relay; a seed it forwards is an address, never document bytes
   background.js        Stateless service worker: offscreen lifecycle, browser events, privileged chrome.* calls
   speak-as-rule.js     The service worker's rule that makes a zone send carry a page's headers
+  ast-worker.html      The offscreen document: the trusted zone's page
   offscreen-brain.js   The trusted zone: wires lib/*, owns IndexedDB
   bridge.js            Network, IndexedDB and renderer edges for the engine
   renderer.html        One sandboxed engine instance
   renderer-host.js     The trusted side of one renderer; render-process-host.js owns the pool
   mojo.js, mojom.js    The interface between the trusted zone and a renderer
   popup.js             Popup controller; lib/popup-*.js are its panels
+  dev.html, dev.js     Diagnostics page: engine readings a developer reads, over the popup's messages
   check.js             JS mirror of the engine's DCHECK/CHECK
   lib/safe-fetch.js    The one external-fetch chokepoint: scheme, SOP/CORS, credentials, provenance, destination
   lib/                 Learning, schema, keys, persistence, grouping, merge, send, encode, serialize,
@@ -79,6 +81,23 @@ engine/
   lexbor/                The vendored Lexbor (DOM, HTML and CSS parsers)
   build.mjs              Builds the Chrome WASM target and the native host from the same sources
 ```
+
+## Permissions
+
+Each permission in `extension/manifest.json` and what it is for:
+
+| Permission | Used for |
+|---|---|
+| `offscreen` | The offscreen document (`ast-worker.html`) that holds the trusted zone, IndexedDB and every engine renderer. |
+| `declarativeNetRequestWithHostAccess` | One session rule per in-flight send that speaks as a document, which sets the `Origin`, `Referer`, `Sec-Fetch-*` and `Cookie` headers the zone computed on exactly that request (`speak-as-rule.js`). |
+| `cookies` | Reading a document's cookies and its partition key, so a credentialed send carries that document's jar (`lib/request-identity.js`). |
+| `webNavigation` | Frame identities (`getAllFrames`) for the document a send speaks as, and navigation events the popup follows. |
+| `tabs` | The active tab, the live-verify attacker tab, and messages to content scripts. |
+| `scripting` | Arming the live-verify attacker tab: a predefined injector run in that tab's main world, refused for any tab the service worker did not open. |
+| `unlimitedStorage` | The IndexedDB store, which holds the cross-session frontier and cold snapshots. |
+| `<all_urls>` host access | The content scripts on every page, and `safeFetch`'s requests. |
+
+**Not used:** `webRequest`, `debugger` and a proxy. Traffic is captured in the page itself (`intercept.js`, which wraps `fetch`, XHR, WebSocket and EventSource in the main world). `webRequest` reports none of the offscreen document's own requests, so it cannot observe the zone's sends or their redirect hops. The `debugger` permission's `Fetch` domain could pause a redirect hop before it is sent, and this extension does not take it. [SECURITY.md](SECURITY.md) states what each of these leaves uncovered.
 
 ## Storage and security
 
