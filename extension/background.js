@@ -254,6 +254,10 @@ async function _swRpc(msg) {
     case "tabs.query": return chrome.tabs.query(...args);
     case "tabs.get": return chrome.tabs.get(...args);
     case "webNavigation.getAllFrames": return chrome.webNavigation.getAllFrames(...args);
+    // The cookies a send that speaks as a document carries (lib/request-identity.js): read-only, and the
+    // offscreen document is the only sender this arm serves.
+    case "cookies.getAll": return chrome.cookies.getAll(...args);
+    case "cookies.getPartitionKey": return chrome.cookies.getPartitionKey(...args);
     // chrome.storage.session.* RPC handlers removed — the brain no longer
     // mirrors request logs to session storage (the offscreen document's
     // stable lifetime makes the in-memory log authoritative). If a caller

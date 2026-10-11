@@ -5,6 +5,7 @@
   "description": "API discovery, protocol reverse-engineering, JavaScript security code review, and request export.",
   "permissions": [
     "offscreen",
+    "cookies",
     "webNavigation",
     "scripting",
     "tabs",

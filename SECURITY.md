@@ -330,10 +330,16 @@ subresource load a drive reaches still fires by its destination arm, which is th
   (`lib/persistence.js`) for the learned store, and `apiclient-frontier` (`idbOpen` in `bridge.js`) for the
   cross-session frontier and the `prefs` store. The request log is in memory for the offscreen's lifetime.
   Content scripts have no read path into either.
-- `manifest.json` requests `offscreen`, `webNavigation`, `scripting`, `tabs` and `unlimitedStorage`, and not
-  `storage`, so `chrome.storage` is undefined in every context and a compromised renderer cannot read keys
-  through it. `unlimitedStorage` lifts the origin's quota and grants no read API. The security claim is that
+- `manifest.json` requests `offscreen`, `cookies`, `webNavigation`, `scripting`, `tabs` and `unlimitedStorage`,
+  and not `storage`, so `chrome.storage` is undefined in every context and a compromised renderer cannot read
+  keys through it. `unlimitedStorage` lifts the origin's quota and grants no read API. The security claim is that
   `git grep -n 'chrome\.storage' extension/` finds no call site, only comments.
+- `cookies` exists so a send that speaks as a document can carry exactly that document's cookies
+  (`lib/request-identity.js`). It reads the jar with `cookies.getAll`, partitioned cookies through a
+  `partitionKey`, and asks `cookies.getPartitionKey` for a frame's key. Only the service worker's `__rpc`
+  arms call it, and those serve only the offscreen document (`OFFSCREEN_HREF`). No arm writes or removes a
+  cookie. The grant is read access to every cookie under `<all_urls>`, so a hole in the `__rpc` sender gate
+  exposes the person's whole jar.
 - The service worker holds no learned state and relays no page data. Content scripts message the offscreen
   directly, so the service worker cannot launder a renderer's message into an extension-origin one.
 - The engine frame has an opaque origin and keeps nothing between sessions; parked work persists through the
