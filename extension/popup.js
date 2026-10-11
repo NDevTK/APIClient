@@ -1155,36 +1155,41 @@ async function renderEgressPolicy(act) {
     partial: "a match is a fact — NO match is not a statement that there is none",
     undetermined: "nothing here can work this out yet; permitting it permits the unknown",
     intent: "an intent this engine holds and cannot verify" };
-  document.getElementById("egress-signals").innerHTML = r.signals.length === 0 ? "" :
-    '<div class="card-label">What may be fetched here, signal by signal</div>' +
+  // Joins node lists with a text separator, the node form of `Array.prototype.join`.
+  const joinNodes = (lists, sep) => lists.map((n, i) => (i === 0 ? n : [sep, n]));
+  domReplaceChildren(document.getElementById("egress-signals"), r.signals.length === 0 ? [] : [
+    domElement("div", { class: "card-label" }, ["What may be fetched here, signal by signal"]),
     /* THE DEFAULTS FIRST, BECAUSE THE FIRST QUESTION A PERSON HAS LOOKING AT A CONTROL THAT PERMITS NOTHING
        IS WHY THEIR APP STILL WORKS. They are read off the policy rather than written here for the reason
        every other line in this function is: a surface that explained them in its own words would be a second
        copy of the list that could stop agreeing with it. */
-    '<div class="egress-default">Fires without any of this: ' +
+    domElement("div", { class: "egress-default" }, ["Fires without any of this: ",
     /* AN ARM IS A CONJUNCTION AND EVERY CONDITION IS RENDERED, which is not a formatting choice: an arm
        fires only where ALL of its conditions hold, so showing one of them would tell a person that a
        population fires which does not — the same "one row, two populations" the arm list itself was changed
        to stop. `join(" and ")` is the sentence, and an arm of one condition reads exactly as it did. */
-      r.defaults.map((d) => d.when.map((c) => "<code>" + esc(c.signal) + "=" + esc(c.value) + "</code>")
-                                  .join(" and ") + " (" + esc(d.why) + ")")
-                .join("; ") + '</div>' +
+      joinNodes(r.defaults.map((d) => [
+        joinNodes(d.when.map((c) => domElement("code", {}, [c.signal + "=" + c.value])), " and "),
+        " (" + d.why + ")",
+      ]), "; "),
+    ]),
     r.signals.map((sig) => {
       const now = r.vector && r.vector[sig.name] !== undefined ? r.vector[sig.name] : null;
-      return '<div class="egress-signal"><code>' + esc(sig.name) + '</code>'
-        + '<span class="egress-certainty">' + esc(CERTAINTY_SAYS[sig.certainty] || sig.certainty) + '</span>'
-        + sig.values.map((v) =>
-            '<label class="egress-value">'
-            + (sig.gates
-                ? '<input type="checkbox" data-egress-signal="' + esc(sig.name) + '" data-egress-value="'
-                  + esc(v.value) + '"' + (v.permitted ? " checked" : "") + ' />'
-                : "")
-            + '<span' + (now === v.value ? ' class="egress-now"' : "") + '>' + esc(v.value) + '</span>'
-            + (now === v.value ? '<span class="egress-now-tag">this request</span>' : "")
-            + '</label>').join("")
-        + (sig.gates ? "" : '<span class="egress-fixed">fixed — not a choice here</span>')
-        + '</div>';
-    }).join("");
+      return domElement("div", { class: "egress-signal" }, [
+        domElement("code", {}, [sig.name]),
+        domElement("span", { class: "egress-certainty" }, [CERTAINTY_SAYS[sig.certainty] || sig.certainty]),
+        sig.values.map((v) => domElement("label", { class: "egress-value" }, [
+          sig.gates
+            ? domElement("input", Object.assign({ type: "checkbox", "data-egress-signal": sig.name,
+                                                  "data-egress-value": v.value }, v.permitted ? { checked: "" } : {}))
+            : [],
+          domElement("span", now === v.value ? { class: "egress-now" } : {}, [v.value]),
+          now === v.value ? domElement("span", { class: "egress-now-tag" }, ["this request"]) : [],
+        ])),
+        sig.gates ? [] : domElement("span", { class: "egress-fixed" }, ["fixed — not a choice here"]),
+      ]);
+    }),
+  ]);
   /* AND A PERMISSION THAT COULD NOT BE CARRIED FORWARD IS SAID OUT LOUD. The previous control was one switch
      per origin and its store was a list of origin names; a bare origin in that shape meant "fire everything
      here", including signals that did not exist when the person said it, so it is DROPPED rather than read
@@ -1205,11 +1210,13 @@ async function renderEgressPolicy(act) {
   /* THE ALLOWED LIST IS THE CHOKEPOINT'S TABLE READ BACK, so what is shown is what the policy is using — and
      the way OUT is beside every entry, because a permission with no withdrawal is a one-way door and this
      one spends somebody else's server under this person's session. */
-  document.getElementById("egress-allowed").innerHTML = r.origins.length === 0 ? "" :
-    '<div class="card-label">Data requests permitted at</div>' + r.origins.map((o) =>
-      '<div class="egress-entry"><code>' + esc(o) + '</code>'
-      + '<button type="button" class="btn-small" data-egress-revoke="' + esc(o) + '">Revoke</button></div>'
-    ).join("");
+  domReplaceChildren(document.getElementById("egress-allowed"), r.origins.length === 0 ? [] : [
+    domElement("div", { class: "card-label" }, ["Data requests permitted at"]),
+    r.origins.map((o) => domElement("div", { class: "egress-entry" }, [
+      domElement("code", {}, [o]),
+      domElement("button", { type: "button", class: "btn-small", "data-egress-revoke": o }, ["Revoke"]),
+    ])),
+  ]);
 }
 
 async function clearState() {
@@ -1360,7 +1367,9 @@ function renderDeepStatus() {
          "(lib/serialize.js), so its absence is that serializer broken and every error the engine recorded " +
          "while running this page would vanish from the only surface that shows them");
   const rerrs = tabData.resolverErrors;
-  let html = "";
+  const sections = [];
+  const deepRow = (children, attrs = {}) =>
+    domElement("div", Object.assign({ class: "deep-row" }, attrs), [domElement("span", { class: "deep-label" }, children)]);
   /* THE RUN THIS PAGE'S FINDINGS CAME OUT OF, SAID FIRST, because it decides how to read everything else on
      the screen. A crashed engine's findings are REAL — it recorded them before it died and the moat has them
      — but the run is not a complete analysis of the page, and nothing must be able to read the panels below
@@ -1393,39 +1402,41 @@ function renderDeepStatus() {
        REFUSED to make (`blocked-scheme:about:`, `blocked-private-from-public`), and the two need opposite
        things from the person reading this row. It was a content script's own exception text before the load
        moved to the chokepoint; it is a named rule now. */
-    const reason = ps.kind === "status" ? `the server answered ${esc(String(ps.status))} to it`
+    const reason = ps.kind === "status" ? `the server answered ${ps.status} to it`
                  : ps.kind === "empty"  ? "the server answered with an empty body"
-                 : `the load did not happen: ${esc(String(ps.detail).slice(0, 160))}`;
-    html += `<div class="deep-row"><span class="deep-label"><strong>This page was NOT analysed.</strong> `
-          + `The analyser loaded this page's address itself — the only way to get the bundle as SHIPPED, with `
-          + `its real response headers, rather than this tab's already-executed DOM — and ${reason}. Nothing `
-          + `below was learned by running this page's code. A single-use URL (a bot challenge, a one-time `
-          + `token) cannot be fetched twice, and neither can a document that was reached by anything other `
-          + `than a plain GET.</span></div>`;
+                 : `the load did not happen: ${String(ps.detail).slice(0, 160)}`;
+    sections.push(deepRow([domElement("strong", {}, ["This page was NOT analysed."]),
+      ` The analyser loaded this page's address itself — the only way to get the bundle as SHIPPED, with `
+      + `its real response headers, rather than this tab's already-executed DOM — and ${reason}. Nothing `
+      + `below was learned by running this page's code. A single-use URL (a bot challenge, a one-time `
+      + `token) cannot be fetched twice, and neither can a document that was reached by anything other `
+      + `than a plain GET.`]));
   }
   if (tabData.analysisRun === "crashed") {
-    html += `<div class="deep-row"><span class="deep-label"><strong>The engine crashed while analysing this `
-          + `page.</strong> What is shown below is what it had already learned when it died — a PARTIAL `
-          + `result, not a clean bill. See the engine run record for the abort.</span></div>`;
+    sections.push(deepRow([domElement("strong", {}, ["The engine crashed while analysing this page."]),
+      ` What is shown below is what it had already learned when it died — a PARTIAL `
+      + `result, not a clean bill. See the engine run record for the abort.`]));
   }
   if (rerrs.length) {
     const rows = rerrs.map((r) => {
       DCHECK(typeof r.context === "string" && typeof r.message === "string",
              "a page-error row reached the popup without a context/message pair — bridge.js writes both as " +
              "strings on every entry it builds, so a row missing one is that relay broken");
-      return `<div class="deep-row" title="${esc(r.message)}"><span class="deep-label">${esc(r.context + ": " + r.message.slice(0, 140))}</span></div>`;
-    }).join("");
+      return deepRow([r.context + ": " + r.message.slice(0, 140)], { title: r.message });
+    });
     /* APPENDED, NOT ASSIGNED. `html =` here silently dropped whatever section had been built above it — which
        was nothing while this was the first section, and was the crashed-run notice the moment one existed.
        A section that overwrites the panel instead of adding to it is a defect waiting for the next section. */
-    html += `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
+    sections.push(domElement("details", { class: "deep-cross-tab" }, [
+      domElement("summary", {}, [`Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})`]), rows,
+    ]));
   }
   // The two sections are INDEPENDENT. A document with no page errors is the ordinary case and still has a run
   // record worth showing; gating the run record on `rerrs.length` would hide it for exactly the pages that
   // went well, which is most of them.
-  html += renderEngineRuns();
-  if (!html) { el.style.display = "none"; return; }
-  el.innerHTML = html;
+  sections.push(renderEngineRuns());
+  if (sections.flat().length === 0) { el.style.display = "none"; return; }
+  domReplaceChildren(el, sections);
   el.style.display = "block";
 }
 
@@ -1461,7 +1472,8 @@ function renderDeepStatus() {
 // analysed, and the wrong answer there is a false impression rather than a crash.
 const RUN_STATES = ["partial", "complete", "crashed"];
 function renderEngineRuns() {
-  if (!engineRuns || !engineRuns.length) return "";
+  if (!engineRuns || !engineRuns.length) return [];
+  const label = (children) => domElement("span", { class: "deep-label" }, children);
   const FULL = [
     ["endpoints", "endpoints learned"], ["sinks", "@S sinks"], ["park", "flows parked for next session"],
     ["switches", "flow context-switches"], ["flows", "flows created"], ["candidates", "@S candidates run"],
@@ -1505,7 +1517,7 @@ function renderEngineRuns() {
        residue — and it is exactly what must not be said when nobody looked. */
     const resumedTxt = m.resumed === null
       ? "resume state not known (this run never seeded a frontier)"
-      : `${esc(String(m.resumed))} resumed`;
+      : `${m.resumed} resumed`;
     /* AND WHAT THE COLD TIER ANSWERED, WHICH `resumed` ALONE CANNOT SAY. `0 resumed` is true of a first
        visit, of a page whose bundle was redeployed between two visits, and of a store that holds this
        document's residue and would not hand it over — three facts that take opposite work (nothing to do,
@@ -1526,8 +1538,8 @@ function renderEngineRuns() {
            "an engine run record reached the popup with a sibling-entry count that is neither a count nor " +
            "the stated absence of one (`" + String(m.coldOther) + "`) — it is the evidence under the word " +
            "beside it, and a `|| 0` here would render an arm that counted nothing as an address with nothing");
-    const _bid = m.bundleId === null ? "" : ` (bundle ${esc(String(m.bundleId))})`;
-    const _oth = m.coldOther === null ? "" : `${esc(String(m.coldOther))}`;
+    const _bid = m.bundleId === null ? "" : ` (bundle ${m.bundleId})`;
+    const _oth = m.coldOther === null ? "" : `${m.coldOther}`;
     /* ONE `switch` AND NOT A SECOND COPY OF THE WORD LIST. bridge.js owns the closed set; a list here would be
        a second spelling of it that drifts, so the renderer IS the membership check and a word this view does
        not speak aborts naming the producer instead of falling through to whichever arm is last. */
@@ -1550,7 +1562,7 @@ function renderEngineRuns() {
         DFAIL("an engine run record reached the popup with a cold-tier lookup this view does not speak (`" +
               String(m.coldLookup) + "`) — bridge.js's COLD_LOOKUP is the closed set and this switch is this " +
               "realm's only reading of it, so an unrendered word is that set having grown without its reader");
-        coldTxt = "cold tier: " + esc(String(m.coldLookup));
+        coldTxt = "cold tier: " + String(m.coldLookup);
     }
     /* WHICH OF THE THREE THIS ROW IS, ASSERTED AND NEVER INFERRED. It was inferred — from a `crashed` boolean,
        which could say one of three things and so said the other two identically — and a mid-run snapshot
@@ -1560,7 +1572,7 @@ function renderEngineRuns() {
            "an engine run record reached the popup in a state this view does not speak (`" + m.run + "`) — " +
            "bridge.js writes `run` on every record it logs, so a missing or unknown one is that seam broken " +
            "and a snapshot of a page still being analysed would be shown as a finished run of it");
-    const where = esc(m.url ? _shortUrl(m.url) : "(no source url)");
+    const where = String(m.url ? _shortUrl(m.url) : "(no source url)");
     if (m.run === "crashed") {
       /* AND IT SAYS WHY, because the reader of this row is the one person who can act on the answer. The row
          used to state the absence of counters and stop there, so the cause — which bridge.js has always had,
@@ -1578,13 +1590,15 @@ function renderEngineRuns() {
          are now said: a count (the residue came back and then the run died), zero (no residue was handed to
          this session, so the cold tier is not implicated) and not-known (the boot died before the frontier
          was seeded at all, which is itself the answer to when it died). */
-      return `<div class="deep-row"><span class="deep-label">${where} — <strong>the engine crashed</strong>`
-           + `; this run reported no result document, so it has no counters at all (not zeroes)`
-           + `; ${resumedTxt}; ${coldTxt}`
-           + ` — ${esc(m.err)}</span></div>`;
+      return domElement("div", { class: "deep-row" }, [label([
+        `${where} — `, domElement("strong", {}, ["the engine crashed"]),
+        `; this run reported no result document, so it has no counters at all (not zeroes)`
+        + `; ${resumedTxt}; ${coldTxt}`
+        + ` — ${m.err}`,
+      ])]);
     }
     const live = m.run === "partial";
-    const parts = FULL.map(([k, label]) => {
+    const parts = FULL.map(([k, title]) => {
       /* THE MESSAGE NAMED A COUNT AND THE COUNT WAS WRONG IN BOTH DIRECTIONS, which is the stale-`DFAIL`
          shape with no crash to retire it: it said "the eight cost counters", and `FULL` holds more rows than
          that AND holds rows that are not cost counters at all — `endpoints`, `sinks` and `park` are LENGTHS
@@ -1597,7 +1611,7 @@ function renderEngineRuns() {
              "off an array that same document carries, and bridge.js asserts each of them before writing " +
              "this record, so a record that has an @RESULT document and is missing one is that seam having " +
              "changed underneath both");
-      return esc(label) + " " + esc(String(m[k]));
+      return title + " " + String(m[k]);
     });
     /* AND WHETHER THIS RUN EVER DROVE CODE THE PAGE NEVER CALLED — solver/engine.h's orphan census. It is
        emitted by result.c in the same snprintf as every counter above, asserted by bridge.js in the same loop
@@ -1700,18 +1714,18 @@ function renderEngineRuns() {
         ? `no member had run out of its own work when this was taken (\`outOfPrograms\` 0) — a GAUGE, so it `
           + `says where the frontier was at that instant and NOT that no member ever stood there`
         : m.cold.outOfProgramsAtTheLadder === 0
-          ? `${esc(String(m.cold.outOfPrograms))} member(s) had run out of their own work, and NONE was in a `
-            + `position to be asked: ${esc(String(m.cold.outOfProgramsUnrun))} had never been handed the `
-            + `thread and ${esc(String(m.cold.outOfProgramsFramed))} were suspended inside a live frame, `
+          ? `${m.cold.outOfPrograms} member(s) had run out of their own work, and NONE was in a `
+            + `position to be asked: ${m.cold.outOfProgramsUnrun} had never been handed the `
+            + `thread and ${m.cold.outOfProgramsFramed} were suspended inside a live frame, `
             + `which is below the ladder's own \`if (!f->frame)\`. That is a statement about the PICK and `
             + `about frames, not about the orphan take or the heap`
-          : `${esc(String(m.cold.outOfProgramsAtTheLadder))} member(s) were standing where the next dispatch `
-            + `descends the ladder (beside ${esc(String(m.cold.outOfProgramsUnrun))} never handed the thread `
-            + `and ${esc(String(m.cold.outOfProgramsFramed))} in a live frame)`
+          : `${m.cold.outOfProgramsAtTheLadder} member(s) were standing where the next dispatch `
+            + `descends the ladder (beside ${m.cold.outOfProgramsUnrun} never handed the thread `
+            + `and ${m.cold.outOfProgramsFramed} in a live frame)`
             + (ladderArms.length === 0
                 ? ``
                 : `, by the arm each LAST returned through: `
-                  + ladderArms.map((a) => esc(String(ladderUnits[a])) + " " + esc(a)).join(" · ")
+                  + ladderArms.map((a) => String(ladderUnits[a]) + " " + String(a)).join(" · ")
                   + `. Read that arm's position in flow_step's chain against \`engine_orphan_seed\`: ABOVE `
                   + `the seed says these members ARE dispatched and that work the page arranged falls due `
                   + `ahead of the take every round; BELOW it says the member went PAST the seed`)
@@ -1729,16 +1743,16 @@ function renderEngineRuns() {
         + `of flow_step's ladder, so every condition above it had to fall through first: ${whereTheyStand}. `
         + `That is a result about this RUN, not a fact about the page.`
       : m.orphansDriven === 0
-        ? `uncalled code: the walk ran ${esc(String(m.orphansAsked))} time(s) and seeded no drive`
+        ? `uncalled code: the walk ran ${m.orphansAsked} time(s) and seeded no drive`
           + (fromResidue
-              ? ` — but this session was seeded from a parked residue of ${esc(String(m.resumed))} flow(s), `
+              ? ` — but this session was seeded from a parked residue of ${m.resumed} flow(s), `
                 + `where a take can route to a flow already waiting for that body without counting here. So `
                 + `this does NOT establish that the bundle ships no uncalled code; the pair reads cleanly `
                 + `only on a fresh session.`
               : `: the heap held no function the page had not already called. That is a fact about the PAGE, `
                 + `and it is NOT evidence that anything was starved.`)
-        : `uncalled code: ${esc(String(m.orphansDriven))} drive(s) SEEDED over `
-          + `${esc(String(m.orphansAsked))} walk(s) — seeded, not run. The count is raised when the take `
+        : `uncalled code: ${m.orphansDriven} drive(s) SEEDED over `
+          + `${m.orphansAsked} walk(s) — seeded, not run. The count is raised when the take `
           + `succeeds, before the drive reaches the frontier, so whether the uncalled body EXECUTED is `
           + `answered by the endpoints learned above and never by this number; a seeded drive with no `
           + `endpoint of its own is displacement, and this pair cannot say of which kind.`;
@@ -1832,11 +1846,11 @@ function renderEngineRuns() {
              "changed between that composition and this render, and every share below would be rendered as a " +
              "statement about the surface a person is shown");
     }
-    const histCells = (h) => Object.keys(h).map((k) => esc(k) + " " + esc(String(h[k]))).join(" · ");
+    const histCells = (h) => Object.keys(h).map((k) => String(k) + " " + String(h[k])).join(" · ");
     const surface = m.endpoints === 0
       ? `learned surface: no address at all, so there is nothing to partition — a statement about this RUN, `
         + `read WITH the uncalled-code sentence above and not against it`
-      : `learned surface (${esc(String(m.endpoints))} address(es)) · composed by: `
+      : `learned surface (${m.endpoints} address(es)) · composed by: `
         + `${histCells(m.endpointDoors)}`
         + ` · minted: ${histCells(m.endpointMintedAt)}`
         + ` · address: ${histCells(m.endpointAddressClass)} — WHICH MECHANISM, WHEN, and WHETHER THE RUN HAD `
@@ -1926,7 +1940,7 @@ function renderEngineRuns() {
     const _razorStated = typeof _beyond === "number" && typeof _either === "number";
     const _bound = !_razorStated || _either === 0
       ? ``
-      : ` A FLOOR, not a total: ${esc(String(_either))} further address(es) came through a mechanism that is `
+      : ` A FLOOR, not a total: ${_either} further address(es) came through a mechanism that is `
         + `reached by a parser-inserted element and by a script-created one alike and does not record which, `
         + `and the producer declines to guess rather than under-credit one or over-credit the other — so the `
         + `true figure lies between the two and neither half is quotable alone.`;
@@ -1944,12 +1958,12 @@ function renderEngineRuns() {
             + `about this RUN, read WITH the surface row above and not against it.`
           : _beyond === 0
             ? `razor — what this engine reached that a markup parse could not: NONE of `
-              + `${esc(String(_emitted))} emitted address(es). That is this run's REFUSAL TO CLAIM the `
+              + `${_emitted} emitted address(es). That is this run's REFUSAL TO CLAIM the `
               + `capability on this document and NOT a small number — every address on the surface above is `
               + `one a parse of the served bytes hands a reader for free.${_bound} A DIAGNOSTIC AND NEVER A `
               + `TARGET: an identity read WITHIN this run, not against another run's.`
             : `razor — what this engine reached that a markup parse could not: `
-              + `${esc(String(_beyond))} of ${esc(String(_emitted))} emitted address(es) came through a `
+              + `${_beyond} of ${_emitted} emitted address(es) came through a `
               + `mechanism NO parse of the served document reaches.${_bound} A DIAGNOSTIC AND NEVER A `
               + `TARGET: an identity read WITHIN this run, not against another run's. The denominator is the `
               + `engine's own census taken at that instant, and is not the array length in the row above.`;
@@ -2019,20 +2033,20 @@ function renderEngineRuns() {
             + `RUN, read WITH the surface row above and not against it.`
           : _undet === 0
             ? `hard bar — addresses NO parse of the served bytes can state: NONE of `
-              + `${esc(String(_emitted))} emitted address(es) was one this run had not determined AND whose `
+              + `${_emitted} emitted address(es) was one this run had not determined AND whose `
               + `unknown somebody outside the engine supplied. That is a `
               + `REFUSAL TO CLAIM the bar on this document and NOT a small number. It is a FLOOR and not a `
               + `verdict: a determined address may still be past every parse — one a flow PINNED and re-read, `
               + `or one a REPLY named — and this engine cannot say which, so the floor here and the razor `
               + `above OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`
             : `hard bar — addresses NO parse of the served bytes can state: at least `
-              + `${esc(String(_undet))} of ${esc(String(_emitted))} emitted address(es) — the run reached `
+              + `${_undet} of ${_emitted} emitted address(es) — the run reached `
               + `each of those holding a value it had NOT determined, resting on an unknown a document, a `
               + `server, an attacker or the environment supplied, so it stands in no served byte. (An `
               + `undetermined address whose unknown the ENGINE minted for its own drive is counted by none of `
               + `this: it is the engine's own "unknown-unproven" and the bar refuses it.) A FLOOR and not a `
               + `verdict: some of the remaining `
-              + `${esc(String(_emitted - _undet))} may be past a parse too (a pinned source re-read, an `
+              + `${_emitted - _undet} may be past a parse too (a pinned source re-read, an `
               + `address a reply named) and nothing here guesses which, so this floor and the razor above `
               + `OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`;
     /* AND THE SAME BAR COMPOSED RATHER THAN BOUNDED, WHICH IS THE ROW THE TWO ABOVE COULD ONLY BRACKET.
@@ -2090,12 +2104,12 @@ function renderEngineRuns() {
           + `moved under this zone — a fact about the BUILD in both cases, and NOT a zero. The two `
           + `bracketing rows above are what this build can say.`
         : _only === 0
-          ? `hard bar, composed — NONE of ${esc(String(m.endpoints))} emitted address(es) is one this run `
+          ? `hard bar, composed — NONE of ${m.endpoints} emitted address(es) is one this run `
             + `PROVED exists only at run time. That is a REFUSAL TO CLAIM the bar on this document and NOT a `
             + `small number. Still a FLOOR: "unproven" claims nothing about what a parse could reach, and a `
             + `source this flow pinned and re-read really is past every parse — the row below is how large `
             + `that population can be.`
-          : `hard bar, composed — ${esc(String(_only))} of ${esc(String(m.endpoints))} emitted address(es) `
+          : `hard bar, composed — ${_only} of ${m.endpoints} emitted address(es) `
             + `is one this run PROVED exists only at run time: it reached the address holding a value it had `
             + `not determined AND resting on an unknown a document, a server, an attacker or the environment `
             + `supplied, or it read the address out of bytes that were never in the served document. This `
@@ -2131,17 +2145,17 @@ function renderEngineRuns() {
           + `this reader knows, which is an installed engine older than the key or one whose class list moved `
           + `under this zone. A fact about the BUILD and NOT a zero.`
         : (_mayRest === 0
-            ? `may rest on a witness — NONE of ${esc(String(m.endpoints))} emitted address(es) was composed `
+            ? `may rest on a witness — NONE of ${m.endpoints} emitted address(es) was composed `
               + `by a path that had pinned a source's value on an arm its own example contradicted. So this `
               + `run's "unproven" above is the bar having genuinely proved nothing, rather than a population `
               + `the bar could not look at.`
-            : `may rest on a witness — ${esc(String(_mayRest))} of ${esc(String(m.endpoints))} emitted `
+            : `may rest on a witness — ${_mayRest} of ${m.endpoints} emitted `
               + `address(es) was composed by a path that HAD pinned a source's value on an arm its own `
               + `example contradicted. That is a MAY and never a bar: it does not say the address read that `
               + `source. It is the bound on the one population "unproven" above cannot look at, because `
               + `a pinned read comes back as a bare value and the address then grades "concrete".`)
           + (_unasked === 0 ? ``
-             : ` ${esc(String(_unasked))} address(es) could not be asked at all — no flow stood when the `
+             : ` ${_unasked} address(es) could not be asked at all — no flow stood when the `
                + `record was minted, which is a door composing a request outside the scheduler and is a `
                + `finding about that door rather than about an address.`);
     /* AND WHETHER THIS TOOL'S OWN EGRESS POLICY IS WHY THAT SURFACE IS THE SIZE IT IS — bridge.js's
@@ -2175,9 +2189,9 @@ function renderEngineRuns() {
       ? `egress: this run asked this tool's chokepoint for nothing, so its own policy refused nothing and is `
         + `not what the surface figure above is measuring`
       : _decl === 0
-        ? `egress: ${esc(String(m.egressAsked))} request(s) asked of this tool's chokepoint and NONE refused `
+        ? `egress: ${m.egressAsked} request(s) asked of this tool's chokepoint and NONE refused `
           + `— so the surface above is what the driving reached, and widening an origin would not add to it`
-        : `egress: ${esc(String(_decl))} of ${esc(String(m.egressAsked))} request(s) REFUSED by this tool's `
+        : `egress: ${_decl} of ${m.egressAsked} request(s) REFUSED by this tool's `
           + `own policy · ${histCells(m.egressDeclined)} — which is a different fact from a page this engine `
           + `never derived the request for, and the two take opposite work: widen the origin, or improve the `
           + `driving.`;
@@ -2202,9 +2216,9 @@ function renderEngineRuns() {
            "the scheduler is ordering its flows by is invisible again");
     const order = m.wfq.members === 0
       ? `frontier order: no members standing when this was taken${live ? "" : " — the run drained or parked, so there was no order left to report"}`
-      : `frontier order over ${esc(String(m.wfq.members))} flows: `
+      : `frontier order over ${m.wfq.members} flows: `
         + Object.keys(m.wfq).filter((k) => k !== "members")
-                .map((k) => esc(k) + " " + esc(String(m.wfq[k]))).join(" · ");
+                .map((k) => String(k) + " " + String(m.wfq[k])).join(" · ");
     /* AND WHAT THAT ORDER WAS DENOMINATED IN — solver/quantum.h's `_quantum`, relayed whole by bridge.js and
        rendered HERE, immediately under the order, because it is the fact that decides whether the order above
        may be compared with another run's at all. A person reading this panel is doing exactly one thing with
@@ -2248,8 +2262,7 @@ function renderEngineRuns() {
            "it into every document result.c builds and bridge.js asserts its three fields before relaying it " +
            "whole, so a record that has an @RESULT document and no `quantum` is that relay broken, and every " +
            "frontier order on this panel becomes a number nobody can tell from another run's");
-    const denom = `<span class="deep-label">`
-      + `scheduler slice ${esc(String(m.quantum.sliceMs))} ms, billed in ${esc(m.quantum.measure)}`
+    const denom = label([`scheduler slice ${m.quantum.sliceMs} ms, billed in ${m.quantum.measure}`
       + (m.quantum.isCpu
           ? ` — real thread CPU, so every microsecond the aging charge bills is one the flow held the thread `
             + `for. That does not make the order reproducible: the slice is that same CPU, and a loaded `
@@ -2258,8 +2271,7 @@ function renderEngineRuns() {
             + `OS left running, so a descheduling nothing in the page chose moves one flow's rank alone — a `
             + `second and larger source of variance on top of the one a CPU-clocked host has.`)
       + ` Either way, two runs of THIS SAME build over this same page take different orders: compare two runs `
-      + `of one build before reading a difference between two builds.`
-      + `</span>`;
+      + `of one build before reading a difference between two builds.`]);
     /* AND THE THREE SUBSYSTEMS UNDER THE ORDER, THE FORK TABLE, AND THE SILENCE — solver/result.c's `_cold`,
        `_heap`, `_swap`, decide.c's `_forkAt` and absent.c's `_absent`, relayed whole by bridge.js. Same defect as `_wfq` and four times the size: each was printed
        ONLY by the smoke driver's loop, which the extension's ABI never enters, so what the pager is holding,
@@ -2283,7 +2295,7 @@ function renderEngineRuns() {
        reading `owed 0` is a real clean bill and a row naming three interfaces is a work queue. */
     const CENSUS = [["cold", "frontier + cold tier"], ["heap", "heap"], ["swap", "COW switch"],
                     ["absent", "asked for and not answered"]];
-    const censusRows = CENSUS.map(([k, label]) => {
+    const censusRows = CENSUS.map(([k, title]) => {
       DCHECK(m[k] && typeof m[k] === "object",
              "an engine run record reached the popup with no `" + k + "` census — solver/result.c composes " +
              "it into every document it builds and bridge.js asserts its shape before relaying it whole, so " +
@@ -2298,56 +2310,57 @@ function renderEngineRuns() {
          to solver/step_unit.h reaches this reader unedited. bridge.js asserts the shape before relaying it, so
          this view renders rather than re-checking. */
       const cell = (v) => (v !== null && typeof v === "object"
-        ? Object.keys(v).map((a) => esc(a) + " " + esc(String(v[a]))).join(", ")
-        : esc(String(v)));
-      return `<span class="deep-label">${esc(label)}: `
-           + Object.keys(m[k]).map((f) => esc(f) + " " + cell(m[k][f])).join(" · ") + `</span>`;
+        ? Object.keys(v).map((a) => String(a) + " " + String(v[a])).join(", ")
+        : String(v));
+      return label([`${title}: `
+                    + Object.keys(m[k]).map((f) => String(f) + " " + cell(m[k][f])).join(" · ")]);
     });
     DCHECK(m.forkAt && typeof m.forkAt === "object",
            "an engine run record reached the popup with no `forkAt` table — solver/decide.c composes it into " +
            "every document result.c builds, so its absence is that relay broken and not a document that " +
            "never forked, which is `{}` and is rendered as the sentence it is");
-    censusRows.push(`<span class="deep-label">` + (Object.keys(m.forkAt).length === 0
+    censusRows.push(label([Object.keys(m.forkAt).length === 0
       ? `forked at: nothing — no predicate of this document ever split a flow`
-      : `forked at: ` + Object.keys(m.forkAt).map((f) => esc(f) + " ×" + esc(String(m.forkAt[f]))).join(" · "))
-      + `</span>`);
+      : `forked at: ` + Object.keys(m.forkAt).map((f) => String(f) + " ×" + String(m.forkAt[f])).join(" · ")]));
     // The numbers on a snapshot are real observations of a page that is STILL being analysed, so they are
     // shown — and they are labelled as a running total, which is the one thing a completed run's row is not.
     const head = live
-      ? `<strong>still running</strong> — snapshot, not a total; ${resumedTxt}; ${coldTxt} · so far: `
+      ? [domElement("strong", {}, ["still running"]), ` — snapshot, not a total; ${resumedTxt}; ${coldTxt} · so far: `]
       : `run complete · ${resumedTxt}; ${coldTxt} · `;
     /* THE ORPHAN SENTENCE SITS DIRECTLY UNDER THE LEARNED/COST ROW AND ABOVE THE SCHEDULER'S OWN READINGS,
        because that is what it is about: the row above says what this run LEARNED, this says whether it ever
        reached the one surface no live traffic can produce, and everything below it is the frontier's internal
        accounting. Its last arm points AT the endpoint number in the row above, so the two must be adjacent. */
-    return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
-         + `</span><span class="deep-label">${orphan}</span>`
-         + `<span class="deep-label">${surface}</span>`
-         + `<span class="deep-label">${razor}</span>`
-         + `<span class="deep-label">${hardBar}</span>`
-         + `<span class="deep-label">${composedBar}</span>`
-         /* IMMEDIATELY AFTER THE BAR AND BEFORE THE EGRESS SENTENCE, because it is the bar's own missing
-            population and its text points AT the row above it — "this run's `unproven` above" — so the two
-            must be adjacent for the same reason the bar and the surface figure are. It renders as the empty
-            string on a run that emitted no address, where there is no surface to bound. */
-         + `<span class="deep-label">${witnessRow}</span>`
-         + `<span class="deep-label">${egress}</span>`
-         + `<span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
-  }).join("");
+    return domElement("div", { class: "deep-row" }, [
+      label([`${where} — `, head, parts.join(" · ")]),
+      label([orphan]),
+      label([surface]),
+      label([razor]),
+      label([hardBar]),
+      label([composedBar]),
+      /* IMMEDIATELY AFTER THE BAR AND BEFORE THE EGRESS SENTENCE, because it is the bar's own missing
+         population and its text points AT the row above it — "this run's `unproven` above" — so the two
+         must be adjacent for the same reason the bar and the surface figure are. It renders as an empty
+         label on a run that emitted no address, where there is no surface to bound. */
+      label([witnessRow]),
+      label([egress]),
+      label([order]), denom, censusRows,
+    ]);
+  });
   const live = engineRuns.filter((m) => m.run === "partial").length;
-  return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked `
-       + `(${engineRuns.length}${live ? `, ${live} still running` : ""})</summary>${rows}</details>`;
+  return domElement("details", { class: "deep-cross-tab" }, [
+    domElement("summary", {}, [`Engine runs — cost, what was learned, what was parked `
+                               + `(${engineRuns.length}${live ? `, ${live} still running` : ""})`]),
+    rows,
+  ]);
 }
 
 // ─── Data Panel ──────────────────────────────────────────────────────────────
 
-// A LIST OF URLs AS LINKS, one spelling. The key card wrote this inline for `pageUrls` and the new endpoint
-// line needs the same thing, and two copies of it is how one of them ends up escaping a title and the other not.
-function _urlListHtml(list) {
-  return list.map((u) => {
-    if (/^https?:\/\//i.test(u)) return `<a href="${esc(u)}" target="_blank" title="${esc(u)}">${esc(_shortUrl(u))}</a>`;
-    return `<span title="${esc(u)}">${esc(_shortUrl(u))}</span>`;
-  }).join(", ");
+// A LIST OF URLs AS LINKS, one spelling: each a link when it is http(s), its short form with the full address
+// as the title either way, comma-separated.
+function _urlListNodes(list) {
+  return list.map((u, i) => [i === 0 ? "" : ", ", domLink(u, { title: u }, [_shortUrl(u)])]);
 }
 
 function renderDataPanel() {
@@ -2407,11 +2420,13 @@ function renderDataPanel() {
   const hasData = keys.length > 0 || scopeRows.length > 0 || auth !== null;
   empty.style.display = hasData ? "none" : "block";
 
-  let html = "";
+  const out = [];
+  const meta = (children) => domElement("div", { class: "card-meta" }, children);
+  const joined = (list, sep, tag) => list.map((v, i) => [i === 0 ? "" : sep, domElement(tag, {}, [String(v)])]);
 
   // Keys section
   if (keys.length) {
-    html += '<div class="section-header">Discovered API Keys</div>';
+    out.push(domElement("div", { class: "section-header" }, ["Discovered API Keys"]));
     for (const [key, info] of keys) {
       /* THE WHOLE RECORD, ASSERTED, BECAUSE ONE PROJECTION WRITES ALL OF IT. serializeApiKeyEntry
          (lib/serialize.js) DCHECKs that the four collections are Sets and that requestCount is a number, then
@@ -2473,26 +2488,39 @@ function renderDataPanel() {
              "lib/keys.js initialises it to 0 and only ever `++`s it, mergeToGlobal takes the max of two such " +
              "numbers and serializeApiKeyEntry asserts and writes it on every entry, so anything else is one " +
              "of those producers having changed under this badge (key type=" + info.name + ")");
-      html += `<div class="card">
-        <div class="card-label">${esc(info.name)} <span class="badge badge-source" title="where this key was found — the request/response context it was matched in">${esc(info.source)}</span>
-          <span class="badge badge-status" title="how many times this key's pattern matched in text this extension scanned — one per match per scanned string (the request URL, each request header, each response, WebSocket and postMessage body, each decoded protobuf field, and every nested base64 level of those). It is not a count of requests, and across documents it is the most any one document's scan saw.">${esc(String(info.requestCount))}&times; seen</span>
-        </div>
-        <div class="card-value">${esc(key)}</div>`;
+      const card = domElement("div", { class: "card" }, [
+        domElement("div", { class: "card-label" }, [
+          info.name + " ",
+          domElement("span", { class: "badge badge-source",
+                               title: "where this key was found — the request/response context it was matched in" },
+                     [info.source]),
+          " ",
+          domElement("span", { class: "badge badge-status",
+                               title: "how many times this key's pattern matched in text this extension scanned — " +
+                                      "one per match per scanned string (the request URL, each request header, " +
+                                      "each response, WebSocket and postMessage body, each decoded protobuf " +
+                                      "field, and every nested base64 level of those). It is not a count of " +
+                                      "requests, and across documents it is the most any one document's scan saw." },
+                     [String(info.requestCount) + "\u00d7 seen"]),
+        ]),
+        domElement("div", { class: "card-value" }, [key]),
+      ]);
+      out.push(card);
 
       if (hosts.length) {
-        html += `<div class="card-meta">${hosts.length === 1 ? "Host" : "Hosts"}: ${hosts.map((h) => `<strong>${esc(h)}</strong>`).join(", ")}</div>`;
+        card.appendChild(meta([(hosts.length === 1 ? "Host" : "Hosts") + ": ", joined(hosts, ", ", "strong")]));
       }
       if (services.length) {
-        html += `<div class="card-meta">${services.length === 1 ? "Service" : "Services"}: ${services.map((s) => `<code>${esc(s)}</code>`).join(" ")}</div>`;
+        card.appendChild(meta([(services.length === 1 ? "Service" : "Services") + ": ", joined(services, " ", "code")]));
       }
       /* THE ENDPOINTS THIS KEY WAS SEEN AGAINST — `<host><path>` per lib/keys.js, and until now the set was
          read only for its `.length`, laundered into the "req" badge above. It is the one measured usage fact
          on the record, so it is stated as itself. */
       if (eps.length) {
-        html += `<div class="card-meta">${eps.length === 1 ? "Endpoint" : "Endpoints"}: ${eps.map((e2) => `<code>${esc(e2)}</code>`).join(" ")}</div>`;
+        card.appendChild(meta([(eps.length === 1 ? "Endpoint" : "Endpoints") + ": ", joined(eps, " ", "code")]));
       }
       if (pageUrls.length) {
-        html += `<div class="card-meta">${pageUrls.length === 1 ? "Page" : "Pages"}: ${_urlListHtml(pageUrls)}</div>`;
+        card.appendChild(meta([(pageUrls.length === 1 ? "Page" : "Pages") + ": ", _urlListNodes(pageUrls)]));
       }
       /* WHEN AND WHERE, the last fields of the record. lib/keys.js stamps `firstSeen`/`lastSeen` on every
          entry and `referer` — the URL the key was matched in — from the text it was scanning; lib/merge.js's
@@ -2508,11 +2536,10 @@ function renderDataPanel() {
              "an API key reached the popup without numeric firstSeen/lastSeen — lib/keys.js stamps both when " +
              "it mints the entry and refreshes lastSeen on every later sighting, so a missing one is a " +
              "copier dropping the field");
-      html += `<div class="card-meta">first seen ${esc(new Date(info.firstSeen).toLocaleString())}`
-            + ` &middot; last seen ${esc(new Date(info.lastSeen).toLocaleString())}`
-            + (info.referer ? ` &middot; matched in ${_urlListHtml([info.referer])}` : "")
-            + `</div>`;
-      html += `</div>`;
+      card.appendChild(meta([
+        `first seen ${new Date(info.firstSeen).toLocaleString()} \u00b7 last seen ${new Date(info.lastSeen).toLocaleString()}`,
+        info.referer ? [" \u00b7 matched in ", _urlListNodes([info.referer])] : [],
+      ]));
     }
   }
 
@@ -2520,10 +2547,12 @@ function renderDataPanel() {
      this snapshot from the beginning and no view has ever read. Rendered together because they answer one
      question — is the surface below the anonymous one, and what would it take to reach the other. */
   if (hasData) {
-    html += '<div class="section-header">Credentials and scopes observed</div>';
+    out.push(domElement("div", { class: "section-header" }, ["Credentials and scopes observed"]));
+    const compact = (title, children) => domElement("div", { class: "card card-compact" },
+                                                    [domElement("div", { class: "card-label" }, title), meta(children)]);
     if (auth) {
       const carried = [];
-      if (auth.hasAuthorization) carried.push("an <code>Authorization</code> header");
+      if (auth.hasAuthorization) carried.push(["an ", domElement("code", {}, ["Authorization"]), " header"]);
       if (auth.hasCookies) carried.push("cookies");
       // response-decode.js writes the record ONLY inside `if (authorization || cookie)`, so at least one of
       // the two is true whenever it exists. An empty list here is that producer changed shape, and reporting
@@ -2532,25 +2561,24 @@ function renderDataPanel() {
              "a document's authContext claims neither an Authorization header nor cookies — " +
              "lib/response-decode.js writes the record only when one of the two was observed, so an empty " +
              "one is that producer broken and this line would report a credentialed document as anonymous");
-      html += '<div class="card card-compact"><div class="card-label">Credentialed traffic observed</div>'
-           + '<div class="card-meta">requests from this document carried ' + carried.join(" and ")
-           + (auth.origin ? ' &middot; <code>Origin: ' + esc(auth.origin) + '</code>' : "")
-           + ' — so what this extension learned here includes what those credentials could reach</div></div>';
+      out.push(compact(["Credentialed traffic observed"], [
+        "requests from this document carried ", carried.map((c, i) => [i === 0 ? "" : " and ", c]),
+        auth.origin ? [" \u00b7 ", domElement("code", {}, ["Origin: " + auth.origin])] : [],
+        " — so what this extension learned here includes what those credentials could reach",
+      ]));
     } else {
-      html += '<div class="card card-compact"><div class="card-label">No credentialed traffic observed</div>'
-           + '<div class="card-meta">no request from this document carried an <code>Authorization</code> header '
-           + 'or a cookie, so everything learned here is the ANONYMOUS surface — which is the point: the bundle '
-           + 'ships the authenticated code path to a logged-out visitor too</div></div>';
+      out.push(compact(["No credentialed traffic observed"], [
+        "no request from this document carried an ", domElement("code", {}, ["Authorization"]), " header or a " +
+        "cookie, so everything learned here is the ANONYMOUS surface — which is the point: the bundle ships the " +
+        "authenticated code path to a logged-out visitor too",
+      ]));
     }
     for (const [svc, list] of scopeRows) {
-      html += '<div class="card card-compact"><div class="card-label">Required OAuth scopes &mdash; <code>'
-           + esc(svc) + '</code></div><div class="card-meta">'
-           + list.map((s) => '<code>' + esc(s) + '</code>').join(" ")
-           + '</div></div>';
+      out.push(compact(["Required OAuth scopes \u2014 ", domElement("code", {}, [svc])], [joined(list, " ", "code")]));
     }
   }
 
-  keysContainer.innerHTML = html;
+  domReplaceChildren(keysContainer, out);
 }
 
 
@@ -2624,9 +2652,7 @@ function onSendEndpointSelected() {
       currentSchema = null;
       setSendPanelVisible(false);
       document.getElementById("send-form-fields").style.display = "block";
-      document.getElementById("send-form-fields").innerHTML =
-        '<div class="hint">' + esc(svc) + " published no rootUrl or baseUrl, so its methods have no " +
-        "address to send to.</div>";
+      _sendFormHint(svc + " published no rootUrl or baseUrl, so its methods have no address to send to.");
       renderChainInfo(null);
       return;
     }
@@ -2666,15 +2692,13 @@ function onSendEndpointSelected() {
   document.getElementById("send-frame-row").classList.add("hidden");
   document.getElementById("send-key-section").classList.add("hidden");
   document.getElementById("send-form-fields").style.display = "block";
-  document.getElementById("send-form-fields").innerHTML =
-    '<div class="hint">Select a method to load its schema.</div>';
+  _sendFormHint("Select a method to load its schema.");
   renderChainInfo(null);
 }
 
 async function loadVirtualSchema(service, methodId, initialData = null) {
   currentSchema = null;
-  document.getElementById("send-form-fields").innerHTML =
-    '<div class="hint">Loading schema...</div>';
+  _sendFormHint("Loading schema...");
 
   try {
     const schema = await chrome.runtime.sendMessage({
@@ -2684,8 +2708,7 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
     });
 
     if (!schema || !schema.method) {
-      document.getElementById("send-form-fields").innerHTML =
-        '<div class="hint">Method definition not found.</div>';
+      _sendFormHint("Method definition not found.");
       return;
     }
 
@@ -2739,9 +2762,13 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
     // line it would render in the same hint and read as a transport hiccup.
     RETHROW_FATAL(err);
     console.error("Error loading virtual schema:", err);
-    document.getElementById("send-form-fields").innerHTML =
-      `<div class="hint">Error loading schema: ${esc(err.message)}</div>`;
+    _sendFormHint("Error loading schema: " + String(err.message));
   }
+}
+
+// Replaces the Send form with one hint line.
+function _sendFormHint(text) {
+  domReplaceChildren(document.getElementById("send-form-fields"), [domElement("div", { class: "hint" }, [text])]);
 }
 
 function renderChainInfo(chains) {
@@ -2749,39 +2776,34 @@ function renderChainInfo(chains) {
   if (!container) return;
   if (!chains || (!chains.incoming?.length && !chains.outgoing?.length)) {
     container.classList.add("hidden");
-    container.innerHTML = "";
+    container.replaceChildren();
     return;
   }
   container.classList.remove("hidden");
-  let html = '<div class="chain-info-box">';
+  const span = (cls, text) => domElement("span", { class: cls }, [text]);
+  const count = (link) => (link.observedCount > 1 ? span("chain-count", String(link.observedCount) + "x") : []);
+  const box = domElement("div", { class: "chain-info-box" });
   if (chains.incoming?.length) {
-    html += '<div class="chain-section"><span class="chain-section-label">Receives data from:</span>';
-    for (const link of chains.incoming) {
-      html += `<div class="chain-link chain-incoming">` +
-        `<span class="chain-param">${esc(link.paramName)}</span>` +
-        `<span class="chain-arrow">&larr;</span>` +
-        `<span class="chain-source">${esc(link.sourceMethodId)}</span>` +
-        `<span class="chain-field">.${esc(link.sourceFieldPath)}</span>` +
-        (link.observedCount > 1 ? `<span class="chain-count">${esc(String(link.observedCount))}x</span>` : "") +
-        `</div>`;
-    }
-    html += '</div>';
+    box.appendChild(domElement("div", { class: "chain-section" }, [
+      span("chain-section-label", "Receives data from:"),
+      chains.incoming.map((link) => domElement("div", { class: "chain-link chain-incoming" }, [
+        span("chain-param", String(link.paramName)), span("chain-arrow", "\u2190"),
+        span("chain-source", String(link.sourceMethodId)), span("chain-field", "." + String(link.sourceFieldPath)),
+        count(link),
+      ])),
+    ]));
   }
   if (chains.outgoing?.length) {
-    html += '<div class="chain-section"><span class="chain-section-label">Feeds data to:</span>';
-    for (const link of chains.outgoing) {
-      html += `<div class="chain-link chain-outgoing">` +
-        `<span class="chain-field">${esc(link.sourceFieldPath)}</span>` +
-        `<span class="chain-arrow">&rarr;</span>` +
-        `<span class="chain-source">${esc(link.targetMethodId)}</span>` +
-        `<span class="chain-param">.${esc(link.paramName)}</span>` +
-        (link.observedCount > 1 ? `<span class="chain-count">${esc(String(link.observedCount))}x</span>` : "") +
-        `</div>`;
-    }
-    html += '</div>';
+    box.appendChild(domElement("div", { class: "chain-section" }, [
+      span("chain-section-label", "Feeds data to:"),
+      chains.outgoing.map((link) => domElement("div", { class: "chain-link chain-outgoing" }, [
+        span("chain-field", String(link.sourceFieldPath)), span("chain-arrow", "\u2192"),
+        span("chain-source", String(link.targetMethodId)), span("chain-param", "." + String(link.paramName)),
+        count(link),
+      ])),
+    ]));
   }
-  html += '</div>';
-  container.innerHTML = html;
+  domReplaceChildren(container, [box]);
 }
 
 function pbTreeToMap(rootNodes) {
@@ -3148,7 +3170,7 @@ async function replayRequest(reqId, sourceTabId) {
   }
   // Add headers (filtering out Content-Type which is auto-determined)
   const headersList = document.getElementById("send-headers-list");
-  headersList.innerHTML = "";
+  headersList.replaceChildren();
   if (req.requestHeaders) {
     for (const [k, v] of Object.entries(req.requestHeaders)) {
       if (k.toLowerCase() === "content-type") continue;
@@ -3329,8 +3351,8 @@ async function replayRequest(reqId, sourceTabId) {
     }
 
     renderResponse(historicalResult);
-    document.getElementById("send-response-status").innerHTML +=
-      ' <span class="badge badge-source ml-8">Historical</span>';
+    domAppendChildren(document.getElementById("send-response-status"),
+                      [" ", domElement("span", { class: "badge badge-source ml-8" }, ["Historical"])]);
   } else {
     document.getElementById("send-response").style.display = "none";
   }
