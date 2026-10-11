@@ -105,7 +105,7 @@ bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool
    ancestor, and §2 writes no such sentence in the viewport half of any of its four rows. */
 static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
 {
-    lxb_dom_element_t *cb = used_value_containing_block(descendant);
+    lxb_dom_element_t *cb = used_value_containing_block_link(descendant).element;
     const lxb_dom_node_t *cbn, *a;
     char dbuf[160], ebuf[160];
 

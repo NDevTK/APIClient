@@ -254,6 +254,18 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
    entries below read the same walk and answer the width, the `direction` and those rectangles. */
 lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
 
+/* The same §10.1 answer as a link of the CONTAINING BLOCK CHAIN (INTERSECTION OBSERVER §3.2.7 step 3, §3.2.10
+   step 2.2.6; CSSOM VIEW §2's scrolling-area exclusion): `element` generates the box, and `table_wrapper` says
+   the box is that table element's §17.4 wrapper rather than its table box. A table element's principal box IS
+   its wrapper and its own containing block is the wrapper's, so the next link is asked of `element` either way.
+   `element` is NULL for the initial containing block. §10.1's fourth case answers its positioned ancestor (the
+   link, not the padding edge). The third case, the viewport, is refused. */
+typedef struct {
+    lxb_dom_element_t *element;
+    bool               table_wrapper;
+} UsedValueCbLink;
+UsedValueCbLink used_value_containing_block_link(lxb_dom_element_t *el);
+
 /* The element whose CSS 2.1 §9.4.1 stack places `el`'s box: its containing block's element for §10.1's second
    case, or, for a caption, the table element whose §17.4 wrapper box holds it ("the table wrapper box …
    contains the table box itself and any caption boxes"). Any other case is refused: no stack holds that box. */

@@ -94,7 +94,7 @@
  * element's document" when the walk reaches the initial containing block, and `scrollingElement` is CSSOM VIEW
  * §5's member on Document — it does not exist in this engine (nothing in the tree defines or reads that name),
  * so the walk's terminating case has nothing to answer with. Its other two operands DO exist: the containing
- * block chain is core/layout/used_value.h's `used_value_containing_block`, and css-overflow-3 §3's SCROLL
+ * block chain is core/layout/used_value.h's `used_value_containing_block_link`, and css-overflow-3 §3's SCROLL
  * CONTAINER is the computed `overflow-x`/`overflow-y` core/css/css_computed_value.h already derives. BUILD §5's
  * `scrollingElement` first; this member is then that walk over the two components that already answer. The IDL
  * audit reports it, which is correct. */

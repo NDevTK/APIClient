@@ -26,6 +26,7 @@
 #include "core/intersection_observer/intersection_observer.h"
 #include "core/intersection_observer/intersection_observer_entry.h"
 #include "core/layout/scroll_container.h"
+#include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
 #include "core/realm.h"
 #include "core/timing/hr_time.h"
@@ -565,6 +566,7 @@ static IoRect io_intersect(IoRect a, IoRect b)
 static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JSValueConst state, IoRect root)
 {
     lxb_dom_element_t *container;
+    UsedValueCbLink link;
     JSValue rootv = JS_GetPropertyUint32(ctx, (JSValue)state, IO_S_ROOT);
     lxb_dom_node_t *rootn = JS_IsNull(rootv) ? NULL : node_of(rootv);
     JSContext *tctx = document_active_realm_of(lxb_dom_interface_node(target->owner_document));
@@ -582,8 +584,9 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
         r = io_intersect(r, root);                                        /* step 5 */
         return r;
     }
-    container = used_value_containing_block(lxb_dom_interface_element(target));   /* step 2 */
+    link = used_value_containing_block_link(lxb_dom_interface_element(target));   /* step 2 */
     for (;;) {                                                            /* step 3 */
+        container = link.element;
         if (container == NULL) {
             /* THE CHAIN HAS REACHED §10.1's INITIAL CONTAINING BLOCK, which is step 3.5's "if container is the
                root element of a browsing context, update container to be the browsing context's DOCUMENT".
@@ -614,6 +617,17 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
             break;
         }
         if (lxb_dom_interface_node(container) == rootn) break;            /* step 3's own condition */
+        /* A table wrapper link takes neither step 3.3 nor step 3.4: `overflow` is not on CSS 2 §17.4's list
+           of the wrapper's properties, so the wrapper has the initial `visible` ("the initial values are used
+           instead") and is no scroll container and has no content clip. The table element's own `overflow`
+           is its table box's, which is not in the chain. */
+        if (link.table_wrapper) {
+            DCHECK(!table_wrapper_owns_property("overflow"),
+                   "CSS 2 §17.4's declaration split now gives `overflow` to the table WRAPPER, and this walk "
+                   "steps past a wrapper link on the reading that the wrapper takes the initial `visible`");
+            link = used_value_containing_block_link(container);           /* step 3.5 */
+            continue;
+        }
         /* STEPS 3.3 AND 3.4 ARE TWO QUESTIONS AND NOT ONE, AND THIS FILE USED TO SAY THEY WERE ONE. The
            retired claim was that "CSSOM VIEW defines a SCROLL CONTAINER by the same overflow properties a
            CONTENT CLIP is defined by", so one predicate could stand for both. `overflow: clip` refutes it:
@@ -658,7 +672,7 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
            CLIENT coordinates (element_view.c reports the border area there), and what would make two boxes'
            spaces differ is a TRANSFORM, which element_view.c crashes for by name before any rectangle with a
            box in it reaches this function. */
-        container = used_value_containing_block(container);               /* step 3.5 */
+        link = used_value_containing_block_link(container);               /* step 3.5 */
     }
     r = io_intersect(r, root);                                            /* step 5 */
     return r;                                       /* steps 4 and 6: identities, for step 3.2's reason */
@@ -800,10 +814,10 @@ static bool io_in_containing_chain(lxb_dom_node_t *target, lxb_dom_node_t *root)
     /* A TARGET THAT GENERATES NO BOX IS IN NO CONTAINING BLOCK CHAIN AT ALL — §10.1 is defined over boxes — so
        it is not a descendant of the root in one, and step 2.2.6 skips it to step 2.2.11. */
     if (!element_view_has_box(target)) return false;
-    c = used_value_containing_block(lxb_dom_interface_element(target));
+    c = used_value_containing_block_link(lxb_dom_interface_element(target)).element;
     while (c != NULL) {
         if (lxb_dom_interface_node(c) == root) return true;
-        c = used_value_containing_block(c);
+        c = used_value_containing_block_link(c).element;
     }
     return false;
 }

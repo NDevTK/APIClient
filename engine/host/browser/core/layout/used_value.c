@@ -1241,6 +1241,11 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        'table' box around the caption that no element names. Both answers are decided at that one ancestor,
        which is why the flag is read there and nowhere else in the loop. */
     bool caption = uv_table_box_kind(el) == TABLE_BOX_CAPTION;
+    /* Whether the box the walk has just come up from is an internal table box (§17.2.1's defined term). While
+       it is, a row or row-group ancestor is not a block container and §10.1 passes it, and the table box above
+       them is inside its §17.4 wrapper, which is the block container. A box with no box (`contents`) keeps the
+       flag; any other box clears it. */
+    bool from_internal = table_box_kind_is_internal(uv_table_box_kind(el));
     char nbuf[160], abuf[160];
 
     r.box = UV_CB_INITIAL;
@@ -1346,8 +1351,9 @@ static UvCb uv_cb(lxb_dom_element_t *el)
                       "the box INSIDE the wrapper. BUILD the wrapper as a box this walk reports, which is "
                       "the same `UV_CB_TABLE_WRAPPER` the caption arm below already answers and the same "
                       "box §17.4's split is stated over — and give this entry the PADDING edge of it. A "
-                      "table-INTERNAL ancestor is a different absence and is §17.5 Visual layout of table "
-                      "contents' grid rectangle, which the second case's own table arm names in full",
+                      "table-INTERNAL ancestor is a different absence: css-tables-3 §4.2 With a "
+                      "table-internal as containing block makes the rectangle \"the area that would be "
+                      "assigned to the box during layout\", which is §3.11's placement of that box",
                       box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
             r.box = UV_CB_POSITIONED_PADDING;
             r.element = anc;
@@ -1454,6 +1460,20 @@ static UvCb uv_cb(lxb_dom_element_t *el)
             r.element = anc;
             return r;
         }
+        /* §10.1's second case over an internal table box: "the content edge of the nearest block container
+           ancestor box". Rows and row groups are not block containers (CSS 2 §9.2.1 names only "non-replaced
+           table cells" among table boxes), so the walk passes them. The table element generates two boxes,
+           and §17.4 makes the outer one a block container: "The table wrapper box is a block box if the table
+           is block-level, and an inline-block box if the table is inline-level. The table wrapper box
+           establishes a block formatting context." So that wrapper is the answer. */
+        if (from_internal && anc_table_box) {
+            r.box = UV_CB_TABLE_WRAPPER;
+            r.element = anc;
+            return r;
+        }
+        if (from_internal && table && !none &&
+            table_box_kind_is_internal(table_box_kind(d)))
+            continue;
         if (none)
             DFAILF("%s, whose ancestor %s generates no box: "
                   "§10.1's second case walked up to an ancestor whose computed `display` is `none`, and "
@@ -1468,38 +1488,14 @@ static UvCb uv_cb(lxb_dom_element_t *el)
                   "every layout walk in this engine descends only through boxes that exist",
                   box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
         if (table)
-            DFAILF("%s, whose ancestor %s generates a TABLE box or a table-internal one: "
-                  "CSS 2 §9.2.1 Block-level elements and block boxes excludes it from this case by name — "
-                  "\"Except for table boxes, which are described in a later chapter, and replaced elements, a "
-                  "block-level box is also a block container box\" — so the walk cannot stop here, and it must "
-                  "not step over it either. "
-                  "THIS IS NO LONGER THE TABLE WRAPPER BOX, AND A CRASH SAYING SO STOOD HERE UNTIL THE ARM "
-                  "ABOVE WAS WRITTEN: the wrapper is now an answer this walk gives (`UV_CB_TABLE_WRAPPER`), "
-                  "for the one box that is inside it and is not the table box — CSS 2 §17.4 Tables in the "
-                  "visual formatting model's CAPTION. What reaches HERE is everything else, and it is a "
-                  "DIFFERENT rectangle with a different owner. §17.4's wrapper \"contains the table box itself "
-                  "and any caption boxes (in document order)\" and NOTHING ELSE, so a box under a table box is "
-                  "inside the TABLE box, where §17.5 Visual layout of table contents places it on a GRID: "
-                  "\"Each cell is thus a rectangular box, one or more grid cells wide and high\", and the "
-                  "section's own last paragraph puts that rectangle's edges at the cells' border edges in the "
-                  "separated model. A CELL'S CONTAINING BLOCK IS THEREFORE A GRID RECTANGLE AND NOT AN "
-                  "ELEMENT'S CONTENT EDGE — the same shape §10.1's fourth case and css-grid-1's grid area are "
-                  "blocked on — and a row's, a row group's, a column's and a column group's are §17.5's rules "
-                  "1 through 4, of which core/layout/table_grid.h states outright that it places only the "
-                  "cells. WHAT ARRIVES AS AN ORDINARY BOX rather than a table-internal one is §17.2.1 "
-                  "Anonymous table objects' second stage generating an anonymous 'table-cell' box around it, "
-                  "which no element names either. BUILD the grid rectangle as a box this walk can report, in "
-                  "the same shape as the wrapper above — §17.5.2 Table width algorithms: the 'table-layout' "
-                  "property and CSS 2.1 §17.5.3 Table height algorithms already answer the columns and rows it "
-                  "is assembled from. "
-                  "WHO IS WAITING ON IT IS NOT TWO FILES, and they do not all want the same thing: "
-                  "core/layout/flow_position.c's placement and core/layout/block_flow.c's stack want a "
-                  "RECTANGLE and are the same subproblem seen from the position side; "
-                  "core/layout/scrolling_area.c's `sa_excluded` asks per DESCENDANT, so it reaches a cell by "
-                  "walking into a table that nothing upstream classified; and "
-                  "core/intersection_observer/intersection_observer.c walks the containing-block CHAIN itself, "
-                  "at both of the call sites its own algorithm marks, and wants each LINK rather than any "
-                  "box's edges — so a rectangle no element names breaks its loop rather than its geometry",
+            DFAILF("%s, whose ancestor %s generates a TABLE box or a table-internal one, and this box is not "
+                  "itself an internal table box: CSS 2 §17.2.1 Anonymous table objects' second stage, Generate "
+                  "missing child wrappers, wraps it — \"If a child C of a table-row box is not a table-cell, then "
+                  "generate an anonymous table-cell box around C and all consecutive siblings of C that are not "
+                  "table-cell boxes\", and the stage's rules for a table or row group parent generate a row "
+                  "around it first. That anonymous cell is a block container (§9.2.1), so it is "
+                  "this box's containing block, and no element names it. BUILD §17.2.1's generated cell as a box "
+                  "this walk can report, as `UV_CB_TABLE_WRAPPER` reports the wrapper no element names either",
                   box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
         if (grid)
             DFAILF("%s, whose ancestor %s is a GRID CONTAINER: "
@@ -1532,6 +1528,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
                   "rectangle (crash naming that module). An `else` that picked one of the three would answer "
                   "every future spelling the same way",
                   box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
+        if (!contents) from_internal = false;
         /* css-display-3 §2.8 The Root Element's Principal Box: "The root element's display type is always
            blockified", and "Additionally, a display of contents computes to block on the root element" — so
            the root is a block container however it was declared and the walk stops AT it, never over it. */
@@ -1599,18 +1596,8 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
        an element a caller would take the wrong edge of. That is not a hypothetical wrong answer: the two
        callers inside this directory both add `used_value_leading_edge_px` to what they get back, which is
        the border AND the padding, so a fourth-case ancestor returned bare would be measured from a rectangle
-       inset by its own border on every side.
-       NAMED RESIDUAL — TWO QUESTIONS ARE BEING ASKED OF ONE ENTRY AND ONLY ONE OF THEM IS REFUSED HERE.
-       WHAT IS NOT COVERED: a caller that wants §10.1's CHAIN LINK rather than its rectangle — the ELEMENT
-       whose box establishes the containing block, which for the fourth case IS this ancestor and is a
-       perfectly good answer to that question. core/intersection_observer/intersection_observer.c's §3.2.7
-       step 3.5 ("update container to be the containing block of container") and
-       core/layout/scrolling_area.c's `sa_excluded` ask exactly that and are refused here for a reason that
-       is about a DIFFERENT question. WHAT THE NEXT DIFF BUILDS: a second entry for the link, over this same
-       walk, so the two questions stop sharing one answer — the fact is the tagged box above and each caller
-       asks its own question of it. HOW ITS ABSENCE WOULD SHOW: a page whose observed target or whose
-       scrolling element has an absolutely positioned descendant aborts here, in a member that never wanted a
-       rectangle, naming an edge it was not going to read. */
+       inset by its own border on every side. A caller that wants the
+       containing block chain's LINK rather than its rectangle asks `used_value_containing_block_link`. */
     if (cb.box == UV_CB_VIEWPORT)
         DFAILF("%s: §10.1's THIRD case — a `position: fixed` box's containing block — is the VIEWPORT, and "
               "this entry answers an ELEMENT'S OWN PRINCIPAL BOX. THE RECTANGLE IS NOT WHAT IS MISSING: "
@@ -1630,7 +1617,7 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
               "NOT WHAT IS MISSING and a caller that wanted only its width or its `direction` already has "
               "it: `used_value_containing_block_width` composes that ancestor's padding box from the same "
               "walk. WHAT THIS ENTRY CANNOT SAY IS WHICH EDGE, because its return type carries only the "
-              "element — see the residual above this line for the split that ends it",
+              "element. A caller that wants the chain's link is `used_value_containing_block_link`'s",
               box_subject(el, nbuf, sizeof nbuf), box_subject(cb.element, abuf, sizeof abuf));
     if (cb.box == UV_CB_TABLE_WRAPPER)
         DFAILF("%s: §10.1's containing block for this box is CSS 2 §17.4 Tables in the visual formatting "
@@ -1643,14 +1630,47 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
               "box itself and any caption boxes (in document order)\", and that list is not the table "
               "element's DOM children — the captions are, the table box is the SAME element wearing its other "
               "box, and the rows are not in it at all. So core/layout/block_flow.c's §9.4.1 stack cannot "
-              "iterate it with `bf_element_child`, core/layout/flow_position.c cannot place inside it, and "
-              "core/intersection_observer/intersection_observer.c's chain has no link to step to. BUILD THAT "
+              "iterate it with `bf_element_child` and core/layout/flow_position.c cannot place inside it (a "
+              "caller that wants the chain's link is `used_value_containing_block_link`'s). BUILD THAT "
               "BOX LIST as the thing §9.4.1's walk iterates — it is the same box-tree step §9.2.1.1 Anonymous "
               "block boxes' runs and css-display-3 §2.5 Box Generation: the none and contents keywords' "
               "`contents` splice both need, and core/layout/block_flow.c's own crashes ask for all three",
               box_subject(el, nbuf, sizeof nbuf), box_subject(cb.element, abuf, sizeof abuf));
     return cb.element;
 }
+
+UsedValueCbLink used_value_containing_block_link(lxb_dom_element_t *el)
+{
+    UvCb cb = uv_cb(el);
+    UsedValueCbLink l;
+    char nbuf[160];
+
+    if (cb.box == UV_CB_VIEWPORT)
+        DFAILF("%s: §10.1's THIRD case — a `position: fixed` box's containing block — is the VIEWPORT, which "
+              "is no element's box, so the containing block chain's next link is not an element and is not "
+              "§10.1's first case either (css-position-3 §2.1 \"Containing Blocks of Positioned Boxes\" "
+              "anchors it to the layout viewport, which does not move when the document scrolls). Decide what "
+              "INTERSECTION OBSERVER §3.2.7 step 3 does at that link and give it a tag of its own",
+              box_subject(el, nbuf, sizeof nbuf));
+    l.element = cb.element;
+    l.table_wrapper = cb.box == UV_CB_TABLE_WRAPPER;
+    return l;
+}
+
+/* The wrapper arms of the views below size a CAPTION, the box §17.4 places in the wrapper beside the table box.
+   An internal table box also has the wrapper as its §10.1 containing block, but the table sizes and places it:
+   css-tables-3 §3.8 resolves a cell's, column's or column group's percentage width as a "percentage
+   contribution" against the table, and §3.11 positions every internal box. A percentage or offset of an
+   internal box resolved against the wrapper is therefore the wrong algorithm, and asserted at each arm. */
+#define UV_WRAPPER_SUBJECT_IS_NOT_INTERNAL(el_, question_)                                                     \
+    do {                                                                                                     \
+        char wbuf_[160];                                                                                     \
+        DCHECKF(!table_box_kind_is_internal(uv_table_box_kind(el_)),                                         \
+                "%s is an internal table box, and its §10.1 containing block (its table's §17.4 wrapper) "   \
+                "was asked for %s. css-tables-3 §3.8 sizes an internal box against the table and §3.11 "     \
+                "places it, so the caller should be asking the table algorithm (core/layout/table_width.h)", \
+                box_subject(el_, wbuf_, sizeof wbuf_), question_);                                           \
+    } while (0)
 
 lxb_dom_element_t *used_value_stacking_container(lxb_dom_element_t *el)
 {
@@ -1661,6 +1681,7 @@ lxb_dom_element_t *used_value_stacking_container(lxb_dom_element_t *el)
             "%s: §9.4.1's stack was asked for a box whose containing block is §10.1's first, third or fourth "
             "case, which no stack holds; the caller places those boxes through their own sections",
             box_subject(el, nbuf, sizeof nbuf));
+    if (cb.box == UV_CB_TABLE_WRAPPER) UV_WRAPPER_SUBJECT_IS_NOT_INTERNAL(el, "§9.4.1's stack");
     return cb.element;
 }
 
@@ -1761,6 +1782,7 @@ CssPx used_value_containing_block_width(lxb_dom_element_t *el)
        asserted through core/layout/table_wrapper.h's own reading of §17.4's list rather than re-read from the
        section here, so the day the list changes the two cannot disagree. */
     if (cb.box == UV_CB_TABLE_WRAPPER) {
+        UV_WRAPPER_SUBJECT_IS_NOT_INTERNAL(el, "its width");
         DCHECK(!table_wrapper_owns_property("border-left-width") &&
                    !table_wrapper_owns_property("padding-left") && !table_wrapper_owns_property("width"),
                "CSS 2 §17.4 Tables in the visual formatting model's declaration split has come apart from the "
@@ -1907,6 +1929,7 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
        BOX, so `<table style="height:400px">` would answer FALSE and make a caption's `height: 50%` resolve
        against a box the caption is not in. */
     if (cb.box == UV_CB_TABLE_WRAPPER) {
+        UV_WRAPPER_SUBJECT_IS_NOT_INTERNAL(el, "whether its height behaves as auto");
         DCHECK(!table_wrapper_owns_property("height"),
                "CSS 2 §17.4 Tables in the visual formatting model's declaration split now puts `height` on "
                "the WRAPPER box, and this arm is written over the opposite — that the wrapper takes §17.4's "
@@ -1954,7 +1977,10 @@ bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out)
        BOX and gives the wrapper the initial value instead, which is `auto`. The predicate above states the
        same derivation and asserts §17.4's split; asking it here would recurse through this box's own arm and
        reach the same answer one call later. */
-    if (cb.box == UV_CB_TABLE_WRAPPER) return false;
+    if (cb.box == UV_CB_TABLE_WRAPPER) {
+        UV_WRAPPER_SUBJECT_IS_NOT_INTERNAL(el, "its height");
+        return false;
+    }
     /* §10.7's SENTENCE HAS A SECOND CONJUNCT AND THESE TWO TAGS ARE IT: "If the height of the containing
        block is not specified explicitly (i.e., it depends on content height), AND THIS ELEMENT IS NOT
        ABSOLUTELY POSITIONED, the percentage value is treated as '0' … or 'none'". Both tags are reached only
