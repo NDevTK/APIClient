@@ -54,14 +54,21 @@ typedef struct {
     size_t    n_value;
 } CspDirective;
 
-/* §2.2's POLICY, reduced to its DIRECTIVE SET. A policy also has a disposition and a source; neither is here,
-   because neither is yet DELIVERED to this engine: only `Content-Security-Policy` and CSP §3.3's `<meta>` are
-   parsed, so every policy has disposition "enforce", and the source that would distinguish the two is a field
-   that cannot survive §7.4's clone (which travels as TEXT), so it arrives with that transport rather than
-   before it. core/dom/document.c asserts the one place the missing source would change an answer. */
+/* §2.2: "Each policy has an associated disposition, which is either "enforce" or "report"." Zero is no
+   disposition, so a policy built by memset is caught where a consumer reads it (csp_policy_is_enforced). */
+typedef enum {
+    CSP_DISPOSITION_UNPLACED = 0,
+    CSP_DISPOSITION_ENFORCE,
+    CSP_DISPOSITION_REPORT,
+} CspDisposition;
+
+/* §2.2's POLICY: its directive set and its disposition. Its source ("header" or "meta") is not here, because
+   it cannot survive §7.4's clone, which travels as TEXT; core/dom/document.c asserts the one place the missing
+   source would change an answer. */
 typedef struct {
-    CspDirective *directives;    /* in delivery order (owned) */
-    size_t        n_directives;
+    CspDirective  *directives;    /* in delivery order (owned) */
+    size_t         n_directives;
+    CspDisposition disposition;
 } CspPolicy;
 
 /* §2.2's CSP LIST. A list, not a policy: several policies arrive comma-delimited in one header or as several
@@ -105,8 +112,11 @@ typedef enum {
    `self_origin` is §2.2.2's "response's URL's origin", stated by the caller because the bytes do not contain
    it and because WHOSE origin it is belongs to the operation: a Document created from a response takes its
    own, and one created by §7.4's clone takes the CREATOR's along with the text. NULL only for a list that
-   will never match a URL — see the field. */
-void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin);
+   will never match a URL — see the field.
+   `disposition` is §2.2.1's argument, stamped on every policy appended: §2.2.2 parses `Content-Security-Policy`
+   as "enforce" and `Content-Security-Policy-Report-Only` as "report". */
+void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin,
+                    CspDisposition disposition);
 
 /* Frees exactly what csp_list_parse allocated — the directive and value arrays — and never the text. */
 void csp_list_free(CspList *list);
@@ -121,8 +131,12 @@ void csp_list_free(CspList *list);
    `out` must be zeroed; `text` is BORROWED and must outlive `out` (this parse copies nothing — see the file
    header). A policy whose directive set comes out empty is a policy that says nothing, which §2.2.2's own
    step drops rather than appends; that judgement is the caller's here, because this entry parses ONE policy
-   and has no list to append it to. */
-void csp_policy_parse(CspPolicy *out, const char *text, size_t len);
+   and has no list to append it to. `disposition` is §2.2.1's own argument. */
+void csp_policy_parse(CspPolicy *out, const char *text, size_t len, CspDisposition disposition);
+
+/* Whether `policy`'s disposition is "enforce", the test every consumer's per-policy step makes ("if policy's
+   disposition is "enforce", then set result to "Blocked""). Asserts the disposition was placed. */
+bool csp_policy_is_enforced(const CspPolicy *policy);
 
 /* Frees exactly what ONE csp_policy_parse allocated — the directive array and each directive's value array —
    and never the text. csp_list_free does this for every member of a list; a policy parsed on its own has no

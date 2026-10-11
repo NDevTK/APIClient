@@ -2117,7 +2117,7 @@ char *solve_json_array(JSContext *ctx) {
         /* The same rule one algorithm earlier: under `require-trusted-types-for 'script'` an innerHTML assignment
            throws before the markup is parsed. The value is the sink group the CSP names, which is what a reader
            adds a policy for. */
-        if (sc->tt >= 0 && trusted_types_required(ctx, (TrustedTypeKind)sc->tt)) {
+        if (sc->tt >= 0 && trusted_types_required(ctx, (TrustedTypeKind)sc->tt, /*include_report_only*/ false)) {
             json_buf_raw(&b, ","); json_buf_key(&b, "trustedTypes");
             json_buf_str(&b, "script");
         }

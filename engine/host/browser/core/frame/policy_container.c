@@ -153,7 +153,10 @@ PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_o
        policy still holds a CSP LIST, and every list has a self-origin. Running it unconditionally is what
        keeps ONE writer for that field — a container built with no text and one built with text are the same
        shape, so no reader has to ask which of the two it is holding. */
-    csp_list_parse(&p->csp, p->csp_text, p->csp_text ? strlen(p->csp_text) : 0, self_origin);
+    /* `csp_text` is the serialized list of ENFORCE policies: `Content-Security-Policy`, HTML §4.2.5.3's
+       `<meta>` ("a disposition of "enforce"") and a creator's clone of those. */
+    csp_list_parse(&p->csp, p->csp_text, p->csp_text ? strlen(p->csp_text) : 0, self_origin,
+                   CSP_DISPOSITION_ENFORCE);
     /* §7.1.7: "A referrer policy, which is a referrer policy. It is initially the default referrer policy",
        which Referrer Policy §3 makes "strict-origin-when-cross-origin". NULL is a creator that states none. */
     p->referrer_policy = strdup(referrer_policy ? referrer_policy : "strict-origin-when-cross-origin");
@@ -295,7 +298,7 @@ void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_
        are, which is what makes this an APPEND at the level of the text as well as of the list. */
     if (old_len) p->csp_text[old_len++] = ',';
     memcpy(p->csp_text + old_len, serialized_policy, add_len + 1);
-    csp_list_parse(&p->csp, p->csp_text, old_len + add_len, self_origin);
+    csp_list_parse(&p->csp, p->csp_text, old_len + add_len, self_origin, CSP_DISPOSITION_ENFORCE);
     /* THE INVARIANT, AT ITS ORIGIN: the list GREW BY ONE. It is the whole of "every delivery appends and none
        replaces" made mechanical — a replace lands on `n_before`, a drop lands below it, and a policy that
        re-parsed as several lands above it. §2.2.2's "if policy's directive set is not empty, append policy"
@@ -530,9 +533,13 @@ SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list
     /* NO SELF-ORIGIN, and that is a statement rather than an omission: this list is read for ONE directive's
        raw value and is never asked to match a URL, so there is no `'self'` here to resolve. §6.7.2.7 asserts
        the origin is present, which is what makes this the only shape of list allowed to lack one. */
-    csp_list_parse(&list, serialized_csp_list, len, NULL);
+    csp_list_parse(&list, serialized_csp_list, len, NULL, CSP_DISPOSITION_ENFORCE);
     for (i = 0; i < list.n_policies; i++) {
-        const CspDirective *d = csp_policy_directive(&list.policies[i], "sandbox");
+        const CspDirective *d;
+
+        /* "If policy's disposition is not "enforce", then continue." */
+        if (!csp_policy_is_enforced(&list.policies[i])) continue;
+        d = csp_policy_directive(&list.policies[i], "sandbox");
         if (d)
             out = sandbox_parse_directive(d->value_text.p, d->value_text.n);
     }
@@ -609,7 +616,8 @@ bool policy_allows_inline(CspReporter reporter, const PolicyContainer *p, CspInl
             csp_report_violation_for_global(reporter, &p->csp.policies[i],
                                             csp_effective_directive_for_inline_checks(type),
                                             CSP_RESOURCE_INLINE, source, source_len, element);
-            allowed = false;
+            /* "If policy's disposition is "enforce", then set result to "Blocked"." */
+            if (csp_policy_is_enforced(&p->csp.policies[i])) allowed = false;
         }
     return allowed;
 }
@@ -633,7 +641,8 @@ bool policy_allows_string_compilation(CspReporter reporter, const PolicyContaine
                point does not carry: see the residual below. */
             csp_report_violation_for_global(reporter, &p->csp.policies[i], "script-src", CSP_RESOURCE_EVAL,
                                             NULL, 0, NULL);
-            allowed = false;
+            /* "If policy's disposition is "enforce", then set result to "Blocked"." */
+            if (csp_policy_is_enforced(&p->csp.policies[i])) allowed = false;
         }
     return allowed;
 }
@@ -834,10 +843,8 @@ CspRequestVerdict policy_should_block_request(CspReporter reporter, const Policy
        pre-request check returns Allowed and there is nothing to walk. */
     if (!effective)
         return CSP_REQUEST_ALLOWED;
-    /* §4.1.2 step 3: for each policy. This build parses only ENFORCE policies (see csp_directive_list.h), so
-       the step's "if policy's disposition is report, skip" is vacuous rather than skipped.
-       THE QUANTIFIER IS THE SAME ONE `policy_allows_inline` RUNS, from the other end: §4.1.2 sets result to Blocked
-       if ANY policy is violated, which is "allowed only if EVERY policy permits it". */
+    /* §4.1.2 step 3: for each policy, skipping a report-only one (step 3.1); §4.1.1 is the walk that reports
+       those. The quantifier is `policy_allows_inline`'s from the other end: Blocked if ANY policy is violated. */
     /* THE LOOP RUNS TO THE END AND DOES NOT RETURN ON THE FIRST VIOLATION, which is §4.1.2's own shape:
        step 3.3 is "execute §5.5 Report a violation …" followed by "SET result to Blocked" — a set and not a
        return — so a document carrying two policies that both refuse one request gets TWO events, which is
@@ -845,7 +852,8 @@ CspRequestVerdict policy_should_block_request(CspReporter reporter, const Policy
        and is a lost event per policy the moment it is not. The ANSWER is identical either way, which is why
        the early return survived as long as it did. */
     for (i = 0; i < p->csp.n_policies; i++)
-        if (policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
+        if (csp_policy_is_enforced(&p->csp.policies[i]) &&
+            policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
                                   p->csp.self_origin, redirect_count)) {
             /* §4.1.2 STEP 3.3.1 — "execute §5.5 Report a violation on the result of executing §2.4.2 Create
                a violation object for request, and policy on request, and policy".
@@ -878,10 +886,11 @@ CspRequestVerdict policy_request_verdict(const PolicyContainer *p, const UrlReco
     verdict = policy_should_block_request(csp_reporter_none(), p, url, destination, metadata, redirect_count);
     if (verdict == CSP_REQUEST_ALLOWED)
         return verdict;
-    /* The same per-policy predicate §4.1.2's loop asked, so the first policy it finds violated is one of the
-       policies that made the answer Blocked. */
+    /* The same per-policy predicate and disposition skip §4.1.2's loop applies, so the first policy it finds
+       violated is one of the enforced policies that made the answer Blocked. */
     for (i = 0; i < p->csp.n_policies && !*governing; i++)
-        if (policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
+        if (csp_policy_is_enforced(&p->csp.policies[i]) &&
+            policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
                                   p->csp.self_origin, redirect_count))
             *governing = csp_policy_governing_directive(&p->csp.policies[i], effective);
     DCHECK(*governing != NULL,

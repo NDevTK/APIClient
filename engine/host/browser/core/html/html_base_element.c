@@ -95,7 +95,9 @@ static bool base_allowed_for_document(JSContext *realm, const PolicyContainer *p
            that document's violation into its own. */
         csp_report_violation_for_global(csp_reporter(realm), &list->policies[i], "base-uri",
                                         CSP_RESOURCE_INLINE, NULL, 0, NULL);
-        return false;   /* every policy this build parses has disposition "enforce" */
+        /* "If policy's disposition is "enforce", return "Blocked"." A report-only policy reports and the walk
+           continues. */
+        if (csp_policy_is_enforced(&list->policies[i])) return false;
     }
     return true;
 }

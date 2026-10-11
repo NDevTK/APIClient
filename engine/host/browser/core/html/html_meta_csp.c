@@ -77,7 +77,7 @@ char *html_meta_csp_policy(const lxb_dom_node_t *node)
        THE ATTRIBUTE'S VALUE IS PARSED MARKUP BY NOW, so entity decoding and quoting are the HTML parser's
        answer rather than a second one — the same reason the bundle id is a real `<script>` scan. */
     memset(&policy, 0, sizeof policy);
-    csp_policy_parse(&policy, (const char *)content, content_len);
+    csp_policy_parse(&policy, (const char *)content, content_len, CSP_DISPOSITION_ENFORCE);
 
     /* STEP 4: "Remove all occurrences of the report-uri, frame-ancestors, and sandbox directives from
        policy." Each for its own reason, and `sandbox` is the one this engine could previously only ASSERT

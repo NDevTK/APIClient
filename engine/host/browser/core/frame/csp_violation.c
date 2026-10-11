@@ -278,25 +278,18 @@ static JSValue csp_violation_target(JSContext *ctx, const lxb_dom_element_t *ele
     return JS_DupValue(ctx, doc);
 }
 
-/* §5.5's own body, for a violation whose every field is already in hand. `resource_url` is the URL arm's
-   operand and `sample`/`sample_len` are §2.4's sample, already cut.
-   THE DISPOSITION IS "enforce" AND IS NOT READ OFF THE POLICY, because a policy in this build has no other
-   value to be read: core/frame/csp_directive_list.h records that a container is built from
-   `Content-Security-Policy` and from CSP §3.3's `<meta>` and never from `Content-Security-Policy-Report-Only`,
-   which this build is never handed. §2.2 gives a policy a disposition of "enforce" or "report" and this one
-   parses only the first, which is also why §4.1.2's "if policy's disposition is report, skip to the next
-   policy" is vacuous here rather than skipped.
-     NAMED RESIDUAL — WHAT IS NOT COVERED: a report-only policy, whose violations a browser reports without
-     blocking. WHAT THE NEXT DIFF BUILDS: §2.2.2's second extraction — "for each token returned by extracting
-     header list values given `Content-Security-Policy-Report-Only` … let policy be the result of parsing
-     token with a source of header and a disposition of report" — a disposition field on CspPolicy, and the
-     two `if policy's disposition is …` arms §4.1.2 and §4.2.3 already spell.
-     HOW ITS ABSENCE WOULD SHOW: a document served BOTH headers fires one event where a browser fires two,
-     and the one it fires reads `disposition: "enforce"` with no `"report"` event beside it. */
 static unsigned long g_csp_violation_reports;
 
 unsigned long csp_violation_reports(void) { return g_csp_violation_reports; }
 
+/* §5.5's own body, for a violation whose every field is already in hand. `resource_url` is the URL arm's
+   operand and `sample`/`sample_len` are §2.4's sample, already cut. The disposition is §2.4's "the
+   disposition of the policy that has been violated", read off the policy.
+     NAMED RESIDUAL — WHAT IS NOT COVERED: no policy reaches a container with disposition "report", so every
+     consumer's report-only arm is built and unreached. WHAT THE NEXT DIFFS BUILD: Fetch §4.1 "Main fetch"
+     step 4's CSP §4.1.1 walk, then §2.2.2's `Content-Security-Policy-Report-Only` extraction at document
+     creation and its carriage on every inherited-CSP path. HOW ITS ABSENCE WOULD SHOW: a document served
+     only `Content-Security-Policy-Report-Only` fires no securitypolicyviolation event. */
 static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const char *effective_directive,
                                CspResourceKind kind, const char *resource_url,
                                const char *sample, size_t sample_len, const lxb_dom_element_t *element)
@@ -359,7 +352,7 @@ static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const ch
          where a browser names the document and the line. */
     f.source_file = NULL;
     f.sample = sample_z;
-    f.disposition = "enforce";
+    f.disposition = csp_policy_is_enforced(policy) ? "enforce" : "report";
     /* §2.4: "each violation has a status, which is a non-negative integer representing the HTTP status code
        of the resource for which the global object was instantiated" — which §2.4.1 itself flags as
        unspecified: "how exactly do we get the status code? we don't actually store it anywhere."

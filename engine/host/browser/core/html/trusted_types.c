@@ -49,7 +49,7 @@ static const char *tt_sink_group(TrustedTypeKind expected)
    the same reason: a second policy can only narrow.
    A NULL list is a document with no Content-Security-Policy, which requires nothing; a directive with NO VALUE
    covers no group, because the value IS the set of groups it covers. */
-static bool tt_list_requires(const CspList *list, const char *quoted_group)
+static bool tt_list_requires(const CspList *list, const char *quoted_group, bool include_report_only)
 {
     size_t i;
 
@@ -59,17 +59,23 @@ static bool tt_list_requires(const CspList *list, const char *quoted_group)
         size_t j;
         if (!d) continue;
         for (j = 0; j < d->n_value; j++)
-            if (csp_token_is(d->value[j], quoted_group)) return true;
+            if (csp_token_is(d->value[j], quoted_group)) {
+                /* "Let enforced be true if policy's disposition is "enforce" … If enforced is true, return
+                   true. If includeReportOnlyPolicies is true, return true." */
+                if (csp_policy_is_enforced(&list->policies[i]) || include_report_only) return true;
+                break;
+            }
     }
     return false;
 }
 
-bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected)
+bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected, bool include_report_only)
 {
     /* THE DOCUMENT PATH NEVER RE-PARSES. This question is asked at every HTML and script sink the platform
        has, so it reads the list the container parsed once when the Document was created rather than the text
        it also keeps. Only the fixture entry below has bytes and no container. */
-    return tt_list_requires(policy_container_csp_list(document_policy(ctx)), tt_sink_group(expected));
+    return tt_list_requires(policy_container_csp_list(document_policy(ctx)), tt_sink_group(expected),
+                            include_report_only);
 }
 
 bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected)
@@ -82,8 +88,9 @@ bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected)
     /* NO SELF-ORIGIN: `require-trusted-types-for` names SINK GROUPS, not URLs, so this list is never asked to
        match one and there is no `'self'` here to resolve. §6.7.2.7 asserts the origin is present, which is
        what keeps that absence a statement rather than a hole. */
-    csp_list_parse(&list, csp_text, strlen(csp_text), NULL);
-    required = tt_list_requires(&list, tt_sink_group(expected));
+    /* The fixture's text is a `Content-Security-Policy` header, so its policies enforce. */
+    csp_list_parse(&list, csp_text, strlen(csp_text), NULL, CSP_DISPOSITION_ENFORCE);
+    required = tt_list_requires(&list, tt_sink_group(expected), false);
     csp_list_free(&list);
     return required;
 }
@@ -100,7 +107,13 @@ JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected,
 
     /* STEPS 2-3: a document that requires no trusted types at this sink group gets the value it was given.
        This is the overwhelmingly common case and it is what "no Content-Security-Policy" means. */
-    if (!trusted_types_required(ctx, expected))
+    if (!trusted_types_required(ctx, expected, /*include_report_only*/ true))
+        return JS_DupValue(ctx, input);
+    /* STEP 6.1: §4.2.4 "Should sink type mismatch violation be blocked by Content Security Policy?" answers
+       "Blocked" only for an enforce policy ("If policy's disposition is "enforce", then set result to
+       "Blocked""), and step 6.2 then returns the stringified input — returned here as the value, as at step 3
+       (trusted_types.h says why). */
+    if (!trusted_types_required(ctx, expected, /*include_report_only*/ false))
         return JS_DupValue(ctx, input);
 
     /* STEP 4: "process value with a default policy", whose step 1 is the factory's default policy — §3, which

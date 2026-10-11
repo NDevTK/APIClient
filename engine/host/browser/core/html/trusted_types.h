@@ -47,12 +47,10 @@ JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected,
 /* §4.2.3 "Does sink type require trusted types?" over this document's §7.2.6 policy container. Exposed because
    it is a question about the DOCUMENT rather than about one sink, and because a report that says "sink REAL,
    CSP blocks" has to be able to ask it.
-   §3.4 step 2 passes `includeReportOnlyPolicies` = true, and this engine's policy container holds the ENFORCED
-   list only — a Content-Security-Policy-Report-Only header is not parsed into it — so the argument has no
-   value to distinguish yet and is not taken. The step it would change is §3.4 step 6.1, which returns the
-   string instead of throwing when only a report-only policy required the type; that arm becomes reachable at
-   the same moment the container learns a second list, and it lands in §3.4 rather than here. */
-bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected);
+   `include_report_only` is §4.2.3's includeReportOnlyPolicies: true counts a report-only policy that requires
+   the type, which §3.4 step 2 asks; false counts enforce policies only, which is the question of whether the
+   sink throws. */
+bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected, bool include_report_only);
 
 /* §3.8 "Get Trusted Type data for attribute" — WHICH attributes are Trusted Type sinks at all. Answers false
    for the overwhelming majority (§3.7 step 3 then returns the value unchanged); answers true having set

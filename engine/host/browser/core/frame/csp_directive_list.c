@@ -110,7 +110,7 @@ static void csp_policy_append(CspPolicy *policy, CspToken name, CspToken value_t
 }
 
 /* §2.2.1 over ONE serialized policy. */
-void csp_policy_parse(CspPolicy *out, const char *text, size_t len)
+void csp_policy_parse(CspPolicy *out, const char *text, size_t len, CspDisposition disposition)
 {
     size_t pos = 0;
 
@@ -119,6 +119,12 @@ void csp_policy_parse(CspPolicy *out, const char *text, size_t len)
            "a CSP policy was parsed over one that already holds directives — csp_policy_free frees exactly "
            "what ONE parse allocated, so the earlier parse's value arrays would be unreachable and unfreed");
     DCHECK(len == 0 || text != NULL, "a CSP policy parse was given a length with no bytes");
+    DCHECK(disposition == CSP_DISPOSITION_ENFORCE || disposition == CSP_DISPOSITION_REPORT,
+           "a CSP policy was parsed with no §2.2 disposition — §2.2.1 takes one from its caller, \"enforce\" or "
+           "\"report\", and a policy without one cannot answer any consumer's per-policy step");
+    /* §2.2.1 step 2: "Let policy be a new policy with an empty directive set, a source of source, and a
+       disposition of disposition." */
+    out->disposition = disposition;
     if (!text || !len) return;
 
     /* "For each token returned by STRICTLY SPLITTING serialized on U+003B SEMICOLON" — strictly, so an empty
@@ -161,7 +167,8 @@ void csp_policy_parse(CspPolicy *out, const char *text, size_t len)
     }
 }
 
-void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin)
+void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin,
+                    CspDisposition disposition)
 {
     size_t pos = 0;
 
@@ -184,7 +191,7 @@ void csp_list_parse(CspList *out, const char *serialized, size_t len, const Orig
 
         while (pos < len && serialized[pos] != ',') pos++;
         memset(&policy, 0, sizeof policy);
-        csp_policy_parse(&policy, serialized + start, pos - start);
+        csp_policy_parse(&policy, serialized + start, pos - start, disposition);
         /* §2.2.2: "if policy's directive set is NOT EMPTY, append policy to policies." An empty one is not a
            policy that permits everything, it is not a policy at all — which matters because every caller's
            quantifier runs over this list, and an "any policy requires X" question would otherwise count it. */
@@ -201,6 +208,15 @@ void csp_list_parse(CspList *out, const char *serialized, size_t len, const Orig
         if (pos >= len) break;
         pos++;   /* past the U+002C that ended this policy */
     }
+}
+
+bool csp_policy_is_enforced(const CspPolicy *policy)
+{
+    DCHECK(policy != NULL && (policy->disposition == CSP_DISPOSITION_ENFORCE ||
+                              policy->disposition == CSP_DISPOSITION_REPORT),
+           "a consumer read the §2.2 disposition of a policy that has none — csp_policy_parse places it, so this "
+           "is a policy built some other way");
+    return policy->disposition == CSP_DISPOSITION_ENFORCE;
 }
 
 void csp_list_free(CspList *list)
