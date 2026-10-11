@@ -290,7 +290,8 @@ typedef struct Flow {
      *   - a branch whose arm the concrete example contradicts (solver/decide.c);
      *   - a request the trusted zone declined, whose failure arm runs the page's `catch` over an outcome nobody
      *     sent (solver/engine.c's flow_decline_fork);
-     *   - a modelled potential close request, an arrival no user performed (solver/engine.c's close-request arm).
+     *   - a modelled potential close request, an arrival no user performed (solver/engine.c's close-request arm);
+     *   - a witness verification delivering the value a pin chose (solver/concolic.c's concolic_deliver).
      * A new producer is a line in this list, not a second bit.
      * Monotone, since a path cannot un-take an arm, and never a weight term. Carried by a fork (flow_fork_inherit
      * asserts it). Not cold-tier state: a resumed flow re-observes each contradiction against current examples
@@ -299,7 +300,8 @@ typedef struct Flow {
     /* Whether this path pinned a value on one of those arms: a strictly narrower fact answering a different
      * question. `path_forced` says what a reply is worth; this says whether an address composed afterwards may
      * rest on bytes this engine chose, which decides whether fetching it may be spent. Set where decide.c pins a
-     * source (concretize-on-pin) on the holding arm of an equality the flow's concrete example contradicts.
+     * source (concretize-on-pin) on the holding arm of an equality the flow's concrete example contradicts, and
+     * where a witness verification delivers such a pinned value (solver/concolic.c's concolic_deliver).
      * It cannot be read off the address: `pin_mint` (solver/concolic.c) returns a bare primitive and
      * `concolic_add_hook` returns 0 when neither operand is concolic, so a URL built from a pinned value is a
      * plain string; recovering the link would need a taint tracker. Strictly nested inside `path_forced` (its
@@ -1509,8 +1511,9 @@ void  flow_mark_forced_arm(void);
    provenance with it: it was built on the path the flow had then. */
 int   flow_path_forced(const Flow *f);
 /* The running flow just determined a source's value on an arm its own example contradicts: `path_pinned`'s one
-   writer, idempotent and monotone. Called only where decide.c's decide_note_forced_arm has just answered that it
-   marked the path, so the nesting is structural and "did this arm contradict its example" has one spelling. */
+   writer, idempotent and monotone. Called where decide.c's decide_note_forced_arm has just answered that it
+   marked the path, so the nesting is structural and "did this arm contradict its example" has one spelling, and
+   where a witness verification delivers that value, right after it marks the path forced (concolic_deliver). */
 void  flow_mark_pinned_value(void);
 /* Has this flow determined a value on such an arm? Read at the park, beside flow_path_forced and for its reason. */
 int   flow_path_pinned(const Flow *f);
