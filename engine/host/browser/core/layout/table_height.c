@@ -100,7 +100,7 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
         if (collapsing) {
             /* §17.6.2 replaces the cell's own border with half the grid-line resolution: top, then bottom. */
-            side[i] = css_px_add(pad.px, i == 0 ? charge.top : charge.bottom);
+            side[i] = css_px_add(used_value_px(cell, PADDINGS[i]), i == 0 ? charge.top : charge.bottom);
         } else {
             bor = css_computed_length(cell, BORDERS[i]);
             DCHECK(bor.kind == CSS_LENGTH_ABSOLUTE,
@@ -108,13 +108,13 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
                    "§3.3 \"Line Thickness: the border-width properties\"' `Computed value:` line is `absolute "
                    "length, snapped as a border width` and every arm of that derivation produces one, so a "
                    "percentage or a keyword here is a rule that did not run");
-            side[i] = css_px_add(pad.px, bor.px);
+            side[i] = css_px_add(used_value_px(cell, PADDINGS[i]), bor.px);
         }
         DCHECK(side[i].px >= 0.0,
-               "CSS 2.1 §17.5.3's cell edges came out NEGATIVE on one side. CSS 2.1 §8.4 states outright that "
-               "\"unlike margin properties, values for padding values cannot be negative\" and "
-               "css-backgrounds-3 §3.3's <line-width> is a non-negative <length>, so lexbor drops either "
-               "declaration; a negative here is arithmetic that lost a sign rather than a document");
+               "CSS 2.1 §17.5.3's cell edges came out NEGATIVE on one side. The padding is `used_value_px`'s, "
+               "floored at zero by css-values-4 §9.1's clamp, and the border term is a computed `<line-width>` "
+               "core/css/css_computed_value.c asserts non-negative or §17.6.2's half of one, so this is a term "
+               "that skipped both");
     }
     *top = side[0];
     *bottom = side[1];

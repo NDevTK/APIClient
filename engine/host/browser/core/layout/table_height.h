@@ -115,7 +115,8 @@ CssPx table_row_used_block_offset(const TableUsedHeights *heights, size_t row);
    A percentage padding crashes: CSS 2.1 §8.4 refers it to the containing block's width "even for 'padding-top'
    and 'padding-bottom'", for a cell the table's content width, which §17.5.2.2's MCW makes depend on the cell;
    §8.4 says "if the containing block's width depends on this element, then the resulting layout is undefined
-   in CSS 2.1".
+   in CSS 2.1". An absolute padding is the used one (`used_value_px`), so a negative `calc()` floors at zero
+   (css-values-4 §9.1 "Numeric Functions").
    Both of §17.6's models are answered here, from the cell's table: the cell's own `border-*-width` under
    §17.6.1; under §17.6.2 half of §17.6.2.1's winner at each horizontal line, zero on the perimeter
    (core/layout/table_border_collapse.h). */

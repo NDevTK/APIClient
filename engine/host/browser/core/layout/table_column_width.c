@@ -18,6 +18,7 @@
 #include "core/layout/table_column_box.h"
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
+#include "core/layout/used_value.h"
 
 /* The coherence floor: a maximum below a minimum is not a width the column can take (see the header for the
    two crossings). Arithmetic only; the invariant is asserted where the pair leaves this component. */
@@ -30,7 +31,8 @@ static CssPx tcw_coherent(CssPx min, CssPx max)
  *
  * It is not core/layout/used_value.c's `uv_surround`: that resolves a percentage padding against CSS 2.1 §10.1
  * Definition of "containing block"'s width, which for a cell is the table's content width this algorithm is
- * producing. Here a percentage is a cycle and crashes.
+ * producing. Here a percentage is a cycle and crashes. An absolute padding is still the used one
+ * (`used_value_px`), whose css-values-4 §9.1 "Numeric Functions" clamp floors a negative `calc()` at zero.
  *
  * §10.4 Minimum and maximum widths: 'min-width' and 'max-width' is not read: "In CSS 2.1, the effect of
  * 'min-width' and 'max-width' on tables, inline tables, table cells, table columns, and column groups is
@@ -83,7 +85,7 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
                    "line is \"the percentage as specified or the absolute length\", so neither is a value the "
                    "cascade can hand back",
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
-        edges = css_px_add(edges, pad.px);
+        edges = css_px_add(edges, used_value_px(cell, PADDINGS[i]));
         /* §17.6.2 replaces the cell's own border with the grid-line resolution, added below for both sides. */
         if (collapsing) continue;
         bor = css_computed_length(cell, BORDERS[i]);
@@ -103,11 +105,10 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
         edges = css_px_add(edges, css_px_add(charge.left, charge.right));
     }
     DCHECK(edges.px >= 0.0,
-           "CSS 2.1 §17.5.2.2's cell edges came out NEGATIVE. CSS 2.1 §8.4 states outright that \"unlike "
-           "margin properties, values for padding values cannot be negative\" — the spec's own wording, "
-           "\"padding values\" included — and css-backgrounds-3 §3.3's <line-width> is a non-negative "
-           "<length>, so lexbor drops either declaration; a negative here is arithmetic that lost a sign "
-           "rather than a document");
+           "CSS 2.1 §17.5.2.2's cell edges came out NEGATIVE. Each padding is `used_value_px`'s, floored at "
+           "zero by css-values-4 §9.1's clamp, and each border term is a computed `<line-width>` "
+           "core/css/css_computed_value.c asserts non-negative or §17.6.2's half of one, so this is a term "
+           "that skipped both");
     return edges;
 }
 
