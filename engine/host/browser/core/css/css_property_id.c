@@ -105,3 +105,9 @@ CssKeywordSet css_property_keywords(CssPropertyId id)
     DCHECKF((unsigned)id < CSS_PROPERTY_COUNT, "a keyword set was asked for id %u, which is no row", (unsigned)id);
     return CSS_PROPERTY_ROWS[id].keywords;
 }
+
+bool css_property_lexbor_parses(CssPropertyId id)
+{
+    DCHECKF(id < CSS_PROPERTY_COUNT, "property id %u is no row", (unsigned)id);
+    return CSS_PROPERTY_ROWS[id].lxb != LXB_CSS_PROPERTY__UNDEF;
+}

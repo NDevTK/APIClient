@@ -2077,10 +2077,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     /* css-display-3 §3 "Display Order: the order property", `Computed value: specified integer`, an
        `<integer>` carried as text; core/layout/flex_line.c parses it for order-modified document order. */
     case CSS_PROPERTY_ORDER:
-    /* css-ui-4 §6.2 "Exclusion from Hit-testing: the pointer-events property", `Computed value: specified
-       keyword` over `auto | none`. `none` excludes the element itself and not its subtree, since a descendant
-       may declare `auto`, so a hit test asks it of every box and never prunes a subtree on one answer. */
-    case CSS_PROPERTY_POINTER_EVENTS:
     /* css-lists-3 §3.4 "Text-based Markers: the list-style-type property" (`Computed value: specified value`;
        a `<counter-style-name>` arrives canonicalized by core/css/css_shorthand.c) and §3.5 "Positioning
        Markers: The list-style-position property" (`keyword, but see prose`, the prose being a layout rule).

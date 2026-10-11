@@ -94,6 +94,7 @@ typedef enum {
     X(BORDER_RIGHT_STYLE,  "border-right-style",  LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LINE_STYLE)      \
     X(BORDER_BOTTOM_STYLE, "border-bottom-style", LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LINE_STYLE)      \
     X(BORDER_LEFT_STYLE,   "border-left-style",   LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LINE_STYLE)      \
+    X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, POINTER_EVENTS)  \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -115,7 +116,6 @@ typedef enum {
     X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  TEXT, ALL, UNTYPED)            \
     X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT, ALL, UNTYPED)            \
     X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT, ALL, UNTYPED)            \
-    X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_POSITION, "list-style-position", LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_IMAGE,    "list-style-image",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)
@@ -137,5 +137,9 @@ const char *css_property_name(CssPropertyId id);
 CssComputedShape css_property_shape(CssPropertyId id);
 CssValueRange css_property_range(CssPropertyId id);
 CssKeywordSet css_property_keywords(CssPropertyId id);
+
+/* Does lexbor's property registry parse the row's declarations? FALSE for a row whose registry column is
+   __UNDEF, whose declarations reach the cascade as raw tokens for core/css/css_shorthand.c to validate. */
+bool css_property_lexbor_parses(CssPropertyId id);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_ID_H */

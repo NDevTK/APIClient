@@ -170,6 +170,9 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
                k == CSS_KEYWORD_DASHED || k == CSS_KEYWORD_SOLID || k == CSS_KEYWORD_DOUBLE ||
                k == CSS_KEYWORD_GROOVE || k == CSS_KEYWORD_RIDGE || k == CSS_KEYWORD_INSET ||
                k == CSS_KEYWORD_OUTSET;
+    /* css-ui-4 §6.2 "Exclusion from Hit-testing: the pointer-events property": `auto | none`. */
+    case CSS_KEYWORDS_POINTER_EVENTS:
+        return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_NONE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

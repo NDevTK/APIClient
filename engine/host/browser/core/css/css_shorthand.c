@@ -326,29 +326,21 @@ static const char *const JUSTIFY_CONTENT_KEYWORDS[] = {
     "flex-start", "flex-end", "center", "space-between", "space-around"
 };
 
-/* css-backgrounds-3 §3.2's `<line-style>`, entire and in the spec's own order; §3.3's `<line-width>` keywords
-   are its row's set (core/css/css_keyword.c). THESE GRAMMARS HAVE TO BE HERE, unlike `<margin-width>`:
-   lexbor's property registry carries no `border-width` and no `border-style` (it has `border`, the four `border-<side>` shorthands and the four
-   `border-*-color` longhands, and nothing else of the border), so those two declarations reach the cascade as
-   a `__CUSTOM` holding the name and the RAW TOKENS with nothing having validated them. CSS Syntax DROPS an
-   invalid declaration, and dropping it is what these two lists decide — a `border-style: nope` that flowed
-   through would reach the computed value as a keyword no grammar admits. */
-
-/* The four table properties' grammars are here for the border lists' reason: lexbor's registry carries none
-   of them, so a declaration reaches the cascade as a `__CUSTOM` with raw, unvalidated tokens. The three
-   keyword-valued ones (css-tables-3 §3.5.1-§3.5.3, one keyword, no multiplier) are parsed over their rows'
-   keyword sets; `border-spacing`'s `<length> <length>?` is a multiplier over a production, in no set. CSS
-   Cascade §7.3's keywords are handled once, ahead of every property's own grammar, below. */
-static const char *const TABLE_KEYWORD_LONGHANDS[] = { "caption-side", "table-layout", "border-collapse" };
-
-/* The row `longhand` names in the table above, or -1. */
-static int table_keyword_longhand_index(const char *longhand)
+/* A KEYWORD row of core/css/css_property_id.h's table that lexbor's registry does not parse: its declarations
+   reach the cascade as raw `__CUSTOM` tokens, and its `Value:` line is one keyword of the row's set, so this
+   component owns the parse over that set, and CSS Syntax drops what the set does not admit. These are
+   `caption-side`, `table-layout`, `border-collapse`, `pointer-events` and the four `border-*-style`
+   longhands (lexbor carries `border`, the `border-<side>` shorthands and `border-*-color`, and no other border
+   property, which is also why `<line-width>` is parsed here). */
+static bool sh_keyword_row(const char *longhand, CssKeywordSet *set)
 {
-    unsigned i;
+    CssPropertyId id = css_property_id_of(longhand);
 
-    for (i = 0; i < CSS_SH_N(TABLE_KEYWORD_LONGHANDS); i++)
-        if (strcmp(TABLE_KEYWORD_LONGHANDS[i], longhand) == 0) return (int)i;
-    return -1;
+    if (id == CSS_PROPERTY_INVALID || css_property_shape(id) != CSS_COMPUTED_SHAPE_KEYWORD ||
+        css_property_lexbor_parses(id))
+        return false;
+    *set = css_property_keywords(id);
+    return true;
 }
 
 /* CSS 2.1 §8.3 and §8.4's FOUR-SIDE ROTATION, which `margin` and `padding` state in identical words: "If there
@@ -1442,26 +1434,17 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
     return css_sh_strdup(kw[axis]);
 }
 
-/* CSS 2.1 §17's four table longhands' OWN value grammars, over the table above. The answer is the SPECIFIED
-   value — canonicalized where the grammar is a keyword, verbatim where it is a length, which is the same split
-   the border longhands take one function down — or NULL for a value the grammar does not admit, which is a
-   declaration CSS Syntax drops. Only ever reached for a name `css_shorthand_validates_longhand` answers TRUE
-   for, and CSS Cascade §7.3's keywords have already been taken by the caller. */
+/* `border-spacing`'s own value grammar, the one table longhand that is no keyword row. The answer is the
+   SPECIFIED value, verbatim lengths, or NULL for a value the grammar does not admit, which is a declaration CSS
+   Syntax drops. CSS Cascade §7.3's keywords have already been taken by the caller. */
 static char *table_longhand_value(const char *longhand, const char *value)
 {
-    const char *w[2], *kw;
+    const char *w[2];
     size_t wl[2];
-    int idx = table_keyword_longhand_index(longhand), n, i;
+    int n, i;
     char *out;
     size_t len;
 
-    if (idx >= 0) {
-        /* Each of the three `Value:` lines is a two-keyword choice carrying NO multiplier, so a second
-           component value is an invalid declaration, which the split reports by refusing to write past `max`. */
-        if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
-        kw = css_sh_keyword_in(css_property_keywords(css_property_id_of(longhand)), w[0], wl[0]);
-        return kw ? css_sh_strdup(kw) : NULL;
-    }
     DCHECK(strcmp(longhand, "border-spacing") == 0,
            "a longhand outside CSS 2.1 §17 Tables' four reached the table-property grammar. This function and "
            "`css_shorthand_validates_longhand`'s §17 arm are one list and have come apart, and the failure is "
@@ -1500,11 +1483,12 @@ static char *table_longhand_value(const char *longhand, const char *value)
 bool css_shorthand_validates_longhand(const char *longhand)
 {
     int side, part;
+    CssKeywordSet set;
 
     DCHECK(longhand != NULL, "the longhand-grammar question was asked about a NULL property name");
-    /* CSS 2.1 §17 Tables' four, whose grammars are above and whose registry gap is the one the border
-       longhands have — see the table for the sentence, which is the same sentence. */
-    if (table_keyword_longhand_index(longhand) >= 0 || strcmp(longhand, "border-spacing") == 0) return true;
+    /* The keyword rows lexbor does not parse, and `border-spacing`, whose registry gap is the same. */
+    if (sh_keyword_row(longhand, &set)) return true;
+    if (strcmp(longhand, "border-spacing") == 0) return true;
     /* SEVEN OF css-backgrounds-3 §2.10's EIGHT, for the same reason and with the same split: lexbor's registry
        carries `background-color` and none of the other seven, so §2.10's component owns their grammars and
        lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
@@ -1539,6 +1523,7 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     size_t wl[1];
     int side, part = border_part_index(longhand, &side);
     int n;
+    CssKeywordSet set;
 
     (void)side;
     DCHECK(value != NULL, "a longhand declaration was validated with no value");
@@ -1557,10 +1542,13 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     /* CSS Cascade §7.3's keywords are a value for EVERY property, so they precede the property's own grammar
        and are handed on for §7's DEFAULTING step to resolve (css_computed_value.h says where that crashes). */
     if (css_wide_keyword(value)) return css_sh_strdup(value);
-    /* CSS 2.1 §17 Tables' four, AFTER §7.3's keywords and before the border arm, because `border-spacing`'s
-       grammar needs two component slots and the border longhands' needs one. */
-    if (table_keyword_longhand_index(longhand) >= 0 || strcmp(longhand, "border-spacing") == 0)
-        return table_longhand_value(longhand, value);
+    /* A keyword row: one component value and no multiplier, so a second is an invalid declaration. */
+    if (sh_keyword_row(longhand, &set)) {
+        if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
+        kw = css_sh_keyword_in(set, w[0], wl[0]);
+        return kw ? css_sh_strdup(kw) : NULL;
+    }
+    if (strcmp(longhand, "border-spacing") == 0) return table_longhand_value(longhand, value);
     /* css-lists-3 §3.6's three, AFTER §7.3's keywords, because `list-style-type: inherit` is not a
        `<counter-style>` and a `<counter-style-name>` is an ident sequence that would admit it. */
     if (list_style_owns(longhand)) return list_style_longhand_value(longhand, value);
@@ -1574,14 +1562,12 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
                 : css_sh_keyword(JUSTIFY_SELF_KEYWORDS, CSS_SH_N(JUSTIFY_SELF_KEYWORDS), w[0], wl[0]);
         return kw ? css_sh_strdup(kw) : NULL;
     }
-    /* `<line-width>` and `<line-style>` are each ONE component value — no multiplier — so a second one is an
-       invalid declaration, which the split reports by refusing to write past `max`. */
+    /* `<line-width>` is ONE component value — no multiplier — so a second one is an invalid declaration, which
+       the split reports by refusing to write past `max`. The four `<line-style>` longhands are keyword rows
+       and left above. */
+    DCHECK(part == 0, "a border longhand other than a `border-*-width` reached the `<line-width>` grammar");
     n = css_shorthand_components(value, w, wl, 1);
     if (n != 1) return NULL;
-    if (part == 1) {
-        kw = css_sh_keyword_in(CSS_KEYWORDS_LINE_STYLE, w[0], wl[0]);
-        return kw ? css_sh_strdup(kw) : NULL;
-    }
     kw = css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w[0], wl[0]);
     if (kw) return css_sh_strdup(kw);
     if (wl[0] > 0 && w[0][0] == '-') return NULL;   /* §3.3: "Negative values are invalid" */
