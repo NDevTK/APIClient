@@ -26,7 +26,7 @@ function renderSendPanel() {
   // Populate service selector
   const svcSelect = document.getElementById("spec-service-select");
   const prevSvc = svcSelect.value;
-  svcSelect.innerHTML = '<option value="">All Services</option>';
+  domReplaceChildren(svcSelect, [domElement("option", { value: "" }, ["All Services"])]);
   if (tabData?.discoveryDocs) {
     for (const [svcName, svcData] of Object.entries(tabData.discoveryDocs).sort((a, b) => a[0].localeCompare(b[0]))) {
       /* THE DOC IS THE QUESTION, NOT THE STATUS. `status === "found"` was the published-discovery FETCH's
@@ -72,16 +72,17 @@ function _renderServiceGrouping() {
      leaving the reviewer with a blank where a classification they are supposed to judge belongs.
      `matched` and `firstUrl` are stated on every record (lib/discovery-entry.js), so the ternaries that stood
      on them are gone with the same defect one level down. */
-  let html = "";
+  const rows = [];
   checkDiscoveryGrouping(svcData, "the Send panel's service-grouping row, service " + JSON.stringify(name));
   const g = svcData.grouping;
+  const ruleLabel = domElement("span", { class: "grouping-label" }, ["grouping rule:"]);
   if (g === null) {
-    html += '<span class="grouping-label">grouping rule:</span> <code>none recorded</code>'
-      + ' <span class="grouping-matched">(this bucket was not named by a URL-structure rule)</span>';
+    rows.push(ruleLabel, " ", domElement("code", {}, ["none recorded"]), " ",
+              domElement("span", { class: "grouping-matched" }, ["(this bucket was not named by a URL-structure rule)"]));
   } else {
-    html += '<span class="grouping-label">grouping rule:</span> <code>' + esc(g.rule) + '</code>'
-      + ' <span class="grouping-matched">matched: <code>' + esc(g.matched) + '</code></span>'
-      + '<div class="grouping-first">first request: <code>' + esc(g.firstUrl) + '</code></div>';
+    rows.push(ruleLabel, " ", domElement("code", {}, [g.rule]), " ",
+              domElement("span", { class: "grouping-matched" }, ["matched: ", domElement("code", {}, [g.matched])]),
+              domElement("div", { class: "grouping-first" }, ["first request: ", domElement("code", {}, [g.firstUrl])]));
   }
 
   // Bucket quality: count methods by origin. THE UNUSED BUCKET IS THE PRODUCT — "what the bundle CAN do but
@@ -111,11 +112,12 @@ function _renderServiceGrouping() {
       if (n.declared) parts.push(n.declared + " declared by a discovery doc, never fired");
       if (n.asset) parts.push(n.asset + " asset");
       if (forced) parts.push(forced + " of them reached only by FORCING a gate");
-      html += '<div class="grouping-first">methods: ' + esc(parts.join(", ")) + '  (' + total + ' total)</div>';
+      rows.push(domElement("div", { class: "grouping-first" },
+                           ["methods: " + parts.join(", ") + "  (" + total + " total)"]));
     }
   }
 
-  el.innerHTML = html;
+  domReplaceChildren(el, rows);
 }
 
 // WHICH BUCKET A METHOD IS IN — asked in ONE place. The grouping summary and the dropdown tag each derived
@@ -159,7 +161,7 @@ function renderMethodDropdown() {
   const select = document.getElementById("send-ep-select");
   const prev = select.value;
 
-  select.innerHTML = '<option value="">-- select method --</option>';
+  domReplaceChildren(select, [domElement("option", { value: "" }, ["-- select method --"])]);
 
   if (tabData?.discoveryDocs) {
     const services = Object.entries(tabData.discoveryDocs).sort((a, b) =>
@@ -303,7 +305,7 @@ function renderFrameSelector() {
     sel.classList.add("hidden");
   } else {
     sel.classList.remove("hidden");
-    sel.innerHTML = "";
+    sel.replaceChildren();
     for (var i = 0; i < availableFrames.length; i++) {
       var f = availableFrames[i];
       var opt = document.createElement("option");
@@ -361,7 +363,7 @@ function renderServiceOriginHint() {
   var hint = document.getElementById("send-service-origin-hint");
   if (!hint) return;
   hint.classList.add("hidden");
-  hint.innerHTML = "";
+  hint.replaceChildren();
 
   // Get selected service
   var epSelect = document.getElementById("send-ep-select");
@@ -419,13 +421,14 @@ function renderServiceOriginHint() {
   var frameNote = "";
   var frameOrigins = svcData.frameOrigins || [];
   if (frameOrigins.length > 0) {
-    frameNote = " (iframe: " + esc(frameOrigins[frameOrigins.length - 1]) + ")";
+    frameNote = " (iframe: " + String(frameOrigins[frameOrigins.length - 1]) + ")";
   }
 
   hint.classList.remove("hidden");
-  hint.innerHTML = '<span class="service-origin-hint">Last used from: ' +
-    esc(lastHostname) + frameNote +
-    ' <a class="service-origin-open" data-url="' + esc(lastUrl) + '">Open \u2197</a></span>';
+  domReplaceChildren(hint, [domElement("span", { class: "service-origin-hint" }, [
+    "Last used from: " + lastHostname + frameNote + " ",
+    domElement("a", { class: "service-origin-open", "data-url": String(lastUrl || "") }, ["Open \u2197"]),
+  ])]);
 }
 
 // ─── The Address This Panel Will Send To ────────────────────────────
@@ -570,43 +573,42 @@ function renderKeySelector() {
   section.classList.remove("hidden");
   badge.textContent = matchingKeys.length + " available";
 
-  var html = '';
+  var radio = function (attrs) {
+    return domElement("input", Object.assign({ type: "radio", name: "send-key-select" }, attrs));
+  };
+  var optionLabel = function (text) { return domElement("span", { class: "key-option-label" }, [text]); };
+  var options = [];
 
   // Auto option (default)
   var autoTruncated = truncateKey(matchingKeys[0].key);
-  html += '<label class="key-option">' +
-    '<input type="radio" name="send-key-select" value="auto" checked /> ' +
-    '<span class="key-option-label">Auto</span> ' +
-    '<span class="key-value-truncated">' + esc(autoTruncated) + '</span>' +
-    '</label>';
+  options.push(domElement("label", { class: "key-option" }, [
+    radio({ value: "auto", checked: "" }), " ", optionLabel("Auto"), " ",
+    domElement("span", { class: "key-value-truncated" }, [autoTruncated]),
+  ]));
 
   // One option per matching key
   for (var i = 0; i < matchingKeys.length; i++) {
     var mk = matchingKeys[i];
     var truncated = truncateKey(mk.key);
-    var sourceBadge = mk.data.source ? '<span class="key-source-badge">' + esc(mk.data.source) + '</span>' : '';
-    html += '<label class="key-option">' +
-      '<input type="radio" name="send-key-select" value="key-' + i + '" data-key="' + esc(mk.key) + '" /> ' +
-      '<span class="key-value-truncated">' + esc(truncated) + '</span> ' +
-      '<span class="key-option-label">' + esc(mk.data.name || "Key") + '</span> ' +
-      sourceBadge +
-      '</label>';
+    options.push(domElement("label", { class: "key-option" }, [
+      radio({ value: "key-" + i, "data-key": String(mk.key) }), " ",
+      domElement("span", { class: "key-value-truncated" }, [truncated]), " ",
+      optionLabel(String(mk.data.name || "Key")), " ",
+      mk.data.source ? domElement("span", { class: "key-source-badge" }, [String(mk.data.source)]) : [],
+    ]));
   }
 
   // Custom key option
-  html += '<label class="key-option">' +
-    '<input type="radio" name="send-key-select" value="custom" /> ' +
-    '<span class="key-option-label">Custom</span>' +
-    '</label>' +
-    '<input type="text" class="key-custom-input hidden" id="send-key-custom" placeholder="Paste API key..." />';
+  options.push(domElement("label", { class: "key-option" }, [radio({ value: "custom" }), " ", optionLabel("Custom")]),
+               domElement("input", { type: "text", class: "key-custom-input hidden", id: "send-key-custom",
+                                     placeholder: "Paste API key..." }));
 
   // None option
-  html += '<label class="key-option">' +
-    '<input type="radio" name="send-key-select" value="none" /> ' +
-    '<span class="key-option-label">None (no key injection)</span>' +
-    '</label>';
+  options.push(domElement("label", { class: "key-option" }, [
+    radio({ value: "none" }), " ", optionLabel("None (no key injection)"),
+  ]));
 
-  optionsEl.innerHTML = html;
+  domReplaceChildren(optionsEl, options);
 
   // Reset override to auto
   currentKeyOverride = null;
