@@ -31,6 +31,7 @@
                                                    §4.12.1.1 park states as its request's credentials mode */
 #include "core/html/nonce_attribute.h"   /* §4.12.1.1 reads el's [[CryptographicNonce]] slot, not its attribute */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
+#include "core/loader/document_scripts.h"   /* §4.12.1.1's schedule, for engine_run's caller that states none */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent operation: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
@@ -599,9 +600,8 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
    (`<script type=module src>` is how a bundle loads a chunk), and the element itself, which would otherwise be
    lost across the park: the classic arm sets §3.1.7's `currentScript` to it. The element crosses as its wrapper
    (solver/pending.h's `scriptEl`) because the record is made of JS values. */
-void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el,
-                               int parser_inserted) {
-    Flow *f = flow_running();
+static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *url, ScriptType stype,
+                                           lxb_dom_element_t *el, int parser_inserted) {
     /* §8.1.4.2's fetch: the type decides the decode and the evaluation entry, not the request. The method is
        Fetch §2.2.5's `GET`, and the destination is `script` for both types: "fetch a classic script" creates the
        request with `script`, and "fetch an external module script graph" fetches a single module script with
@@ -646,6 +646,12 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
     pending_park_request(ctx, e, &req);
     script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
+}
+
+/* The running flow's park; a document's seed names the flow it is building (engine_seed_scripts). */
+void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el,
+                               int parser_inserted) {
+    engine_pending_script_url_into(flow_running(), ctx, url, stype, el, parser_inserted);
 }
 
 /* A peer holds a reference into this document (engine.h's engine_set_referenced). It belongs to the instance,
@@ -779,9 +785,9 @@ static uint32_t g_sess_doc;
    obtained, for external scripts, or the document base URL of the containing document, for inline scripts").
    `body` is NULL until a reply carries the source, which parks a flow on the row; `url` is NULL for a `<script>`
    without `src`. Both set is an external script whose response the host already handed over; dropping its
-   address would compile it under the document's name, which for a module is the module map key. Neither set is
-   no row: a `src` that fails to parse fires `error` and runs nothing (§4.12.1.1). The strings are owned:
-   built in engine_sched_begin, freed in engine_session_close. */
+   address would compile it under the document's name, which for a module is the module map key. A `refused`
+   row (`src` failed to encoding-parse) holds the attribute text as its body. The strings are owned: built in
+   engine_sched_begin, freed in engine_session_close. */
 typedef struct RootScript {
     /* This row's source text, or NULL while the flow is still owed it. One buffer for the session, because the
        table is read by every base flow (engine_seed_root_flow is the seed hook: the boot flow, each cold-resumed
@@ -789,6 +795,12 @@ typedef struct RootScript {
     DynBody *body;
     char *url;           /* §4.12.1.1's encoding-parsed address, or NULL for a `<script>` with no `src` */
     ScriptType type;     /* which of §8.1.4.4 "Calling scripts"'s two algorithms evaluates it */
+    /* §4.12.1.1's schedule (core/loader/script_type.h): an external member of the as-soon-as-possible set
+       holds no position, so the seed parks on it instead of giving it a row. */
+    ScriptSchedule sched;
+    /* §4.12.1.1's "If url is failure": the element runs no script, and the page is owed an `error` event, which
+       the DYN_SCRIPT_FAILED row this seeds fires. */
+    int refused;
     /* The `script` element the row is the program of: §4.12.1.1's "execute the script element" switches on el,
        and its classic arm sets HTML §3.1.7 `currentScript` to it for the run. By the time the scheduler holds a
        body the element is behind it, and this is the last table that knows it. Borrowed: the tree outlives the
@@ -804,12 +816,13 @@ static RootScript *g_root_scripts;
 static int g_root_n;
 /* The seed's partition of `g_root_n`: rows that already have their source text (an inline `<script>`, or an
    external one whose response the host handed over) and rows that do not, which the seed turns into
-   DYN_SCRIPT_SRC rows that park the flow on the reply door. `rootProgramsAwaitedAtSeed` is the number of
-   reply-door openings the document owes for its own bundle: a run whose `replyAsked` equals it issued no page
-   `fetch()`, XHR or dynamic `import()` and learned nothing. The converse does not hold: `replyAsked` also
-   counts openings the markup named that are not program rows (a `<link>` stylesheet), so the inequality alone
-   is not evidence of learning. Subtract the markup doors (`document-script`, `link-element`) shown in the door
-   histogram; `fetch`, `xhr`, `module-import` and `beacon` are the run's.
+   DYN_SCRIPT_SRC rows that park the flow on the reply door (or a park with no row, for an as-soon-as-possible
+   member). `rootProgramsAwaitedAtSeed` is the reply-door openings the document owes for its own bundle: a run
+   whose `replyAsked` equals it issued no page `fetch()`, XHR or dynamic `import()` and learned nothing.
+   The converse does not hold: `replyAsked` also counts openings the markup named that are not program rows
+   (a `<link>` stylesheet), so the inequality alone is not evidence of learning. Subtract the markup doors
+   (`document-script`, `link-element`) shown in the door histogram; `fetch`, `xhr`, `module-import` and
+   `beacon` are the run's.
    Both arms are written at the one line `g_root_n` is, keyed on the same `rows[i].body` column
    engine_seed_scripts branches on; the identity against `g_root_n` is asserted at engine_frontier_census. They
    are a constant fixed at seed (hence `AtSeed`), neither a gauge nor a lifetime counter: they do not fall as
@@ -817,6 +830,8 @@ static int g_root_n;
    because a delivery rewrites each flow's own table. There is no inequality between the two: forks copy rows,
    so the gauge stands above the constant on a forking frontier and below it once a member is sold. */
 static int g_root_n_held, g_root_n_awaited;
+/* …and the third arm: elements whose `src` did not encoding-parse, seeded as the row that fires `error`. */
+static int g_root_n_refused;
 static Flow *g_sess_cur;
 static int g_sess_live;
 /* The finish owed to `g_sess_cur`, deferred across one return to the host. A member's last moment is the only one
@@ -6022,11 +6037,13 @@ static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind 
    are §4.12.1.1's encoding-parsed addresses, resolved once per element by the caller, whose document they belong
    to. Which shape a row takes is asked of its body, not its address: HTML §8.1.4.1 Scripts gives a script source
    text and a base URL independently, so a host that already holds an external script's response hands over both
-   and the row is a program at its own address. A row with neither is not a row: "If url is failure, then queue an
-   element task on the DOM manipulation task source given el to fire an event named error at el, and return"; the
-   owed error event needs a task on the document, not a position. */
+   and the row is a program at its own address. A refused row ("If url is failure, then queue an element task on
+   the DOM manipulation task source given el to fire an event named error at el, and return") becomes the
+   DYN_SCRIPT_FAILED row, whose step queues that task when the flow reaches the element. An external member of
+   §4.12.1.1's as-soon-as-possible set is parked on rather than given a row: the set has no order and §13.2.7
+   waits for it only before the load event, so its program joins the flow whenever its reply is delivered. */
 static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, int n) {
-    int i;
+    int i, queued = 0;
 
     DCHECK(f != NULL, "a document's scripts were seeded onto no flow");
     DCHECK(n == 0 || rows != NULL,
@@ -6041,15 +6058,33 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                "and a set of speculation rules are registered or ignored rather than evaluated, so "
                "document_exec_scripts drops all three before they become rows");
         DCHECK(rows[i].body != NULL || rows[i].url != NULL,
-               "a script table row holds neither source text nor an address — §4.12.1.1's \"if url is failure "
-               "… fire an event named error at el, and return\" means such an element runs no script and takes "
-               "no position, so a row that is nothing would park the flow on nothing for the rest of the "
+               "a script table row holds neither source text nor an address — a refused row keeps its `src` "
+               "text as its body, so a row that is nothing would park the flow on nothing for the rest of the "
                "session");
-        /* The position a row is queued at is the position it is addressed at: `i` is the element's place in
-           §4.12.1.1's document order and the cursor indexes the same table. Asserted per row. */
-        DCHECK(f->dyn_n == i, "a document's scripts left the seed out of document order — the row about to be "
-                              "queued is not the one the sequence is at, so the flow's cursor would reach this "
-                              "element at some other element's position");
+        DCHECK(!rows[i].refused || (rows[i].url == NULL && rows[i].el != NULL),
+               "a refused script row carries an address or no element — §4.12.1.1's \"If url is failure\" "
+               "leaves no URL to carry, and the `error` event it owes is fired AT el");
+        /* The position a row is queued at is the position it is addressed at: `queued` counts the rows this
+           seed has given a slot, in §4.12.1.1's order, and the cursor indexes the same table. Asserted per
+           row. */
+        DCHECK(f->dyn_n == queued, "a document's scripts left the seed out of document order — the row about "
+                                   "to be queued is not the one the sequence is at, so the flow's cursor would "
+                                   "reach this element at some other element's position");
+        if (rows[i].refused) {
+            /* The task is queued by the row's step, in this flow's own world, at the place the parser would
+               have prepared the element. */
+            engine_queue_into(f, doc, rows[i].body, DYN_SCRIPT_FAILED, rows[i].type, NULL, NULL,
+                              TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el, /*parser_inserted*/0);
+            queued++;
+            continue;
+        }
+        if (!rows[i].body && rows[i].sched == SCRIPT_SCHED_ASAP) {
+            /* The set's member parks on this flow; every element of a document's own inventory was placed by
+               its parser (core/loader/document_scripts.c asks script_block_schedule with parser_inserted). */
+            engine_pending_script_url_into(f, doc_realm(doc), rows[i].url, rows[i].type, rows[i].el,
+                                           /*parser_inserted*/1);
+            continue;
+        }
         /* The element travels with the row at both positions: "execute the script element" switches on el, and
            an external row is that element's program from the moment it takes its slot. NULL is a statement: a host
            driving a synthesized program list (wpt_runner.c's harness prologue and epilogue) has rows no `<script>`
@@ -6067,6 +6102,7 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
             engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
                               NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el,
                               /*parser_inserted*/0);
+            queued++;
         } else {
             /* An address is the one body whose length is its `strlen`: script_src_absolute serializes a URL record
                (URL §4.5 URL serializing), whose components went through percent-encode sets containing U+0000 (URL
@@ -6087,6 +6123,7 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                               TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el,
                               /*parser_inserted*/rows[i].el != NULL);
             dyn_body_unref(addr);
+            queued++;
         }
     }
 }
@@ -7809,9 +7846,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    `<script src>` observing `f` before `onerror`, where a browser runs `onerror` first. */
                 if (kind == DYN_SCRIPT_FAILED) {
                     DCHECK(f->dyn_el[f->script_i] != NULL,
-                           "a failed-load row carries no element — the row is created only by the null arm of "
-                           "flow_deliver_one_reply, which asserts the element on both of its two paths, and "
-                           "§4.12.1.1's step 4 fires `error` AT el");
+                           "a failed-load row carries no element — the row is created by the null arm of "
+                           "flow_deliver_one_reply, which asserts the element on both of its two paths, and by "
+                           "engine_seed_scripts for a refused `src`, which asserts it too; §4.12.1.1 fires "
+                           "`error` AT el");
                     /* The element's own document's realm, never the flow's ambient one: the task's callee is a C
                        function running in the realm that defined it, and a child navigable's script element is an
                        ordinary row of this same sequence. */
@@ -9498,7 +9536,7 @@ static void engine_session_close(void) {
         g_root_scripts = NULL;
     }
     g_root_n = 0;
-    g_root_n_held = g_root_n_awaited = 0;   /* the arms go back with the total they partition */
+    g_root_n_held = g_root_n_awaited = g_root_n_refused = 0;   /* the arms go back with the total they partition */
     g_sess_live = 0;
 }
 
@@ -9685,22 +9723,19 @@ static void engine_rejection_console(JSContext *ctx, JSValueConst reason, Reject
 }
 
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
-                        lxb_dom_element_t **els, int n, int forking, const char *recipes) {
+                        const ScriptSchedule *sched, lxb_dom_element_t **els, int n, int forking,
+                        const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
-    /* A job enqueued before this line is a dropped work item, caught here: the enqueue hook is installed below, so
-       anything queued earlier went to quickjs's own global list, which nothing in this engine drains
-       (engine_enqueue_job). It happens: §4.8.5's insertion steps run for every <iframe> in the initial markup when
-       the document is installed, and an <iframe src> there enqueues §7.4 step 14's load, so such a frame never
-       loads, silently; every host installs its document before opening a session. Seeding the session first does
-       not help (the flow is not switched in until the first step, so the hook finds no running flow), and the job
-       cannot run here (page code entered from the host with no flow base). The initial markup's insertion steps
-       are the first flow's work: boot is the forking first flow and its creations are the baseline. What to
-       build: give the document install a flow to run in, or let this call adopt what the runtime already holds. */
+    /* The document install's own work is the first flow's. §4.8.5's insertion steps run for an <iframe src> in
+       the initial markup when the host installs the document, before this session exists, and queue §7.4 step
+       14's navigation through JS_EnqueueCallTask; with no enqueue hook installed that is quickjs's baseline list,
+       which the first executing flow adopts (js_adopt_baseline_calls), so the frame loads in the boot timeline.
+       What this asserts is the other population: a job on quickjs's own job or task list, which only a raw
+       JS_EnqueueJob before the hook can put there and nothing in this engine drains. */
     DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
-           "a job was enqueued BEFORE this session began — it is on quickjs's global list, which this engine "
-           "never drains, so it is a work item the frontier will never run: the document was installed before "
-           "the scheduler existed and §4.8.5's insertion steps enqueued §7.4's load for an <iframe src> in the "
-           "initial markup");
+           "a job was enqueued on quickjs's own job or task list BEFORE this session began — the user agent's "
+           "own callbacks wait on the baseline list for the first flow, so this is a raw JS_EnqueueJob with no "
+           "owner, a work item the frontier will never run");
     g_sess_ctx = ctx;
     g_sess_cur = NULL; g_sess_live = 1;
     /* The three arrays are one inventory, so a session opened with a length and two of them would have the seed
@@ -9708,6 +9743,13 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL),
            "a session was opened over a script inventory missing one of its three columns — bodies, srcs and "
            "types are one table with one length, and the seed below reads all three");
+    /* A list of `<script>` elements carries their §4.12.1.1 schedules (core/loader/document_scripts.h's
+       `sched`); only a host's synthesized program list, which names no element, has none and runs in its own
+       order. */
+    DCHECK(n == 0 || els == NULL || sched != NULL,
+           "a session was opened over a document's `<script>` elements without their §4.12.1.1 schedules — "
+           "document_exec_scripts computes the column, and without it an `async` external would hold a "
+           "position the as-soon-as-possible set does not have");
     /* The document this session is of: the instance's root document, whose script sequence the session runs.
        Asserted against the realm, because everything below compiles by asking the document for its realm, and a
        ctx of another document's realm would run this document's scripts somewhere else. */
@@ -9755,18 +9797,29 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            its own answer for a document not executing a script element. */
         g_root_scripts[g_root_n].el = els ? els[i] : NULL;
         g_root_scripts[g_root_n].type = types[i];
+        g_root_scripts[g_root_n].sched = sched ? sched[i]
+                                         : (bodies[i] ? SCRIPT_SCHED_IMMEDIATE : SCRIPT_SCHED_PARSER_BLOCKING);
         /* The address first, for every row that has one, including a row that also has its source text.
            §4.12.1.1's next step for a `src` that does not encoding-parse is "If url is failure, then queue an
            element task on the DOM manipulation task source given el to fire an event named error at el, and
            return", so that element runs no script and takes no position, whatever bytes were handed over (a host
            could hold them only by fetching the address this parse refuses). Resolved before the body is copied,
-           so the refusal costs nothing.
-           Named residual. Not covered: that `error` event. Next diff builds: an element task on this document
-           firing `error` at el. Absence shows as: a page's `onerror` on a `<script src>` whose address does not
-           parse never running. */
+           so the refusal costs nothing. A refused row keeps the attribute's text as its body and the seed makes
+           it the row that fires `error`. */
         if (srcs[i]) {
             g_root_scripts[g_root_n].url = script_src_absolute(ctx, srcs[i], strlen(srcs[i]));
-            if (!g_root_scripts[g_root_n].url) continue;
+            if (!g_root_scripts[g_root_n].url) {
+                DCHECK(g_root_scripts[g_root_n].el != NULL,
+                       "a synthesized program list carries an address the URL parser refuses — the host built "
+                       "that address itself, and there is no element to fire §4.12.1.1's `error` at");
+                g_root_scripts[g_root_n].refused = 1;
+                g_root_scripts[g_root_n].body = dyn_body_new(srcs[i], strlen(srcs[i]));
+                CHECK(g_root_scripts[g_root_n].body,
+                      "engine: OOM copying a refused script's `src` into its seed row");
+                g_root_n_refused++;
+                g_root_n++;
+                continue;
+            }
         }
         if (bodies[i]) {
             /* Copied rather than borrowed: this table outlives the call and is read whenever a flow of this document
@@ -9886,16 +9939,11 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
  * The flow is added unseeded, which makes it this document's boot rather than a second boot of the root's: a
  * flow's cursor indexes one table, its own rows, and flow_add seeds that table with the root document's programs.
  * This member takes none of them, so everything queued below is its whole program order, at cursor 0. The order
- * is the document's: an inline script is a program queued in place and an external one a DYN_SCRIPT_SRC entry
- * queued in place, holding its address until the reply fills it and stopping the flow there.
- * Named residual. Not covered: HTML §4.12.1.1's schedule. The inventory reaching this entry carries bodies, srcs
- * and types but not `sched`, so every external takes its parse position, right for a pending parsing-blocking
- * script and an over-ordering for an `async` one, which belongs to a set §13.2.7 waits for only before the load
- * event. Next diff builds: the hosts pass DocScripts.sched (they compute it and drop it at this call) and this
- * entry orders by it, as core/frame/navigable.c does. Absence shows as: an `async` external script of a joined
- * document delaying the inline scripts that follow it. */
+ * is the document's, and engine_seed_scripts lays it down from the same rows the root's seed reads, schedule and
+ * refusals included. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
-                          const ScriptType *types, lxb_dom_element_t **els, int n) {
+                          const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
+                          int n) {
     Flow *f;
     RootScript *rows;
     int i, rown = 0;
@@ -9913,9 +9961,9 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
            "a document was joined naming a realm that is not the one it answers with — the queue carries the "
            "NAME and the compile resolves it, so the two disagreeing compiles this document's code in another "
            "document's Window");
-    DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL && els != NULL),
-           "a document was joined with a script inventory missing one of its four columns — bodies, srcs, "
-           "types and els are one table with one length, and the seeding below reads all four");
+    DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL && sched != NULL && els != NULL),
+           "a document was joined with a script inventory missing one of its five columns — bodies, srcs, "
+           "types, sched and els are one table with one length, and the seeding below reads all five");
 
     /* The joined document's boot flow: an empty decision vector over this agent's baseline, minted with a root
        world of its own because it stands on no other flow's decisions. Every timeline this document has is a fork
@@ -9948,14 +9996,20 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                "element of one parsed tree");
         rows[rown].el = els[i];
         rows[rown].type = types[i];
+        rows[rown].sched = sched[i];
         /* The address first, for every row that has one, as in the root document's build: source text and base
            URL are two independent items of one script (§8.1.4.1 "Scripts"), so a row handed over with its response
-           still carries the address §8.1.4.2 makes its base URL. A `src` that does not parse takes §4.12.1.1's
-           next step ("fire an event named error at el, and return"): the element runs no script and takes no
-           position; the `error` event is engine_sched_begin's named residual. */
+           still carries the address §8.1.4.2 makes its base URL. A `src` that does not parse is a refused row,
+           which the seed makes the row that fires `error` at el. */
         if (srcs[i]) {
             rows[rown].url = script_src_absolute(cctx, srcs[i], strlen(srcs[i]));
-            if (!rows[rown].url) continue;
+            if (!rows[rown].url) {
+                rows[rown].refused = 1;
+                rows[rown].body = dyn_body_new(srcs[i], strlen(srcs[i]));
+                CHECK(rows[rown].body, "engine: OOM copying a joined document's refused `src` into its row");
+                rown++;
+                continue;
+            }
         }
         /* The copy is made once, here, and every timeline of this document references it: the row's body is the
            shared program text (solver/dyn_body.h), so this document's bundle is in the instance once however many
@@ -11354,6 +11408,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->root_programs     = g_root_n;
     out->root_programs_held_at_seed    = g_root_n_held;
     out->root_programs_awaited_at_seed = g_root_n_awaited;
+    out->root_programs_refused_at_seed = g_root_n_refused;
     out->prog_starts       = g_prog_starts;
     out->prog_starts_cand  = g_prog_starts_cand;
     out->prog_starts_other = g_prog_starts_other;
@@ -11452,12 +11507,14 @@ void engine_frontier_census(EngineFrontierCensus *out)
        a row was added to the table by a path that did not say which side it was on, and the side that matters
        is the one `replyAsked` is read against — an unlabelled row there silently lowers the bundle's own share
        of the reply door and makes a run that learned nothing read as one that reached a request. */
-    DCHECKF(out->root_programs_held_at_seed + out->root_programs_awaited_at_seed == out->root_programs,
-            "the root document's seed rows do not partition its own count (%d held + %d awaited against %d "
-            "rows) — both arms are written at the one line the total is, on the same column engine_seed_scripts "
+    DCHECKF(out->root_programs_held_at_seed + out->root_programs_awaited_at_seed +
+                out->root_programs_refused_at_seed == out->root_programs,
+            "the root document's seed rows do not partition its own count (%d held + %d awaited + %d refused "
+            "against %d rows) — the arms are written beside the total, on the columns engine_seed_scripts "
             "branches on, so a difference is a second path into that table and `replyAsked` is about to be read "
             "against a bundle share that is not the bundle's",
-            out->root_programs_held_at_seed, out->root_programs_awaited_at_seed, out->root_programs);
+            out->root_programs_held_at_seed, out->root_programs_awaited_at_seed,
+            out->root_programs_refused_at_seed, out->root_programs);
     /* AND THE PROGRAM-START PARTITION, asserted for the reason the two above are and at the same place. It is
        the ONLY identity these four rows have, which is stated here because the missing one is the tempting
        one: `prog_queued_cand` is an ASK and `prog_starts_cand` counts STARTS ACROSS TIMELINES, and a fork
@@ -11750,7 +11807,8 @@ int engine_census_emit(void)
 }
 
 static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
-                          lxb_dom_element_t **els, int n, int forking, const char *recipes) {
+                          const ScriptSchedule *sched, lxb_dom_element_t **els, int n, int forking,
+                          const char *recipes) {
     int r;
     /* THE RESIDUE THIS HOST WAS HANDED, or NULL. This line used to say the cold tier's resume "belongs to the
        host that has an IndexedDB", and that was a claim about STORAGE standing in for a claim about the
@@ -11759,7 +11817,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
        resume path unreachable from every host but the extension's, which is exactly the shape §SECURITY.md
        names one level up — a mechanism that can be written, reviewed and self-tested with no process able to
        run it. The store is the caller's business; the choice is the scheduler's, and it is made in one place. */
-    engine_sched_begin(ctx, bodies, srcs, types, els, n, forking, recipes);
+    engine_sched_begin(ctx, bodies, srcs, types, sched, els, n, forking, recipes);
     for (;;) {
         /* DOES THIS HOST WANT THE RESIDUE? Level-1 eviction is the HOST's decision — it is the only zone that
            can see the other documents' engines and the summed working set — so it is a SEAM here exactly as
@@ -11946,7 +12004,22 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
 /* EXPLORE: seed boot OR a parked residue, then drain the frontier, forking at every concolic branch. */
 void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
                 lxb_dom_element_t **els, int n, const char *recipes) {
-    run_scheduler(ctx, bodies, srcs, types, els, n, 1, recipes);
+    /* Named residual. Not covered: this entry's caller (test_forced.c) passes no schedule column, so it is
+       re-derived here with document_exec_scripts' own call, every row being a parse product (parser-inserted,
+       force async false). Next diff builds: engine_run takes DocScripts.sched and this derivation is deleted.
+       Absence shows as: two derivations of one column, which agree only while every row is a parse product. */
+    ScriptSchedule *sched = NULL;
+
+    if (n > 0 && els) {
+        sched = (ScriptSchedule *)calloc((size_t)n, sizeof *sched);
+        CHECK(sched != NULL, "engine: OOM deriving the schedule column for engine_run's inventory");
+        for (int i = 0; i < n; i++)
+            sched[i] = els[i] ? script_block_schedule(els[i], types[i], /*parser_inserted*/true,
+                                                      /*force_async*/false)
+                              : (bodies[i] ? SCRIPT_SCHED_IMMEDIATE : SCRIPT_SCHED_PARSER_BLOCKING);
+    }
+    run_scheduler(ctx, bodies, srcs, types, sched, els, n, 1, recipes);
+    free(sched);
 }
 
 /* WHETHER THE FRONTIER HAS ALREADY GONE DOWN IN THIS TEARDOWN. It is not agent state and is deliberately not

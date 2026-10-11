@@ -439,7 +439,8 @@ function coldPartition(c, total, parts, where) {
    statement about how far the run got and sends a reader to the cursor histogram rather than to the driving.
    A READING AND NEVER A THRESHOLD (§NO BOUNDS): nothing branches on it and no verdict is refused for it. */
 function bundleShareReading(b) {
-  coldPartition(b, "rootPrograms", ["rootProgramsHeldAtSeed", "rootProgramsAwaitedAtSeed"], "engine_frontier_census");
+  coldPartition(b, "rootPrograms", ["rootProgramsHeldAtSeed", "rootProgramsAwaitedAtSeed", "rootProgramsRefusedAtSeed"],
+                "engine_frontier_census");
   const owed = Number(b.rootProgramsAwaitedAtSeed), asked = Number(b.replyAsked);
   const beyond = asked - owed;
   if (owed === 0)

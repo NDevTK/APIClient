@@ -3455,7 +3455,7 @@ static int wpt_child_main(int argc, char **argv)
        A `<script src>` is Fetch §2.2.5 Requests' `GET` with no body at all (engine_pending_docscript says so
        at the park), so the echoed-POST-body case the clause turned on cannot arise for this row. */
     ds = document_exec_scripts(g_wpt_dom);
-    engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.types, ds.els, ds.n, /*forking*/0, NULL);
+    engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.types, ds.sched, ds.els, ds.n, /*forking*/0, NULL);
     /* THE DOCUMENT RUNS BEFORE THE FIRST QUESTION ARRIVES, which is what makes a child a participant rather
        than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
        post has to be on this channel before the parent asks anything. */
@@ -3737,7 +3737,7 @@ int main(int argc, char **argv)
        document rather than collected as its `<script>` elements, so no row of it came from one. §3.1.7's
        `currentScript` is null while each of them runs, which is that section's answer for a document that
        is not executing a script element. The OTHER entry above passes document_exec_scripts's column. */
-    engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, /*els*/NULL, g_prog_n,
+    engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, /*sched*/NULL, /*els*/NULL, g_prog_n,
                        /*forking*/0, NULL);
     for (;;) {
         int r = engine_sched_step();

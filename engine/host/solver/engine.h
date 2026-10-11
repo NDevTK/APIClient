@@ -332,9 +332,12 @@ void engine_set_provider(int (*provide)(JSContext *ctx));
    HTML §8.1.4.1 "Scripts" base URL; an already-fetched external entry passes both, and an entry with neither
    is refused. `els[i]` is entry i's `script` element, which "execute the script element" switches on and whose
    classic arm sets §3.1.7 `currentScript`; NULL for a synthesized program list, where `currentScript` stays
-   null. All four arrays are borrowed for the life of the session. One session at a time (asserted). */
+   null. `sched[i]` is entry i's §4.12.1.1 schedule, required whenever `els` is given (asserted) and NULL for a
+   synthesized list, which runs in its own order. The arrays are borrowed for the life of the session. One
+   session at a time (asserted). */
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
-                        lxb_dom_element_t **els, int n, int forking, const char *recipes);
+                        const ScriptSchedule *sched, lxb_dom_element_t **els, int n, int forking,
+                        const char *recipes);
 int  engine_sched_step(void);
 
 /* Emit the periodic census for a host whose output is a stream of lines: @SWAP, @COLD, @HEAP, @WFQ, @FORKAT, in
@@ -368,11 +371,12 @@ void engine_sched_end(void);
  * `cctx` is that document's realm, where its programs compile, and is asserted to be the realm `doc` names.
  * Requires a live session and a document other than the session's (asserted).
  * `bodies`/`srcs`/`types`/`n` are the document's §4.12.1 inventory (core/loader/document_scripts.h) in
- * document order, copied, because the host read them once and nothing owns them past this call. `els[i]` is
- * entry i's `script` element, borrowed, because it names a node of the handed-over tree, which outlives the
- * rows. */
+ * document order, copied, because the host read them once and nothing owns them past this call. `sched[i]` is
+ * entry i's §4.12.1.1 schedule (required, asserted). `els[i]` is entry i's `script` element, borrowed, because
+ * it names a node of the handed-over tree, which outlives the rows. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
-                          const ScriptType *types, lxb_dom_element_t **els, int n);
+                          const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
+                          int n);
 /* Request the RAM-to-disk park. The host sees the pressure; the engine takes it at the next step boundary with
    no flow switched in, writes the park document (cold_park_json, published in the result) and answers
    ENGINE_STEP_DONE, and the flows' memory goes with the instance the host then tears down. Nothing is dropped:
@@ -967,13 +971,15 @@ typedef struct {
      * appended, so `deepest` may exceed or fall short of `root_programs - 1` and no assert relates them. It
      * reads 0 outside a live session (engine_session_close gives the seed table back) and for a document with
      * no executable script. Nor is `progStarts` a script count: it counts starts across timelines.
-     * The two at-seed rows partition it (asserted) and are written at one line, when the rows are seeded:
+     * The three at-seed rows partition it (asserted) and are written at one line, when the rows are seeded:
      * `replyAsked == rootProgramsAwaitedAtSeed` means the run asked for its own bundle and nothing else. */
     int  root_programs;     /* rows the root document's own <script> elements seeded into every flow of it */
     int  root_programs_held_at_seed;    /* …whose source text this instance had when the rows were seeded:
                                    inline, or external and already fetched; both are DYN_PAGE_SCRIPT rows */
     int  root_programs_awaited_at_seed; /* …and whose bytes the reply door owed then: DYN_SCRIPT_SRC rows
                                    that park their flow, the bundle's own share of `replyAsked` */
+    int  root_programs_refused_at_seed; /* …and whose `src` did not encoding-parse: DYN_SCRIPT_FAILED rows
+                                   that fire §4.12.1.1's `error` and owe the reply door nothing */
     /* Counts the two maxima cannot carry. `prog_starts` is partitioned into candidate and other starts
      * (asserted), and `prog_queued_cand` is the solver's ask, raised where the row is created, upstream of the
      * pick, the compile and the destroyed-document walk, each of which may legitimately decline. `0/0` says no

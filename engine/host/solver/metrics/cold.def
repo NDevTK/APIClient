@@ -37,11 +37,13 @@ METRIC(deepest_left, "deepestLeft", MAXIMUM, "row", PROCESS, "solver/engine.c", 
    any flow's sequence length (which continues with chunks, injections and candidates).
    solver/engine.h states why no inequality between them holds. */
 METRIC(root_programs, "rootPrograms", CONSTANT, "program", AGENT, "solver/engine.c", INT)
-/* …and its two arms. `rootProgramsAwaitedAtSeed` is the reply-door openings this document owes
+/* …and its three arms (the third, `rootProgramsRefusedAtSeed`, is the elements whose `src` did not
+   encoding-parse). `rootProgramsAwaitedAtSeed` is the reply-door openings this document owes
    for its own bundle, so `replyAsked` equal to it is a run that issued no page `fetch()`, XHR or
    dynamic `import()`. A partition, asserted at engine_frontier_census. */
 METRIC(root_programs_held_at_seed, "rootProgramsHeldAtSeed", CONSTANT, "program", AGENT, "solver/engine.c", INT)
 METRIC(root_programs_awaited_at_seed, "rootProgramsAwaitedAtSeed", CONSTANT, "program", AGENT, "solver/engine.c", INT)
+METRIC(root_programs_refused_at_seed, "rootProgramsRefusedAtSeed", CONSTANT, "program", AGENT, "solver/engine.c", INT)
 /* …and the live half of that pair: a gauge, where `…AwaitedAtSeed` is a constant written once at
    the seed. It counts program rows of the live frontier standing on an address now: `17` beside
    `0` is a bundle that arrived whole (read `programCursors`), `17` beside `17` a bundle whose

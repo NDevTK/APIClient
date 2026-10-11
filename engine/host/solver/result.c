@@ -1339,6 +1339,7 @@ char *result_cold_json(void) {
     METRIC_SET(root_programs, e.root_programs);
     METRIC_SET(root_programs_held_at_seed, e.root_programs_held_at_seed);
     METRIC_SET(root_programs_awaited_at_seed, e.root_programs_awaited_at_seed);
+    METRIC_SET(root_programs_refused_at_seed, e.root_programs_refused_at_seed);
     METRIC_SET(rows_awaiting_bytes, awaiting_rows);
     METRIC_SET(prog_starts, e.prog_starts);
     METRIC_SET(prog_starts_cand, e.prog_starts_cand);
