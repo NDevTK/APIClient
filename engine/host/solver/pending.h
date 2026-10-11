@@ -544,9 +544,9 @@ int  pending_blocked(JSValueConst reg);
    retires it: an answered HOSTREQ reaching flow_deliver_one_reply. Its answer is TAKEN at the call site that
    asked, so a delivery that swap-removes it leaves the asking flow parked for ever — the state the paragraph
    above is about. Nothing here may be read as licence to drop the kind test.
-   WHAT IS NOT COVERED: this predicate and five others in this header — `pending_count_kind`,
-   `pending_owed_replies`, `pending_deliverable_count`, `pending_outstanding` and `pending_outstanding_kind` —
-   still WALK, over the same register that only grows. This one is the hottest of the six: flow_step asks it at
+   WHAT IS NOT COVERED: this predicate and four others in this header — `pending_count_kind`,
+   `pending_owed_replies`, `pending_deliverable_count` and `pending_outstanding` — still WALK, over the same
+   register that only grows. This one is the hottest of the five: flow_step asks it at
    the top of its arm chain on EVERY step, and again on the external-script row (once as that arm's own assert
    under -DAPICLIENT_DEV=1, once as the scheme-answered re-read). They are correct; they are not cheap, and the
    paragraph at `pending_blocked` says exactly why the cure that reached that one does not reach these.
@@ -676,19 +676,6 @@ int  pending_host_outstanding(JSValueConst reg);
    RETIREMENT: this note goes with the partition assert in pending.c — when the three walks cannot disagree,
    there is nothing here for a caller to get wrong. */
 int  pending_declined_outstanding(JSValueConst reg);
-
-/* IS ANY ENTRY OF ONE KIND STILL OWED — the missing ARITY of the two questions above, and the one a caller
-   that cares WHICH debt it is holding has to be able to ask. `pending_count_kind` asks the kind and counts
-   ANSWERED entries too (which is right for the request door); `pending_outstanding` asks "owed" and not the
-   kind. A caller that needs both was left to re-derive "owed" for itself, and pend_owed's own comment above it
-   says why that must not happen: what differs between callers is which KINDS they ask about, never what
-   "owed" means, and a second spelling of it is the drift that comment exists to prevent.
-   THE CALLER THIS EXISTS FOR IS HTML §13.2.7 "The end" step 8 — "nothing that delays the load event" — which
-   is a question about WHICH replies are outstanding and not how many: a `<script src>` still in the air delays
-   a document's `load` (§4.12.1.1 "Processing model": "Whenever a script element el's delaying the load event is
-   true, the user agent must delay the load event of el's preparation-time document") and a `fetch()` or a
-   dynamic `import()` does not, so one number over the whole register cannot answer it. */
-int  pending_outstanding_kind(JSValueConst reg, int kind);
 
 /* HAS THE TRUSTED ZONE REFUSED THIS ENTRY — the `declined` field read through its own vocabulary, so no caller
    ever spells the JS_NULL-versus-string test for itself, and so the field's two legal shapes are asserted in

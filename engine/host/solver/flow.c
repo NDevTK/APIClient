@@ -4979,7 +4979,13 @@ int flow_dyn_row_by_id(const Flow *f, uint64_t id) {
    of the count. It reads three fields and writes none, so the removal can call it during its compaction, which
    writes slot `w <= k` while this is asked about `k`. */
 static int prog_row_removed_by_destroy(const Flow *f, int k, uint32_t doc) {
-    return f->dyn_doc[k] == doc && k > f->last_compiled && k >= f->script_i;
+    return f->dyn_doc[k] == doc && flow_row_unstarted(f, k);
+}
+
+/* See flow.h. */
+int flow_row_unstarted(const Flow *f, int k) {
+    DCHECKF(k >= 0 && k < f->dyn_n, "row %d was asked about in a sequence of %d rows", k, f->dyn_n);
+    return k > f->last_compiled && k >= f->script_i;
 }
 
 /* How many of those rows lie strictly below `slot`: what an index recorded before the compaction comes down by. It

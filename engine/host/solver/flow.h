@@ -1556,6 +1556,9 @@ int   flow_programs_for_document(uint32_t doc);
  * tasks"; a compiled row may hold a suspended continuation, which is the flow's own state. `last_compiled` is
  * the line between them. Pure, so a DCHECK may ask it. */
 int   flow_programs_unstarted_for_document(const Flow *f, uint32_t doc);
+/* Whether row `k` of `f` is one that count counts for its own document: at or past the cursor and past the last
+   started row. The one spelling of "unstarted", for a caller that asks more of the row than its document. */
+int   flow_row_unstarted(const Flow *f, int k);
 
 /* HTML §7.5.10 "Destroying documents" step 5, "Remove any tasks whose document is document from any task queue
  * (without running those tasks)", on the queue JS_DropJobsForContext cannot see: a document's scripts are rows

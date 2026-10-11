@@ -170,6 +170,11 @@ void engine_set_idle_hook(int (*fn)(JSContext *ctx));
    load) and answers 1, or answers 0 when every document of the agent is complete. One claimant at a time
    (asserted); NULL releases the slot. A scheduler with no document (the solver fixture) has no hook. */
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
+/* HTML §13.2.7 "The end", asked of document `doc` in the running flow. The first is true while the document owes
+   a script DOMContentLoaded waits for (step 5's list, and the parse's own scripts before it); the second while
+   it owes any script `load` waits for, adding step 7's two as-soon-as-possible lists. */
+int  engine_document_dcl_scripts_held(uint32_t doc);
+int  engine_document_load_scripts_held(uint32_t doc);
 /* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a parse produced
    (html_link.h). Asked ahead of everything else a flow could do: a browser connects them during tree
    construction, so their requests precede every script of the document. The baseline walk that finds them can

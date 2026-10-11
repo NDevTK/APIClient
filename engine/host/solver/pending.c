@@ -238,7 +238,7 @@ int64_t pending_get_int(JSValueConst e, int field)
    the reason that matters has MOVED rather than gone: it used to be that `pending_blocked` asked it at every
    suspend point the interpreter offers, and that path no longer reads an entry at all. What still reads it is
    every walking predicate below (`pending_ready`, `pending_deliverable_count`, `pending_outstanding`,
-   `pending_outstanding_kind`, `pending_owed_replies`), each of which pays this once per ENTRY over a register
+   `pending_owed_replies`), each of which pays this once per ENTRY over a register
    that only grows — so the cost of this line is multiplied by a number nothing bounds, which is the residual
    pending.h names at `pending_ready`. */
 static int pend_owed(JSValueConst e)
@@ -495,18 +495,6 @@ int pending_declined_outstanding(JSValueConst reg)
            "they no longer do. One of them has been edited away from `pend_owed`, which means some caller is "
            "now getting a fourth answer to a question this file states has only three");
     return hit_any;
-}
-
-int pending_outstanding_kind(JSValueConst reg, int kind)
-{
-    int n = pend_len(reg), i;
-    for (i = 0; i < n; i++) {
-        JSValue e = pending_entry(reg, i);
-        int hit = pending_get_int(e, PEND_KIND) == kind && pend_owed(e);
-        JS_FreeValue(pend_ctx(), e);
-        if (hit) return 1;
-    }
-    return 0;
 }
 
 int pending_owed_replies(JSValueConst reg)

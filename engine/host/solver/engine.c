@@ -3848,6 +3848,24 @@ static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKi
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
                                  TaskSource src, DynPos pos, lxb_dom_element_t *el, int parser_inserted);
 
+/* HTML §13.2.7 "The end": the parse's own scripts run before step 5's list, and step 5 runs before the
+   DOMContentLoaded task is queued, so a parser-inserted script's bytes reach a document that is still "loading".
+   A failed load counts: §4.12.1.1 step 4's `error` is that script's execution. Asserted at the arrival, where
+   both its document and its park are in hand, against the readiness core/dom/document.c moved. A macro so each
+   arm reports its own line; under the dev guard because the read interns an atom. */
+#if APICLIENT_DEV
+#define ENGINE_DCHECK_PARSER_SCRIPT_BEFORE_DCL(p, doc) do {                                                    \
+        uint32_t pdoc_ = (doc);                                                                          \
+        const char *pready_ = document_readiness_of(                                                     \
+            lxb_dom_interface_node(document_associated(doc_realm(pdoc_))));                             \
+        DCHECKF(!pending_get_int((p), PEND_PARSER_INS) || strcmp(pready_, "loading") == 0,               \
+                "a parser-inserted script's bytes arrived for document %u, whose readiness is \"%s\": the " \
+                "parser's scripts hold DOMContentLoaded, so it fired while this one was owed", pdoc_, pready_); \
+    } while (0)
+#else
+#define ENGINE_DCHECK_PARSER_SCRIPT_BEFORE_DCL(p, doc) do { } while (0)
+#endif
+
 /* Delivers one answered entry, then returns; the selector finds it, nothing drains. Every delivery runs through
  * JS_CallAsFlow, a call-root flow whose resolving function can park at each re-entry: 27.5.1.3
  * CreateResolvingFunctions ( toResolve )'s resolveSteps reads `Get(resolution, "then")` (step 2.f) off an object
@@ -3962,6 +3980,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                     DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
                            "an external document script's failure named a row that is not awaiting a program "
                            "— the row already holds one, so this is a second answer to one request");
+                    ENGINE_DCHECK_PARSER_SCRIPT_BEFORE_DCL(p, f->dyn_doc[di]);
                     DCHECK(f->dyn_el[di] != NULL,
                            "an external document script's row carries no element — §4.12.1.1 fires `error` at el, "
                            "and both seams that queue such rows (engine_queue_docscript_url, the seed's address arm) "
@@ -4023,6 +4042,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    "an external document script replied for a sequence position that is not awaiting one — the "
                    "slot holds a program already, so this reply is a second answer to one request and the "
                    "program it overwrites would never run");
+            ENGINE_DCHECK_PARSER_SCRIPT_BEFORE_DCL(p, f->dyn_doc[di]);
             /* Which of §8.1.4.2 Fetching scripts' two decodes runs is the row's own type: a module's bytes are
                UTF-8 whatever the response says, a classic script's go through the response's charset label. The
                encoding realm is the entry's document's. */
@@ -5931,6 +5951,62 @@ static void engine_seed_root_flow(Flow *f) {
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
 }
 
+/* Whether unstarted row `k` of `f`, still owed its bytes, was filed by a parser. HTML §4.12.1.1 files a
+   parser-inserted external script as the pending parsing-blocking script or in the list of scripts that will
+   execute when the document has finished parsing, and a script-inserted one with a position in the list of
+   scripts that will execute in order as soon as possible. The row cannot say which; the park made with it can. */
+static int flow_src_row_parser_inserted(const Flow *f, int k)
+{
+    int j, m = pending_count(f->pending), found = -1;
+
+    for (j = 0; j < m && found < 0; j++) {
+        JSValue pe = pending_entry(f->pending, j);
+        if (pending_get_int(pe, PEND_KIND) == FLOW_PENDING_DOCSCRIPT &&
+            (uint64_t)pending_get_int(pe, PEND_SCRIPT_ROW) == f->dyn_id[k])
+            found = (int)pending_get_int(pe, PEND_PARSER_INS);
+        JS_FreeValue(pending_ctx(), pe);
+    }
+    DCHECKF(found >= 0,
+            "row %d (id %llu) is owed its bytes and no park names it — §4.12.1.1 step 33 fetches when the row is "
+            "made, so the entry left the register without the row", k, (unsigned long long)f->dyn_id[k]);
+    return found == 1;
+}
+
+/* See engine.h. Step 5 runs the document's list, then queues the DOMContentLoaded task, so every program of the
+   document already in the sequence precedes it. The one row that does not is an in-order-ASAP script still owed
+   its bytes: step 7 waits for that list, not step 5. */
+int engine_document_dcl_scripts_held(uint32_t doc)
+{
+    const Flow *f = flow_running();
+
+    DCHECK(f != NULL, "§13.2.7's script lists were asked of a document with no running flow to hold them");
+    for (int k = f->script_i; k < f->dyn_n; k++) {
+        if (f->dyn_doc[k] != doc || !flow_row_unstarted(f, k)) continue;
+        if (f->dyn_cand[k] != DYN_SCRIPT_SRC || flow_src_row_parser_inserted(f, k)) return 1;
+    }
+    return 0;
+}
+
+/* See engine.h. A member of the set of scripts that will execute as soon as possible has no row until its reply
+   arrives (engine_pending_script_url), so the register answers for it. */
+int engine_document_load_scripts_held(uint32_t doc)
+{
+    const Flow *f = flow_running();
+    int j, m;
+
+    DCHECK(f != NULL, "§13.2.7's script lists were asked of a document with no running flow to hold them");
+    if (flow_programs_unstarted_for_document(f, doc) > 0) return 1;
+    m = pending_count(f->pending);
+    for (j = 0; j < m; j++) {
+        JSValue pe = pending_entry(f->pending, j);
+        int hit = pending_get_int(pe, PEND_KIND) == FLOW_PENDING_SCRIPT &&
+                   (uint32_t)pending_get_int(pe, PEND_DOC) == doc;
+        JS_FreeValue(pending_ctx(), pe);
+        if (hit) return 1;
+    }
+    return 0;
+}
+
 /* Which kind the program at `script_i` is, for the compile and the resume. Re-derived from the cursor, which
    already says which program is running, rather than latched in a field that could lag. The cursor indexes one
    table; past the end is a real position (the accessors are read before the step decides what the flow does). */
@@ -7723,19 +7799,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * `setTimeout(f, 0)` runs after DOMContentLoaded). Above the owed return, because HTML §13.2.7 The end
              * step 8 waits until "there is nothing that delays the load event in the Document", not for quiescence:
              * a `fetch()` or a dynamic `import()` delays nothing, and an SPA's bootstrap, router and lazy loaders
-             * hang off `load`. What still holds it, per kind:
-             *  - A `<script src>`, the document's own (DOCSCRIPT) or an injected one (SCRIPT): §4.12.1.1 "Whenever
-             *    a script element el's delaying the load event is true, the user agent must delay the load event of
-             *    el's preparation-time document", set by step 33 ("Set el's delaying the load event to true.") as
-             *    it fetches, which is when the entry this reads is created (engine_queue_into).
-             *  - A HOSTREQ is not a delay source; the flow is suspended, answered by the arm above.
-             *  - A `fetch()` (RESOLVE) and a dynamic `import()` (MODULE) delay nothing, and this runs in front of
-             *    them.
-             * The other step 8 sources are per-element flags (`img`, the media elements, `script`), owned by those
-             * components; core/dom/document.c's document_load_event_delayed names them at the gate. */
-            else if (!pending_outstanding_kind(f->pending, FLOW_PENDING_SCRIPT) &&
-                     !pending_outstanding_kind(f->pending, FLOW_PENDING_DOCSCRIPT) &&
-                     g_docdone_hook && g_docdone_hook(ctx)) {
+             * hang off `load`. An owed `<script src>` holds each stage of its own document only, and only the stage
+             * whose list it is in (steps 5 and 7); the hook asks engine_document_dcl_scripts_held and
+             * engine_document_load_scripts_held per document. A `fetch()` and a dynamic `import()` delay nothing. */
+            else if (g_docdone_hook && g_docdone_hook(ctx)) {
                 g_step_unit = STEP_UNIT_LIFECYCLE; return 0; }
             /* The flow's own recorded drive: the half of the orphan surface that stays above the clock. A resume is
                this flow's own identity (recorded in a previous session as the drive of one body, carrying the path

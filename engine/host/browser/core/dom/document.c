@@ -3116,7 +3116,10 @@ int document_lifecycle_step(JSContext *ctx)
     for (i = 0; i < n && !did; i++) {          /* pass one: DOMContentLoaded, in tree order */
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i);
         JSContext *realm = window_proxy_realm(ctx, proxy);
-        if (document_readiness(realm) == 0 && document_parse_ended(realm)) {
+        /* §13.2.7 steps 5-6: DOMContentLoaded is queued once the list of scripts that will execute when the
+           document has finished parsing is empty, which is a question about this document's scripts alone. */
+        if (document_readiness(realm) == 0 && document_parse_ended(realm) &&
+            !engine_document_dcl_scripts_held(document_doc(realm))) {
             document_done_stage(realm, 0);
             DCHECK(document_readiness(realm) == 1,
                    "a document's DOMContentLoaded stage ran and left its readiness where it was — this walk "
@@ -3134,14 +3137,18 @@ int document_lifecycle_step(JSContext *ctx)
            order alone cannot express and which quiescence used to hide.
            THE SOURCES THIS PREDICATE DOES NOT YET CARRY are `img` (§4.8.4.3.5 "Updating the image data": "When
            delay load event is true, fetching the image must delay the load event of the element's node
-           document"), the media elements' §4.8.11.5 "Loading the media resource" delaying-the-load-event flag, and
-           §4.12.1.1 "Processing model"'s per-`script` delaying the load event. Each is a per-ELEMENT flag with
-           no record in this engine, so each is a document that may reach `load` EARLY — the same shape this
+           document") and the media elements' §4.8.11.5 "Loading the media resource" delaying-the-load-event
+           flag. A `script` element's own flag is not among them: it is set only while the element is fetching,
+           and a fetching script is a member of one of the lists step 7 or step 5 waits for until it has run.
+           Each of the two is a per-ELEMENT flag with no record in this engine, so each is a document that may
+           reach `load` EARLY — the same shape this
            whole gate exists to end, one element type down. They are not defaulted-to-false here and then
            forgotten: the flag belongs to the element's own component, and the honest place for its absence to
            crash is where that component would raise it, not in a `||` chain here that would have to guess at
            the state of an element it does not own. */
-        if (document_readiness(realm) == 1 && !document_load_event_delayed(ctx, docs, n, proxy)) {
+        /* STEP 7, the spin over the two as-soon-as-possible lists, asked before step 8's. */
+        if (document_readiness(realm) == 1 && !engine_document_load_scripts_held(document_doc(realm)) &&
+            !document_load_event_delayed(ctx, docs, n, proxy)) {
             document_done_stage(realm, 1);
             DCHECK(document_readiness(realm) == 2,
                    "a document's `load` stage ran and left its readiness where it was — as above, the walk "
