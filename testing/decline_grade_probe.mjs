@@ -11,10 +11,10 @@
 // `engine/trusted.mjs` and the arm probe load it, and every verdict below is that file's own answer. A second
 // copy of the deny list or of the gate order here would be the copy that drifts.
 //
-// `fetch` THROWS A MARKED ERROR AND THAT IS THE POSITIVE CONTROL. CLAUDE.md §AND-THE-WAY-YOU-ESTABLISH-WHICH-
-// HALF-A-FAILURE-LANDS-IN: a probe for a refusal must first be shown to let something THROUGH, or a DECLINE
-// everywhere reads identically to a probe that never reached the ladder at all. A vector that reaches the wire
-// is one no pre-request gate refused; nothing here opens a socket.
+// THE PLATFORM EDGE THROWS A MARKED ERROR AND THAT IS THE POSITIVE CONTROL: a refusal probe must first let
+// something through. The edge is `fetch` for a network URL and `swRpc`, the relay a credentialed send's identity
+// reads its jar through; a vector reaching either passed every pre-request gate, and no socket opens. A `data:`
+// URL is answered by the host's own fetch, Fetch §4.3's "data" arm without a network.
 //
 // THE VECTORS ARE TRANSCRIBED OFF THE CALL SITES, WITH THE GREP NAMED, which is the one thing here a reader
 // must check rather than trust — a vector whose call site has moved is a row about nothing.
@@ -37,11 +37,18 @@ const EXT = join(dirname(fileURLToPath(import.meta.url)), '..', 'extension');
 const REACHED = 'DECLINE_GRADE_PROBE_REACHED_THE_WIRE';
 
 function zone() {
-  const sandbox = { console, URL, TextDecoder, TextEncoder,
-                    fetch: () => { throw new Error(REACHED); } };
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Headers,
+                    fetch: (u, init) => {
+                      if (String(u).startsWith('data:')) return fetch(u, init);
+                      throw new Error(REACHED);
+                    },
+                    swRpc: () => { throw new Error(REACHED); } };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
+  /* The ast-worker.html order for the files a credentialed navigation's identity is built and spoken by. */
+  for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
+                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/navigable-notice.js',
+                   'lib/document-record.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
   for (const n of ['safeFetch', 'safeFetchEgressStated'])
     if (typeof sandbox[n] !== 'function')
@@ -57,18 +64,31 @@ function zone() {
 
 const PRINCIPAL = 'https://app.example.com/page';
 /* bridge.js's `navigationLoad` opts, transcribed:
-   git grep -n 'destination: "document", provenance: provenance' extension/bridge.js
-   The two seeds differ only in the two words their own call sites state:
-   git grep -n 'refusalArm' extension/bridge.js                       (the ROUTE seed: derived/page)
-   git grep -n 'PROVENANCE_OBSERVED, PROVENANCE_OBSERVED' extension/bridge.js  (the AMBIENT seed: observed/tool) */
-function navOpts(over) {
+   git grep -n 'const r = await self.safeFetch(abs, { pageOrigin: principalOrigin' extension/bridge.js
+   The route seed states the declaration's words (derived, page, its drive and witness marks, here an
+   undriven, unpinned declaration) and the ambient seed the tool's (observed, tool, unstated, unstated):
+   git grep -n 'navigationLoad(seed.url' extension/bridge.js
+   git grep -n 'navigationLoad(msg.seedUrl' extension/bridge.js
+   Both are credentialed for a same-origin document, so both speak as `navigationIdentity`'s identity, which
+   is identityFor over the speaker. A declared route's speaker is engineIdentity of the declaring document,
+   with no referrer and no policy; the ambient seed's is the browser frame's (seedSpeaker), which this realm
+   has no browser to ask, so it states the same engine identity. No gate before the edge reads the identity's
+   source. */
+function navIdentity(url) {
+  return z.identityFor(z.engineIdentity(new URL(PRINCIPAL).origin, PRINCIPAL),
+                       { url, requestInit: { credentials: 'include', mode: 'navigate', referrer: '',
+                                             referrerPolicy: null } },
+                       'strict-origin-when-cross-origin');
+}
+function navOpts(url, over) {
   return Object.assign({ pageOrigin: new URL(PRINCIPAL).origin,
                          destination: 'document', mode: 'navigate', provenance: 'derived',
                          doc: z.docRecord('observed', 'undriven', 'unpinned', 'none',
                                           z.safeFetchDocumentAddressSpace(PRINCIPAL, null)),
-                         actor: 'page', pinned: 'unstated', credentials: 'include',
-                         credentialed: true }, over || {});
+                         actor: 'page', driven: 'undriven', pinned: 'unpinned', credentials: 'include',
+                         credentialed: true, identity: navIdentity(url) }, over || {});
 }
+const AMBIENT = { provenance: 'observed', actor: 'tool', driven: 'unstated', pinned: 'unstated' };
 
 const ROWS = [
   { label: 'ROUTE SEED, an ordinary route (CONTROL: must reach the wire)',
@@ -81,9 +101,18 @@ const ROWS = [
      `credentialed && provenance !== "observed"`, so this is the one navigation caller they do not reach — the
      loosening is argued at the gate itself and this is where it is exercised rather than assumed. */
   { label: 'AMBIENT SEED, /logout (observed: the deny list does not apply)',
-    url: 'https://app.example.com/logout', want: 'WIRE', over: { provenance: 'observed', actor: 'tool' } },
+    url: 'https://app.example.com/logout', want: 'WIRE', over: AMBIENT },
   { label: 'AMBIENT SEED, /account/delete (the same)',
-    url: 'https://app.example.com/account/delete', want: 'WIRE', over: { provenance: 'observed', actor: 'tool' } },
+    url: 'https://app.example.com/account/delete', want: 'WIRE', over: AMBIENT },
+  /* navigationLoad's data: arm is Fetch §4.3's "data" arm and never asks safeFetch, so it cannot decline: a
+     well-formed URL is a response and a malformed one (no comma, Fetch §6 "data: URLs") a network error,
+     which the loader reports as unavailable. safeFetch itself refuses the scheme. */
+  { label: 'DATA ARM, a well-formed data: URL (answered, never asked of safeFetch)',
+    url: 'data:text/html,<p>x', want: 'ANSWERED', scheme: true },
+  { label: 'DATA ARM, a data: URL with no comma (a network error, not a decline)',
+    url: 'data:text/html', want: 'REFUSE:network', scheme: true },
+  { label: 'safeFetch asked for a data: URL (the scheme is refused, not declined)',
+    url: 'data:text/html,<p>x', want: 'REFUSE:network' },
 ];
 
 const z = zone();
@@ -91,7 +120,8 @@ let bad = 0, wire = 0, decl = 0;
 for (const row of ROWS) {
   let got, detail;
   try {
-    const r = await z.safeFetch(row.url, navOpts(row.over));
+    const r = row.scheme ? await z.safeFetchSchemeData(row.url)
+                         : await z.safeFetch(row.url, navOpts(row.url, row.over));
     if (r && r.refusal) { got = r.refusal.kind === 'decline' ? 'DECLINE' : 'REFUSE:' + r.refusal.kind;
                           detail = r.refusal.reason; }
     else { got = 'ANSWERED'; detail = 'status ' + (r && r.status); }
