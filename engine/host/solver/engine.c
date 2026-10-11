@@ -3908,31 +3908,15 @@ static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType st
     return src;
 }
 
-/* HTML §8.1.4.2 "Fetching scripts"' FETCH A SINGLE MODULE SCRIPT HAS A CONDITION THE TWO CLASSIC ALGORITHMS
-   DO NOT, AND THIS IS IT. Its processResponseConsumeBody opens with the same two-item list the three program
-   kinds share — "If any of the following are true: bodyBytes is null or failure; or response's status is not
-   an ok status" — and then states two steps the classic algorithms have no counterpart for: "Let mimeType be
-   the result of extracting a MIME type from response's header list." and "Let moduleScript be null." Every
-   arm that can make moduleScript non-null is GUARDED BY mimeType, and the JavaScript one reads "If mimeType
-   is a JavaScript MIME type and moduleType is "javascript-or-wasm", then set moduleScript to the result of
-   creating a JavaScript module script given sourceText, settingsObject, response's URL, and options." So a
-   module answered a non-JavaScript type leaves moduleScript NULL, and §8.1.6.7.3 HostLoadImportedModule's
-   onSingleFetchComplete turns a null moduleScript into a TypeError — the arm this file's failure branch
-   already reaches for a network error.
-   THERE IS NO SCHEME EXEMPTION HERE AND THAT IS NOT AN OVERSIGHT IN THE STANDARD. The CLASSIC algorithm's
-   gate is written "If all of the following are true: response's URL's scheme is an HTTP(S) scheme and the
-   result of extracting a MIME type from response's header list is not a JavaScript MIME type", with the
-   standard's own note that "other fetch schemes are exempted from MIME type checking for historical web
-   compatibility reasons". The module algorithm carries no such clause, so a `data:text/plain` import fails
-   where a `data:text/javascript` one loads — which is what a browser does, and is why this is asked of the
-   module kind ALONE rather than hoisted beside the status test.
-   AN ABSENT `Content-Type` IS FAILURE AND THEREFORE A REJECTION, which is mime_type_extract's own contract in
-   its own words ("NULL — the header is absent — is the spec's "values is null", which is failure") and not a
-   default this reads into it: a failed mimeType makes every one of those arms false, so moduleScript is null
-   for the same reason a `text/plain` body leaves it null.
-   NOTHING IS ASSERTED ON THE TYPE. It is a string a stranger's server chose, so §WHOSE-BYTES-STATE-THE-VALUE
-   makes the answer to a type this algorithm refuses the ALGORITHM'S OWN FAILURE and never a crash — the same
-   reason the status test one branch down stands on no assert. */
+/* HTML §8.1.4.2 Fetching scripts' fetch a single module script has a condition the classic algorithms lack.
+   After the shared two-item list ("bodyBytes is null or failure; or response's status is not an ok status") it
+   extracts a MIME type and sets moduleScript only "If mimeType is a JavaScript MIME type and moduleType is
+   "javascript-or-wasm"", so a non-JavaScript type leaves moduleScript null and §8.1.6.7.3 HostLoadImportedModule
+   turns it into a TypeError. There is no scheme exemption: the classic gate applies only to HTTP(S) URLs ("other
+   fetch schemes are exempted from MIME type checking for historical web compatibility reasons"), the module
+   one to every scheme, so `data:text/plain` fails where `data:text/javascript` loads. An absent `Content-Type` is
+   extraction failure (mime_type_extract's contract) and so a rejection. Nothing is asserted on the type: a
+   server chose it, so a refused type is the algorithm's own failure. */
 static bool module_reply_is_javascript(JSContext *ctx, JSValueConst reply)
 {
     HeaderList hl = { 0 };
@@ -3950,226 +3934,94 @@ static bool module_reply_is_javascript(JSContext *ctx, JSValueConst reply)
     return ok;
 }
 
-/* WHAT THE PROGRAM QUEUE CAN CARRY IS `len` BYTES, WHICHEVER OF THEM ARE NUL. A `REPLY_SOURCE_WHOLE` macro
-   stood here and asserted `strlen(src) == n` at each of the two decodes below, naming the fix — "build the
-   queue over a LENGTH". It is built: `dyn_body_adopt` takes the decode's own `(src, src_n)`, the row keeps
-   both, and flow_step hands both to JS_FlowNew / JS_FlowEvalModule, which have taken a length all along. The
-   assertion is DELETED rather than relaxed, because what it was guarding no longer has a way to go wrong here:
-   the length never becomes a `strlen` between this line and the compiler. The invariant that survives is
-   dyn_body_adopt's, and it is about the GUARD byte rather than the length.
-   THE MEASUREMENT THAT MADE THIS URGENT: over a 30-site frozen mirror, two of the three sites in this defect's
-   cluster aborted HERE — one shipping 125 U+0000s in a single script, the other 2309. A page whose script
-   carries one is not a broken page (ECMAScript §11.1 "Source Text"), and running it to the first NUL is a
-   silently shorter program with every endpoint and sink past that byte unreachable. */
+/* The program queue carries `len` bytes, NUL or not: `dyn_body_adopt` takes the decode's `(src, src_n)`, the row
+   keeps both, and flow_step hands both to JS_FlowNew / JS_FlowEvalModule, so the length never becomes a `strlen`
+   before the compiler. Real scripts contain U+0000 (ECMAScript §11.1 Source Text), and running one only to its
+   first NUL would be a silently shorter program. dyn_body_adopt's invariant is about the guard byte. */
 
-/* A REPLY THAT IS A PROGRAM JOINS THE SEQUENCE, which is why the delivery below reaches the queue that is
-   defined past it. Declared rather than moved: the queue belongs beside the other queue entry points and
-   the delivery belongs beside the register it scans. */
+/* A reply that is a program joins the sequence, so the delivery below reaches queue entries defined past it.
+   Declared rather than moved: the queue belongs beside the other queue entries, the delivery beside the
+   register it scans. */
 static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
                          const char *url, TaskSource src, DynPos pos);
-/* …and the same entry for a row an ELEMENT put there — see engine_queue_el below. */
+/* …and the same entry for a row an element put there (engine_queue_el below). */
 static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
                             const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el,
                             int parser_inserted);
-/* …and the one a caller reaches when it ALREADY holds the decoded text as a shared body, which is every reply
-   that arrives as a program: the delivery below adopts the decode and hands it over without a second copy. */
+/* …and the one for a caller already holding the decoded text as a shared body, which is every reply that
+   arrives as a program: the delivery adopts the decode and hands it over without a second copy. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
                                  TaskSource src, DynPos pos, lxb_dom_element_t *el, int parser_inserted);
 
-/* ONE ANSWERED ENTRY, THEN RETURN — and the loop below is the SEARCH for it, not a drain.
+/* Delivers one answered entry, then returns; the selector finds it, nothing drains. Every delivery runs through
+ * JS_CallAsFlow, a call-root flow whose resolving function can park at each re-entry: 27.5.1.3
+ * CreateResolvingFunctions ( toResolve )'s resolveSteps reads `Get(resolution, "then")` (step 2.f) off an object
+ * whose prototype the page owns. Delivering reply B while A's settle is parked would trigger B's reactions first
+ * (27.5.1.4 FulfillPromise step 7, 27.5.1.8 TriggerPromiseReactions step 1.b), and §9.5.5 HostEnqueuePromiseJob
+ * runs jobs in enqueue order, so `.then` handlers would run in an order the preempt chose. One per step is also
+ * the event loop's model: a completed fetch is delivered by a task, and HTML §8.1.7.3 Processing model runs a
+ * microtask checkpoint after each. flow_step resumes the parked continuation first and flow_checkpoint_due runs
+ * the microtasks before the next reply; the entry stays on the register until the step that delivers it.
  *
- * IT WAS A DRAIN, and the drain settled every answered entry in one pass. That is the shape §Every runtime job
- * is a scheduler flow forbids in as many words — "There is NO `while(JS_ExecutePendingJob)` loop — the
- * scheduler IS the job pump" — and flow_step's own header says the same thing about itself ("flow_step is a
- * step, and it used to be a drain"). This was the last drain left inside it.
+ * `pending_next_deliverable` is the one answer to "which reply is next": `pending_ready` asks whether there is
+ * one, `pending_ready_next_seq` its stamp (for the ladder), and this its index, so all three name one entry. A
+ * HOSTREQ's answer is skipped by the selector's predicate and never removed here: it stays where the machine
+ * parked at the call site will take it (engine_host_take).
  *
- * AND IT REORDERED THE PAGE'S MICROTASKS, which is the reason it could not merely be tidied. Every delivery
- * below runs through JS_CallAsFlow, which builds a CALL-ROOT FLOW: the native resolving function is a step
- * machine and offers a park at every re-entry, and 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s
- * resolveSteps — the closure that is step 2's one nested list — has at step 2.f
- * `Get(resolution, "then")`, a read on an object whose prototype the page owns, so the settle of reply A can
- * PARK part-way. The drain did not stop for that. It went on and delivered reply B, whose settle ran to
- * completion — so B's promise reached 27.5.1.4 "FulfillPromise" step 7's TriggerPromiseReactions FIRST, and
- * 27.5.1.8 "TriggerPromiseReactions ( reactions, arg )" step 1.b enqueued B's reaction jobs ahead of A's.
- * §9.5.5 "HostEnqueuePromiseJob ( job, realm )" then requires that "Jobs must run in the same order as the
- * HostEnqueuePromiseJob invocations that scheduled them", and the queue honours that faithfully — so the
- * page's `.then` handlers ran B before A, in an order the forced preempt alone decided. A park is only ever
- * legal because it is TRANSPARENT (flow_park says so, and JS_CallInternal, JS_ExecutePendingJob and
- * JS_FlowFree each assert it); here the transparency was broken not by the park but by the walk continuing
- * across it.
- *
- * IT WAS UNREACHABLE UNTIL THE PARK RECORD MOVED ONTO THE BASE. While the runtime held ONE park slot, the
- * second park aborted at flow_park before the ordering question could be asked at all. The runtime owns a FIFO
- * of them now, so the walk ran to the end and the reordering became reachable — which is what makes this the
- * moment for the fix rather than a defect that was always live.
- *
- * ONE PER STEP IS ALSO WHAT THE EVENT LOOP DOES. A completed fetch is delivered by a TASK, and HTML §8.1.7.3
- * "Processing model" performs a microtask checkpoint at the end of each one — so two replies are two tasks
- * with a checkpoint between them, never one pass that settles both. flow_step's arms are that model: the
- * parked continuation is resumed by the arm at the top of the loop before anything else this flow could do,
- * and flow_checkpoint_due runs the microtasks the completed settle enqueued, both of them BEFORE control
- * reaches this function again for the next reply. Nothing is dropped, starved, skipped or forgotten: the entry
- * stays on the register until the step that delivers it, and the flow reports progress, so it is re-ranked and
- * comes back for the rest exactly as it comes back for its programs and its jobs.
- *
- * THE FIRST ANSWERED ENTRY IN THE REGISTER'S CURRENT ARRAY ORDER, AND THAT IS NOT THE ORDER THE FLOW ISSUED
- * ITS REQUESTS. This paragraph used to claim it was — "delivery order is then a function of the order the flow
- * ISSUED its requests and not of the order the host happened to answer them, which is the invariance §Testing's
- * solver differential asks for" — and the register cannot carry that claim: pending_remove is a SWAP-REMOVE
- * (solver/pending.h says so in its own words, "the register is a set of outstanding requests, not an ordered
- * queue"), so the first removal moves the LAST entry into the hole and every issue-order reading after it is an
- * artifact of which entries happened to have been taken. Four entries A B C D all answered deliver A, D, B, C.
- * The two HOSTREQ removals in this file (engine_host_take, and the withdrawal beside it) permute it too, so
- * this is not something the delivery site can fix by shifting instead of swapping.
- * IT IS NOT §8.1.7.3'S ORDER EITHER, WHICH IS THE HALF THAT MATTERS FOR FIDELITY. A completed fetch's task is
- * queued on ONE source, HTML §8.1.7.1 Definitions requires that "For each event loop, every task source must be
- * associated with a specific task queue", and §8.1.7.3 Processing model step 2.3 then takes the oldest of that
- * queue — "Set oldestTask to the first runnable task in taskQueue, and remove it from taskQueue" — so the order
- * within this source is the order the REPLIES ARRIVED and is not implementation-defined.
- * WHAT IS NOT COVERED: this arm delivers one answered entry per step, which is right, and picks WHICH one out of
- * a permuted array, which is neither of the two defensible orders.
- * WHAT THE NEXT DIFF BUILDS: an arrival ordinal on the RECORD — a PENDING_FIELDS entry, PEND_SHARE for `value`'s
- * reason exactly (an answer that arrived before a fork was computed in a world both arms were in), minted
- * monotonically at the `PEND_HAVE_VALUE` write pending.c's pend_index_sync already dispatches on — and this
- * scan choosing the SMALLEST rather than the first, which is §8.1.7.3's oldest-first over the networking task
- * source.
- * AND THAT WRITE IS `pend_set_field`, NOT `pending_set`, WHICH IS THE HALF THIS CLAUSE USED TO NAME AND THE
- * HALF A READER WOULD HAVE CONFIRMED RATHER THAN CHECKED. `pending_set` is one of TWO doors and it REFUSES
- * exactly one write: `PEND_HAVE_VALUE` on a SYNCHRONOUS request, whose DCHECK says to use `pending_answer_sync`
- * instead because that door is HANDED the register the count lives on — and it reaches `pend_set_field`
- * directly. Both doors end there, which is why `pend_index_sync` hangs off `pend_set_field` and not off the
- * public one, and pending.c states that convergence in its own words at the site. So an ordinal minted at
- * `pending_set` is monotone over ONE door's settles: every synchronous answer THIS FILE writes (the
- * pending_answer_sync call in engine_host_answer) would settle a record carrying no ordinal at all, which a
- * scan reading the SMALLEST takes as the oldest arrival. The mint goes where the two doors meet.
- * HOW ITS ABSENCE SHOWS: engine/solvergate.mjs already drives a `lastreply` schedule ("one entry per turn, tail
- * first"), so a corpus document with two concurrently answered fetches whose `.then` handlers observe each
- * other disagrees between `lastreply` and the `direct` reference. That is the gate reporting a real reorder, and
- * the fix is the ordinal — never a narrowing of the schedule set. */
-/* THE ENTRY IS ASKED FOR RATHER THAN SCANNED FOR, which is the whole of why the ladder above and this delivery
-   cannot be about different replies. `pending_next_deliverable` is the ONE answer to `which reply is next`;
-   `pending_ready` asks whether there is one and `pending_ready_next_seq` asks for its stamp so the arm can
-   order against it, and this asks for its INDEX so it can settle it. Three readers, one selector.
-   THE RETIRED WORDING IS KEPT BECAUSE A READER WILL RE-DERIVE THE SCAN. It read: a synchronous request's answer
-   is not this walk's to take, which is the same sentence the `else` branch below states as an assertion — said
-   HERE, where the entry is still on the register, because there is no way to state it below without the answer
-   having already been removed; `pending_ready` decides WHETHER this runs and asks the same two questions this
-   scan asks, this decides which entry it TOUCHES once it is running, and both are needed, because a register
-   can hold a fetch reply and an answered HOSTREQ at the same instant and it is the fetch reply that brought the
-   scan here. Every word of that is true and it describes TWO walks asking one question in two places, which is
-   what drifted: the ladder's reader took the MINIMUM stamp over the deliverable set while this took the FIRST
-   by index, and `pending_remove` is a swap-remove, so after any mid-register removal they named different
-   entries. pending.c carries the measurement.
-   WHAT STILL HAS TO BE SAID HERE, because it is about what this function must NOT do rather than about which
-   entry it gets: a HOSTREQ's answer stays where the machine parked at the call site will take it
-   (engine_host_take), so it is SKIPPED and never swap-removed — the predicate behind the selector is what
-   skips it, and a path here that removed one instead would leave the flow that asked resuming into a
-   rendezvous whose record is gone, waiting at that line for the rest of the session. */
+ * Named residual. Not covered: the order among answered entries. §8.1.7.1 Definitions puts a fetch's task on one
+ * source and §8.1.7.3 step 2.3 takes "the first runnable task in taskQueue", so replies should deliver in arrival
+ * order; this selects by register position, which swap-removes (pending_remove, engine_host_take) permute (A B C
+ * D deliver A, D, B, C). Next diff builds: an arrival ordinal on the record (a PENDING_FIELDS entry, PEND_SHARE
+ * for `value`'s reason) minted monotonically in `pend_set_field`, where both write doors (`pending_set` and
+ * `pending_answer_sync`) meet and pend_index_sync dispatches, and the selector choosing the smallest. Absence
+ * shows as: engine/solvergate.mjs's `lastreply` schedule disagreeing with `direct` on a corpus document whose
+ * two concurrently answered fetches' `.then` handlers observe each other. */
 static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
     int i = pending_next_deliverable(f->pending);
     if (i >= 0) {
         JSValue p = pending_entry(f->pending, i);
         JSValue pv;
         int kind;
-        /* NO ENTRY IS DELIVERED WHILE A SETTLE OF THIS REGISTER IS STILL PARKED — the invariant this function
-           was rewritten around, asserted where the next delivery would begin rather than left as a property
-           somebody maintains. A settle that parked has not reached 27.5.1.4 "FulfillPromise" step 7 yet, so its
-           reactions are not on the queue; anything delivered in front of it enqueues first and §9.5.5
-           "HostEnqueuePromiseJob ( job, realm )" then runs them in that order — the page observes an order the
-           preempt chose. Both homes of the park are asked, because a park rides the Flow while it is switched
-           OUT and sits in the runtime's FIFO while it is switched IN, and an assert that can only be true is
-           the read-side of the defect a defaulted field is (this is the form flow_answer_fork and flow_finish
-           already use). It cannot fire from THIS function's own structure — the delivery below is the last
-           thing it does — so what it catches is a caller that reached here with a continuation outstanding,
-           which is exactly the state flow_step's resume arm exists to make impossible. */
+        /* No entry is delivered while a settle of this register is still parked: its reactions are not queued
+           yet (27.5.1.4 FulfillPromise step 7), and anything delivered first would enqueue ahead of them. Both
+           homes of a park are asked (on the Flow while switched out, in the runtime's FIFO while switched in), as
+           flow_answer_fork and flow_finish do. It catches a caller arriving with a continuation outstanding,
+           which flow_step's resume arm exists to prevent. */
         DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->parked == NULL,
                "a reply is about to be delivered while a settle from this flow's register is still PARKED — "
                "the parked settle has not triggered its promise's reactions yet, so this delivery's reactions "
                "would be enqueued in front of them and the page would observe an order the forced preempt "
                "chose. Resume the parked continuations first (flow_step's resume arm)");
-        /* AND UNDER THIS FLOW'S OWN DELTA, because the delivery below runs the PAGE's code: the settle would
-           otherwise read and write whichever world happened to be applied, and the reaction jobs it enqueues
-           would land on that flow's queue. flow_deliver asserts the same thing about a routed message for the
-           same reason. */
+        /* Under this flow's own delta, because the delivery runs the page's code; flow_deliver asserts the same
+           for a routed message. */
         DCHECK(flow_running() == f,
                "a reply was delivered while another flow was switched in — the page's resolving function would "
                "run against that flow's delta and the reactions it triggers would be queued on that flow");
-        /* TAKEN OFF THE REGISTER BEFORE IT IS DELIVERED, and that ordering is the record's own lifetime. The
-           delivery below runs the PAGE's code — 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s
-           resolveSteps, the closure that is step 2's one nested list, reads at step 2.f
-           `Get(resolution, "then")` off an object whose prototype the page owns — and that code can issue
-           another fetch, which appends to this very register. As a C array the walk held a `FlowPending *` into
-           storage the append could realloc out from under it; as a JS record the reference here is what keeps
-           it alive, so an append cannot move it and the slot it occupied cannot be read twice. The removal is a
-           swap-remove and the scan does not resume past it: this call ends at the delivery, and the next step
-           scans from the front again over a register the delivery may have changed. */
+        /* Taken off the register before delivery, which is the record's lifetime: the page code the settle runs
+           (resolveSteps' `Get(resolution, "then")`) can issue another fetch onto this register, and the JS
+           reference held here keeps the record alive across that. The removal is a swap-remove and the call ends
+           at the delivery; the next step selects again over whatever the register became. */
         pending_remove(&f->pending, i);
         kind = (int)pending_get_int(p, PEND_KIND);
         pv = pending_get(p, PEND_VALUE);
-        /* §4.12.1.1's NULL RESULT, WHICH IS THE ONE ANSWER A PROGRAM PARK HAS NO PROGRAM FOR. Fetch §5.6
-           "Fetch methods"' network error crosses as JS_NULL (core/fetch/fetch.h), and so does an answer the
-           trusted zone REFUSED to ask for (flow_decline_fork). §4.12.1.1's fetch `onComplete` is "Mark as
-           ready el given result", the result is null, and "execute the script element" step 4 is "If el's
-           result is null, then fire an event named error at el, and return" — so the element runs NOTHING and
-           the page is told. This arm makes that a ROW; the sequence arm in flow_step is where step 4 runs.
-           IT IS ASKED HERE RATHER THAN INSIDE EACH KIND because §8.1.4.2 states this test once per algorithm
-           and states it IDENTICALLY, so the three PROGRAM kinds share it whole — and the sentence that stood
-           here narrowed it to one half, saying the thing the three kinds share is that none of them can be
-           answered with bytes that did not arrive, which is exactly the reading under which the status member
-           below went unbuilt.
-           WHAT IT REPLACED WAS NOT A CRASH, WHICH IS WHY THIS IS THE ROOT AND NOT THE DECLINE. `reply_source_
-           text` reads its bytes through fetch_reply_body, whose network-error arm answers the EMPTY byte
-           sequence — so a `<script src>` whose fetch failed decoded to an empty source text, COMPILED as an
-           empty program and RAN, with no `error` fired at the element and §4.12.1.1's step 8 `load` owed to
-           it instead. A page's `s.onerror = () => loadFrom(FALLBACK_CDN)` could not run, and nothing said so:
-           the failure arrived as a plausible datum (a script that "ran" and defined nothing) rather than as
-           an absence. The decline is the same value through a different door and is answered by this line.
-           AND IT IS §8.1.4.2's WHOLE DISJUNCTION, NOT ITS FIRST HALF — the second half stood unasked and a
-           404's BODY WAS COMPILED. Each of that section's three fetch algorithms opens the same two-item list
-           ("fetch a classic script" step 5.2, "fetch a classic worker script"'s processResponseConsumeBody
-           step 2, "fetch a single module script" step 13.1): `bodyBytes` "is null or failure", or "response's
-           status is not an ok status" — and then "run onComplete given null, and abort these steps". This
-           engine had only the first member: a network error is JS_NULL and was refused here, while a reply
-           that ARRIVED was handed to reply_source_text whatever the server had said about it, so a `<script
-           src>` answered 404 with an HTML error page reached JS_FlowNew and a dynamic `import()` answered 500
-           settled its promise with the error page's text. The observable was the §4.12.1.1 `load`/`error`
-           pair inverted — a page's `s.onerror = () => loadFrom(FALLBACK_CDN)` never ran, and its `onload`
-           did — plus whatever a SyntaxError over an error page's markup did to the flow that owned it.
-           THE STATUS IS THE ONLY THING ASKED OF THE RECORD HERE, and the range is
-           core/loader/script_fetch.h's rather than a literal, because §8.1.4.2 is what states this test and
-           core/html/html_link.c's modulepreload delivery already asks the same question of the same operand.
-           NO ASSERT STANDS ON THE NUMBER: it is a value a stranger's server chose, so the answer to one this
-           algorithm refuses is the algorithm's own failure and never a crash (script_fetch.c says so at the
-           predicate). THE ORDER MATTERS AND IS THE STANDARD'S: `JS_IsNull` FIRST, because a network error has
-           no record to read a status off at all — fetch_reply_status answers §2.2.6's 0 for one, which is a
-           second correct route to the same arm and not the one this reads. */
-        /* …AND A `<link>`'S IS EXCLUDED FOR THE FETCH KIND'S REASON EXACTLY, WHICH IS THAT ITS FAILURE IS THE
-           ANSWER AND NOT THE ABSENCE OF ONE. HTML §4.6.8.12 Link type "modulepreload" step 14.1 ("If result
-           is null, then fire an event named `error` at el") and HTML §4.6.8.20 Link type "preload"'s
-           network-error branch ARE the element's failure arm and they
-           live at the element, so a null reply and a non-ok status are values core/html/html_link.c's two
-           deliveries read for themselves — link_module_deliver tests both by name. Diverting one here would
-           fire the DCHECK below, which is the check earning its keep rather than a hazard avoided.
-           THE TEST STAYS NEGATIVE AND GAINS A SECOND EXCLUSION rather than becoming the positive one it
-           looks like it wants to be: written as `is this a program kind` the DCHECK below could not
-           disagree with it, and a vacuous assert is a non-check wearing the syntax of one. Negative, that
-           assert is what a SIXTH kind delivered with no arm of its own crashes on. */
-        /* …AND THE MODULE KIND'S THIRD CONDITION, WHICH IS WHY THE SENTENCE ABOVE SAYS THE THREE KINDS SHARE
-           THE TEST AND NOT THAT THEY SHARE THE ALGORITHM. §8.1.4.2 states the two-item list identically in all
-           three, and fetch a single module script adds a MIME gate the two classic ones DO NOT HAVE — see
-           module_reply_is_javascript for the standard's own words and for why it carries no scheme exemption.
-           WHAT IT REPLACED WAS A COMPILE OF WHATEVER ARRIVED, and the symptom is the status half's one layer
-           on: a reply that arrived WITH an ok status was handed to reply_source_text whatever the server had
-           said about it, so a chunk served `application/json` was UTF-8 decoded and compiled as a module —
-           measured, a JSON object body reaching the module compile and throwing `expecting ';'` at its first
-           `:`, which is a SyntaxError INSIDE the import's own compile where a browser rejects the LOAD before
-           any source text exists. The two are not a severity apart: `import(u).catch(h)` runs `h` for the
-           rejection and NOT for a compile error inside a module that loaded, so a bundle whose CDN answers a
-           chunk with an error page took the wrong arm — and the fallback chunk behind that `catch` is the code
-           §What-the-tool-produces exists to reach.
-           IT IS ASKED LAST BECAUSE IT IS THE ONLY MEMBER OF THE DISJUNCTION THAT READS THE RECORD'S HEADERS: a
-           network error has no header list at all, which `JS_IsNull` answers first — the same ordering
-           argument the status test states for itself. */
+        /* The program kinds' failure arm: §8.1.4.2's three fetch algorithms open with the same two-item list
+           ("fetch a classic script" step 5.2, "fetch a classic worker script"'s processResponseConsumeBody step 2,
+           "fetch a single module script" step 13.1): `bodyBytes` "is null or failure", or "response's status is
+           not an ok status", then "run onComplete given null". A network error crosses as JS_NULL (Fetch §5.6,
+           core/fetch/fetch.h), as does a request the zone refused (flow_decline_fork). For a script element
+           onComplete is "Mark as ready el given result" with a null result, and "execute the script element" step
+           4 fires `error` and returns, so the element runs nothing and `s.onerror` fallbacks run. Without this a
+           failed load would decode fetch_reply_body's empty bytes, or a 404's error page, and run as a program.
+           The status range is core/loader/script_fetch.h's (core/html/html_link.c asks the same); no assert
+           stands on it, since a server chose it. `JS_IsNull` comes first: a network error has no record to read
+           a status or headers off.
+           A module adds the MIME gate (module_reply_is_javascript), asked last as the only member reading
+           headers: a chunk served `application/json` must reject the load, so `import(u).catch(h)` runs `h`,
+           rather than throw a SyntaxError inside a module that loaded.
+           The fetch and `<link>` kinds are excluded: their failure is the answer (HTML §4.6.8.12 Link type
+           "modulepreload" step 14.1, §4.6.8.20 Link type "preload"'s network-error branch), read by
+           core/html/html_link.c's deliveries. The test stays negative so the DCHECK below can fail: a new kind
+           delivered with no arm of its own crashes on it. */
         if (kind != FLOW_PENDING_RESOLVE && kind != FLOW_PENDING_RESOURCE &&
             (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)) ||
              (kind == FLOW_PENDING_MODULE && !module_reply_is_javascript(ctx, pv)))) {
@@ -4179,27 +4031,13 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    "— the synchronous kind is skipped above and the fetch kind is excluded by this condition, "
                    "so a fourth answer means a park of some new kind is being delivered with no arm of its own");
             if (kind == FLOW_PENDING_MODULE) {
-                /* AND THE ONE PROGRAM KIND WITH NO ELEMENT TO FIRE AT, WHOSE FAILURE IS THEREFORE A REJECTION
-                   AND NOT AN EVENT. HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest,
-                   loadState, payload)" ends in `onSingleFetchComplete`, whose first steps are "Let completion
-                   be null." and "If moduleScript is null, then set completion to ThrowCompletion(a new
-                   TypeError)", and whose last performs FinishLoadingImportedModule with that completion —
-                   ECMAScript §16.2.1.11 "FinishLoadingImportedModule ( referrer, moduleRequest, payload,
-                   result )", whose dynamic-import arm is §13.3.10.3 "ContinueDynamicImport ( promiseCapability,
-                   moduleCompletion )": "If moduleCompletion is an abrupt completion", "Perform !
-                   Call(promiseCapability.[[Reject]], undefined, « moduleCompletion.[[Value]] »)".
-                   WHAT IT REPLACED SETTLED THE SUCCESS HALF. `resolve` was the only capability this record
-                   carried, so a network error reached reply_source_text, whose bytes came back EMPTY from
-                   fetch_reply_body's network-error arm — an empty source text, which compiles and evaluates
-                   as a valid EMPTY MODULE. `import(u).catch(h)` therefore ran `h` never and `await import(u)`
-                   continued as though the chunk had loaded and exported nothing, which is indistinguishable
-                   from a chunk that legitimately does.
-                   THE TYPE IS THE STANDARD'S; THE MESSAGE IS NOT, BECAUSE THE STANDARD GIVES NONE. "a new
-                   TypeError" names a constructor and no text, so the string is this engine's, and it names
-                   the ADDRESS — the one fact a page's handler cannot re-derive from the rejection.
-                   AS A FLOW, for the reason the settle two branches below is: the rejection triggers the
-                   page's own `catch` reactions, which is where a bundle keeps its fallback host and its
-                   degraded-mode configuration — the code §What-the-tool-produces exists to reach. */
+                /* The one program kind with no element to fire at, so its failure is a rejection. HTML
+                   §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete sets "completion to
+                   ThrowCompletion(a new TypeError)" for a null moduleScript and performs ECMAScript §16.2.1.11
+                   FinishLoadingImportedModule, whose dynamic-import arm, §13.3.10.3 ContinueDynamicImport, calls
+                   "promiseCapability.[[Reject]]". The TypeError's message is this engine's (the standard gives
+                   none) and names the address, the one fact a handler cannot re-derive. Run as a flow, because
+                   the rejection triggers the page's `catch` reactions, where bundles keep fallback hosts. */
                 JSValue rej = pending_get(p, PEND_REJECT);
                 JSValue uv = pending_get(p, PEND_URL), err;
                 const char *u;
@@ -4222,12 +4060,9 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 JS_FreeValue(ctx, rej);
             } else {
                 if (kind == FLOW_PENDING_DOCSCRIPT) {
-                    /* THE ROW IS ALREADY THERE AND IT IS CONVERTED IN PLACE, NEVER REMOVED — and the reason
-                       is now HTML §4.12.1.1's ORDER rather than anybody's bookkeeping. A failed load still holds its
-                       element's position against the scripts written around it (see the DYN_SCRIPT_FAILED arm
-                       in flow_step, which is this engine's "execute the script element" for it), so the row
-                       has to stay. It used to have to stay for a second reason as well — other records named
-                       it by absolute position — and that one is gone: the register names it by `dyn_id`. */
+                    /* The row is converted in place, never removed: a failed load still holds its element's
+                       position against the scripts around it (flow_step's DYN_SCRIPT_FAILED arm is this engine's
+                       "execute the script element" for it). The register names it by `dyn_id`. */
                     int di = flow_dyn_row_by_id(f, (uint64_t)pending_get_int(p, PEND_SCRIPT_ROW));
 
                     DCHECK(di >= 0,
@@ -4243,21 +4078,16 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                            "without one was queued by something that is not engine_queue_docscript_url or the "
                            "seed's address arm, both of which take the element that owns the address");
                     f->dyn_cand[di] = DYN_SCRIPT_FAILED;
-                    /* AND THE ROW IS RUNNABLE FROM NOW, WHICH IS AS TRUE OF A FAILURE AS OF A PROGRAM. The row
-                       was not a work item this flow could take while its bytes were in the air; it is one now,
-                       because §4.12.1.1's step 4 — fire `error` at el and return — is what this step will run at
-                       it. Stamped here for the same reason the program arm stamps: HTML §13.2.6.4.8 The "text"
-                       insertion mode spins the event loop until "the script's ready to be parser-executed
-                       becomes true", and a load that FAILED is one of the two ways it becomes true. */
+                    /* The row is runnable from now: §4.12.1.1 step 4 is what this step runs at it, and HTML
+                       §13.2.6.4.8 The "text" insertion mode waits until "the script's ready to be
+                       parser-executed becomes true", which a failed load also makes true. */
                     f->dyn_run[di] = flow_work_seq_next();
                 } else {
-                    /* AN INJECTED `<script src>` HAS NO ROW YET — its reply is what CREATES one (the branch
-                       below queues the program), so its failure creates the row that runs nothing. It takes
-                       the tail exactly as the program would: HTML §4.12.1.1's `list of scripts that will execute in
-                       order as soon as possible` holds these elements' places against one another, and a
-                       failed member still EXECUTES (step 4) at its place. The body is the address, which is
-                       the only account of the row there is; the address COLUMN stays null because a row that
-                       runs nothing has no §8.1.4.2 created-script base URL. */
+                    /* An injected `<script src>` has no row yet (its reply creates one), so its failure creates
+                       the row that runs nothing, at the tail as the program would: §4.12.1.1's list of scripts
+                       that will execute in order as soon as possible holds these elements' places, and a failed
+                       member still executes (step 4) at its place. The body is the address; the address column
+                       stays null because a row that runs nothing has no §8.1.4.2 created-script base URL. */
                     JSValue ev = pending_get(p, PEND_SCRIPT_EL);
                     JSValue uv = pending_get(p, PEND_URL);
                     lxb_dom_node_t *en = node_of(ev);
@@ -4284,21 +4114,17 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                     JS_FreeValue(ctx, ev);
                 }
             }
-            /* AND THE ENTRY IS DONE EITHER WAY. It left the register before this arm ran (pending_remove
-               above), so nothing below can reach it and nothing is still owed for it: the page has been told
-               by the algorithm its kind names, and this delivery — like every other — settles ONE. */
+            /* The entry is done either way: it left the register before this arm ran, and the page has been
+               told by the algorithm its kind names. */
             JS_FreeValue(ctx, pv);
             JS_FreeValue(ctx, p);
             return;
         }
         if (kind == FLOW_PENDING_DOCSCRIPT) {
-            /* AN EXTERNAL SCRIPT OF SOME DOCUMENT OF THIS AGENT, AT ITS POSITION IN THIS FLOW'S SEQUENCE
-               (DYN_SCRIPT_SRC). ONE branch, where there were two: the session document's own external scripts
-               used to be filled into a slot SHARED by every flow, with a whole-frontier clear behind it,
-               because the sequence they lived in was the document's rather than any flow's. They are rows of
-               this flow's own table now, so this reply fills THIS timeline's row — and the sharing that branch
-               provided is already provided one layer down: engine_provide fills every flow whose register names
-               the address and un-marks each of them, so one host fetch still answers every waiting member. */
+            /* An external script of some document of this agent, at its position in this flow's sequence
+               (DYN_SCRIPT_SRC). The reply fills this timeline's own row; engine_provide already filled and
+               un-marked every flow whose register names the address, so one host fetch answers every waiting
+               member. */
             int di = flow_dyn_row_by_id(f, (uint64_t)pending_get_int(p, PEND_SCRIPT_ROW));
             size_t src_n = 0;
             char *src;
@@ -4310,51 +4136,36 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    "an external document script replied for a sequence position that is not awaiting one — the "
                    "slot holds a program already, so this reply is a second answer to one request and the "
                    "program it overwrites would never run");
-            /* WHICH OF §8.1.4.2 "Fetching scripts"'S TWO DECODES RUNS IS THE ROW'S OWN ANSWER. It used to be
-               hardcoded CLASSIC here, and that was only ever true because the two seams that queue these rows
-               (core/frame/navigable.c and engine_join_document) ABORTED on a `<script type=module>` rather than
-               queue one — so the hardcode was a restatement of a gap, not a fact about these entries. With the
-               row carrying its type, a module's bytes are UTF-8 whatever the response says and a classic
-               script's go through the response's charset label. The encoding realm is the ENTRY's document's. */
+            /* Which of §8.1.4.2 Fetching scripts' two decodes runs is the row's own type: a module's bytes are
+               UTF-8 whatever the response says, a classic script's go through the response's charset label. The
+               encoding realm is the entry's document's. */
             DCHECK(script_type_executes((ScriptType)f->dyn_type[di]),
                    "an external document script replied for a row whose type executes nothing — only a "
                    "`<script>` element of an executing type ever becomes a DYN_SCRIPT_SRC row, so this row's "
                    "type column was written by something that is not one of the two seams that queue them");
             src = reply_source_text(ctx, pv, (ScriptType)f->dyn_type[di], doc_realm(f->dyn_doc[di]), &src_n);
             CHECK(src, "engine: OOM storing an external document script");
-            /* THE ADDRESS IS TAKEN OUT OF THE BODY COLUMN RATHER THAN DISCARDED, and this is the ONE moment at
-               which it can be: the row's body IS the URL until this line, and everything the address decides
-               happens after it. §8.1.4.2 creates the script with the RESPONSE'S URL as its base — "let script
-               be the result of creating a classic script given sourceText, settingsObject, response's URL,
-               options, mutedErrors, and url" — so a nested `import('./chunk.js')` inside a bundle served from
-               `/assets/app.js` resolves to `/assets/chunk.js`, and for a MODULE that address is additionally
-               the module map KEY. Dropped here instead, two `<script type=module src>` of one document were
-               named by the document they share and were therefore ONE module: the second found the first's
-               record and evaluated nothing.
-               IT IS COPIED, WHERE IT USED TO BE A POINTER MOVE. The move was right while the body column was
-               this flow's own `char *`; the text is SHARED now (solver/dyn_body.h), so a fork of a flow parked
-               on this row leaves both arms naming the same address buffer and each takes its own row — what
-               this row keeps has to be its own. An address is tens of bytes; the megabyte is on the line
-               after it, and that one is ADOPTED rather than copied. */
+            /* The address moves out of the body column into the address column, at the one moment it can: the
+               row's body is its URL until here. §8.1.4.2 creates the script with the response's URL ("creating a
+               classic script given sourceText, settingsObject, response's URL, options, mutedErrors, and url"),
+               so a nested `import('./chunk.js')` in a bundle served from `/assets/app.js` resolves to
+               `/assets/chunk.js`, and for a module the address is the module map key that keeps two
+               `<script type=module src>` two modules. It is copied because the body text is shared
+               (solver/dyn_body.h) by the arms of a fork parked on this row; the source text itself is adopted. */
             DCHECK(f->dyn_url[di] == NULL,
                    "an external document script's row already held an address before its reply arrived — the "
                    "row's body is its URL until this delivery takes it, so a second one means the row was queued "
                    "with an address column it may not have or a reply was delivered into it twice");
             {
-                /* THE ROW NAMES A LIVE BODY AT EVERY POINT OF THIS SWAP, which is why the replacement is built
-                   BEFORE the old one is released rather than after: between an unref and the store the column
-                   would hold a pointer whose buffer is gone, and anything that walked this flow's rows in
-                   between — a census, a release, a sale of the frontier's tail — would read it. */
+                /* The row names a live body at every point of the swap: the replacement is built before the old
+                   one is released, so nothing walking this flow's rows (a census, a release, a sale) can read a
+                   freed buffer. */
                 DynBody *nb = dyn_body_adopt(src, src_n);   /* the decode above already made this buffer */
                 CHECK(nb, "engine: OOM adopting an external document script's source text");
-                /* AND THE ONE PLACE A BODY IS READ AS A C STRING IS THE ONE PLACE THAT SAYS SO. A DYN_SCRIPT_SRC
-                   row's body is its ADDRESS, and an address is a NUL-terminated string every URL API takes —
-                   which is exactly the read the rest of this file no longer makes of a body (a PROGRAM is
-                   (text, len) and may hold a U+0000). The two shapes live in one column, so the assertion is
-                   HERE, at the read that assumes the narrower one: an address whose stored length is not its
-                   `strlen` is a body that got into this column by some route other than the two that queue an
-                   address, and the base URL every nested `import()` of this bundle resolves against would be a
-                   prefix of it. */
+                /* The one place a body is read as a C string says so: a DYN_SCRIPT_SRC row's body is its
+                   address, a NUL-terminated string, while a program body is (text, len) and may hold U+0000. An
+                   address whose length is not its `strlen` came by some route other than the two that queue
+                   one, and every nested `import()` would resolve against a prefix of it. */
                 DCHECK(strlen(dyn_body_text(f->dyn[di])) == dyn_body_len(f->dyn[di]),
                        "an external document script's row holds an address with a U+0000 in it — the row's "
                        "body is its URL until this delivery takes it across, and a URL is the one body in this "
@@ -4366,29 +4177,17 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 f->dyn[di] = nb;
             }
             f->dyn_cand[di] = DYN_PAGE_SCRIPT;
-            /* AND THE ROW ARRIVES AS A RUNNABLE WORK ITEM HERE, WHICH IS THE WHOLE POINT OF A SECOND COLUMN.
-               Until this line the row held an ADDRESS and no step could start it; from this line it holds a
-               program and one can, so THIS is its arrival and its creation at parse was not. HTML §13.2.6.4.8
-               The "text" insertion mode blocks only the tokenizer while the bytes are outstanding — "Block the
-               tokenizer for this instance of the HTML parser, such that the event loop will not run tasks that
-               invoke the tokenizer" — and then "spin the event loop until the parser's Document has no style
-               sheet that is blocking scripts and the script's ready to be parser-executed becomes true"; HTML
-               §8.1.7.3 "Processing model" expands that macro and resumes the blocked algorithm with a QUEUED
-               TASK taken when the wait ends: "Queue a task on task source to: Replace the JavaScript execution
-               context stack with old stack. Perform any steps that appear after this spin the event loop
-               instance in the original algorithm." So every callback queued while these bytes were in the air is
-               OLDER than this row and runs first, and the stamp is what says so.
-               THE NAME IS DELIBERATELY NOT TOUCHED. `dyn_id` is what the register entry just above resolved this
-               row by, and what every other entry of every forked arm still names it by — re-stamping it here
-               would orphan them from inside the delivery that depends on the lookup. */
+            /* The row becomes a runnable work item here, which is its arrival: until now it held an address no
+               step could start. HTML §13.2.6.4.8 The "text" insertion mode blocks only the tokenizer while the
+               bytes are outstanding, then spins the event loop until "the script's ready to be parser-executed
+               becomes true", and §8.1.7.3 resumes the blocked algorithm by queueing a task when the wait ends. So
+               every callback queued while the bytes were in the air is older than this row and runs first; the
+               stamp says so. `dyn_id` is not touched: the register entry above resolved the row by it, and
+               every forked arm's entries still name it by it. */
             f->dyn_run[di] = flow_work_seq_next();
         } else if (kind == FLOW_PENDING_SCRIPT) {
-            /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
-            /* AN INJECTED `<script src>` IS A CLASSIC SCRIPT, which is a statement about this entry and not a
-               default: the element was inserted by page code and its reply becomes one of this flow's programs,
-               and every program a FLOW adds is compiled classic (see the compile below). The document is the one
-               the element was inserted into — the park recorded it — so the encoding that decodes these bytes is
-               that document's and not the session's. */
+            /* The reply is a program: it joins this flow's script sequence. The document is the one the element
+               was inserted into, which the park recorded, so its encoding decodes these bytes. */
             uint32_t doc = (uint32_t)pending_get_int(p, PEND_DOC);
             ScriptType st = (ScriptType)pending_get_int(p, PEND_SCRIPT_TYPE);
             JSValue uv = pending_get(p, PEND_URL);
@@ -4399,10 +4198,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    "an injected <script src> replied for a park carrying a type that executes nothing — the "
                    "park writes the element's type and §4.12.1.1 fetches for exactly the two that run, so a "
                    "third answer means this record was pushed by something that is not that park");
-            /* THE STRING AND NOT WHATEVER COERCES TO ONE: `JS_ToCString` answers "undefined" for an absent
-               field, and an address of "undefined" is a base URL the parser would accept and every nested
-               specifier would then resolve against. The park writes a real string, so a record without one is
-               a record something else pushed. */
+            /* Must be a string, not something that coerces to one: `JS_ToCString` answers "undefined" for an
+               absent field, which a URL parser would accept as a base. */
             DCHECK(JS_IsString(uv),
                    "an injected <script src> replied for a park with no address — the park writes the resolved "
                    "URL and the reply is matched on it, so a record without one names no script and the "
@@ -4410,20 +4207,16 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             u = JS_ToCString(ctx, uv);
             CHECK(u != NULL, "engine: OOM reading an injected script's address off its park");
             src = reply_source_text(ctx, pv, st, doc_realm(doc), &src_n);
-            /* THE SAME `CHECK` THE DOCUMENT-SCRIPT BRANCH ABOVE MAKES, which this branch did not: the decode
-               answers NULL when it cannot allocate, and the adopt below would take a NULL buffer. */
+            /* The decode answers NULL when it cannot allocate. */
             CHECK(src, "engine: OOM storing an injected script");
-            /* §8.1.4.2's created script is based on the RESPONSE'S URL, so the program carries the address its
-               bytes came from — the base a nested `import('./chunk.js')` resolves against and, for a module,
-               the module map key that keeps two injected chunks two modules. */
+            /* §8.1.4.2's created script is based on the response's URL, so the program carries the address its
+               bytes came from: the base for a nested `import('./chunk.js')`, and for a module the module map key. */
             {
-                /* …AND THE ELEMENT THE PARK CARRIED, back onto the row. §4.12.1.1's "execute the script
-                   element" runs when the sequence reaches this row, and the element is what it switches on. */
+                /* The element the park carried goes back onto the row: §4.12.1.1's "execute the script element"
+                   switches on it when the sequence reaches the row. */
                 JSValue ev = pending_get(p, PEND_SCRIPT_EL);
                 lxb_dom_node_t *en = node_of(ev);
-                /* ADOPTED RATHER THAN COPIED. This queued the decoded text and then freed it, so an injected
-                   chunk cost the instance two of itself for the length of one call; the body is shared now
-                   (solver/dyn_body.h) and the row is its first holder. */
+                /* Adopted, not copied (solver/dyn_body.h); the row is the body's first holder. */
                 DynBody *b;
                 DCHECK(en != NULL && en->type == LXB_DOM_NODE_TYPE_ELEMENT,
                        "an injected <script src> replied for a park carrying no element — the park writes the "
@@ -4431,24 +4224,21 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                        "something that is not that park pushed");
                 b = dyn_body_adopt(src, src_n);
                 CHECK(b, "engine: OOM adopting an injected script's source text");
-                /* THE NETWORKING TASK SOURCE (§8.1.7.4 "Generic task sources"), because that is what this arm
-                   IS: a response arrived and its program is what the response is for. §8.1.7.1 "Definitions"
-                   lists the case in its own words — "When an algorithm fetches a resource, if the fetching
-                   occurs in a non-blocking fashion then the processing of the resource once some or all of the
-                   resource is available is performed by a task." */
+                /* The networking task source (§8.1.7.4 Generic task sources): §8.1.7.1 Definitions, "When an
+                   algorithm fetches a resource, if the fetching occurs in a non-blocking fashion then the
+                   processing of the resource once some or all of the resource is available is performed by a
+                   task." */
                 engine_queue_el_body(doc, b, DYN_PAGE_SCRIPT, st, u, TASK_SOURCE_NETWORKING, DYN_POS_APPEND,
-                                     lxb_dom_interface_element(en), /*parser_inserted*/0);   /* the reply IS here */
+                                     lxb_dom_interface_element(en), /*parser_inserted*/0);   /* the reply is here */
                 dyn_body_unref(b);
                 JS_FreeValue(ctx, ev);
             }
             JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, uv);
         } else if (kind == FLOW_PENDING_MODULE) {
-            /* the reply is a MODULE's SOURCE: settle the load's promise with the text, and the import's own
-               reaction compiles, links and continues the flow that wrote `await import(...)`. The promise is
-               settled with the SOURCE TEXT and not with the reply's bytes — "let sourceText be the result of
-               UTF-8 decoding bodyBytes" is the step that stands between them, and the compiler on the other side
-               of this promise is the one that refuses an ill-formed byte. */
+            /* The reply is a module's source: the load's promise is settled with the text (not the bytes; "let
+               sourceText be the result of UTF-8 decoding bodyBytes" stands between them), and the import's own
+               reaction compiles, links and continues the flow that wrote `await import(...)`. */
             size_t src_n = 0;
             char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_MODULE, ctx, &src_n);
             JSValue sv = JS_NewStringLen(ctx, src, src_n);
@@ -4461,25 +4251,14 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, sv);
         } else if (kind == FLOW_PENDING_RESOURCE) {
-            /* A BROWSER ALGORITHM'S OWN SUBRESOURCE: hand the record to THAT ALGORITHM's completion steps,
-               and queue NOTHING. This arm is the whole content of the kind — everything else about the park is
-               the fetch kind's — and what it does NOT do is the point: the arm below compiles a
-               JavaScript-typed reply as a program, which is CLAUDE.md §Solver's rule that a fetch whose body
-               is JavaScript is always fetched and EXECUTED — and none of this kind's algorithms evaluates
-               anything at this moment. HTML §4.6.8.12 Link type "modulepreload" in its own words "places the
-               result into the appropriate module map for later evaluation", and its `import()` example spells
-               out the state that leaves: "the module is already ready (but not evaluated) in the module map".
-               HTML §4.6.8.20 Link type "preload" places its result in the preload cache, and HTML §4.8.4.3.5
-               "Updating the image data" decodes its result as an image.
-               THE SOLVER LOSES NO CODE BY DECLINING, WHICH IS WHY THIS IS NOT A NARROWING OF CLAUDE.md
-               §Solver'S RULE. A preloaded chunk is a chunk the document's own `<script type=module>` IMPORTS,
-               and that park is FLOW_PENDING_MODULE, whose delivery hands the source to a compiler that reads
-               `export`. What the RESOLVE arm did with those bytes was compile them CLASSIC and abort at
-               flow_step's no-compile row — so the coverage this declines to take was never taken. An image's
-               reply was never code at all.
-               THE REPLY MAY BE A NETWORK ERROR AND IS STILL DELIVERED: HTML §4.6.8.12's step 14.1 fires
-               `error` at el for a null result and link_module_deliver reads a non-ok status itself, so the
-               failure arm above excludes this kind rather than answering for it. */
+            /* A browser algorithm's own subresource: the record goes to that algorithm's completion steps and
+               nothing is queued, since none of these algorithms evaluates anything now. HTML §4.6.8.12 Link type
+               "modulepreload" "places the result into the appropriate module map for later evaluation" (its
+               example: "the module is already ready (but not evaluated) in the module map"); §4.6.8.20 Link type
+               "preload" fills the preload cache; §4.8.4.3.5 Updating the image data decodes an image. No code is
+               lost: a preloaded chunk is imported by the document's own module script, whose park is
+               FLOW_PENDING_MODULE. A network error is still delivered: §4.6.8.12 step 14.1 fires `error` for a
+               null result and link_module_deliver reads a non-ok status itself. */
             JSValue deliver = pending_get(p, PEND_RESOLVE);
             DCHECK(JS_IsObject(pv) || JS_IsNull(pv),
                    "a browser algorithm's subresource reply arrived as something other than the host's reply "
@@ -4487,56 +4266,35 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    "qjs_provide parses the trusted zone's JSON into one and §4.3's scheme fetch builds one, "
                    "and JS_NULL is the network error both spell; a bare string here is a host still "
                    "delivering only bytes, which core/html/html_link.c's deliveries assert against too");
-            /* AS A FLOW, for the reason the settle below is one: §4.6.8.12 step 14's steps fire an event at
-               the element, and an event is the PAGE's listener running. Out of a plain call that listener
-               would run in a C activation with no flow base, which is the drive-to-completion this engine
-               aborts on rather than tolerates. */
+            /* As a flow: §4.6.8.12 step 14's steps fire an event at the element, running the page's listener,
+               which a plain call would run with no flow base. */
             if (JS_CallAsFlow(ctx, deliver, pv) < 0) {
                 JSValue exc = JS_GetException(ctx);
                 JS_FreeValue(ctx, exc);   /* a listener's throw is the page's to observe, not this step's */
             }
             JS_FreeValue(ctx, deliver);
         } else {
-            /* A SYNCHRONOUS ANSWER IS TAKEN, NEVER DRAINED, and that is asserted here because this branch is
-               where it would land if it were not. The machine that asked resumes through its park and consumes
-               the answer with engine_host_take; the entry is gone before any delivery sees it. A HOSTREQ that
-               reached this line would be settled as if it were a fetch — through a `resolve` capability it does
-               not have, since nothing on that path ever made a promise. */
+            /* A synchronous answer is taken, never delivered here: the asking machine resumes through its park
+               and consumes it with engine_host_take. A HOSTREQ reaching this line would be settled as a fetch,
+               through a `resolve` it does not have. */
             DCHECK(kind == FLOW_PENDING_RESOLVE,
                    "a synchronous host request's answer reached the reply delivery — its asking machine never "
                    "resumed to take it, so its parked continuation is the thing to look for");
-            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and
-               27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s resolveSteps — the closure that is its step
-               2's one nested list, and NOT a titled section of its own since "Promise Resolve Functions" was
-               folded into it — reads `Get(resolution, "then")` at step 2.f off the Response, an ordinary object
-               whose prototype the page owns, so `Object.prototype.then = { get(){…} }` makes that read the
-               page's code. Out of a plain call it ran in a C activation with no flow base, which is the
-               drive-to-completion this engine aborts on; prototype pollution is a gadget class the solver
-               exists to RUN rather than assume away.
-               IT IS ALSO WHERE THE SETTLE CAN PARK, which is why this function delivers exactly one entry: the
-               resolving function is a step machine that RESTS at that read (js_promise_resolvefn_step's
-               PRF_THEN), so a forced preempt suspends the settle there with the promise still pending. */
-            /* THE REPLY THE TRUSTED ZONE ANSWERED, DELIVERED AS IT ARRIVED. It used to be re-wrapped here —
-               `fetch_reply_new(ctx, 200, "OK", NULL, body, len)` — which threw away everything safeFetch had
-               seen and invented the rest: every reply this host delivered reported status 200, status message
-               "OK", NO headers at all, and a URL list this zone could not have known. The record now crosses
-               whole (qjs_provide parses it), so the reply the page reads is the reply the trusted zone made,
-               and JS_NULL is the network error the delivery machine already knows how to reject with. */
+            /* As a flow, not a JS_Call: 27.5.1.3 CreateResolvingFunctions ( toResolve )'s resolveSteps reads
+               `Get(resolution, "then")` (step 2.f) off the Response, whose prototype the page owns, so
+               `Object.prototype.then = { get(){…} }` runs page code there; prototype pollution is a gadget class
+               the solver runs. It is also where the settle can park (js_promise_resolvefn_step's PRF_THEN),
+               which is why this function delivers exactly one entry.
+               The reply is delivered as the trusted zone made it (qjs_provide parses the record whole), with its
+               status, headers and URL list; JS_NULL is the network error the delivery machine rejects with. */
             JSValue resolve = pending_get(p, PEND_RESOLVE);
             DCHECK(JS_IsObject(pv) || JS_IsNull(pv),
                    "a fetch reply arrived as something other than the host's reply record — qjs_provide parses "
                    "the trusted zone's JSON, and a bare string here is a host still delivering only bytes");
-            /* AND IT IS A REPLY RECORD, ASKED HERE RATHER THAN THREE FRAMES LATER. `JS_IsObject` was the whole
-               of the shape test, and an object is exactly what the two WRONG values on this path also are — a
-               peer's `{body, csp}` navigation answer, a pending entry read for the wrong field. The delivery
-               machine then reads §2.2.6's URL list off it, finds nothing, and aborts in fetch.c with the record
-               in hand but NO WAY TO SAY WHICH ENTRY PRODUCED IT: not the URL, not the kind, not the flow. That
-               is what made a payment-schedule change read as a fetch bug.
-               `urlList` is the field to ask for because it is the one only the trusted zone can answer and the
-               one every producer of this record must therefore fill (fetch.h) — a record missing it was not
-               built by fetch_reply_new, whoever built it. Asked in a DEV block rather than inside the DCHECK's
-               condition, because the read allocates and a condition that is unevaluated in release may not own
-               a reference nothing frees. */
+            /* It must be a reply record, asked here rather than three frames later where fetch.c would abort
+               with no way to say which entry produced it. `urlList` is the field only the trusted zone can
+               answer and every producer must fill (fetch.h), so a record without it was not built by
+               fetch_reply_new. Asked in a dev block because the read allocates. */
 #if APICLIENT_DEV
             if (JS_IsObject(pv)) {
                 JSValue ul = JS_GetPropertyStr(ctx, pv, "urlList");
@@ -4546,28 +4304,19 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 size_t fi = 0;
                 JSAtom cn = JS_ATOM_NULL;
                 const char *cns = NULL;
-                /* AND WHAT THE RECORD ACTUALLY IS, because "it has no urlList" names a hole and the FIELDS name
-                   the object. Every candidate on this path is identifiable by its own property list in one
-                   glance and by nothing else: `body,csp` is the peer's §7.4 navigation answer, `resolve,value,
-                   url,…` is a pending ENTRY that reached the value slot, `urlList,status,…` minus the list is a
-                   record that was built right and CHANGED afterwards, and a bare `{}` is an object nobody
-                   filled. Guessing between those cost a full round trip already.
-                   AND THE CLASS, WHICH IS THE SPLIT THE FIELD LIST CANNOT MAKE. `tag=-1` is JS_TAG_OBJECT, so
-                   an EMPTY field list does not mean "not an object" — it means an object with no own string
-                   properties, and that is the signature of an entire FAMILY rather than of one mistake: a
-                   platform object keeps its whole state in a C opaque and has none by design (a Response, a
-                   Promise, a Headers), while a plain `Object` with none is either one nobody filled or one
-                   whose shape is no longer what it was. The first is a Fetch question and the second is a
-                   MEMORY question, and they have nothing in common but the symptom. The pointer rides along so
-                   the address can be matched against an allocator report. */
+                /* The message names what the record is: its own property list identifies each candidate
+                   (`body,csp` is a peer's §7.4 navigation answer, `resolve,value,url,…` a pending entry in the
+                   value slot, `urlList,status,…` minus the list a record changed after it was built, `{}` an
+                   object nobody filled). The class separates the empty list's two families: a platform object
+                   keeping its state in a C opaque (a Response, a Promise, a Headers) from a plain `Object` nobody
+                   filled or whose shape changed, a Fetch question versus a memory one. The pointer can be
+                   matched against an allocator report. */
                 if (JS_IsObject(pv)) {
                     cn = JS_GetClassName(JS_GetRuntime(ctx), JS_GetClassID(pv));
                     cns = JS_AtomToCString(ctx, cn);
                 }
-                /* THE FIELD LIST IS DATA, so it is composed as data and the assert's own message is a format
-                   like every other. It is the one thing here with no bound of its own — an object can carry
-                   any number of own properties — so it says WHERE it stopped rather than ending on whichever
-                   name happened to fit, which would read as the complete list of a different object. */
+                /* The field list has no bound of its own, so it says where it stopped rather than ending on
+                   whichever name happened to fit. */
                 memcpy(fields, "(not an object)", 16);
                 if (JS_IsObject(pv)) {
                     JSPropertyEnum *tab = NULL;
@@ -4607,78 +4356,49 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 JS_FreeValue(ctx, ul);
             }
 #endif
-            /* A REPLY WHOSE BYTES ARE JAVASCRIPT IS A PROGRAM, AND THIS IS WHERE IT BECOMES ONE. §Solver's
-               trust boundary says it outright — "a fetch whose body is JAVASCRIPT is ALWAYS fetched +
-               EXECUTED (a lazy chunk reveals real endpoints — the headline moat surface)" — and only the
-               FETCHED half was built. The reply became a Response, the page's `then` got it, and if the page
-               did not itself hand those bytes to a `<script>` element nothing ever compiled them. The entry
-               that runs such a program has existed and been correct the whole time
-               (engine_queue_fetched_script); its only caller was a test fixture.
-               WHY HERE AND NOT IN reply_decode_learn, WHICH IS WHERE THE NEXT READER WILL REACH FIRST. That
-               file runs on the HOST's time — its own contract says "OUTSIDE any flow" — and the queue entry
-               below reaches engine_queue_el_body, which DCHECKs `flow_running() != NULL`. That check would
-               NOT fire there and would not save anybody: a yielded flow keeps its stamp up deliberately (its
-               COW delta is still applied), so `flow_running()` at host time answers with whichever flow last
-               yielded and the program would be written silently into an arbitrary member's row table. At THIS
-               site a flow is switched in and it is the flow that made the fetch, which is also what
-               §State-isolation requires — N flows parked on one URL each get their own delivery, so each
-               compiles the chunk on the timeline that asked for it rather than one arm's answer serving both.
-               AND IT IS BEFORE THE SETTLE, not after: the row takes HTML §4.12.1.1's networking-task-source position
-               ahead of the page's own reaction, which is exactly what the `<script src>` sibling arm above
-               gives a chunk the page loaded through an element. A chunk that arrives after the reaction that
-               was waiting for it is a chunk whose endpoints the reaction has already not seen.
-               THE TYPE IS THE HOST'S DECISION AND IS NEVER RE-SNIFFED HERE. SECURITY.md puts sniffing in the
-               trusted zone and CLAUDE.md keeps it there by name; `computedType` is stamped on every record at
-               fetch_reply_new and this reads it. A record whose type does not parse is not a program — there
-               is no sniff this process may run to find out otherwise, which is the identical sentence
-               reply_decode.c makes at its own extract. */
+            /* A reply whose bytes are JavaScript is a program: a fetch whose body is JavaScript is always fetched
+               and executed (a lazy chunk reveals real endpoints), whether or not the page hands it to a
+               `<script>`. engine_queue_fetched_script runs it. Here, not in reply_decode_learn, which runs on the
+               host's time outside any flow, where `flow_running()` would name whichever flow last yielded
+               (engine_queue_el_body's DCHECK would not fire) and the row would land in an arbitrary member's
+               table. Here the flow that made the fetch is switched in, so each of N flows parked on one URL
+               compiles the chunk on its own timeline. Before the settle, so the row takes the networking task
+               source's position ahead of the page's own reaction, as the `<script src>` arm gives an
+               element-loaded chunk. The type is the host's `computedType`, stamped at fetch_reply_new; sniffing
+               belongs to the trusted zone (SECURITY.md), so a type that does not parse is not a program. */
             {
                 uint32_t sdoc = (uint32_t)pending_get_int(p, PEND_DOC);
                 char *ct;
                 MimeType cm;
-                /* THIS DOOR WAS ASKED, RECORDED BEFORE ANY TYPE IS READ — the denominator the queue below is
-                   the numerator of, and it is raised HERE rather than after the gate for
-                   §AN-INVARIANT-OVER-A-GATED-OPERATION's reason: this arm declines a reply whose computed
-                   type is not JavaScript and that refusal is correct, so a census of what landed reports
-                   every one of them as a door that failed. See solver/engine.h's `net_prog_*` block.
-                   IT IS GUARDED ON THE REPLY BEING A RECORD SO THE TWO DOORS' DENOMINATORS COUNT ONE
-                   POPULATION. `pv` is JS_NULL for a network error here, and the XHR door returns before its
-                   own program block for the same case (a reply with no body), so counting a network error on
-                   this side and not on that one would make the two rows a ratio of two things. */
+                /* This door was asked, recorded before any type is read: the denominator of the queue below,
+                   counted ahead of the gate because declining a non-JavaScript reply is correct (solver/engine.h's
+                   `net_prog_*` block). Counted only for a reply record, since the XHR door returns before its
+                   program block for a network error, so both doors' denominators count one population. */
                 if (JS_IsObject(pv)) engine_note_net_prog_fetch_ask();
                 ct = fetch_reply_computed_type(ctx, pv);
                 if (mime_type_extract(&cm, ct)) {
                     if (mime_type_is_javascript(&cm)) {
                         JSValue suv = pending_get(p, PEND_URL);
                         const char *su = JS_IsString(suv) ? JS_ToCString(ctx, suv) : NULL;
-                        /* THE ADDRESS IS REQUIRED AND IS NOT DEFAULTABLE — engine_queue_fetched_script
-                           refuses without one, because §8.1.4.2 creates the script with the RESPONSE'S URL
-                           and §8.1.4.1 keeps it as the program's base URL. A park that reached the network
-                           has one by construction (pending_park_request wrote it); the arm is guarded rather
-                           than asserted because a value-carrying park with no address never reaches the
-                           network at all and is not a program either. */
+                        /* The address is required: engine_queue_fetched_script refuses without one, because
+                           §8.1.4.2 creates the script with the response's URL and §8.1.4.1 keeps it as the base
+                           URL. A park that reached the network has one (pending_park_request wrote it); a
+                           value-carrying park with none never reached the network and is not a program. */
                         if (su && *su) {
                             size_t src_n = 0;
-                            /* §8.1.4.2's decode, through the same reader both script arms above use — the
-                               record's bytes are a byte sequence and the encoding is the reply's own. */
+                            /* §8.1.4.2's decode, through the reader the script arms use. */
                             char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(sdoc),
                                                           &src_n);
                             CHECK(src, "engine: OOM decoding a fetched JavaScript reply into a program");
-                            /* NAMED RESIDUAL — the bytes are COPIED here and adopted one door over.
-                               NOT COVERED: engine_queue_fetched_script takes `const char *` and
-                               engine_queue_el copies it into a fresh DynBody, so a multi-megabyte chunk
-                               delivered to N flows parked on one URL is decoded and copied N times, where the
-                               `<script src>` arm hands its decode over without a second copy.
-                               WHAT THE NEXT DIFF BUILDS: an entry beside engine_queue_fetched_script taking
-                               an already-built DynBody, so the decode is adopted exactly as the element arm's
-                               is — the shared body is refcounted already (solver/dyn_body.h), so what is
-                               missing is the entry and not the sharing.
-                               HOW ITS ABSENCE WOULD SHOW: resident bytes rising with the number of flows
-                               parked on one chunk address rather than with the number of distinct chunk
-                               addresses a document loaded. */
+                            /* Named residual. Not covered: engine_queue_fetched_script takes `const char *` and
+                               engine_queue_el copies it into a fresh DynBody, so a chunk delivered to N flows
+                               parked on one URL is decoded and copied N times. Next diff builds: an entry beside
+                               engine_queue_fetched_script taking a built DynBody (already refcounted,
+                               solver/dyn_body.h). Absence shows as: resident bytes rising with the number of
+                               flows parked on one chunk address rather than the number of distinct addresses. */
                             engine_queue_fetched_script(sdoc, src, src_n, su);
-                            /* …AND THIS DOOR QUEUED ONE. Beside the call rather than inside the entry,
-                               because the entry cannot see which transport carried the bytes. */
+                            /* This door queued one; counted beside the call because the entry cannot see which
+                               transport carried the bytes. */
                             engine_note_net_prog_fetch_queued();
                             free(src);
                         }
@@ -4697,57 +4417,38 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
         }
         JS_FreeValue(ctx, pv);
         JS_FreeValue(ctx, p);
-        /* ONE, AND THE STEP IS OVER. The settle above may have PARKED (the resolving function is a step
-           machine, and the `then` read is the page's code), and that is precisely the state in which nothing
-           else may run: flow_step's next pass resumes the continuation before anything else this flow could
-           do. It may equally have completed and enqueued reactions, and then the checkpoint arm runs them
-           first — which is what §8.1.7.3 "Processing model" does at the end of the task that delivered it. */
+        /* One, and the step is over. The settle may have parked (the `then` read is page code), and then nothing
+           else may run: flow_step's next pass resumes it first. If it completed and enqueued reactions, the
+           checkpoint arm runs them first, as §8.1.7.3 does at the end of the delivering task. */
         return;
     }
-    /* AND THE TWO QUESTIONS AGREE, asserted at the one point they can disagree. `pending_ready` is what both
-       call sites consult to decide that this function has something to do, and the scan above is what finds
-       it; they ask the same pair of things about the same register with nothing running in between, so
-       reaching here means one of them has been changed and the other has not — and the symptom of that would
-       be a flow reporting progress every step while delivering nothing, which is a livelock that looks exactly
-       like slowness. */
+    /* The two questions agree: `pending_ready` told the caller there was something to deliver and the selector
+       over the same register found nothing. One changed without the other, and the symptom would be a flow
+       reporting progress every step while delivering nothing, a livelock that looks like slowness. */
     DFAIL("a reply delivery found nothing to deliver — pending_ready answered that this flow had an answered "
           "non-HOSTREQ entry and the scan over the same register did not find one");
 }
 
-/* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision + pins here at a forking branch;
-   the interpreter then clones the frame and calls engine_fork_finalize, which assembles the sibling flow. */
+/* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision and pins here at a forking branch; the
+   interpreter then clones the frame and calls engine_fork_finalize, which assembles the sibling. */
 static void *g_fork_dec = NULL, *g_fork_pins = NULL;
-/* AND WHO IS ASKING, WHICH IS THE HALF THE SEAM COULD NOT SEE. The interpreter and the step driver both hold a
-   resume point and clone it a moment after they ask, and a plain C body holds none — but they call the SAME
-   two symbols, so nothing at the seam could tell them apart and every C-body fork was stashed for a consumer
-   that never came. engine.c installs the hooks, so engine.c is where the difference can be stated: the two
-   wrappers below raise this across their call and nothing else does. It is a declaration by the one caller
-   that can make it, not an inference from the flow's state — and it is not a routing table either, because
-   there is nothing to look up: raised means "a clone is coming", clear means "there is no activation here". */
+/* Who is asking: the interpreter and the step driver hold a resume point and clone it just after asking, a plain
+   C body holds none, and all call the same two symbols. The two wrappers below raise this across their call and
+   nothing else does, so raised means "a clone is coming" and clear means "there is no activation here". It is the
+   caller's declaration, not an inference from the flow's state. */
 static int g_fork_snapshot_owed;
-/* …AND WHETHER THIS SESSION FORKS AT ALL — the explore/verify bit, written beside JS_SetFlowControlHooks. */
+/* Whether this session forks at all: the explore/verify bit, written beside JS_SetFlowControlHooks. */
 static int g_sess_forking;
-/* AND IT IS READ BY THE SEAM ITSELF, which is what turns the assert below from a report into a mechanism. The
-   hook table carries the policy into the INTERPRETER and into the step driver, and both already have their own
-   non-forking answer for the absence of a hook (-1 then ToBool, and outcome 0). A caller that asks the decision
-   seam BY SYMBOL consults neither, so decide.c has to be able to ask — and it asks HERE, at the one place the
-   session's policy is written, rather than being handed a second copy of the bit that could disagree with the
-   hook table. It is not a routing predicate: it selects no implementation, it answers a question about the
-   session. */
+/* Read by the seam itself. The hook table carries the policy into the interpreter and step driver, which have
+   their own non-forking answers for a missing hook (-1 then ToBool, and outcome 0), but a caller asking the
+   decision seam by symbol consults neither, so decide.c asks here, where the session's policy is written, rather
+   than holding a second copy of the bit. It selects no implementation. */
 int engine_session_forks(void) { return g_sess_forking; }
-/* (engine_sibling_assemble is declared above the delivery fork, which is the FIRST of its callers in this
-   file; a second declaration here would be a second place to keep its signature in step. THE NUMBER THAT STOOD
-   HERE WAS THREE AND THE CONSTRUCT ANSWERS SIX, which is the one thing a parenthesis like this should never have
-   carried: a count of call sites rises on every commit that adds a fork, so it is stale by construction and the
-   only thing this sentence needed was WHICH caller comes first. The derivation lives at this file's own counting
-   site and in decide.c's argument that rests on the same population.) */
-/* THE HANDOFF IS FILLED AND EMPTIED WITHIN ONE FORK, AND THAT IS ASSERTED HERE RATHER THAN HOPED FOR. Two
-   pointers held between a `prepare` and a `finalize` are a slot with exactly one legal occupant: a second
-   prepare arriving with the first still in it means the interpreter took the FORKED bit and never reached its
-   fork hook, and the assignment then overwrites a decision blob and a pin blob that nothing else names — a leak
-   per unconsumed fork, of the shared decision chain reference the sibling was going to stand on, so the whole
-   frozen prefix under it stays alive too. It stays as the BACKSTOP it always was; what it can no longer be is
-   the diagnosis, because the two ways to reach it without a consumer now crash where they are born. */
+/* engine_sibling_assemble is declared above the delivery fork, its first caller in this file. */
+/* The handoff is filled and emptied within one fork: the two pointers are a slot with one legal occupant. A second
+   prepare with the first still there means the interpreter took the forked bit and never reached its fork hook,
+   and overwriting would leak a decision blob and pin blob nothing names, keeping the frozen decision prefix under
+   them alive. A backstop: the two ways to reach it without a consumer crash where they are born. */
 int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
                         const char *site) {
     Flow *f = flow_running();
@@ -4761,13 +4462,11 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
            "line means the answer was declared and the seam forked anyway — decide_arm's non-forking branch is "
            "the one that must have been taken");
     if (!g_fork_snapshot_owed) {
-        /* NOBODY IS GOING TO CLONE A FRAME, so the sibling's resume point has to be the flow's own state — and
-           it is, for exactly one kind of caller: engine code that is re-reached by RE-RUNNING the flow's
-           scheduler step. HTML §8.1.7.3 Processing model step 2.1 makes that choice "in an
-           implementation-defined manner", between tasks, with the flow switched in and nothing of it on any
-           stack; the sibling is assembled with NO frame and its step re-runs the same walk, where the arm
-           recorded for it here replays. Assembled HERE and not stashed, because there is no later moment at
-           which the parent is still the switched-in flow. */
+        /* Nobody will clone a frame, so the sibling's resume point must be the flow's own state, which holds for
+           engine code re-reached by re-running the flow's scheduler step: HTML §8.1.7.3 Processing model step
+           2.1 chooses "in an implementation-defined manner", between tasks, with nothing on the stack. The
+           sibling has no frame and its step re-runs the same walk, where the arm recorded here replays.
+           Assembled now, because no later moment has the parent still switched in. */
         if (restartable) {
             DCHECK(f->frame == NULL,
                    "a restartable fork was asked for by a flow holding a live program frame — the caller "
@@ -4782,65 +4481,26 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
             engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob);
             return 0;
         }
-        /* AND A C BODY MID-ALGORITHM HAS NEITHER, WHICH IS AN UNBUILT DECLARATION AND NOT A REASON TO ASK
-           LESS. It is already inside its own activation, so there is no machine state for the other arm to be
-           snapshotted at and no way to re-reach the ask by re-running anything. What it needs is to become a
-           step machine — JS_CFUNC_STEP_DEF at its definition, with the ask moved into the machine's own fork
-           seam — after which the driver holds the resume point and takes the first branch above.
-
-           THIS CRASH'S REMEDY CLAUSE SAID `step_fork_run`, AND THAT IS THE WRONG SEAM FOR THE ONE QUESTION
-           THAT REACHES IT. It is corrected rather than deleted because the clause was PLAUSIBLE: `step_fork_run`
-           is the seam a machine reaches for, this abort fires from a fork, and a reader who re-derives the
-           remedy from "a machine forks through step_fork_run" will write it again. What arrives here through
-           solver_decide is a BRANCH question — keyed by the operand's own identity, which is what decide_key
-           composes — and quickjs-step.h states in its own words why the outcome seam is wrong for one, twice
-           over: it "would fork a second time over a predicate the flow may already have fixed, and it would
-           file a domain-less shape for a parameter the page had gated", because it keys by (operand,
-           OPERATION, completion) rather than by the value. The seam a ToBoolean belongs on is
-           `step_tobool_run` (JS_FORK_KIND_TOBOOL), which is BUILT and has live consumers, so this is a
-           re-aiming and not a thing to build. A machine answering about one of ITS OWN completions still asks
-           step_fork_run; the clause was wrong about which of the two this population is.
-
-           AND THE CLAUSE THAT NAMED NO SITE WAS THE HALF THAT COST A READING, which is why `site` exists. The
-           abort held the PREDICATE, which is a fact about the VALUE and names nobody: the whole population
-           reaching it is one helper in core/dom/abort.c, so a reader was handed that helper's entire call
-           population and a remedy with no object — §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE, measured on a
-           real page twice over two virgin profiles before the site was threaded.
-           HOW BIG THAT POPULATION IS LIVES AT THAT HELPER AND NOT HERE, as the command that derives it. This
-           sentence read `24 further sites across 9 files, so a reader was handed 26 candidates`, which was the
-           SECOND COPY of a figure abort.c also carried — and when the §4.4 grant's test converted to the parking
-           form, the commit that retired the figure rewrote abort.c's copy into a derivation and left this one
-           standing, present-tense, one file over. That is the shape rather than the incident: a count is retired
-           by a routing change in a THIRD component, so every copy of it is a site the converting diff has to
-           find, and the copy in the file that does not own the fact is the copy nobody greps.
-
-           AND THE REMEDY'S FIRST HALF — `Declare that builtin a step machine (JS_CFUNC_STEP_DEF)` — HAS NOW BEEN
-           WRONG AT EVERY SITE THIS ABORT HAS EVER BEEN LOCALISED TO, WHICH IS A PATTERN AND NOT A RUN OF BAD
-           LUCK. Three conversions have been made off this crash — `fetch()`'s §5.6 step 4, Web Locks §3.2.1
-           step 9 and DOM §3.2's create-a-dependent-abort-signal step 2 under `AbortSignal.any()` — and in all
-           three the builtin WAS ALREADY DECLARED a step machine. Nothing had to be built in the fork machinery
-           at any of them: the driver already held the resume point it clones at, and the whole repair was that
-           the ASK could not return a fork code, so each is a routing of one call onto a seam that was already
-           there with live consumers.
-           THE REASON IS STRUCTURAL AND IS WHY IT SHOULD KEEP HOLDING. A member that TAKES a signal takes it in
-           a dictionary or a sequence, and Web IDL converts both by running the PAGE'S code — so such a member
-           had to be a machine before it could accept its own argument. The population the remedy's first half
-           is right about is therefore the rarer one: a getter, a constructor or an engine-internal helper that
-           reaches a signal it was HANDED, which is where this abort's remaining callers live.
-           SO THE CLAUSE IS KEPT AND IS READ SECOND. It states what must EXIST afterwards — a machine holding the
-           resume point — and a reader who takes it as an instruction to ADD a declaration will grep for one and
-           find it, which costs a reading; a reader who takes it as a description of the END STATE asks the right
-           question first. The check is one grep of the body's own `JSTrampStepDef`, before the remedy is read at
-           all, and it is the first thing this crash's `site` makes possible. */
+        /* A C body mid-algorithm has neither: it is inside its own activation, with no machine state to snapshot
+           and no way to re-reach the ask by re-running anything. It must become a step machine
+           (JS_CFUNC_STEP_DEF), with the ask moved into the machine's branch seam, after which the driver holds the
+           resume point. A question arriving here through solver_decide is a branch question keyed by the
+           operand's identity (decide_key), so its seam is `step_tobool_run` (JS_FORK_KIND_TOBOOL), not
+           `step_fork_run`, which keys by (operand, operation, completion), is for a machine's own completions, and
+           per quickjs-step.h would fork again over a predicate the flow may have fixed.
+           `site` names the ask, because the predicate alone names nobody (the population is one helper in
+           core/dom/abort.c, whose call population is derived there). Read the remedy as an end state: at the
+           sites localised so far the builtin was already a step machine (a member taking a signal in a
+           dictionary or sequence must be one, since Web IDL conversion runs page code), and the repair was
+           routing the ask onto its existing branch seam. So check the body's `JSTrampStepDef` first; the
+           remaining callers are getters, constructors and engine helpers that reach a signal they were handed. */
 #if APICLIENT_DEV
         {
             char name[192];
             size_t i;
-            /* THE KEY IS LENGTH-PREFIXED AND ITS FIELD SEPARATORS ARE CONTROL BYTES (decide.c's
-               concolic_ident_compose), so the one thing the reader needs from it — the name of the predicate
-               that forked — is copied through printable-only. NOT for the record's sake: check.h escapes what
-               it emits, so a raw separator would arrive intact and legal. It is for the READER's, who is
-               looking for an identifier and would be handed a run of escapes in the middle of it. */
+            /* The key is length-prefixed with control-byte separators (decide.c's concolic_ident_compose), so the
+               predicate's name is copied printable-only for the reader, who is looking for an identifier; check.h
+               would escape the bytes anyway. */
             for (i = 0; i + 1 < sizeof name && asked && asked[i]; i++)
                 name[i] = (asked[i] >= 0x20 && asked[i] < 0x7f) ? asked[i] : '.';
             name[i] = '\0';
@@ -4863,9 +4523,9 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
     return 1;
 }
 
-/* GENERATOR-STATE fork stash: clone_deep_flow fires gen_fork for each generator body frame it clones (during
-   JS_FlowClone), BEFORE engine_fork_finalize exists to hold the sibling's delta. Append here; the finalize
-   drains all onto the just-created sibling delta and resets. Filled-then-fully-drained within one fork. */
+/* Generator-state fork stash: clone_deep_flow calls gen_fork for each generator body frame it clones (during
+   JS_FlowClone), before engine_fork_finalize has the sibling's delta. Appended here; the finalize drains them onto
+   the new sibling's delta and resets. Filled and fully drained within one fork. */
 typedef struct { JSValueConst genobj; void *g0, *g1; } GenForkRec;
 static GenForkRec *g_genforks = NULL; static int g_genfork_n = 0, g_genfork_cap = 0;
 void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd) {
@@ -4879,164 +4539,105 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
     g_genfork_n++;
 }
 
-/* THE RECLAIM SAFEPOINT'S SWITCH, declared here and defined with the partial self-park below. Two operations in
-   this file hold a position in the frontier while allocating — the sibling being assembled just below, and the
-   job-drop walk — and both close the safepoint around themselves with it. */
+/* The reclaim safepoint's switch, defined with the partial self-park below. Two operations here hold a position in
+   the frontier while allocating (the sibling assembly below and the job-drop walk) and close the safepoint
+   around themselves with it. */
 static int engine_reclaim_set(int v);
 
-/* ASSEMBLE A SIBLING FROM A PARENT AND A FRAME CLONE — everything a new timeline of this flow IS, and nothing
- * about WHY it exists. That split is the point of this function existing separately from the branch hook below.
- *
- * A FORK IS NOT ONLY A BRANCH. A flow forks over a PREDICATE (the interpreter's concolic OP_if, whose sibling
- * carries the other arm) and it forks over a VALUE it did not choose — a peer document's state IS its flows, so
- * one cross-instance read has N true answers and the asking flow explores one arm per DISTINCT ANSWER
- * (flow_answer_fork). Both need the identical construction: the frame clone, the O(1) delta and DOM-segment
- * fork, the generator swaps, the inherited chunks, jobs and register, the world minted as a CHILD of the
- * parent's so a peer can materialize the arm's segment by forking the asker's. What differs is exactly the
- * decision state, which is why it is a PARAMETER here rather than read from a static: a branch has an arm to
- * record and an answer fork has none, and that is the whole of the difference between them.
- *
- * AND IT FORKS OVER CODE THE PAGE NEVER RAN — the third caller (engine_orphan_seed), which is where `clone`
- * stops being a clone and the parameter's name stops being the whole truth. What a sibling needs is a FRAME TO
- * RESUME, and a branch arm's happens to be a snapshot of its parent's while a driven orphan's is a fresh call
- * of a function nothing has called (JS_FlowNewCall). Every line below is identical for the two, which is the
- * statement worth making: an orphan drive is not a kind of flow this scheduler can distinguish — same delta
- * fork, same DOM segment, same child world, same inherited queues and register, same rank.
- * `dec_blob` and `pin_blob` are CONSUMED — they become the sibling's. */
+/* Assembles a sibling from a parent and a frame: everything a new timeline of this flow is, nothing about why it
+ * exists. A flow forks over a predicate (the interpreter's concolic OP_if, the sibling carrying the other arm),
+ * over a value it did not choose (one cross-instance read has N true answers, one arm per distinct answer,
+ * flow_answer_fork), and over code the page never ran (engine_orphan_seed, whose `clone` is a fresh call frame
+ * from JS_FlowNewCall). All need the same construction: the frame, the O(1) delta and DOM-segment fork, the
+ * generator swaps, the inherited chunks, jobs and register, and a child world of the parent's so a peer can
+ * materialize the arm's segment by forking the asker's. Only the decision state differs, so it is a parameter.
+ * `dec_blob` and `pin_blob` are consumed; they become the sibling's. */
 static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
                                      void *dec_blob, void *pin_blob) {
     DCHECK(parent != NULL, "a sibling was assembled with no parent flow — every field below is copied from one");
     DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — it would resume its parent's "
                              "frame standing on nothing, and every branch its parent had already taken would "
                              "be re-asked as a new one");
-    /* A SIBLING RESUMES WHERE ITS PARENT STANDS, AND A FRAME IS ONLY HALF OF WHERE THAT IS. The claim here used
-       to be "a sibling without a snapshot is not a sibling", which was the right worry stated as the wrong
-       invariant: what makes a frameless sibling dangerous is not the missing handle, it is a parent that IS
-       inside a program — `started` is set below, so such a sibling is hot with nothing to resume, and
-       flow_step compiles the row at `script_i` again and REPLAYS side effects the parent already performed.
-       A parent with NO frame is a flow between programs, and a sibling of it is a flow between programs too:
-       its cursor is past the sequence, so there is nothing to recompile, and it re-enters its scheduler step
-       exactly where its parent was. That is what a fork asked between tasks needs (engine_prepare_fork), and
-       it is the state the cold tier's own rebuilds already have (flow.h: started, no frame, replaying arms).
-       The orphan drive is the third shape and passes a FRESH call frame over a frameless parent, which this
-       permits for the same reason: what is asserted is that a frameless SIBLING never stands over a parent
-       that was mid-program. */
+    /* A frameless sibling is safe only over a frameless parent. A parent inside a program would give a hot
+       sibling (`started` is set below) with nothing to resume, and flow_step would compile the row at
+       `script_i` again and replay its side effects. A parent with no frame is between programs, and so is its
+       sibling, which re-enters its scheduler step where the parent was: a fork asked between tasks
+       (engine_prepare_fork), the cold tier's rebuilds (flow.h), and the orphan drive's fresh call frame over a
+       frameless parent all fit. */
     DCHECK(clone != NULL || parent->frame == NULL,
            "a fork of a flow that is INSIDE a program arrived with no frame snapshot — the sibling would be "
            "marked hot with nothing to resume, and its first step would compile that program's row again and "
            "replay every side effect the parent has already performed");
-    /* AN UNSTARTED CROSS-AGENT OPERATION AND A ROUTED DELIVERY ARE NOT ASSERTED HERE, and their assertions have
-       moved to the BRANCH hook where they are true claims: they are statements about a flow being AT A BRANCH
-       (nothing routed can be outstanding, because a delivery and an operation are both turned into work before
-       any code runs), not about assembling a sibling. An answer fork happens at a PARK, where the trusted zone
-       may perfectly well have attached one meanwhile, and it says so at its own site. */
-    /* THE SIBLING IS A MEMBER OF THE FRONTIER BEFORE IT IS A FLOW, so nothing may page it out while this
-       assembles it. flow_add publishes it into the registry on its first line and everything below is the
-       CONSTRUCTION — a dozen allocations, any one of which can reach the allocator's refusal edge. A newborn
-       flow carries the full optimism bonus and so is near the TOP of the ranking rather than the tail, which
-       makes this a hazard that would fire rarely and read as a corrupt frontier when it did: the reclaim would
-       free `sib` and every line after it would write through a dangling pointer. Same primitive, same reason
-       and same shape as the job-drop walk: the engine is holding a position in its own frontier. */
+    /* Unstarted cross-agent operations and routed deliveries are asserted at the branch hook, not here: an
+       answer fork happens at a park, where the zone may have attached one. */
+    /* The sibling joins the frontier on flow_add's first line, so nothing may page it out while the dozen
+       allocations below construct it: a newborn carries the full optimism bonus and ranks near the top, so a
+       reclaim at the refusal edge could free `sib` under these writes. The job-drop walk takes the same
+       precaution for the same reason. */
     int prev_reclaim = engine_reclaim_set(0);
-    /* BOTH ARMS GET A CHILD WORLD AND THE FORK POINT IS RETIRED — the sibling's by flow_add, the parent's on
-     * the line after it, from the SAME parent name captured before either. The edge is recorded so another
-     * instance that already holds a segment for the fork point can materialize each arm's by forking it — the
-     * same O(1) shared-base-segment fork this function performs locally, performed there.
-     *
-     * THE PARENT ARM USED TO KEEP THE FORK POINT'S NAME, and that is what made this a fork in the flow graph
-     * and not in the world graph. Two consequences, and the second one is silent data loss:
-     *   - a peer asked "do these two senders contradict?" saw the two arms as ancestor-and-descendant, which is
-     *     the same relation a flow's two SEQUENTIAL posts have — §9.3.3 "Posting messages" queues each on the
-     *     posted message task source, which §8.1.7.1 "Definitions" serializes, so it must deliver them in
-     *     order (the number here read §9.4.4, which is "Message ports": a whole section away). One
-     *     question, two opposite answers, no way to tell which;
-     *   - a peer materializes an arm's segment by forking the nearest ancestor it holds, and cow_delta_fork
-     *     FREEZES that ancestor's head at that instant. The primary went on writing into the fork point's
-     *     segment, so whether the sibling inherited the primary's post-branch writes depended on which arm
-     *     reached that peer first. Retired, every ancestor is a world no flow holds, and what a peer forks
-     *     cannot change under it — which is the invariant world_ancestry now asserts on every field it writes.
-     * ONE EXTRA MINTED ROW PER FORK is the whole cost; the vector does not grow with it, because world_ancestry
-     * names only ancestors that have themselves crossed the seam. */
+    /* Both arms get a child world and the fork point is retired: the sibling's by flow_add, the parent's on the
+     * line after, from the same parent name. The edge is recorded so another instance holding a segment for the
+     * fork point can materialize each arm's by forking it. Retiring the point matters twice: a peer asking
+     * whether two senders contradict must not see the arms as ancestor and descendant, the relation a flow's
+     * two sequential posts have (§9.3.3 Posting messages, serialized by §8.1.7.1's task source); and a peer
+     * forks the nearest ancestor it holds with cow_delta_fork, which freezes that head, so an ancestor no flow
+     * holds cannot change under it (world_ancestry asserts it). The cost is one minted row per fork; the vector
+     * does not grow, because world_ancestry names only ancestors that have crossed the seam. */
     WorldId fork_point = parent->world;
-    /* UNSEEDED, because an arm INHERITS its parent's sequence rather than starting one: the copy below is this
-       flow's programs, and a seeded arm would have the root document's rows allocated onto it and then leaked
-       under that copy — and would have them a second time, since the parent's own copy already holds them. */
+    /* Unseeded: an arm inherits its parent's sequence (copied below), so seeding would allocate the root
+       document's rows onto it and leak them under the copy. */
     Flow *sib = flow_add_unseeded(ctx, parent->fn, fork_point);
     parent->world = world_mint_child(fork_point);
-    /* AND ITS ACCOUNT IS A CHILD OF THE PARENT'S TOO — the WFQ's two terms, taken over at the branch like every
-       other field of the parent's history copied below. It is FIRST because it is what decides where this flow
-       enters the queue, and everything after this line is the construction of a flow that is already ranked. */
+    /* Its account is a child of the parent's too: the WFQ's two terms, taken over at the branch. First, because
+       it decides where the flow enters the queue. */
     flow_fork_inherit(sib, parent);
-    sib->started = 1;                 /* HOT: resume from the blobs (and the cloned frame, when there is one) */
-    sib->frame = clone;               /* the frame snapshot taken AT the branch — NULL for a fork between tasks */
+    sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
+    sib->frame = clone;               /* the frame snapshot taken at the branch; NULL for a fork between tasks */
     sib->script_i = parent->script_i; /* same position in the script sequence */
-    /* …AND WHAT THAT FRAME IS. A branch taken inside an `error` listener is a branch inside its parent's
-       §8.1.4.4 step 8 report, standing on the same row of the sequence: the arm has to finish the report and
-       take the row's completion out of it, exactly as the parent would have. Left at zero the arm would read
-       its own report frame as the row's PROGRAM — advancing the cursor a second time and skipping the next
-       script, and restoring `document.currentScript` at a step §4.12.1.1 does not restore it at. */
+    /* What that frame is: a branch inside an `error` listener is inside its parent's §8.1.4.4 step 8 report on
+       the same row, so the arm must finish the report and take the row's completion out of it. At zero it would
+       read the report frame as the row's program, advance the cursor twice and restore `currentScript` where
+       §4.12.1.1 does not. */
     sib->reporting = parent->reporting;
-    /* …AND THE SAME SENTENCE FOR THE OTHER TWO FRAME FACTS THIS FLOW CAN CARRY. An arm branching inside a
-       watcher's `cancel` handler is standing in its parent's HTML §6.10.1 "Close requests" task and has to take
-       that task's completion value out of it, exactly as the parent would; and an arm forked after a modelled
-       close request reached §6.10.1's step 9 is standing in a timeline where nothing is watching, so it must
-       not model the arrival its parent has already found nothing for. Left at the constructor's zeros the first
-       would read a task frame as the row's PROGRAM and the second would model close requests for ever. */
+    /* The same for the other two frame facts: an arm branching in a watcher's `cancel` handler stands in its
+       parent's HTML §6.10.1 Close requests task and must take that task's completion; an arm forked after a
+       modelled close request reached §6.10.1 step 9 found nothing watching and must not model the arrival
+       again. */
     sib->close_req = parent->close_req;
     sib->close_req_none = parent->close_req_none;
-    /* AND HOW FAR THE SEQUENCE HAS ALREADY BEEN RUN, which is what makes the no-replay assert at the compile
-       site mean anything for an arm. Every sibling inherited -1, so a sibling that reached the compile with a
-       cursor its parent had already compiled passed a check that only ever compared against "nothing yet" —
-       and a FRAMELESS sibling is the shape that can actually reach it. The obligation is the same one every
-       field above and below carries: an arm is its parent's timeline continued, so it has run what its parent
-       had run. */
+    /* How far the sequence has been run, so the no-replay assert at the compile site holds for an arm, which has
+       run what its parent ran; a frameless sibling is the shape that can reach that compile. */
     sib->last_compiled = parent->last_compiled;
-    /* AND NOT A PARSE IN FLIGHT, which is a statement about when a fork can happen rather than a field being
-       skipped. A concolic branch is taken by RUNNING bytecode; a flow whose program is still being PARSED is
-       running none, so there is no reachable state in which a parent holds one here. Asserted rather than
-       zeroed, because the sibling's constructor zeros it and a parent holding one would mean a fork was taken
-       from inside the compiler. */
+    /* No parse in flight: a branch is taken by running bytecode, and a compiling flow runs none, so a parent
+       holding one means a fork from inside the compiler. Asserted rather than zeroed. */
     DCHECK(parent->compile == NULL,
            "a flow was forked while its program was still being PARSED — a branch is taken by running "
            "bytecode and a compiling flow is running none, so either the fork came from inside the parser or "
            "the compile handle outlived the program it belongs to");
     DCHECK(sib->compile == NULL, "a freshly built sibling already held a suspended compile");
-    /* AND WHERE THE PROGRAM IT IS STANDING IN HAS ALREADY INTERPOSED (flow.h). The arm inherits the parent's
-       `dyn` rows, so it inherits the interpositions among them; without this pair it would compute its next
-       IMMEDIATE slot as if the program had made none and shift them apart. Two lines because the pair only
-       means anything together — `imm_next` without the cursor it was computed against is a slot in a sequence
-       nobody is standing in. */
+    /* Where the program it stands in has already interposed (flow.h): the arm inherits the parent's `dyn` rows
+       and so their interpositions; without this pair it would compute its next immediate slot as if none had
+       happened. A pair, because `imm_next` means nothing without the cursor it was computed against. */
     sib->imm_at = parent->imm_at; sib->imm_next = parent->imm_next;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
-    /* GENERATOR-STATE swaps built by clone_deep_flow for this fork: record each on the sibling's delta so the
-       shared generator object resolves to the sibling's own cloned execution state while it runs. */
+    /* Generator-state swaps built by clone_deep_flow for this fork, recorded on the sibling's delta so the shared
+       generator object resolves to the sibling's own cloned execution state while it runs. */
     for (int i = 0; i < g_genfork_n; i++)
         cow_delta_add_gendata(ctx, (CowDelta *)sib->delta, g_genforks[i].genobj, g_genforks[i].g0, g_genforks[i].g1);
     g_genfork_n = 0;
-    /* DOM analog of the heap clone: freeze the parent's live DOM head into a SHARED refcounted base segment
-       (refcount 2 — parent keeps a fresh empty head over it, sibling references it too), so the sibling INHERITS
-       the parent's PRE-FORK document writes in O(1) instead of a copy, then each diverges on its own head. */
+    /* The DOM analog of the heap fork: the parent's live DOM head is frozen into a shared refcounted base
+       segment (refcount 2: the parent gets a fresh empty head over it), so the sibling inherits the pre-fork
+       document writes in O(1) and each diverges on its own head. */
     sib->dom_base = dom_cow_fork();
     sib->dec_blob = dec_blob;
     sib->pin_blob = pin_blob;
-    /* AND SO DOES THE @S SUBSTITUTION, which is the same sentence about a different identity: this sibling
-       resumes the same candidate session's frame from the fork point, in a heap where the injected payload has
-       ALREADY been read, and it carries on into the other arm of the branch. Three fields were missing here and
-       the failure was silent in both directions at once.
-         - solve_flow_begin installs the running flow's substitution UNCONDITIONALLY (its own comment says why),
-           so a sibling with no `cand_src` re-reads the attacker source as the ordinary concolic value from its
-           very next switch-in. Its world is then half-injected: the prefix ran under the payload, the suffix
-           does not, and nothing anywhere describes that state.
-         - solve_flow_end records a PoC only for a flow that HAS a `cand_src`, so a breakout that fires in the
-           sibling's arm — which is precisely the arm a gate was hiding — fired and was never reported. §@S says
-           only firing proves it; this dropped the proof.
-         - endpoint_suppress is keyed on the same field, so the sibling recorded @H endpoints built out of a
-           fabricated breakout string as if they were observed. §Attacker-sources: COMPUTE OR SHAPE, NEVER
-           INVENT.
-       `cand_fired` DOES travel, unlike at the cold tier where dropping it is what keeps a finding an
-       observation: a fire before the branch is a thing BOTH timelines performed, and record_sink dedups the two
-       reports. `cand_verifying` does not, for the reason it does not cross the tier either — solve_flow_begin
-       re-derives it from `cand_src` on every switch-in. */
+    /* The @S substitution travels too: the sibling resumes the same candidate session from the fork point, in a
+       heap where the payload was already read, into the other arm. Without `cand_src` solve_flow_begin (which
+       installs the running flow's substitution unconditionally) would re-read the source as an ordinary concolic
+       value, solve_flow_end would never record the arm's PoC, and endpoint_suppress (keyed on the same field)
+       would let it record @H endpoints built from a breakout string. `cand_fired` travels (a fire before the
+       branch is both timelines'; record_sink dedups), unlike at the cold tier; `cand_verifying` does not, since
+       solve_flow_begin re-derives it from `cand_src` at every switch-in. */
     if (parent->cand_src) {
         DCHECK(parent->cand_payload && parent->cand_sink,
                "a candidate session forked holding only part of its substitution — the source, the payload and "
@@ -5044,40 +4645,27 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         sib->cand_src = strdup(parent->cand_src);
         sib->cand_payload = strdup(parent->cand_payload);
         CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
-        sib->cand_sink = parent->cand_sink;   /* solve.c's static table text; not owned, so not copied */
+        sib->cand_sink = parent->cand_sink;   /* solve.c's static table text: not owned, not copied */
         sib->cand_fired = parent->cand_fired;
-        /* AND WHERE THE PAYLOAD CAME FROM, which is a fact about the BYTES and therefore about both arms. An
-           arm of a resumed candidate is carrying the record's payload exactly as its parent is, so an arm that
-           lost this bit would be a flow whose bytes this session's search list has no row for and which claims
-           it was seeded out of that list — the state solve.c's arrival assert exists to catch, manufactured by
-           the fork. It fires at the FIRST branch a resumed candidate takes on its way to the sink, which on a
-           gated document is every one of them. */
+        /* Where the payload came from is a fact about the bytes, so both arms have it; an arm without it would
+           claim to be seeded from this session's search list with no row there, which solve.c's arrival assert
+           refuses at the first branch a resumed candidate takes. */
         sib->cand_resumed = parent->cand_resumed;
     }
-    /* AND SO DOES BEING A DRIVEN ORPHAN, which is the same sentence about the third thing a flow can be: an arm
-       of an orphan drive is that drive continued, so it is no more reproducible from a decision vector than its
-       parent is and the cold tier must refuse it for the same reason. A sibling that lost the mark would be
-       written out as an ordinary flow and come back next session as a document replay that calls nothing. */
+    /* Being a driven orphan travels: an arm of an orphan drive is that drive continued, no more reproducible from
+       a decision vector than its parent, so the cold tier must refuse it too. */
     sib->orphan = parent->orphan;
-    /* AND THE NAME OF THE FUNCTION IT IS THE DRIVE OF, by the same sentence: the arm's recipe has to say which
-       body to re-take, and it is the same body. An arm that inherited the MARK without the LOCATOR would be
-       written out as a drive of nothing and refused at the park by the assert that says a drive has a name. */
+    /* The name of the function it drives travels by the same sentence: the arm's recipe must say which body to
+       re-take, and the park asserts a drive has a name. */
     sib->orphan_hash = parent->orphan_hash;
-    /* AND SO DOES THE WAIT, WHICH IS NOT OBVIOUS AND IS THE HALF THAT BREAKS IF IT IS LEFT OUT. A resumed drive
-       does not begin as a call: it REPLAYS THE DOCUMENT first, exactly like the flow record it is written
-       beside, and a replay branches. So a flow that is still waiting for its function forks arms while it
-       waits, and each arm is the same drive of the same body — an arm that inherited the MARK and the LOCATOR
-       without the WAIT would be a drive that never builds a call and never says so, and the park would then
-       write an 'o' for it and assert against a `fn` it does not have.
-       ONE FUNCTION SERVES ANY NUMBER OF THEM. What the take consumes is the `entered` BIT, not the function
-       object, so N arms of one drive each call it; that is also what the original session did — one function,
-       N flows whose frames were clones of one call. `fn` itself is carried by flow_add_unseeded above, and
-       `orphan_argc` is a fact about that same body. */
+    /* The wait travels too: a resumed drive replays the document first, and a replay branches, so a flow still
+       waiting for its function forks arms that are each the same drive; without the wait an arm would never build
+       its call and the park would write an 'o' for a `fn` it lacks. The take consumes the `entered` bit, not the
+       function, so N arms each call it. `fn` is carried by flow_add_unseeded; `orphan_argc` belongs to that body. */
     sib->orphan_want = parent->orphan_want;
     sib->orphan_argc = parent->orphan_argc;
-    /* A FIELD ADDED TO THE CANDIDATE IDENTITY IS AN OBLIGATION HERE, and this is what says so — the same shape
-       as the queued job's realm below, and for the same reason: the three fields are copied out one by one
-       precisely so a fourth is visible, which is exactly how these three came to be missing. */
+    /* A field added to the candidate identity is an obligation here: the fields are copied one by one so that a
+       new one is visible, and this checks they arrived. */
     DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
            (sib->cand_sink != NULL) == (parent->cand_sink != NULL) &&
            sib->cand_resumed == parent->cand_resumed,
