@@ -299,6 +299,12 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     DCHECK(req->address != FETCH_ADDRESS_UNPLACED,
            "a request parked without stating whether its URL is bytes it may be sent to — the producer holds "
            "the address value (core/fetch/fetch.h's FetchAddressClass)");
+    /* The asking document travels with the address: engine_pending_fetches names it to the trusted zone, which
+       judges the request against that document's record. */
+    DCHECK(pending_get_int(e, PEND_DOC) != 0,
+           "a request parked without naming its asking document — every park records it before this door "
+           "(document_doc of the asking realm, or a document script row's `dyn_doc`), and the trusted zone "
+           "judges the request against that document's record");
     DCHECK(req->method != NULL && *req->method,
            "a request parked on an ADDRESS without stating its METHOD — the reply seam is keyed on the pair "
            "(engine.h), so an unnamed method would park this request under another one's identity and settle "
@@ -512,7 +518,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
     /* Which document asked: the realm this chokepoint was entered with. `flow_step`'s realm is the session's,
        so a delivery re-deriving it would compile the reply in whichever realm the session is rooted at. It is
-       carried rather than defaulted because `PEND_DOC`'s default 0 is a real document id. */
+       carried rather than defaulted because `PEND_DOC`'s default 0 names no document. */
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     /* The address and what travels with it go through the one door, which also asks §4.3. Requests reaching
        here always get NETWORK: `fetch_owe` and `fetch()` run §4.3 with their own `deliver` closure and return
@@ -625,7 +631,7 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
     e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
-    /* Which document asked, as in the parks above: `PEND_DOC`'s default 0 is a real document id. */
+    /* Which document asked, as in the parks above. */
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     pending_park_request(ctx, e, req);
     JS_FreeValue(ctx, e);
@@ -998,6 +1004,9 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
+    /* Which document asked: the realm the operation was entered with. The trusted zone judges the request
+       against that document's record (engine_host_requests). */
+    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     id = mint_req();   /* the ask half of the rate above, counted at the mint */
     /* Both names of one rendezvous, equal at the first ask and not the same field. `PEND_REQ` is what this
        returns, so the asking machine stores it in its step state, inside a frame a fork clones verbatim;
@@ -1426,8 +1435,25 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
     return 0;
 }
 
-/* What the host still owes, as `id\top\n` records. Pulled each step like the pending URLs and not deduplicated:
-   two identical questions from two flows are two questions, each answered under its own world. */
+/* The name of the document a register entry asks for (PEND_DOC), as the trusted zone knows it: the token a
+   provisioning record gave it, or the "<creator>.<n>" world_mint_doc composed. A name crosses inside a TAB- and
+   newline-separated line and, on the fetch bill, inside a comma-joined set, so it holds none of the three. */
+static const char *engine_asker_name(JSValueConst p) {
+    uint32_t doc = (uint32_t)pending_get_int(p, PEND_DOC);
+    const char *name;
+
+    DCHECK(doc != 0, "an outstanding request names no asking document — every park records it at its push "
+                     "(pending_park_request and engine_host_request assert it), so this entry bypassed both");
+    name = world_doc_name(doc);
+    DCHECK(!strpbrk(name, "\t\n,"),
+           "a document name holds a TAB, a newline or a comma — the bill and the request line carry it as a "
+           "token, and the bill's asker set is comma-joined, so the line would split into names nobody holds");
+    return name;
+}
+
+/* What the host still owes, as `id\tasker\top\n` records, `asker` being the asking document's name
+   (engine_asker_name). Pulled each step like the pending URLs and not deduplicated: two identical questions
+   from two flows are two questions, each answered under its own world. */
 const char *engine_host_requests(void) {
     static char *join;
     static size_t cap;
@@ -1442,8 +1468,8 @@ const char *engine_host_requests(void) {
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
             JSValue o;
-            const char *s;
-            size_t ol = 0;
+            const char *s, *asker;
+            size_t ol = 0, al;
             char idbuf[24];
             int idlen;
             /* "Can the host still be asked", not "is this flow still waiting", via the one exported predicate.
@@ -1460,15 +1486,19 @@ const char *engine_host_requests(void) {
                so every id the zone can quote back comes from here; the machine's name would give the host two
                arms' identical names and land one answer in two contradictory worlds. */
             idlen = snprintf(idbuf, sizeof idbuf, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ_HOST));
+            asker = engine_asker_name(p);
+            al = strlen(asker);
             o = pending_get(p, PEND_OP);
             s = JS_ToCStringLen(pending_ctx(), &ol, o);
             DCHECK(s != NULL, "an outstanding host request has no text — the host routes on it");
-            while (n_out + (size_t)idlen + ol + 2 > cap) {
+            while (n_out + (size_t)idlen + al + ol + 3 > cap) {
                 cap *= 2;
                 join = realloc(join, cap);
                 CHECK(join, "engine: OOM growing the outstanding-request join");
             }
             memcpy(join + n_out, idbuf, (size_t)idlen); n_out += (size_t)idlen;
+            memcpy(join + n_out, asker, al); n_out += al;
+            join[n_out++] = '\t';
             memcpy(join + n_out, s, ol); n_out += ol;
             join[n_out++] = '\n';
             join[n_out] = 0;
@@ -3287,6 +3317,19 @@ static int driven_is_yes(const char *tok, size_t n) {
                 "declares", (int)n, tok);
 }
 
+/* Is `name` a member of the comma-joined asker set `set` (`n` bytes)? */
+static int asker_set_has(const char *set, size_t n, const char *name, size_t nl) {
+    const char *at = set, *end = set + n;
+
+    while (at < end) {
+        const char *comma = memchr(at, ',', (size_t)(end - at));
+        const char *stop = comma ? comma : end;
+        if ((size_t)(stop - at) == nl && !memcmp(at, name, nl)) return 1;
+        at = stop + 1;
+    }
+    return 0;
+}
+
 /* The URLs the host owes, newline-joined across every live flow and deduplicated over the request's identity,
    or "". Several flows park on one request (a candidate re-fire re-runs the exploring flow's fetches) and
    engine_provide fills every entry that names it, so the list is a set of requests, not of waiters;
@@ -3295,7 +3338,8 @@ static int driven_is_yes(const char *tok, size_t n) {
    `fetch(u)` with one reply, where Fetch §4.1 Main fetch gives the first the body and the second a CORS check.
    The buffer is this function's, valid until the next call. Each line is
    `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
-   REFERRER_POLICY<TAB>REFERRER<TAB>URL`. */
+   REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`, ASKERS being the comma-joined names of the documents whose
+   parks the line folds (engine_asker_name), each once. */
 const char *engine_pending_fetches(void) {
     static char *join;
     static size_t cap;
@@ -3351,12 +3395,15 @@ const char *engine_pending_fetches(void) {
                grades above (engine.h's PENDING_DRIVEN_*). */
             int driven_v = (int)pending_get_int(pe, PEND_DRIVEN);
             const char *driven = engine_driven_token(driven_v);
-            size_t il = strlen(ini), pl = strlen(prov), nl = strlen(pinned), vl = strlen(driven);
+            size_t il = strlen(ini), pl = strlen(prov), nl = strlen(pinned), vl = strlen(driven), al;
             /* A request the zone already refused is not listed, which keeps a decline a fork rather than a spin:
                unanswered entries are re-joined every step, and each decline reaching the engine forks another
                failure arm. A refusal answers "will you make this request", and this list is what the host can
                still be asked; the record keeps the reason, and the parked flow its snapshot. */
             int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE) || pending_entry_declined(pe));
+            /* Which document asked; read only for a listed entry, the one population that must carry it. */
+            const char *asker = skip ? "" : engine_asker_name(pe);
+            al = strlen(asker);
             if (!skip) {
                 char *q = join, *stop = join + n_out;
                 /* Only bytes are listed: pending_park_request declines an address with none, so a listed record
@@ -3457,19 +3504,20 @@ const char *engine_pending_fetches(void) {
                     char *t8 = t7 ? memchr(t7 + 1, '\t', (size_t)(lend - t7 - 1)) : NULL;
                     char *t9 = t8 ? memchr(t8 + 1, '\t', (size_t)(lend - t8 - 1)) : NULL;
                     char *t10 = t9 ? memchr(t9 + 1, '\t', (size_t)(lend - t9 - 1)) : NULL;
-                    DCHECK(t10 != NULL,
-                           "a line already in this join carries fewer than ten TABs — the buffer is this "
+                    char *t11 = t10 ? memchr(t10 + 1, '\t', (size_t)(lend - t10 - 1)) : NULL;
+                    DCHECK(t11 != NULL,
+                           "a line already in this join carries fewer than eleven TABs — the buffer is this "
                            "function's alone and every line it writes is `METHOD<TAB>DESTINATION<TAB>"
                            "INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>"
-                           "REFERRER_POLICY<TAB>REFERRER<TAB>URL`, so this is the writer and the reader having "
-                           "parted");
+                           "REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`, so this is the writer and the "
+                           "reader having parted");
                     /* The key is (method, mode, referrer policy, referrer, url); none of the last four is
                        folded, because a line is one request. */
                     if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
                         (size_t)(t8 - (t7 + 1)) == ol && !memcmp(t7 + 1, o, ol) &&
                         (size_t)(t9 - (t8 + 1)) == rpl && !memcmp(t8 + 1, rp, rpl) &&
                         (size_t)(t10 - (t9 + 1)) == rl && !memcmp(t9 + 1, r, rl) &&
-                        (size_t)(lend - (t10 + 1)) == ul && !memcmp(t10 + 1, u, ul)) {
+                        (size_t)(lend - (t11 + 1)) == ul && !memcmp(t11 + 1, u, ul)) {
                         /* One reply fills every entry on the key, so each folded field states what survives
                            every member, independent of walk order. The initiator and the provenance fold to
                            the most observed (monotone): if any member's path stood on no contradicted arm, a
@@ -3479,9 +3527,9 @@ const char *engine_pending_fetches(void) {
                            the bytes must pass the code rule, so script-like (§2.2.5) wins; otherwise the line
                            keeps what it has, since no consumer distinguishes, say, `image` from `font` (one
                            that does needs the register keyed on the destination). Every offset and verdict is
-                           taken before the first write, and the six writes run back to front (credentials,
-                           drive mark, witness, provenance, initiator, destination), because a rewrite shifts
-                           everything after its field. The drive mark folds to `undriven` if any member's flow
+                           taken before the first write, and the writes run back to front (asker set,
+                           credentials, drive mark, witness, provenance, initiator, destination), because a
+                           rewrite shifts everything after its field. The drive mark folds to `undriven` if any member's flow
                            was not a drive: then the page itself makes this request. */
                         size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
                         size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
@@ -3489,6 +3537,10 @@ const char *engine_pending_fetches(void) {
                         size_t n_at = (size_t)(t4 + 1 - join), n_len = (size_t)(t5 - (t4 + 1));
                         size_t v_at = (size_t)(t5 + 1 - join), v_len = (size_t)(t6 - (t5 + 1));
                         size_t c_at = (size_t)(t6 + 1 - join), c_len = (size_t)(t7 - (t6 + 1));
+                        /* The asker set is the union of the members' documents, so the zone judges the one
+                           reply against every document it fills. */
+                        size_t a_end = (size_t)(t11 - join);
+                        int new_asker = !asker_set_has(t10 + 1, (size_t)(t11 - (t10 + 1)), asker, al);
                         /* The (provenance, witness) pair folds as a pair, taking one member's whole, so it
                            cannot state a pair no member held: folding each by its own extremum could give
                            (observed, unpinned) from (observed, pinned) and (forced, unpinned) members.
@@ -3512,6 +3564,10 @@ const char *engine_pending_fetches(void) {
                         FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
                                                                     cred_of_token(c, cl));
                         int mo_driven = driven_v && driven_is_yes(join + v_at, v_len);
+                        if (new_asker) {
+                            join_set_field(&join, &n_out, &cap, a_end, 0, asker);
+                            join_set_field(&join, &n_out, &cap, a_end, 0, ",");
+                        }
                         join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
                         join_set_field(&join, &n_out, &cap, v_at, v_len, engine_driven_token(mo_driven));
                         join_set_field(&join, &n_out, &cap, n_at, n_len,
@@ -3520,8 +3576,8 @@ const char *engine_pending_fetches(void) {
                         join_set_field(&join, &n_out, &cap, i_at, i_len,
                                        mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
                         if (widen_dst) join_set_field(&join, &n_out, &cap, d_at, d_len, d);
-                        /* Both rewrites can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t10`) is
-                           dead from here; the break is what makes that safe. */
+                        /* Every rewrite can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t11`)
+                           is dead from here; the break is what makes that safe. */
                         skip = 1; break;
                     }
                     if (!e) break;
@@ -3529,7 +3585,7 @@ const char *engine_pending_fetches(void) {
                 }
             }
             if (!skip) {
-                while (n_out + ml + dl + il + pl + nl + vl + cl + ol + rpl + rl + ul + 12 > cap) {
+                while (n_out + ml + dl + il + pl + nl + vl + cl + ol + rpl + rl + al + ul + 13 > cap) {
                     cap *= 2;
                     join = realloc(join, cap);
                     CHECK(join, "engine: OOM growing the pending-request join");
@@ -3553,6 +3609,8 @@ const char *engine_pending_fetches(void) {
                 memcpy(join + n_out, rp, rpl); n_out += rpl;
                 join[n_out++] = '\t';
                 memcpy(join + n_out, r, rl); n_out += rl;
+                join[n_out++] = '\t';
+                memcpy(join + n_out, asker, al); n_out += al;
                 join[n_out++] = '\t';
                 memcpy(join + n_out, u, ul); n_out += ul;
                 join[n_out++] = '\n';
@@ -3580,14 +3638,14 @@ const char *engine_pending_fetches(void) {
 void engine_pending_split(char *line, const char **method, const char **destination, const char **initiator,
                           const char **provenance, const char **pinned, const char **driven,
                           const char **credentials, const char **mode, const char **referrer_policy,
-                          const char **referrer, const char **url) {
+                          const char **referrer, const char **askers, const char **url) {
     const char **field[] = { method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                             referrer_policy, referrer, url };
+                             referrer_policy, referrer, askers, url };
     enum { NFIELDS = sizeof field / sizeof field[0] };
     char *at = line;
 
     DCHECK(line && method && destination && initiator && provenance && pinned && driven && credentials && mode &&
-           referrer_policy && referrer && url, "a pending line was split with nowhere to put its fields");
+           referrer_policy && referrer && askers && url, "a pending line was split with nowhere to put its fields");
     /* A CHECK per TAB, not a DCHECK: release has no defined answer, because the fields key the delivery and
        decide what fires, and a line not in this engine's grammar would decide them from the wrong field. A URL
        cannot contain a TAB (URL Standard §4.4), so the URL is the remainder of the line. */
@@ -3596,8 +3654,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
         CHECKF(tab != NULL,
                "engine: a host split a pending line carrying %d TABs where engine_pending_fetches writes %d "
                "(`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>"
-               "MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`) — the host is reading another grammar, and field "
-               "%d would be decided from the wrong bytes", k, NFIELDS - 1, k + 1);
+               "MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`) — the host is reading another grammar, "
+               "and field %d would be decided from the wrong bytes", k, NFIELDS - 1, k + 1);
         *tab = 0;
         *field[k] = at;
         at = tab + 1;
@@ -3636,6 +3694,9 @@ void engine_pending_split(char *line, const char **method, const char **destinat
            "a pending line's REFERRER POLICY is not a Referrer Policy §3 referrer policy, or its REFERRER is "
            "empty — the join writes the policy through fetch_referrer_policy_for_wire and the referrer as "
            "\"no-referrer\" or a URL, so this is the writer and the reader having parted");
+    DCHECK(**askers && (*askers)[strlen(*askers) - 1] != ',' && **askers != ',' && !strstr(*askers, ",,"),
+           "a pending line's ASKERS is not a comma-joined set of document names — the join writes the asking "
+           "document of every park it folds, so an empty member is the writer and the reader having parted");
 }
 
 /* Is anything outstanding for the host on the whole frontier? The scheduler asks this before it may call a
@@ -5891,6 +5952,8 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
        the set is fixed (solver/flow.h), and this entry outlives §4.12.1.1's immediate interposition and
        §7.5.10's removal. */
     pending_set_int(e, PEND_SCRIPT_ROW, (int64_t)f->dyn_id[at]);
+    /* Which document asked: the row's, whose realm the program compiles in. */
+    pending_set_int(e, PEND_DOC, (int)f->dyn_doc[at]);
     /* And §4.3 Scheme fetch with the address: a document's own `<script src="data:text/javascript,…">` is
        answered at the park, so the entry may already carry its reply when this returns, and the flow's next step
        delivers it through the networking arm above the sequence, the same door as a host-answered entry. */

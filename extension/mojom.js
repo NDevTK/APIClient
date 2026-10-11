@@ -475,7 +475,8 @@
           { name: "requests", type: "string",
             why: "the REQUESTS flows are parked on — one " +
                  "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>" +
-                 "REFERRER_POLICY<TAB>REFERRER<TAB>URL` line each, " +
+                 "REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` line each (ASKERS the comma-joined " +
+                 "names of the documents whose parks it folds, which this zone judges it by), " +
                  "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +
                  "two, and both settled with whichever body the zone fetched first. TAB can occur in none of " +
@@ -580,7 +581,8 @@
         params: [],
         reply: [
           { name: "requests", type: "string",
-            why: "`id<TAB>op` per line — the flows suspended on something only the host can do. It deliberately " +
+            why: "`id<TAB>asker<TAB>op` per line, `asker` naming the asking document — the flows suspended on " +
+                 "something only the host can do. It deliberately " +
                  "does NOT dedupe (two identical questions from two flows are two questions), so a record " +
                  "dropped here is a flow parked forever on an answer nobody will send" },
           WORKING_SET] },

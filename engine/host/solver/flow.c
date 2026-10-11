@@ -5197,8 +5197,8 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
 }
 
 /* WHETHER A REGISTER ENTRY IS A FETCH ISSUED IN THE CONTEXT OF `doc` — §7.5.11 step 2's population. Every park
-   a document's code or algorithm makes records the asking document (PEND_DOC). A document script's park names
-   its row instead and leaves with it (above); a host request is a cross-instance read, not a fetch. */
+   a document's code or algorithm makes records the asking document (PEND_DOC). A document script's park also
+   names its row and leaves with it (above); a host request is a cross-instance read, not a fetch. */
 static int pend_entry_fetch_of_document(JSValueConst e, uint32_t doc) {
     int kind = (int)pending_get_int(e, PEND_KIND);
     uint32_t edoc = (uint32_t)pending_get_int(e, PEND_DOC);

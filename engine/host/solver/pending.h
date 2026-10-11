@@ -409,7 +409,7 @@ int pending_driven_compose(int kind, int path_driven);
     X(ADDRESS,    "address",   PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
-    /* the asking document, which every fetch park writes; 0 names none (a document script, a host request) */ \
+    /* the asking document, which every park writes before it is listed; 0 names none */             \
     X(DOC,        "doc",       PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)                              \
     /* the zone has refused nothing about this request — see the two fields below */   \

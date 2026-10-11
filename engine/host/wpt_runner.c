@@ -1299,7 +1299,7 @@ static int wpt_issue_pending(void)
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-        const char *referrer_policy, *referrer;
+        const char *referrer_policy, *referrer, *askers;
         FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the runner's own
                                      HTTP client requests and reach no park, so a zero is the named abort a
                                      future reader gets rather than a stack address it would compare bytes at */
@@ -1315,7 +1315,7 @@ static int wpt_issue_pending(void)
            is the vocabulary assert, since a runner reading a field it never checked would see the producer drift
            first. */
         engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                             &mode, &referrer_policy, &referrer, &url);
+                             &mode, &referrer_policy, &referrer, &askers, &url);
         DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
                "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
@@ -1917,13 +1917,18 @@ static bool wpt_answer_host_requests(JSContext *ctx)
     /* Each request is routed to the instance holding its document, as the trusted zone does in the extension:
        only it knows which instance holds which document. */
     for (p = engine_host_requests(); *p; ) {
-        const char *tab = strchr(p, '\t');
+        /* `id<TAB>asker<TAB>op`: `tab` is the TAB before the operation. The asker is the zone's to judge a
+           request by; this runner serves the corpus off loopback and judges nothing. */
+        const char *idtab = strchr(p, '\t');
+        const char *tab = idtab ? strchr(idtab + 1, '\t') : NULL;
         const char *end = strchr(p, '\n');
         char op[512];
         uint32_t id;
         size_t n;
 
         if (!tab || !end) break;
+        DCHECK(tab > idtab + 1 && tab < end, "an owed host request is not `id<TAB>asker<TAB>op` — "
+                                             "engine_host_requests writes the asking document on every record");
         id = (uint32_t)strtoul(p, NULL, 10);
         n = (size_t)(end - tab - 1);
         /* Every cross-agent operation routes the same way: a member of a navigable's Window, the close of a

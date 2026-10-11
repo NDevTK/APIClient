@@ -757,7 +757,7 @@ static int fixture_provide(JSContext *ctx) {
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
         const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
-        const char *referrer_policy, *referrer;
+        const char *referrer_policy, *referrer, *askers;
         UrlRecord rec;
         char *abs;
         JSValue reply;
@@ -765,8 +765,8 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
-           REFERRER_POLICY<TAB>REFERRER<TAB>URL` AND IT IS SPLIT BY THE
+        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>
+           MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` AND IT IS SPLIT BY THE
            ENGINE'S OWN SPLITTER — the reply seam is keyed on the pair, so a fixture that answered the whole
            line as an address would match nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT
            ITSELF, deliberately: what it exercises is the PATH (parked, delivered, resumed), and both a firing
@@ -775,7 +775,7 @@ static int fixture_provide(JSContext *ctx) {
            what a fixture is for; the DESTINATION's is asserted inside the splitter against Fetch §2.2.5's own
            enumeration, which is too long to restate at each host and is one table for that reason. */
         engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
-                             &mode, &referrer_policy, &referrer, &url);
+                             &mode, &referrer_policy, &referrer, &askers, &url);
         DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
                "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
@@ -5343,7 +5343,9 @@ static int hostreq_answer_all(JSContext *ctx)
     }
 
     while (*p) {
-        const char *tab = strchr(p, '\t');
+        /* `tab` is the TAB before the operation, past the asking document, which this fixture judges nothing by. */
+        const char *idtab = strchr(p, '\t');
+        const char *tab = idtab ? strchr(idtab + 1, '\t') : NULL;
         const char *end = strchr(p, '\n');
         uint32_t id;
         /* A RECORD THIS LOOP CANNOT PARSE IS NOT A REASON TO STOP ANSWERING THE REST OF THEM. This was a bare
@@ -5351,12 +5353,12 @@ static int hostreq_answer_all(JSContext *ctx)
            exactly the symptom that has no symptom: those flows stay blocked at the call site that asked, the
            census reports them under `blocked` like any flow that is merely waiting, and nothing anywhere
            distinguishes "the host has not answered yet" from "the host walked past this one and never will".
-           engine_host_requests writes `id<TAB>op<NL>` and nothing else, so a record without both is a join
-           this host cannot read — an op carrying a newline is how that happens — and it is a defect in the
+           engine_host_requests writes `id<TAB>asker<TAB>op<NL>` and nothing else, so a record without all three
+           is a join this host cannot read — an op carrying a newline is how that happens — and it is a defect in the
            record, not a condition to tolerate. */
-        DCHECK(tab != NULL && end != NULL,
-               "an outstanding host request did not arrive as `id<TAB>op<NL>` — every record after it in this "
-               "join goes unanswered, and each of those is a flow suspended mid-frame at the read that asked, "
+        DCHECK(tab != NULL && end != NULL && tab > idtab + 1 && tab < end,
+               "an outstanding host request did not arrive as `id<TAB>asker<TAB>op<NL>` — every record after it "
+               "in this join goes unanswered, and each of those is a flow suspended mid-frame at the read that asked, "
                "with nothing but a `blocked` count to say it is never coming back");
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
@@ -5373,7 +5375,7 @@ static int hostreq_answer_all(JSContext *ctx)
                    exactly as it did. That is a property of THIS verb and not of the grammar — `object.apply`
                    ends in a variadic argument list — and it is the reason this reader survives a change the
                    writer beside it had to make. */
-                /* BOUNDED TO THIS RECORD. The joined buffer is `id<TAB>op<NL>` repeated, so it is NOT
+                /* BOUNDED TO THIS RECORD. The joined buffer is `id<TAB>asker<TAB>op<NL>` repeated, so it is NOT
                    NUL-terminated at the newline — an strrchr from the op start finds the last tab in every
                    record that follows, and the member read was a field of some later request. Scan back from
                    this record's end instead. */

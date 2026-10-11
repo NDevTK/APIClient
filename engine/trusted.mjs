@@ -1685,15 +1685,15 @@ async function main() {
     }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 12)
+      if (f.length !== 13)
         throw new Error('the host announced a fetch that is not ' +
                         '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>' +
-                        'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`: ' +
+                        'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`: ' +
                         `${line} — the bill is ` +
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
       const [, method, destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
-             referrer, url] = f;
+             referrer, , url] = f;
       /* The request's referrer policy (after Fetch §4.1 "Main fetch" gave an empty one the policy container's)
          and its referrer ("no-referrer" or a URL), both part of the identity the reply is keyed on;
          extension/bridge.js's `pendingRequest` asserts the same shape. */
@@ -1717,7 +1717,10 @@ async function main() {
       track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
                               referrerPolicy, referrer, url));
     } else if (f[0] === 'request') {
-      const id = Number(f[1]), op = f.slice(2).join('\t');
+      /* `request<TAB>id<TAB>asker<TAB>op` (solver/engine.h's engine_host_requests). */
+      if (f.length < 4 || !f[2])
+        throw new Error(`the host announced a request that is not \`request<TAB>id<TAB>asker<TAB>op\`: ${line}`);
+      const id = Number(f[1]), op = f.slice(3).join('\t');
       const key = `req:${f[1]}`;
       if (e.answered.has(key)) return;
       if (!Number.isInteger(id))

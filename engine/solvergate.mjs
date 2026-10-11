@@ -189,7 +189,8 @@ const SCRIPT_LIKE = scriptLikeDestinations();
    and not here trips the check LOUDLY, and a field added here and not to the join trips it too. Neither can
    quietly re-point the address. */
 const PENDING_LINE_FIELDS = ["method", "destination", "initiator", "provenance",
-                             "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "url"];
+                             "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "askers",
+                             "url"];
 
 /* THE SCHEDULES, AND EACH ONE IS A TRIPLE RATHER THAN A NAME. Every knob is one the production host already
    has and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule
@@ -514,8 +515,8 @@ async function child(docPath, schedName) {
        written as source text here, so this is an ENCODE. */
     /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers
        `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>
-       REFERRER<TAB>URL` and the reply is delivered against its five-field identity, so a GET and a POST to one
-       address are two questions here. */
+       REFERRER<TAB>ASKERS<TAB>URL` and the reply is delivered against its five-field identity, so a GET and a
+       POST to one address are two questions here. */
     const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
       const b = new TextEncoder().encode(body);
       const p = M._malloc(b.length + 1);
@@ -668,7 +669,8 @@ async function child(docPath, schedName) {
                "holding a foreign world's segment. Move a cross-instance document to engine/route.mjs, which " +
                "is the driver that provisions a second instance");
     for (const l of e.str("qjs_host_requests").split("\n").filter(Boolean))
-      gateFail(`the document asked the host to perform \`${l.slice(l.indexOf("\t") + 1).slice(0, 80)}\` — this ` +
+      gateFail(`the document asked the host to perform \`${l.split("\t").slice(2).join("\t").slice(0, 80)}\` — ` +
+               "this " +
                "gate answers no cross-agent operation, so the asking flow would stay parked while the frontier " +
                "reported DONE around it, and this gate would read that dropped flow as a solver regression");
     const pending = e.str("qjs_pending").split("\n").filter(Boolean);

@@ -3514,10 +3514,11 @@ async function engineDecline(eng, method, mode, referrerPolicy, referrer, url, r
    (Fetch §2.2.5 Requests: "" for a `fetch()`), so the shape assert is over the field count and the two ends. */
 function pendingRequest(line) {
   const f = line.split("\t");
-  CHECK(f.length === 11 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[10] !== "",
+  CHECK(f.length === 12 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[10] !== "" && f[11] !== "",
         "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>" +
-        "PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`: `" +
-        line + "` — the engine joins the eleven and this zone must deliver against (method, mode, referrer " +
+        "PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>" +
+        "URL`: `" +
+        line + "` — the engine joins the twelve and this zone must deliver against (method, mode, referrer " +
         "policy, referrer, url), so a line missing a field puts a token where the address belongs and keys a " +
         "reply on a request nothing parked on");
   const destination = f[1];
@@ -3586,8 +3587,14 @@ function pendingRequest(line) {
   CHECK(referrer === "no-referrer" || URL.canParse(referrer),
         "GetPending stated the referrer `" + referrer + "`, which is neither \"no-referrer\" nor a URL — the " +
         "engine resolves Fetch §2.2.5's \"client\" before the line is joined, so nothing else may arrive here");
+  /* The documents whose parks the line folds (solver/engine.h's ASKERS), each a name the engine states; the
+     caller checks each names a document of the asking instance and judges the request by their records. */
+  const askers = f[10].split(",");
+  CHECK(askers.every(function (a, i) { return a !== "" && askers.indexOf(a) === i; }),
+        "GetPending stated the asker set `" + f[10] + "`, which is not a comma-joined set of document names — " +
+        "the engine writes each folded park's document once");
   return { method: f[0], destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
-           referrer, url: f[10] };
+           referrer, askers, url: f[11] };
 }
 /* Referrer Policy §3 "Referrer Policies", the empty string included. */
 const _REFERRER_POLICIES = ["", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
@@ -4391,13 +4398,16 @@ async function engineServiceHostRequests(eng) {
   // a guessed answer is not. Answering is what lets a navigation finish.
   const reqs = owedList("GetHostRequests", (await eng.r.renderer.getHostRequests()).requests);
   for (const line of reqs) {
-    /* `id<TAB>op`, written by engine_host_requests from a counter it CHECKs against wrapping; a record without
-       that shape is asserted, since dropping it would leave its flow parked with no symptom. */
+    /* `id<TAB>asker<TAB>op`, written by engine_host_requests from a counter it CHECKs against wrapping, the
+       asker naming the asking document; a record without that shape is asserted, since dropping it would leave
+       its flow parked with no symptom. */
     const tab = line.indexOf("\t");
-    DCHECK(tab > 0, "an owed host request is not `id<TAB>op` — the id is what an answer is routed by, so a " +
-                    "record without one names a call site this zone can never reach");
-    if (tab < 0) continue;   // release: an unanswerable record leaves its flow parked, which is visible
-    const id = +line.slice(0, tab), op = line.slice(tab + 1);
+    const atab = tab > 0 ? line.indexOf("\t", tab + 1) : -1;
+    DCHECK(tab > 0 && atab > tab + 1, "an owed host request is not `id<TAB>asker<TAB>op` — the id is what an " +
+                                      "answer is routed by, so a record without one names a call site this " +
+                                      "zone can never reach");
+    if (atab < 0) continue;   // release: an unanswerable record leaves its flow parked, which is visible
+    const id = +line.slice(0, tab), asker = line.slice(tab + 1, atab), op = line.slice(atab + 1);
     /* The id is the whole routing table for an answer: engine_host_answer matches every flow's register on it
        and the engine's counter starts at 1, so 0 or NaN would answer a call site that does not exist. */
     DCHECK(Number.isInteger(id) && id > 0,

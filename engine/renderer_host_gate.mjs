@@ -711,11 +711,11 @@ try {
        joined the line after the provenance and is answered the same way and for the same reason. */
     for (const line of (await opener.renderer.getPending()).requests.split('\n').filter(Boolean)) {
       const t = line.split('\t');
-      if (t.length !== 11 || t[0] === '' || t[10] === '')
+      if (t.length !== 12 || t[0] === '' || t[11] === '')
         fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>' +
-             'DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`, and the reply is ' +
-             `delivered against the five-field identity it names: ${line}`);
-      const method = t[0], mode = t[7], referrerPolicy = t[8], referrer = t[9], u = t[10];
+             'DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`, and the ' +
+             `reply is delivered against the five-field identity it names: ${line}`);
+      const method = t[0], mode = t[7], referrerPolicy = t[8], referrer = t[9], u = t[11];
       console.log(`${TAG}   pending: ${method} ${u}`);
       await opener.renderer.provide({
         method, mode, referrerPolicy, referrer, url: u,

@@ -204,8 +204,8 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
     return [p, u8.length];
   };
   /* KEYED ON THE REQUEST: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>
-     CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` lines and the delivery matches the five-field
-     identity, so a GET and a POST to one address are two questions with two replies. */
+     CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL` lines and the delivery matches the
+     five-field identity, so a GET and a POST to one address are two questions with two replies. */
   const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
     const [p, n] = bs(body);
     try { M.ccall('qjs_provide', 'void', ['number','number','number','number','number','number','number','number'],
@@ -426,9 +426,9 @@ async function service(e) {
   let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const t = line.split('\t');
-    if (t.length !== 11 || t.some((x, i) => i !== 1 && i !== 8 && x === ''))
+    if (t.length !== 12 || t.some((x, i) => i !== 1 && i !== 8 && x === ''))
       fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>' +
-           `DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL\`: ${line} — ` +
+           `DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL\`: ${line} — ` +
            'the empty DESTINATION is Fetch §2.2.5\'s own default and the empty REFERRER POLICY is Referrer ' +
            'Policy §3\'s, and they are the fields that may be empty');
     /* THE DESTINATION IS NOT NAMED HERE, AND THAT IS A STATEMENT. It is the CORB class — whether a reply may
@@ -442,7 +442,9 @@ async function service(e) {
        data request whose address rests on a witness this engine chose from one the app's own text spells, and
        this driver fires nothing — it answers every park out of a literal. Its vocabulary is checked below all
        the same, for the reason the other two vocabularies are. */
-    const [method, , initiator, provenance, pinned, driven, , mode, referrerPolicy, referrer, u] = t;
+    /* THE ASKERS are skipped for the pinned mark's reason: they name the documents a firing policy judges the
+       request by, and this driver fires nothing. */
+    const [method, , initiator, provenance, pinned, driven, , mode, referrerPolicy, referrer, , u] = t;
     /* THIS DRIVER ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF — its fixtures' fetches are named `/hold`,
        `/resume`, `/got` and `/closed` and the reply is `{}` served out of a literal, so there is no network
        here for a firing policy to be about. The vocabularies are checked because a driver that read a field it
@@ -487,7 +489,12 @@ async function service(e) {
      `navigable.create` came to be answered with "not created". An unanswered one keeps being reported, which is
      visible in a way a wrong answer is not. */
   for (const l of e.str('qjs_host_requests').split('\n').filter(Boolean)) {
-    const id = +l.slice(0, l.indexOf('\t')), op = l.slice(l.indexOf('\t') + 1);
+    /* `id<TAB>asker<TAB>op`; the asker is a firing policy's input and this driver fires nothing. */
+    const t1 = l.indexOf('\t'), t2 = t1 > 0 ? l.indexOf('\t', t1 + 1) : -1;
+    if (t2 <= t1 + 1)
+      fail(`a host request line is not \`id<TAB>asker<TAB>op\`: ${l} — engine_host_requests names the asking ` +
+           'document on every record');
+    const id = +l.slice(0, t1), op = l.slice(t2 + 1);
     /* A CROSS-AGENT OPERATION IS RECORDED THE FIRST TIME IT IS ASKED and never answered here, because there is
        nothing in the ABI to ask the peer WITH. It is not skipped silently: leaving it out of the accounting is
        how a seam whose read half has never run reports OK. */
