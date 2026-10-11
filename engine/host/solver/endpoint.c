@@ -2265,46 +2265,17 @@ char *endpoint_door_hist_json(void) {
     return json_buf_take(&b);
 }
 
-/* THE SAME SURFACE PARTITIONED BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED — see endpoint.h for the
-   three classes, for why there are three and not two, and for why the map is a column of the door list rather
-   than a table anywhere. `beyond` is the addresses a MARKUP parse does not reach, `either` is the population
-   no door can decide, and `markup` is the `<head>` counted back.
-   THIS OPENING READ THAT THE ROW IS CLAUDE.md §What-the-tool-produces' RAZOR STATED, AND IT IS REWRITTEN
-   RATHER THAN DELETED BECAUSE A READER HOLDING A ROW NAMED `beyond` RE-DERIVES EXACTLY IT. endpoint.h records
-   that same sentence as retired at this function's own declaration: the bar became a COLUMN, composed by
-   `endpoint_razor_class_of` out of `addressClass` and the door list's FOURTH column, and this row is keyed on
-   the THIRD, which is what a markup parse reaches. They are not one question at two grains, because that
-   section names BY HAND a literal chunk URL through `module-import` as `beyond` and as scoring ZERO on the bar.
-   THE HEADER WAS REPAIRED AND THE TWO FILES THAT STATE THE CENSUS WERE NOT, which is the one-header-two-answers
-   defect endpoint.h already records one door over, arriving as the sweep a retirement leaves behind rather than
-   as a fresh claim: the argument was retired where it is DECLARED and stayed written down where it is
-   PUBLISHED, here and at solver/result.c's `epReach` row. That is CLAUDE.md §A-FIX-THAT-RETIRES-AN-ARGUMENT,
-   whose whole point is that such a fix's code delta is not its size.
-   AND THE COST WAS NOT A READING, WHICH IS WHY IT IS RECORDED RATHER THAN QUIETLY CORRECTED. Both emitters
-   that show a person a razor figure off this census compose it out of a DOOR COUNT: engine/build.mjs's
-   `endpointReachReading` takes this row and returns a line beginning `@H razor:`, and extension/popup.js reads
-   it into a row labelled `razor`. That assembly is the one CLAUDE.md §What-the-tool-produces' own retirement
-   clause asks to be made impossible, and this sentence was the tree INVITING it.
-   RETIREMENT: this record goes when this census publishes the COMPOSED bar beside this row, because a reader
-   holding `beyond` then has the bar itself in the same document and has nothing left to re-derive it from.
-   IT IS A COARSENING OF THE ROW ABOVE AND NOT A SECOND OBSERVATION. Every count here is the sum of the door
-   counts of its class, so a reader holding both histograms holds ONE fact at two grains and two zeroes here
-   are one zero — CLAUDE.md §EVIDENCE-INFLATION, whose cure is that a derived row names its derivation where
-   the number is rather than leaving a reader to find it by reading the producer. WHAT IT CARRIES THAT THE
-   DOOR ROW DOES NOT is the map itself, which lived as incomplete prose in engine/build.mjs's verdict line and
-   in testing/static_surface.mjs and as data nowhere — so no output in this tree could state the MARKUP REACH
-   at all, and a coordinator who drove a real app had to read the emitted @H array by hand to find it read ZERO.
-   A SECOND WALK AND NOT A SUM OVER `endpoint_door_hist_json`'s TABLE, which is deliberate and is this file's
-   existing rule: that census and `endpoint_surface_census` are already two walks over `g_eps` spelled with
-   the SAME `is_asset` skip precisely so that one of them drifting is a LOUD identity failure rather than a
-   quiet agreement, and a third walk of that shape earns the same check. Summing that table instead would
-   make this row true by construction of it and blind to the walk it is supposed to be checking.
-   THE SUBSCRIPT NEEDS NO RANGE ASSERT AND THAT IS NOT AN OMISSION. `endpoint_door_reach` is generated from the
-   door list and its fallthrough is a `CHECK` — fatal in EVERY build, unlike the mint's own `DCHECK` — so it
-   returns a member of `ENDPOINT_REACHES` or it does not return. An assert here could not fail, and CLAUDE.md
-   §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE rates a non-check wearing a check's syntax as worse than none:
-   it certifies what it never examined. `endpoint_door_hist_json` asserts its range because ITS subscript is
-   the raw `door` field off the record, which is a different operand with a different guard. */
+/* The same surface partitioned by what a parse of the document would have reached (endpoint.h has the three
+   classes, why three, and why the map is a column of the door list): `beyond` is the addresses a markup parse does
+   not reach, `either` the population no door can decide, and `markup` the `<head>` counted back. It is a markup
+   diagnostic, not the product's bar, which `endpoint_razor_class_of` composes from `addressClass` and the door
+   list's fourth column (`endpoint_razor_hist_json` below); this row is keyed on the third column, and a literal
+   chunk URL delivered through `module-import` is `beyond` here and scores zero on the bar. It is a coarsening of
+   the door row, not a second observation: every count is the sum of its class's door counts, so two zeroes here
+   are one zero, and what it adds is the map as data. A separate walk rather than a sum of the door table, so one
+   walk drifting is a loud identity failure (the walks share the `is_asset` skip). No range assert on the
+   subscript: `endpoint_door_reach` is generated and its fallthrough is a CHECK in every build, so an assert could
+   not fail; `endpoint_door_hist_json` asserts because its subscript is the raw `door` field. */
 char *endpoint_reach_hist_json(void) {
     JsonBuf b = { 0 };
     long n[EPR_COUNT];
@@ -2318,13 +2289,10 @@ char *endpoint_reach_hist_json(void) {
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
 
-    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the door census's reason and with a sharper one here:
-       a `beyond` that is ABSENT and a `beyond` that read 0 are the two things this row exists to keep apart,
-       and a table listing only its non-empty classes renders a run that learned nothing beyond the markup
-       identically to a run whose composer stopped writing the class. The first is THIS MARKUP DIAGNOSTIC
-       answering and is a REFUSAL TO CLAIM the reach it measures — never the product's own bar, which
-       `endpoint_razor_class_of` composes and which no count of doors reaches at any grain; the second is an
-       instrument that stopped. */
+    /* Every class is emitted including zeroes, for the door census's reason and a sharper one: an absent `beyond`
+       and a `beyond` of 0 are what this row keeps apart. The zero is this markup diagnostic declining to claim
+       reach (never the product's bar, which no count of doors reaches); the absence is an instrument that
+       stopped. */
     json_buf_raw(&b, "{");
     for (r = 0; r < EPR_COUNT; r++) {
         if (r) json_buf_raw(&b, ",");
@@ -2343,44 +2311,20 @@ char *endpoint_reach_hist_json(void) {
     return json_buf_take(&b);
 }
 
-/* THE SAME SURFACE PARTITIONED BY WHETHER THE RUN HAD DETERMINED THE ADDRESS AND WHOSE UNKNOWN IT RESTS ON —
-   see endpoint.h for what each class claims, for why there is no unstated member, and for why the honest
-   field is a FLOOR under CLAUDE.md §What-the-tool-produces' HARD BAR rather than a boolean about what a parse
-   could reach. `unknown` is the addresses this run reached holding a value it had not determined AND resting
-   on an unknown somebody OUTSIDE this engine supplied, which is the one figure the hard bar can be scored
-   off; `unknown-unproven` is undetermined and refused by that bar; `concrete` and `source-determined` are the
-   rest, and neither claims anything whatever about a parse. (It read "the two classes" and "`concrete` is the
-   rest", which is retired rather than deleted because it is what a reader re-derives from a boolean reading
-   of this row: the list has grown twice and each widening carved a population OUT of the bar's claim.)
-   IT IS A SECOND OBSERVATION AND NOT A COARSENING, WHICH IS WHERE IT DIFFERS FROM THE ROW ABOVE AND IS WHY IT
-   EARNS ITS OWN WALK. `endpoint_reach_hist_json` is the door census summed by class and says so, so a reader
-   holding both of those holds ONE fact at two grains. This is keyed on a property of the ADDRESS VALUE that
-   no door implies in either direction — `link-element` is reached by a determined address and by a tainted
-   one alike, and `reply-chunk` is `beyond` a parse with a determined address every time — so a reader holding
-   all three histograms holds TWO observations, and CLAUDE.md §EVIDENCE-INFLATION is why that is said here,
-   where the numbers are, rather than left to be worked out from the producers.
-   A THIRD WALK OVER `g_eps` AND NOT A SUM OVER EITHER TABLE, which is this file's existing rule for the same
-   reason it gave for the second: the walks are spelled with the SAME `is_asset` skip precisely so that one of
-   them drifting is a LOUD identity failure rather than a quiet agreement, and a table summed from another is
-   true by construction of it and blind to the walk it is supposed to be checking.
-   THE SUBSCRIPT IS RE-ASSERTED AND THAT IS NOT REDUNDANT WITH THE TOKEN SPELLER. `endpoint_address_class_token`
-   is a `CHECK` in every build, so the EMIT cannot publish a fabricated word — and this line indexes an array
-   before any speller runs, which is `endpoint_door_hist_json`'s own reason for asserting its range: what the
-   assert adds is that nothing corrupts the frame on the way to the refusal. BOTH SIDES ARE THIS CODEBASE'S
-   OWN (a field this file wrote from a predicate this file spells), which is what makes it a DCHECK rather
-   than a refusal about page bytes.
-   AND THE RANGE ASSERT IS NO LONGER THE ONLY ONE HERE, WHICH IS WHAT EACH WIDENING OF THAT LIST COST — the
-   difference `endpoint_witness_hist_json` already carries, arriving at this list for the same reason and with
-   one more thing to hold at every widening. This list is ORDERED and the record's merge is a MAX over that
-   order, so the thing a later diff can break WITHOUT going out of range is the ORDER ITSELF, and THREE facts
-   about it are load-bearing: the LOW end, because `EPA_CONCRETE` is the identity element the `memset` leaves
-   behind; the HIGH end, because `endpoint_razor_class_of` keys the product's own bar on `EPA_UNKNOWN` — so a
-   reordering that moved it off the top would let a MAX carry a record OUT of the class the bar reads, and the
-   bar would quietly stop claiming an address some path had proved; and the DETERMINED MEMBERS BEING A PREFIX,
-   which the two ends cannot see and which the fourth member made load-bearing, because the list's own Q1 is a
-   THRESHOLD once more than one member answers NOT DETERMINED. All three are checkable here, where the whole
-   array is in one hand, and all three CAN fail: each names members of a list a later diff is free to think is
-   arbitrary. */
+/* The same surface partitioned by whether the run had determined the address and whose unknown it rests on
+   (endpoint.h has each class's claim, why there is no unstated member, and why the field is a floor under the
+   hard bar). `unknown` is the addresses reached holding a value the run had not determined and resting on an
+   unknown supplied outside this engine, the one figure the bar is scored off; `unknown-unproven` is undetermined
+   and refused by the bar; `concrete` and `source-determined` are the rest and claim nothing about a parse. A second
+   observation, not a coarsening: it is keyed on a property of the address value no door implies either way
+   (`link-element` is reached by determined and tainted addresses alike, `reply-chunk` is `beyond` with a
+   determined address every time), so the three histograms hold two observations. A third walk, for the reach
+   row's reason. The subscript is re-asserted, though the token speller is a CHECK, because this line indexes the
+   array before any speller runs; both sides are this codebase's own. Three facts about the list's order are
+   asserted, since the record's merge is a max over it and a later diff can break the order without going out of
+   range: `EPA_CONCRETE` is the low end (the identity element the `memset` leaves); `EPA_UNKNOWN` the high end (the
+   bar keys on it, so a member above it would let a max carry a record out of the class the bar reads); and the
+   determined members are a prefix (below). */
 char *endpoint_address_hist_json(void) {
     JsonBuf b = { 0 };
     long n[EPA_COUNT];
@@ -2397,15 +2341,11 @@ char *endpoint_address_hist_json(void) {
            "the record's merge is a MAX over this order, so a member above it lets a later sighting carry a "
            "record out of the one class that clears the bar, and this surface would stop claiming an address "
            "a path had already proved stands in no served byte");
-    /* …AND THE THIRD FACT ABOUT THIS ORDER, WHICH THE TWO ENDS ABOVE CANNOT SEE AND WHICH THE FOURTH MEMBER
-       MADE LOAD-BEARING. The list's two PREDICATES are asked of one stored member, and while every
-       undetermined address was ONE member they were one test negated; they are not now, so Q1 is spelled as a
-       THRESHOLD (`cls <= EPA_SOURCE_DETERMINED`) and that spelling is correct only while the DETERMINED
-       members are a PREFIX of the order. A determined member added ABOVE an undetermined one satisfies both
-       ends above, keeps every count summing, and makes Q1 answer DETERMINED for a row no path determined —
-       which is the one reading this list's own banner hands a consumer and the one nothing else here pins.
-       IT CAN FAIL, which is what separates it from a restatement: it names two members of a list a later diff
-       is free to think is arbitrary, and both are in one hand here. */
+    /* The third fact, which the two ends cannot see: the list's two predicates are asked of one stored member, and
+       with more than one undetermined member Q1 is spelled as a threshold (`cls <= EPA_SOURCE_DETERMINED`), which
+       is correct only while the determined members are a prefix. A determined member added above an undetermined
+       one would satisfy both end asserts, keep every count summing, and make Q1 answer determined for a row no
+       path determined. */
     DCHECK(EPA_SOURCE_DETERMINED < EPA_UNKNOWN_UNPROVEN,
            "endpoint.h's ENDPOINT_ADDRESS_CLASSES no longer has its DETERMINED members as a PREFIX of the "
            "order — that list's banner spells Q1 as `cls <= EPA_SOURCE_DETERMINED`, which is a threshold and "
@@ -2425,11 +2365,9 @@ char *endpoint_address_hist_json(void) {
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
 
-    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the reach census's reason and with the same sharper
-       one at the class that matters: an `unknown` that is ABSENT and an `unknown` that read 0 are the two
-       things this row exists to keep apart. The first is an instrument that stopped writing the class; the
-       second is the product's own hard bar answering, and it is a REFUSAL TO CLAIM the capability on this
-       document rather than a smaller version of it. */
+    /* Every class is emitted including zeroes, for the reach census's reason: an absent `unknown` is an instrument
+       that stopped writing the class, while an `unknown` of 0 is the hard bar answering, a refusal to claim the
+       capability on this document. */
     json_buf_raw(&b, "{");
     for (c = 0; c < EPA_COUNT; c++) {
         if (c) json_buf_raw(&b, ",");
@@ -2445,107 +2383,23 @@ char *endpoint_address_hist_json(void) {
             "the census beside it does, so a difference is one of those walks having stopped describing the "
             "population the other counts, and the hard bar a reader reads off this row would be a share of a "
             "number that is not the surface's size", sum, emitted);
-    /* THE RESIDUAL THAT STOOD HERE IS RETIRED, AND BOTH OF ITS CLAUSES WERE WRONG — RECORDED RATHER THAN
-       DELETED, BECAUSE A READER HOLDING TWO MARGINALS RE-DERIVES BOTH OF THEM IN THIS ORDER.
-       ITS NOT-COVERED CLAUSE SAID "no surface anywhere carries, FOR ANY ROW, both of those facts at once",
-       AND THE PER-RECORD EMITTER CARRIES `door` AND `addressClass` ON EVERY ROW, unconditionally, in every
-       build, and has since before that sentence was written. What was true is the ARGUMENT under it — this
-       walk and `endpoint_reach_hist_json`'s are MARGINALS over one array, and a union is a statement about
-       per-row MEMBERSHIP that no marginal carries — and a clause that is right about its mechanism and wrong
-       about the tree is the shape CLAUDE.md rates worst, since a reader who checks the reasoning finds it
-       sound and only a reader who greps the emitter finds nothing there.
-       ITS WHAT-THE-NEXT-DIFF-BUILDS CLAUSE NAMED THE WRONG OPERAND, WHICH IS THE HALF THAT WOULD HAVE BEEN
-       EXECUTED. It said to raise a scalar over the rows that are `unknown` OR `endpoint_door_reach(door) ==
-       EPR_BEYOND`, and `EPR_BEYOND` is what a MARKUP parse cannot reach while the bar is keyed on a parse of
-       the SERVED BYTES — so that scalar would have counted every `fetch`, `xhr`, `beacon` and `module-import`
-       row, which is essentially the whole of a real surface and is the figure CLAUDE.md
-       §What-the-tool-produces DEMOTED by name ("a literal chunk URL delivered through `module-import` is
-       `beyond` and scores ZERO here"). It would also have been an OVER-claim published as a FLOOR, which is
-       the one direction a floor may not be wrong in.
-       WHERE IT LANDED INSTEAD is `endpoint_razor_class_of`, composed PER ROW at the emitter out of
-       `addressClass` and the door list's own FOURTH column — the set the prose operand was reaching for, now
-       data, with `EPB_OFF_DOCUMENT` as its single member today. A scalar here would additionally have been a
-       third marginal over a population the emitted array already answers per row, and a census cannot be the
-       emitter CLAUDE.md's retirement condition asks for: this file's censuses reach a reader only through
-       solver/result.c's @COLD line, while the razor figure a person is shown is composed in the trusted zone
-       off the emitted array.
-       AND THAT LAST CLAUSE IS REFUTED, KEPT RATHER THAN DELETED BECAUSE IT IS WHAT A READER HOLDING THE NEW
-       PER-ROW COLUMN RE-DERIVES — it is the conclusion that leaves this census alone. Its premise was that the
-       razor figure A PERSON IS SHOWN is composed in the trusted zone off the emitted array, which was true when
-       it was written. MEASURED by reading the consumers rather than inferring from them: engine/build.mjs's
-       `endpointReachReading` calls `censusHistRows` on `epReach` and returns a line beginning `@H razor:`, and
-       extension/popup.js reads `m.cold.epReach` into a row labelled `razor` and `m.cold.epAddressClass` into one
-       labelled `hard bar`. THREE razor figures reach a person and TWO are composed off THIS CENSUS, one of them
-       out of a DOOR COUNT — which is the assembly that retirement clause asks to be made impossible. What the
-       clause was right about is the MECHANISM, and it decides the fix's shape: a union is a statement about
-       per-row MEMBERSHIP, so no marginal carries it and a SUM of these two tables means neither.
-       THE RESIDUAL IS RETIRED AND ITS ARGUMENT IS KEPT, WHICH IS THE WHOLE OF WHY THIS PARAGRAPH IS STILL
-       HERE. Its NOT-COVERED clause read "this census publishes the union's TWO OPERANDS and the union itself
-       nowhere, so an @COLD reader has no row stating the bar and the nearest thing to one is keyed on the
-       DOOR", and `endpoint_razor_hist_json` below is the fourth walk it named — spliced by solver/result.c as
-       `epRazorClass`, declared a GAUGE beside `epReach`, and read by engine/build.mjs's
-       `endpointRazorClassReading`, all in the one commit its scope clause said it had to be. What a reader
-       holding two marginals re-derives is not the gap, which is closed; it is the ARGUMENT, which is that a
-       union is a claim about per-row MEMBERSHIP and can therefore be assembled from neither table nor from
-       both — and a reader who re-derives THAT will propose the sum, which is why it is not deleted with the
-       clause it justified.
-       AND THE SUM IS WRONG ARITHMETICALLY AND NOT MERELY WEAKLY, WHICH THE RETIRED CLAUSE NEVER SAID AND IS
-       THE SHARPER REASON: the two operands OVERLAP, so a `reply-chunk` row whose address the run had not
-       determined is counted by this walk AND by `endpoint_reach_hist_json`'s and is ONE row of the razor
-       partition. A reader adding the two floors gets a number larger than the surface.
-       ITS SCOPE CLAUSE WAS THE HALF THAT HELD AND IT HELD EXACTLY, which is worth recording because it is the
-       clause CLAUDE.md rates as the least reliable kind: `censusRowSet` compares the object rows it is GIVEN
-       against the ones it derives from this composer's own format string and THROWS on either difference, and
-       `censusComposerFields` takes that source through `hostSource`, a `readFileSync(join(HOST, file))` of THE
-       WORKING TREE — so a `%s` row written without the matching `coldFields()` entry reddens every lane's
-       build from the moment it is WRITTEN, before it is committed. MEASURED by slicing that derivation out and
-       running it at both revisions rather than by reasoning about it: at the parent it answers "list has,
-       composer lacks: [epRazorClass]", and at the landing it agrees in both directions. That is the in-between
-       state §A-CROSS-BOUNDARY-DIFF forbids, and the control is ARMED rather than assumed.
-       AND THIS RECORD FIRST NAMED A DEFECT IN THE TRUSTED ZONE THAT IS NOT THERE, WHICH IS AN OVER-CLAIM BY
-       THE AUTHOR OF THE LANDING AND IS CORRECTED HERE RATHER THAN QUIETLY DROPPED. It read: "extension/popup.js
-       renders `m.cold.epReach` under a row labelled `razor`, which is the same defect this landing repaired in
-       engine/build.mjs's verdict line — a person shown the word `razor` over a count of doors". BOTH HALVES ARE
-       WRONG and one grep of that file refutes them, which is the whole hazard: §AN-OVER-CLAIM-IS-REFUTABLE says
-       a reader who runs the cheap check discards the true part with the false, and the true part here is the
-       retirement above it. Its label is `razor — what this engine reached that a markup parse could not`, so
-       the qualification engine/build.mjs's bare `@H razor:` lacked is IN the label; and the block directly
-       beneath it already states in its own words that the overlap sentence "is retired by this one and is kept
-       in the block above rather than deleted, because a reader holding two marginals re-derives exactly it".
-       That zone had already done this work at the per-row grain.
-       WHAT IS TRUE IS NARROWER AND IS NOT A DEFECT: that file's sentence "Neither producer composes the union
-       and neither does this" is now false in a SECOND way, because this census composes it too and not only
-       the emitter — and the paragraph that retires it is already there, so nothing is owed. Its rows stay
-       separate for a reason this row does not disturb: its denominator is `endpoints`, the emitted ARRAY's
-       length, while every row here is over `epEmitted`, a GAUGE taken at an instant, so the two are one
-       population at two moments and that view asserts no identity between them.
-       THE TELL THAT PRODUCED THE WRONG SENTENCE IS THE ONE CLAUDE.md ALREADY GIVES AND IT COSTS ONE GREP: the
-       claim was about ANOTHER FILE, written while reading this one, from what a row of that name WOULD be
-       called rather than from what the file says. */
+    /* The bar is not the sum of this table and the reach table: the two overlap (an undetermined `reply-chunk` row
+       is counted by both), so their sum exceeds the surface; a union is per-row membership, which
+       `endpoint_razor_hist_json` composes. */
     return json_buf_take(&b);
 }
 
-/* THE SAME SURFACE PARTITIONED BY THE BAR RATHER THAN BY ONE OF ITS OPERANDS — see endpoint.h for what each
-   class claims, for why the honest field is a FLOOR, and for why a union is not a coarsening of the two
-   marginals above it. `endpoint_razor_class_of` is the whole of the keying: `runtime-only` where the run had
-   not determined the address AND its unknown is one somebody OUTSIDE this engine supplied, OR where the
-   door's bytes are not the served document's; `unproven` otherwise.
-   A FOURTH WALK OVER `g_eps` AND NOT A SUM OF THE TWO TABLES, which is this file's rule for the second and
-   the third and is not merely a preference here: the two operands OVERLAP, so a row that is `unknown` AND
-   `EPB_OFF_DOCUMENT` is counted once by each marginal and is ONE row of this partition — a sum would be
-   arithmetically wrong and not just weak. The `is_asset` skip is spelled identically to the three walks above
-   precisely so that one of them drifting is a LOUD identity failure rather than a quiet agreement.
-   THE `addr_class` RANGE IS RE-ASSERTED AND THE `door` IS DELIBERATELY NOT. A corrupt `addr_class` would fall
-   through `endpoint_razor_class_of`'s first arm into `unproven`, which is an UNDER-claim published as a floor
-   and is the one direction a floor may not be wrong in — so the same operand the walk above asserts is
-   asserted here, where this walk reads it. `door` is left to `endpoint_door_bytes`, whose own `CHECK_FAILF` is
-   fatal in EVERY build rather than dev-only, and this walk never subscripts an array by `door`: a second
-   assert here would be a weaker copy of a stronger check, standing where nothing indexes.
-   IT IS A CROSS-CHECK AGAINST THE PER-ROW `razorClass` COLUMN AND NEVER A SUM WITH IT. Both come off this one
-   predicate, so they are ONE observation at two grains, and they are worth having together only because they
-   are read at two INSTANTS over a GAUGE — `epEmitted` FALLS when an asset verdict lands between a census and
-   the emission, so a difference names which records each document was describing and is not an error in
-   either. Adding them would double-count the whole surface. */
+/* The same surface partitioned by the bar itself (endpoint.h has each class's claim and why the field is a floor):
+   `endpoint_razor_class_of` is the whole keying, `runtime-only` where the run had not determined the address and
+   its unknown was supplied outside this engine, or where the door's bytes are not the served document's, and
+   `unproven` otherwise. A fourth walk, not a sum of the two tables: the operands overlap (a row that is `unknown`
+   and `EPB_OFF_DOCUMENT` is in each marginal and is one row here), so a sum would be arithmetically wrong. The
+   `addr_class` range is re-asserted because a corrupt value would fall through `endpoint_razor_class_of`'s first
+   arm into `unproven`, an under-claim published as a floor; `door` is not, because `endpoint_door_bytes` CHECKs it
+   in every build and nothing here indexes by it. This is a cross-check against the per-row `razorClass` column,
+   never a sum with it: both come off one predicate, read at two instants over a gauge (`epEmitted` falls when an
+   asset verdict lands between a census and the emission), so a difference names which records each document
+   described. */
 char *endpoint_razor_hist_json(void) {
     JsonBuf b = { 0 };
     long n[EPZ_COUNT];
@@ -2565,12 +2419,9 @@ char *endpoint_razor_hist_json(void) {
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
 
-    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the reason the three walks above give and with the
-       sharpest form of it at the class that matters: a `runtime-only` that is ABSENT and a `runtime-only`
-       that read 0 are the two facts this row exists to keep apart. The first is an instrument that stopped
-       writing the class; the second is the product's own bar answering, and CLAUDE.md
-       §What-the-tool-produces calls that 0 a REFUSAL TO CLAIM the capability on this document rather than a
-       smaller version of it. */
+    /* Every class is emitted including zeroes, for the walks above's reason: an absent `runtime-only` is an
+       instrument that stopped, and a `runtime-only` of 0 is the product's bar answering, a refusal to claim the
+       capability on this document. */
     json_buf_raw(&b, "{");
     for (c = 0; c < EPZ_COUNT; c++) {
         if (c) json_buf_raw(&b, ",");
@@ -2589,17 +2440,11 @@ char *endpoint_razor_hist_json(void) {
     return json_buf_take(&b);
 }
 
-/* THE FIFTH WALK, OVER THE ONE FACT THE BAR'S `unproven` DOES NOT CARRY — see endpoint.h for what each member
-   claims and for why this is the NECESSARY CONDITION under that bar rather than a part of it. It is a separate
-   walk and not a sum over any table above for `endpoint_reach_hist_json`'s stated reason: each of these walks
-   asserts its OWN subscript against its OWN list, and a walk that derived its rows from another's would
-   certify what it never examined.
-   THE RANGE ASSERT IS NOT THE ONLY ONE HERE AND THAT IS THE DIFFERENCE FROM THE FOUR ABOVE. Those classes are
-   unordered sets, so a corrupt value can only be outside the table; this list is ORDERED and the record's
-   merge is a MAX over that order, so the thing a later diff can break without going out of range is the
-   ORDER ITSELF — and the one property that would then be false is checkable here, where the whole array is in
-   one hand: `EPW_UNASKED` is the identity element the `memset` leaves behind, so it must be the lowest member
-   or a merge could silently lower a record that had already read something. */
+/* The fifth walk, over the one fact the bar's `unproven` does not carry (endpoint.h has each member's claim and why
+   it is the necessary condition under the bar rather than part of it), separate for `endpoint_reach_hist_json`'s
+   reason. This list is ordered and the record's merge is a max over it, so a later diff can break the order
+   without going out of range; `EPW_UNASKED` is the identity element the `memset` leaves, so it must be the lowest
+   member or a merge could lower a record that had already read something. */
 char *endpoint_witness_hist_json(void) {
     JsonBuf b = { 0 };
     long n[EPW_COUNT];
@@ -2624,12 +2469,10 @@ char *endpoint_witness_hist_json(void) {
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
 
-    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the four walks' reason and with its own sharpest form
-       here: a `may-rest-on` that is ABSENT and one that read 0 are the two facts this row exists to keep
-       apart, and they take OPPOSITE work. Absent is an instrument that stopped writing the field. Zero is a
-       run on which no address was composed by a path that had pinned anything — which makes the bar's
-       `unproven` beside it the run having genuinely proved nothing, and sends the next diff to the SOLVER
-       rather than to the pin. */
+    /* Every class is emitted including zeroes, for the four walks' reason, and here the two states take opposite
+       work: an absent `may-rest-on` is an instrument that stopped writing the field, while a zero is a run on which
+       no address was composed by a path that had pinned anything, which makes the bar's `unproven` beside it the
+       run having proved nothing and sends the next diff to the solver rather than to the pin. */
     json_buf_raw(&b, "{");
     for (c = 0; c < EPW_COUNT; c++) {
         if (c) json_buf_raw(&b, ",");
@@ -2648,8 +2491,7 @@ char *endpoint_witness_hist_json(void) {
     return json_buf_take(&b);
 }
 
-/* THE STAGE ARMS THE PARTITION IS MADE OF, SUMMED ONCE FOR THE IDENTITY AND WRITTEN ONCE FOR THE DOCUMENT —
-   two edges, one walk each, and the arithmetic in one place. */
+/* The stage arms the partition is made of, summed once for the identity and written once for the document. */
 static long edge_stage_sum(const EndpointEdge *e) {
     long sum = 0;
     int i;
@@ -2658,14 +2500,11 @@ static long edge_stage_sum(const EndpointEdge *e) {
     return sum;
 }
 
-/* THE ONE IDENTITY THAT IS A FACT ABOUT EVERY EDGE'S OWN TEARDOWN, ASSERTED WHERE BOTH TERMS ARE IN ONE HAND.
-   The other relations are NOT shared, and that is a finding about the two machines rather than a shape this
-   helper could not express — each emitter states its own, with the reason it holds there.
-   THE PARTITION. The two sides are raised in the two arms of ONE teardown, so they part company exactly when
-   a third way out of that function is added without classifying the state it lets go — which is how a state
-   that dies in a new way goes missing from a histogram that still sums to something plausible. It survives
-   the deep-fork copy that defeats every OTHER relation here, because a copy gets its own teardown and that
-   teardown raises exactly one of these two arms like any other. */
+/* The one identity about every edge's own teardown, asserted where both terms are in hand; the other relations
+   differ between the two machines, and each emitter states its own with its reason. The two sides are raised in the
+   two arms of one teardown, so they part exactly when a third way out is added without classifying the state it
+   lets go. It survives the deep-fork copy that defeats every other relation here, because a copy gets its own
+   teardown, which raises one arm like any other. */
 static void edge_partition(const EndpointEdge *e, const char *who, long sum) {
     DCHECKF(sum + e->freed_reached == e->freed,
             "the %s edge's torn-down states do not sum over what happened to them (%ld by the stage rows plus "
@@ -2675,18 +2514,11 @@ static void edge_partition(const EndpointEdge *e, const char *who, long sum) {
             who, sum, e->freed_reached, e->freed);
 }
 
-/* ONE ARM PER STAGE, EVERY ONE EMITTED INCLUDING THE ZEROES, which is absent.c's rule for its histograms and
-   is load-bearing twice over. It is what makes a stage reading 0 the positive statement that no construction
-   died there, where a row listing only its non-zero arms is a table whose shape a reader has to know before
-   they can tell an arm that never fired from an arm that does not exist — and extension/bridge.js REFUSES an
-   empty histogram on this census by name, so a table that listed only its non-zero arms would abort the
-   trusted zone for every document whose constructions all survived.
-   THE KEY IS COMPUTED AND IS NOT A FIELD NAME — json_buf_key takes a literal and the compiler enforces it,
-   which is what makes every FIELD name in this seam auditable; a STAGE LABEL is another component's
-   declaration and no producer here could declare it, so it goes through the VALUE entry. That entry also
-   ESCAPES, which this key needs and absent.c's row keys do not: these labels quote the standards' own
-   `"no-cors"`, `init["body"]` and `"fetching req"`, so a raw write would end the JSON string early and the
-   document embedding this census would not parse. */
+/* One arm per stage, every one emitted including zeroes, absent.c's rule for its histograms: a stage of 0 is then
+   the positive statement that no construction died there, and extension/bridge.js refuses an empty histogram on
+   this census by name. The key is a stage label, another component's declaration, so it goes through the value
+   entry rather than `json_buf_key`, and that entry escapes, which these labels need: they quote the standards'
+   `"no-cors"`, `init["body"]` and `"fetching req"`, and a raw write would end the JSON string early. */
 static void edge_stage_hist(JsonBuf *b, const EndpointEdge *e) {
     int i;
 
@@ -2707,12 +2539,10 @@ char *endpoint_fetch_edge_rows(void) {
     long sum = 0;
 
     if (!g_fetch_edge.steps) {
-        /* NO ROWS AT ALL, WHICH IS A DIFFERENT DOCUMENT FROM FIVE ZEROES AND IS THE HONEST ONE. A host that
-           installs no fetch runs no fetch machine, so there is no population — and §Testing's rule is that an
-           absent count and a zero count are different facts that must never be averaged. Five zeroes here
-           would be exactly that average, published on the census whose whole subject is what a zero means.
-           The EMPTY STRING and not `{}`: these are ROWS of the census above, spliced between its own, so the
-           absent form has to be the absence of the rows and of the comma in front of them. */
+        /* No rows at all, a different document from zeroes and the honest one: a host that installs no fetch runs
+           no fetch machine, so there is no population, and an absent count is a different fact from a zero. The
+           empty string rather than `{}`, because these are rows spliced into the census above, so the absent form
+           is the absence of the rows and of the comma before them. */
         METRIC_ABSENT(fetch_named);
         METRIC_ABSENT(fetch_named_typeof);
         METRIC_ABSENT(fetch_named_prop);
@@ -2773,11 +2603,9 @@ char *endpoint_xhr_edge_rows(void) {
     char *died, *rows, *out;
     long sum = 0;
 
-    /* THE CROSS-CHECK THAT HAS TO COME BEFORE THE ABSENT ARM, because the absent arm returns. An offer at this
-       edge's door with its send machine never declared is core/xhr having recorded an endpoint in a session
-       whose own xhr_init did not run — which would publish this edge's share of `epAsks` with no census under
-       it, and would do it as an ABSENCE, which §Testing's rule says is a different fact from a zero and is the
-       one a reader stops at. */
+    /* The cross-check before the absent arm, because the absent arm returns: an offer at this edge's door with its
+       send machine never declared is core/xhr recording an endpoint in a session whose own xhr_init did not run,
+       which would publish this edge's share of `epAsks` with no census under it, as an absence. */
     DCHECKF(g_xhr_offered == 0 || g_xhr_edge.steps != NULL,
             "the XHR edge offered this surface %ld addresses with no send machine ever declared to it — the "
             "declaration is xhr_init's and every member of §3 runs after it, so this is a session whose "
@@ -2785,11 +2613,8 @@ char *endpoint_xhr_edge_rows(void) {
             "to be ABSENT from a document that nevertheless counted this edge's asks",
             g_xhr_offered);
     if (!g_xhr_edge.steps) {
-        /* NO ROWS AT ALL, WHICH IS A DIFFERENT DOCUMENT FROM SIX ZEROES AND IS THE HONEST ONE — the same
-           sentence as the fetch edge's absent arm above, and for the same reason: a host that installs no
-           XMLHttpRequest runs no send machine and there is no population. The EMPTY STRING and not `{}`,
-           because these are ROWS of the census above and the absent form has to be the absence of the rows
-           and of the comma in front of them. */
+        /* No rows at all, for the fetch edge's absent arm's reason: a host that installs no XMLHttpRequest runs no
+           send machine. The empty string, not `{}`, for the splice. */
         METRIC_ABSENT(xhr_named);
         METRIC_ABSENT(xhr_named_typeof);
         METRIC_ABSENT(xhr_named_prop);
@@ -2804,18 +2629,16 @@ char *endpoint_xhr_edge_rows(void) {
     }
     sum = edge_stage_sum(&g_xhr_edge);
     edge_partition(&g_xhr_edge, "xhr send", sum);
-    /* AND THERE IS NO `freed_placed <= placed` HERE, WHICH IS A FACT ABOUT THIS MACHINE AND NOT AN OMISSION.
-       A step state is BYTE-COPIED at a deep fork and the copy inherits `placed`, so two copies file against
-       one placement — and unlike core/fetch, `XHR_SEND_DECL` declares NO `unforkable`, so nothing refuses
-       that fork. It is not a corner either: §3.5.6's SYNCHRONOUS arm sets `placed` and then PARKS inside its
-       own call to the lifecycle machine, which goes on to fire `readystatechange` and `progress` at the
-       page's own listeners — page code, at a depth where the send frame is live and forkable. An assert here
-       would therefore fire on a legitimate state, which is the concession shape §Offensive-programming
-       refuses, and the row pair is read as two facts rather than subtracted. */
-    /* THE CONTAINMENT THIS EDGE DOES HAVE IS OVER THE OFFER ROW AND NOT OVER THE PLACEMENT — the placement is
-       one machine short of the door and endpoint.h states why nothing between them may be asserted. Every
-       offer is raised on the line before an endpoint_record call that raises `g_asks` before its own gate, so
-       this edge's offers are contained in the surface's asks and the slack is every OTHER door. */
+    /* There is no `freed_placed <= placed` here, a fact about this machine: a step state is byte-copied at a deep
+       fork and the copy inherits `placed`, so two copies file against one placement, and unlike core/fetch
+       `XHR_SEND_DECL` declares no `unforkable`. It is ordinary: §3.5.6's synchronous arm sets `placed` and then
+       parks inside its call to the lifecycle machine, which fires `readystatechange` and `progress` at the page's
+       own listeners, page code at a depth where the send frame is live and forkable. So the two rows are read as
+       two facts rather than subtracted. */
+    /* The containment this edge does have is over the offer row, not the placement, which is one machine short of
+       the door (endpoint.h): every offer is raised on the line before an endpoint_record call that raises `g_asks`
+       before its gate, so this edge's offers are contained in the surface's asks, the slack being every other
+       door. */
     DCHECKF(g_xhr_offered <= g_asks,
             "the XHR edge offered this surface more addresses (%ld) than the surface counted asks at its door "
             "(%ld) — the offer is raised on the line before endpoint_record and that door raises the ask "
@@ -2842,30 +2665,25 @@ char *endpoint_xhr_edge_rows(void) {
     return out;
 }
 
-/* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The
-   writer is core/json_buf.h's: this file and solve.c each carried a private copy of it, which is one copy too
-   many of a thing that has exactly one correct behaviour. */
+/* Serialize the @H surface directly to a JSON string in C (caller frees), with core/json_buf.h's writer. */
 char *endpoint_json_array(void) {
     JsonBuf b = { 0 };
     int wrote_one = 0;
     json_buf_raw(&b, "[");
     for (int i = 0; i < g_eps_n; i++) {
         Endpoint *e = &g_eps[i];
-        /* A RESOURCE THAT TURNED OUT TO BE A STATIC ASSET IS NOT AN ENDPOINT — §Attacker sources says so in
-           those words, and this is the only place that can act on it, because the verdict arrives after the
-           record. The separator is a `wrote_one` latch and not the loop index for exactly this reason: an
-           index-keyed comma emits a leading one the moment record 0 is the skipped kind, and that is invalid
-           JSON on a document whose whole delivery is one parse. */
+        /* A resource that turned out to be a static asset is not an endpoint, and this is the only place that can
+           act on it, since the verdict arrives after the record. The separator is a `wrote_one` latch, not the
+           loop index: an index-keyed comma would emit a leading one when record 0 is skipped, invalid JSON on a
+           document delivered in one parse. */
         if (e->is_asset) continue;
         if (wrote_one) json_buf_raw(&b, ",");
         wrote_one = 1;
         json_buf_raw(&b, "{"); json_buf_key(&b, "method"); json_buf_str(&b, e->method);
         json_buf_raw(&b, ","); json_buf_key(&b, "url"); json_buf_str(&b, e->path);
-        /* AND THE BODY THIS ENGINE COULD NOT NAME, as bytes plus the type that decides how to read them.
-           BOTH OR NEITHER: bytes with no type are bytes nothing can name the fields of, and a type with no
-           bytes is not a body — the same sentence `EndpointBody` is one struct for. A consumer reads their
-           presence as the POSITIVE statement "this request sends a body this engine has no reader for",
-           never as a hole to default past. */
+        /* And the body this engine could not name, as bytes plus the type that decides how to read them. A
+           consumer reads their presence as the positive statement "this request sends a body this engine has no
+           reader for", never as a hole to default past. */
         if (e->body_b64 || e->body_shape || e->body_example_b64) {
             DCHECK((!!e->body_b64 + !!e->body_shape + !!e->body_example_b64) == 1,
                    "one request body was recorded under more than one of this surface's three claims — bytes "
@@ -2873,178 +2691,95 @@ char *endpoint_json_array(void) {
                    "unknown ranges `params` names. body_store sets exactly one, so a record holding two is "
                    "two sightings merged across a grade the identity is supposed to keep apart");
             if (e->body_mime) { json_buf_raw(&b, ","); json_buf_key(&b, "bodyMime"); json_buf_str(&b, e->body_mime); }
-            /* THREE KEYS, SO THE CONSUMER NEVER GUESSES. `bodyBase64` is the replay claim, `bodyShape` is a
-               statement about WHICH SOURCE composes the body, and `bodyExampleBase64` is what the payload
-               LOOKS LIKE at the byte ranges `params` names; a reader that met one field would have to decide
-               which of those it was holding, and deciding wrongly is how a hole gets sent.
-               THE THIRD NAME CARRIES ITS REFUSAL IN ITS OWN SPELLING and that is deliberate rather than
-               decorative: `bodyExampleBase64` cannot be mistaken for `bodyBase64` by a consumer skimming for
-               a payload to replay, where a `bodyBase64` plus a sibling flag could be, and the flag would be
-               the field a reader defaults past. It is emitted BESIDE the span params rather than instead of
-               them — they are the addresses and it is the content, so a splice needs both. */
+            /* Three keys, so the consumer never guesses: `bodyBase64` is the replay claim, `bodyShape` a statement
+               about which source composes the body, and `bodyExampleBase64` what the payload looks like at the byte
+               ranges `params` names. The third carries its refusal in its spelling, so a consumer skimming for a
+               payload to replay cannot mistake it for `bodyBase64`, where a sibling flag would be the field a
+               reader defaults past. It is emitted beside the span params: they are the addresses, it the content. */
             if (e->body_b64)   { json_buf_raw(&b, ","); json_buf_key(&b, "bodyBase64"); json_buf_str(&b, e->body_b64); }
             if (e->body_shape) { json_buf_raw(&b, ","); json_buf_key(&b, "bodyShape");  json_buf_str(&b, e->body_shape); }
             if (e->body_example_b64) {
                 json_buf_raw(&b, ","); json_buf_key(&b, "bodyExampleBase64"); json_buf_str(&b, e->body_example_b64);
             }
         }
-        /* …AND WHAT THIS RECORD IS EVIDENCE OF, ALWAYS, in the same three words the pending line spells and
-           through the same mapping (solver/engine.h's `engine_provenance_token`), so the zone that reads both
-           about one app cannot be shown two vocabularies. There is NO absence-is-the-statement here, which is
-           the opposite of `excludes` and `bounds` one field down and is the difference between a fact that
-           may legitimately have gone unobserved and one that is exhaustive: the three words cover every way
-           this engine can come to know an address, so a silent grade is not "unconstrained", it is a record
-           whose strongest reading — `observed` — a consumer would take by default. That is the fabrication
-           CLAUDE.md §@H forbids, performed by omission. */
+        /* And what this record is evidence of, always, in the three words the pending line spells, through
+           solver/engine.h's `engine_provenance_token`, so a zone reading both about one app meets one vocabulary.
+           No absence-is-the-statement here, unlike `excludes` and `bounds`: the three words cover every way this
+           engine comes to know an address, so a silent grade would be read as `observed`, the strongest. */
         json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
         json_buf_str(&b, engine_provenance_token(e->prov));
-        /* …AND WHICH MECHANISM COMPOSED THE ADDRESS, AND WHETHER THE PAGE'S CODE HAD RUN WHEN IT DID —
-           ALWAYS, both of them, for `provenance`'s reason above and with its exhaustiveness. These are the
-           two facts CLAUDE.md §What-the-tool-produces' razor is a SUBTRACTION OF TWO TOTALS over: `epEmitted
-           - epPreProgram` says how many addresses forced execution CAN HAVE contributed and names none of
-           them, so a reader cannot tell a run that learned ten gated API calls from one that learned ten
-           `<link rel=preload>` elements of one `<head>`. Carried per row, the surface partitions directly and
-           the subtraction has nothing left to say — which is that record's own retirement clause.
-           NEITHER IS AN OPTIONAL KEY AND NEITHER HAS AN ABSENCE-IS-THE-STATEMENT READING, which is the
-           opposite of `excludes` and `bounds` below and the same split `provenance` makes: `door` is
-           exhaustive over the ways an address can reach this surface because endpoint.h derives the list from
-           this function's own call sites, and `mintedAt`'s two words are exhaustive over a boolean fact. A
-           silent one would be read as whichever value a consumer's `||` names, and for the door that is a
-           mechanism nothing ran.
-           `mintedAt` IS TWO WORDS AND NOT A BOOLEAN, deliberately and for `valueClass`'s reason exactly: this
-           record is read by a zone deployed on WRITE while this engine is live only after a build, so a
-           consumer WILL meet rows from an artifact that predates this key — and `false` and absent are one
-           value under every truthiness test a reader reaches for, while neither word is.
-           THEY ARE TWO FACTS AND NOT TWO SPELLINGS OF ONE. The door is WHICH MECHANISM and the mint state is
-           WHEN, and the pair is what makes either readable: `link-element` alone cannot say whether the
-           `<link>` was in the markup or one the router created, and `pre-program` alone cannot say what
-           composed the address. A `<head>` whose first `<script src>` runs before the parser reaches the
-           `<link>` below it mints that link POST-program, so the timing fact is a proxy for the markup door
-           and not the door — in the flattering direction, on the commonest document shape there is. */
-        /* THE RESIDUAL THAT STOOD HERE IS RETIRED, AND ITS WHAT-THE-NEXT-DIFF-BUILDS CLAUSE WAS WRONG —
-           RECORDED RATHER THAN DELETED, BECAUSE THE WRONG SITE IS THE ONE A READER RE-DERIVES. It said no
-           consumer in the trusted zone read either key, which was true, and named extension/lib/merge.js's
-           call-site loop as the diff that would fix it, beside the `provenance` check that loop already
-           makes. THE SECOND HALF DOES NOT HOLD AND THE REASON IS ABOUT POPULATIONS: that loop `continue`s
-           past a structural @T candidate (`url == null`) and past every `data:`/`blob:`/`about:`/
-           `javascript:` address before it registers anything, and it folds several rows of THIS array onto
-           one `method+host+path` key — so a partition built there is over a smaller, deduped set than the
-           emitted figure a reader holds beside it, and would sum to nothing checkable. A per-ADDRESS record
-           would also have needed a fold rule for two doors reaching one address, which the enum above
-           deliberately declines to invent.
-           WHERE IT LANDED INSTEAD is extension/bridge.js's run-record composition, which holds THIS ARRAY at
-           the instant it writes the `endpoints` figure that is its length — so the partition and the number
-           it partitions are one population at one moment, and each histogram is asserted there to sum to it.
-           WHAT THAT READER DOES NOT DO, AND IT IS THE HALF THE DEFERRAL WAS ABOUT (CLAUDE.md
-           §A-CROSS-BOUNDARY-DIFF): it does not ASSERT either key's presence. That zone's JavaScript is
-           INTERPRETED FROM THE TREE and live on WRITE, while these bytes are live only after somebody builds,
-           so a reader demanding a key the SHIPPED wasm does not write would abort the trusted zone on every
-           endpoint of every document until an install caught up. It buckets an absent key as its own stated
-           third state instead, and the retiring observation and the actor who may make it are recorded at
-           that reader rather than here — the tolerance is the JS half's to drop, and this file's own
-           contract is unchanged: both keys are written on every row, unconditionally, in every build. */
+        /* And which mechanism composed the address and whether the page's code had run when it did, always, for
+         * `provenance`'s reason: `epEmitted - epPreProgram` bounds how many addresses forced execution can have
+         * contributed and names none, so a reader could not tell a run that learned ten gated API calls from one
+         * that learned ten `<link rel=preload>` elements; carried per row, the surface partitions directly.
+         * Neither has an absence-is-the-statement reading: `door` is exhaustive over the ways an address reaches
+         * this surface (endpoint.h derives the list from this file's call sites), and `mintedAt` is two words over
+         * a boolean, not a boolean, because this record is read by a zone deployed on write while this engine is
+         * live only after a build, and `false` and absent are one value under every truthiness test. They are two
+         * facts: the door is which mechanism and the mint state is when, and the pair makes either readable. A
+         * `<head>` whose first `<script src>` runs before the parser reaches a `<link>` below it mints that link
+         * post-program, so the timing fact is a proxy for the markup door, in the flattering direction.
+         *
+         * Their consumer is extension/bridge.js's run-record composition, which holds this array when it writes
+         * the `endpoints` figure that is its length, so each histogram it builds is one population at one moment
+         * and is asserted there to sum to it (extension/lib/merge.js's call-site loop would not do: it skips
+         * structural @T candidates and `data:`/`blob:`/`about:`/`javascript:` addresses and folds rows onto one
+         * `method+host+path` key). That reader buckets an absent key as its own third state rather than asserting
+         * presence, because the zone's JavaScript is live on write and these bytes only after a build; the
+         * tolerance is the JS half's to drop, and this file writes both keys on every row in every build. */
         json_buf_raw(&b, ","); json_buf_key(&b, "door");
         json_buf_str(&b, endpoint_door_token(e->door));
         json_buf_raw(&b, ","); json_buf_key(&b, "mintedAt");
         json_buf_str(&b, e->pre_program ? "pre-program" : "post-program");
-        /* …AND THE THIRD FACT ABOUT THE SIGHTING, WHICH IS NEITHER OF THOSE TWO AND WHICH NEITHER IMPLIES.
-           The door is WHICH MECHANISM, the mint state is WHEN, and this is WHETHER THE RUN HAD DETERMINED THE
-           ADDRESS *AND WHOSE UNKNOWN IT RESTS ON* — CLAUDE.md §What-the-tool-produces' HARD BAR at the grain
-           the bar is stated at, which no count of doors can reach: a literal chunk URL through
-           `module-import` and `/api/{location.hash}` through `fetch` are both `beyond` a markup parse and only
-           the second clears this bar. THE SECOND FACT IS IN THIS ONE WORD AND NOT IN A COLUMN OF ITS OWN, so
-           a consumer reading `unknown-unproven` beside `unproven` can still check the razor's answer against
-           what the wire carries — which is `endpoint_razor_class_of`'s own contract and is why the whose fact
-           rides this member rather than arriving as a third operand there. Written
-           UNCONDITIONALLY on every row in every build, exactly as the two above are, so the `(unstated)`
-           bucket a consumer keeps for a row from an artifact older than the key stays a fact about the BUILD
-           and never about an address (see endpoint.h for that contract and for who may retire the
-           tolerance). */
+        /* And the third fact about the sighting, which neither of those implies: whether the run had determined the
+           address and whose unknown it rests on, the hard bar at its own grain, which no count of doors reaches (a
+           literal chunk URL through `module-import` and `/api/{location.hash}` through `fetch` are both `beyond` a
+           markup parse, and only the second clears the bar). The whose fact is in this one word rather than a
+           column of its own, so a consumer reading `unknown-unproven` beside `unproven` can check the razor's
+           answer against what the wire carries (`endpoint_razor_class_of`'s contract). Written on every row in
+           every build, so a consumer's `(unstated)` bucket stays a fact about the build (endpoint.h). */
         json_buf_raw(&b, ","); json_buf_key(&b, "addressClass");
         json_buf_str(&b, endpoint_address_class_token(e->addr_class));
-        /* …AND THE UNION OF TWO OF THE THREE, WHICH IS CLAUDE.md §What-the-tool-produces' HARD BAR AS ONE WORD
-           AND IS THE FIELD THAT BAR'S OWN RETIREMENT CONDITION ASKS FOR: "the emitter that states a razor
-           figure composes that union ITSELF, so a door count cannot be assembled into one at all". Before it,
-           the floor was TWO facts a consumer had to union by hand, the second operand was named in prose at
-           three sites with three different sets, and the one a reader would have reached for —
-           `endpoint_door_reach(door) == EPR_BEYOND`, which the residual at `endpoint_address_hist_json`
-           proposed — is the figure CLAUDE.md demoted rather than the one it chose, because `fetch`, `xhr`,
-           `beacon` and `module-import` are all `beyond` a MARKUP parse and "a JS AST parse reads them off the
-           text without running anything".
-           IT IS DERIVED AND NOT STORED, AND THAT IS WHAT KEEPS IT HONEST UNDER THE TWO MERGE RULES ITS
-           OPERANDS HAVE. `addr_class` is unioned on a merge and `door` is the first sighting's; both
-           directions are sound as a floor (see endpoint.h), and computing the verdict HERE means there is no
-           third merge rule to get wrong and a consumer can check this word against the two beside it.
-           WRITTEN UNCONDITIONALLY ON EVERY ROW IN EVERY BUILD, exactly as the three above are, so the
-           `(unstated)` bucket a consumer keeps for a row from an artifact older than the key stays a fact
-           about the BUILD and never about an address. */
+        /* And the hard bar as one word, the union of two of the three, so the emitter that states a razor figure
+           composes the union itself and a door count cannot be assembled into one. (`endpoint_door_reach(door) ==
+           EPR_BEYOND` would be the demoted figure: `fetch`, `xhr`, `beacon` and `module-import` are all `beyond` a
+           markup parse, and a JS AST parse reads them off the text without running anything.) Derived, not stored,
+           which keeps it honest under its operands' two merge rules (`addr_class` by a max, `door` the first
+           sighting's), leaves no third merge rule to get wrong, and lets a consumer check this word against the two
+           beside it. Written on every row in every build. */
         json_buf_raw(&b, ","); json_buf_key(&b, "razorClass");
         json_buf_str(&b, endpoint_razor_class_token(endpoint_razor_class_of(e->door, e->addr_class)));
-        /* …AND THE ONE FACT THAT BAR DOES NOT CARRY, BESIDE IT RATHER THAN INSIDE IT. endpoint.h's
-           ENDPOINT_WITNESS_CLASSES states why: `razorClass` is a FLOOR and this is a MAY, so a consumer that
-           wants the bound reads this column and one that wants the bar reads that one. They are adjacent here
-           precisely so the pair is legible per row — `unproven` beside `may-rest-on` is the population the
-           razor's zero does not account for, and `unproven` beside `no-witness` is the run having genuinely
-           proved nothing about this address.
-           WRITTEN UNCONDITIONALLY ON EVERY ROW IN EVERY BUILD, for the four columns above it. */
+        /* And the one fact the bar does not carry, beside it rather than inside it (endpoint.h's
+           ENDPOINT_WITNESS_CLASSES): `razorClass` is a floor and this a may, adjacent so the pair is legible per
+           row: `unproven` beside `may-rest-on` is the population the razor's zero does not account for, and
+           `unproven` beside `no-witness` the run having proved nothing about this address. Written on every row in
+           every build. */
         json_buf_raw(&b, ","); json_buf_key(&b, "witnessClass");
         json_buf_str(&b, endpoint_witness_class_token(e->witness_class));
-        /* …AND THE OPERAND THE ADDRESS CLASS WAS DERIVED FROM, WHICH IS THE ONE FACT THE FOUR COLUMNS ABOVE
-           ARE COMPOSED OUT OF AND NONE OF THEM PUBLISHES. `addressClass` is read off the address VALUE's own
-           concolic provenance and nothing else, so a reader who meets `unknown` beside `runtime-only` can see
-           that the run held an unknown and cannot see WHICH SOURCE's bytes it was — and `address_class_of`'s
-           residuals are entirely about the population where those two answers part, and both are now MET: a
-           hole `engine_orphan_call` minted so that a drive could happen at all USED TO answer `unknown` here
-           and clear the bar with nothing learned, because the hole is OURS, and it now answers
-           `unknown-unproven` and the bar reads `unproven` for it. This column is still the OBSERVATION those
-           residuals handed over — it is what a reader checks the narrowing against, per row, since
-           `addressClass` says the run held an unknown somebody outside this engine supplied and only this
-           says WHICH component carried the bytes in. An `unknown-unproven` row whose root names a component
-           that carries a DOCUMENT'S or a SERVER'S bytes is the observation that reopens the residual below.
-           IT READS THE ROOT AND NOT THE ADDRESS'S DISPLAY SHAPE, WHICH IS THE WHOLE OF WHY IT IS A NEW
-           COLUMN. `url` already carries a composed IDENTITY — solver/concolic.h spends its `root` banner on
-           the report that identity produced when it was asked a delivery question (`{location.hash}.slice()`
-           matched no declared source, and the envelope said "there is no navigation that reproduces it") —
-           and the residual's own last paragraph says the same thing one grain out: "Whose unknown it is, is a
-           fact about the ROOT; where the literals fall is a fact about the page's syntax." A reader counting
-           hole-bearing `url` spellings is reading the axis that file refutes.
-           THREE JSON TYPES AND EACH IS A POSITIVE STATEMENT, because `concolic_root_c`'s NULL is two facts and
-           a reader may not have them folded. `null` — the record's class says no sighting held a concolic
-           address at all, so there was no provenance to ask. `false` — a sighting did, and its bytes entered
-           through nothing this engine minted as a source (concolic.h: "a positive statement, never a hole to
-           fill"). A STRING — the sources it entered through, as that file spells them, which may name a SET.
-           THE TYPES ARE THE DISCRIMINATOR AND A TOKEN WOULD NOT BE: a root may be composed out of a name the
-           PAGE chose (solver/absent.c mints an injected global's source from the property the page read), so
-           any in-band word this file reserved would be a word a document could spell, and the collision would
-           report an attributed address as one this engine attributed to nothing.
-           IT COMPOSES NO VERDICT, HERE OR IN ANY CONSUMER, and that is a decision rather than a gap: see the
-           struct for why a classification keyed on this string's spelling is the one §RUN-DON'T-MATCH forbids,
-           and `address_class_of`'s residual for what has to be built before the bar may read it.
-           WRITTEN UNCONDITIONALLY ON EVERY ROW IN EVERY BUILD, for the four columns above it, so the
-           `(unstated)` bucket a consumer keeps stays a fact about the BUILD and never about an address.
-           NAMED RESIDUAL — THIS COLUMN IS A FLOOR ON THE SOURCES AN ADDRESS'S BYTES ENTERED THROUGH AND NEVER
-           THE SET, AND THE CLAUSE IS ABOUT THIS TREE'S MERGE RULE RATHER THAN ABOUT ANY STANDARD, so it is as
-           unreliable as the remedy clause below it and is checked by reading the merge rather than trusted.
-           WHAT IS NOT COVERED: the root is the root of the sighting whose CLASS this record carries, which is
-           what keeps the pair one sighting's — so where TWO sightings of one address held the SAME class and
-           DIFFERENT roots, the second root is not recorded anywhere. The record then names one component where
-           the bytes of some observed path entered through another, which is the `root` banner's own case for a
-           SET one grain out: "bytes that arrived through two components entered through two".
-           WHAT THE NEXT DIFF BUILDS: the union, spelled in solver/concolic.c and never here, because
-           `CONCOLIC_JOINT_SEP` is declared in that file and `derived_root_join` is its one speller — a union
-           composed at this site would hold the second copy of a separator that file states once, which is the
-           drifting restatement §AN-AUDITOR-DERIVES-THE-RULE forbids and which would drift in the silent
-           direction (a root that stopped splitting reads as a single-source address). MEASURED ABSENT with the
-           command, so this clause does not name a mechanism the tree already has: over solver/concolic.h,
-           `concolic_root_member`, `concolic_root_walk`, `concolic_root_union`, `concolic_root_join`,
-           `concolic_root_any` and `concolic_root_all` each answer NOTHING, against `concolic_root_c` answering
-           as the armed control.
-           HOW ITS ABSENCE WOULD SHOW: this column MOVING between two runs of ONE artifact over ONE document,
-           read per row out of the emitted records — which sighting raises a record's class first is decided by
-           the interleaving, so a floor is free to name a different source each time while a SET could not.
-           Observed where the records are, beside the `endpointAddressRoot` partition the trusted zone composes
-           from them; a column that is stable across such a pair is evidence about that document's sightings and
-           not about this rule, which is why the pair is the observation and one run is not. */
+        /* And the operand the address class was derived from, which none of the four columns above publishes:
+         * `addressClass` says the run held an unknown somebody outside this engine supplied, and only this says
+         * which component carried the bytes in, so it is the per-row observation a reader checks the whose
+         * narrowing against; an `unknown-unproven` row whose root names a component carrying a document's or a
+         * server's bytes reopens it. It reads the root, not the address's display shape: `url` carries a composed
+         * identity (concolic.h's `root` banner records `{location.hash}.slice()` matching no declared source when
+         * asked a delivery question), and whose unknown it is is a fact about the root, while where the literals
+         * fall is a fact about the page's syntax.
+         *
+         * Three JSON types, each a positive statement, because `concolic_root_c`'s NULL is two facts: `null` when
+         * the record's class says no sighting held a concolic address; `false` when one did and its bytes entered
+         * through nothing this engine minted as a source (concolic.h: "a positive statement, never a hole to
+         * fill"); a string naming the sources, possibly a set. The types discriminate, not a token: a root may be
+         * composed from a name the page chose (solver/absent.c mints an injected global's source from the property
+         * read), so any reserved in-band word could be spelled by a document. It composes no verdict here or in any
+         * consumer: the bar reads whose through `concolic_root_whose_any`, never this string's spelling. Written on
+         * every row in every build.
+         * Named residual. Not covered: the root is that of the sighting whose class the record carries, so where
+         * two sightings of one address held the same class and different roots, the second root is recorded
+         * nowhere, and the record names one component where some observed path's bytes entered through another.
+         * Next diff builds: the union of roots, spelled in solver/concolic.c (where `CONCOLIC_JOINT_SEP` and its one
+         * speller `derived_root_join` live) and called from here, never composed here. Absence shows as: this
+         * column moving between two runs of one artifact over one document, read per row, since which sighting
+         * raises a record's class first depends on the interleaving. */
         json_buf_raw(&b, ","); json_buf_key(&b, "addressRoot");
         if (e->addr_class == EPA_CONCRETE)   json_buf_raw(&b, "null");
         else if (!e->addr_root)              json_buf_raw(&b, "false");
@@ -3053,73 +2788,51 @@ char *endpoint_json_array(void) {
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");
             json_buf_raw(&b, "{"); json_buf_key(&b, "name"); json_buf_str(&b, e->params[j].name);
-            /* `CHECK` AND NOT `DCHECK`, BECAUSE THE SUBSCRIPT IS ON THE NEXT LINE AND IS IN EVERY BUILD. The
-               message below already named what it was preventing — a field the consumer cannot classify — and
-               a dev-only guard prevents it in the one build where nobody is reading the report. `ep_loc_name`
-               is a THREE-element table of `const char *`, so an out-of-range read hands `json_buf_str` a
-               pointer assembled out of whatever the link placed after it, and check.h's header says the wasm
-               build does not fault on that: it reads bytes from that address and emits them as this param's
-               `location`. That is not a missing field a consumer can see is missing — it is a plausible
-               location token in the @H record, which §@H forbids by name, and it is the same shape one
-               indirection further out as `provenance` defaulting to `observed`. */
+            /* A CHECK, not a DCHECK, because the subscript is on the next line in every build: `ep_loc_name` is a
+               three-element table, and an out-of-range read would hand `json_buf_str` a pointer assembled from
+               whatever the link placed after it (check.h: the wasm build does not fault on that), emitting a
+               plausible location token in the @H record. */
             CHECK(e->params[j].loc == EP_QUERY || e->params[j].loc == EP_PATH || e->params[j].loc == EP_BODY,
                   "engine: an endpoint param carries a location this surface has no name for — the enum and "
                   "its name table are read together at exactly this line, so one grown without the other "
                   "would index outside a three-entry table and emit whatever that address holds as the "
                   "param's location");
             json_buf_raw(&b, ","); json_buf_key(&b, "location"); json_buf_str(&b, ep_loc_name[e->params[j].loc]);
-            /* …AND WHETHER THIS PARAM'S VALUE EVER NAMED A HOLE, ALWAYS, for `provenance`'s reason one level
-               in. There is NO absence-is-the-statement here — it is the opposite of `excludes` and `bounds`
-               below — because the two words are EXHAUSTIVE over the ways a value reaches this surface, and a
-               fact that cannot have gone unobserved must not be spelled by a silence that means "unobserved"
-               everywhere else in this record.
-               IT IS WHAT MAKES THOSE SILENCES READABLE, which is the whole of why it is here. `excludes`
-               absent says "no equality gate over this hole took its false arm on every path that built this
-               request" — a sentence that presupposes a hole. Where there was none, all four domain reads were
-               skipped at the mint and the same absence means "this param is a literal and there was never
-               anything to look up". Those two take opposite work and rendered with identical bytes, so a
-               consumer counting parameters whose domain could have been narrowed was counting a population
-               it could not name.
-               TWO WORDS AND NOT A BOOLEAN, DELIBERATELY. This record is read by a zone that is deployed on
-               WRITE while this engine is live only after a build, so a consumer WILL meet params from a
-               build that predates this key — and `false` and absent are one value under every truthiness
-               test a reader reaches for, while neither word is. The absence is a third state and has to stay
-               one; lib/learn.js reads it as `unstated`, which is extension/lib/safe-fetch.js's own word for
-               an act that comes off no line at all.
-               THE WORDS ARE `concolic_hole_key`'s OWN, not coined here: its contract says it answers NULL
-               where a shape "names no hole at all (a concrete value has no domain to look up and must not
-               borrow one)", so `concrete` is the name of exactly the case that gates these reads out and
-               `unknown` is §Solver-half's word for the other. */
+            /* And whether this param's value ever named a hole, always, for `provenance`'s reason: the two words are
+               exhaustive over the ways a value reaches this surface. It makes the silences below readable:
+               `excludes` absent says no equality gate over this hole took its false arm on every path, which
+               presupposes a hole; with no hole, all four domain reads were skipped at the mint and the same absence
+               means the param is a literal. Two words, not a boolean, for `mintedAt`'s reason: a consumer will meet
+               params from a build older than this key, and lib/learn.js reads the absence as `unstated`
+               (extension/lib/safe-fetch.js's word for an act that comes off no line). The words are
+               `concolic_hole_key`'s own: it answers NULL where a shape "names no hole at all (a concrete value has
+               no domain to look up and must not borrow one)", so `concrete` names exactly the case that gates the
+               reads out, and `unknown` is the other. */
             json_buf_raw(&b, ","); json_buf_key(&b, "valueClass");
             json_buf_str(&b, e->params[j].has_hole ? "unknown" : "concrete");
             json_buf_raw(&b, ","); json_buf_key(&b, "validValues"); json_buf_raw(&b, "[");
             for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_raw(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }
             json_buf_raw(&b, "]");
-            /* THE DOMAIN, AND ONLY WHERE ONE WAS OBSERVED. An empty array would be a third state beside "the
-               field is absent" and "the field lists tokens", and a consumer cannot tell an empty constraint
-               from an unconstrained param — so the ABSENCE is the statement: no equality gate over this hole
-               took its false arm on every path that built this request. §Solver-half's asymmetry is what this
-               field exists for: without it a param proved to be neither "admin" nor "prod" rendered with the
-               same bytes as one nothing had ever tested, and that silence reads as "anything goes". */
+            /* The domain, and only where one was observed: an empty array would be a third state a consumer could
+               not tell from an unconstrained param, so the absence is the statement that no equality gate over this
+               hole took its false arm on every path that built this request. Without it a param proved to be
+               neither "admin" nor "prod" would render as one nothing tested. */
             if (e->params[j].nexcl) {
                 json_buf_raw(&b, ","); json_buf_key(&b, "excludes"); json_buf_raw(&b, "[");
                 for (int k = 0; k < e->params[j].nexcl; k++) { if (k) json_buf_raw(&b, ","); json_buf_str(&b, e->params[j].excl[k]); }
                 json_buf_raw(&b, "]");
             }
-            /* …AND THE INTERVAL, IN THE STANDARD'S OWN VOCABULARY FOR IT, and only where a bound survived every
-               observed path. JSON Schema Validation 2020-12 §6.2 Validation Keywords for Numeric Instances
-               (number and integer) names all four: §6.2.2 "maximum" ("an inclusive upper limit"), §6.2.3
-               "exclusiveMaximum" ("strictly less than (not equal to)"), §6.2.4 "minimum" ("an inclusive lower
-               limit") and §6.2.5 "exclusiveMinimum" ("strictly greater than (not equal to)"). In 2020-12 each
-               is a NUMBER — the draft-04 boolean form, where `exclusiveMinimum:true` modified `minimum`, is a
-               different keyword shape and writing it here would be read as a bound of 1.
-               THE NUMBER IS THE PAGE'S OWN SPELLING, carried from the literal the predicate compared against
-               rather than re-printed from a double, so a report never states a number the bundle does not
-               contain. It is written UNQUOTED because these keywords take a number and a quoted one is a
-               different type; every spelling that reaches here came from §6.1.6.1.20 Number::toString of a
-               FINITE Number (concolic_rel_hook refuses the rest), which is a JSON number by construction.
-               IT STAYS A SHAPE. §@H forbids inventing `6` for `x > 5`, and nothing here picks a member of the
-               interval — `validValues` is still only what the code COMPUTED. */
+            /* And the interval, in the standard's own vocabulary, only where a bound survived every observed path.
+               JSON Schema Validation 2020-12 §6.2 Validation Keywords for Numeric Instances (number and integer)
+               names all four: §6.2.2 "maximum" ("an inclusive upper limit"), §6.2.3 "exclusiveMaximum" ("strictly
+               less than (not equal to)"), §6.2.4 "minimum" ("an inclusive lower limit") and §6.2.5
+               "exclusiveMinimum" ("strictly greater than (not equal to)"). In 2020-12 each is a number; the draft-04
+               boolean form (`exclusiveMinimum:true` modifying `minimum`) would read as a bound of 1. The number is
+               the page's own spelling, carried from the literal the predicate compared against, so a report never
+               states a number the bundle does not contain; written unquoted, since these keywords take a number,
+               and every spelling here came from §6.1.6.1.20 Number::toString of a finite Number (concolic_rel_hook
+               refuses the rest), a JSON number by construction. It stays a shape: nothing picks a member of the
+               interval. */
             if (e->params[j].bnd.has_lo || e->params[j].bnd.has_hi) {
                 int wrote = 0;
                 json_buf_raw(&b, ","); json_buf_key(&b, "bounds"); json_buf_raw(&b, "{");
@@ -3135,28 +2848,18 @@ char *endpoint_json_array(void) {
                 }
                 json_buf_raw(&b, "}");
             }
-            /* …AND THE CALL PREDICATES, IN THE ENGINE'S OWN VOCABULARY AND DELIBERATELY NOT JSON SCHEMA'S.
-               JSON Schema Validation 2020-12 §6.3 Validation Keywords for Strings has one keyword that could
-               carry a prefix test — §6.3.3 "pattern", whose text is "The value of this keyword MUST be a
-               string. This string SHOULD be a valid regular expression, according to the ECMA-262 regular
-               expression dialect. A string instance is considered valid if the regular expression matches the
-               instance successfully. Recall: regular expressions are not implicitly anchored." — and it is
-               the wrong shape here for three reasons that all point the same way. It cannot state the FALSE
-               arm at all, and forced multi-path produces that arm at exactly the rate it produces the true
-               one, so half of every observation would be dropped — which is §@H's wrong-report-not-a-partial-
-               one, arriving through a vocabulary choice. Writing `^/api` out of `startsWith("/api")` means
-               DECIDING WHAT THE METHOD MEANS, which is the recogniser §RUN-DON'T-MATCH forbids and which
-               would have to enumerate the string builtins. And the translation itself is a place to be
-               silently wrong: the quoted sentence says a pattern is not anchored and the page's literal may
-               hold regex metacharacters, so the emission would owe an escaping rule nobody checks.
-               So what is emitted is what was OBSERVED: the method the page named, the arguments it passed,
-               and the answer the run got. `holds` is the arm, not a modifier — `false` is a fact this flow
-               PROVED, and it is exactly the arm the shipped bundle did not take.
-               THE ABSENCE IS THE STATEMENT, as it is for `excludes` and `bounds`: no key at all where no call
-               predicate survived every observed path to this request, never an empty array, which a consumer
-               could not tell apart from a param nothing tested.
-               IT STAYS A SHAPE. Nothing here picks a string that would satisfy the predicate; §@H forbids
-               inventing `/api/x` for `startsWith("/api")` exactly as it forbids inventing `6` for `x > 5`. */
+            /* And the call predicates, in the engine's own vocabulary and deliberately not JSON Schema's. JSON
+               Schema Validation 2020-12 §6.3 Validation Keywords for Strings has one keyword that could carry a
+               prefix test, §6.3.3 "pattern" ("The value of this keyword MUST be a string. This string SHOULD be a
+               valid regular expression, according to the ECMA-262 regular expression dialect. A string instance is
+               considered valid if the regular expression matches the instance successfully. Recall: regular
+               expressions are not implicitly anchored."), and it is the wrong shape: it cannot state the false arm,
+               which forced multi-path produces as often as the true one; writing `^/api` for `startsWith("/api")`
+               means deciding what the method means; and the translation owes an escaping rule nobody checks, since
+               the page's literal may hold regex metacharacters. So what is emitted is what was observed: the method
+               the page named, its arguments, and the answer the run got; `holds` is the arm, and `false` is a fact
+               this flow proved. The absence is the statement, as for `excludes` and `bounds`. It stays a shape:
+               nothing picks a string that satisfies the predicate. */
             if (e->params[j].npred) {
                 json_buf_raw(&b, ","); json_buf_key(&b, "predicates"); json_buf_raw(&b, "[");
                 for (int k = 0; k < e->params[j].npred; k++) {
@@ -3179,27 +2882,17 @@ char *endpoint_json_array(void) {
                 }
                 json_buf_raw(&b, "]");
             }
-            /* …AND THE LOOSE EQUALITIES THAT HELD, which is the FOURTH way a gate narrows a domain and the one
-               that used to reach the report as silence. §7.2.14 IsStrictlyEqual ( x, y ) step 1 is "If
-               SameType(x, y) is false, return false", so a `===` that held DETERMINED the value and it appears
-               in `validValues`; §7.2.13 IsLooselyEqual ( x, y ) coerces, so its holding arm determines nothing
-               and `concolic_pin` refuses it — correctly, and until this key existed that refusal was the whole
-               of the record. The param then rendered exactly like one nothing had ever tested, while its
-               sibling flow's `excludes` carried the same gate's other arm.
-               EACH ENTRY IS `{"value":<string>,"type":<string>}` AND BOTH HALVES ARE LOAD-BEARING. The value is
-               the operand's own §7.1.19 ToString ( arg ), which flattens `undefined`, `null`, `0` and `false`
-               onto text that is also a legal String operand — so `type` is what separates `== undefined`
-               (which §7.2.13 steps 2 and 3 make a demand for null-or-undefined, and for a query parameter a
-               demand that it be ABSENT) from `== "undefined"` (which demands nine characters). The word is
-               concolic.c's own report name for the kind and never a re-spelling of it here.
-               IT STATES THE PREDICATE AND NOT THE SET. §7.2.13's holding set depends on the token's kind and
-               its Object arm runs the PAGE's own ToPrimitive, so a consumer that rendered the set would be
-               re-implementing fourteen spec steps beside the engine that runs them — §RUN-DON'T-MATCH, in a
-               report. What is carried is the transcript: the page wrote `== 0` and this run got true.
-               IT INVENTS NOTHING. No member of the holding set is emitted; `validValues` still carries only
-               what the code COMPUTED, exactly as it does beside `bounds`.
-               THE ABSENCE IS THE STATEMENT, as it is for `excludes`, `bounds` and `predicates`: no key at all
-               where no loose equality held on every observed path to this request, never an empty array. */
+            /* And the loose equalities that held, the fourth way a gate narrows a domain. Step 1 of §7.2.14
+               IsStrictlyEqual ( x, y ) is "If SameType(x, y) is false, return false", so a `===` that held
+               determined the value and it appears in `validValues`; §7.2.13 IsLooselyEqual ( x, y ) coerces, so its
+               holding arm determines nothing and `concolic_pin` refuses it, and without this key the param would
+               render as untested while its sibling flow's `excludes` carries the gate's other arm. Each entry is
+               `{"value":<string>,"type":<string>}`: the value is the operand's §7.1.19 ToString ( arg ), which
+               flattens `undefined`, `null`, `0` and `false` onto text a String operand could also be, so `type`
+               separates `== undefined` (by §7.2.13 steps 2 and 3 a demand for null or undefined, for a query
+               parameter a demand that it be absent) from `== "undefined"`; the word is concolic.c's report name for
+               the kind. It states the predicate, not the set (the holding set depends on the token's kind, and its
+               Object arm runs the page's own ToPrimitive), and invents nothing. The absence is the statement. */
             if (e->params[j].nleq) {
                 json_buf_raw(&b, ","); json_buf_key(&b, "looselyEquals"); json_buf_raw(&b, "[");
                 for (int k = 0; k < e->params[j].nleq; k++) {
@@ -3215,17 +2908,14 @@ char *endpoint_json_array(void) {
             json_buf_raw(&b, "}");
         }
         json_buf_raw(&b, "]");
-        /* The transport half, and ONLY when there is one — an endpoint with no learned header must not claim an
-           empty requirement, which reads as "needs nothing" rather than "nothing was observed". A record keyed
-           by header name, which is the shape the popup's Required Headers section already reads. */
+        /* The transport half, only when there is one: an empty requirement would read as "needs nothing" rather than
+           "nothing observed". Keyed by header name, the shape the popup's Required Headers section reads. */
         if (e->nh) {
             json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "{");
             for (int j = 0; j < e->nh; j++) {
-                /* THE ONE COMPUTED KEY IN THIS SEAM, AND IT IS NOT A FIELD NAME. json_buf_key takes a literal
-                   and the compiler enforces it, which is what makes every FIELD name here auditable; this key
-                   is a HEADER NAME, so it is DATA and no producer could ever declare it. Writing it through
-                   the VALUE entry is the distinction: a reader who greps json_buf_key gets the contract, and
-                   a key that is not one is visibly a different construct rather than an exception to a rule. */
+                /* The one computed key in this seam, and it is not a field name: a header name is data no producer
+                   could declare, so it goes through the value entry, and a reader grepping json_buf_key gets the
+                   field contract. */
                 if (j) json_buf_raw(&b, ",");
                 json_buf_str(&b, e->hdrs[j].name);
                 json_buf_raw(&b, ":");
@@ -3242,11 +2932,8 @@ char *endpoint_json_array(void) {
 void endpoint_free(void) {
     for (int i = 0; i < g_eps_n; i++) {
         free(g_eps[i].method); free(g_eps[i].path);
-        /* THE BODY FIELDS ADDED TO `Endpoint` FREED WHERE EVERY OTHER OWNED FIELD IS — §Architecture's rule
-           that a struct copied or freed field-by-field creates an obligation at every such site, which is
-           what a field added to one and not the other silently breaks. It said TWO for as long as there were
-           two; the count is gone rather than raised, because the obligation is the rule and the number is
-           what goes stale the next time this struct grows. */
+        /* The body fields freed where every other owned field is: a struct copied or freed field by field creates
+           an obligation at every such site, which a field added to one and not the other silently breaks. */
         free(g_eps[i].body_mime); free(g_eps[i].body_b64); free(g_eps[i].body_shape);
         free(g_eps[i].body_example_b64);
         free(g_eps[i].addr_root);
@@ -3265,26 +2952,19 @@ void endpoint_free(void) {
         free(g_eps[i].hdrs);
     }
     free(g_eps); g_eps = NULL; g_eps_n = g_eps_cap = 0;
-    /* …AND THE ASK COUNTERS BESIDE THE ARRAY THEY ARE A FACT ABOUT. One process runs many sessions and this is
-       the per-session teardown (solver/engine.c resets its own per-session rows on the same line it calls
-       this, and says why), so a count left standing would report a previous document's asks under this
-       document's name — and it would do it in the flattering direction, since `asks > preProgram` is the
-       reading that says running code composed a request. The mint arm is reset with `g_eps_n` for a
-       second reason: the identity between them is asserted every time the surface is read, so leaving one of
-       the pair behind would abort the next session's first census. */
+    /* And the ask counters beside the array they are a fact about. One process runs many sessions and this is the
+       per-session teardown (solver/engine.c resets its own per-session rows on the line that calls this), so a
+       standing count would report a previous document's asks under this one's name, in the flattering direction
+       (`asks > preProgram` says running code composed a request). The mint arm is reset with `g_eps_n` because the
+       identity between them is asserted on every read of the surface. */
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
     g_ask_merged_pre_program = 0;
-    /* AND WHAT THE NEXT SESSION WOULD BE GRADING AGAINST, TAKEN HERE BECAUSE HERE IS WHERE THE SCOPES PART.
-       This line puts this file's program-state boundary back to the start of time and the engine's stays
-       where it is; the latch is the difference, and the door asserts on it at the first ask. */
+    /* And what the next session would be grading against, taken here, where the scopes part: this resets this
+       file's program-state boundary and the engine's stays, the latch is the difference, and the door asserts on
+       it at the first ask. */
     g_boundary_spent = engine_any_program_started();
-    /* …AND THE HOST EDGE'S ROWS, ON THE SAME LINE AND FOR THE SAME SENTENCE. They are read against the ask
-       rows above, so a scope they did not share with them would be the defect the latch one line up exists to
-       catch, arriving through a counter instead of through a boundary.
-       THE ARRAY IS GIVEN BACK AND THE TABLE IS LET GO, in that order and both of them, because the next
-       session's edge declares itself again at its own init: keeping the array would be a session's allocation
-       outliving the session, and keeping the pointer while freeing the array would leave the next declare
-       taking the early return above and every teardown indexing a freed block. */
+    /* And the host edges' rows, for the same reason: they are read against the ask rows above, so they must share
+       their scope; edge_release gives each array back and lets each table go (see it). */
     edge_release(&g_fetch_edge);
     edge_release(&g_xhr_edge);
     g_xhr_offered = 0;
