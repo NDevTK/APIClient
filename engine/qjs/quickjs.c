@@ -70774,6 +70774,12 @@ static int gather_available_ancestors(JSContext *ctx, JSModuleDef *module,
     for (;;) {
         for(i = 0; i < cur->async_parent_modules_count; i++) {
             JSModuleDef *m = cur->async_parent_modules[i];
+            DCHECK(m->cycle_root != NULL,
+                   "§16.2.1.6.1.3.3 GatherAvailableAncestors ( module, execList ) read an async parent whose "
+                   "[[CycleRoot]] is unset — a parent is appended during its own InnerModuleEvaluation, whose SCC "
+                   "pop sets the field before any job can run, so in this flow's world that walk never reached its "
+                   "pop. The walk starts module bodies from C (js_execute_async_module), so a timeline that "
+                   "diverged inside one of them is the first candidate: find where this world's walk stopped");
             if (!find_in_exec_module_list(exec_list, m) &&
                 !m->cycle_root->eval_has_exception) {
                 /* THE DECREMENT BELOW IS A WRITE TO m, not to the module whose promise settled, and it was the
@@ -71137,6 +71143,9 @@ static int js_module_eval_after_child(JSContext *ctx, JSModuleDef *m, JSModuleDe
                             m1->dfs_ancestor_index);
     } else {
         m1 = m1->cycle_root;
+        /* The cycle root is a module this walk may never have entered, and the lines below read its status and
+           append to its [[AsyncParentModules]], both per-flow fields: announced first, as every write is. */
+        js_module_eval_capture(ctx, m1);
         DCHECK(m1->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m1->status == JS_MODULE_STATUS_EVALUATED, "m1->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m1->status == JS_MODULE_STATUS_EVALUATED");
         if (m1->eval_has_exception) {
         *pvalue = js_dup(m1->eval_exception);
