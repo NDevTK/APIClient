@@ -1436,7 +1436,8 @@ async function frontierRederive(e) {
                                                   /* A parked document is one only this zone holds. */
                                                   identity: navigationCarriesSession(e.sourceUrl, e.origin)
                                                     ? navigationIdentity({ identity: engineIdentity(e.origin, e.sourceUrl),
-                                                                           referrer: "none" }, e.sourceUrl) : null }); }
+                                                                           referrer: "none", policy: null },
+                                                                         e.sourceUrl) : null }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
   const landed = r && Array.isArray(r.urlList) && r.urlList.length ? r.urlList[r.urlList.length - 1] : null;
@@ -1782,27 +1783,46 @@ function responseFieldLines(h) {
    them. Next diff builds a document load type in safe-fetch.js whose read principal is the response's own
    origin (the bytes go to a different instance, not the initiator). Absence shows as cross-origin child
    documents loading in their logged-out form. */
-/* A speaker is who a document load's request speaks as, {identity, referrer}: `identity` is the request's
-   client (lib/request-identity.js), and `referrer` is "client" when the request's referrer is that client's
-   URL and "none" when no referrer is known. Each `speakerOf` below resolves one, or null when the browser's
-   document it names has gone.
+/* A speaker is who a document load's request speaks as, {identity, referrer, policy}: `identity` is the
+   request's client (lib/request-identity.js), `referrer` is "client" when the request's referrer is that
+   client's URL and "none" when no referrer is known, and `policy` is the client's policy container's referrer
+   policy as seedReferrerPolicy states it, or null where this zone holds none. Each `speakerOf` below resolves
+   one, or null when the browser's document it names has gone.
    documentSpeaker: a load the document `msg` describes makes for a child navigable, whose client is that
    document: the browser's frame (frameIdentity, by its id and its tab, which is its group) when the browser
    holds it, and engineIdentity for one only this zone holds (a peer-announced child, a rehydrated recipe). */
 function documentSpeaker(msg) {
   return async () => {
-    const identity = typeof msg.documentId === "string" && typeof msg.groupId === "number"
-      ? await frameIdentity(msg.groupId, msg.documentId) : engineIdentity(msg.origin, msg.sourceUrl);
-    return identity === null ? null : { identity, referrer: "client" };
+    const live = typeof msg.documentId === "string" && typeof msg.groupId === "number";
+    const identity = live ? await frameIdentity(msg.groupId, msg.documentId) : engineIdentity(msg.origin, msg.sourceUrl);
+    if (identity === null) return null;
+    return { identity, referrer: "client", policy: live ? await seedReferrerPolicy(msg.documentId) : null };
   };
+}
+
+/* HTML §7.1.7 Policy containers' "create a policy container from a fetch response" sets the referrer policy
+   from Referrer Policy §8.1 over the response. For each live document whose seed this zone loaded itself,
+   by the browser's documentId, this holds the promise of that policy over the zone's own reply, or of null
+   where the load delivered no document. An entry lives as long as the document's DocData. */
+const _seedReferrerPolicies = new Map();
+
+/* The referrer policy, "" included, of the policy container this zone's own load of `documentId` creates;
+   null when this zone did not load that document. */
+async function seedReferrerPolicy(documentId) {
+  const p = _seedReferrerPolicies.get(documentId);
+  return p === undefined ? null : await p;
 }
 
 /* seedSpeaker: the seed of the live document `msg`, re-loading what the browser's navigation loaded. A
    sub-frame's navigation had its parent document as client, so the load speaks as that parent, found by the
-   browser's own `parentDocumentId`. A top-level navigation's initiator is not recorded, so the document speaks
-   as itself with no referrer.
-   Named residual. Not covered: a top-level document's initiator, and the parent's own referrer policy (its
-   default stands). The next diff reads the policy the engine parsed for the parent. Their absence shows as a
+   browser's own `parentDocumentId`, under the parent's policy container's referrer policy (HTML §4.8.5's
+   "navigate an iframe or frame" navigates using the element's node document, whose policy container Fetch
+   §4.1 Main fetch reads for a request stating ""). A top-level navigation's initiator is not recorded, so the
+   document speaks as itself with no referrer.
+   Named residual. Not covered: a top-level document's initiator; a parent policy set by a `<meta
+   name=referrer>` (HTML §4.2.5.1 Standard metadata names) or narrowed by the container's `referrerpolicy`;
+   and a parent this zone did not load. The next diff has the engine state, with the seed's analysis, the
+   policy its parse of this zone's bytes left in the Document's policy container. Their absence shows as a
    seed load's Referer and Sec-Fetch-Site differing from the browser's navigation of that document. */
 function seedSpeaker(msg) {
   return async () => {
@@ -1812,13 +1832,33 @@ function seedSpeaker(msg) {
     if (f === undefined) return null;
     if (f.parentFrameId === -1) {
       const own = await frameIdentityOf(f);
-      return own === null ? null : { identity: own, referrer: "none" };
+      return own === null ? null : { identity: own, referrer: "none", policy: null };
     }
     DCHECK(typeof f.parentDocumentId === "string" && f.parentDocumentId !== "",
            "webNavigation reported a sub-frame with no parentDocumentId — the seed load cannot name its client");
     const parent = await frameIdentity(msg.groupId, f.parentDocumentId);
-    return parent === null ? null : { identity: parent, referrer: "client" };
+    if (parent === null) return null;
+    return { identity: parent, referrer: "client", policy: await seedReferrerPolicy(f.parentDocumentId) };
   };
+}
+
+/* Why a seed's load `loaded` is not this document, in the page-source vocabulary, or null when it is;
+   `asked` is the origin of the address the browser reported. Both rules sit on top of the loader's. An OK
+   empty body is an ordinary empty Document (HTML §7.4.5), but a seed with no bytes cannot be the program this
+   run explores, and analysing it would read as a clean page. A load that landed on another origin is not this
+   document: the Document's URL is the response's (HTML §7.4.5) while the principal is the browser's
+   MessageSender.origin, so it would seat a document of origin B in a cluster keyed on A (engineJoin's assert
+   and SECURITY.md's one-instance-per-origin-keyed-agent-cluster forbid that). safeFetch already refuses a
+   credentialed load that redirects off-origin (`blocked-cors-credentialed:<origin>`); this catches the
+   uncredentialed case. It is a report, not an assert: the server chose the redirect, and a second GET of the
+   address the person's own navigation landed on arriving elsewhere is evidence of a single-use token or bot
+   challenge. */
+function seedUnavailable(loaded, asked) {
+  const landed = originOf(loaded.url);
+  return loaded.unavailable !== null ? loaded.unavailable
+       : (landed === "" || landed !== asked)
+         ? { kind: "network", detail: "cross-origin-redirect:" + (landed || "unparseable") }
+       : loaded.bytes.length === 0 ? { kind: "empty" } : null;
 }
 
 function navigationCarriesSession(absUrl, principalOrigin) {
@@ -1840,9 +1880,14 @@ function navigationIdentity(speaker, absUrl) {
   DCHECK(!!speaker && !!speaker.identity && typeof speaker.identity.origin === "string" &&
          !!speaker.identity.partitionKey && (speaker.referrer === "client" || speaker.referrer === "none"),
          "a credentialed document load was handed no {identity, referrer} to speak as");
+  DCHECK(speaker.policy === null || speaker.policy === "" || REFERRER_POLICIES.indexOf(speaker.policy) >= 0,
+         "a document load's speaker states the client policy " + JSON.stringify(speaker.policy) +
+         ", which is neither null (none held) nor a Referrer Policy §3 policy");
+  /* Referrer Policy §3.9 The empty string: a container stating none falls back to the default referrer policy. */
+  const policy = speaker.policy === null || speaker.policy === "" ? "strict-origin-when-cross-origin" : speaker.policy;
   return identityFor(speaker.identity, { url: absUrl, requestInit: { credentials: "include", mode: "navigate",
                                          referrer: speaker.referrer === "client" ? null : "", referrerPolicy: null } },
-                     "strict-origin-when-cross-origin");
+                     policy);
 }
 
 /* ─── The one document-load path ────────────────────────────────────────────────────────────────────
@@ -5624,7 +5669,8 @@ self.astDispatch = async function astDispatch(msg) {
        the request this zone is about to make, which is this tool, from an address an observer reported
        (safe-fetch.js's `_actorOf`: a request this tool composed at a person's direction is still `tool`).
        engine/trusted.mjs's command-line seed states the same word. */
-    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
+    const _asked = originOf(msg.sourceUrl);
+    const seeded = navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
                                         /* `none`: this seed can report an unavailability through
                                            `onNavigationOutcome` but not a decline, since offscreen-brain.js's
                                            `_PAGE_SOURCE_KINDS` (status/empty/network) all say a load was
@@ -5638,24 +5684,13 @@ self.astDispatch = async function astDispatch(msg) {
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
-                                        seedSpeaker(msg));
-    /* The seed's own rule on top of the loader's: an OK empty body is an ordinary empty Document (HTML §7.4.5),
-       but a seeded document with no bytes cannot be the program this run explores, and analysing it would read
-       as a clean page. */
-    /* A seeded load that landed on another origin is not this document. The Document's URL is the response's
-       (HTML §7.4.5), while the principal is the browser's MessageSender.origin, so a cross-origin response would
-       seat a document of origin B in a cluster keyed on origin A (engineJoin's assert and SECURITY.md's
-       one-instance-per-origin-keyed-agent-cluster forbid that). A credentialed load that redirects off-origin is
-       already refused by safeFetch (`blocked-cors-credentialed:<origin>`, over the post-redirect origin); this
-       catches the uncredentialed case (an opaque-origin document). It is a report, not an assert: the server
-       chose the redirect, and a second GET of the address the person's own navigation landed on arriving
-       elsewhere is evidence of a single-use token or bot challenge. */
-    const _landed = originOf(loaded.url);
-    const _asked = originOf(msg.sourceUrl);
-    const unavailable = loaded.unavailable !== null ? loaded.unavailable
-                      : (_landed === "" || _landed !== _asked)
-                        ? { kind: "network", detail: "cross-origin-redirect:" + (_landed || "unparseable") }
-                      : loaded.bytes.length === 0 ? { kind: "empty" } : null;
+                                        seedSpeaker(msg))
+      .then((loaded) => ({ loaded, unavailable: seedUnavailable(loaded, _asked) }));
+    /* A sub-frame seed speaks under this document's policy (seedSpeaker), so it is filed before the load is
+       awaited: a child dispatched while this load is in flight waits for it. */
+    _seedReferrerPolicies.set(msg.documentId, seeded.then((s) =>
+      s.unavailable === null ? referrerPolicyOfResponse(s.loaded.headers) : null));
+    const { loaded, unavailable } = await seeded;
     /* The outcome is reported the instant the load settles, so a person opening the popup over an empty panel
        can tell "failed" from "nothing yet" while the analysis runs. */
     DCHECK(typeof self.onNavigationOutcome === "function",

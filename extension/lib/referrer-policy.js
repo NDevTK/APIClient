@@ -8,6 +8,23 @@
 const REFERRER_POLICIES = ["no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
                            "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"];
 
+/* Referrer Policy §8.1 "Parse a referrer policy from a Referrer-Policy header" over a reply record's header
+   list (lowercased names, a repeated header's values joined by ", "): the last member that is a policy, or ""
+   when there is none. Fetch §2.2.2's extraction of §4.1's `1#(policy-token / extension-token)` fails, and
+   so yields no member, when one member is not `1*( ALPHA / "-" )`. */
+function referrerPolicyOfResponse(headers) {
+  DCHECK(!!headers && typeof headers === "object",
+         "referrerPolicyOfResponse was given no header record — every reply record lib/safe-fetch.js answers carries one");
+  const value = headers["referrer-policy"];
+  if (value === undefined) return "";
+  DCHECK(typeof value === "string", "a reply record's Referrer-Policy value is not a string");
+  const members = value.split(",").map((m) => m.replace(/^[ \t]+|[ \t]+$/g, "")).filter((m) => m !== "");
+  if (!members.every((m) => /^[A-Za-z-]+$/.test(m))) return "";
+  let policy = "";
+  for (const m of members) if (REFERRER_POLICIES.indexOf(m) >= 0) policy = m;
+  return policy;
+}
+
 /* Secure Contexts §3.1 "Is origin potentially trustworthy?" and §3.2 for a URL. `chrome-extension:` is the one
    scheme this user agent considers authenticated a priori (§7.1 Packaged Applications). */
 function urlPotentiallyTrustworthy(u) {
