@@ -2831,13 +2831,13 @@ function pbTreeToMap(rootNodes) {
 
 function getStatusBadge(status) {
   if (status === "pending")
-    return '<span class="badge badge-pending">pending</span>';
-  if (status === "error") return '<span class="badge badge-error">error</span>';
+    return domElement("span", { class: "badge badge-pending" }, ["pending"]);
+  if (status === "error") return domElement("span", { class: "badge badge-error" }, ["error"]);
   const code = parseInt(status);
   if (code >= 200 && code < 300)
-    return `<span class="badge badge-found">${code}</span>`;
-  if (code >= 400) return `<span class="badge badge-notfound">${code}</span>`;
-  return `<span class="badge">${code}</span>`;
+    return domElement("span", { class: "badge badge-found" }, [String(code)]);
+  if (code >= 400) return domElement("span", { class: "badge badge-notfound" }, [String(code)]);
+  return domElement("span", { class: "badge" }, [String(code)]);
 }
 
 let currentReplayRequest = null;

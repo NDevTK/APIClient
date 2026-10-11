@@ -48,8 +48,37 @@ function _cardTabId(req) {
   return String(req._tabId);
 }
 
+/* One card's shell: the head row (kind badge, timestamp, tab label when the log spans tabs, status badge),
+   the address line, and the meta line. `meta` is the card's own badges and counts. */
+function _logCard(req, showTabLabel, kindBadge, statusBadge, value, meta) {
+  return domElement("div", { class: "card request-card clickable-card mb-8", "data-id": String(req.id),
+                             "data-tab-id": _cardTabId(req) }, [
+    domElement("div", { class: "card-label flex-between" }, [
+      domElement("span", {}, [
+        kindBadge, " ",
+        domElement("span", { class: "text-timestamp" }, [new Date(req.timestamp).toLocaleTimeString()]),
+        showTabLabel ? [" ", domElement("span", { class: "badge badge-tab" }, [req._tabTitle])] : [],
+      ]),
+      statusBadge,
+    ]),
+    value,
+    domElement("div", { class: "card-meta" }, [
+      req.service ? ["Service: ", domElement("strong", {}, [req.service]), " "] : [],
+      meta,
+    ]),
+  ]);
+}
+
+function _claimedOriginValue(req) {
+  return domElement("div", { class: "card-value card-value-mono", title: PAGE_CLAIMED_ORIGINS_TITLE },
+                    ["page-claimed: " + _claimedOriginPair(req)]);
+}
+
 function _renderLogCard(req, showTabLabel) {
   const hasProto = !!req.decodedBody;
+  const urlValue = () => domElement("div", { class: "card-value card-value-mono" }, [req.url]);
+  const counts = (text) => domElement("span", { class: "ws-msg-counts" }, [text]);
+  const active = () => domElement("span", { class: "badge ws-status-open" }, ["ACTIVE"]);
 
   // Combined WebSocket entry — show message counts and connection status
   if (req.kind === "websocket") {
@@ -58,21 +87,9 @@ function _renderLogCard(req, showTabLabel) {
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
     const statusClass = req.wsOpen ? "ws-status-open" : "ws-status-closed";
     const statusText = req.wsOpen ? "OPEN" : "CLOSED";
-    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
-    <div class="card-label flex-between">
-      <span>
-        <span class="badge badge-ws">WEBSOCKET</span>
-        <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
-      </span>
-      <span class="badge ${esc(statusClass)}">${esc(statusText)}</span>
-    </div>
-    <div class="card-value card-value-mono">${esc(req.url)}</div>
-    <div class="card-meta">
-      ${req.service ? `Service: <strong>${esc(req.service)}</strong>` : ""}
-      <span class="ws-msg-counts">${sentCount} sent / ${recvCount} received</span>
-    </div>
-  </div>`;
+    return _logCard(req, showTabLabel, domElement("span", { class: "badge badge-ws" }, ["WEBSOCKET"]),
+                    domElement("span", { class: "badge " + statusClass }, [statusText]), urlValue(),
+                    counts(sentCount + " sent / " + recvCount + " received"));
   }
 
   // Combined postMessage entry — show origin pair and message counts
@@ -80,22 +97,9 @@ function _renderLogCard(req, showTabLabel) {
     const msgs = req.messages;
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
-    const origins = _claimedOriginPair(req);
-    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
-    <div class="card-label flex-between">
-      <span>
-        <span class="badge badge-pm">POSTMESSAGE</span>
-        <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
-      </span>
-      <span class="badge ws-status-open">ACTIVE</span>
-    </div>
-    <div class="card-value card-value-mono" title="${esc(PAGE_CLAIMED_ORIGINS_TITLE)}">page-claimed: ${esc(origins)}</div>
-    <div class="card-meta">
-      ${req.service ? `Service: <strong>${esc(req.service)}</strong>` : ""}
-      <span class="ws-msg-counts">${recvCount} received${sentCount ? ` / ${sentCount} replied` : ""}</span>
-    </div>
-  </div>`;
+    return _logCard(req, showTabLabel, domElement("span", { class: "badge badge-pm" }, ["POSTMESSAGE"]),
+                    active(), _claimedOriginValue(req),
+                    counts(recvCount + " received" + (sentCount ? " / " + sentCount + " replied" : "")));
   }
 
   // Combined MessageChannel entry — show origin pair and message counts
@@ -103,47 +107,24 @@ function _renderLogCard(req, showTabLabel) {
     const msgs = req.messages;
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
-    const origins = _claimedOriginPair(req);
-    return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
-    <div class="card-label flex-between">
-      <span>
-        <span class="badge badge-mc">MSGCHANNEL</span>
-        <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
-      </span>
-      <span class="badge ws-status-open">ACTIVE</span>
-    </div>
-    <div class="card-value card-value-mono" title="${esc(PAGE_CLAIMED_ORIGINS_TITLE)}">page-claimed: ${esc(origins)}</div>
-    <div class="card-meta">
-      ${req.service ? `Service: <strong>${esc(req.service)}</strong>` : ""}
-      <span class="ws-msg-counts">${recvCount} received${sentCount ? ` / ${sentCount} sent` : ""}</span>
-    </div>
-  </div>`;
+    return _logCard(req, showTabLabel, domElement("span", { class: "badge badge-mc" }, ["MSGCHANNEL"]),
+                    active(), _claimedOriginValue(req),
+                    counts(recvCount + " received" + (sentCount ? " / " + sentCount + " sent" : "")));
   }
 
-  return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(_cardTabId(req))}">
-    <div class="card-label flex-between">
-      <span>
-        <span class="badge ${esc(req.method)}">${esc(req.method)}</span>
-        <span class="text-timestamp">${new Date(req.timestamp).toLocaleTimeString()}</span>
-        ${showTabLabel ? `<span class="badge badge-tab">${esc(req._tabTitle)}</span>` : ""}
-      </span>
-      ${getStatusBadge(req.status)}
-    </div>
-    <div class="card-value card-value-mono">${esc(req.url)}</div>
-    <div class="card-meta">
-      ${req.service ? `Service: <strong>${esc(req.service)}</strong>` : ""}
-      ${hasProto ? ' <span class="badge badge-found">PROTOBUF</span>' : ""}
-      ${req.url.includes("batchexecute") ? ' <span class="badge badge-batch">BATCHEXECUTE</span>' : ""}
-      ${isGrpcWeb(req.mimeType !== "" ? req.mimeType : req.contentType) ? ' <span class="badge badge-grpc">gRPC-WEB</span>' : ""}
-      ${isSSE(req.mimeType) ? ' <span class="badge badge-sse">SSE</span>' : ""}
-      ${isNDJSON(req.mimeType) ? ' <span class="badge badge-ndjson">NDJSON</span>' : ""}
-      ${isGraphQLUrl(req.url) ? ' <span class="badge badge-graphql">GRAPHQL</span>' : ""}
-      ${isMultipartBatch(req.mimeType) ? ' <span class="badge badge-multipart">MULTIPART</span>' : ""}
-      ${/\/async\//.test(req.url) ? ' <span class="badge badge-batch">ASYNC</span>' : ""}
-      ${req.method === "SSE" ? ' <span class="badge badge-sse">SSE</span>' : ""}
-    </div>
-  </div>`;
+  const badges = [];
+  const badge = (cls, text) => badges.push(" ", domElement("span", { class: "badge " + cls }, [text]));
+  if (hasProto) badge("badge-found", "PROTOBUF");
+  if (req.url.includes("batchexecute")) badge("badge-batch", "BATCHEXECUTE");
+  if (isGrpcWeb(req.mimeType !== "" ? req.mimeType : req.contentType)) badge("badge-grpc", "gRPC-WEB");
+  if (isSSE(req.mimeType)) badge("badge-sse", "SSE");
+  if (isNDJSON(req.mimeType)) badge("badge-ndjson", "NDJSON");
+  if (isGraphQLUrl(req.url)) badge("badge-graphql", "GRAPHQL");
+  if (isMultipartBatch(req.mimeType)) badge("badge-multipart", "MULTIPART");
+  if (/\/async\//.test(req.url)) badge("badge-batch", "ASYNC");
+  if (req.method === "SSE") badge("badge-sse", "SSE");
+  return _logCard(req, showTabLabel, domElement("span", { class: "badge " + req.method }, [req.method]),
+                  getStatusBadge(req.status), urlValue(), badges);
 }
 
 function _renderVisibleSlice() {
@@ -179,13 +160,13 @@ function _renderVisibleSlice() {
   // Fixed minHeight keeps scroll range stable regardless of actual card heights
   container.style.minHeight = totalHeight + "px";
 
-  let html = '<div id="vs-top-spacer"></div>';
+  const spacer = domElement("div", { id: "vs-top-spacer" });
+  spacer.style.height = topPad + "px";
+  const cardNodes = [];
   for (let i = startIdx; i <= endIdx; i++) {
-    html += _renderLogCard(_vs.entries[i], showTabLabel);
+    cardNodes.push(_renderLogCard(_vs.entries[i], showTabLabel));
   }
-
-  container.innerHTML = html;
-  document.getElementById("vs-top-spacer").style.height = topPad + "px";
+  domReplaceChildren(container, [spacer, cardNodes]);
 
   // Attach click handlers
   container.querySelectorAll(".request-card").forEach((c) => {
@@ -263,7 +244,7 @@ function renderResponsePanel() {
 
   if (entries.length === 0) {
     container.style.minHeight = "";
-    container.innerHTML = '<div class="empty">No requests captured yet.</div>';
+    domReplaceChildren(container, [domElement("div", { class: "empty" }, ["No requests captured yet."])]);
     return;
   }
 
