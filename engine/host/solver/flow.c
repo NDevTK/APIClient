@@ -3214,74 +3214,47 @@ static double flow_index_surrogate(const Flow *f) {
            - (double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM;
 }
 
-/* HOW FAR THAT RE-ASSOCIATION MAY STAND FROM THE COMPARATOR, DERIVED FROM THE TWO EXPRESSIONS AND NEVER
-   MEASURED — the one quantity that turns a key this file has already established is NOT bit-identical to the
-   order into a CANDIDATE SET the order can still decide inside. The banner above says the surrogate "may
-   differ from the comparator in the last bit"; this says by how much it may differ AT MOST, which is a
-   different claim and the only one an index can be built on.
-   WHAT IT IS FOR, AND IT IS NOT ACCURACY. A candidate set of every member within this margin of the
-   surrogate's extremum PROVABLY CONTAINS the comparator's own extremum (the proof is at flow_pick's band
-   walk), so re-comparing the survivors through flow_weight — with the same direction bit and the same
-   tie-break — returns the member the full scan returns, POINTER FOR POINTER. That is the design that answers
-   the surrogate's TIE mode with flow_weight untouched, no order change and no decision to escalate; the
-   assert at the band walk is what states it, and a fire there is that design being wrong rather than a
-   rounding difference reaching the last bit.
-   WHY A DERIVED BOUND AND NOT A CONSTANT SOMEBODY ROUNDED UP. A tolerance fitted to the populations anybody
-   happened to try is the softening §Offensive-programming forbids wearing a bound's clothes: it is correct
-   about the frontiers it was fitted on, says nothing about the next one, and the failure it permits is an
-   index returning a member the comparator calls worse with no assert able to see it. What follows is an upper
-   bound on |surrogate - weight| for EVERY member of EVERY frontier, and the DCHECK at flow_pick's fold asks it
-   of every member the order weighs, so a derivation that is wrong FIRES rather than being believed.
+/* How far that re-association may stand from the comparator, derived from the two expressions and never measured.
+   The surrogate "may differ from the comparator in the last bit"; this bounds by how much, the claim an index can
+   be built on. A candidate set of every member within this margin of the surrogate's extremum provably contains the
+   comparator's extremum (the proof is at flow_pick's band walk), so re-comparing the survivors through flow_weight,
+   with the same direction bit and tie-break, returns the full scan's member pointer for pointer, with flow_weight
+   untouched. A tolerance fitted to the populations tried says nothing about the next frontier; this is an upper
+   bound on |surrogate - weight| for every member of every frontier, and the fold's DCHECK asks it of every member
+   weighed, so a wrong derivation fires.
 
-   THE DERIVATION. Both spellings approximate ONE exact real. Write the weight's five terms as `V =
-   acct_family_val`, `P = N*Q` with `N = flow_silence_notch` and `Q = FLOW_AGE_QUANTUM`, `O = flow_optimism`,
-   `D = flow_distance`, `B = flow_branch_bonus`; the exact target is `R = V - P + O + D + B`.
-   THE FIVE LEAVES CANCEL OUT OF THE DIFFERENCE, which is what makes this bound small rather than a statement
-   about the whole weight: each of them is the SAME CALL on the same operands in both spellings, so whatever
-   rounding each carries is carried IDENTICALLY by both and subtracts away. What is being bounded is only the
-   arithmetic BETWEEN the leaves. `N = k + K + c` is an exact integer identity (flow_silence_phase), so
-   `k*Q + (K+c)*Q = N*Q` in the reals and the surrogate's target IS the comparator's.
-   COUNT THE ROUNDINGS. flow_weight computes one product (`N*Q`) and four sums (`+O`, `+D`, `+B`, `V+..`):
-   FIVE. The surrogate computes two products (`k*Q`, `(K+c)*Q`) and five sums (`+O`, `+D`, `+B`, `V+..`,
-   `-..`): SEVEN. The casts of the notches are exact — flow_silence_notch's own banner says its int64 count of
-   quanta "cannot overflow anything a session can reach", and 2^53 quanta is three million years of thread
-   time — and negation of a double is exact, so neither contributes.
-   BOUND EACH CHAIN. Let `L = |V| + P + O + D + B`. Every exact intermediate of either spelling is a signed
-   sub-sum of those five terms, so every one has magnitude at most `L`. Each rounding is `fl(a.b) =
-   (a.b)(1+d)` with `|d| <= u` and `u = 2^-53`; along a left-associated chain whose fresh operand is exact at
-   every step the accumulated error obeys `|e_j| <= |e_{j-1}|*(1+u) + u*L`, and each product contributes at
-   most `u*L` at its leaf. A spelling of `n` roundings therefore satisfies `|computed - R| <= n*u*L*(1+u)^n`,
-   giving `|weight - R| <= 5*u*L*(1+u)^5` and `|surrogate - R| <= 7*u*L*(1+u)^7`, hence by the triangle
-   inequality `|surrogate - weight| <= 12*u*L*(1+u)^7`.
-   THE CONSTANT IS THE NEXT POWER OF TWO ABOVE THAT, AND ITS SLACK IS ENUMERATED RATHER THAN ASSUMED: 12 -> 16,
-   and the remaining `4*u*L` absorbs, in order, (a) the `(1+u)^7` factor, under 8e-16 relative; (b) up to three
-   further roundings where a host's FLT_EVAL_METHOD is 2 and rounds at the returns from flow_index_key,
-   flow_member_key and flow_nonreward — flow_member_key's own guard is what catches that regime — taking the
-   derived figure to `15*u*L`; (c) the rounding of `L` itself, computed below in three operations, so what is
-   returned is at least `16*u*L*(1-4u)`, which still exceeds `15*u*L`; and (d) the single rounding of the band
-   EDGE at flow_pick, at most `u*L`, which is why the slack has to survive (a)-(c) at all rather than merely
-   exist.
-   `O`, `D` AND `B` ARE BOUNDED BY THE DECLARATION THE ORDER ALREADY OBEYS rather than by a `3.0` written
-   here. FLOW_NONREWARD_MAX's four summands are the optimism at zero visits, the distance at its top rung, the
-   branch term alone in its bucket, and the aging at ZERO silence — so that macro's VALUE is exactly the sum of
-   the three positive terms' maxima, which is what this uses it for, and flow_nonreward asserts the bound
-   against the quantity itself. A term added to the order is a term added there; it is ALSO one more rounding
-   in both spellings, which is the half no macro can state, and the fold's DCHECK is what says so.
-   IT IS NOT A TERM AND NOTHING RANKS BY IT, for flow_index_key's reason with nothing added: no summand of
-   flow_weight reads it, no fork carries it, no pick branches on it, and the member flow_pick RETURNS is the
-   comparator's extremum whether this is right or wrong. §EVERY-TERM-IS-CARRIED-BY-A-FORK is satisfied
-   trivially — this is RECOMPUTED per member per ask out of quantities a fork already carries — and the
-   two-instants test has nothing to ask of it: two arms forked at two instants may read DIFFERENT margins with
-   no rank moving at all, because the margin decides which members are COMPARED and flow_weight decides which
-   of them wins.
-   DEV-ONLY, and it raises no scan counter, for flow_index_surrogate's reason exactly. */
+   The derivation. Write `V = acct_family_val`, `P = N*Q` with `N = flow_silence_notch` and `Q = FLOW_AGE_QUANTUM`,
+   `O = flow_optimism`, `D = flow_distance`, `B = flow_branch_bonus`; the exact target is `R = V - P + O + D + B`.
+   The five leaves are the same calls on the same operands in both spellings, so their rounding cancels; only the
+   arithmetic between them is bounded. `N = k + K + c` is an exact integer identity (flow_silence_phase), so the
+   surrogate's target is the comparator's.
+   Roundings: flow_weight computes one product (`N*Q`) and four sums (`+O`, `+D`, `+B`, `V+..`), five; the surrogate
+   two products (`k*Q`, `(K+c)*Q`) and five sums (`+O`, `+D`, `+B`, `V+..`, `-..`), seven. The notch casts are
+   exact (2^53 quanta is three million years of thread time) and negation is exact.
+   Chains: let `L = |V| + P + O + D + B`; every exact intermediate of either spelling is a signed sub-sum of those
+   five terms, so has magnitude at most `L`. Each rounding is `fl(a.b) = (a.b)(1+d)` with `|d| <= u = 2^-53`; along a
+   left-associated chain whose fresh operand is exact `|e_j| <= |e_{j-1}|*(1+u) + u*L`, and each product contributes
+   at most `u*L` at its leaf. So `|computed - R| <= n*u*L*(1+u)^n` for `n` roundings: `|weight - R| <= 5*u*L*(1+u)^5`,
+   `|surrogate - R| <= 7*u*L*(1+u)^7`, and `|surrogate - weight| <= 12*u*L*(1+u)^7`.
+   The constant is the next power of two, 12 -> 16, and the remaining `4*u*L` absorbs (a) the `(1+u)^7` factor,
+   under 8e-16 relative; (b) up to three further roundings where FLT_EVAL_METHOD is 2 rounds at the returns from
+   flow_index_key, flow_member_key and flow_nonreward (flow_member_key's guard catches that regime), taking the
+   figure to `15*u*L`; (c) the rounding of `L` itself, three operations, so what is returned is at least
+   `16*u*L*(1-4u)`, still above `15*u*L`; and (d) the single rounding of the band edge at flow_pick, at most `u*L`.
+   `O`, `D` and `B` are bounded by FLOW_NONREWARD_MAX, whose value is the sum of the three positive terms' maxima
+   (the aging summand is zero silence) and which flow_nonreward asserts; a term added to the order is also one more
+   rounding in both spellings, which the fold's DCHECK reports.
+   Not a term and nothing ranks by it: the member flow_pick returns is the comparator's extremum whether this is
+   right or wrong. It is recomputed per member per ask from quantities a fork carries, and two arms may read
+   different margins with no rank moving, since the margin decides which members are compared and flow_weight which
+   wins. Dev-only, and it raises no scan counter, for flow_index_surrogate's reason. */
 #define FLOW_UNIT_ROUNDOFF (1.0 / 9007199254740992.0)  /* 2^-53: binary64 round-to-nearest unit roundoff */
 #define FLOW_INDEX_MARGIN_ULPS 16.0                    /* derived above: 12 roundings, next power of two up */
 static double flow_index_margin(const Flow *f) {
     double v = acct_family_val(f);
     if (v < 0.0) v = -v;  /* negation of a double is exact, so the bound loses nothing to this */
-    /* THE SCALE FACTOR IS A POWER OF TWO AND ITS PRODUCT IS THEREFORE EXACT, which is why the `(1-4u)` in
-       clause (c) above counts only the THREE operations of the sum beside it and the one that scales it. */
+    /* The scale factor is a power of two, so its product is exact, which is why clause (c) counts only the three
+       operations of the sum and the one that scales it. */
     return (FLOW_INDEX_MARGIN_ULPS * FLOW_UNIT_ROUNDOFF)
            * (v + (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM + FLOW_NONREWARD_MAX);
 }
@@ -3303,9 +3276,8 @@ static double flow_index_margin(const Flow *f) {
    price), so an epsilon would only be room for the next unranged term. The caller's address is not threaded: every
    route in is a request to rank a flow, and the remedy is always an edit to the terms summed below, here. */
 static double flow_nonreward(const Flow *f) {
-    /* THE TWO READINGS AND THE ONE TAG, which is what this sum is now made of explicitly: the optimism
-       bonus and the fitness distance are facts about THIS FLOW, and the aging is the queue coordinate it
-       shares with whatever it was placed beside. flow_weight is unchanged in value. */
+    /* Two readings and one tag: the optimism bonus and the fitness distance are facts about this flow, and the
+       aging is the queue coordinate it shares with what it was placed beside. */
     double n = flow_queue_nonreward(f) + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f);
     DCHECK(n <= FLOW_NONREWARD_MAX,
            "a term of the WFQ's order other than the REWARD lifted a flow further than one emission and a full "
@@ -3313,39 +3285,19 @@ static double flow_nonreward(const Flow *f) {
            "span at most a finding, and §scheduler's 'a never-run flow is never starved' is a claim about a "
            "quantity nobody bounded. Bound the term in flow_queue_nonreward or flow_distance, or state its "
            "range in FLOW_NONREWARD_MAX beside the three that are already stated there");
-    /* …AND THE ONE STATE IN WHICH flow_member_key MUST REPRODUCE THIS EXACTLY — see that function for why the
-       summand order is what makes this a check rather than a tolerance. With the family's aging at zero and no
-       carry, flow_queue_nonreward IS `-(double)flow_service_notch(f) * FLOW_AGE_QUANTUM` spelled identically
-       and the three terms after it are the same calls in the same order, so a difference here is a summand
-       that reached one of the two and not the other.
-       IT IS ASKED HERE AND NOT AT flow_member_key BECAUSE THIS IS THE SITE A NEW TERM IS ADDED TO. A guard
-       written at the reader would go on passing for as long as nobody re-read it; written at the writer it
-       fires on the diff that causes it.
-       AND ITS PRECONDITION IS NEVER TRUE ON A REAL PAGE, WHICH IS A FINDING ABOUT THIS GUARD AND NOT A REASON
-       TO WIDEN IT. `flow_family_notch(f) == 0` says this family has burned less than ONE cooperative quantum
-       since any of its arms last emitted, and flow_pick's `unrun` banner already records what that costs one
-       scope over in its own words: "once a family has burned one cooperative quantum since any of its arms
-       last emitted, `acct_family_us` alone exceeds FLOW_SERVICE_US and NO member of it can answer this" and
-       "on a real page the whole frontier is one family". The same operand empties this guard for the same
-       reason, and the two sites had never been read together. So the check that the two spellings agree is
-       armed on the smoke fixture and on the interval after an emission, and on the population an index would
-       actually be built over it is SILENT.
-       THE OBVIOUS STRENGTHENING IS REFUSED AND THE REASON IS THE ONE THIS FILE ALREADY STATES ABOUT INDEXES.
-       A guard that held in general would have to compare this sum against a re-association of it — either
-       `member_key + (family and carry terms)` or `n` minus a subtraction — and `a + b + c + d` associates as
-       `((a+b)+c)+d`, so every such spelling differs from this one in the last bit. flow_pick's own words for
-       that hazard are that an index "would differ from it in the last bit and reorder two members the order
-       currently ties", and a GUARD written that way would report a divergence the comparator does not have.
-       Nothing here is worth a rounding difference in the order.
-       WHAT COVERS THE POPULATION INSTEAD IS THE WALK, WHICH ASKS A DIFFERENT QUESTION AND CAN. flow_pick
-       stamps `key_last`/`phase_last` per member per scan and compares them across a frontier generation, so
-       the claim an index rests on — that a non-running member's own half and its phase stand still — is
-       armed on every member of every scan, including every member of the one family a real page presents.
-       This guard is about a SUMMAND reaching one function and not the other; that one is about a VALUE
-       moving when nothing may move it. Two questions, and only the second is answerable in general.
-       RETIREMENT: this record goes when flow_weight is composed so that its member half is a SUBEXPRESSION of
-       it rather than a re-association — at which point the equality holds by construction for every family
-       notch and this guard has no precondition left to be vacuous under. */
+    /* And the one state in which flow_member_key must reproduce this exactly: with the family's aging at zero and no
+       carry, flow_queue_nonreward is `-(double)flow_service_notch(f) * FLOW_AGE_QUANTUM` and the three terms after
+       it are the same calls in the same order, so a difference is a summand that reached one and not the other.
+       Asked here because this is where a new term is added, so it fires on the diff that causes it.
+       Its precondition is rarely true on a real page: `flow_family_notch(f) == 0` means the family has burned less
+       than one cooperative quantum since any arm last emitted, and on a one-family frontier that empties the guard
+       as it empties flow_pick's `unrun` population. So it is armed on the smoke fixture and just after an emission.
+       A general guard would compare against a re-association, which differs in the last bit and would report a
+       divergence the comparator does not have. The population is covered instead by flow_pick's walk, which stamps
+       `key_last`/`phase_last` per member per scan and compares them across a frontier generation: that asks whether
+       a value moved, this whether a summand reached one function and not the other. This record retires when
+       flow_weight's member half is a subexpression of it rather than a re-association, so the equality holds for
+       every family notch. */
     DCHECK(!(flow_family_notch(f) == 0 && flow_silence_carry(f) == 0) || flow_member_key(f) == n,
            "the member half of the WFQ's weight is no longer what flow_weight computes — with this family's "
            "aging at zero and no carry the two are the same expression on the same operands, so a difference "
@@ -3355,90 +3307,48 @@ static double flow_nonreward(const Flow *f) {
     return n;
 }
 
-/* THE COMPARATOR ITSELF, WRITTEN AS THE ONE SENTENCE EVERY ASSERTION IN THIS FILE IS DERIVED FROM: the
-   account's ledger, plus everything else. It used to read `flow_queue_weight(f) + flow_distance(f)`, which is
-   the same number and a worse statement — it grouped the reward with the optimism and the aging because those
-   three share an ARRIVAL door, and the split the ORDER's guarantees are made along is a different one. Grouped
-   this way there is exactly one place a new term can go that is not the reward, and it is bounded there. */
+/* The comparator, written as the sentence every assertion in this file is derived from: the account's ledger plus
+   everything else, so there is one place a new term can go that is not the reward, and it is bounded there. */
 double flow_weight(const Flow *f) {
     return acct_family_val(f) + flow_nonreward(f);
 }
 
-/* THE SILENCE AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's
-   sentence claims exists, computed from the flow's OWN reward rather than a fixed threshold that could fire
-   falsely on a very productive flow. A never-run flow carries the full optimism bonus and no aging, so its
-   weight is its reward plus its fitness distance plus 1.0 and therefore at least 1.0; past this charge a
-   serviced flow's aging has eaten its whole reward and the comparison cannot go the other way for any reward,
-   which is why the crossing closes strictly.
-   AND IT IS COMPARED AGAINST BOTH HALVES OF THE SILENCE — this flow's own and its FAMILY's — which is what
-   makes the assertion able to catch a fork chain AND one of its arms. A walker whose arms burn the document and
-   depart, or simply one with N live arms, shows a per-arm `cpu` that is a sliver of what the family has
-   consumed (svcMax 1124 against svcFamMax 8910 on the frontier the family charge was added for); read against
-   that sliver alone this was an identity that held for a family monopolising the thread for hours. Read against
-   the family alone it is an identity that holds for every member of a one-family frontier at once, which is the
-   ordinary state of a real page. The sum is the only reading that is neither.
-
-   THE BOUND IS DERIVED FROM flow_weight, NEVER FROM THE SENTENCE ABOUT IT, AND THE DERIVATION IS REDONE
-   WHENEVER THE FORMULA MOVES — which is the only reason this stays a check rather than becoming a number
-   somebody once believed. If any candidate is unrun — ALL of its terms at zero, its visit count, its own
-   service and its family's, which is what flow_pick's `unrun` tests — its weight is its own reward plus its
-   own distance plus 1.0, both of which are non-negative, and hence at least 1.0; so the MAXIMUM the pick
-   returns is at least 1.0 too. Write that out for the picked flow,
-   with `v` its visit count, `D` its fitness distance, `A` its silence notch IN QUANTA and `Q` the price of one
-   quantum (FLOW_AGE_QUANTUM): `val + D + 1/(1+v) − A*Q >= 1`, and since `1/(1+v) <= 1` it forces
-   `A*Q <= val + D`. `D` is a FRACTION — `(cand_surv + cand_rung) / FLOW_RUNGS_N` with the survival rung
-   asserted in [0,1] and the rung count asserted at most FLOW_RUNGS_N - 1 — so `A*Q <= val + 1` and hence
-   `A <= (val + 1) / Q`. `A` is a FLOOR of `(own_silence + fam_us) / S` with `S` the cooperative quantum, so
-   `own_silence + fam_us < (A + 1) * S = (val + 1) * FLOW_SILENCE_US + S`. That is this expression, and the
-   caller reads the own half through flow_own_silence for the reason that function gives — the raw `Flow.cpu`
-   is that quantity only while its window mark is current, and comparing a stale field against a bound derived
-   from the weight is comparing two things the order never puts side by side.
-   THE TWO TERMS ARE EARNED SEPARATELY AND THE SECOND ONE JUST SHRANK BY A FACTOR OF 83, which is the whole
-   visible consequence of the aging's step becoming the quantum. The `(val + 1)` second is the ENTIRE RANGE of
-   the fitness comparator on top of the reward: a candidate whose bytes arrive intact ranks a full point above
-   one whose bytes died, so it may outlast one by a point's worth of silence, and that is the term doing
-   exactly its job. The `+ S` is the width of the aging's OWN step, because a bound cannot be tighter than the
-   resolution of the quantity it bounds — and that step used to be a whole SECOND, so this bound used to allow
-   a second of unmeasured silence that nothing in the formula could account for. Neither term is slack, and if
-   the comparator's range ever stops being 1 this arithmetic is what has to be redone.
-   THE QUANTITY IT MEASURES IS THE SILENCE, WHICH IS BOTH HALVES OF THE AGING AND USED TO BE ONE. It read the
-   family's service alone, which is the half that CANNOT order a family's own members, so on a frontier that is
-   one family this was an identity with the interesting case removed. The name says which quantity it bounds,
-   because a bound named for one of two summands is the shape that goes quietly wrong when the other is added.
-   WHAT IT CATCHES IS AN EDIT, NOT A STATE. The derivation above is an identity under the current formula, so it
-   can only fire on a change that breaks it — a clamped or capped aging term, an optimism term without a ceiling
-   of 1, a reward allowed to grow with the CPU it is weighed against, a fitness comparator that is not a
-   fraction, or an optimism term keyed on something a never-run flow does not stand at zero of. Each of those
-   is exactly the shape a "fix" for a thrashing
-   scheduler takes, which is why the guard is worth its arithmetic; it is not a thing that fires on today's
-   tree, and an earlier comment saying it FIRES on the tree it replaced was the stale-DFAIL shape wearing an
-   assertion.
-   `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
+/* The silence at which a flow is guaranteed to rank below any never-run sibling: the crossing the never-starved
+   guarantee claims, computed from the flow's own reward rather than a fixed threshold that would fire falsely on a
+   very productive flow. Compared against both halves of the silence, this flow's own and its family's: against the
+   per-arm half alone it holds for a family whose arms each burn a sliver while the family monopolises the thread,
+   and against the family half alone it holds for every member of a one-family frontier at once.
+   Derived from flow_weight, and redone whenever the formula moves. An unrun candidate (all its terms at zero, as
+   flow_pick's `unrun` tests) weighs its reward plus its distance and branch bonus plus 1.0, at least 1.0, so the
+   pick's maximum is at least 1.0. For the picked flow, with `v` its visit count, `D` its fitness distance, `B` its
+   branch bonus, `A` its silence notch in quanta and `Q` the price of one quantum (FLOW_AGE_QUANTUM):
+   `val + D + B + 1/(1+v) − A*Q >= 1`, and `1/(1+v) <= 1` forces `A*Q <= val + D + B`. `D` and `B` are each in
+   [0, 1] (FLOW_NONREWARD_MAX's derivation), so `A <= (val + 2) / Q`, and since `A` is a floor of
+   `(own_silence + fam_us) / S` with `S` the cooperative quantum, `own_silence + fam_us < (val + 2) *
+   FLOW_SILENCE_US + S`. The caller reads the own half through flow_own_silence, since the raw field is that
+   quantity only while its window mark is current.
+   Neither term is slack: each of the two extra points is the whole range of a term (the fitness comparator, the
+   branch bonus) doing its job, and `+ S` is the width of the aging's own step, below which no bound can resolve.
+   It catches an edit, not a state: a clamped or capped aging term, an optimism term without a ceiling of 1, a
+   reward that grows with the CPU it is weighed against, a fitness comparator that is not a fraction, or an
+   optimism term keyed on something a never-run flow does not stand at zero of, each the shape a fix for a
+   thrashing scheduler takes. `static inline` so release, where the DCHECK's condition is unevaluated, does not
+   warn. */
 static inline int64_t flow_silence_us_to_sink(const Flow *f) {
-    /* THE REWARD IN THE DERIVATION IS THE ONE flow_queue_weight READS, which is the FAMILY's — the same
-       account the silence on the other side of this inequality is charged to. Read off the flow it would be a
-       bound on a quantity the weight does not contain, so the guard would pass on a state the order does not
-       have and fail on one it does. */
-    /* `+ 2.0` AND NOT `+ 1.0`: the derivation above forces `A*Q <= val + D + B` where `D` is the fitness
-       fraction and `B` the branch bonus, each in [0, 1]. The second point is the branch term's entire range,
-       earned exactly as the fitness term's first one is — a member alone in its bucket may outlast one of a
-       crowded bucket by a point's worth of silence, which is that term doing its job. */
+    /* The reward is the one flow_queue_weight reads, the family's, the account the silence on the other side is
+       charged to; read off the flow, the bound would be on a quantity the weight does not contain. `+ 2.0` is the
+       fitness fraction and the branch bonus, each in [0, 1], per the derivation above. */
     return (int64_t)((acct_family_val(f) + 2.0) * (double)FLOW_SILENCE_US) + FLOW_SERVICE_US;
 }
 
-/* HOST-OWED MARKS — see flow.h for what a mark means and why the flow carries one at all.
- *
- * A GENERATION RATHER THAN A PER-FLOW FLAG, so clearing every mark is a single increment rather than a walk of
- * a frontier that has reached tens of thousands of members. A flow is marked by stamping the current
- * generation on it, and every stamp ages out the instant the generation moves. */
+/* Host-owed marks (flow.h says what a mark means and why the flow carries one). A generation rather than a per-flow
+ * flag, so clearing every mark is one increment rather than a walk of a frontier tens of thousands strong: a flow is
+ * marked by stamping the current generation, and every stamp ages out when the generation moves. */
 static unsigned g_owed_gen = 1;   /* NEVER 0: a fresh (calloc'd) flow must read as RUNNABLE, not as marked */
 
-/* PUBLISHED RATHER THAN STATIC, BECAUSE IT IS flow_pick'S OWN FILTER AND A SECOND CALLER NOW HAS TO ASK
-   THE SAME QUESTION. The scan below is the ONE place a member is kept out of the runnable order, so
-   "is this flow a candidate of that order" has exactly one correct spelling; engine.c's yield decision
-   needs the answer for the incumbent, and re-deriving it there from the step code that marked it would
-   be two right answers to one question — the shape that drifts the day a second site learns to mark.
-   ROUTED TO THE CANONICAL SPELLING rather than answered twice. */
+/* Published because it is flow_pick's own filter, the one place a member is kept out of the runnable order, and
+   engine.c's yield decision asks the same question of the incumbent; a second spelling there would drift the day a
+   second site learns to mark. */
 int flow_host_owed(const Flow *f) { return f->owed_gen == g_owed_gen; }
 
 int flow_host_owed_count(void) {
@@ -3450,37 +3360,24 @@ int flow_host_owed_count(void) {
 void flow_set_host_owed(Flow *f) {
     DCHECK(f != NULL, "a host-owed report arrived with no flow — the scheduler marks the flow it just stepped, "
                       "so this is a report about nobody, and the flow that made it is picked again immediately");
-    /* A FLOW CANNOT ANSWER HOST-OWED TWICE WITH NO HOST EVENT IN BETWEEN, AND THAT IS THE WHOLE MECHANISM SAID
-       AS A CHECK. A marked flow is out of the pick (flow_pick skips it as a candidate and refuses it as the
-       seed), so the only way it can be stepped again — and therefore the only way it can report again — is if
-       something CLEARED its mark. The clears are the host's own events, and nothing else may spell one.
-       IT IS THE ASSERTION THIS SUBSYSTEM WAS MISSING WHEN IT WAS MEASURED. The clear used to run at the top of
-       every slice, on the reasoning that "between two slices the host ran" — true of a slice that ended because
-       the engine had nothing left to do, and FALSE of one that ended because its CPU quantum expired, which
-       hands the thread to a host with nothing to answer. On a document whose whole frontier was blocked (512 of
-       512), a slice marked the ~59 flows it had time for, the quantum cut it short, and the next slice
-       re-admitted all of them: the sweep could never reach the end of the frontier, so the STALL was
-       unreachable by construction and the engine swapped COW deltas 1.76 MILLION times without one flow
-       finishing. Nothing said so — the frontier looked busy, and `blocked: 512` had to be read off a census
-       and reasoned about. This line states it at the moment it happens, and names the laundering. */
+    /* A flow cannot report host-owed twice with no host event in between. A marked flow is out of the pick
+       (flow_pick skips it as a candidate and refuses it as the seed), so it can be stepped again only if something
+       cleared its mark, and the clears are the host's own events. A clear at the top of every slice would be wrong:
+       a slice that ended because its CPU quantum expired hands the thread to a host with nothing to answer, so a
+       frontier that is wholly blocked would be re-admitted before the sweep reached its end, and the stall would be
+       unreachable while the engine swapped deltas without finishing anything. */
     DCHECK(!flow_host_owed(f),
            "a flow reported host-owed AGAIN with no host event in between — a marked flow is out of the pick, "
            "so it can only have been stepped because its mark was cleared by something that cannot have "
            "answered it. The frontier can then never be fully marked, the STALL is unreachable, and the "
            "scheduler re-asks members it has already asked for as long as the run lasts");
     f->owed_gen = g_owed_gen;
-    /* AND THE RANKING CHANGED, WHICH IS THE THING A MARK IS AND NOBODY SAID SO. §scheduler's value yield fires
-       "the moment a parked flow outranks", and the WFQ's answer is `the best ELIGIBLE flow` — so the eligible
-       SET is as much a term of that answer as any weight is. A mark takes a member out of the pick and a clear
-       puts one back, and neither raised the one signal every consumer of the ranking keys on. Both consumers
-       were wrong in opposite directions and only one of them could say so: the preempt hook caches its rival on
-       this generation, so it kept ranking against a set that no longer existed, and the value-yield assertion
-       snapshots this generation, so it had no way to distinguish "the set changed" from "nothing changed" and
-       aborted the smoke on a yield that was entirely correct. See the assertion in engine.c's preempt_hook.
-       IT GOES IN THE EXISTING GENERATION RATHER THAN A FIFTH CLAUSE BESIDE IT. §scheduler is ONE WFQ policy,
-       and `frontier_rank_changed` is already the one sentence that means "the running flow's claim on the
-       thread may have changed" — a second sentinel tracked in parallel would be a second definition of the
-       same event, free to drift exactly where these two already had. */
+    /* And the ranking changed: the value yield fires "the moment a parked flow outranks", and the WFQ's answer is
+       the best eligible flow, so the eligible set is a term of that answer. A mark takes a member out of the pick
+       and a clear puts one back. The preempt hook caches its rival on this generation, and the value-yield
+       assertion in engine.c's preempt_hook snapshots it to tell "the set changed" from "nothing changed". Raised
+       through the existing generation, the one sentence that means the running flow's claim may have changed,
+       rather than a second sentinel beside it. */
     frontier_rank_changed();
 }
 
@@ -3488,31 +3385,25 @@ void flow_set_host_owed(Flow *f) {
 void flow_clear_host_owed(Flow *f) {
     DCHECK(f != NULL, "a host event cleared the mark of no flow at all");
     f->owed_gen = 0;   /* never equal to g_owed_gen, which starts at 1 and only ever moves forward */
-    /* …AND THIS IS THE DIRECTION THAT ACTUALLY BROKE, which is why it is not enough to say "a mark change is a
-       ranking change" at the site above and leave this one implicit. A clear makes a flow ELIGIBLE that the
-       scheduler's last pick could not consider, and the pick and the preempt hook do not run at the same
-       instant: the loop picks the best of the unmarked members, and a clear that lands during that flow's very
-       first step — flow_deliver_one_reply settles the shared document-script slot for every flow waiting on one
-       address — hands the hook a rival the pick was never shown. The hook then yields against a flow the
-       scheduler chose one step earlier, with the frontier generation, the service notch, the family notch and
-       the reward all exactly as they were. That is the pick and the hook answering one state two different
-       ways, it is what the value-yield assertion exists to catch, and it is what it caught. */
+    /* And this direction needs it as much: a clear makes eligible a flow the scheduler's last pick could not
+       consider, and the pick and the preempt hook do not run at the same instant. A clear landing during the picked
+       flow's first step (flow_deliver_one_reply settles the shared document-script slot for every flow waiting on
+       one address) would hand the hook a rival the pick was never shown, with the generation, both notches and the
+       reward unchanged: the pick and the hook answering one state two ways, which the value-yield assertion
+       catches. */
     frontier_rank_changed();
 }
 
 void flow_clear_host_owed_all(void) {
-    /* THE WRAP IS HANDLED, NOT ARGUED AWAY. Four billion clears is a document-wide event each and it is not
-       impossible, and a stamp that aliased the new generation would read as owed on a flow that is runnable —
-       an exclusion lasting until the next clear, which is precisely the "skips ANY flow" §scheduler's razor
-       forbids. Resetting the stamps costs one walk per wrap. */
+    /* The wrap is handled: four billion clears is not impossible, and a stamp aliasing the new generation would read
+       as owed on a runnable flow, excluding it until the next clear. Resetting the stamps costs one walk per wrap. */
     if (++g_owed_gen == 0) {
         for (int i = 0; i < g_flows_n; i++) g_flows[i]->owed_gen = 0;
         g_owed_gen = 1;
     }
-    /* THE WHOLE-FRONTIER FORM OF THE SAME STATEMENT — every member of the frontier just became eligible, which
-       is the largest ranking change this engine can make in one call, and it raised nothing. The host reaches
-       this between slices (engine_set_referenced, and the provider's own edges), so the yield request it raises
-       is read at the first opcode of the next slice, which is exactly when the new set first matters. */
+    /* The whole-frontier form: every member just became eligible, the largest ranking change one call makes. The
+       host reaches this between slices (engine_set_referenced and the provider's own edges), so the yield request is
+       read at the first opcode of the next slice, when the new set first matters. */
     frontier_rank_changed();
 }
 
