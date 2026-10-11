@@ -411,6 +411,11 @@ void      cow_unapply(JSContext *ctx, CowDelta *d);
    last saw. */
 void      cow_apply(JSContext *ctx, CowDelta *d);
 
+/* Moves the installed base chain to none, so the heap shows the baseline itself: what a switch-out leaves
+   standing is the outgoing flow's shared chain, which is a timeline and not the baseline. For a host act that
+   builds baseline state between slices (solver/engine.h's engine_host_baseline). No head may be applied. */
+void      cow_install_baseline(JSContext *ctx);
+
 /* INSTALL THE TIME-TRAVEL RECORD BOUNDARY — the per-flow COW capture set, declared once for the reason the
    concolic set is: two entries each spelled it out as a struct literal, which is a list that can drift, and one
    of them already had. `.gen_fork` is the scheduler's, which is why this lives with the capture hooks that make

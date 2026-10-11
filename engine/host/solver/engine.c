@@ -10013,6 +10013,10 @@ void engine_host_baseline(void) {
            "the baseline was asked for while a slice is open — the held flow is switched out only across the "
            "host's own time, where the capture route is down and the stamp is zero");
     if (g_sess_cur) { flow_switch_out(g_sess_ctx, g_sess_cur); g_sess_cur = NULL; }
+    /* The switch-out leaves the flow's shared base chain applied (cow_unapply moves only the head), so the heap
+       still shows that flow's family's history; the baseline is the chain moved to none. The DOM's switch-out
+       already restores its baseline document. */
+    cow_install_baseline(g_sess_ctx);
     /* The slice re-opens with captures routed nowhere, as the first one does; the saved route was the delta
        just unapplied. */
     g_slice_delta = NULL;

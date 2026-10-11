@@ -2083,6 +2083,15 @@ static void cow_install_chain(JSContext *ctx, CowSeg *want) {
     if (touched > g_swap_max) g_swap_max = touched;
 }
 
+void cow_install_baseline(JSContext *ctx) {
+    DCHECK(g_current == NULL,
+           "the baseline was installed while captures are routed to a delta — a head standing on the heap "
+           "would be left over a chain it was not written against");
+    cow_swap_begin();
+    cow_install_chain(ctx, NULL);
+    cow_swap_end();
+}
+
 void cow_delta_release(JSContext *ctx, CowDelta *d) {
     CowSeg *surv, *s;
 
