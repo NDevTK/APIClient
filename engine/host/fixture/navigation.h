@@ -59,23 +59,25 @@ static const char HTML_NAVIGATION[] =
        builds anything: without this line the srcless child stays unmaterialized for the whole fixture and the
        destroy has no realm to let go of. `document` forwards to the child's Window, so the initial about:blank
        Document and its realm exist from here on — ONE PER FLOW, which is the shape the ceiling is made of. */
-    "_ift(function(){ return !!_cw.document && _cw.document !== document; });"
+    "var _cwDoc = null;"
+    "_ift(function(){ _cwDoc = _cw.document; return !!_cwDoc && _cwDoc !== document; });"
     /* §4.8.5's REMOVING STEPS: the element loses its navigable, and the proxy the page still holds stays the
        same object while reporting a destroyed one. */
     "document.body.removeChild(_if);"
     "_ift(function(){ return _if.contentWindow === null; }); _ift(function(){ return _cw.closed === true; });"
     "_ift(function(){ return _cw.name === ''; }); _ift(function(){ return _cw.self === _cw; });"
     "_ift(function(){ return _if.getAttribute('name') === 'fr'; });"
-    /* AND THE PROXY THE PAGE IS STILL HOLDING HAS NO ACTIVE DOCUMENT — HTML §7.5.10's own note ("even after
-       destruction, the Document object itself might still be accessible to script, in the case where we are
-       destroying a child navigable") is about a reference the PAGE kept, and `_cw` is exactly that reference.
-       Step 9 nulled the navigable's active document, so this read must not reach one AND must not build one:
-       a proxy whose realm slot is empty because it was released reads identically to one that has never been
-       materialized, and only the destroyed flag tells them apart (window_proxy.c's proxy_realm asserts it).
-       The `undefined` is §7.2.3's own surface answering a name it does not carry, which is this engine's
-       pre-existing answer for every through-read on a closed navigable and not a value this probe chose. */
-    "_ift(function(){ return _cw.document === undefined; });"
-    "fetch('/api/iframenav?v=' + (/^1+$/.test(_ifb) ? 'ifnav' : 'claims' + _ifb));"
+    /* AND THE PROXY THE PAGE IS STILL HOLDING STILL ANSWERS ITS WINDOW'S DOCUMENT. HTML §7.2.2 "The Window
+       object": "The document getter steps are to return this's associated Document", and §7.5.10's note says
+       "even after destruction, the Document object itself might still be accessible to script, in the case
+       where we are destroying a child navigable" — `_cw` is that reference, so it reads the same Document. The
+       `name` claim above is the same section's "If this's navigable is null, then return the empty string."
+       A failure carries what the engine answered for both. */
+    "_ift(function(){ return _cw.document === _cwDoc; });"
+    "var _ifv = function(f){ try { var v = f(); return v === _cwDoc ? 'samedoc' : v === null ? 'null'"
+    " : typeof v === 'string' ? 's' + v : typeof v; } catch (e) { return 'E' + e.name; } };"
+    "fetch('/api/iframenav?v=' + (/^1+$/.test(_ifb) ? 'ifnav' : 'claims' + _ifb"
+    " + '-name' + _ifv(function(){ return _cw.name; }) + '-doc' + _ifv(function(){ return _cw.document; })));"
     /* NOT PROBED: an iframe with a REAL `src` (§7.4 step 14's load job, which parks on the host for the
        response and runs the child's scripts); `node engine/wpt.mjs html/browsers` runs those. A srcless
        navigable that something reads through is materialized exactly as a src'd one is, so this costs one
