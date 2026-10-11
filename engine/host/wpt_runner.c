@@ -3000,30 +3000,26 @@ static int wpt_child_main(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-    /* LINE-BUFFERED, so an ABORT cannot throw away what the file already reported. A DCHECK ends the process
-       with abort(), which does not flush stdio — and stdout is a pipe here, so it is fully buffered. Every
-       result a file produced before it aborted was therefore lost, and the driver read the file as having
-       produced NOTHING. That is the "same failures with the count hidden" shape this gate exists to avoid, and
-       it hid them from ME: I diagnosed a file as ending with no results and went looking for what it was
-       waiting on, when it had reported four failures and then leaked. */
+    /* Line-buffered, so an abort cannot discard what the file already reported: a DCHECK ends the process with
+       abort(), which does not flush stdio, and stdout is a pipe here, so it would otherwise be fully buffered and
+       the driver would read a file that reported results as one that produced nothing. */
     setvbuf(stdout, NULL, _IOLBF, 0);
     JSRuntime *rt;
     JSContext *ctx;
     int i, failed = 0;
 
     g_self_exe = argv[0];
-    /* A CHILD NAVIGABLE'S INSTANCE, re-executed from this same binary — see the child-document section. */
+    /* A child navigable's instance, re-executed from this same binary; see the child-document section. */
     if (argc >= 5 && !strcmp(argv[1], "--document")) return wpt_child_main(argc, argv);
-    /* THE DRIVER'S CLASSIFICATION, consumed before anything else reads argv. Everything downstream then sees
-       the same argument shape it always saw, so there is no second indexing rule to keep in step. */
+    /* The driver's classification, consumed before anything else reads argv, so everything downstream sees one
+       argument shape and one indexing rule. */
     while (argc >= 2 && argv[1][0] == '-' && argv[1][1] == '-') {
         if (!strcmp(argv[1], "--test-document")) { g_html_mode = 1; argv++; argc--; }
         else if (!strcmp(argv[1], "--variant")) {
             CHECK(argc >= 3, "wpt: --variant names no variant");
-            /* THE CORPUS'S OWN RULE, asserted where the value arrives rather than trusted from the driver:
-               sourcefile.py rejects a non-empty variant that does not begin with `?` or `#`, because a variant
-               is a query or a fragment and nothing else. A variant that is neither would silently become part
-               of the PATH here and this runner would GET a file that does not exist. */
+            /* The corpus's own rule, asserted where the value arrives: sourcefile.py rejects a non-empty variant
+               that does not begin with `?` or `#`, because a variant is a query or a fragment. Anything else would
+               become part of the path, and this runner would GET a file that does not exist. */
             CHECK(argv[2][0] == '?' || argv[2][0] == '#',
                   "wpt: a variant must begin with ? or # — it is a query or a fragment, not a path");
             CHECK(strlen(argv[2]) < sizeof g_variant, "wpt: the variant is longer than this runner holds");
@@ -3031,92 +3027,58 @@ int main(int argc, char **argv)
             argv += 2; argc -= 2;
         } else break;
     }
-    /* THE HARNESS AND THE TEST ARE BOTH REQUIRED, which the usage line has always said and the check has not:
-       it accepted `argc >= 2`, and with only the harness given every rule below that says "the LAST argument is
-       the test" would have named the harness as the test. */
+    /* The harness and the test are both required: with only the harness given, every rule below that takes the
+       last argument as the test would name the harness. */
     if (argc < 3) {
         fprintf(stderr, "usage: wpt_runner [--test-document] [--variant ?v] <testharness.js> <test> [more.js ...]\n");
         return 2;
     }
-    /* WHICH FILE IS THE TEST, WHERE IT LIVES, AND WHETHER IT IS A DOCUMENT. Derived before anything else is
-       built, because an HTML test's document has to be FETCHED and PARSED before `document` is installed —
-       there is no second document to swap in later, and a runner that installed a placeholder first would be
-       running the test's scripts against the wrong tree. */
+    /* Which file is the test, where it lives, and whether it is a document, derived before anything is built: an
+       HTML test's document must be fetched and parsed before `document` is installed, and there is no second
+       document to swap in later. */
     wpt_derive_addresses(argc, argv);
-    /* THE TEST DOCUMENT. One call, because a child document is built by the same one — see above. */
-    /* THE TEST DOCUMENT IS THIS PROCESS'S TOP-LEVEL TRAVERSABLE, so its environment's top-level creation
-       URL is its own address — the runner navigated to it and nothing embeds it. */
-    /* NO CREATOR: this process rooted its own top-level document from a response it fetched, so
-       §7.1.7 has no container to clone and CSP §2.2.2's self-origin (this address's origin) is the
-       right one. The empty pair is that statement rather than an absent argument.
-       AND §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" — the initial value §7.1.7 gives a container built without
-       a creator, spelled out because an embedder policy has no ABSENCE to spell: the CSP list's absence is the
-       empty self-origin beside it, and this item is always there. What this document's OWN response says about
-       it is a different fact and is obtained from that response inside the build. */
-    /* NO BYTES AND NO HEADERS FROM HERE: this call has no response of its own to hand over — wpt_build_document
-       fetches the test document itself in `--test-document` mode, and a `.any.js` run has no document response
-       at all (the skeleton it wraps the script in is this runner's, not a server's). */
-    /* AND §7.3.1.3's PARENT IS `u`, WHICH THIS RUNNER KNOWS RATHER THAN ASSUMES: it loaded this document from
-       the corpus itself, so nothing embeds it and its navigable is a top-level traversable. A `--document`
-       child reaches the same build with the identity its parent process wrote on its command line.
-       AND §3.1.3's LIST IS EMPTY BY THAT SAME SENTENCE, said in that grammar's own word: a document nothing
-       embeds has no container document, so step 3 returns an empty output. It is stated rather than left
-       blank because an empty field would be indistinguishable from a host that stopped stating it. */
-    /* AND §7.1.5's SET IS EMPTY BY THAT SAME SENTENCE, in that section's own word: a navigable nothing
-       embeds is a top-level traversable, whose creation sandboxing flags are its POPUP sandboxing flag set,
-       which §7.1.5 makes empty at creation and which only §7.3.1.7's rules for choosing a navigable fill. */
+    /* The test document, built by the same call as a child document. It is this process's top-level traversable:
+       the runner navigated to it and nothing embeds it, so its top-level creation URL is its own address. There
+       is no creator, so §7.1.7 has no container to clone: the empty CSP pair says so (CSP §2.2.2's self-origin is
+       this address's origin), and §7.1.4's item is "a new embedder policy", spelled out because an embedder
+       policy has no absence. What the document's own response says is obtained inside the build, which fetches
+       the test document itself in `--test-document` mode; a `.any.js` run has no document response (its skeleton
+       is this runner's), so no bytes or headers are passed. §7.3.1.3's parent is `u`, §3.1.3's list is empty
+       (no container document, step 3), and §7.1.5's set is empty (a top-level traversable's popup sandboxing
+       flag set, which only §7.3.1.7's rules for choosing a navigable fill), each in its grammar's own word so an
+       empty field cannot be mistaken for a host that stopped stating it. */
     ctx = wpt_build_document("wpt", g_top_origin, g_base_url, NULL, 0, NULL, "", "",
                              "unsafe-none", "", "unsafe-none", "", "u",
                              PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                              DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
                              SANDBOX_FLAGS_SERIALIZED_NONE);
-    /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
-       inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
-       arriving before there is one is a message with nowhere to go. */
+    /* The realm a relayed notice is delivered into. A child's notice arrives while this process is blocked inside
+       wpt_child_ask, which has no ctx of its own. */
     g_wpt_ctx = ctx;
     rt = g_rt;
 
-    /* THE PROGRAMS THIS RUN IS, built before the session because that is what a session is opened over. */
+    /* The programs this run is, built before the session because a session is opened over them. */
     {
         if (g_html_mode) {
-            /* THE DOCUMENT'S OWN SCRIPTS, IN DOCUMENT ORDER — the same component the engine loads a real page
-               with, so an HTML test's `<script src=/resources/testharness.js>` is loaded the way the page
-               asked for it rather than by this runner guessing which files a document needs.
-               NO PROLOGUE HERE. `GLOBAL` is the shim WPT's server writes around a `.any.js`, and a document
-               that never asked for it must not be given one.
-               AN EXTERNAL SCRIPT IS FETCHED INTO ITS OWN SLOT, in position, because classic scripts run in
-               document order and one that did not load is a script that runs nothing rather than one that
-               moves the others up.
-               NAMED RESIDUAL — THIS PATH DOES NOT GO THROUGH §8.1.4.2 AND THE CHILD PATH ABOVE NOW DOES.
-               WHAT IS NOT COVERED: the engine's own answer for an external script is the docscript park (the
-               flow waits, wpt_issue_pending asks, and the reply that arrives carries the STATUS §8.1.4.2's
-               "fetch a classic script" step 5.2 refuses on), and this loop pre-fetches instead — so a
-               `<script src>` this corpus server answers with a non-ok status is DROPPED from the sequence
-               below rather than run through §4.12.1.1 "Processing model"'s "execute the script element" step
-               4, "If el's result is null, then fire an event named error at el, and return". Dropping it is
-               narrower than that step and not a false success: the element takes no position and fires
-               NOTHING, so a corpus test asserting `onerror` fails rather than passing for the wrong reason.
-               The former default here was `strdup("")` and that WAS a false success; the child path's note
-               above records why.
-               WHAT THE NEXT DIFF BUILDS: this loop deleted the same way the child path's was, leaving each
-               external entry as document_scripts.h's `(bodies[i] NULL, srcs[i] its address)` row. It is a
-               separate diff and not this one because THE REPORT HOOK'S POSITION IS COMPUTED OVER THIS LIST —
-               wpt_insert_report searches `g_prog_names` for a program whose name ends `/resources/
-               testharness.js` and inserts the report immediately after it — so a path that parks instead of
-               pre-fetching contributes no name, the search finds nothing, and every html-mode file reports
-               its own "no testharness.js among this document's programs" instead of its subtests. That
-               position has to be derived from the DOCUMENT's script inventory before the sequence is built,
-               and doing both in one diff is the two-ends-of-a-seam scope this file has been wrong about
-               before. HOW ITS ABSENCE SHOWS: a corpus test that loads a script under a deliberate non-ok
-               status (wptserve's `?pipe=status(404)`) and asserts an `error` event at the element reports
-               that event never firing, in html mode only, while the same assertion passes in a child
-               document. */
+            /* The document's own scripts in document order, from the component the engine loads a real page with,
+               so `<script src=/resources/testharness.js>` loads as the page asked. No prologue: `GLOBAL` is the
+               shim WPT's server writes around a `.any.js`. An external script is fetched into its own slot, in
+               position, because classic scripts run in document order.
+               Named residual. Not covered: this path pre-fetches instead of using the engine's docscript park (the
+               flow waits, wpt_issue_pending asks, and the reply carries the status §8.1.4.2's "fetch a classic
+               script" step 5.2 refuses on), so a `<script src>` answered with a non-ok status is dropped from the
+               sequence rather than run through §4.12.1.1 "Processing model"'s step 4 ("If el's result is null, then
+               fire an event named error at el, and return"). Dropping fires nothing, so an `onerror` assertion fails
+               rather than passing. Next diff builds: this loop deleted as the child path's was, which first needs
+               the report hook's position derived from the document's script inventory, because wpt_insert_report
+               searches `g_prog_names` for the harness and a parked row contributes no name. Absence shows as: a
+               test that loads a script under `?pipe=status(404)` and asserts an `error` event reports it never
+               firing, in html mode only, while the same assertion passes in a child document. */
             DocScripts ds = document_exec_scripts(g_wpt_dom);
             for (i = 0; i < ds.n; i++) {
-                /* AN INLINE `<script>` HAS NO ADDRESS — §4.12.1.1: "If el does not have a src content
-                   attribute: Let base URL be el's node document's document base URL." The engine reads a NULL
-                   address as exactly that, so naming the document here would be a second copy of a fact the
-                   document already answers. */
+                /* An inline `<script>` has no address. §4.12.1.1: "If el does not have a src content attribute:
+                   Let base URL be el's node document's document base URL." The engine reads a NULL address as
+                   exactly that. */
                 if (ds.bodies[i]) {
                     wpt_program(strdup(ds.bodies[i]), g_test_url, /*address*/NULL, ds.types[i]);
                     continue;
@@ -3125,64 +3087,54 @@ int main(int argc, char **argv)
                 {
                     size_t len = 0;
                     char *body = wpt_get(ds.srcs[i], &len);
-                    /* A <script src> THE SERVER DOES NOT HAVE is a real 404, and a real browser fires an
-                       error event and carries on rather than stopping the document. Reporting it names the
-                       file, because a test whose harness failed to load reports nothing at all otherwise. */
+                    /* A <script src> the server does not have is a real 404; a browser fires an error event and
+                       carries on. Reporting it names the file, because a test whose harness failed to load
+                       otherwise reports nothing. */
                     if (!body) {
                         fprintf(report_out(), "@WPTERR %s: <script src> did not load: %s\n",
                                 g_test_url, ds.srcs[i]);
                         continue;
                     }
-                    /* AND AN EXTERNAL ONE'S ADDRESS IS ITS OWN — §8.1.4.2 "Fetching scripts" creates the
-                       script with "response's URL" as its base, and for a module that address is additionally
-                       the module map key, so two `<script type=module src>` of one document are two modules.
-                       The raw `src` attribute goes over as-is: §4.12.1.1's encoding-parse is relative to el's
-                       node document, and the engine holds that document's realm. */
+                    /* An external script's address is its own: §8.1.4.2 "Fetching scripts" creates the script with
+                       "response's URL" as its base, and for a module that address is also the module map key, so
+                       two `<script type=module src>` are two modules. The raw `src` attribute crosses as-is:
+                       §4.12.1.1's encoding-parse is relative to el's node document, whose realm the engine holds. */
                     wpt_program(body, ds.srcs[i], ds.srcs[i], ds.types[i]);
                 }
             }
             doc_scripts_free(&ds);
         } else {
             wpt_program(strdup(WPT_PROLOGUE), "<wpt-prologue>", /*address*/NULL, SCRIPT_TYPE_CLASSIC);
-            /* THE HARNESS AND THE META SCRIPTS ARE PROGRAM INPUTS THE DRIVER RESOLVED, so they come from the
-               paths it named; a `.sub.js` among them was fetched and substituted by the driver before it
-               handed the path over. The TEST is not one of those — it is the run's ADDRESS — so it comes from
-               the server. */
+            /* The harness and the META scripts are program inputs the driver resolved, so they come from the paths
+               it named (it fetched and substituted any `.sub.js` first). The test is the run's address, so it
+               comes from the server. */
             for (i = 1; i < argc - 1 && !failed; i++) {
                 size_t len = 0;
                 char *src = read_file(argv[i], &len);
                 if (!src) { fprintf(report_out(), "@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
-                /* NO ADDRESS: the driver handed this runner a PATH ON DISK and these bytes were read from it,
-                   not obtained from a URL. §8.1.4.1's base URL is "the URL from which the script was
-                   obtained", and there is none — so the document's own address answers, which is what a
-                   generated `.any.html` gives a same-directory helper anyway. Naming a corpus URL these bytes
-                   did not come from would be a fabricated address. */
+                /* No address: these bytes were read from a path on disk, not obtained from a URL, so §8.1.4.1's
+                   base URL ("the URL from which the script was obtained") falls back to the document's address,
+                   which a generated `.any.html` gives a same-directory helper anyway. */
                 wpt_program(src, argv[i], /*address*/NULL, SCRIPT_TYPE_CLASSIC);
             }
-            /* AND THE TEST ITSELF IS FETCHED, exactly as a document test is, because the reason is the same
-               and it is not a reason about markup: a `.sub.` file is a TEMPLATE, and wptserve substitutes
-               `{{host}}` and `{{ports[https][0]}}` when it serves one. Read off disk,
-               `dom/events/EventListener-addEventListener.sub.window.js` opens an iframe at the literal string
-               `https://{{hosts[alt][]}}:{{ports[https][0]}}/…`, which is not a URL — so the file tested the
-               template rather than the test, and the driver's own substitution reached only the META scripts.
-               One rule, both kinds: the test comes from the corpus's own server. */
+            /* The test itself is fetched, as a document test is: a `.sub.` file is a template, and wptserve
+               substitutes `{{host}}` and `{{ports[https][0]}}` when it serves one. Off disk,
+               `dom/events/EventListener-addEventListener.sub.window.js` would open an iframe at a string that is
+               not a URL. */
             if (!failed) {
                 size_t len = 0;
                 char *src = wpt_get(g_test_url, &len);
                 if (!src) wpt_unserved_test_file();
-                /* AND THIS ONE DOES HAVE AN ADDRESS: these bytes came off the corpus server at g_test_url, so
-                   that is §8.1.4.1's "URL from which the script was obtained" and what a relative
-                   `import('./helper.js')` inside the test resolves against. */
+                /* This one has an address: the bytes came off the corpus server at g_test_url, which is §8.1.4.1's
+                   "URL from which the script was obtained" and what a relative `import('./helper.js')` in the test
+                   resolves against. */
                 wpt_program(src, g_test_url, g_test_url, SCRIPT_TYPE_CLASSIC);
             }
         }
-        /* THE REPORT AND THE EPILOGUE ARE PROGRAMS OF THIS DOCUMENT LIKE THE REST, and they are two rather than
-           one: the report registers where WPT's own vendor hook goes (immediately after testharness.js, so no
-           helper the test loads can be ahead of it), and the epilogue tells the harness the page is done, which
-           can only be the last thing that runs.
-           AND THE EPILOGUE IS THE SCRIPT ARM'S ALONE — see WPT_EPILOGUE for the three ways it destroys a
-           document. It is not a shape this runner decides: `.any.worker.js` carries `done()` and `.any.html`
-           does not, and the arm above already declared which of those two this run is. */
+        /* The report and the epilogue are programs of this document like the rest. The report registers where
+           WPT's vendor hook goes, immediately after testharness.js, so no helper the test loads is ahead of it.
+           The epilogue is the script arm's alone (see WPT_EPILOGUE): `.any.worker.js` carries `done()` and
+           `.any.html` does not, and the arm above already declared which this run is. */
         if (!failed) {
             wpt_insert_report();
             if (!g_html_mode)
@@ -3190,23 +3142,14 @@ int main(int argc, char **argv)
         }
     }
 
-    /* THE ONE SCHEDULER, over this document's programs. What stood here was a fabricated flow — one member
-       added at agent init and left switched in for the whole run so that everything asking flow_running() had
-       an answer — and a pump beside it: a `while (JS_FlowResume)` per program, a `while (JS_ResumeParkedFlow)`,
-       a `JS_ExecutePendingJob` drain, and this host's own copy of the event loop's order (the document
-       lifecycle, then the rendering opportunity, then the due timer). Every one of those is the scheduler's:
-       the flow's jobs are ITS queue, the parked continuation is resumed by flow_step before anything else the
-       flow could do, and the three task sources are asked through the hooks their components registered. A
-       host that kept its own copy was a second scheduler with the frontier bypassed, which is what CLAUDE.md
-       §scheduler forbids at every depth — and it measured a model the product does not have.
-       FORKING IS OFF: this gate measures the browser half against a spec oracle, so a concolic branch must not
-       explore both arms — the same choice the child half makes, and the same one the @S candidate re-fire
-       makes for its own reason. */
-    /* NO ELEMENT COLUMN, AND THAT IS A STATEMENT ABOUT THIS LIST. These programs are the harness's own —
-       a prologue, testharness.js, the report hook, an epilogue — flattened by wpt_program out of a
-       document rather than collected as its `<script>` elements, so no row of it came from one. §3.1.7's
-       `currentScript` is null while each of them runs, which is that section's answer for a document that
-       is not executing a script element. The OTHER entry above passes document_exec_scripts's column. */
+    /* The one scheduler, over this document's programs. A flow's jobs are its own queue, a parked continuation is
+       resumed by flow_step before anything else the flow could do, and the document lifecycle, rendering
+       opportunity and due timer are asked through the hooks their components registered, so this host keeps no
+       pump or event-loop order of its own. Forking is off: this gate measures the browser half against a spec
+       oracle, so a concolic branch must not explore both arms, as in the child half.
+       No element column: these programs are flattened by wpt_program rather than collected as `<script>`
+       elements, so §3.1.7's `currentScript` is null while each runs, that section's answer for a document not
+       executing a script element. wpt_child_main passes document_exec_scripts's column. */
     /* The test document is the one this runner was named, as a person names a seed. */
     engine_set_arrival(PROV_OBSERVED);
     engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, /*sched*/NULL, /*els*/NULL, g_prog_n,
@@ -3215,12 +3158,10 @@ int main(int argc, char **argv)
         int r = engine_sched_step();
         int did;
 
-        /* THE STEP AFTER A PARK REQUEST IS THE ONE THAT TAKES IT (engine.h's engine_request_park: at the next
-           boundary with no flow switched in, which is the top of the very next slice, before the first pick),
-           so this run is over the moment it returns. What is still owed is the park's OWN announcements — it
-           emits them between writing the residue and closing the session, which the engine calls the last
-           point at which a notice of ours is still drained. The REQUESTS are deliberately not answered here:
-           the session is closed, and engine_host_answer into a closed frontier delivers to nobody. */
+        /* The step after a park request takes it (engine.h's engine_request_park: at the next boundary with no
+           flow switched in, the top of the next slice), so the run is over when it returns. Still owed are the
+           park's own announcements, emitted between writing the residue and closing the session. Requests are not
+           answered: the session is closed, and engine_host_answer into a closed frontier delivers to nobody. */
         if (g_parking) {
             DCHECK(r == ENGINE_STEP_DONE,
                    "this host asked the engine to write its frontier out and the step that followed did not "
@@ -3230,105 +3171,69 @@ int main(int argc, char **argv)
             break;
         }
 
-        /* THE HOST'S HALF OF EVERY SLICE BOUNDARY, and it is asked at EVERY one rather than only at a stall —
-           the same protocol the extension's bridge speaks (engine.h): paying only at a stall makes one flow's
-           reply conditional on every other flow in the document also becoming blocked. Notices first: a
-           document announced but not yet provisioned is one a read would arrive for before its instance
-           exists. */
+        /* The host's half of every slice boundary, asked at every one rather than only at a stall, as the
+           extension's bridge does (engine.h): paying only at a stall would make one flow's reply wait for every
+           other flow to block. Notices come first, because a document announced but not yet provisioned is one a
+           read would arrive for before its instance exists. */
         did = wpt_answer_host_requests(ctx);
         if (wpt_issue_pending() > 0) did = 1;
         if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
-        /* AFTER THE HOST'S HALF AND NOT BEFORE IT. The final step emits like any other — a notice naming a
-           document, a reply a flow was owed — and a DONE checked ahead of this line would leave exactly those
-           undrained, which is the emitting-end-invisible drop the router's own DFAIL is about. */
+        /* After the host's half, not before: the final step emits like any other (a notice naming a document, a
+           reply a flow was owed), and a DONE checked first would leave those undrained. */
         if (r == ENGINE_STEP_DONE) break;
 
-        /* THE MEASUREMENT ENDED, so the session does — HTML §7.3.1.6 "Navigable destruction". `done()` is
-           testharness's own end of the test and the verdict is already printed (js_wpt_test_complete says why
-           this is the end of a MEASUREMENT and not a bound on work). What performs the destruction is the
-           teardown below this loop: every document this process holds is released, and each child navigable is
-           a PROCESS whose pipes are closed and which is reaped — which is the shape of that section's
-           destroy-a-top-level-traversable, "for each historyEntry ... destroy a document and its descendants"
-           and then the traversable itself.
-           IT IS NOT A `break`, AND THAT WAS THE HALF THAT WAS STILL WRONG. Ending a session over a live
-           frontier suspends the RUNNING flow (engine_sched_end) and says nothing about the OTHER members, which
-           reach flow_registry_free still holding parked continuations, suspended frames, queued reactions,
-           replies this host owed them and peers' routed messages — every one a work item on the ONE frontier,
-           and §scheduler forbids dropping one. flow_release asserts exactly that, and its own comment names the
-           two honest ends: a session that ends over live flows either PAGED them or had nothing to lose. This
-           one has plenty to lose (that is what a poll loop is), so it pages: engine_request_park writes every
-           member out as a recipe — the same operation the extension's host asks for at the RAM floor — and the
-           step that takes it switches the running flow out, hands back the operations it never started,
-           announces its worlds, and answers DONE with every flow marked `paged`.
-           SO NOTHING IS DROPPED, WHICH IS THE WHOLE DIFFERENCE FROM A BOUND. The residue is written IN FULL and
-           the recipes exist; what this host then does with the document is its own business, and a conformance
-           gate is one document in one process with no cross-session frontier to store it in. That is a fact
-           about this host's storage and not about the scheduler truncating work — the assert below reads the
-           engine's own answer to "was this frontier written out rather than drained" rather than taking my
-           word for it.
-           AND IT IS ASKED BELOW THE DONE EXIT, WHICH IS THE WHOLE OF WHY THAT EXIT IS ABOVE IT. TWO facts end
-           this loop and they are INDEPENDENT: the MEASUREMENT ended (`done()` ran and the verdict is printed)
-           and the FRONTIER ended (the step drained it, and draining CLOSES the session inside that same step).
-           The park answers the first WHILE the second is false — it writes a LIVE frontier down — and a drained
-           frontier is already the OTHER honest end flow_release names: nothing left to lose, so nothing to
-           write. Asked above the DONE exit the two facts collapse into one, and they collapse for the ORDINARY
-           test rather than an exotic one: the epilogue is the last program this document has, so the step that
-           sets `g_test_complete` is usually the same step that empties the frontier. That step answers DONE
-           with the session already closed, this line then asks the engine to write out a session that no longer
-           exists, and the engine aborts saying exactly that — AFTER every subtest is recorded, so the file
-           reads as a finished measurement and is not one. Below the DONE exit the session is live BY
-           CONSTRUCTION; that is the invariant the ordering carries, and it is the one both park requests in
-           this loop rest on without either of them restating it. */
+        /* The measurement ended, so the session does (HTML §7.3.1.6 "Navigable destruction"; js_wpt_test_complete
+           says why that is not a bound). The teardown below performs the destruction: every document this process
+           holds is released, and each child navigable's process is reaped.
+           It pages rather than breaks. Ending a session over a live frontier suspends only the running flow, and
+           the other members would reach flow_registry_free holding parked continuations, frames, reactions and
+           owed replies, which flow_release forbids: a session ending over live flows either paged them or had
+           nothing to lose. engine_request_park writes every member out as a recipe (the operation the extension
+           asks for at the RAM floor), and the step that takes it answers DONE with every flow paged. A conformance
+           gate has no cross-session frontier to keep the residue in, which is a fact about this host's storage.
+           It is asked below the DONE exit because the two ends are independent: the measurement ending, and the
+           frontier draining, which closes the session inside that step. The epilogue is usually the last
+           program, so one step often does both; asked above the exit, the park would target a closed session.
+           Below it the session is live by construction, which both park requests in this loop rely on. */
         if (g_test_complete) { engine_request_park(); g_parking = 1; continue; }
 
         if (r == ENGINE_STEP_STALLED && !did) {
-            /* NOTHING RUNNABLE, AND THIS HOST FILLED NOTHING — which is a WAIT if an answer is on its way and
-               a DISAGREEMENT if one is not, and those were the same line until the network edge could tell
-               them apart. A request in flight means the frontier is parked on the network, which is the
-               ordinary state of a browser: this host has no work of its own left, so it sleeps in the poll
-               until one of the answers lands and then re-ranks. NO TIMEOUT — §NO BOUNDS: a reply that never
-               comes leaves its flow parked, and a deadline could only truncate one that was merely slow.
-               THE TWO ANSWERS ABOUT ONE QUESTION MUST AGREE. With nothing in flight, the scheduler says it is
-               owed something and this host says it owes nothing, so the flows parked here are waiting for a
-               reply nobody is going to send. In release there is nothing to fix it with, so the run ends with
-               the flows parked and the teardown names what was dropped. */
-            /* A REFERENCED DOCUMENT AT REST IS THE THIRD ANSWER. Its last timeline waits to be asked something by
-               a peer (engine.h's engine_set_referenced — this document created a navigable another instance
-               hosts), so with nothing in flight it waits on the children still in their boot round, the only
-               channels that can write to it unasked; once every child has rested nothing can arrive, which is
-               trusted.mjs's all-stalled end, and the park below takes it. */
+            /* Nothing runnable and nothing filled. A request in flight means the frontier is parked on the
+               network, the ordinary state of a browser, so this host sleeps in `poll` until an answer lands; there
+               is no timeout, since a deadline could only truncate a reply that was merely slow. A referenced
+               document at rest is the other legitimate state: it created a navigable another instance hosts
+               (engine.h's engine_set_referenced), so its last timeline waits to be asked something by a peer. With
+               nothing in flight it waits on the children still in their boot round, the only channels that can
+               write to it unasked, and once every child has rested nothing can arrive (trusted.mjs's all-stalled
+               end) and it pages. Otherwise the scheduler says it is owed something and this host says it owes
+               nothing, so the parked flows wait for a reply nobody will send; in release the run pages and ends. */
             int booting = wpt_children_booting();
 
             DCHECK(g_inflight_n > 0 || booting || engine_referenced(),
                    "the frontier stalled on work this host says it owes, this host filled NOTHING, and it has "
                    "NOTHING IN FLIGHT — the stall hook and the network edge are two answers to one question "
                    "and they disagree, so the flows parked here are waiting for a reply nobody will send");
-            /* AND THIS END PAGES FOR THE SAME REASON, so the two ways this host stops are one operation: a
-               frontier parked on a reply nobody will send is a frontier with everything to lose. */
+            /* This end pages for the same reason, so the two ways this host stops are one operation. */
             if (!g_inflight_n && !booting) { engine_request_park(); g_parking = 1; continue; }
             wpt_net_pump(ctx, /*block*/1);
         }
     }
-    /* THE ENGINE'S OWN ANSWER TO THE CLAIM THE PARK ABOVE MAKES. "Every member was written out as a
-       recipe" is exactly the sort of statement that reads as true because it was intended; engine_frontier_paged
-       is the engine saying whether this frontier was WRITTEN rather than drained, so the claim is checked at the
-       one place it is load-bearing instead of asserted by the comment that makes it. */
+    /* The engine's own answer to the park's claim: engine_frontier_paged says whether this frontier was written
+       rather than drained, checked where the claim is load-bearing. */
     DCHECK(!g_parking || engine_frontier_paged(),
            "this host asked the engine to page its frontier out and the engine does not report a frontier that "
            "was written — so the teardown below is about to release flows whose work has no recipe, which is "
            "the drop flow_release names one flow at a time");
-    /* AND THE SESSION ENDS HERE, UNCONDITIONALLY. This loop now has ONE exit — DONE — because the two ends that
-       are not a drained frontier ask for a park and the step that takes it answers DONE like any other; so this
-       call is the positive nothing engine.h describes, and it is kept rather than dropped because the rule it
-       obeys is "call it when you stop stepping" and a host that obeys that cannot be wrong when it grows an
-       exit. Which exits have already closed the session is a question the ENGINE answers, and a copy of that
-       answer in each host is a condition every new exit has to remember to be included in. */
+    /* The session ends here, unconditionally. The loop has one exit, DONE, because the other ends ask for a park
+       and the step that takes it answers DONE; engine.h makes this call harmless then, and the rule it obeys is
+       "call it when you stop stepping", so a new exit cannot forget it. Which exits already closed the session
+       is the engine's question. */
     engine_sched_end();
 
-    /* THE PROGRAM SEQUENCE AND THE REQUEST RECORDS, both of which outlived the session by design and neither
-       of which anything else owns. The session BORROWED the arrays (engine.h), so they are freed only now that
-       it has ended; a record still here is a request whose flow was parked when the run stopped, which the
-       frontier's own teardown asserts about from the other end. */
+    /* The program sequence and the request records, which outlive the session by design and are owned by nothing
+       else. The session borrowed the arrays (engine.h), so they are freed only now. A record still here is a
+       request whose flow was parked when the run stopped, which the frontier's teardown asserts about from the
+       other end. */
     {
         int k;
         for (k = 0; k < g_prog_n; k++) { free(g_prog_bodies[k]); free(g_prog_names[k]); free(g_prog_srcs[k]); }
@@ -3340,167 +3245,40 @@ int main(int argc, char **argv)
         wpt_net_free();
     }
 
-    /* THE FRONTIER FIRST, BECAUSE A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER — solver/engine.h states
-       the whole of it, and THIS host is where it was measured: a file whose classic script completed abruptly
-       parked inside §8.1.4.6 step 6.2's `error` dispatch, and the flag its step 6.1 owes back is kept under a
-       private Symbol the platform release below frees, so the give-back asked for a key that was gone. */
+    /* The frontier first, because a suspended flow is a live activation of the browser (solver/engine.h). A flow
+       parked inside §8.1.4.6 step 6.2's `error` dispatch gives back its step 6.1 flag under a private Symbol that
+       the platform release below frees. */
     solver_frontier_free(ctx);
-    /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
+    /* The platform's own list, undone in one call (see main.c's teardown). Every component of core/platform.h,
+       including rendering, timers, message ports, event targets, the viewports, Location, History, the navigation
+       API, the event loop record, Fetch's Headers, Response and Request, URL, FormData, the streams group,
+       AbortSignal and Observable, Window, the cross-agent seam, Event, the File API, the File System model,
+       XMLHttpRequest and Encoding, is a row on its release column, released in reverse declaration order, so a
+       dependent is released before what it depends on. platform_check_agent_state fires on a row with agent
+       state and no release. */
     platform_agent_free();
-    /* rendering, timer, message_port and event_target are ROWS on core/platform.h's release column now,
-       run by the platform_agent_free above. Each of them CLAIMED a slot in another component — §8.1.7's
-       timer step and §8.1.7.3's in-parallel half on the ONE frontier, HTML §8.1.7.2's handler-set hook and
-       §2.9's tree walk and activation behaviour in the events layer — and not one of those claims was ever
-       given back. Two of these three hosts also ran event_target_free BEFORE message_port_free, which is
-       the order of that pair exactly backwards; reverse declaration order is what decides it now. */
-    /* CSSOM VIEW §4's viewport and §12's VisualViewport are ROWS on that column now too — the pair every host
-       wrote as `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the
-       component whose every member is a derivation over it. Reverse declaration order decides it now. */
-    /* AND HTML §7.4.6.3 Revealing the document WITH CSSOM View §4.2 The MediaQueryList Interface, which used
-       to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
-       platform_agent_free above — and this is the group where all three hosts were wrong IDENTICALLY, which is
-       the one shape a hand-written list cannot show you. Written here, §4.2 was released AFTER the `viewport`
-       and `visual_viewport` rows platform_agent_free had already run, and §4.2's whole answer is a predicate
-       over the viewport, so the dependent component went second. Reverse declaration order gives
-       media_query_list, visual_viewport, viewport, page_reveal — this pair inverted, with two rows BETWEEN
-       them. See core/platform.c's entry, and the live leak it names. */
-    /* §7.2.4's Location is a ROW on core/platform.h's release column now, run by the platform_agent_free
-       above. It holds TWO CLAIMS in solver/concolic.c's source registry, and concolic_free asserts that
-       registry is empty — an ordering that used to rest on all three hosts writing these two lines the same
-       way round, and that reverse declaration order decides now.
-       AND HTML §7.4.1's state machine WITH §7.2.5's History over it, which used to be the two lines here. Both
-       are ROWS on that column now, and they are what a hand-written list costs when no host is even missing a
-       line: this host released them HERE and the other two released them a whole teardown later, past the
-       realm intrinsics and the streams group. Within the pair all three had it backwards — §7.2.5 is a VIEW
-       over §7.4.1's record and reads it in every member, so the view goes first. */
-    /* AND HTML §7.2.6 The navigation API WITH §7.2.6.5 The NavigationHistoryEntry interface under it, which
-       used to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
-       platform_agent_free above. All three hosts had this pair adjacent and in the right order — the walker
-       before the interface it walks — so what it cost was not an order: both rows' release columns were empty
-       while both files declared no agent state, and both carried their CLASS ID past the release. See
-       core/platform.c's entry. */
-    /* AND HTML §8.1.7 Event loops's OWN RECORD WITH HTML §8.12 Animation frames's map keys, which used to be
-       the two lines here. Both are ROWS on core/platform.h's release column now, run by the platform_agent_free
-       above — released after `timer`, whose entries are all due at a moment on that clock, instead of before
-       it. See core/platform.c's entry. */
-    /* FETCH §5.1 "Headers class", §5.5 "Response class" and §5.4 "Request class" are ROWS on
-       core/platform.h's release column now, run by the platform_agent_free above, and reverse declaration
-       order releases them headers-then-response-then-request, which is the sequence all three hosts already
-       had them in. Out here NONE of the three could declare its state to core/agent_state.h at all — a row
-       with agent state and no release is what platform_check_agent_state fires on, and a release run AFTER
-       platform_agent_free is a release agent_state_check_released has already finished asking about. What
-       they held meanwhile: THREE CLASS IDS, §5.5's per-realm %JSON.stringify% slot, §5.3's two body handles,
-       §5.1's six member declarations and its pair-iterator handle, and §5.5's clone machine — every class id
-       a number JS_NewClassID handed out of a runtime that is gone, read by §5.1's finalizer and §5.4's and
-       §5.5's finalizer-and-mark pairs, which run later still. See core/platform.c's entries. */
-    /* URL §6.1 AND §6.2 are NOT freed here any more — `url` and `url_search_params` are ROWS on
-       core/platform.h's release column, run by the platform_agent_free above. These two lines were in all
-       three host teardowns and ran AFTER that call had already run the whole column, which is the drift the
-       column exists to end. Out here neither file could declare its agent state to core/agent_state.h at all
-       — a row with agent state and no release is what platform_check_agent_state fires on — so TWO CLASS IDS
-       were carried past their own release, each read by a finalizer and a gc_mark that run later still. See
-       core/platform.c's entry. */
-    /* XHR §4 "Interface FormData" is NOT freed here any more — `form_data` is a ROW on core/platform.h's
-       release column, run by the platform_agent_free above. This line was in all three host teardowns and ran
-       AFTER that call had already run the whole column, and the three did not agree on where it went: this
-       host and one other ran it beside encoding and text_stream, the third ran it up beside the two URL rows.
-       Out here the file could declare no agent state to core/agent_state.h at all — a row with agent state
-       and no release is what platform_check_agent_state fires on — so §4's CLASS ID was carried past its own
-       release, read by a finalizer and a gc_mark that run later still. See core/platform.c's entry. */
-    /* THE WHOLE STREAMS GROUP — §4's ReadableStream with core/streams/pipe.c and
-       core/streams/readable_byte_stream.c under it, §5's WritableStream, §6's TransformStream and §7's two
-       queuing strategies — is NOT freed here any more: all four are ROWS on core/platform.h's release column,
-       run by the platform_agent_free above, and reverse declaration order gives them the same sequence they
-       had here. All three hosts wrote these four lines and none of them agreed on where:
-       main.c's and test_forced.c's had the four together, while THIS list ran transform and writable, then SIX
-       other releases — abort, observable, navigable, solver_agent_free, document and realm_intrinsics — and
-       then queuing and readable, so the group straddled the frontier's own agent half in this host and in
-       neither of the others. Out here NONE of the four could declare its state to
-       core/agent_state.h at all — a row with agent state and no release is what platform_check_agent_state
-       fires on — so between them FIFTEEN CLASS IDS and THIRTY-THREE per-realm value slots were carried
-       past their own release, each one a number JS_NewClassID handed out of a runtime that is gone and
-       each one doubling as its component's declaration latch. See core/platform.c's entry. */
-    /* DOM §3.1/§3.2's AbortController and AbortSignal WITH the Observable standard's §2, which used to be
-       the two lines here. Both are ROWS on core/platform.h's release column now, run by the
-       platform_agent_free above. All three hosts wrote this pair and all three wrote it INVERTED —
-       `abort_free(); observable_free();` releases the depended-on component first, when §2.2's
-       SubscribeOptions declares `AbortSignal signal` and observable.c reads abort_signal_class() for its
-       brand — and the three did not agree on WHERE either: main.c's and test_forced.c's ran the pair
-       immediately before `document_free`, while THIS list ran it after six other hand-written releases and
-       before navigable, the solver's own agent half and document. Reverse declaration order gives observable,
-       then `fetch`, then abort. See core/platform.c's entry. */
     navigable_free(ctx);
-    /* NOTHING SWITCHES THE RUNNING FLOW OUT HERE ANY MORE, and the line that did is deleted rather than kept
-       as a safety net: a session ends by CLOSING (engine_session_close performs exactly that switch-out, which
-       is what makes the frontier a set of snapshots), so a host doing it as well would be the second scheduler
-       this conversion removed, expressed as one line of teardown. A flow still switched in at this point is a
-       session that never closed, and flow_release says so at the flow it reaches — which is what the
-       `engine_sched_end` above the teardown is for, and it is the ENGINE's close rather than a switch-out this
-       file performs, so the two lines say the same thing from the two sides rather than contradicting. */
-    /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
-       these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
+    /* Nothing switches the running flow out here: a session ends by closing (engine_session_close performs that
+       switch-out, which makes the frontier a set of snapshots), and a flow still switched in now is a session
+       that never closed, which flow_release reports. The solver's own list is one call, in solver/engine.h, for
+       the reason the platform's is. */
     solver_agent_free(ctx);
     document_free(ctx);
-    /* THE WHOLE DOM GROUP — element_free's cascade, the <iframe> element and GEOMETRY INTERFACES §3/§4 — is a
-       set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. This LINE
-       stays: document_free releases a REALM's record, not the agent's. The component's other half —
-       document_agent_free — is a row on that column, and the two are not ordered against each other. See
-       main.c's teardown. */
-    /* HTML §7.2.2's Window, with §7.2.2.5's BarProp under it, is a ROW on core/platform.h's release column now,
-       run by the platform_agent_free above — and THIS host is the one that shows why the column and not the
-       line: all three had `window_free`, and this one ran it HERE, after solver_agent_free and after
-       document_free, while the other two ran it a whole teardown earlier beside §7.2.6.5's
-       NavigationHistoryEntry. Nothing was missing and the order was still three different answers. See main.c's
-       teardown and core/platform.c's entry. */
-    /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
-       Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
-       on core/platform.h's release column now, run by the platform_agent_free above; every host wrote them
-       DEPENDENT-FIRST and reverse declaration order is what decides the sequence instead. See main.c's
-       teardown. */
-    /* HTML §8.1.4.6 Runtime script errors AND DOM §2.2's Event with the thirteen subclasses
-       core/events/event.c declares beside it, which used to be the two lines here — and THIS host is the one
-       that shows why the column and not the line: all three had both, and this one ran them BEFORE
-       realm_intrinsics_free while the other two ran them after. Nothing was missing and the order was still
-       three different answers. Both are ROWS on core/platform.h's release column now, run by the
-       platform_agent_free above, and out here neither component's state could be declared to
-       core/agent_state.h at all — a row with agent state and no release is what platform_check_agent_state
-       fires on: the Event family's sixty-six slots, and §8.1.4.6's own four. See main.c's teardown and
-       core/platform.c's entries. */
-    realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
-    /* FILE API §3, §4 AND §5 are NOT freed here any more — `blob` is a ROW on core/platform.h's release
-       column, run by the platform_agent_free above. This line was in all three host teardowns and ran AFTER
-       that call had already run the whole column, which is the drift the column exists to end. blob_free
-       reaches file_list_free, so §5 goes with §3 and §4 and the three are one row on both columns. Out here
-       neither file could declare its agent state to core/agent_state.h at all — a row with agent state and
-       no release is what platform_check_agent_state fires on — so THREE CLASS IDS were carried past their
-       own release, one of them the brand every BlobPart and BodyInit position reads. See core/platform.c's
-       entry. */
-    /* The File System model and its two standards, the two delivery callees, §9.5's bus and
-       XMLHttpRequest are ROWS on core/platform.h's release column now — this runner never had the
-       XMLHttpRequest line at all, so §5's ProgressEvent slot Symbol leaked in every file it ran. */
-    /* ENCODING §7.2, §7.4, §7.5 AND §7.6 are NOT freed here any more — `encoding` and `text_stream` are
-       ROWS on core/platform.h's release column, run by the platform_agent_free above. These two lines were in
-       all three host teardowns and ran AFTER that call had already run the whole column, and the WPT runner
-       ran them a hundred lines below where the other two did. Out here neither file could declare its agent
-       state to core/agent_state.h at all — a row with agent state and no release is what
-       platform_check_agent_state fires on — so FOUR CLASS IDS and ONE PER-REALM VALUE SLOT were carried past
-       their own release, read by two finalizers and a shared gc_mark that run later still. Reverse
-       declaration order releases `text_stream` before `encoding`, the dependent first, which is the order
-       these lines already had. See core/platform.c's entry. */
-    /* AFTER THE FRONTIER (solver_agent_free above), because a flow parked inside an IDL member reads this pool
-       at its teardown — the position this runner already had, and the one idl_args_free now asserts. */
+    /* document_free releases a realm's record, not the agent's. The DOM group, document_agent_free among it, is a
+       set of rows on core/platform.h's release column, and the two are not ordered against each other (see
+       main.c's teardown). */
+    realm_intrinsics_free();   /* the declarations are the agent's; each realm's prototypes went with it */
+    /* After the frontier (solver_agent_free above), because a flow parked inside an IDL member reads this pool at
+       its teardown; idl_args_free asserts the position. */
     idl_args_free(ctx);
-    /* THE CHILD DOCUMENTS THIS FILE CREATED. A child is a PROCESS: closing its pipes ends its serve loop and
-       waitpid reaps it. Without this each file left one zombie per <iframe> and per popup for the whole run —
-       a leak the runtime's own gc walk cannot see, because the thing leaked is not in this heap. */
+    /* The child documents this file created. A child is a process: closing its pipes ends its serve loop and
+       waitpid reaps it, a leak no GC walk could see because the thing leaked is not in this heap. */
     wpt_children_free();
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
-       this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
-       outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
-       unfinished machine by the step it rests at. The IDL pool's BLOCKS are the same obligation: each holds
-       the definition the runtime borrowed. */
+    /* After JS_FreeRuntime, and the order is part of the meaning: this releases step definitions, which
+       JS_RegisterStepDef borrows and requires to outlive the runtime (JS_FreeRuntime's [stepleak] report reads
+       `def->steps` to name each unfinished machine by its step). The IDL pool's blocks hold such definitions. */
     idl_args_pool_free();
     idl_async_iter_free();
     return failed ? 1 : 0;
