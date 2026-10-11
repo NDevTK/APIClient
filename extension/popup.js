@@ -198,7 +198,6 @@ function _refreshSendEnabled() {
           : settling ? "Document just changed — settling…"
           : "";
 }
-let currentKeyOverride = null; // null = auto, { key, source, disabled } for override
 
 // Virtual scroll state for request log
 const _vs = {
@@ -258,8 +257,6 @@ function setBodyMode(mode) {
     }
   }
   document.getElementById("send-frame-row").style.display =
-    isConsole ? "none" : "";
-  document.getElementById("send-key-section").style.display =
     isConsole ? "none" : "";
   document.getElementById("send-headers-section").style.display =
     isConsole ? "none" : "";
@@ -450,14 +447,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     loadState();  // re-load the selected document's per-document analysis (documentId-keyed)
   });
 
-  // API key selector: delegate to radio buttons and custom input
-  document.getElementById("send-key-options").addEventListener("change", onKeySelectionChange);
-  document.getElementById("send-key-section").addEventListener("change", (e) => {
-    if (e.target.name === "key-inject") onKeySelectionChange();
-  });
-  document.getElementById("send-key-options").addEventListener("input", (e) => {
-    if (e.target.id === "send-key-custom") onKeySelectionChange();
-  });
+  wireKeyExamples();
 
   // Service origin hint: "Open" link
   document.getElementById("send-service-origin-hint").addEventListener("click", (e) => {
@@ -679,7 +669,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         contentType,
         headers: sendPanelHeaders(headers),
         body,
-        apiKeyOverride: currentKeyOverride,
         requestInit: sendPanelRequestInit(),
         stated: sendPanelStatedHeaders(),
       });
@@ -1757,7 +1746,6 @@ function onSendEndpointSelected() {
   currentBodyMode = "form";
   setSendPanelVisible(false);
   document.getElementById("send-frame-row").classList.add("hidden");
-  document.getElementById("send-key-section").classList.add("hidden");
   document.getElementById("send-form-fields").style.display = "block";
   _sendFormHint("Select a method to load its schema.");
   renderChainInfo(null);
@@ -1815,7 +1803,7 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
 
     buildFormFields(schema, initialData);
     renderChainInfo(schema.chains);
-    renderKeySelector();
+    prefillKeyPositions();
     renderServiceOriginHint();
     /* AFTER buildFormFields AND NOT BEFORE. `setBodyMode` above already rendered the row, and it ran while
        the path and query inputs did not exist yet — so that render showed the template with its `{holes}`
@@ -2257,6 +2245,9 @@ async function replayRequest(reqId, sourceTabId) {
       addHeaderRow(k, v);
     }
   }
+  // The replayed record's own headers are in; a learned key goes where the record carries none.
+  prefillKeyPositions();
+  renderSendUrl();
 
   // Populate raw body textarea with original body as fallback
   document.getElementById("send-raw-body").value = "";

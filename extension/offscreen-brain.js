@@ -2405,19 +2405,6 @@ async function buildExportRequest(msg) {
   if (msg.stated.origin !== null && msg.stated.origin.header !== null) headers["Origin"] = msg.stated.origin.header;
   if (msg.stated.referer !== null) headers["Referer"] = msg.stated.referer;
 
-  /* API key: the user's explicit choice from the Send panel's key selector, which the popup posts with every
-     export. THERE IS NO ENDPOINT ARM. `else if (ep?.apiKey) { ep.apiKeySource === "url" ? … }` stood here and
-     neither field exists on an endpoint record — lib/merge.js, the extension's only `endpoints.set`, writes
-     exactly the names lib/endpoint-record.js declares — so the arm could not fire and the whole `ep` lookup
-     existed to feed it. */
-  if (msg.apiKeyOverride && !msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
-    if (msg.apiKeyOverride.source === "url") {
-      parsedUrl.searchParams.set("key", msg.apiKeyOverride.key);
-    } else {
-      headers["X-Goog-Api-Key"] = msg.apiKeyOverride.key;
-    }
-  }
-
   const url = parsedUrl.toString();
 
   let body = null;

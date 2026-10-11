@@ -1786,9 +1786,7 @@ async function sendRequest() {
   /* THE ADDRESS IS COMPOSED ONCE, HERE, AND RENDERED FROM THE SAME CALL. `renderSendUrl` re-runs
      `sendPanelAddress` in this same synchronous turn over a DOM nothing between these two lines mutates, so
      the row the operator is looking at when this handler returns is the string this request carries — which
-     is the whole of what SECURITY.md's "a surface that shows them the bytes" buys the operator tier.
-     What this panel CANNOT know is stated at the row rather than omitted: lib/send.js re-parses this address
-     and may add a `key` query parameter from a key store the popup cannot read. */
+     is the whole of what SECURITY.md's "a surface that shows them the bytes" buys the operator tier. */
   let url = sendPanelAddress();
   /* THE TEMPLATE THIS ADDRESS WAS COMPOSED FROM, SNAPSHOT SO THE ASSERT BELOW CAN SPEAK. Everything from
      here to that assert is one synchronous stretch — the only `await` in this function is the send itself —
@@ -1961,7 +1959,6 @@ async function sendRequest() {
     headers,
     body,
     frameId: replayFrameId,
-    apiKeyOverride: currentKeyOverride,
     requestInit: sendPanelRequestInit(),
     stated: sendPanelStatedHeaders(),
   };

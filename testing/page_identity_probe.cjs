@@ -99,7 +99,7 @@ async function main() {
       type: "SEND_REQUEST", tabId: rt.tabId, documentId: rt.documentId, endpointKey: "", service: null,
       methodId: null, url: u, httpMethod: o.method || "GET", contentType: "", headers: o.headers || {},
       body: o.body === undefined ? null : { mode: "raw", rawBody: o.body, formData: null },
-      frameId: 0, apiKeyOverride: null, requestInit: o.requestInit,
+      frameId: 0, requestInit: o.requestInit,
       stated: o.stated || { origin: null, referer: null, jar: null } })
       .then((x) => (x && x.error ? { error: x.error } : { status: x && x.status })), route, url, init);
     else if (how === "off" || how === "dnr") {

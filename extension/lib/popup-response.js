@@ -245,6 +245,7 @@ function addHeaderRow(initialKey, initialValue) {
   ]);
   remove.addEventListener("click", () => row.remove());
   list.appendChild(row);
+  return row;
 }
 
 // ─── Export / Copy ────────────────────────────────────────────────────────────

@@ -800,6 +800,9 @@ function _checkSendPanelRequest(msg, command) {
   DCHECK(safeFetchStatedShape(msg.stated),
          command + " arrived with no stated {origin, referer, jar} — lib/popup-send.js's sendPanelStatedHeaders " +
          "writes all three (null for the frame's own) on every send");
+  DCHECK(!("apiKeyOverride" in msg),
+         command + " arrived with an apiKeyOverride — a key travels in the request's own header or query " +
+         "parameter, where the panel shows it, and nothing here adds one");
 }
 
 /* A body is bytes when its type is a binary wire format; JSPB (json+protobuf) is text. */
@@ -967,84 +970,10 @@ async function executeSendRequest(documentId, msg, sender) {
     headers["Content-Type"] = msg.contentType;
   }
 
-  // API key: user override → service keys → discovery doc key. (The endpoint record itself carries no key:
-  // lib/merge.js, its only producer, writes none, so the lookup that stood here was fetching a record to
-  // read two fields off it that do not exist.)
+  /* No key is added here: the Send panel offers each learned key at the header or query parameter it was
+     observed at (lib/popup-send.js renderKeyExamples), so a key is one of the bytes the operator sees. */
   const tab = _docForLearning(documentId);
   const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // the frame's tab, for frameIdentity; msg.tabId for a cross-tab replay
-  let apiKey = null;
-  let apiKeySource = "header";
-
-  if (msg.apiKeyOverride) {
-    // User explicitly selected a key (or disabled injection) from the Send panel
-    if (msg.apiKeyOverride.disabled) {
-      apiKey = null; // Skip all auto-selection
-    } else {
-      apiKey = msg.apiKeyOverride.key || null;
-      apiKeySource = msg.apiKeyOverride.source || "header";
-    }
-  }
-  /* NO `ep.apiKey` / `ep.apiKeySource` ARM. An endpoint record has neither field (lib/merge.js is its only
-     producer), so this branch read undefined twice and resolved to exactly the initial values above — the
-     service-wide key search below is what has always found the key. */
-
-  if (!msg.apiKeyOverride && !apiKey && service) {
-    const hostname = parsedUrl.hostname;
-    const svcKeys = collectKeysForService(tab, service, hostname);
-    // Also check globalStore for keys from previous sessions
-    if (svcKeys.length === 0) {
-      for (const [key, data] of globalStore.apiKeys) {
-        if (data.services?.has(service) || data.hosts?.has(hostname)) {
-          svcKeys.push(key);
-        }
-      }
-    }
-    if (svcKeys.length > 0) {
-      // Use the first matching key. We do NOT tiebreak by "same origin as the
-      // current tab": mapping a tabId to an origin assumes the main frame and races
-      // navigation (banned). The keys are already filtered to this service/host.
-      apiKey = svcKeys[0];
-      // Look up the actual location (url vs specific header name) the key
-      // was originally observed in — keys captured from
-      // `X-Goog-Api-Key` shouldn't be re-emitted as Google-branded
-      // headers against non-Google targets like statsigapi.
-      if (apiKey) {
-        var _skStoredData = tab.apiKeys.get(apiKey) || globalStore.apiKeys.get(apiKey);
-        if (_skStoredData && _skStoredData.source) {
-          apiKeySource = _skStoredData.source;
-        } else {
-          apiKeySource = null; // unknown origin — don't guess a header name
-        }
-      }
-    }
-    // Fall back to discovery doc's key
-    if (!apiKey) {
-      const docEntry = tab.discoveryDocs.get(service) || globalStore.discoveryDocs.get(service);
-      if (docEntry?.apiKey) apiKey = docEntry.apiKey;
-    }
-  }
-
-  // Only add key if not already present in headers or URL
-  const hasKeyHeader = headers["X-Goog-Api-Key"] || headers["x-goog-api-key"];
-  const hasKeyParam = parsedUrl.searchParams.has("key");
-  if (apiKey && !hasKeyHeader && !hasKeyParam) {
-    // apiKeySource carries either "url", "header:<name>", or a legacy
-    // "header" (no name). Only inject when we know the exact location —
-    // silently defaulting to X-Goog-Api-Key for arbitrary third-party
-    // hosts pollutes their requests with a Google-branded header that
-    // the server doesn't recognize. Fall back to X-Goog-Api-Key only for
-    // Google-ish hostnames where it is the genuine convention.
-    if (apiKeySource === "url") {
-      parsedUrl.searchParams.set("key", apiKey);
-    } else if (typeof apiKeySource === "string" && apiKeySource.startsWith("header:")) {
-      var _hdrName = apiKeySource.slice("header:".length);
-      headers[_hdrName] = apiKey;
-    } else if (/\.google(?:apis)?\.com$/i.test(parsedUrl.hostname) || /\.clients6\.google\.com$/i.test(parsedUrl.hostname)) {
-      headers["X-Goog-Api-Key"] = apiKey;
-    }
-    // Otherwise skip auto-attach — let the user pick explicitly via the
-    // Send panel's key selector if they want to try a specific key.
-  }
 
   const url = parsedUrl.toString();
 

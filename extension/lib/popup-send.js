@@ -1,6 +1,6 @@
 /* Popup send-panel controls — extracted from popup.js (classic script, shares the popup global scope +
    DOM). renderSendPanel + its selectors: service grouping, method dropdown, frame selector, service-origin
-   hint, API-key selector (+ onKeySelectionChange/truncateKey). */
+   hint, and the API keys offered at the positions they were seen sent. */
 // ─── Send Panel ──────────────────────────────────────────────────────────────
 
 function renderSendPanel() {
@@ -457,12 +457,6 @@ function renderServiceOriginHint() {
  * request is not a wrong number in a report, it is a person deciding on a fact nobody established, and it
  * would FORGE the authorization the relay's exemption rests on rather than supply it.
  *
- * WHAT IT CANNOT KNOW IS SAID RATHER THAN OMITTED. `executeSendRequest` (lib/send.js) re-parses this address
- * and MAY add a `key` query parameter, from `collectKeysForService` over the offscreen's per-tab store and
- * `globalStore.apiKeys` — a cross-session store the popup does not hold, so whether it will is not a small
- * fact this file declined to compute, it is UNKNOWN from here. Replicating that condition would be exactly
- * the second copy the paragraph above refuses.
- *
  * THIS IS A DISPLAY AND NEVER A GATE. It adds no confirmation, no token list and no veto — CLAUDE.md and
  * SECURITY.md both record a gate built at that relay and REMOVED, because a token list standing there is the
  * tool vetoing its operator on a substring they never saw. The floor under an operator's act is the operator
@@ -547,10 +541,7 @@ function renderSendUrl() {
     "are stated only in their own fields below."]));
   if (URL.canParse(sent)) renderSendPolicyVerdict(row, new URL(sent).href);
   renderSendIdentity(URL.canParse(sent) ? new URL(sent).href : null);
-  row.appendChild(domElement("div", { class: "send-url-note" }, [
-    "Not decided here: an API key whose learned location is the URL is attached downstream as a `key` " +
-    "query parameter, from a key store this panel cannot read — whether that happens to this request is " +
-    "UNKNOWN from here."]));
+  renderKeyExamples();
 }
 
 /* The frame's Content Security Policy verdict on a request to `url` (SEND_PANEL_POLICY, answered by the engine
@@ -755,110 +746,170 @@ function loadSendRequestInit(req) {
     req.requestInit === null || req.requestInit.credentials === null ? "" : req.requestInit.credentials;
 }
 
-// ─── API Key Selector ────────────────────────────────────────────────────────
+// ─── API keys, offered where they were seen sent ─────────────────────────────
 
-function renderKeySelector() {
-  var section = document.getElementById("send-key-section");
-  var optionsEl = document.getElementById("send-key-options");
-  var badge = document.getElementById("send-key-badge");
-  if (!section || !optionsEl) return;
+/* Where a learned key was seen sent, from its record (lib/keys.js): the request header its context names
+   (`header:<name>`), or each query parameter of the request URL it was seen in (`referer`) whose value is the
+   key. A key found only in a response body has no position.
+   Named residual. Not covered: a key's later sightings, as lib/keys.js records the first one's context only.
+   Next diff records every position a key is seen sent at on its entry. Its absence shows as a key offered
+   at one position while requests the page sent carried it at another. */
+function apiKeyPositions(key, entry) {
+  DCHECK(typeof entry.source === "string",
+         "an API-key entry carries no source — lib/keys.js records the context it was found in on every entry");
+  if (entry.source.startsWith("header:")) return [{ in: "header", name: entry.source.slice("header:".length) }];
+  if (entry.source !== "url") return [];
+  DCHECK(typeof entry.referer === "string" && URL.canParse(entry.referer),
+         "an API-key entry found in a URL carries no URL — lib/keys.js records the one it scanned as `referer`");
+  var out = [];
+  new URL(entry.referer).searchParams.forEach(function (v, n) {
+    if (v === key && !out.some(function (p) { return p.name === n; })) out.push({ in: "query", name: n });
+  });
+  return out;
+}
 
-  // Get selected service and hostname
+/* The learned keys for this panel's request, seen with its service or host (collectKeysForService's rule),
+   as [{in, name, offers: [{key, seen, context}]}]: one entry per position a key was seen sent at, where
+   `seen` is "sent" for those keys and "response" for a key found only in a response, offered at every
+   position. With no position at all, those keys are one entry with `in` null. */
+function sendPanelKeyPositions() {
   var epSelect = document.getElementById("send-ep-select");
-  var selectedOpt = epSelect?.options?.[epSelect.selectedIndex];
-  var svc = selectedOpt?.dataset?.svc || "";
-  // Explicit canParse guard — same root-cause fix as renderServiceOriginHint.
-  var hostname = (currentRequestUrl && URL.canParse(currentRequestUrl)) ? new URL(currentRequestUrl).hostname : "";
-
-  // Collect matching keys (same logic as collectKeysForService in background)
-  var matchingKeys = [];
-  if (tabData?.apiKeys) {
-    for (var k in tabData.apiKeys) {
-      var kd = tabData.apiKeys[k];
-      var svcMatch = kd.services && kd.services.indexOf(svc) !== -1;
-      var hostMatch = kd.hosts && kd.hosts.indexOf(hostname) !== -1;
-      if (svcMatch || hostMatch) {
-        matchingKeys.push({ key: k, data: kd });
-      }
-    }
-  }
-
-  if (matchingKeys.length === 0) {
-    section.classList.add("hidden");
-    currentKeyOverride = null;
-    return;
-  }
-
-  section.classList.remove("hidden");
-  badge.textContent = matchingKeys.length + " available";
-
-  var radio = function (attrs) {
-    return domElement("input", Object.assign({ type: "radio", name: "send-key-select" }, attrs));
+  var selectedOpt = epSelect.options[epSelect.selectedIndex];
+  var svc = selectedOpt && typeof selectedOpt.dataset.svc === "string" ? selectedOpt.dataset.svc : "";
+  var host = currentRequestUrl !== "" && URL.canParse(currentRequestUrl) ? new URL(currentRequestUrl).hostname : "";
+  DCHECK(!!tabData && !!tabData.apiKeys && typeof tabData.apiKeys === "object",
+         "the Send panel was asked for its key positions before GET_STATE answered with the key map");
+  var positions = [], unplaced = [];
+  var at = function (p) {
+    var e = positions.find(function (x) { return x.in === p.in && x.name.toLowerCase() === p.name.toLowerCase(); });
+    if (!e) { e = { in: p.in, name: p.name, offers: [] }; positions.push(e); }
+    return e;
   };
-  var optionLabel = function (text) { return domElement("span", { class: "key-option-label" }, [text]); };
-  var options = [];
+  Object.keys(tabData.apiKeys).forEach(function (k) {
+    var kd = tabData.apiKeys[k];
+    if (kd.services.indexOf(svc) < 0 && kd.hosts.indexOf(host) < 0) return;
+    var ps = apiKeyPositions(k, kd);
+    if (ps.length === 0) unplaced.push({ key: k, seen: "response", context: kd.source });
+    ps.forEach(function (p) { at(p).offers.push({ key: k, seen: "sent", context: kd.source }); });
+  });
+  if (positions.length === 0) return unplaced.length ? [{ in: null, name: null, offers: unplaced }] : [];
+  positions.forEach(function (p) { p.offers = p.offers.concat(unplaced); });
+  return positions;
+}
 
-  // Auto option (default)
-  var autoTruncated = truncateKey(matchingKeys[0].key);
-  options.push(domElement("label", { class: "key-option" }, [
-    radio({ value: "auto", checked: "" }), " ", optionLabel("Auto"), " ",
-    domElement("span", { class: "key-value-truncated" }, [autoTruncated]),
-  ]));
-
-  // One option per matching key
-  for (var i = 0; i < matchingKeys.length; i++) {
-    var mk = matchingKeys[i];
-    var truncated = truncateKey(mk.key);
-    options.push(domElement("label", { class: "key-option" }, [
-      radio({ value: "key-" + i, "data-key": String(mk.key) }), " ",
-      domElement("span", { class: "key-value-truncated" }, [truncated]), " ",
-      optionLabel(String(mk.data.name || "Key")), " ",
-      mk.data.source ? domElement("span", { class: "key-source-badge" }, [String(mk.data.source)]) : [],
-    ]));
+/* The Send panel's own control for a position: a parameter field of that name and location, else a typed
+   header row, else (for a query parameter) the address template's own query. */
+function _keyPositionField(pos) {
+  var fields = document.querySelectorAll("#send-form-fields > .form-section > .form-field");
+  for (var i = 0; i < fields.length; i++)
+    if (fields[i].dataset.category === "param" && fields[i].dataset.location === pos.in &&
+        fields[i].dataset.name === pos.name) {
+      var input = fields[i].querySelector(".form-input");
+      DCHECK(!!input, "a " + pos.in + " parameter field " + pos.name + " holds no .form-input — _buildFieldStep " +
+             "gives every scalar parameter one, and a key goes nowhere else");
+      return { kind: "field", input: input };
+    }
+  if (pos.in === "header") {
+    var rows = document.querySelectorAll("#send-headers-list .header-row");
+    for (var j = 0; j < rows.length; j++)
+      if (rows[j].querySelector(".header-key").value.trim().toLowerCase() === pos.name.toLowerCase())
+        return { kind: "row", input: rows[j].querySelector(".header-val"), row: rows[j] };
+    return null;
   }
-
-  // Custom key option
-  options.push(domElement("label", { class: "key-option" }, [radio({ value: "custom" }), " ", optionLabel("Custom")]),
-               domElement("input", { type: "text", class: "key-custom-input hidden", id: "send-key-custom",
-                                     placeholder: "Paste API key..." }));
-
-  // None option
-  options.push(domElement("label", { class: "key-option" }, [
-    radio({ value: "none" }), " ", optionLabel("None (no key injection)"),
-  ]));
-
-  domReplaceChildren(optionsEl, options);
-
-  // Reset override to auto
-  currentKeyOverride = null;
+  return { kind: "template" };
 }
 
-function truncateKey(key) {
-  if (!key || key.length <= 16) return key || "";
-  return key.slice(0, 8) + "\u2026" + key.slice(-4);
+/* The address template's query, split off before a fragment; holes live in the path, so the query parses. */
+function _templateQuery(t) {
+  var q = t.indexOf("?"), h = t.indexOf("#");
+  var end = h < 0 ? t.length : h;
+  return { head: q < 0 || q > end ? t.slice(0, end) : t.slice(0, q),
+           params: new URLSearchParams(q < 0 || q > end ? "" : t.slice(q + 1, end)), tail: t.slice(end) };
 }
 
-function onKeySelectionChange() {
-  var selected = document.querySelector('input[name="send-key-select"]:checked');
-  var customInput = document.getElementById("send-key-custom");
-  if (!selected) { currentKeyOverride = null; return; }
-
-  var injectSource = "header";
-  var injectRadio = document.querySelector('input[name="key-inject"]:checked');
-  if (injectRadio) injectSource = injectRadio.value;
-
-  if (customInput) customInput.classList.add("hidden");
-
-  if (selected.value === "auto") {
-    currentKeyOverride = null;
-  } else if (selected.value === "none") {
-    currentKeyOverride = { disabled: true };
-  } else if (selected.value === "custom") {
-    if (customInput) customInput.classList.remove("hidden");
-    var val = customInput ? customInput.value.trim() : "";
-    currentKeyOverride = val ? { key: val, source: injectSource } : null;
-  } else if (selected.dataset.key) {
-    currentKeyOverride = { key: selected.dataset.key, source: injectSource };
-  }
+/* The value the panel will send at `pos`, or null when it sends none there. */
+function keyPositionValue(pos) {
+  var f = _keyPositionField(pos);
+  if (f === null) return null;
+  if (f.kind !== "template") return f.input.value === "" ? null : f.input.value;
+  var q = _templateQuery(currentRequestUrl);
+  return q.params.has(pos.name) ? q.params.get(pos.name) : null;
 }
 
+/* Puts `value` at `pos` in the panel's own control, so the address row and the header rows show it. Answers
+   the header row it added, or null. */
+function setKeyPositionValue(pos, value) {
+  var f = _keyPositionField(pos);
+  if (f === null) return addHeaderRow(pos.name, value);
+  if (f.kind !== "template") { f.input.value = value; return null; }
+  var q = _templateQuery(currentRequestUrl);
+  q.params.set(pos.name, value);
+  setRequestTemplate(q.head + "?" + q.params.toString() + q.tail);
+  return null;
+}
+
+/* What the last endpoint load put in: [{pos, value, row, template}], `row` the header row it added and
+   `template` the address it wrote. A prefilled value is the derived one; the next load removes a header row
+   still holding it and fills again, while a value the person changed is theirs. */
+var _keyPrefilled = [];
+
+/* On an endpoint load: each position with a key seen sent there, and nothing in the panel's control for it,
+   gets the first such key. A key found only in a response is offered and never prefilled. */
+function prefillKeyPositions() {
+  _keyPrefilled.forEach(function (p) {
+    if (p.row !== null && p.row.isConnected && p.row.querySelector(".header-val").value === p.value) p.row.remove();
+  });
+  // An address template this prefill wrote and nothing has replaced since still holds the derived value.
+  _keyPrefilled = _keyPrefilled.filter(function (p) { return p.template !== null && p.template === currentRequestUrl; });
+  sendPanelKeyPositions().forEach(function (pos) {
+    if (pos.in === null || keyPositionValue(pos) !== null) return;
+    var sent = pos.offers.find(function (o) { return o.seen === "sent"; });
+    if (!sent) return;
+    var row = setKeyPositionValue(pos, sent.key);
+    _keyPrefilled.push({ pos: pos, value: sent.key, row: row,
+                         template: _keyPositionField(pos).kind === "template" ? currentRequestUrl : null });
+  });
+}
+
+/* The key lines under the headers: per position, its state (derived, in the request as the replayed record
+   or the person put it, or none sent) and each key offered there as a chip; a click puts that key there. */
+function renderKeyExamples() {
+  var box = document.getElementById("send-key-examples");
+  DCHECK(!!box, "the Send panel carries no #send-key-examples — extension/popup.html declares it");
+  var positions = currentRequestUrl === "" || currentBodyMode === "msgconsole" ? [] : sendPanelKeyPositions();
+  domReplaceChildren(box, positions.map(function (pos) {
+    var where = pos.in === null ? "API keys found in responses, never seen sent:"
+      : "API key at " + (pos.in === "header" ? "header " : "query parameter ") + pos.name + ":";
+    var state = [];
+    if (pos.in !== null) {
+      var now = keyPositionValue(pos);
+      var derived = _keyPrefilled.some(function (p) {
+        return p.pos.in === pos.in && p.pos.name === pos.name && p.value === now &&
+               (p.row !== null ? p.row.isConnected : p.template === null || p.template === currentRequestUrl);
+      });
+      state = [" ", domElement("span", { class: "send-provenance-mark" },
+                               [now === null ? "(none sent)" : derived ? "(derived)" : "(in the request)"])];
+    }
+    var chips = pos.offers.map(function (o) {
+      return [" ", domElement("span", { class: "send-key-chip", "data-in": pos.in === null ? "" : pos.in,
+                                        "data-name": pos.name === null ? "" : pos.name }, [
+        offeredValueChip(o.key, { cls: "send-provenance-mark",
+          text: o.seen === "sent" ? "(seen sent)" : "(found in a response)",
+          title: o.seen === "sent" ? "observed in a request at this position (" + o.context + ")"
+                                   : "found in a response body (" + o.context + "), never seen sent" })])];
+    });
+    return domElement("div", { class: "field-ast-values" }, [domElement("span", { class: "ast-values-label" }, [where]),
+                                                              state, chips]);
+  }));
+}
+
+/* A chip click puts its key at its position; the panel's input listener then re-renders the address. */
+function wireKeyExamples() {
+  document.getElementById("send-key-examples").addEventListener("click", function (e) {
+    if (!e.target.classList.contains("ast-value-chip")) return;
+    var holder = e.target.closest(".send-key-chip");
+    if (holder.dataset.in === "") return;
+    setKeyPositionValue({ in: holder.dataset.in, name: holder.dataset.name }, e.target.textContent);
+    document.getElementById("panel-send").dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}

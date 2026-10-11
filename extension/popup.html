@@ -186,20 +186,15 @@
       </div>
       <div id="send-service-origin-hint" class="hidden"></div>
 
-      <details id="send-key-section" class="hidden">
-        <summary>API Key <span id="send-key-badge"></span></summary>
-        <div id="send-key-options"></div>
-        <div class="key-inject-row">
-          <label class="key-inject-label"><input type="radio" name="key-inject" value="header" checked /> Header</label>
-          <label class="key-inject-label"><input type="radio" name="key-inject" value="url" /> URL param</label>
-        </div>
-      </details>
 
       <div id="send-chain-info" class="hidden"></div>
 
       <details id="send-headers-section" class="hidden">
         <summary>Custom Headers</summary>
         <div id="send-headers-list"></div>
+        <!-- Each learned API key, offered at the header or query parameter it was seen sent at
+             (lib/popup-send.js renderKeyExamples). -->
+        <div id="send-key-examples"></div>
         <button id="btn-add-header" class="btn-small" type="button">
           + Add Header
         </button>
