@@ -10046,64 +10046,42 @@ static void excerpt(char *out, size_t cap, const char *src, size_t n)
 static int engine_sched_slice(void) {
     JSContext *ctx = g_sess_ctx;
     Flow *cur = g_sess_cur;
-    /* ONE READING OF THE SLICE'S OWN MEASURE PER ITERATION, carried. It closes the step just run (the WFQ's
-       aging charge) and opens the next one, so the charges TELESCOPE across the whole quantum and no
-       quantisation is lost between steps.
-       IT IS THE QUANTUM'S MEASURE AND NOT A SECOND CLOCK, which is the correction this line carries. It used to
-       be `engine_now_us()` — CLOCK_MONOTONIC — with a paragraph explaining that "this host has no CPU clock" and
-       that an ORDER decision can afford a wrong reading. Half of that was true of emscripten and none of it was
-       true of the native host, which has had a per-thread CPU clock all along; and §WFQ names the term CPU-AGING
-       — "a monopolizer that burns CPU without emitting" — so the currency the aging charge is denominated in has
-       to be the one the slice is. quantum_thread_us() is that one quantity, answered per host, and where the
-       host genuinely has no CPU clock quantum_measure() says so instead of this comment claiming it.
-       WHAT TELESCOPING PUTS ON THE WRONG BILL, said plainly rather than left to be discovered: the context
-       switch and the finish that happen BETWEEN two readings are charged to the flow stepped next, not to the
-       one they were performed for. That is one COW delta swap of misattribution, it is bounded by the swap this
-       scheduler already counts, and buying it back would cost a second reading per iteration for an ORDER
-       decision that a notch of quantisation already absorbs. Charging nothing at all — which is what a
-       release build did — is the error that matters here, not which of two flows pays for a swap. */
+    /* One reading of the slice's own measure per iteration, carried: it closes the step just run (the WFQ's aging
+       charge) and opens the next, so the charges telescope across the quantum and no quantisation is lost between
+       steps. It is the quantum's measure (quantum_thread_us), because the aging term is CPU aging ("a monopolizer
+       that burns CPU without emitting") and must be in the slice's currency; where a host has no CPU clock,
+       quantum_measure() says so. Telescoping charges the context switch and finish between two readings to the
+       flow stepped next, not the one they were for: one COW delta swap of misattribution, bounded by the swaps
+       this scheduler counts, which a second reading per iteration would buy back for an order decision a notch of
+       quantisation already absorbs. */
     int64_t now = quantum_thread_us();
-    /* THE SPAN EVERY COST THIS LOOP REPORTS IS A SHARE OF IS NO LONGER OPENED HERE, AND THE LINE THAT DID IT
-       IS RECORDED RATHER THAN QUIETLY MOVED. It read `if (!g_instance_us0_set) { g_instance_us0 = now; ... }`,
-       with a paragraph saying that opening it from this reading put it BEFORE the first turn is charged,
-       which made the containment at engine_step_unit_runs an identity. Every word of that was true of the
-       only row that existed then. It is not sufficient for the PARTITION `loop_us`/`between_slices_us` adds:
-       those are charged from engine_sched_step's own two readings, and the wrapper's first reading is EARLIER
-       than this one — it precedes `quantum_begin()`, the flow-stamp restore and the capture route — so a
-       baseline opened here would sit inside the first slice's own span and the partition would exceed it by
-       the wrapper's entry work on the very first slice. The opening is one line up the call chain now, at
-       engine_sched_step's first statement, which is the earliest reading this engine takes on its own thread
-       and therefore the only one every charge below is a sub-interval of. */
-    /* THE SESSION THE HOST STEPPED IS STILL OPEN — and the way this fires is a CALLER THAT TRANSFORMED THE
-       PREVIOUS ANSWER. Two exits close the session and both answer ENGINE_STEP_DONE: the frontier draining, and
-       the PARK that writes the residue to the cold tier. A wrapper that folded DONE into YIELD would send the
-       host straight back in here with nothing live, and the abort would read as a bug in whatever the park had
-       just done rather than in the fold. No layer folds anything now — the ABI entry used to fold STALLED into
-       YIELD "because the bridge speaks two values", and that cost a driver 10.8 million no-op steps against a
-       peer that had said it was owed a reply. So every code is propagated unchanged by every layer above this
-       (engine_sched_step brackets
-       the slice and returns it verbatim; qjs_step latches it in g_done and answers DONE to every later step). */
+    /* The span every cost this loop reports is a share of is opened at engine_sched_step's first statement, not
+       here: the partition `loop_us`/`between_slices_us` is charged from engine_sched_step's own two readings, and
+       the wrapper's first reading precedes this one (and `quantum_begin()`, the flow-stamp restore and the capture
+       route), so a baseline opened here would sit inside the first slice's span. */
+    /* The session the host stepped is still open. Two exits close it, both answering ENGINE_STEP_DONE (the
+       frontier draining, and the park that writes the residue to the cold tier), so this fires on a caller that
+       transformed the previous answer: a wrapper folding DONE into YIELD would send the host back in with nothing
+       live, and the abort would read as a bug in the park. Every layer propagates the code unchanged
+       (engine_sched_step brackets the slice and returns it verbatim; qjs_step latches it in g_done and answers
+       DONE to every later step). */
     DCHECK(g_sess_live,
            "a slice was opened on a session that is no longer live — the previous step answered "
            "ENGINE_STEP_DONE and the host stepped again anyway");
-    /* THE FLOW CARRIED ACROSS A QUANTUM BOUNDARY IS STILL A MEMBER OF THE FRONTIER. §scheduler's razor says the
-       cooperative yield resumes "the SAME top flow on the byte-identical frontier", and the whole of what makes
-       that true here is a raw `Flow *` held in a static across a RETURN TO THE HOST — during which the host
-       routes records, provides replies and answers requests. If any of those ever removed a flow, this pointer
-       would be read (`best != cur`, then flow_switch_out) after its free, and the corruption would look like a
-       scheduling bug rather than a lifetime one. Asserted where the pointer is picked back up, which is the one
-       place the claim is made. */
+    /* The flow carried across a quantum boundary is still a member of the frontier. The cooperative yield resumes
+       "the same top flow on the byte-identical frontier", and what makes that true here is a raw `Flow *` held in
+       a static across a return to the host, during which the host routes records, provides replies and answers
+       requests. If any of those removed a flow, this pointer would be read (`best != cur`, then flow_switch_out)
+       after its free, a lifetime bug looking like a scheduling one. Asserted where the pointer is picked up. */
     DCHECK(cur == NULL || flow_is_member(cur),
            "the flow this quantum resumes is no longer in the frontier — it was removed while the scheduler was "
            "returned to the host, so the resume is neither the same flow nor a byte-identical frontier");
-    /* THE FINISH THE PREVIOUS SLICE DEFERRED SO THE HOST COULD PHOTOGRAPH THIS MEMBER'S LAST MOMENT —
-       @PERWORLD; the whole argument is at `g_sess_finish_owed`. It stands ABOVE the park, above the pick and
-       above every `engine_session_close` in this function, which is what makes the deferral a split call
-       rather than a second teardown path: whatever this slice goes on to do, the member that answered
-       FLOW_STEP_DONE last time is finished FIRST and by the same two lines that would have finished it then.
-       THE MEMBER IS STILL SWITCHED IN, and that is the state the return left rather than something re-created
-       here — the host between the two does not switch flows (there is no ABI entry that does), so the delta
-       this unapplies is the delta the picture was taken of. */
+    /* The finish the previous slice deferred so the host could photograph this member's last moment (@PERWORLD;
+       the argument is at `g_sess_finish_owed`). Above the park, the pick and every engine_session_close here, so
+       the deferral is a split call rather than a second teardown path: whatever this slice does, the member that
+       answered FLOW_STEP_DONE last time is finished first, by the two lines that would have finished it then. The
+       member is still switched in, as the return left it: the host does not switch flows between the two (no ABI
+       entry does), so the delta this unapplies is the one photographed. */
     if (g_sess_finish_owed) {
         DCHECK(cur != NULL,
                "a finish was deferred for a picture and the member it was deferred for is gone — the yield "
@@ -10120,17 +10098,11 @@ static int engine_sched_slice(void) {
         cur = NULL;
         g_sess_cur = NULL;
     }
-    /* THE PARK IS TAKEN HERE — BEFORE the first pick, and that position is the mechanism rather than a
-       convenience. Every flow's decision state has to be in its OWN blob for the walk to read it, and the one
-       flow whose state is NOT is whichever the scheduler is holding: decide.c keeps the running flow's
-       evolving vector in its globals. So the running flow is switched out first — the ordinary suspend, the
-       same one a context switch performs — and from that instant the frontier is a set of snapshots, which is
-       exactly what a park needs and exactly what §Time-travel-resume says a parked flow is.
-       IT IS NOT A DROP AND NOT A BOUND. Nothing is truncated, skipped or forgotten: every member is written,
-       in full, and the host stores the document under this bundle's key. The flows themselves are released by
-       the instance teardown that follows, which is what frees the RAM the host asked for — Level-1 eviction is
-       a whole document's engine leaving memory, and its residue coming back is the SAME admission step, ranked
-       by the same one order. */
+    /* The park is taken here, before the first pick: engine_park_frontier switches the running flow out first,
+       since the walk reads every flow's decision state from its own blob. Not a drop and not a bound: every member
+       is written in full, and the instance teardown that follows frees the RAM the host asked for. Level-1
+       eviction is a whole document's engine leaving memory; its residue coming back is the same admission step,
+       ranked by the same order. */
     if (g_park_req) {
         engine_park_frontier(ctx, cur);
         cur = NULL;
@@ -10139,230 +10111,146 @@ static int engine_sched_slice(void) {
         engine_session_close();
         return ENGINE_STEP_DONE;
     }
-    /* NOTHING IS RE-ADMITTED HERE, AND THE LINE THAT DID IT IS DELETED. A `flow_clear_host_owed()` stood at the
-       top of every slice, reasoned as "between two slices the HOST ran". That is true of a slice that ended
-       because the engine had nothing left to do — and FALSE of one that ended on its CPU QUANTUM, which is
-       thread-sharing and hands the thread to a host with nothing to answer. Since the quantum is the exit a
-       busy slice always takes, the mark was being laundered by the one exit that means nothing.
-       WHAT IT COST, MEASURED: a document whose entire frontier was blocked on the host (512 of 512) marked the
-       ~59 flows one 12 ms slice had time for, was cut short, and re-admitted all of them at the next slice. The
-       sweep could never reach the end of the frontier, so "every member is waiting" — the STALL — was
-       unreachable BY CONSTRUCTION, and the engine swapped COW deltas 1.76 MILLION times with not one flow
-       finishing, not one candidate found and the heap unchanged. The marks now live until the HOST does
-       something that could have answered them, and each of those events clears the flow it reached
-       (engine_provide, engine_host_answer, engine_deliver, engine_perform, and the shared document-script slot
-       inside flow_deliver_one_reply). */
+    /* Nothing is re-admitted here. A slice that ended on its CPU quantum handed the thread to a host with nothing
+       to answer, so clearing host-owed marks at every slice would launder them through the exit a busy slice
+       always takes, and a frontier blocked on the host could never be swept to its end, making the stall
+       unreachable. The marks live until the host does something that could have answered them, and each such
+       event clears the flow it reached (engine_provide, engine_host_answer, engine_deliver, engine_perform, and
+       the shared document-script slot inside flow_deliver_one_reply). */
     for (;;) {
-        /* THE SEARCH'S OWN WORK ITEMS, CREATED WHERE THEY COME INTO EXISTENCE. §@S: an @S candidate re-fire is a
-           FLOW on this ONE frontier, so a detected sink becomes members of the frontier the way a fork does —
-           when it happens.
-           IT WAS ASKED ONLY WHERE THE FRONTIER HAD DRAINED, and that gate is a claim §NO BOUNDS forbids: a
-           frontier need never drain. MEASURED on this tree's own minimal document, whose opaque-length walk
-           makes every length a world — fifteen minutes, 4813 flows, three @S sinks in the document and
-           `candidates: 0`, so every @S verdict it can state was unreachable by construction and nothing said so.
-           IT IS IDEMPOTENT BY CURSOR (solve.h), so the ask costs one walk of the detected-sink list and adds
-           only what detection has appended since the last one. At the PICK rather than once per slice, because
-           that is what makes the exhausted answer below honest: a sink detected by the LAST runnable flow is
-           seeded before the frontier can be declared empty, so there is no seeding site left below and no
-           second one to keep in step.
-           A BLOCKED FLOW'S REPLY IS NOT DEFERRED BY THIS, which was the whole of the old ordering's argument.
-           Its premise is gone: every driver pays the host at EVERY slice (run_scheduler below, and main.c's
-           qjs_step at the ABI) rather than only at a stall, so a flow suspended inside a read is answered at the
-           next slice whatever else the frontier has to run. */
+        /* The search's own work items, created when they come into existence: an @S candidate re-fire is a flow on
+           this one frontier, so a detected sink becomes members the way a fork does. Asked at every pick, not only
+           when the frontier drained, which a frontier need never do. Idempotent by cursor (solve.h): one walk of
+           the detected-sink list, adding only what detection appended since. At the pick, so a sink detected by
+           the last runnable flow is seeded before the frontier can be declared empty, and no other seeding site
+           exists to keep in step. A blocked flow's reply is not deferred by this: every driver pays the host at
+           every slice (run_scheduler below, main.c's qjs_step at the ABI), so a flow suspended inside a read is
+           answered at the next slice. */
         solve_seed_candidates(ctx);
-        /* WFQ: highest value-of-information among the members that can still make progress — a fresh fork
-           (UCB) can preempt. The filter is the ONE order with the flows that have told the scheduler they are
-           waiting on the host taken out of the PICK only; they keep their weight, their place and every work
-           item they hold (flow.h).
-           THE FLOW THAT HOLDS THE THREAD IS PASSED IN, and that is what makes this a SCHEDULE rather than a
-           ranking read out loud. Asked without it, the pick returned the first maximum in registry order, so a
-           field of equal-weight members — which is most frontiers, since most flows have emitted the same
-           amount and usually none — moved the thread to g_flows[0] on every iteration and paid a COW delta swap
-           for a ranking that had not changed. The incumbent is displaced only by a STRICTLY better flow, which
-           is the same comparison the preempt hook makes, so the two ends of the decision cannot disagree. */
+        /* WFQ: highest value of information among the members that can still make progress; a fresh fork (UCB)
+           can preempt. The members waiting on the host are taken out of the pick only; they keep their weight,
+           place and every work item (flow.h). The flow holding the thread is passed in, which makes this a
+           schedule rather than a ranking: the incumbent is displaced only by a strictly better flow, the
+           comparison the preempt hook makes, so the two ends of the decision cannot disagree and a field of
+           equal-weight members (most frontiers) does not pay a COW delta swap per iteration. */
         Flow *best = flow_next_to_run(cur, FLOW_SCAN_NEXT);
-        /* NOTHING LEFT TO RUN: either the frontier is empty, or every member is waiting on the host — which is
-           the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
+        /* Nothing left to run: the frontier is empty, or every member is waiting on the host (the stall), decided
+           by asking each member rather than by counting unproductive picks. */
         if (!best) break;
         if (best != cur) {                  /* context switch: swap COW delta + decision + pins */
             if (cur) flow_switch_out(ctx, cur);
             flow_switch_in(ctx, best);
             solve_flow_begin(best);   /* the substitution is live only while its own flow runs */
-            /* AND THE MEMBER'S OWN RECORD THAT IT WAS EVER CHOSEN — the counter below says how many switches
-               this DOCUMENT performed, which is a fact about the scheduler; this says whether a given member
-               was ever on the receiving end of one, which is a fact about that member and is the only thing
-               that can tell a flow the ordering never reached from a flow the ordering reached and that made
-               no progress. Those two take opposite work (flow.h's `picks`), and until this line the census
-               could not distinguish them: every other candidate row is a term of the weight, and
-               flow_credit_emit resets all of them. Credited HERE and not inside flow_switch_in because that
-               function's job is to make the flow's state live — its delta, its decision cursor, its pins —
-               and a census entry among those would be a second thing it does under one name. */
+            /* The member's own record that it was chosen. The switch count below is a fact about the scheduler;
+               this is a fact about the member, and tells a flow the ordering never reached from one it reached
+               that made no progress, which take opposite work (flow.h's `picks`); every other candidate row is a
+               term of the weight, and flow_credit_emit resets them. Credited here rather than in flow_switch_in,
+               whose job is making the flow's state live. */
             flow_credit_pick(best);
             cur = best;
-            /* COUNTED, and it leaves in the result document. A scheduler that interleaves and one that runs
-               its flows FIFO produce the same endpoints on an easy page and diverge on every hard one, so
-               "does it actually switch" cannot be inferred from the findings — it has to be reported. The
-               host's WFQ reads it for exactly that. Cumulative across steps: the host wants the document's
-               total, not the last slice's. */
+            /* Counted, and reported in the result document: a scheduler that interleaves and one that runs flows
+               FIFO produce the same endpoints on an easy page and diverge on every hard one, so whether it switches
+               has to be reported. The host's WFQ reads it. Cumulative across steps. */
             g_switches++;
         }
-        /* THE IMAGE THIS MEMBER OWES THE HOST IS NOT TAKEN HERE, AND THIS PARAGRAPH IS WHY — @PERWORLD.
-           A discharge STOOD at this line, before the step, and its stated reason was that this is "the one
-           line in the engine where a member is switched in, its COW and DOM deltas are applied,
-           `flow_running()` names it, and it has not yet executed an instruction". Every clause of that is
-           TRUE, and the last one is the defect: a member's deltas at the OPENING of its FIRST turn are EMPTY,
-           so the picture taken here is the document as no flow has written it — which is BYTE-IDENTICAL to
-           the `baseline` image the same run already writes at `engine_session_close`, under a world's name.
-           MEASURED, on the shipped ABI through engine/trusted.mjs against a five-line document whose inline
-           script writes one element's textContent: the two PAM payloads md5 to one value, 445 ink pixels of
-           the PRE-SCRIPT text in both, on a run reporting `pageErrors: []` and one finished flow. Two files,
-           one fact — CLAUDE.md's plausible datum arriving as an artifact, since the second file reads as a
-           timeline's appearance and is a copy of the timeline nobody asked about.
-           IT DEFEATED THE ASK AT PRECISELY THE POPULATION THE ASK IS MADE OVER. The frontier walk the ask
-           is made of, `paint_mark_standing_members`, DCHECKs a live session and a non-empty frontier, so
-           the earliest a host may ask is before its first `qjs_step` — when the one member is the boot
-           flow and has run nothing. flow.h's `paint_owed` says the mark
-           exists because "§Boot's `if (__FLAGS.admin)` sibling holds a DOM and a heap its primary never had";
-           a discharge before the member's first instruction photographs neither.
-           A MEMBER'S TURN HAS TWO SUCH MOMENTS AND THE CLOSING ONE IS THE WORLD. The opening and the closing
-           of a turn both satisfy "switched in with its deltas applied", and only the closing one can hold
-           anything the member did. So the discharge moved to where a turn CLOSES: the FLOW_STEP_DONE arm
-           below (deferred across the return, because flow_finish is what unapplies the deltas) and the
-           slice-end yields beside it (free, because the host is already being handed that exact turn).
-           WHAT THIS DOES NOT CHANGE is every other sentence the deleted paragraph made, which is why they are
-           restated here rather than lost. It is a YIELD AND NOT A HOOK — the host that asked is the party
-           that renders, and nothing crosses this seam but the turn. AT MOST ONE IMAGE IS UN-DRAINED, because
-           there is no image on this side of the seam at all and each mark is cleared by the one discharge
-           that spends it. It CHANGES NO RANK AND TRUNCATES NOTHING: no discharge promotes a member, reorders
-           the frontier, or decides that any work will not happen. And the host's render burns this thread,
-           which is the misattribution a slice already carries for every record it routes and reply it
-           provides, paid only by a host that asked for pictures. */
+        /* The image this member owes the host is not taken here (@PERWORLD). At the opening of a member's first
+           turn its deltas are empty, so a picture here is the document no flow has written, byte-identical to the
+           `baseline` image engine_session_close writes, under a world's name; and the frontier walk the ask is
+           made of (`paint_mark_standing_members`) can run before the first `qjs_step`, when the one member is the
+           boot flow and has run nothing. A turn closes as well as opens with the member switched in and its deltas
+           applied, and only the closing moment holds what the member did, so the discharge is where a turn closes:
+           the FLOW_STEP_DONE arm below (deferred across the return, because flow_finish unapplies the deltas) and
+           the slice-end yields beside it. It is a yield, not a hook: the host that asked renders, and nothing
+           crosses the seam but the turn. At most one image is un-drained, since each mark is cleared by the one
+           discharge that spends it. It changes no rank and truncates nothing; the host's render burns this
+           thread, the misattribution a slice already carries for every record it routes, paid only by a host that
+           asked for pictures. */
         {
-            /* AGING IS CHARGED IN THREAD TIME, not in steps, and the difference is what a step MEANS.
-               `flow_age_running(1)` was written when a step was a whole drain — a long, roughly comparable
-               chunk of work — so one unit per step approximated CPU. A step is now ONE unit of work, so the
-               same charge bills a flow the same amount for twelve milliseconds of execution as for advancing a
-               single script index. §scheduler says the term demotes "a monopolizer that burns CPU without
-               emitting", so it is time that must be measured, and in the SAME currency as the reward it is
-               subtracted from (flow.c's FLOW_AGE_RATE: one emitted finding per second held without emitting).
-               THE READING IS UNCONDITIONAL, and it was the one thing wrong with the paragraph that used to
-               stand here. It said "the step is already timed for the seam assertion; this is that number" while
-               the only clock read on this path sat inside `#if APICLIENT_DEV` — so a release build charged the
-               constant 1 per step and had no aging policy at all. CLAUDE.md's release exemption covers DCHECKs,
-               which assert; it never covers the engine's BEHAVIOUR, and a WFQ that is fair only in development
-               is not the one policy §scheduler requires. It costs nothing: the reading is carried in `now`, so
-               this loop performs exactly the readings its slice check always did.
-               IT IS THE QUANTUM'S OWN MEASURE (solver/quantum.h), which is CPU actually consumed wherever the
-               host has a CPU clock — natively CLOCK_THREAD_CPUTIME_ID, the same clock the slice's timer is armed
-               on. The paragraph that stood here said flatly that "this host has no CPU clock", which was a claim
-               about emscripten written into a file that also compiles for Linux, and it was the licence for
-               charging aging in wall time. Where it IS true — the extension's wasm instance, whose every WASI
-               clock is emscripten_get_now() — the fallback is the same wall clock as before and quantum_measure()
-               names it, so nothing here has to claim anything. On that host a descheduled step is charged for
-               time it did not burn, so a flow is demoted one notch early and a sibling runs sooner; nothing is
-               dropped, truncated, skipped or reordered out of the frontier, which is the only thing the WFQ is
-               allowed to be and the razor §scheduler states. The seam assertion below may not take that trade,
-               because it reaches a VERDICT and aborts — which is why it decides on WORK and not on any clock.
-               WORK-DONE WOULD BE THE WRONG QUANTITY HERE even though it is the right one below: a flow that
-               forks nothing, queues nothing and emits nothing — a tight compute loop over opaque input — burns
-               the thread while its share of engine_work_done() stays at zero, so aging by work would never
-               demote the very shape this term exists for.
-               AND THE FINER WORK UNIT IS BLIND WHERE THIS TERM MOST NEEDS TO SEE, which is the question that
-               paragraph opens and does not close: the interpreter's own retired-DISPATCH count DOES move in
-               that tight compute loop, so it reads as the better work unit and it is not one. It has exactly
-               ONE increment site, inside quickjs.c's DISPATCH, so a C ACTIVATION THAT DECLARES NO STEP BOUNDARY
-               retires zero of it however long it runs — and a charge denominated in it would leave a
-               C-builtin-heavy flow UN-DEMOTABLE for as long as it ran, which is §ONE-WFQ-policy's aging term
-               failing not for the charged flow but for its siblings. That is the SAME population solver/quantum.h
-               names as the one no raise source reaches, so the blind spot in the RAISE and the blind spot in the
-               CHARGE are one blind spot, and what closes it is the step-machine conversion (§C-stack) rather
-               than any choice of unit here. */
+            /* Aging is charged in thread time, not in steps: a step is one unit of work, so a per-step charge would
+             * bill twelve milliseconds of execution the same as advancing one script index. The aging term demotes
+             * "a monopolizer that burns CPU without emitting", so it measures time in the reward's currency
+             * (flow.c's FLOW_AGE_RATE: one emitted finding per second held without emitting). The reading is
+             * unconditional, since a release build needs the aging policy as much as a dev one, and costs nothing,
+             * being carried in `now`.
+             *
+             * It is the quantum's measure (solver/quantum.h): CPU actually consumed where the host has a CPU clock,
+             * natively CLOCK_THREAD_CPUTIME_ID, the clock the slice's timer is armed on. On the extension's wasm
+             * instance every WASI clock is emscripten_get_now(), so the measure is wall time and quantum_measure()
+             * names it; there a descheduled step is charged for time it did not burn and a flow is demoted one
+             * notch early, which reorders nothing out of the frontier. The seam assertion below cannot take that
+             * trade, since it aborts, so it decides on work.
+             *
+             * Work done is the wrong quantity here: a tight compute loop over opaque input forks, queues and emits
+             * nothing, so its share of engine_work_done() stays at zero and aging by work would never demote it.
+             * The interpreter's retired-dispatch count moves in that loop but has one increment site, inside
+             * quickjs.c's DISPATCH, so a C activation that declares no step boundary retires none of it however
+             * long it runs, and a charge in it would leave a C-builtin-heavy flow undemotable. That is the
+             * population solver/quantum.h names as one no raise source reaches: one blind spot in the raise and the
+             * charge, closed by the step-machine conversion rather than by a choice of unit. */
             int64_t t0 = now;   /* this step's start: the previous iteration's reading, carried */
 #if APICLIENT_DEV
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
-            /* THE WORK THIS STEP PERFORMS, sampled beside the clocks and for a reason no clock can serve —
-               see the verdict below. Forks, flows and jobs are things the engine DID; no amount of being
-               descheduled can inflate them. */
+            /* The work this step performs, sampled beside the clocks (see the verdict below): forks, flows and jobs
+               are things the engine did, which no descheduling can inflate. */
             long w0 = engine_work_done();
-            /* AND THE WALL CLOCK, READ SEPARATELY BECAUSE IT MEASURES A DIFFERENT THING. `now` is the slice's
-               measure (CPU, where the host has one); the gap census and the step duration below are WALL
-               quantities the seam message REPORTS and never decides on, so mixing the two units into one
-               subtraction would produce a "wall gap" that is neither. Two numbers, two clocks, one verdict —
-               and the verdict is neither of them. */
+            /* And the wall clock, read separately because it measures something else: `now` is the slice's measure
+               (CPU where the host has one), while the gap census and the step duration below are wall quantities
+               the seam message reports and never decides on. */
             int64_t wall0_ms = engine_now_ms();
             JS_FlowPreemptStats(&pq0, &pf0);
             g_max_gap = 0; g_last_ask = wall0_ms;   /* this step's gaps, measured from the moment it starts */
             idl_slowest_reset();              /* ...and this step's slowest single Web API member step */
 #endif
-            /* THE RECLAIM SAFEPOINT, and it is this ONE region for a structural reason rather than a
-               performance one: across the step the engine holds no position in its own frontier, so a member
-               removed by the allocator's refusal edge cannot be removed out from under a walk. It is also where
-               essentially every allocation of a run happens — the page's own objects, its frames, its deltas —
-               so arming it here is what makes "the engine pages its tail at the RAM floor" true in general
-               rather than at one hand-picked call site. Restored rather than cleared, because the step can
-               reach this loop again through a nested driver. */
+            /* The reclaim safepoint, this one region for a structural reason: across the step the engine holds no
+               position in its own frontier, so a member removed by the allocator's refusal edge cannot be removed
+               from under a walk. It is also where nearly every allocation of a run happens (the page's objects,
+               frames, deltas). Restored rather than cleared, because the step can reach this loop again through a
+               nested driver. */
             int prev_reclaim = engine_reclaim_set(1);
-            /* THE SCHEDULER'S OWN PICK IS BEHIND THIS LINE — solve_seed_candidates, flow_next_to_run, the
-               context switch and solve_flow_begin have all run, and the flow is switched in but has not
-               executed an instruction. `detail` is the switch count, which says whether this iteration
-               performed one: a stray completion with the count unchanged is the seeding or the pick, and one
-               with it just incremented is the swap. */
+            /* The scheduler's pick is behind this line (solve_seed_candidates, flow_next_to_run, the context switch,
+               solve_flow_begin), and the flow is switched in but has executed nothing. `detail` is the switch count:
+               a stray completion with it unchanged is the seeding or the pick, one with it just incremented is the
+               swap. */
             ENGINE_NO_STRAY(ctx, "pre-step: the scheduler's pick, the context switch and the delta swap",
                             g_switches);
-            /* WHERE THE TURN'S TWO HALVES MEET — see g_slice_us. Everything the scheduler does for this turn
-               is behind this line and the flow has not executed an instruction, which is the same boundary the
-               stray check above is declared at, so the split is taken where the tree already says the pick,
-               the switch and the swap are finished. */
+            /* Where the turn's two halves meet (see g_slice_us): everything the scheduler does for this turn is
+               behind this line and the flow has executed nothing, the boundary the stray check above is declared
+               at. */
             int64_t t_slice0 = quantum_thread_us();
             g_sched_us += t_slice0 - now;
-            /* …AND THE SAME BRACKET IN THE OTHER CURRENCY, opened on the same line as the clock so the two
-               readings are of ONE span: the overrun test below compares `now - t_slice0` and this says how
-               many suspend points the path offered across that same interval. Taken HERE rather than at the
-               turn's own `t0` above deliberately — the pick, the switch and the delta swap are behind this
-               line and consult no policy, so counting from `t0` would be counting over a span the overrun
-               test is not about. It is a LOAD of a static in every build; see g_over_asks. */
+            /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
+               span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
+               across that interval. From here rather than the turn's `t0`, because the pick, switch and delta swap
+               consult no policy. A load of a static in every build; see g_over_asks. */
             uint64_t pa_slice0 = g_preempt_asked;
-            /* …AND THE THIRD READING OF THE SAME BRACKET, WHICH NEEDS NO CLOCK CALL OF ITS OWN: `t_slice0` IS
-               the turn's opening reading in the slice's measure, so the gap census opens from the very number
-               the overrun test will subtract from. Resetting the maximum here rather than at the turn's `t0`
-               above is the same choice `pa_slice0` makes and for the same reason — the pick, the switch and
-               the delta swap consult no policy, so a gap measured from `t0` would include a span in which an
-               offer was impossible and would read as a missing seam. See solver/engine.h's `over_gap_arms`. */
+            /* The third reading of the same bracket, needing no clock call: `t_slice0` is the turn's opening
+               reading in the slice's measure, so the gap census opens from the number the overrun test subtracts
+               from. Reset here rather than at `t0`, as `pa_slice0` is: a gap measured from `t0` would include a
+               span in which no offer was possible and read as a missing seam (solver/engine.h's `over_gap_arms`). */
             g_gap_max_us = 0; g_gap_last_us = t_slice0;
             int r = flow_step(ctx, cur);
-            /* WHERE THE STEP'S ANSWER GOES ONTO THE FLOW — the ONE point every arm of flow_step converges on,
-               so a new arm cannot forget to be recorded and there is no route to remember. What the arm
-               declares is its own NAME; where that name is KEPT is here. It decides nothing: `r` is the
-               scheduler's answer and this is the record beside it, read by the `@COLD` histogram and by the
-               seamless-stretch aborts below.
-               AND THE ASSERT IS WHAT MAKES THE DECLARATION A RULE. flow_step resets to NONE at its entry, so a
-               step that returned without naming its arm is one whose exit was added and never declared, and it
-               crashes HERE with the flow in hand rather than being attributed to the previous step — which is
-               exactly the misattribution this record exists to end (solver/step_unit.h). */
+            /* Where the step's answer goes onto the flow: the one point every arm of flow_step converges on, so a
+               new arm cannot forget to be recorded. The arm declares its name; it is kept here, read by the `@COLD`
+               histogram and the seamless-stretch aborts below, and decides nothing. flow_step resets to NONE at
+               entry, so a step returning without naming its arm crashes here with the flow in hand rather than
+               being attributed to the previous step (solver/step_unit.h). */
             DCHECK(g_step_unit != STEP_UNIT_NONE,
                    "a scheduler step returned without naming the arm it took — flow_step resets to NONE at its "
                    "entry and every exit declares itself, so this is an exit added without a name and the "
                    "member's step-unit row would report whatever the PREVIOUS step did");
             cur->step_unit = g_step_unit;
-            /* AND THE ARM'S LIFETIME COUNT, AT THIS SAME ONE POINT AND FOR THIS SAME REASON. A per-arm
-               increment written into each of the two dozen exits is two dozen places to forget one, and a
-               forgotten one is a silent undercount rather than a crash; here there is nothing per-arm to
-               remember, so an arm added later is counted by the fact that it returned. The line above is
-               WHERE THIS MEMBER IS STANDING and is overwritten at its next step; this is HOW MANY TIMES THE
-               SCHEDULER HAS RUN THIS ARM and is never overwritten. That pair is what separates "the ladder
-               never reaches this rung" from "it reaches it constantly and no member happens to be sitting
-               there when a census is taken" — two readings of one zero that take opposite work.
-               IT DECIDES NOTHING, exactly like the record above it: §NO BOUNDS, and see the declaration. */
+            /* And the arm's lifetime count, at this one point for the same reason: an increment per exit is two
+               dozen places to forget one, and a forgotten one undercounts silently. The line above is where this
+               member stands, overwritten at its next step; this is how many times the scheduler has run the arm,
+               never overwritten. The pair separates "the ladder never reaches this rung" from "it reaches it
+               constantly and no member is sitting there when a census is taken", two readings of one zero that
+               take opposite work. It decides nothing. */
             g_step_unit_runs[g_step_unit]++;
-            /* THE CONSERVATION, ASSERTED AT THE ONE INSTANT IT IS EXACT. flow_step has returned, so every
-               entry counted at its reset has now been recorded here — and the two are counted at DIFFERENT
-               places precisely so that this can fail. It is asked HERE and not at the accessor that publishes
-               the numbers for the ordinary reason a bad state is caught where it is born: a reader composing
-               the census would learn only that the totals disagree, with the step that broke them long gone,
-               while here the step that failed to record itself is the step that has just returned and the
-               flow it ran is in hand. It is also the one place the identity is exact — the accessor is a
-               public entry a host may call at any point, and between the entry and the record it is off by
-               one BY DESIGN. */
+            /* The conservation, asserted at the one instant it is exact: flow_step has returned, so every entry
+               counted at its reset is recorded here, and the two are counted at different places so that this can
+               fail. Here rather than at the publishing accessor, because the step that failed to record itself has
+               just returned with its flow in hand, and between an entry and its record the identity is off by one
+               by design. */
             DCHECKF(step_unit_runs_total() == g_steps,
                     "the lifetime step histogram does not account for every scheduler step (%ld arm counts "
                     "against %ld entries into flow_step) — the entry is counted where flow_step resets the "
@@ -10373,80 +10261,47 @@ static int engine_sched_slice(void) {
                     step_unit_runs_total(), g_steps);
             engine_reclaim_set(prev_reclaim);
             ENGINE_NO_STRAY(ctx, "post-step: the arm flow_step just ran", r);
-            /* HTML §8.1.7.3's END OF A MICROTASK CHECKPOINT. The flow has run a unit of work — a script, a
-               microtask, a task — and if it holds no microtask the queue has drained, which is the moment
-               HTML runs the steps other standards register there. It is asked HERE rather than inside
-               flow_run_one_job because a SCRIPT that queued nothing at all still ends in a checkpoint, and
-               that path never reaches the job pump. Running it more often than a browser would costs nothing
-               and changes nothing: every consumer's steps are idempotent by their own definition (Indexed
-               Database §2.7.1 empties its set and then answers false), which is the same property that lets
-               HTML itself re-enter the checkpoint from clean-up-after-running-script.
-               A FINISHED FLOW IS NOT ASKED, and that is not a hole: the steps registered here QUEUE work (a
-               deactivated transaction with an empty request list commits, which is a database task), and a
-               task enqueued on a flow that has finished is a dropped work item — §scheduler's razor. Nothing
-               is left behind either, because the flow's own COW delta carries every transaction it created
-               and unapplies with it.
-               AND A FLOW SUSPENDED INSIDE A PROGRAM IS NOT ASKED EITHER — `!cur->frame` — because "the flow has
-               run a unit of work" was the claim above and a PREEMPT is not the end of one: flow_step returns on
-               a back-edge preempt too. HTML §8.1.4.4 Calling scripts states the precondition exactly — clean up
-               after running script performs the checkpoint only "if the JavaScript execution context stack is
-               now EMPTY" — and `Flow::frame` IS that stack here (`the current script's live preemptible frame,
-               NULL between scripts`, solver/flow.h). Without it the checkpoint ran at EVERY back-edge, and its
-               one registered consumer is HTML §8.1.7.3 Processing model's "Cleanup Indexed Database
-               transactions" step, whose steps are STATE TRANSITIONS and not observation: deactivate an active
-               transaction, and commit it when its request list is empty. So `db.transaction('s','readwrite')`
-               was deactivated and committed under the very statement that created it, and a member that had
-               already made §4.5's own "is the transaction active" check resumed to place its request against a
-               transaction that was no longer active — which is what core/indexeddb/idb_object_store.c's
-               os_active_across_suspension says in its own words and aborts on. The idempotence argument above
-               is untouched: running these steps MORE often than a browser is free, running them EARLIER is not.
-               THAT STACK HAS TWO REPRESENTATIONS HERE AND `frame` IS ONLY ONE OF THEM — which is why this
-               guard was necessary and NOT sufficient, and the assert above went on firing after it landed.
-               `Flow::frame` is a page SCRIPT's suspended frame chain; a flow that preempts inside JOB-DRIVEN
-               code parks instead (quickjs.h's pump: "a flow that preempts inside job-driven code parks"
-               there), and `frame` is NULL for the whole of that. Every Indexed Database member that matters
-               runs inside a job — `upgradeneeded`, `success`, `abort` are all event handlers — so the script
-               half of this test never covered them. And the return above is what exposes it: resuming a parked
-               continuation returns from here immediately, and its own comment says the continuation may park
-               AGAIN straight away, so this line was reached with a member suspended between §4.5's "is the
-               transaction active" check and the step that places its request. `JS_HasParkedFlow` is the other
-               half of the same sentence, asked of the runtime because the flow is switched IN here and the
-               queue is its own (JS_TakeParkedFlows/JS_PutParkedFlows carry it across a switch). */
-            /* THE EMPTYING ITSELF, READ ONCE. Three lines in this function ask the identical three-term
-               question — this checkpoint, the notify below it and the visit credit further down — and each
-               used to spell it out, with a paragraph beside two of them saying they are one sentence. Two
-               spellings of one predicate is the drift solver/pending.h refuses for the word "owed", and the
-               same argument holds here: what may differ between these readers is what they DO, never what
+            /* HTML §8.1.7.3's end of a microtask checkpoint. The flow has run a unit of work (a script, a
+             * microtask, a task), and if it holds no microtask the queue has drained, when HTML runs the steps
+             * other standards register there. Asked here rather than in flow_run_one_job, because a script that
+             * queued nothing still ends in a checkpoint and never reaches the job pump. Running it more often than
+             * a browser costs nothing: every consumer's steps are idempotent (Indexed Database §2.7.1 empties its
+             * set and then answers false), as HTML's own re-entry from clean up after running script relies on. A
+             * finished flow is not asked: the registered steps queue work (a deactivated transaction with an empty
+             * request list commits, a database task), and a task enqueued on a finished flow is dropped; the
+             * flow's COW delta carries every transaction it created and unapplies with it.
+             *
+             * Nor is a flow suspended inside a program: a preempt is not the end of a unit, and HTML §8.1.4.4
+             * Calling scripts performs the checkpoint only "if the JavaScript execution context stack is now
+             * empty". That stack has two representations here: `Flow::frame`, a page script's suspended frame
+             * chain (solver/flow.h), and the runtime's parked slot, where a flow that preempts inside job-driven
+             * code parks with `frame` NULL (quickjs.h's pump). Every Indexed Database member that matters runs
+             * inside a job (`upgradeneeded`, `success`, `abort` are event handlers), and the cleanup step's state
+             * transitions (deactivate an active transaction, commit it when its request list is empty), run early,
+             * would deactivate a transaction under a member suspended between §4.5's "is the transaction active"
+             * check and the step that places its request, which core/indexeddb/idb_object_store.c's
+             * os_active_across_suspension aborts on. Running these steps more often is free; running them earlier
+             * is not. `JS_HasParkedFlow` is asked of the runtime because the flow is switched in here and the queue
+             * is its own (JS_TakeParkedFlows/JS_PutParkedFlows carry it across a switch). */
+            /* The emptying itself, read once: this checkpoint, the notify below and the visit credit further down
+               ask the identical three-term question, and what may differ between them is what they do, never what
                "this flow's turn ended" means. */
-            /* WHOSE TURN THIS IS, ASSERTED BEFORE THE FIRST LINE THAT READS THE ANSWER AS `cur`'S. Two of the
-               three terms below are per-flow fields and are correct for any member; the MIDDLE one is not.
-               `JS_HasParkedFlow` asks the RUNTIME, and under an interleaving host the runtime holds exactly
-               ONE flow's parked continuations — the switched-in one's, because flow_switch_out's
-               JS_TakeParkedFlows moves the whole set onto `Flow::parked` and flow_switch_in's
-               JS_PutParkedFlows puts it back, DCHECKing the runtime was empty first. So that term is a fact
-               about `cur` only while `cur` holds the thread, and asked of any other member it answers about a
-               stranger's suspended activations — after which the §8.1.4.7 rejection notify and the §8.1.7.3
-               microtask checkpoint below both run on it, and the visit credit further down spends it.
-               ITS NAME SAYS RUNTIME AND ITS SCOPE IS DECIDED ELSEWHERE, which is why this is asserted rather
-               than left to whoever reads the predicate: quickjs.h states at JS_HasParkedFlow only who may
-               PARK, and states whose parks the runtime HOLDS three declarations further down at
-               JS_TakeParkedFlows. A reader of the predicate has no reason to reach that line, and the
-               reading the name alone offers — `any flow anywhere is parked` — is the one that makes this
-               boundary look like a global-quiescence gate rather than §8.1.4.4's own "the JavaScript
-               execution context stack is now empty". solver/flow.c's flow_between_units says the same thing
-               from the other side and cannot ask this half at all.
-               ONE ASSERT COVERS BOTH READERS BECAUSE THE REGISTER CANNOT MOVE BETWEEN THEM, which is what
-               makes this a hoist and not a second spelling — and it is a DERIVATION rather than a count,
-               because a count over a symbol's NAME scores this tree's prose along with its calls. The
-               register is `static` to solver/flow.c, so its whole writer set is enumerable from that ONE FILE
-               rather than from a grep over a tree: the initialiser, flow_registry_init's direct reset at a
-               session boundary, and flow_set_running's body — whose callers are this file's own
-               flow_switch_out, flow_switch_in and flow_finish and nothing else. The two consumers standing
-               between here and the charge are browser components — unhandled_rejection.h's notify and Indexed
-               Database §2.7.1's registered cleanup — that hold no scheduler entry, so none of the three
-               writers can run between these two readers.
-               RETIRES when something that CAN write the register stands between them, at which point the
-               charge is owed an assert of its own again and this one no longer speaks for it. */
+            /* Whose turn this is, asserted before the first line that reads the answer as `cur`'s. Two of the three
+             * terms below are per-flow fields; the middle one, `JS_HasParkedFlow`, asks the runtime, which under an
+             * interleaving host holds only the switched-in flow's parked continuations (flow_switch_out's
+             * JS_TakeParkedFlows moves the set onto `Flow::parked`; flow_switch_in's JS_PutParkedFlows puts it
+             * back, asserting the runtime was empty). So it is a fact about `cur` only while `cur` holds the
+             * thread; asked of another member it answers about a stranger, and the §8.1.4.7 notify, the §8.1.7.3
+             * checkpoint and the visit credit below all act on it. quickjs.h says who may park at JS_HasParkedFlow
+             * but whose parks the runtime holds only at JS_TakeParkedFlows, and the name alone reads as a
+             * global-quiescence gate rather than §8.1.4.4's "the JavaScript execution context stack is now empty"
+             * (solver/flow.c's flow_between_units says the same from the other side).
+             *
+             * One assert covers both readers because the register cannot move between them: it is `static` to
+             * solver/flow.c, written only by its initialiser, flow_registry_init's reset at a session boundary and
+             * flow_set_running (called only by flow_switch_out, flow_switch_in and flow_finish), and the two
+             * consumers between here and the charge are browser components with no scheduler entry. If something
+             * that can write the register comes to stand between them, the charge needs its own assert again. */
             DCHECK(flow_running() == cur,
                    "the flow the scheduler stepped is not the one holding the thread — the unit-of-work "
                    "boundary on the next line reads `JS_HasParkedFlow` of the RUNTIME, whose parked set "
@@ -10454,109 +10309,69 @@ static int engine_sched_slice(void) {
                    "notify below would run on another flow's suspended activations and the visit credit "
                    "would be spent on the wrong member; and the aging charge further down would demote a "
                    "flow that did not burn the time and leave the one that did holding its rank");
-            /* …AND WHICH CLAUSE OF IT ANSWERED, RECORDED HERE BECAUSE HERE IS WHERE IT IS DECIDED. The
-               ladder is the SAME conjunction in the SAME order — a live frame, then the runtime's parked slot,
-               then a checkpoint still owed — written as an if/else so the clause that refused has a name
-               instead of being flattened into one bit. Short-circuiting is preserved exactly: each clause is
-               reached only when every clause above it held, so `JS_HasParkedFlow` is still not asked of a
-               member that holds a frame. `unit_ended` is derived from the ladder rather than computed beside
-               it, because two spellings of one predicate is the drift this local already exists to refuse.
-               ONE ARM PER TURN AND THEREFORE A PARTITION: see g_unit_mid_program for why the four counters sum
-               to `g_steps` and where that is asserted. */
+            /* And which clause answered, recorded where it is decided: the same conjunction in the same order (a
+               live frame, the runtime's parked slot, a checkpoint still owed), written as an if/else so the refusing
+               clause has a name. Short-circuiting is preserved, so `JS_HasParkedFlow` is not asked of a member
+               holding a frame, and `unit_ended` is derived from the ladder. One arm per turn, so a partition (see
+               g_unit_mid_program). */
             int unit_ended;
             if (cur->frame)                                { g_unit_mid_program++;     unit_ended = 0; }
             else if (JS_HasParkedFlow(JS_GetRuntime(ctx))) { g_unit_parked++;          unit_ended = 0; }
             else if (flow_job_microtask(cur))              { g_unit_checkpoint_owed++; unit_ended = 0; }
             else                                             unit_ended = 1;
 
-            /* …AND THE STEP OF "PERFORM A MICROTASK CHECKPOINT" THAT COMES FIRST, WHICH WAS NOT HERE AT ALL.
-               The algorithm runs the microtask queue to empty and then, verbatim: "For each environment
-               settings object settingsObject whose responsible event loop is this event loop, notify about
-               rejected promises given settingsObject's global object" — and the Cleanup-Indexed-Database-
-               transactions step the hook below serves is the step DIRECTLY AFTER it in that same list. So the
-               two are one algorithm's two tails in the standard's own order, and they are now written in it.
-               WHERE IT USED TO BE was an arm at the BOTTOM of flow_step's ladder, reachable only by a flow with
-               no program, no job, no reply, no lifecycle stage, no rendering opportunity, no due timer and no
-               outstanding request — a per-flow DRAIN, which §scheduler forbids as a justification in terms.
-               MEASURED, AND STATED AT THE STRENGTH IT WAS MEASURED AT: six runs of the native fixture at
-               3ca1e281 (nine to a hundred and forty-one `@COLD` censuses each, 213 in all, five of them cut off
-               by a wall-clock kill rather than by draining) put a member on the old arm in NINE censuses — all
-               of them inside the single deepest run, none before its 126th — and on the microtask-checkpoint
-               seam this now rides in 178. The arm was not unreachable; it was reached about one twentieth as
-               often as the position HTML actually specifies, and only on a run that got far. `finished` was 0
-               in all 213, which is the other half of the same sentence: the drain the old position waited for
-               has not once happened on this fixture.
-               THE DEV-BUILD ASSERT AT THE OTHER END IS WHAT KEEPS THIS HONEST: flow_step's finished arm now
-               refuses to declare a timeline over while its list is non-empty, so a flow that never reaches this
-               seam crashes by name instead of dropping the page's own error report.
-               IT IS IDEMPOTENT, exactly as the hook below is and for a stronger reason: the notify CLEARS the
-               list as it queues (unhandled_rejection.h says so at its own declaration), so a second call at a
-               second checkpoint queues nothing. Running it more often than a browser would is free; the
-               position is not earlier than a browser's, because this predicate IS the emptying HTML §8.1.4.4
-               Calling scripts' clean up after running script step 3 triggers the checkpoint on.
-               A FINISHED FLOW IS NOT ASKED, for the identical reason the hook is not: what this queues are
-               §8.1.4.7 step 4 TASKS on the flow's own queue, and a task enqueued on a flow that has finished is
-               a dropped work item — §scheduler's razor. The assert named above is what makes that safe rather
-               than merely consistent. */
+            /* And the step of "perform a microtask checkpoint" that comes first. Having run the microtask queue to
+               empty, the algorithm says "For each environment settings object settingsObject whose responsible
+               event loop is this event loop, notify about rejected promises given settingsObject's global object",
+               and the Cleanup Indexed Database transactions step the hook below serves is the step directly after
+               it, so the two tails are written in the standard's order. Idempotent for a stronger reason than the
+               hook: the notify clears the list as it queues (unhandled_rejection.h), so a second checkpoint queues
+               nothing; and the position is not earlier than a browser's, because this predicate is the emptying
+               HTML §8.1.4.4 Calling scripts' clean up after running script step 3 triggers the checkpoint on. A
+               finished flow is not asked, for the hook's reason: what this queues are §8.1.4.7 step 4 tasks on the
+               flow's own queue. flow_step's finished exit refuses to end a timeline whose list is non-empty, so a
+               flow that never reaches this seam crashes by name rather than dropping the page's error report. */
             if (r != FLOW_STEP_DONE && unit_ended)
                 unhandled_rejection_notify(ctx);
             if (g_checkpoint_hook && r != FLOW_STEP_DONE && unit_ended)
                 g_checkpoint_hook(ctx);
-            /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
-               says is running, and that is only the flow this step advanced while nothing between the switch-in
-               above and here has changed it — a step that returned with a different flow running would bill the
-               wrong one, and the symptom would be a monopolizer that never ages and a sibling demoted for time
-               it never spent. The finish path clears it, which is why this stands BEFORE the r == DONE branch.
-               ASSERTED AT THE UNIT BOUNDARY ABOVE RATHER THAN HERE, and this is the retired half of that
-               sentence rather than a pointer added for tidiness: the register was checked at THIS line while
-               the FIRST reader of it is the `unit_ended` predicate above, so the two consumers
-               between — §8.1.4.7's rejection notify and §8.1.7.3's microtask checkpoint — had already acted
-               on a predicate computed from it. An invariant asserted at its second reader is one the first
-               reader has already built on. */
-            /* WHAT THE ORDER SAID ABOUT THIS FLOW BEFORE IT WAS CHARGED — held for the resolution assertion
-               below, and only in a build that evaluates it. It is `#if`-guarded WITH its assertion rather than
-               declared unconditionally, because check.h's release DCHECK still TYPE-CHECKS its condition
-               (`(void)sizeof(cond)`) and would therefore make an unguarded reading a per-step call in a build
-               that reads nothing. The seam census above is guarded the same way for the same reason. */
+            /* The charge, billed to the flow that ran: `flow_age_running` bills whoever the registry says is
+               running, which is the flow this step advanced only while nothing since the switch-in changed it
+               (asserted at the unit boundary above, before the register's first reader); otherwise a monopolizer
+               would never age and a sibling would be demoted for time it never spent. The finish path clears the
+               register, so this stands before the r == DONE branch. */
+            /* What the order said about this flow before it was charged, held for the resolution assertion below
+               and guarded with it: check.h's release DCHECK still type-checks its condition (`(void)sizeof(cond)`),
+               so an unguarded reading would be a per-step call in a build that reads nothing. */
 #if APICLIENT_DEV
             int64_t age_notch0 = flow_silence_notch(cur);
 #endif
             now = quantum_thread_us();
-            /* THE OTHER HALF, FROM THE SAME TWO READINGS THE CHARGE USES — never a third clock reading, which
-               would be a different quantity wearing this one's name. `t_slice0` was taken immediately before
-               the step and `now` immediately after it, so this arm is the step and nothing else, and the two
-               arms sum to the charge below by construction rather than by agreement. */
+            /* The other half, from the same two readings the charge uses, never a third clock reading: `t_slice0`
+               was taken just before the step and `now` just after, so this arm is the step alone, and the two arms
+               sum to the charge by construction. */
             g_slice_us += now - t_slice0;
-            /* AND WHETHER THIS ONE TURN OVERRAN, ASKED WITH THE SAME INEQUALITY solver/quantum.c's
-               quantum_expired() USES AND NOT A SECOND OPINION ABOUT THE BUDGET — a step that met or passed the
-               slice is a step in which the flow never reached a raise point, which is the one thing a mean of
-               turn costs cannot report. No branch depends on it (§NO BOUNDS: a per-turn overrun test is
-               exactly what a watchdog would be built from); it is counted and nothing else. */
+            /* Whether this turn overran, by the inequality solver/quantum.c's quantum_expired() uses: a step that
+               met the slice never reached a raise point, which a mean of turn costs cannot report. Counted and
+               nothing else; no branch depends on it, since a per-turn overrun test is what a watchdog is built of. */
             if (now - t_slice0 >= (int64_t)ENGINE_QUANTUM_MS * 1000) {
                 g_slice_over++;
-                /* KEYED ON THE ARM THIS TURN DECLARED, which is still in hand: `g_step_unit` is written by
-                   flow_step's convergence point above and is not overwritten until the next step resets it,
-                   so the arm, both clock readings and the budget are all one turn's. */
+                /* Keyed on the arm this turn declared, still in hand: `g_step_unit` is written at flow_step's
+                   convergence point above and not overwritten until the next step, so arm, readings and budget are
+                   one turn's. */
                 g_step_unit_over[g_step_unit]++;
-                /* THE CONSERVATION, ASSERTED AT THE ONE INSTANT IT IS EXACT — both arms have just been
-                   raised, so this is the only point in the loop where the histogram and the total agree, and
-                   asserting it at the accessor instead would learn that they disagree with the turn that
-                   broke them long gone. Same argument as the runs identity above, and the same shape: a
-                   partition whose parts cannot move without the total moving. */
+                /* The conservation, at the one instant it is exact: both are raised here, so a disagreement learned
+                   at the accessor would arrive with the turn that broke it long gone. */
                 DCHECKF(step_unit_over_total() == g_slice_over,
                         "the slice-overrun histogram does not account for every overrunning turn (%ld arm "
                         "counts against %lld overruns) — both are raised on this line from one turn's arm and "
                         "one turn's clock readings, so a difference is a second raise site for one of them",
                         step_unit_over_total(), (long long)g_slice_over);
-                /* …AND THE PER-ARM CONTAINMENT, WHICH NEITHER TOTAL ABOVE CAN SEE. `sum(over) ==
-                   g_slice_over` and `sum(runs) == g_steps` both hold with ONE arm's overrun count standing
-                   above its own run count and another's standing below it, so the two sums are blind to
-                   exactly the row a reader subtracts. This turn raised `g_step_unit_runs[g_step_unit]`
-                   unconditionally at the convergence point above — same arm, same turn, and no branch
-                   between the two lines — so the containment is true by construction HERE, which is why
-                   it is asked here rather than at the accessor: the turn that broke it is the turn that has
-                   just returned. It is what makes `arms[i] - over_arms[i]` a non-negative reading of one
-                   population rather than a subtraction nobody licensed. */
+                /* And the per-arm containment neither sum can see: both totals hold with one arm's overrun count
+                   above its run count and another's below. This turn raised `g_step_unit_runs[g_step_unit]`
+                   unconditionally at the convergence point, same arm and no branch between, so it is true by
+                   construction here, which makes `arms[i] - over_arms[i]` a non-negative reading of one
+                   population. */
                 DCHECKF(g_step_unit_over[g_step_unit] <= g_step_unit_runs[g_step_unit],
                         "arm %d has overrun the slice %ld time(s) against %ld run(s) of that arm — the "
                         "run is counted at the convergence point above and the overrun on the line above "
@@ -10564,18 +10379,12 @@ static int engine_sched_slice(void) {
                         "`g_step_unit` having been rewritten between the two lines or an overrun counted "
                         "for a turn whose arm was never recorded",
                         (int)g_step_unit, g_step_unit_over[g_step_unit], g_step_unit_runs[g_step_unit]);
-                /* AND WHETHER THE PAGE'S CODE WAS RUNNING AT ALL IN THIS TURN, RAISED HERE BECAUSE HERE IS
-                   WHERE THE TURN IS KNOWN TO BE ONE OF THE POPULATION — see solver/engine.h's
-                   `slice_overrun_asks`. `pa_slice0` was read on the same line as `t_slice0`, so both operands
-                   of the subtraction bracket exactly the span the test above judged.
-                   THE TWO ROWS' EQUIVALENCE IS BY THE ORDER OF THESE TWO STATEMENTS AND NOT BY AGREEMENT: a
-                   turn adds to the sum precisely when it does not add to the seamless count, which is why
-                   `asks == 0` and `seamless == overruns` can be asserted against each other at the accessor.
-                   THE CONTAINMENT IS ASKED HERE, WHERE THE TURN THAT WOULD BREAK IT HAS JUST RETURNED: a
-                   consultation count cannot go backwards across a step, because `g_preempt_asked`'s only
-                   writer is preempt_hook's own increment. A negative delta is that counter having been reset
-                   or wrapped, and the symptom of the reset would be a sum that quietly stopped covering the
-                   turns this branch counts. */
+                /* And whether the page's code offered a point in this turn, raised here where the turn is known to
+                   be one of the population (solver/engine.h's `slice_overrun_asks`); `pa_slice0` was read on
+                   `t_slice0`'s line, so both operands bracket the span judged above. A turn adds to the sum exactly
+                   when it does not add to the seamless count, by the order of these two statements, which the
+                   accessor asserts as an equivalence. The delta cannot be negative, since `g_preempt_asked`'s only
+                   writer is preempt_hook's increment; a negative delta is a reset or a wrap. */
                 DCHECKF(g_preempt_asked >= pa_slice0,
                         "the preempt policy reports FEWER lifetime consultations after a step than before it "
                         "(%llu against %llu) — the only writer is preempt_hook's own increment, so this is a "
@@ -10584,20 +10393,17 @@ static int engine_sched_slice(void) {
                         (unsigned long long)g_preempt_asked, (unsigned long long)pa_slice0);
                 if (g_preempt_asked == pa_slice0) {
                     g_over_seamless++;
-                    /* …AND IN WHICH ARM, WHICH THE SCALAR ABOVE CANNOT SAY AND WHICH DECIDES WHETHER THE
-                       ANSWER IS A STEP-MACHINE CONVERSION OR NOTHING AT ALL — see g_step_unit_over_seamless.
-                       Same arm, same turn, same consultation delta, one statement apart, so both identities
-                       below are exact here and nowhere else. */
+                    /* And in which arm, which decides whether the answer is a step-machine conversion or nothing
+                       (see g_step_unit_over_seamless). Same arm, turn and delta, one statement apart, so both
+                       identities below are exact here. */
                     g_step_unit_over_seamless[g_step_unit]++;
                     DCHECKF(step_unit_over_seamless_total() == g_over_seamless,
                             "the seamless-overrun histogram does not account for every seamless turn (%ld arm "
                             "counts against %ld seamless) — both are raised on these two lines from one "
                             "turn's arm, so a difference is a second raise site for one of them",
                             step_unit_over_seamless_total(), g_over_seamless);
-                    /* AND THE PER-ARM CONTAINMENT, WHICH THE SUM ABOVE IS BLIND TO for the same reason the
-                       runs/overruns pair is: two sums agree with one arm's subset standing above its own
-                       population and another's below it. This turn raised `g_step_unit_over[g_step_unit]` a
-                       few lines up, same arm and no branch between, so it is true by construction HERE. */
+                    /* And the per-arm containment the sum is blind to, for the runs/overruns pair's reason;
+                       `g_step_unit_over[g_step_unit]` was raised a few lines up, same arm and no branch between. */
                     DCHECKF(g_step_unit_over_seamless[g_step_unit] <= g_step_unit_over[g_step_unit],
                             "arm %d offered no suspend point in %ld overrunning turn(s) against %ld "
                             "overrunning turn(s) of that arm — the overrun is counted a few lines above this "
@@ -10607,17 +10413,13 @@ static int engine_sched_slice(void) {
                             g_step_unit_over[g_step_unit]);
                 } else {
                     g_over_asks += g_preempt_asked - pa_slice0;
-                    /* …AND IN WHICH ARM THOSE POINTS WERE OFFERED, WHICH THE SUM ABOVE CANNOT SAY AND WHICH
-                       IS WHERE THE TWO READINGS OF AN OVERRUNNING TURN DIFFER — see solver/engine.h's
-                       `over_ask_arms`. Same turn, same arm, same delta, one statement from the scalar, so the
-                       identity below is exact HERE and nowhere else. */
-                    /* THE HEADROOM IS ASKED BEFORE THE ADD AND NEVER AFTER, for `g_step_us`' reason: a
-                       sum of non-negative deltas only climbs, the delta's sign is asserted two statements
-                       up, so the one way this row can hand a reader something that is not a total is by
-                       OVERFLOWING — and a check written after the addition reads a value the overflow has
-                       already made undefined. This is the narrowing solver/engine.h's `over_ask_arms` states:
-                       the row is a `long` because solver/result.c has ONE step-unit composer and it prints
-                       `%ld`, so a 64-bit partition would force a second speller of that format. */
+                    /* And in which arm those points were offered, where the two readings of an overrunning turn
+                       differ (solver/engine.h's `over_ask_arms`). Same turn, arm and delta, one statement from the
+                       scalar, so the identity below is exact here. */
+                    /* The headroom is asked before the add, never after: a sum of non-negative deltas (the sign is
+                       asserted above) can mislead only by overflowing, and a check after the addition reads an
+                       undefined value. The row is a `long` because solver/result.c has one step-unit composer and
+                       it prints `%ld` (solver/engine.h's `over_ask_arms`). */
                     DCHECK((long)(g_preempt_asked - pa_slice0) <= LONG_MAX - g_step_unit_over_asks[g_step_unit],
                            "one arm's count of suspend points offered by overrunning turns would overflow a "
                            "`long` — the deltas are non-negative and the row only climbs, so this is a "
@@ -10632,32 +10434,22 @@ static int engine_sched_slice(void) {
                             "difference is a second raise site for one of them",
                             (unsigned long long)step_unit_over_asks_total(),
                             (unsigned long long)g_over_asks);
-                    /* …AND THE WIDEST INTERVAL INSIDE THIS TURN DURING WHICH NO POINT WAS OFFERED, WHICH IS
-                       THE ONE THING THE SUM ABOVE IS A PROXY FOR — see solver/engine.h's `over_gap_arms`.
-                       THE TAIL IS CLOSED HERE AND NOWHERE ELSE: `now` is the turn's closing reading in the
-                       same measure `g_gap_last_us` holds, so `now - g_gap_last_us` is the stretch between the
-                       last offer and the turn's end — which on the regime this row was built for IS the
-                       finding, since a turn that consulted nine times in its first millisecond and then ran
-                       for seconds has every one of those nine inside `g_gap_max_us` and the whole of its cost
-                       in the tail. A row that took `g_gap_max_us` alone would report milliseconds for a turn
-                       that held the thread for seconds, which is the flattering direction.
-                       ONLY FOR A NON-SEAMLESS TURN, WHICH IS WHY IT IS IN THIS `else` AND NOT ABOVE IT. A turn
-                       that offered NOT ONE point has no interval between two offers at all: its widest
-                       no-offer stretch is its own whole duration, which is already published as this turn's
-                       contribution to `g_slice_us` and whose turns `g_step_unit_over_seamless` counts. The two
-                       are a turn's worst GAP and a turn's LENGTH, and one row holding both could not be read
-                       for either. */
+                    /* And the widest interval inside this turn with no point offered, which the sum above is a
+                       proxy for (solver/engine.h's `over_gap_arms`). The tail is closed here: `now` is the turn's
+                       closing reading in `g_gap_last_us`'s measure, so `now - g_gap_last_us` is the stretch from the
+                       last offer to the turn's end, which for a turn that consulted nine times in its first
+                       millisecond and then ran for seconds is the finding; `g_gap_max_us` alone would report
+                       milliseconds for it. Only for a non-seamless turn: a turn that offered no point has no
+                       interval between offers, its whole duration is already its share of `g_slice_us`, counted by
+                       `g_step_unit_over_seamless`, and one row holding a turn's worst gap and its length could not
+                       be read for either. */
                     {
                         int64_t gap = now - g_gap_last_us > g_gap_max_us
                                       ? now - g_gap_last_us : g_gap_max_us;
-                        /* THE HEADROOM IS ASKED BEFORE THE NARROWING AND NEVER AFTER IT, for the ask row's
-                           reason exactly and against a different horizon. This row is a MAXIMUM rather than
-                           an accumulator, so the `long` it must be — solver/result.c has ONE step-unit
-                           composer and it prints `%ld` — is not the 35.8-minute saturation a SUM of
-                           microseconds is: the exposure is ONE TURN whose worst no-offer stretch exceeds
-                           about 2147 seconds in the slice's measure on a 32-bit host, which is an engine that
-                           has hung for half an hour. A check written after the cast reads a value the
-                           narrowing has already made undefined. */
+                        /* The headroom is asked before the narrowing, for the ask row's reason against a
+                           different horizon: this row is a maximum, so the `long` it must be overflows only for one
+                           turn whose worst no-offer stretch exceeds about 2147 seconds on a 32-bit host, an engine
+                           hung for half an hour. */
                         DCHECK(gap <= (int64_t)LONG_MAX,
                                "one turn's widest no-suspend-point stretch does not fit the `long` the "
                                "step-unit row composer prints — that is about 2147 seconds in the slice's "
@@ -10667,14 +10459,10 @@ static int engine_sched_slice(void) {
                         if (gap > g_over_gap_us) g_over_gap_us = gap;
                         if ((long)gap > g_step_unit_over_gap[g_step_unit])
                             g_step_unit_over_gap[g_step_unit] = (long)gap;
-                        /* THE IDENTITY, AND IT IS A MAX AND NOT A SUM — which is the one thing a reader
-                           carrying the three identities above must not transfer. A sum of maxima is a
-                           quantity no turn produced; what the arm row and its scalar share is that both are
-                           folds of the SAME per-turn number over the SAME population, so the scalar is the
-                           arms' own maximum. Asserted HERE, where the arm, the turn's two clock readings and
-                           the turn's consultation delta are all in one hand, for the reason the three above
-                           are: a disagreement learned at the accessor arrives with the turn that caused it
-                           long gone. */
+                        /* The identity is a max, not a sum: a sum of maxima is a quantity no turn produced, and the
+                           arm row and its scalar are folds of one per-turn number over one population, so the
+                           scalar is the arms' maximum. Asserted here, with the arm, the turn's readings and its
+                           delta in hand. */
                         DCHECKF(step_unit_over_gap_max() == g_over_gap_us,
                                 "the per-arm worst-gap row and its scalar disagree (%ld against %lld) — both "
                                 "are folded from ONE turn's interval on the two lines above this one, and the "
@@ -10691,25 +10479,14 @@ static int engine_sched_slice(void) {
                         "than its population is one of them being raised somewhere else",
                         g_over_seamless, (long long)g_slice_over);
             }
-            /* WHAT THIS TURN OF THE DISPATCH LOOP COST, ACCUMULATED FROM THE SAME DELTA THE CHARGE BILLS AND
-               NOT FROM A SECOND READING — see g_step_us. It is written BEFORE the charge for the ordinary
-               reason a reading is taken before the thing that consumes it: `flow_age_running` is the WFQ's
-               policy and this is a census, so the census may not be the thing that decides whether the policy
-               ran. In every build, because a run's own cost is not a developer's question — a release engine
-               that could not say what a step cost would leave `steps` with no denominator anywhere.
-               AND THE ONE THING THAT CAN MAKE THIS TOTAL A LIE IS ASKED BEFORE THE ADD, NEVER AFTER. A sum of
-               non-negative charges only climbs — flow_age_running, which is handed this same delta below,
-               asserts its sign (flow.c: a negative charge PROMOTES a monopolizer) — so the sole way this
-               accumulator can hand a reader a number that is not a total is by
-               OVERFLOWING, and a check written after the addition would be reading a value the overflow had
-               already made undefined. Asked in the form the type allows: whether the headroom is there, which
-               is side-effect-free and is the whole of what a DCHECK condition may be.
-               THE WIDTH ABOVE IS WHY THIS CANNOT FIRE TODAY, AND THAT IS THE POINT RATHER THAN AN ARGUMENT
-               AGAINST IT. At int64_t the horizon is a few hundred thousand years of slice time; at the `long`
-               this used to be it is 35.8 minutes on the host that ships. The _Static_assert catches a
-               narrowing at BUILD time and this catches a clock that has stopped being what the reading assumes
-               — the two together are what make solver/engine.h's paragraph a checked claim instead of a
-               remembered one. */
+            /* What this turn of the dispatch loop cost, from the delta the charge bills, never a second reading
+               (see g_step_us). Before the charge, because `flow_age_running` is the WFQ's policy and this is a
+               census, which may not decide whether the policy ran. In every build: without it `steps` has no
+               denominator. The headroom is asked before the add: a sum of non-negative charges (flow_age_running
+               asserts the sign; flow.c: a negative charge promotes a monopolizer) can mislead only by overflowing.
+               At int64_t the horizon is hundreds of thousands of years of slice time, so this cannot fire today;
+               the _Static_assert catches a narrowing at build time and this catches a clock that stopped being
+               what the reading assumes, which together make solver/engine.h's paragraph a checked claim. */
             DCHECK(now - t0 <= INT64_MAX - g_step_us,
                    "the dispatch loop's microsecond total would overflow — its charges are non-negative and it "
                    "only climbs, so this is either a slice measure that has stopped being microseconds or an "
@@ -10719,29 +10496,18 @@ static int engine_sched_slice(void) {
             g_step_us += now - t0;
             flow_age_running(now - t0);
 #if APICLIENT_DEV
-            /* §scheduler'S MONOPOLIZER HALF, ASSERTED AT THE SEAM WHERE THE CHARGE MEETS THE PICK — and it is
-               the one claim in the WFQ that nothing was checking. Its twin — "a UCB optimism bonus ∝
-               1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED" — is a floor on the weight flow_pick returns.
-               The other half — "CPU-AGING so a monopolizer that burns CPU without emitting sinks below
-               productive+unrun flows" — has a bound in flow_pick too, but that bound is DERIVED from
-               flow_weight, so it can only catch an EDIT to the formula and says nothing about whether the term
-               it is derived from can be OBSERVED. This is the observability, and it is a different claim: not
-               how far a flow sinks, but whether consuming a slice of the thread moves its rank AT ALL at the
-               granularity the thread is handed out in. The next statement of this loop is the pick.
-               IT IS AN IDENTITY UNDER TODAY'S UNIT AND IT FIRES ON THE ONE IT REPLACES. `flow_silence_notch`
-               divides by the cooperative quantum and the charge adds the same microseconds to BOTH of its
-               summands, so a full quantum moves it by at least two notches. That doubling is also why the unit
-               it replaces was 41.7 quanta of CPU rather than the 83.3 quanta of SILENCE a whole second names:
-               with it, a full quantum moved this by ZERO, forty picks out of every forty-one, and the
-               only term left with finer resolution was the optimism bonus, whose sole mover is COMPLETING a
-               unit of work — which is also the sole precondition for reaching a queued job (`frame == NULL`,
-               the predicate three lines below and the predicate every job arm of flow_step is under). So the
-               one flow that could run a promise reaction was the only flow paying anything between two whole
-               seconds. Measured on one login page, three runs, a fresh browser each: `jobsQueued` 373/401/417
-               and `jobsRun` 14/14/14 — an integral, document-determined number with no network in it.
-               A CHARGE UNDER ONE QUANTUM IS EXEMPT because it is below the resolution of anything this
-               scheduler decides: a step that ended early is not a slice consumed, and the charges TELESCOPE
-               across the quantum (the reading above is carried), so nothing is lost by not asserting on one. */
+            /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, "a UCB optimism bonus
+               ∝ 1/(visits+1) so a never-run flow is never starved", is a floor on the weight flow_pick returns;
+               flow_pick's bound on the aging half is derived from flow_weight and catches only an edit to the
+               formula. This is observability: whether consuming a whole quantum moves the flow's rank at the
+               granularity the thread is handed out in, since the next statement of this loop is the pick. Under
+               today's unit it is an identity: `flow_silence_notch` divides by the cooperative quantum and the
+               charge adds the same microseconds to both of its summands, so a full quantum moves it at least two
+               notches. A unit coarser than a quantum would leave the optimism bonus as the only finer term, whose
+               sole mover is completing a unit of work, the precondition for reaching a queued job
+               (`frame == NULL`), so the one flow able to run a promise reaction would be the only one paying. A
+               charge under one quantum is exempt: it is below anything this scheduler decides, and the charges
+               telescope. */
             DCHECK(now - t0 < (int64_t)ENGINE_QUANTUM_MS * 1000 || flow_silence_notch(cur) > age_notch0,
                    "a flow consumed a whole COOPERATIVE QUANTUM of the thread and its rank did not move — the "
                    "aging term is quantised coarser than the granularity at which the thread is handed over, "
@@ -10749,54 +10515,28 @@ static int engine_sched_slice(void) {
                    "not touch, and a monopolizer is invisible to the ordering for as many picks as that unit "
                    "is quanta wide");
 #endif
-            /* …AND THE OTHER TERM'S CHARGE, WHICH IS A COUNT AND NOT A CLOCK. §scheduler's optimism bonus is
-               "∝ 1/(visits+1)", and a VISIT is a completed unit of work — a program that ended, a job that ran,
-               a delivery, a lifecycle stage — never a slice of thread time. The two are charged here together
-               and stay two calls because they measure two quantities: the line above bills every microsecond,
-               this one bills only a step that finished what it was doing.
-               THE PREDICATE IS HTML §8.1.4.4 "Calling scripts"'s, step 3 of clean up after running script: "if
-               the JavaScript execution context stack is now empty". `Flow::frame` is that stack for a page
-               script and the runtime's parked slot is the other half of it (solver/flow.h) — and it is READ
-               here rather than re-spelled, from the one `unit_ended` the checkpoint and the rejection notify
-               above read, because what differs between these three is what they DO and never what the question
-               means. So a flow preempted in
-               the middle of a program is NOT credited — it is the same trial, still running. That is the whole
-               of the fix: charged per quantum instead, a flow was strictly outranked by every arm it had forked
-               as soon as it crossed one, so no flow ever reached the end of a program, and flow_step can only
-               reach a flow's queued jobs with `frame == NULL`. 217 jobs queued and none run, on a page whose
-               fetch surface is entirely promise reactions.
-               A FINISHED FLOW IS CREDITED TOO and that is deliberate: `r == FLOW_STEP_DONE` is the largest
-               completed unit there is, and the flow is about to leave the frontier, so the count is read only
-               by the census that reports what the order was made of. Excluding it would mean the ONE step whose
-               completion is certain is the one step not counted as one. */
-            /* AND THE INSTANCE-WIDE COUNT OF THE SAME EVENT, taken HERE so it cannot drift from the credit it
-               reports: `_unitsDone` beside `_jobsRun` is what tells "flows reach the between-units boundary and
-               have no jobs" from "no flow has ever reached it", which is the pair engine.c's declaration of
-               g_units_done argues for. It is not a second predicate — it is this one, counted. */
-            /* AND THE THIRD HALF OF §8.1.4.4'S BOUNDARY, WHICH THE CHECKPOINT HOOK THREE LINES ABOVE WAS
-               ALREADY ASKING AND THIS WAS NOT. Both lines claim to answer "is this flow's turn over"; the hook
-               asked `!flow_job_microtask(cur)` and the credit asked a strictly weaker predicate, so two
-               readings of one spec sentence stood one screen apart and disagreed. Step 3 of clean up after
-               running script performs a microtask checkpoint when the execution context stack empties — the
-               emptying is the checkpoint's TRIGGER, and the checkpoint runs "While the event loop's microtask
-               queue is not empty", so the unit ends when the queue does. Crediting at the return DEMOTED the
-               flow (the optimism term is 1/(1+visits)) at the one instant its queued reactions became eligible,
-               and every job arm of flow_step is under this same `frame == NULL`: the flow then had to win the
-               whole frontier again to run its own checkpoint. flow_credit_visit asserts it at the origin so no
-               future credit site can reintroduce it; this is the predicate that satisfies the assert. */
+            /* And the other term's charge, a count and not a clock: the optimism bonus is "∝ 1/(visits+1)", and a
+             * visit is a completed unit of work (a program that ended, a job, a delivery, a lifecycle stage), never
+             * a slice of thread time. The predicate is HTML §8.1.4.4 "Calling scripts"'s, step 3 of clean up after
+             * running script, "if the JavaScript execution context stack is now empty", read from the one
+             * `unit_ended` the checkpoint and the notify read. A flow preempted mid-program is not credited: it is
+             * the same trial, still running, and crediting per quantum would leave a flow strictly outranked by
+             * every arm it forked, never reaching the end of a program or its queued jobs. The unit ends when the
+             * microtask queue does, since the checkpoint the emptying triggers runs "While the event loop's
+             * microtask queue is not empty"; crediting at the return would demote the flow (the bonus is
+             * 1/(1+visits)) the moment its queued reactions became eligible, and flow_credit_visit asserts this at
+             * the origin. A finished flow is credited too: `r == FLOW_STEP_DONE` is the largest completed unit,
+             * read only by the census.
+             *
+             * `g_units_done` is the instance-wide count of the same event, taken here so it cannot drift from the
+             * credit: `_unitsDone` beside `_jobsRun` tells "flows reach the boundary and have no jobs" from "no
+             * flow reaches it" (see g_units_done). */
             if (unit_ended) { flow_credit_visit(cur); g_units_done++; }
-            /* AND THE FOUR ARMS OF THE UNIT BOUNDARY PARTITION THE DISPATCHES, asserted HERE because this
-               is the line the fourth arm is written on and therefore the first instant all four describe this
-               turn. `g_steps` counted it at flow_step's own entry and the ladder above put it on exactly one
-               refusal arm or on none; nothing between the two can `continue`, `break` or `return`, which is
-               what makes this an identity rather than an expectation.
-               WHAT IT CATCHES is a fourth reason to decline a unit added to that conjunction without an arm —
-               after which `_unitsDone` reading low would once again be three states behind one answer, and the
-               reader composing the split across the document's two objects would be composing it out of a
-               total that no longer accounts for every turn. It also catches a nested dispatch: a hook run
-               between the boundary and this line that stepped a flow would move `g_steps` under a turn already
-               charged, which is the same thing `sum(arms) == steps` above fires on and is worth naming twice
-               because the two would fail for one cause. */
+            /* The four arms of the unit boundary partition the dispatches, asserted on the line the fourth arm is
+               written on: `g_steps` counted the turn at flow_step's entry and the ladder above put it on exactly one
+               arm, with no `continue`, `break` or `return` between. It catches a reason to decline a unit added
+               without an arm, and a nested dispatch (a hook between the boundary and here that stepped a flow would
+               move `g_steps` under a turn already charged, which `sum(arms) == steps` also fires on). */
             DCHECKF(g_units_done + g_unit_mid_program + g_unit_parked + g_unit_checkpoint_owed == g_steps,
                     "the unit-of-work boundary's arms do not partition the dispatches (%ld ended + %ld "
                     "mid-program + %ld parked + %ld checkpoint-owed against %ld steps) — the boundary is "
@@ -10804,19 +10544,14 @@ static int engine_sched_slice(void) {
                     "`g_steps` is raised at that step's entry, so a difference is a clause added to the "
                     "conjunction with no arm, or a dispatch that happened between the two",
                     g_units_done, g_unit_mid_program, g_unit_parked, g_unit_checkpoint_owed, g_steps);
-            /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
-               suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
-               within the quantum, which is what makes the frontier parkable at all. A path with NO suspend
-               point on it does not slow the run down, it STOPS it: the slice's expiry below is never observed,
-               the scheduler never returns, and the whole engine spins at 100% with the switch count frozen.
-               Nothing else catches that. The preempt-fired-vs-requested stat cannot: a pure C loop reaches no
-               back-edge, so no preempt is ever REQUESTED and the ratio stays a perfect 100% while the engine
-               hangs. So the hang was silent, and localising one meant bisecting the fixture by hand.
-               This is NOT a bound — it truncates nothing, drops no flow and is compiled out of release. It
-               asserts that the path the flow just ran HAS the suspend/resume seam the design requires, and it
-               names the flow so the missing seam identifies itself instead of having to be hunted. The margin
-               is deliberately enormous (400x the 12ms quantum): anything under it is merely slow, anything over
-               it has no seam at all. */
+            /* The cooperative-quantum contract, asserted at its site. A flow_step must reach a suspend point (a
+               bytecode back-edge where the preempt hook runs, a step machine's boundary) within the quantum, which
+               is what makes the frontier parkable. A path with no suspend point stops the run: the slice's expiry
+               is never observed and the engine spins with the switch count frozen. The preempt fired/requested
+               ratio cannot catch it, since a pure C loop reaches no back-edge and requests nothing. Not a bound: it
+               truncates nothing, drops no flow and is compiled out of release; it asserts the path has the seam the
+               design requires and names the flow, with an enormous margin (400x the 12 ms quantum) so anything
+               under it is merely slow. */
 #if APICLIENT_DEV
             {
                 /* THE WALL CLOCK'S OTHER END, taken once, for the two REPORTED numbers below. It is deliberately
