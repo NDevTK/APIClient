@@ -102,12 +102,10 @@ static CssPx fx_cross_margins_stretch_fit(lxb_dom_element_t *el, bool vertical)
     return m;
 }
 
-/* §8.3's resolved cross-axis alignment for one item, as the keyword: one resolution that the baseline refusal
-   and step 11's stretched test both read, so they cannot disagree about `align-self: auto`.
-   §4's anonymous item is `item == NULL` and is included: "align-items sets the default alignment for all of the
-   flex container's items, including anonymous flex items"; unstyleable, it takes `auto`'s arm. `align-self`'s
-   `Initial: auto` is what defers an undeclared item to the container. The caller frees the result. */
-static char *fx_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item)
+/* §8.3's resolved cross-axis alignment for one item, as the keyword: one resolution that the baseline refusal,
+   step 11's stretched test and core/layout/flex_position.h's §9.6 placement all read, so they cannot disagree
+   about `align-self: auto`. See flex_cross_size.h. */
+char *flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
     char *items = css_computed_value(container, "align-items");
     char *self = NULL;
@@ -148,7 +146,7 @@ static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *ite
            "test was asked with no item element. §4 \"Flex Items\"' anonymous flex item has no used cross size "
            "any caller asks for yet — §9.6 \"Cross-Axis Alignment\" is what would place it — so a NULL here is "
            "a caller that reached this predicate through a walk that should have stopped at step 8");
-    align = fx_resolved_align(container, item);
+    align = flex_cross_size_resolved_align(container, item);
     stretch = strcmp(align, "stretch") == 0;
     free(align);
     if (!stretch) return false;
@@ -167,7 +165,7 @@ static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *ite
 static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_dom_element_t *item,
                                              lxb_dom_node_t *subject)
 {
-    char *align = fx_resolved_align(container, item);
+    char *align = flex_cross_size_resolved_align(container, item);
     bool baseline;
     char nbuf[160];
 

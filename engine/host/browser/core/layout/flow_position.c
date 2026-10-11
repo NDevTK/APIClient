@@ -13,7 +13,10 @@
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flow_placement.h"
+#include "core/layout/flex_item.h"
+#include "core/layout/flex_position.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
@@ -442,6 +445,31 @@ static bool fp_line_box_origin(lxb_dom_element_t *el, FlowPoint *out)
    §10.1's second case composes the wrapper's origin with the stack position. The wrapper is the table element's
    principal box and has no border or padding (§17.4 puts them on the table box), so its origin is the table
    element's and its content edge adds nothing. */
+/* Whether `el` is an in-flow flex item: css-flexbox-1 §4 "Flex Items", "each in-flow child of a flex container
+   becomes a flex item". The caller has already sent an out-of-flow box to its own section. */
+static bool fp_is_flex_item(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+
+    return parent != NULL && flex_item_display_is_flex_container(css_computed_display(parent));
+}
+
+/* A flex item's border-box origin: its container's content-box origin (its border-box origin plus the leading
+   border and padding) plus css-flexbox-1 §9.5's and §9.6's placement inside it (core/layout/flex_position.h).
+   False ("not yet") when the container's origin was deferred. */
+static bool fp_flex_item_origin(lxb_dom_element_t *el, FlowPoint *out)
+{
+    lxb_dom_element_t *container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+    FlowPoint o;
+    CssPx dx, dy;
+
+    if (!flow_border_box_origin_ask(container, &o)) return false;
+    flex_position_item_offset(container, el, &dx, &dy);
+    out->x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(container, false)), dx);
+    out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(container, true)), dy);
+    return true;
+}
+
 static bool fp_caption_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     lxb_dom_element_t *table = used_value_stacking_container(el);
@@ -893,6 +921,7 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
         css_computed_display_is(el, CSS_KEYWORD_TABLE_FOOTER_GROUP))
         return fp_table_row_group_origin(el, out);
     if (css_computed_display_is(el, CSS_KEYWORD_TABLE_CAPTION)) return fp_caption_origin(el, out);
+    if (fp_is_flex_item(el)) return fp_flex_item_origin(el, out);
     fp_require_placeable(el);
 
     /* §10.1's first case, §9.4.1's base case: the root's containing block is the ICB, "anchored at the canvas
