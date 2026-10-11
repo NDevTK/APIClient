@@ -94,6 +94,7 @@ static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
 #include "core/dom/shadow_root.h"
 #include "core/dom/slot.h"
 #include "core/dom/document.h"
+#include "core/dom/render_blocking.h"
 
 /* IDENTITY AND THE TREE BASE LIVE IN node.c — one wrapper table for every node kind, because a tree whose only
    node kind is Element cannot represent the document it just parsed. This file is what makes a node an ELEMENT:
@@ -2732,6 +2733,9 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
                no longer connected, so a `<style>` taken out of the document stops having a style sheet and the
                one it had is orphaned rather than left claiming an owner node it no longer has. */
             html_style_element_update(el);
+            /* HTML §3.1.6: "Whenever a render-blocking element el becomes browsing-context disconnected … unblock
+               rendering on el." An element not in the set is unaffected. */
+            render_blocking_unblock(el);
             /* HTML §4.11.4's DIALOG HTML ELEMENT REMOVING STEPS, 3 steps: the dialog cleanup steps for a
                `<dialog open>` that LEAVES the document, the immediate top-layer removal, and clearing is modal.
                It is the other half of the close watcher's life — removing a node changes no attribute, so the

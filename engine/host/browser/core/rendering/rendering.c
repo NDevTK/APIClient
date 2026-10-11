@@ -25,6 +25,7 @@
 #include "core/css/media_query_list.h"
 #include "core/css/top_layer.h"
 #include "core/dom/page_visibility.h"
+#include "core/dom/render_blocking.h"
 #include "core/dom/scroll_events.h"
 #include "core/intersection_observer/intersection_observer.h"
 #include "core/rendering/animation_frame.h"
@@ -114,9 +115,8 @@ static bool doc_has_rendering_work(JSContext *docctx)
  * called `requestAnimationFrame` and the only listener that could observe its `pagereveal` would have to be
  * registered by code in it — which is what materializing it means.
  *
- * A RENDER-BLOCKED DOCUMENT IS REMOVED BY STEP 3's first clause, and in this engine that is the document whose
- * parser has not finished — see document_render_blocked. It is what puts the first rendering opportunity after
- * DOMContentLoaded, where a browser puts it. */
+ * A RENDER-BLOCKED DOCUMENT IS REMOVED BY STEP 3's first clause, which is HTML §3.1.6 Render-blocking mechanism's
+ * own predicate (core/dom/render_blocking.h). */
 static JSValue rendering_collect_docs(JSContext *ctx)
 {
     JSValue docs = JS_NewArray(ctx), all = navigable_tree_order(ctx), len;
@@ -136,7 +136,7 @@ static JSValue rendering_collect_docs(JSContext *ctx)
            A flow exploring the backgrounded world therefore gets no rendering opportunity, which is what a
            browser does to a hidden tab. */
         if (page_visibility_hidden(docctx)) { JS_FreeValue(ctx, proxy); continue; }
-        if (!document_render_blocked(docctx) && doc_has_rendering_work(docctx))
+        if (!render_blocking_document_render_blocked(docctx) && doc_has_rendering_work(docctx))
             JS_SetPropertyUint32(ctx, docs, ndocs++, JS_DupValue(ctx, proxy));
         JS_FreeValue(ctx, proxy);
     }

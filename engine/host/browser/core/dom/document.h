@@ -167,12 +167,8 @@ uint32_t document_doc(JSContext *ctx);
    complete. WHEN a document has finished loading is the SCHEDULER's answer — it is the flow that knows it has
    run everything the documents gave it — so this is registered as that hook; it is declared here as well
    because a host that drives its own pump has the same lifecycle to run, and a host that runs NONE of it has
-   documents that are render-blocked for ever. */
+   documents that never fire DOMContentLoaded or `load`. */
 int document_lifecycle_step(JSContext *ctx);
-
-/* HTML §8.1.7.3 "update the rendering" step 3's render-blocked clause — see the definition. True while this
-   document's parser has not finished, which is `readyState === "loading"`. */
-bool document_render_blocked(JSContext *ctx);
 
 /* HTML §3.1.5's CURRENT DOCUMENT READINESS of ONE DOCUMENT, as the string `readyState` answers with —
    "loading", "interactive" or "complete". Asked of this component because it owns the load lifecycle that

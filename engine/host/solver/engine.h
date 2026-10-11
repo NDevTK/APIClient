@@ -175,6 +175,10 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
    it owes any script `load` waits for, adding step 7's two as-soon-as-possible lists. */
 int  engine_document_dcl_scripts_held(uint32_t doc);
 int  engine_document_load_scripts_held(uint32_t doc);
+/* Where document `doc`'s parser stands in the running flow: the element of the first row at or past the cursor
+   that holds a parse position (§13.2.7's rank 0, an inline or parser-blocking script the parser placed), or NULL
+   once no such row remains. Borrowed. core/dom/render_blocking.h is the reader. */
+lxb_dom_element_t *engine_document_parse_position(uint32_t doc);
 /* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a parse produced
    (html_link.h). Asked ahead of everything else a flow could do: a browser connects them during tree
    construction, so their requests precede every script of the document. The baseline walk that finds them can

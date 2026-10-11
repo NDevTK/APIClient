@@ -17,6 +17,7 @@
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/dom/document.h"
+#include "core/dom/render_blocking.h"   /* HTML §3.1.6, which §4.6.8.23 blocks and unblocks */
 #include "core/dom/shadow_root.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -249,6 +250,9 @@ static JSValue link_state(JSContext *ctx, JSValueConst el)
        Symbol because one element has one processing state, and a second key would be a second thing a
        `<link>` that changed its `rel` could carry two disagreeing answers in. */
     JS_SetPropertyStr(ctx, st, "sheet", JS_NULL);
+    /* Whether el's node document's parser created it, which makes a `stylesheet` link implicitly potentially
+       render-blocking (§4.6.8.23). Written by html_link_connected_step, which serves exactly the parser's links. */
+    JS_SetPropertyStr(ctx, st, "parserCreated", JS_FALSE);
     JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_state, JS_DupValue(ctx, st),
                            JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
     return st;
@@ -274,6 +278,27 @@ static void link_set_obtained(JSContext *ctx, JSValueConst el)
     JSValue st = link_state(ctx, el);
 
     JS_SetPropertyStr(ctx, st, "obtained", JS_TRUE);
+    JS_FreeValue(ctx, st);
+}
+
+static bool link_parser_created(JSContext *ctx, JSValueConst el)
+{
+    JSValue st = link_state(ctx, el);
+    JSValue v = JS_GetPropertyStr(ctx, st, "parserCreated");
+    bool b;
+
+    DCHECK(JS_IsBool(v), "a link element's parser-created field is not a boolean — this file is its only writer");
+    b = JS_ToBool(ctx, v) != 0;
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, st);
+    return b;
+}
+
+static void link_set_parser_created(JSContext *ctx, JSValueConst el)
+{
+    JSValue st = link_state(ctx, el);
+
+    JS_SetPropertyStr(ctx, st, "parserCreated", JS_TRUE);
     JS_FreeValue(ctx, st);
 }
 
@@ -829,10 +854,19 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
     upgraded = fetch_main_upgrade(ctx, abs, destination, /*initiator*/ NULL);
     if (upgraded) abs = upgraded;
     if (fetch_main_blocked(ctx, abs, destination, metadata, mode)) {
+        /* The network error goes to the type's own processing steps, called with the host's null, so a
+           stylesheet runs its steps 3, 5 and 7 (remove the sheet, fire `error`, unblock rendering). */
+        JSValueConst data[2], none = JS_NULL;
+        JSValue urlv = JS_NewString(ctx, abs);
+
+        CHECK(!JS_IsException(urlv), "§4.2.4.3: OOM carrying a blocked link request's URL to its processing");
         free(upgraded);
         JS_FreeCString(ctx, nonce);
         JS_FreeValue(ctx, nonce_slot);
-        link_queue_fire(ctx, wrap, "error", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.20, a bare fire */
+        data[0] = wrap;
+        data[1] = urlv;
+        JS_FreeValue(ctx, deliver(ctx, JS_UNDEFINED, 1, &none, 0, data));
+        JS_FreeValue(ctx, urlv);
         return;
     }
 
@@ -1644,8 +1678,9 @@ static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, in
        appropriate to fetch it again" names §4.6.8.23's own appropriate times, and every time this file
        registers FIRES the algorithm rather than recording that it became due — so a second fetch is already
        in flight when that disjunct would be true, and the sheet this delivery would build is the one that
-       second fetch is about to replace at step 3 anyway. The script-blocking style sheet set is not modelled
-       (this engine blocks no rendering), so there is nothing to remove from. */
+       second fetch is about to replace at step 3 anyway. The script-blocking style sheet set is not modelled,
+       so there is nothing to remove from. This return does not unblock rendering, as the standard writes it:
+       an element that left the document was unblocked by HTML §3.1.6's disconnection clause. */
     if (link_external_type_of(elem) != LINK_EXT_STYLESHEET) {
         if (have_mime) mime_type_free(&mt);
         JS_FreeValue(ctx, body);
@@ -1726,6 +1761,8 @@ static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, in
         /* STEP 5 — "Otherwise, fire an event named error at el." */
         link_queue_fire(ctx, el, "error", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.23 step 5, a bare fire */
     }
+    /* STEP 6 is the script-blocking style sheet set, not modelled. STEP 7 — "Unblock rendering on el." */
+    render_blocking_unblock(elem);
     if (have_mime) mime_type_free(&mt);
     JS_FreeValue(ctx, body);
     return JS_UNDEFINED;
@@ -1750,7 +1787,7 @@ static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, in
  * `preload` would carry a claim made by this algorithm into that one's conditional times. §4.6.8.23 has a
  * "previously not obtained" time of its own, and it is among the five this file does not register; it lands
  * with them, reading whatever state that diff gives them rather than this one's. */
-static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el)
+static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el, bool by_parser)
 {
     size_t href_n = 0;
     const char *href;
@@ -1768,10 +1805,9 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el)
        the result is false, then return." So a `<link rel=stylesheet disabled>` asks for nothing at all, which
        is the whole point of that markup and is why the attribute is tested for PRESENCE rather than parsed:
        it is a boolean attribute, so `disabled=""` and `disabled="false"` are both set.
-       STEPS 2-5 ARE THE RENDER-BLOCKING HALF — the script-blocking style sheet set, `block rendering on el`,
-       and setting the request's render-blocking — and they decide WHEN a document is allowed to paint. This
-       engine has no render-blocking and nothing here delays a paint, so the sheet those steps would hold the
-       first paint for is the one built below either way. Step 5's "Return true" is this function continuing. */
+       Step 3 runs beside the fetch below. Step 2's script-blocking style sheet set is not modelled, and step
+       4's request render-blocking flag has no reader in this engine. Step 5's "Return true" is this function
+       continuing. */
     {
         size_t d_n = 0;
 
@@ -1825,6 +1861,13 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el)
        the same call this file already declines to make for §4.6.8.12's referrer policy and fetch priority, and
        for the same stated reason: a value written where nothing can read it is the write-with-no-reader half
        of the defect CLAUDE.md counts seven of. It lands with its first consumer. */
+    /* SETUP STEP 3: "If el's media attribute's value matches the environment and el is potentially
+       render-blocking, then block rendering on el." A link of this type is implicitly potentially
+       render-blocking when its node document's parser created it; the parser's own act stands at el. */
+    if (link_parser_created(ctx, wrap) && link_media_matches(ctx, el))
+        render_blocking_block(el, by_parser ? lxb_dom_interface_node(el)
+                                            : render_blocking_parse_position(document_realm_of(
+                                                  lxb_dom_interface_node(el))));
     link_fetch_request(ctx, el, wrap, abs, "style", CSP_PARSER_METADATA_EMPTY,
                        cors_potential_request_credentials(cors_settings_attribute_state(el)),
                        cors_potential_request_mode(cors_settings_attribute_state(el)),
@@ -1837,7 +1880,7 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el)
    whichever type's steps this element's `rel` names. Reached only from the appropriate times below, so a type
    arriving here with no steps is not a page doing something unusual, it is THIS FILE having registered a
    trigger it cannot serve — which is why it is an assert and not a silent return. */
-static void link_fetch_and_process(JSContext *ctx, lxb_dom_element_t *el)
+static void link_fetch_and_process(JSContext *ctx, lxb_dom_element_t *el, bool by_parser)
 {
     LinkExternalType t = link_external_type_of(el);
 
@@ -1849,7 +1892,7 @@ static void link_fetch_and_process(JSContext *ctx, lxb_dom_element_t *el)
         link_modulepreload(ctx, el);
         return;
     case LINK_EXT_STYLESHEET:
-        link_stylesheet(ctx, el);
+        link_stylesheet(ctx, el, by_parser);
         return;
     case LINK_EXT_UNBUILT:
         DFAIL("§4.2.4.3's fetch and process the linked resource was entered for an external resource link "
@@ -1880,8 +1923,9 @@ static void link_fetch_and_process(JSContext *ctx, lxb_dom_element_t *el)
    five and §4.6.8.12's three each read
    "a link element that is already browsing-context connected" or "becomes browsing-context connected" — and a
    `<link>` built with `createElement` and configured before insertion must not fetch until it is inserted,
-   which is the order the idiom this component exists for actually writes. */
-static void link_trigger(JSContext *ctx, lxb_dom_element_t *el)
+   which is the order the idiom this component exists for actually writes. `by_parser` is true where the
+   parser performs the time itself (html_link_connected_step), so the parse stands at el. */
+static void link_trigger(JSContext *ctx, lxb_dom_element_t *el, bool by_parser)
 {
     if (!link_is_node(lxb_dom_interface_node(el))) return;
     if (!node_is_connected(lxb_dom_interface_node(el))) return;
@@ -1918,13 +1962,13 @@ static void link_trigger(JSContext *ctx, lxb_dom_element_t *el)
            "be owed a reply. Every one of §4.6.8.20's appropriate times reaches this from a flow: the mutation "
            "entries are script or a job, and the parser's own elements are served by html_link_connected_step, "
            "which the scheduler asks INSIDE a flow. A fourth entry has been added without one");
-    link_fetch_and_process(ctx, el);
+    link_fetch_and_process(ctx, el, by_parser);
 }
 
 void html_link_inserted(JSContext *ctx, lxb_dom_element_t *el)
 {
     /* "When the external resource link's link element becomes browsing-context connected." */
-    link_trigger(ctx, el);
+    link_trigger(ctx, el, false);
 }
 
 void html_link_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
@@ -1941,7 +1985,7 @@ void html_link_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *n
        read AFTER the change, which is what makes the `rel` arm the creation of whichever link the new value
        names. */
     if (!strcmp(local, "rel") || !strcmp(local, "href")) {
-        link_trigger(ctx, el);
+        link_trigger(ctx, el, false);
         return;
     }
 
@@ -1963,7 +2007,7 @@ void html_link_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *n
        is already browsing-context connected is changed." Unconditional like the two above, and for the same
        reason: the link may have been obtained under a different destination. */
     if (!strcmp(local, "as")) {
-        link_trigger(ctx, el);
+        link_trigger(ctx, el, false);
         return;
     }
     /* …and its two CONDITIONAL times, "but was previously not obtained due to the type attribute specifying an
@@ -1979,7 +2023,7 @@ void html_link_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *n
         done = link_obtained(ctx, wrap);
         JS_FreeValue(ctx, wrap);
         if (done) return;
-        link_trigger(ctx, el);
+        link_trigger(ctx, el, false);
     }
 }
 
@@ -2126,7 +2170,15 @@ int html_link_connected_step(JSContext *ctx)
                 link_rec_set_int(ctx, rec, "served", served + 1);
                 JS_FreeValue(ctx, docv);
                 JS_FreeValue(ctx, rec);
-                link_trigger(dctx, el);
+                {
+                    /* This inventory is the parser's elements, so el's node document's parser created it. */
+                    JSValue wrap = node_wrap(dctx, lxb_dom_interface_node(el));
+
+                    CHECK(!JS_IsException(wrap), "§4.6.8.20: OOM reaching a parsed link element's processing state");
+                    link_set_parser_created(dctx, wrap);
+                    JS_FreeValue(dctx, wrap);
+                }
+                link_trigger(dctx, el, true);
                 return 1;
             }
             link_rec_set_int(ctx, rec, "served", -1);

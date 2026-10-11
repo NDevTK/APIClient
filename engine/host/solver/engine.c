@@ -6425,6 +6425,26 @@ int engine_document_dcl_scripts_held(uint32_t doc)
     return 0;
 }
 
+/* See engine.h. Rows at or past the cursor are running or unstarted. A row's element is the parser's unless
+   §4.12.1.1 recorded it as not parser-inserted: an inventory element answers unstated, because the parse never
+   ran preparation over it (html_script.h's html_script_parser_inserted residual). */
+lxb_dom_element_t *engine_document_parse_position(uint32_t doc)
+{
+    const Flow *f = flow_running();
+
+    DCHECK(f != NULL, "a document's parse position was asked with no running flow to hold its rows");
+    for (int k = f->script_i; k < f->dyn_n; k++) {
+        lxb_dom_element_t *el = f->dyn_el[k];
+
+        if (f->dyn_doc[k] != doc || el == NULL) continue;
+        if (html_script_parser_metadata(el) == HTML_SCRIPT_PARSER_METADATA_NOT_PARSER_INSERTED) continue;
+        if (script_sched_run_rank(script_block_schedule(el, (ScriptType)f->dyn_type[k], /*parser_inserted*/true,
+                                                        /*force_async*/false)) == 0)
+            return el;
+    }
+    return NULL;
+}
+
 /* See engine.h. A member of the set of scripts that will execute as soon as possible has no row until its reply
    arrives (engine_pending_script_url), so the register answers for it. */
 int engine_document_load_scripts_held(uint32_t doc)

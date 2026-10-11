@@ -63,6 +63,7 @@
 #include "core/frame/location.h"
 #include "core/frame/session_history.h"
 #include "core/dom/page_visibility.h"
+#include "core/dom/render_blocking.h"
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
 #include "core/dom/document_fragment.h"
@@ -2180,15 +2181,6 @@ void document_page_showing_set(JSContext *ctx, bool showing)
     JS_FreeValue(ctx, rec);
 }
 
-/* HTML §8.1.7.3 "update the rendering" step 3's render-blocked clause, answered by the component that owns the load
- * lifecycle. A Document is render-blocked while it has render-blocking elements, and the parser removes the last of
- * them; here the parse's completion is stage 0, when the readiness leaves "loading" and DOMContentLoaded fires, so
- * the first rendering opportunity (and `pagereveal` and the first animation frame) comes after DOMContentLoaded. */
-bool document_render_blocked(JSContext *ctx)
-{
-    return document_readiness(ctx) == 0;
-}
-
 /* HTML §7.5.8 "Finishing the loading process": "to completely finish loading a Document document":
  *
  *   1. Assert: document's browsing context is non-null.
@@ -3878,6 +3870,8 @@ void document_init(JSContext *ctx)
     /* §6.2's visibility state is a document's, and page_visibility_install runs from document_install_proto below,
        so its declaration is paired here rather than in each host's init list. */
     page_visibility_init(ctx);
+    /* HTML §3.1.6's render-blocking element set is a Document's, built by document_install_proto below. */
+    render_blocking_init(ctx);
     /* HTML §6.6's focused area is a Document's state too, and focus_install_document_members runs from
        document_install_proto below, so its declaration is paired here. */
     focus_init(ctx);
@@ -3930,6 +3924,7 @@ void document_install_proto(JSContext *ctx)
     node_install_nonelement_parent_mixin(ctx, proto);
     /* HTML §6.2's `visibilityState` and `hidden`: one source and the comparison the spec defines over it. */
     page_visibility_install(ctx, proto);
+    render_blocking_install(ctx);
     /* HTML §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()`, and this realm's initial focused area,
        the viewport, built with the realm so it is baseline. */
     focus_install_document_members(ctx, proto);
@@ -4757,6 +4752,7 @@ void document_agent_free(JSRuntime *rt)
     fullscreen_free(rt);
     autofocus_free();
     focus_free();
+    render_blocking_free();
     page_visibility_free();
     selection_free();
     dom_implementation_free();
