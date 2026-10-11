@@ -595,6 +595,37 @@ static char *shape_quote(const char *s)
     return out;
 }
 
+/* A literal operand as a shape: the token a page writes for it, quoted for a String and suffixed `n` for a
+   BigInt, so two operands the identity separates by kind are two shapes. `tok` is borrowed; owned result. */
+static char *lit_shape(ConcolicLit kind, const char *tok)
+{
+    char *r = NULL;
+
+    DCHECK(tok != NULL && kind != CONCOLIC_LIT_NONE,
+           "a literal was shaped with no token or no kind — literal_tok answers both or neither, and an operand "
+           "with neither renders `?` at its caller");
+    switch (kind) {
+    case CONCOLIC_LIT_STRING: r = shape_quote(tok); break;
+    /* §6.1.6.2 The BigInt Type spells 5n as "5", the Number's spelling, so the `n` keeps the two apart as the
+       identity's kind does. */
+    case CONCOLIC_LIT_BIGINT: r = shapef("%sn", tok); break;
+    case CONCOLIC_LIT_NUMBER:
+    case CONCOLIC_LIT_BOOL:
+    case CONCOLIC_LIT_NULL:
+    case CONCOLIC_LIT_UNDEFINED:
+        /* §7.1.19 ToString ( arg ) of each of these is the literal a page writes for it, and no two of the
+           four spell one token, so the token alone separates what the identity separates. */
+        r = shapef("%s", tok);
+        break;
+    /* Refused above. Listed so the switch has no `default` and a kind added to ConcolicLit draws a -Wswitch
+       warning; the release arm is the same "?" the unspellable path answers. */
+    case CONCOLIC_LIT_NONE:
+        r = shapef("?");
+        break;
+    }
+    return r;
+}
+
 /* One operand's display: the shape twin of ident_of_operand. An unknown renders as its hole shape, a concrete
    operand as the literal the page wrote, an intrinsic as its %-name, and an operand this engine cannot spell as
    "?" (its identity is already absent by concolic_ident_compose's unspellable-member rule).
@@ -638,26 +669,7 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
         }
         return shapef("?");
     }
-    switch (kind) {
-    case CONCOLIC_LIT_STRING: r = shape_quote(tok); break;
-    /* §6.1.6.2 The BigInt Type spells 5n as "5", the Number's spelling, so the `n` keeps the two apart as the
-       identity's kind does. */
-    case CONCOLIC_LIT_BIGINT: r = shapef("%sn", tok); break;
-    case CONCOLIC_LIT_NUMBER:
-    case CONCOLIC_LIT_BOOL:
-    case CONCOLIC_LIT_NULL:
-    case CONCOLIC_LIT_UNDEFINED:
-        /* §7.1.19 ToString ( arg ) of each of these is the literal a page writes for it, and no two of the
-           four spell one token, so the token alone separates what the identity separates. */
-        r = shapef("%s", tok);
-        break;
-    /* Unreachable: NONE is a NULL token, and the `!tok` arm above has returned for one. Listed so the switch
-       has no `default` and a kind added to ConcolicLit draws a -Wswitch warning; the shape is the same "?" the
-       unspellable path answers. */
-    case CONCOLIC_LIT_NONE:
-        r = shapef("?");
-        break;
-    }
+    r = lit_shape(kind, tok);
     free(tok);
     return r;
 }
@@ -2461,10 +2473,12 @@ static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
  * the operator and both operands, the whole predicate, so to decide.c it is an ordinary derived value.
  * `ia`/`ib` are the operands' identities in composition order and are consumed. `eq_kind` and `tok` are the
  * pin, which only an equality against a concrete side has; an ordering narrows a domain and determines no
- * value. */
+ * value. `shape` is the predicate as the page wrote it, each operand spelled by derived_operand_shape, and is
+ * consumed: it is what a report states a decision over this result as. */
 static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root,
                         unsigned root_whose, char *ia, char *ib,
-                        int eq_kind, int algo, ConcolicLit tok_kind, const char *tok, const char *subj)
+                        int eq_kind, int algo, ConcolicLit tok_kind, const char *tok, const char *subj,
+                        char *shape)
 {
     const char *f[3];
     char *ident;
@@ -2500,11 +2514,13 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
            "at all — an ordering carrying an algorithm names a §7.2.13/§7.2.14 reading of a predicate neither "
            "defines, and an equality without one is a pin whose arm cannot say whether it determined a value "
            "or merely bounded it");
+    DCHECK(shape != NULL, "a comparison result was minted with no display shape");
     f[0] = op; f[1] = ia; f[2] = ib;
     ident = concolic_ident_compose("?", f, 3);
     free(ia); free(ib);
     /* Not a source read, so no candidate substitution (see concolic_alloc's declaration). */
-    r = concolic_alloc(ctx, "{cmp}", src, root, root_whose, ident, JS_UNDEFINED);
+    r = concolic_alloc(ctx, shape, src, root, root_whose, ident, JS_UNDEFINED);
+    free(shape);
     c = JS_GetOpaque(r, g_concolic_class);
     DCHECK(c != NULL, "a comparison result was minted as something that is not a concolic value");
     c->cmp_op = eq_kind;
@@ -2646,6 +2662,7 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
    relies on this). */
 JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit kind, const char *tok) {
     const char *sf[1], *kf[2];
+    char *shape, *ts;
 
     DCHECK(op == OPCMP_EQ || op == OPCMP_NE,
            "a comparison result was declared with an operator that is neither an equality nor an inequality — "
@@ -2659,6 +2676,9 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
            "member whose IDL says it compares against one is stating a predicate no key can name");
     sf[0] = src;
     kf[0] = lit_tag(kind); kf[1] = tok;
+    ts = lit_shape(kind, tok);
+    shape = shapef("{%s}%s%s", src ? src : "", cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), ts);
+    free(ts);
     /* The strict spelling, which makes this one entry with the page's own test: these members are defined as
        strict string equalities (HTML §6.2 Page visibility: "The `hidden` getter steps are to return true if
        this's visibility state is "hidden", otherwise false"), so a page writing the comparison out reaches
@@ -2671,7 +2691,7 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
     return pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
                     src ? (1u << CONCOLIC_WHOSE_WORLD) : 0u,
                     concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
-                    op, JS_CONCOLIC_EQ_STRICT, kind, tok, src);
+                    op, JS_CONCOLIC_EQ_STRICT, kind, tok, src, shape);
 }
 /* …and the twin for a relation over two live values, for a component whose own algorithm compares two
  * operands either of which may be unknown (HTML §8.7 Timers orders one expiry against another).
@@ -2683,6 +2703,7 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
  * concrete value to pin to. Both operands are borrowed. */
 JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValueConst b) {
     JSValueConst opq;
+    char *sa, *sb, *shape;
 
     DCHECK(op != NULL,
            "a component asked for a relation over two values without naming the RELATION — the operator is "
@@ -2693,9 +2714,13 @@ JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValue
            "two concrete operands is decided by running it, and minting a predicate for it would put a fork "
            "in the frontier over a question the engine can already answer");
     opq = concolic_is(a) ? a : b;
+    sa = derived_operand_shape(ctx, a);
+    sb = derived_operand_shape(ctx, b);
+    shape = shapef("%s(%s, %s)", op, sa, sb);
+    free(sa); free(sb);
     return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq), root_whose_of(opq),
                     ident_of_operand(ctx, a), ident_of_operand(ctx, b),
-                    OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
+                    OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL, shape);
 }
 
 /* The tag that puts a conjunction in its own namespace. Length-prefixed fields keep any tag from spelling
@@ -2732,7 +2757,7 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
     const char **members, **sorted;
     int *order;
     int n = 0, u, i, k;
-    char *ident;
+    char *ident, *shape;
     JSValue res;
 
     DCHECK(concolic_is(a) && concolic_is(b),
@@ -2742,6 +2767,10 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
 
     side[0] = JS_GetOpaque(a, g_concolic_class);
     side[1] = JS_GetOpaque(b, g_concolic_class);
+    /* The conjunction as written, which is what a report states a decision over it as. The identity is the
+       set and the shape the order the page gave; one set may have two shapes, never one shape two sets. */
+    shape = shapef("%s&&%s", concolic_shape_c(a) ? concolic_shape_c(a) : "{}",
+                   concolic_shape_c(b) ? concolic_shape_c(b) : "{}");
     /* The members, flattened: a conjunct that is itself a conjunction contributes its members, so
        `(p ∧ q) ∧ r` and `p ∧ (q ∧ r)` are one set and one key. */
     for (i = 0; i < 2; i++) {
@@ -2772,7 +2801,9 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
     for (i = 0; i < n; i++)
         if (!members[i]) {
             free(members); free(order);
-            return concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, NULL, conj_example(ctx, a, b));
+            res = concolic_alloc(ctx, shape, NULL, NULL, 0u, NULL, conj_example(ctx, a, b));
+            free(shape);
+            return res;
         }
 
     ident_set_order(members, n, order);
@@ -2791,7 +2822,7 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
                "a conjunction over a set that collapsed to ONE member had a conjunction as an operand — that "
                "operand's own members are distinct by construction, so this is a set that was stored without "
                "going through this mint's deduplication");
-        free(members); free(order);
+        free(members); free(order); free(shape);
         return JS_DupValue(ctx, a);
     }
 
@@ -2805,7 +2836,8 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
 
     /* Not a source read (concolic_alloc, never concolic_derived): a conjunction is a boolean this engine
        computed, and an @S candidate substituted into it would answer a predicate with a payload. */
-    res = concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, ident, conj_example(ctx, a, b));
+    res = concolic_alloc(ctx, shape, NULL, NULL, 0u, ident, conj_example(ctx, a, b));
+    free(shape);
     c = JS_GetOpaque(res, g_concolic_class);
     DCHECK(c != NULL, "a conjunction was minted as something that is not a concolic value");
     c->conj = reclaim_malloc((size_t)n * sizeof *c->conj);
@@ -2963,7 +2995,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     int ca = concolic_is(a), cb = concolic_is(b);
     JSValueConst opq, other;
     const char *src, *root;
-    char *tok = NULL, *iu, *io, *subj;
+    char *tok = NULL, *iu, *io, *subj, *shape;
     ConcolicLit kind = CONCOLIC_LIT_NONE;
     JSValue res;
 
@@ -3000,9 +3032,14 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        which arm makes the equality hold; whether that arm determined the operand is §7.2.13 IsLooselyEqual
        ( x, y ) versus §7.2.14 IsStrictlyEqual ( x, y ) (a held `x == undefined` leaves undefined or null). See
        concolic.h's concolic_pin. */
+    {
+        char *sa = derived_operand_shape(ctx, a), *sb = derived_operand_shape(ctx, b);
+        shape = shapef("%s%s%s", sa, cmp_op_ident(is_neq, op), sb);
+        free(sa); free(sb);
+    }
     res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, root_whose_of(opq), iu, io,
                    tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE,
-                   tok ? (int)op : CMP_ALGO_NONE, kind, tok, subj);
+                   tok ? (int)op : CMP_ALGO_NONE, kind, tok, subj, shape);
     /* Which value the predicate is about, by its own identity: read off `opq` (not `iu`, which is swapped when
        both operands are unknown), under the same condition as the hole. An operand this engine cannot spell
        gets none; the predicate still forks, pins and excludes, and only the per-flow degrade has nowhere to be
@@ -3145,9 +3182,14 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     (void)w;
     {
         JSValueConst opq = ca ? a : b, other = ca ? b : a;
-        JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq), root_whose_of(opq),
-                               ident_of_operand(ctx, a), ident_of_operand(ctx, b),
-                               OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL);
+        char *sa = derived_operand_shape(ctx, a), *sb = derived_operand_shape(ctx, b);
+        char *shape = shapef("%s%s%s", sa, rel_op_spelling(rel), sb);
+        JSValue res;
+
+        free(sa); free(sb);
+        res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq), root_whose_of(opq),
+                       ident_of_operand(ctx, a), ident_of_operand(ctx, b),
+                       OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL, shape);
         /* A bound exists only where the relation's meaning is determined, which §7.2.12 IsLessThan ( x, y,
            leftFirst ) decides: it compares as Strings only when both primitives are Strings, so a Number on
            the concrete side fixes the numeric path, while a String leaves the page performing a lexicographic
