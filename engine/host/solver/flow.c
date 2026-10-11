@@ -8792,3 +8792,49 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
            "cursor and became unstarted, which nothing in this walk can do");
     return removed;
 }
+
+/* WHETHER A REGISTER ENTRY IS A FETCH ISSUED IN THE CONTEXT OF `doc` — §7.5.11 step 2's population. Every park
+   a document's code or algorithm makes records the asking document (PEND_DOC). A document script's park names
+   its row instead and leaves with it (above); a host request is a cross-instance read, not a fetch. */
+static int pend_entry_fetch_of_document(JSValueConst e, uint32_t doc) {
+    int kind = (int)pending_get_int(e, PEND_KIND);
+    uint32_t edoc = (uint32_t)pending_get_int(e, PEND_DOC);
+
+    if (kind == FLOW_PENDING_DOCSCRIPT || kind == FLOW_PENDING_HOSTREQ) return 0;
+    DCHECK(edoc != 0,
+           "a fetch on a flow's register names no asking document — every fetch park records "
+           "document_doc at its push, so this record was pushed by a park that does not");
+    return edoc == doc;
+}
+
+/* See flow.h. */
+int flow_fetches_for_document(const Flow *f, uint32_t doc) {
+    int n = 0;
+
+    DCHECK(f != NULL && doc != 0, "the fetch count was asked of no flow or about the NONE document");
+    for (int k = 0; k < pending_count(f->pending); k++) {
+        JSValue e = pending_entry(f->pending, k);
+
+        if (pend_entry_fetch_of_document(e, doc)) n++;
+        JS_FreeValue(pending_ctx(), e);
+    }
+    return n;
+}
+
+/* See flow.h. The register is walked backwards because pending_remove is a swap-remove. A removed entry's
+   record survives for any sibling register that names it (pending_index_unref), and a reply already received
+   for it is discarded with it, which is step 2's "discarding any further data received from the network". */
+void flow_abort_document_load(Flow *f, uint32_t doc) {
+    DCHECK(f != NULL && doc != 0, "§7.5.11 was run for no flow or for the NONE document");
+    flow_programs_remove_for_document(f, doc);
+    for (int k = pending_count(f->pending) - 1; k >= 0; k--) {
+        JSValue e = pending_entry(f->pending, k);
+        int go = pend_entry_fetch_of_document(e, doc);
+
+        JS_FreeValue(pending_ctx(), e);
+        if (go) pending_remove(&f->pending, k);
+    }
+    DCHECK(flow_programs_unstarted_for_document(f, doc) == 0 && flow_fetches_for_document(f, doc) == 0,
+           "§7.5.11 step 2 ran and this flow still holds an unstarted program or a fetch of the aborted "
+           "document — both walks above ask the same predicates the counts do");
+}

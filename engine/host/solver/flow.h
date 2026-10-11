@@ -1569,6 +1569,18 @@ int   flow_programs_unstarted_for_document(const Flow *f, uint32_t doc);
  * collection or a DCHECK. */
 int   flow_programs_remove_for_document(Flow *f, uint32_t doc);
 
+/* How many fetches `f`'s register holds that were issued in the context of `doc`: every park but a document
+ * script's (which names its row) and a host request (which is not a fetch). Side-effect-free, so a DCHECK may
+ * ask it. */
+int   flow_fetches_for_document(const Flow *f, uint32_t doc);
+
+/* HTML §7.5.11 "Aborting a document load" step 2, "Cancel any instances of the fetch algorithm in the context
+ * of document, discarding any tasks queued for them, and discarding any further data received from the network
+ * for them", for one timeline: the document's unstarted program rows go (flow_programs_remove_for_document) and
+ * so does every register entry flow_fetches_for_document counts. The running flow's state only, for the reason
+ * the removal above gives. Not pure. */
+void  flow_abort_document_load(Flow *f, uint32_t doc);
+
 /* Which row of `f`'s sequence is called `id`, or -1 when this flow holds none (see `dyn_id`). Pure, so it may
  * stand in a DCHECK, and it asserts nothing itself: each of its three callers (the two halves of a document
  * script's delivery and §7.5.10's removal walk) says what its own -1 means. */

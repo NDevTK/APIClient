@@ -393,7 +393,7 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     X(CREDENTIALS,"credentials",PEND_SHARE, JS_NULL)                                   \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
-    /* 0 is "this park's reply is not a program", which is every kind but the injected <script src> */ \
+    /* the asking document, which every fetch park writes; 0 names none (a document script, a host request) */ \
     X(DOC,        "doc",       PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)                              \
     /* the zone has refused nothing about this request — see the two fields below */   \

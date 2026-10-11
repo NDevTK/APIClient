@@ -486,12 +486,13 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
     free(op);
     /* HTML §7.5.11 "Aborting a document load" step 2, which §7.4.2.2 "Beginning navigation" queues for the
        outgoing document: its fetches are cancelled and their queued tasks discarded. In this timeline those are
-       the unstarted program rows of that document; a row already compiled is the flow's own state. */
+       the document's unstarted program rows and every fetch its code or algorithms parked; a row already
+       compiled is the flow's own state. */
     /* Named residual. Not covered: the abort runs here, when the response commits, rather than in the task
        §7.4.2.2 queues when the navigation begins, and the in-agent arm (window_proxy_navigate) does not run it.
        Next diff: queue §7.5.11 from §7.4.2.2 for both arms. Absence shows as: an outgoing document's program
        starting between a navigation's begin and its commit, or window_proxy_navigate's unstarted-rows DCHECK. */
-    flow_programs_remove_for_document(flow_running(), window_proxy_doc(proxy));
+    flow_abort_document_load(flow_running(), window_proxy_doc(proxy));
     window_proxy_navigate_to_peer(ctx, proxy, incoming, url, origin);
 }
 

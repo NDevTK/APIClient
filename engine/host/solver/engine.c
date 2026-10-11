@@ -529,6 +529,9 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
            "this park is what the failure arm reaches the second one through, so a record without it could "
            "answer a network error only by settling the SUCCESS half with bytes that never arrived");
     pending_set(e, PEND_REJECT, JS_DupValue(ctx, reject));
+    /* And which document asked, as every other fetch park records it: the importing realm is the asking
+       document's, and HTML §7.5.11 step 2 cancels this load with that document's other fetches. */
+    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     /* And §4.3 Scheme fetch with it: `import("data:text/javascript,export default 1")` is answered from the
        specifier's own bytes, settling the promise JS_ModuleLoadPending is about to be handed. */
     pending_park_request(ctx, e, &req);
