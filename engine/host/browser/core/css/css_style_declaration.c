@@ -248,6 +248,27 @@ static lxb_dom_element_t *cssd_owner_element(JSContext *ctx, JSValueConst block)
     return lxb_dom_interface_element(n);
 }
 
+/* CSSOM §7.2 Extensions to the Window Interface's getComputedStyle step 5: decls is every supported longhand's
+   resolved value only "if obj is not null, and elt is connected, part of the flat tree, and its
+   shadow-including root has a browsing context which either doesn't have a browsing context container, or
+   whose browsing context container is being rendered"; otherwise it is the empty list. The block is live, so
+   the condition is asked at each read of its declarations. A document no navigable presents has no active
+   realm, which is its having no browsing context. */
+/* NAMED RESIDUAL, two of step 5's conjuncts. Not covered: "part of the flat tree" (a shadow host's unslotted
+   light child) and "being rendered" (an iframe container that renders nothing). Next: the flat-tree slot
+   assignment test and the container's own box. How its absence shows: a resolved value read for an element
+   step 5 gives no declarations, and a layout entry reached for an element with no box. */
+static bool cssd_computed_has_declarations(JSContext *ctx, JSValueConst block)
+{
+    lxb_dom_element_t *el = cssd_owner_element(ctx, block);
+    lxb_dom_node_t *n;
+
+    DCHECK(el != NULL, "a computed declaration block has no owner element — getComputedStyle's step 6 sets it");
+    n = lxb_dom_interface_node(el);
+    if (!node_is_connected(n) || n->owner_document == NULL) return false;
+    return document_active_realm_of(lxb_dom_interface_node(n->owner_document)) != NULL;
+}
+
 /* §6.6's PARENT CSS RULE — JS_NULL for the two element-backed blocks. OWNED. */
 static JSValue cssd_parent_rule(JSContext *ctx, JSValueConst block)
 {
@@ -4311,7 +4332,8 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
            ones is the used value (css_computed_value.h). It answers a JSValue rather than text because a used
            value derived from CSS 2.1 §10.1's initial containing block carries the VIEWPORT's domain, and a
            `char *` here would carry the number and drop the fork. */
-        r = css_resolved_value(ctx, cssd_owner_element(ctx, block), name);
+        r = cssd_computed_has_declarations(ctx, block)
+              ? css_resolved_value(ctx, cssd_owner_element(ctx, block), name) : JS_NewStringLen(ctx, "", 0);
     } else {
         CssDecls d = { 0 };
         char *v;
@@ -4495,7 +4517,8 @@ static JSValue js_cssd_property_get(JSContext *ctx, JSValueConst this_val, int m
            "installer and that seam disagreeing about which properties exist");
     if (JS_IsException(block)) return block;
     if (cssd_flag(ctx, block, "computed")) {
-        r = css_resolved_value(ctx, cssd_owner_element(ctx, block), pname);
+        r = cssd_computed_has_declarations(ctx, block)
+              ? css_resolved_value(ctx, cssd_owner_element(ctx, block), pname) : JS_NewStringLen(ctx, "", 0);
     } else {
         CssDecls d = { 0 };
         char *v;
@@ -5339,7 +5362,10 @@ static void cssd_computed_names(CssDecls *d)
    the other two. Both §6.6.1 members that need them go through here. */
 static void cssd_declared_decls(JSContext *ctx, JSValueConst block, CssDecls *out)
 {
-    if (cssd_flag(ctx, block, "computed")) { cssd_computed_names(out); return; }
+    if (cssd_flag(ctx, block, "computed")) {
+        if (cssd_computed_has_declarations(ctx, block)) cssd_computed_names(out);
+        return;
+    }
     cssd_declarations_read(ctx, block, out);
 }
 
