@@ -2049,14 +2049,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        flex base size if the item is not shrinkable", and those two adjectives are these two properties at
        zero. Their declarations reach the cascade through §7.1's `flex` on almost every page that uses flexbox
        at all, which is core/css/css_shorthand.c's row and the reason this one means anything.
-       css-display-3 §4 "Invisibility: the visibility property" says `Computed value: as specified` over
-       `visible | hidden | collapse`, so the arm is the whole of its rule as well. IT IS HERE FOR §9.9.1's
-       SAKE and reaches further than that: css-flexbox-1 §4.4 "Collapsed Items" hangs an entire layout effect
-       off one of the three keywords — "the collapsed flex item is removed from rendering entirely, but leaves
-       behind a “strut” that keeps the flex line's cross-size stable" — which is why §9.9.1.2 and §9.9.1.3
-       sum over the "non-collapsed" items while §9.9.2 does not, and neither question can be asked of a box
-       whose `visibility` has no computed value. It is the one property in this arm that is `Inherited: yes`,
-       and core/css/css_defaulting.c already records it there.
        CSS 2.1 §9.9.1 "Specifying the stack level: the 'z-index' property" says `Computed value: as specified`
        over `auto | <integer> | inherit`, which is this arm whole. IT IS HERE FOR §9.9.1's STACKING-CONTEXT
        TEST, which that section states over the COMPUTED value in its own words — "Other stacking contexts are
@@ -2069,7 +2061,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     case CSS_PROPERTY_WHITE_SPACE:
     case CSS_PROPERTY_ALIGNMENT_BASELINE:
     case CSS_PROPERTY_BASELINE_SOURCE:
-    case CSS_PROPERTY_VISIBILITY:
     case CSS_PROPERTY_Z_INDEX:
     case CSS_PROPERTY_BORDER_TOP_STYLE:
     case CSS_PROPERTY_BORDER_RIGHT_STYLE:

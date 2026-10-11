@@ -160,6 +160,9 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-tables-3 §3.5.3 "The Caption-Side property": `top | bottom`. */
     case CSS_KEYWORDS_CAPTION_SIDE:
         return k == CSS_KEYWORD_TOP || k == CSS_KEYWORD_BOTTOM;
+    /* css-display-3 §4 "Invisibility: the visibility property": `visible | hidden | collapse`. */
+    case CSS_KEYWORDS_VISIBILITY:
+        return k == CSS_KEYWORD_VISIBLE || k == CSS_KEYWORD_HIDDEN || k == CSS_KEYWORD_COLLAPSE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

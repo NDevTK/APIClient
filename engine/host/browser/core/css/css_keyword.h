@@ -97,7 +97,9 @@
     X(SIDEWAYS_RL,        "sideways-rl") \
     X(SIDEWAYS_LR,        "sideways-lr") \
     X(SEPARATE,           "separate") \
-    X(COLLAPSE,           "collapse")
+    X(COLLAPSE,           "collapse") \
+    X(VISIBLE,            "visible") \
+    X(HIDDEN,             "hidden")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -144,7 +146,8 @@ typedef enum {
     CSS_KEYWORDS_WRITING_MODE,
     CSS_KEYWORDS_TABLE_LAYOUT,
     CSS_KEYWORDS_BORDER_COLLAPSE,
-    CSS_KEYWORDS_CAPTION_SIDE
+    CSS_KEYWORDS_CAPTION_SIDE,
+    CSS_KEYWORDS_VISIBILITY
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

@@ -89,6 +89,7 @@ typedef enum {
     X(CAPTION_SIDE,        "caption-side",        LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, CAPTION_SIDE)    \
     X(TABLE_LAYOUT,        "table-layout",        LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, TABLE_LAYOUT)    \
     X(BORDER_COLLAPSE,     "border-collapse",     LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, BORDER_COLLAPSE) \
+    X(VISIBILITY,          "visibility",          LXB_CSS_PROPERTY_VISIBILITY,     KEYWORD, ALL, VISIBILITY)      \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -109,7 +110,6 @@ typedef enum {
     X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     TEXT, ALL, UNTYPED)            \
     X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  TEXT, ALL, UNTYPED)            \
     X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT, ALL, UNTYPED)            \
-    X(VISIBILITY,          "visibility",          LXB_CSS_PROPERTY_VISIBILITY,     TEXT, ALL, UNTYPED)            \
     X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT, ALL, UNTYPED)            \
     X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \

@@ -267,18 +267,8 @@ lxb_dom_node_t *flex_item_text_sequence_end(lxb_dom_element_t *container, lxb_do
 
 bool flex_item_is_collapsed(lxb_dom_element_t *item)
 {
-    char *v;
-    bool collapsed;
-
     DCHECK(item != NULL, "css-flexbox-1 §4.4's collapsed-item question was asked with no element");
-    v = css_computed_value(item, "visibility");
-    DCHECK(v != NULL,
-           "the cascade produced no computed `visibility` — css-display-3 §4 \"Invisibility: the visibility "
-           "property\" gives it an initial value of `visible` and an `Inherited:` of `yes`, so the cascade's "
-           "last layer always answers");
-    collapsed = strcmp(v, "collapse") == 0;
-    free(v);
-    return collapsed;
+    return css_computed_keyword_is(item, "visibility", CSS_KEYWORD_COLLAPSE);
 }
 
 /* css-flexbox-1 §7.2.1 "The flex-grow property"' and §7.2.2 "The flex-shrink property"' factor; see
