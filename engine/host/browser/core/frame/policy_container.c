@@ -157,9 +157,9 @@ PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_o
        `<meta>` ("a disposition of "enforce"") and a creator's clone of those. */
     csp_list_parse(&p->csp, p->csp_text, p->csp_text ? strlen(p->csp_text) : 0, self_origin,
                    CSP_DISPOSITION_ENFORCE);
-    /* §7.1.7: "A referrer policy, which is a referrer policy. It is initially the default referrer policy",
-       which Referrer Policy §3 makes "strict-origin-when-cross-origin". NULL is a creator that states none. */
-    p->referrer_policy = strdup(referrer_policy ? referrer_policy : "strict-origin-when-cross-origin");
+    /* §7.1.7: "A referrer policy, which is a referrer policy. It is initially the default referrer policy".
+       NULL is a creator that states none. */
+    p->referrer_policy = strdup(referrer_policy ? referrer_policy : FETCH_DEFAULT_REFERRER_POLICY);
     CHECK(p->referrer_policy != NULL, "policy container: OOM copying a referrer policy");
     /* §7.1.4's ITEM, TAKING ITS OWN COPY OF BOTH ENDPOINT STRINGS. The caller's bytes belong to the operation
        creating this Document — a response's header list that is freed the moment the Document is installed, or

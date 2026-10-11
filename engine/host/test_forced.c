@@ -27699,6 +27699,7 @@ static int abi_pay(void)
             const char *jcoep_ep = abi_take(&p, "inherited embedder policy reporting endpoint");
             const char *jcoep_ro = abi_take(&p, "inherited embedder policy report-only value");
             const char *jcoep_ro_ep = abi_take(&p, "inherited embedder policy report-only endpoint");
+            const char *jreferrer_policy = abi_take(&p, "inherited referrer policy");
             const char *jparent = abi_take(&p, "parent navigable");
             const char *jopener = abi_take(&p, "opener navigable");
             const char *jcontainer = abi_take(&p, "container permissions policy");
@@ -27710,6 +27711,9 @@ static int abi_pay(void)
             int jr;
 
             CHECKF(p == NULL, "a join record carries a field after its last. trailing=[%s]", p ? p : "");
+            CHECKF(fetch_is_referrer_policy(jreferrer_policy),
+                   "a join record carries the inherited referrer policy `%s`, which is no Referrer Policy §3 "
+                   "value — a field read at the wrong tab", jreferrer_policy);
             DCHECK(jh_n == strlen(jheaders) && jc_n == strlen(jcsp),
                    "a joined document's header block or inherited CSP list carries a NUL — both reach the ABI "
                    "as C strings, so every field past that byte is one this engine would never be shown");
@@ -27720,7 +27724,8 @@ static int abi_pay(void)
                    "a document was joined into an instance no peer references — the zone joins a create "
                    "notice's child, which a peer holds a WindowProxy for, so this frontier may not drain");
             jr = qjs_join(jhtml, (unsigned)jb_n, jurl, jdoc, jheaders, jtlu, jcsp, jcsp_self, jcoep, jcoep_ep,
-                          jcoep_ro, jcoep_ro_ep, jparent, jopener, jcontainer, jancestors, jsandbox, jarrival);
+                          jcoep_ro, jcoep_ro_ep, jreferrer_policy, jparent, jopener, jcontainer, jancestors,
+                          jsandbox, jarrival);
             DCHECK(jr == 0, "qjs_join refused the document this zone routed here");
             free(jheaders);
             free(jcsp);
@@ -28467,7 +28472,7 @@ static int abi_main(int argc, char **argv)
     const char *paint_dir = arg_val(argc, argv, "--paint-dir");
     char *rec, *p;
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
-    const char *coep_ro, *coep_ro_ep, *parent, *opener, *container_policy, *ancestor_origins;
+    const char *coep_ro, *coep_ro_ep, *referrer_policy, *parent, *opener, *container_policy, *ancestor_origins;
     const char *creation_sandbox_flags, *referenced_f, *arrival_f;
     char *headers, *html, *csp;
     size_t headers_n = 0, html_n = 0, csp_n = 0;
@@ -28549,6 +28554,13 @@ static int abi_main(int argc, char **argv)
           "the document record carries no §7.1.4 EMBEDDER POLICY VALUE — the section gives every container "
           "one and its initial value is a TOKEN, so an empty field is a caller that did not state which of the "
           "two answers applies (the creator's clone, or a new embedder policy where there is no creator)");
+    /* §7.1.7's referrer policy item of that same container: the creator's, or the container's initial
+       default referrer policy where there is none. "" is a Referrer Policy §3 value, so it is not refused. */
+    referrer_policy = abi_take(&p, "inherited referrer policy");
+    CHECKF(fetch_is_referrer_policy(referrer_policy),
+           "the document record carries the inherited referrer policy `%s`, which is no Referrer Policy §3 "
+           "value — the zone relays the creator's item verbatim, so this is a field read at the wrong tab",
+           referrer_policy);
     /* HTML §7.3.1.3 "Child navigables"' PARENT, which is not an item of the container beside it — a policy
        container is five policies and says nothing about a frame tree. The section defines "is a child
        navigable" as "its parent is non-null", so `u` — core/frame/remote_object.h's undefined — is the
@@ -28633,7 +28645,7 @@ static int abi_main(int argc, char **argv)
        arrival carries — every one of them now stated by the party that HAS it. This document's OWN policy is
        not on that list at all: it arrives in the header block above, where a server put it. */
     r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, top_level_url,
-                 csp, csp_self, coep, coep_ep, coep_ro, coep_ro_ep,
+                 csp, csp_self, coep, coep_ep, coep_ro, coep_ro_ep, referrer_policy,
                  parent, opener, container_policy, ancestor_origins, creation_sandbox_flags);
     DCHECK(r == 0, "qjs_init refused the document this process was handed");
     /* THE POLICY BYTES ARE PARSED AND COPIED INSIDE THE ENTRY, exactly as the header block below is. */

@@ -347,7 +347,8 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
 static SerializedPolicyContainer qjs_inherited_container(const char *csp, const char *self_origin,
                                                          const char *coep, const char *coep_endpoint,
                                                          const char *coep_report_only,
-                                                         const char *coep_report_only_endpoint)
+                                                         const char *coep_report_only_endpoint,
+                                                         const char *referrer_policy)
 {
     EmbedderPolicyValue v = EMBEDDER_POLICY_UNSAFE_NONE, ro = EMBEDDER_POLICY_UNSAFE_NONE;
     /* The parse runs, then the assert reads its answer: a DCHECK condition is compiled out in release, so a parse
@@ -366,6 +367,13 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
            "`navigable.create` notice and the trusted zone relays them verbatim, so a token outside them is a "
            "relay that stopped writing the field, not a header that failed to parse. Read as `unsafe-none` it "
            "would put a cross-origin isolated creator's child under the wrong rule for every no-CORS fetch");
+    /* §7.1.7's referrer policy item, a Referrer Policy §3 token or "" (Referrer Policy §3.9 "The empty
+       string"), on the embedder policy's rule. */
+    DCHECK(referrer_policy != NULL && fetch_is_referrer_policy(referrer_policy),
+           "a §7.1.7 policy container arrived over this ABI with a REFERRER POLICY that is no Referrer Policy §3 "
+           "value — the emitting engine writes its container's item onto the `navigable.create` notice and the "
+           "zone relays it verbatim, so this is a relay that stopped writing the field. Read as the default it "
+           "would send referrers from a child whose creator's policy strips them");
     return serialized_policy_container_or_none(csp, self_origin,
                                                serialized_embedder_policy(v, coep_endpoint, ro,
                                                                           coep_report_only_endpoint),
@@ -380,15 +388,7 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
                                                   and read here. How its absence shows: such a child loads a
                                                   `<script src>` without `integrity` that its creator's policy
                                                   refuses, while a same-instance sibling is refused it. */
-                                               NULL,
-                                               /* Named residual: §7.1.7's referrer policy item is not on this
-                                                  entry either. Not covered: a child whose creator lives in
-                                                  another instance holds the default referrer policy. Next diff
-                                                  builds: the field on the same `navigable.create` notice. How
-                                                  its absence shows: such a child's requests carry a referrer its
-                                                  creator's policy strips, while a same-instance sibling's do
-                                                  not. */
-                                               NULL);
+                                               NULL, referrer_policy);
 }
 
 /* `headers` is the navigation response's header list, as HTTP field lines (`name: value`, one per line), which
@@ -415,8 +415,9 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * cannot exist and is asserted. Which container the document is created with is §7.1.7's
  * determine-navigation-params-policy-container (core/frame/policy_container.h), called with both in hand.
  * The four `inherited_coep*` arguments are the same container's §7.1.4 item, since a clone copies every item;
- * without them a cross-origin-isolated creator's child would silently be `unsafe-none`. They are read through
- * qjs_inherited_container. */
+ * without them a cross-origin-isolated creator's child would silently be `unsafe-none`. `inherited_referrer_policy`
+ * is its referrer policy item ("Set clone's referrer policy to policyContainer's referrer policy"), a Referrer
+ * Policy §3 token or "". All are read through qjs_inherited_container. */
 /* `parent_navigable` is §7.3.1.3 "Child navigables"' parent of this document's navigable, stated by the zone that
  * routed the create, since a cross-origin `<iframe>` is the root of its own instance (navigable_root in
  * core/frame/navigable.h). `opener_navigable` is §7.2.2.4's opener of that navigable in the same grammar, `N`
@@ -445,6 +446,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
+                        const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags)
@@ -585,7 +587,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
         SerializedPolicyContainer inherited =
             qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
-                                    inherited_coep_report_only_endpoint);
+                                    inherited_coep_report_only_endpoint, inherited_referrer_policy);
         /* §7.5.1's opener policy row for the root Document: §7.1.3's policy obtained from this instance's
            response, the navigable's because §7.1.3.2 and §7.3.2.1 read it off a browsing context's active
            document (core/frame/window_proxy.h). §7.3.1.3's parent, stated by the zone that routed the create,
@@ -661,6 +663,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
+                        const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags,
@@ -776,7 +779,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
         SerializedPolicyContainer inherited =
             qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
-                                    inherited_coep_report_only_endpoint);
+                                    inherited_coep_report_only_endpoint, inherited_referrer_policy);
         /* §7.5.1's opener policy row for the joined Document, from its own response's header list, and §7.3.1.3's
            parent: a same-origin document nested through a cross-origin one belongs to this cluster and to another
            instance's frame tree at once. */

@@ -27,6 +27,7 @@
     X(COEP_ENDPOINT, coepEndpoint, TOKEN)      /* its reporting endpoint */                                      \
     X(COEP_REPORT_ONLY, coepReportOnly, TOKEN) /* its report-only value */                                       \
     X(COEP_REPORT_ONLY_ENDPOINT, coepReportOnlyEndpoint, TOKEN)                                                  \
+    X(REFERRER_POLICY, referrerPolicy, TOKEN)  /* HTML §7.1.7's referrer policy item, Referrer Policy §3 */    \
     X(PARENT, parent, TOKEN)                   /* HTML §7.3.1.3's parent navigable (remote_object.h), or `u` */  \
     X(CONTAINER_POLICY, containerPolicy, TOKEN) /* Permissions Policy §9.5's result for the container */         \
     X(ANCESTOR_ORIGINS, ancestorOrigins, TOKEN) /* HTML §3.1.3's internal ancestor origin objects list */        \

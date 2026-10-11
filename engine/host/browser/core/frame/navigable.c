@@ -4123,16 +4123,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            WHAT IS ALSO OWED IS AN ABI PARAMETER, WHICH IS WHY THE TWO HALVES OF THE `BUILD` ABOVE ARE NOT
            SYMMETRIC AND MUST NOT BE PRICED AS ONE. The RESOURCE has a whole path already: it is the bytes field
            the provisioning record carries, which reaches qjs_init as `(html, html_len)` and is parsed, so the
-           notice field is genuinely all of it. The ABOUT BASE URL has NO path — qjs_init's sixteen parameters
-           do not include it — so it needs a hop at every party between this notice and that entry, and one of
+           notice field is genuinely all of it. The ABOUT BASE URL has NO path — qjs_init's parameters do not
+           include it — so it needs a hop at every party between this notice and that entry, and one of
            those hops is the ABI's own signature. The clause "with the readers this host already has for the
            container" is true of the container and of the resource and false of the base URL.
-           AND THE TWO READERS OF THIS RECORD ARE LIVE ON WRITE WHILE THIS PRODUCER IS LIVE ONLY AFTER A BUILD,
-           WHICH DECIDES THE UNIT AND NOT MERELY THE ORDER. Both take the policy as the remainder from field 16
-           (`f.slice(16)` in engine/trusted.mjs and in extension/bridge.js), so two fields inserted before it
-           move that index in BOTH — and CLAUDE.md §A-CROSS-BOUNDARY-DIFF's in-between state here is not a
-           srcdoc frame misbehaving but EVERY cross-origin child navigable notice failing its own field count,
-           in the half that is live, until somebody builds the half that is not.
            NEITHER FIELD IS DERIVABLE FROM
            WHAT THIS RECORD CARRIES: the top-level creation URL beside them is §8.1.3.1's, which for a nested
            frame is the TOP document's and never this one's, and the creator's ADDRESS is not its BASE URL the
@@ -4170,10 +4164,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                   "— the address — and fails every relative URL SILENTLY. This refusal is the only thing "
                   "standing there. THE CLASS IS NOT A THIRD FIELD: it is derived from the resource at the "
                   "open, so a peer derives it from the resource too, and what must cross is still TWO. "
-                  "AND BOTH READERS OF THIS RECORD TAKE THE POLICY AS THE REMAINDER FROM FIELD 16 "
-                  "(engine/trusted.mjs, extension/bridge.js), which are live on WRITE while this producer is "
-                  "live only after a BUILD — so inserting two fields before the policy is one commit or it is "
-                  "every cross-origin child navigable's notice short of its count in the half that is live");
+                  "Both are entries of navigable_notice.h's create table, which every reader indexes by name");
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
@@ -4278,6 +4269,14 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                "8941 §3.3.3 \"Strings\" excludes tabs from a structured-field string, so a byte that reached "
                "here is one the structured-field parser admitted and should not have; it would split this "
                "notice into more fields than it has and shift the creator's policy text onto the wrong one");
+        /* §7.1.7's referrer policy item crosses beside the embedder policy: "Set clone's referrer policy to
+           policyContainer's referrer policy". It is a Referrer Policy §3 token or "" (Referrer Policy §3.9
+           "The empty string"), none of which holds a TAB. */
+        DCHECK(creator_policy.referrer_policy != NULL && fetch_is_referrer_policy(creator_policy.referrer_policy),
+               "§7.1.7's referrer policy item of the creator's container was about to cross to a peer instance "
+               "as no Referrer Policy §3 value — serialized_policy_container_of reads it off a live container, "
+               "which holds one from creation, so this is a container whose item was written outside "
+               "policy_container_set_referrer_policy");
         /* HTML §7.3.1.3 "Child navigables" — THE ONE FACT THE PEER COULD NEVER DERIVE ABOUT ITS OWN NAVIGABLE,
            and the reason this field is the PARENT rather than a flag. The section defines the term over the
            link and not over a property of the navigable: "A navigable navigable is a child navigable of another
@@ -4371,7 +4370,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* The record's fields, in navigable_notice.h's order. No field but the last may contain a TAB, which
            engine_notice_build asserts for all of them, and each grammar here guarantees it: an origin
            serialization (URL §3.2 "Host miscellaneous" forbids TAB in a host), HTML §7.1.4's tokens, RFC 8941
-           §3.3.3 strings, remote_object.c's identities, Permissions Policy §4.1's tokens, HTML §3.1.3's
+           §3.3.3 strings, Referrer Policy §3's tokens, remote_object.c's identities, Permissions Policy §4.1's tokens, HTML §3.1.3's
            SPACE-joined list, §7.1.5's COMMA-joined flag names and solver/engine.h's lowercase marks. The
            creator's raw CSP header may hold one, so it is the remainder.
            The provenance is what the zone decides whether to spend the network on: a navigation's safety is
@@ -4397,6 +4396,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             [NAVIGABLE_CREATE_COEP_REPORT_ONLY] =
                 embedder_policy_value_token(creator_policy.embedder.report_only_value),
             [NAVIGABLE_CREATE_COEP_REPORT_ONLY_ENDPOINT] = creator_policy.embedder.report_only_endpoint,
+            [NAVIGABLE_CREATE_REFERRER_POLICY] = creator_policy.referrer_policy,
             [NAVIGABLE_CREATE_PARENT] = parent_id,
             [NAVIGABLE_CREATE_CONTAINER_POLICY] = container_policy,
             [NAVIGABLE_CREATE_ANCESTOR_ORIGINS] = ancestor_origins,

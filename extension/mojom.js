@@ -234,6 +234,16 @@
          "obtain never writes it — BOTH of its branches set `policy's endpoint`, which is the section's own " +
          "text — because the item exists and a serialization that dropped an item is the defect this whole " +
          "record is shaped to prevent" };
+  /* HTML §7.1.7's REFERRER POLICY item of that same container: "Set clone's referrer policy to
+     policyContainer's referrer policy". It is the creator's, and the child's own response cannot state it, so
+     a child provisioned without it sends the referrers its creator's policy strips. The emitting engine
+     writes it onto its `navigable.create` notice and this zone relays it; the receiving engine crashes on a
+     value that is no Referrer Policy §3 policy. */
+  var INHERITED_REFERRER_POLICY = { name: "inheritedReferrerPolicy", type: "string", retained: false,
+    why: "§7.1.7's referrer policy of that inherited container, as a Referrer Policy §3 token or the empty " +
+         "string, which Referrer Policy §3.9 \"The empty string\" makes a value of its own. A container with no creator states the container's " +
+         "initial value, the default referrer policy; the absence of a creator is said by the self-origin " +
+         "above. NOT retained: policy_container_new strdup's it" };
 
   /* HTML §7.3.1.3 "Child navigables"' PARENT NAVIGABLE of the navigable this document is rooted in — NOT an
      item of the policy container above it, and the distinction is the whole reason it is its own parameter: a
@@ -384,7 +394,8 @@
       { ordinal: 0, name: "Init",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE, OPENER_NAVIGABLE,
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, INHERITED_REFERRER_POLICY,
+                 PARENT_NAVIGABLE, OPENER_NAVIGABLE,
                  CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS],
         reply: [
           { name: "rc", type: "int32",
@@ -396,7 +407,8 @@
       { ordinal: 1, name: "Join",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE, OPENER_NAVIGABLE,
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, INHERITED_REFERRER_POLICY,
+                 PARENT_NAVIGABLE, OPENER_NAVIGABLE,
                  CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS, ARRIVAL],
         reply: [
           { name: "rc", type: "int32",

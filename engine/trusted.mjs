@@ -607,14 +607,14 @@ async function main() {
      engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
      rather than by SPACE, because that section's flag names CONTAIN spaces.
      Every index is navigable_notice.h's, through noticegen.mjs, so the policy's slice moves with the record:
-     a slice one short would join the field before the policy onto its front. The opener is in this list,
-     after the parent, in qjs_init's order. The provenance, the group and the two marks are not: they decide
-     the load and which instance hosts it. */
+     a slice one short would join the field before the policy onto its front. The referrer policy and the
+     opener are in this list in qjs_init's order. The provenance, the group and the two marks are not: they
+     decide the load and which instance hosts it. */
   const C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
   const createFacts = (f) =>
     [f[C.topLevelUrl], b64(f.slice(C.policy).join('\t')), f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint],
-     f[C.coepReportOnly], f[C.coepReportOnlyEndpoint], f[C.parent], f[C.opener], f[C.containerPolicy],
-     f[C.ancestorOrigins], f[C.sandboxFlags]];
+     f[C.coepReportOnly], f[C.coepReportOnlyEndpoint], f[C.referrerPolicy], f[C.parent], f[C.opener],
+     f[C.containerPolicy], f[C.ancestorOrigins], f[C.sandboxFlags]];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -1223,7 +1223,8 @@ async function main() {
           (f[C.pinned] !== 'pinned' && f[C.pinned] !== 'unpinned'))
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
                         'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
-                        '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s parent ' +
+                        '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.1.7\'s ' +
+                        'referrer policy, §7.3.1.3\'s parent ' +
                         'navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ' +
                         'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION ' +
                         'is evidence of, which browsing context group the navigable is in (`creator` or ' +

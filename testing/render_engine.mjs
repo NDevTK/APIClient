@@ -107,7 +107,8 @@ async function drive(gluePath, html, steps) {
     inheritedCsp: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
-    parentNavigable: 'u', containerPolicy: 'null', ancestorOrigins: 'none', creationSandboxFlags: 'none',
+    inheritedReferrerPolicy: 'strict-origin-when-cross-origin',
+    parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none', creationSandboxFlags: 'none',
   }, cs);
   M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
   /* A document this driver names, as a person names a seed (solver/engine.h's engine_set_arrival). */

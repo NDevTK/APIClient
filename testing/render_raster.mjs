@@ -383,7 +383,8 @@ async function drive(opts) {
     inheritedCsp: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
-    parentNavigable: 'u', containerPolicy: 'null', ancestorOrigins: 'none', creationSandboxFlags: 'none',
+    inheritedReferrerPolicy: 'strict-origin-when-cross-origin',
+    parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none', creationSandboxFlags: 'none',
   }, cs);
   M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
   /* NO RESIDUE, STATED — `qjs_begin`'s argument is the parked frontier a previous session left. */

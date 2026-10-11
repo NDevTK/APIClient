@@ -761,6 +761,7 @@
           topLevelUrl: p.addr, inheritedCsp: "", inheritedCspSelfOrigin: "",
           inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
           inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
+          inheritedReferrerPolicy: "strict-origin-when-cross-origin",
           parentNavigable: "u", openerNavigable: "N", containerPolicy: "null", ancestorOrigins: "none",
           creationSandboxFlags: "none" });
         var b = await r.renderer.getBundleId();

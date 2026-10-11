@@ -2312,6 +2312,10 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
    one and there is no empty spelling. */
 const NEW_EMBEDDER_POLICY = Object.freeze({ value: "unsafe-none", endpoint: "",
                                             reportOnlyValue: "unsafe-none", reportOnlyEndpoint: "" });
+/* The referrer policy item of that same container (HTML §7.1.7: "It is initially the default referrer
+   policy"), which a caller with no creator states. It is not "", because "" is a policy value of its own
+   (Referrer Policy §3.9 "The empty string"). */
+const DEFAULT_REFERRER_POLICY = "strict-origin-when-cross-origin";
 
 /* Whole or not at all, like the CSP list's two halves: §7.1.7's clone moves every item, so half an item
    arrives having replaced the creator's answer with the default. */
@@ -2349,10 +2353,12 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
      defaulted: a create notice always carries one, so `null` and "the caller forgot" must stay distinct. */
   DCHECK(inherited === null ||
          (!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
-          inherited.selfOrigin !== "" && embedderPolicyWhole(inherited.embedder)),
+          inherited.selfOrigin !== "" && embedderPolicyWhole(inherited.embedder) &&
+          _REFERRER_POLICIES.includes(inherited.referrerPolicy)),
          "an instance was started with an inherited policy container that is neither `null` nor a WHOLE one — " +
          "CSP §2.2 makes a list a struct of policies AND a self-origin, and HTML §7.1.7 makes the container a " +
-         "struct of that list AND §7.1.4's embedder policy, so a half of either is a clone that arrives unable " +
+         "struct of that list, §7.1.4's embedder policy and a referrer policy, so a missing item is a clone " +
+         "that sends referrers its creator's policy strips, or one that arrives unable " +
          "to resolve `'self'` against anything but this document's own address or claiming `unsafe-none` for a " +
          "creator that opted into cross-origin isolation");
   /* The parent of the navigable this instance is rooted in (HTML §7.3.1.3 Child navigables), a separate kind
@@ -2648,6 +2654,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     inheritedCoep: _initEp.value, inheritedCoepEndpoint: _initEp.endpoint,
     inheritedCoepReportOnly: _initEp.reportOnlyValue,
     inheritedCoepReportOnlyEndpoint: _initEp.reportOnlyEndpoint,
+    inheritedReferrerPolicy: inherited ? inherited.referrerPolicy : DEFAULT_REFERRER_POLICY,
     parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags });
   DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                          "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
@@ -3238,7 +3245,8 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
      Updating the traversable) joins a Document whose container comes from its own response. There is no
      `null` arm: engineRoot takes one for a rehydrated recipe with no message, and every caller here has one. */
   DCHECK(!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
-         (inherited.selfOrigin !== "" || inherited.csp === "") && embedderPolicyWhole(inherited.embedder),
+         (inherited.selfOrigin !== "" || inherited.csp === "") && embedderPolicyWhole(inherited.embedder) &&
+         _REFERRER_POLICIES.includes(inherited.referrerPolicy),
          "a document was joined with a CSP list and no SELF-ORIGIN for it — CSP §2.2 \"Policies\" makes a list " +
          "a struct of policies AND the origin `'self'` resolves against, so a policy with no self-origin is " +
          "half a container and §6.7.2.8 would answer one directive backwards. BOTH EMPTY IS A REAL STATE AND " +
@@ -3256,6 +3264,7 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
     inheritedCoep: inherited.embedder.value, inheritedCoepEndpoint: inherited.embedder.endpoint,
     inheritedCoepReportOnly: inherited.embedder.reportOnlyValue,
     inheritedCoepReportOnlyEndpoint: inherited.embedder.reportOnlyEndpoint,
+    inheritedReferrerPolicy: inherited.referrerPolicy,
     parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
     arrival: msg.arrival });
   DCHECK(_join.rc === 0,
@@ -3846,11 +3855,14 @@ async function hostNotice(eng, line) {
        fields: their values are fixed tokens, and `report-to` is a structured-field string (RFC 8941 §3.3.3
        Strings: printable ASCII %x20-%x7E, no tabs). Relayed verbatim; only the receiving engine maps the tokens,
        and it crashes on an unknown one (see NEW_EMBEDDER_POLICY). */
-    /* The policy is the remainder from the table's last field; navigable_notice.h asserts it is last. */
+    /* The policy is the remainder from the table's last field; navigable_notice.h asserts it is last.
+       §7.1.7's referrer policy item is relayed verbatim beside the embedder policy: a Referrer Policy §3
+       token or "", none of which holds a tab. */
     const inherited = { csp: f.slice(C.policy).join("\t"), selfOrigin: f[C.cspSelfOrigin],
                         embedder: { value: f[C.coep], endpoint: f[C.coepEndpoint],
                                     reportOnlyValue: f[C.coepReportOnly],
-                                    reportOnlyEndpoint: f[C.coepReportOnlyEndpoint] } };
+                                    reportOnlyEndpoint: f[C.coepReportOnlyEndpoint] },
+                        referrerPolicy: f[C.referrerPolicy] };
     /* HTML §7.3.1.3 Child navigables' parent navigable, separate from the container policy: an
        auxiliary navigable (`window.open`) has a full container and no parent. It is the emitting engine's own
        navigable identity (core/frame/remote_object.h), relayed verbatim; only the receiving engine decodes it,
@@ -4082,7 +4094,8 @@ async function hostNotice(eng, line) {
       /* No creator: the join's grammar for that is the empty CSP pair and the new embedder policy, as for a
          tab's top-level navigation joining its cluster. */
       await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[P.document], navd.url,
-                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY }, "u", "N", "null", "none", "none");
+                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
+                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none", "none");
       return;
     }
     /* No creator: engineCreate's grammar for that is `null`, as for the swap arm. */
@@ -5369,7 +5382,8 @@ const _hostOps = {
       /* The bytes are on the job, not its message (the job table's only writer puts them there, and the message's
          entry asserts it carries no document), as for the admission arm's engineCreate. */
       await engineJoin(swap.cluster, swap.job.html, swap.job.msg, swap.docId, _tlu,
-                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY }, "u", "N", "null", "none",
+                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
+                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none",
                        "none");
       await engineUnload(swap.cluster, swap.outgoing, swap.docId);
       /* `null`: this round spent its advance on the navigation and never asked the non-resident order. */

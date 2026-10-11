@@ -179,6 +179,7 @@ let instanceSerial = 0;
 async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arrival, inheritedCsp, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
+                          inheritedReferrerPolicy = 'strict-origin-when-cross-origin',
                           parentNavigable = 'u', openerNavigable = 'N', containerPolicy = 'null',
                           ancestorOrigins = 'none',
                           creationSandboxFlags = 'none') {
@@ -237,7 +238,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
       document: [hp, hn], url, docId, headers: headers || '', topLevelUrl,
       inheritedCsp: inheritedCsp || '', inheritedCspSelfOrigin: inheritedCspSelf || '',
       inheritedCoep, inheritedCoepEndpoint,
-      inheritedCoepReportOnly, inheritedCoepReportOnlyEndpoint,
+      inheritedCoepReportOnly, inheritedCoepReportOnlyEndpoint, inheritedReferrerPolicy,
       parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
     }, cs);
 
@@ -688,8 +689,9 @@ async function drainNotices(e) {
                                          `${f[C.provenance]},${f[C.driven]},${f[C.pinned]}`,
                                          f.slice(C.policy).join('\t'),
                                          f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint], f[C.coepReportOnly],
-                                         f[C.coepReportOnlyEndpoint], f[C.parent], f[C.opener],
-                                         f[C.containerPolicy], f[C.ancestorOrigins], f[C.sandboxFlags]));
+                                         f[C.coepReportOnlyEndpoint], f[C.referrerPolicy], f[C.parent],
+                                         f[C.opener], f[C.containerPolicy], f[C.ancestorOrigins],
+                                         f[C.sandboxFlags]));
     }
     /* HTML §7.1.3.2's browsing context group swap — `navigable.swap`, navigable_notice.h's provision record.
        The same act as a create and a different record: §7.3.2.3 makes the new browsing context "with null,

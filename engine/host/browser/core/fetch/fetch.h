@@ -142,6 +142,9 @@ const char *fetch_mode_token(FetchMode m);
 
 /* Whether `p` is a Referrer Policy §3 referrer policy, the empty string included. */
 bool fetch_is_referrer_policy(const char *p);
+/* Referrer Policy §3 "Referrer Policies"' default referrer policy, which HTML §7.1.7 makes a new policy
+   container's initial referrer policy. */
+#define FETCH_DEFAULT_REFERRER_POLICY "strict-origin-when-cross-origin"
 /* Referrer Policy §8.1 "Parse a referrer policy from a Referrer-Policy header" over a response's header list:
    the last known policy it names, or the empty string. OWNED. */
 char *fetch_referrer_policy_of_response(const HeaderList *headers);

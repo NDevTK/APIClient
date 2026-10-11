@@ -638,7 +638,8 @@ try {
   console.log(`${TAG} ── phase 4: a flow behind the frame boundary ──`);
   const OPENER_ADDR = 'https://opener.renderer.gate/app/index.html';
   const CHILD_ADDR = 'https://peer.renderer.gate/child';
-  const OPENER_DOC = '<!doctype html><script>window.open("' + CHILD_ADDR + '","child");</script>';
+  const OPENER_DOC = '<!doctype html><meta name="referrer" content="same-origin"><script>window.open("' +
+                     CHILD_ADDR + '","child");</script>';
   const opener = await self.rendererLaunch('gate-group' + NUL + new URL(OPENER_ADDR).origin);
   noteId(opener.routingId, 'phase 4');
   /* THE ARGUMENTS ARE `qjs_init`'s, and they are the same ones the probe passes: the document as BYTES (a
@@ -674,6 +675,7 @@ try {
     topLevelUrl: OPENER_ADDR, inheritedCsp: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
+    inheritedReferrerPolicy: 'strict-origin-when-cross-origin',
     parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none',
     creationSandboxFlags: 'none' });
   if (initReply.rc !== 0)
@@ -810,6 +812,14 @@ try {
          `(\`${create[C.coepEndpoint]}\`/\`${create[C.coepReportOnlyEndpoint]}\`) and no ` +
          'response header on this document could have named one — §7.1.4 makes both endpoints the EMPTY ' +
          'STRING initially and only a `report-to` parameter writes one');
+  /* §7.1.7's referrer policy item of the creator's container. The opener's `<meta name="referrer">` sets it
+     (HTML §4.2.5.1 "Standard metadata names"), so the value is one no initial default states, and the record
+     carries it because §7.1.7's clone does: "Set clone's referrer policy to policyContainer's referrer
+     policy". */
+  if (create[C.referrerPolicy] !== 'same-origin')
+    fail(`the create notice's §7.1.7 referrer policy is \`${create[C.referrerPolicy]}\` and the opener's <meta ` +
+         'name="referrer"> set its container\'s item to `same-origin` — the peer would hold a referrer policy ' +
+         'its creator never had');
   /* HTML §7.3.1.3's PARENT NAVIGABLE, AND THIS PHASE IS THE ONE THAT PROVES THE `u` ARM RATHER THAN THE OTHER.
      The opener runs `window.open(CHILD_ADDR, "child")`, which §7.3.1.7 step 8 makes an AUXILIARY navigable —
      created out of a target name with no element anywhere in the algorithm — so it has a full §7.1.7 container

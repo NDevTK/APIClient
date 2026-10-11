@@ -48,6 +48,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
+                        const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags);
@@ -57,6 +58,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
+                        const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags,

@@ -1,7 +1,7 @@
 /* HTML §7.5.1 "Shared document creation infrastructure"'s TWELVE REMAINING FACTS, FOR A DOCUMENT THAT IS ITS
  * OWN TOP-LEVEL TRAVERSABLE — stated ONCE, for every host this engine is driven through.
  *
- * WHY IT EXISTS. `qjs_init` takes fifteen facts and four of them are per-run (the bytes, the address, the
+ * WHY IT EXISTS. `qjs_init` takes sixteen facts and four of them are per-run (the bytes, the address, the
  * document's name, the response's header block). The other TWELVE are the same answers for every document
  * nothing embeds, and they were written out at every site that seats one — the LIST rather than a count of
  * it, because the list is what a reader can act on and the count is what they would quote onward:
@@ -13,15 +13,6 @@
  * twelve facts in one module both this file and `trusted.mjs` read, so there is one statement of them and no
  * copy to drift — which is possible only because they are pure data and need none of the zone's fetching,
  * and is therefore a smaller diff than importing the zone would be."
- *
- * AND THE COPY PROPAGATES ITS OWN JUSTIFICATION, WHICH IS WHY THE RESIDUAL UNDER-COUNTED ITS OWN POPULATION.
- * It named TWO files; there were six, and the third was found only by grepping for the ARGUMENT rather than
- * for the values. `layout_cost.mjs` said in as many words that its eleven were "engine/one_document.mjs's
- * `topLevelFacts`, copied for the reason that file states about copying them from engine/trusted.mjs" — a
- * retired argument inherited at one remove, from a file that had inherited it at one remove, each hop
- * carrying the previous one's reasoning forward without re-deriving it. The reasoning was sound and its
- * conclusion never followed: it establishes only that the facts must not come from THE ZONE, and this module
- * is not the zone.
  *
  * AND THE COPY IS NOT THE WHOLE OF WHAT IT COSTS, WHICH IS WHY THIS MODULE SPANS BOTH HOSTS RATHER THAN THE
  * TWO NATIVE DRIVERS THE RESIDUAL NAMES. CLAUDE.md's §Testing makes the ONE experiment nobody has run "the
@@ -47,6 +38,8 @@
  *     every container one, so a container with no creator states that section's own initial value. The two
  *     values are §7.1.4's token strings, and main.c refuses one naming none of the three rather than reading
  *     it as a default.
+ *   · §7.1.7's referrer policy item of that container likewise states its initial value, Referrer Policy §3
+ *     "Referrer Policies"' default referrer policy, because the empty string is a policy value of its own.
  *   · §7.3.1.3 "Child navigables" defines "is a child navigable" as "its parent is non-null", so `u` —
  *     core/frame/remote_object.h's undefined — is the positive statement that this navigable has none.
  *   · Permissions Policy §9.5 "Create a Permissions Policy for a navigable" is given "null or an element
@@ -122,6 +115,7 @@ function statement(url) {
     inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none',
     inheritedCoepReportOnlyEndpoint: '',
+    inheritedReferrerPolicy: 'strict-origin-when-cross-origin',
     parentNavigable: 'u',
     openerNavigable: 'N',   // §7.2.2.4's opener, remote_object.h's null: nothing opened a page a person named
     containerPolicy: 'null',

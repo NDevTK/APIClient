@@ -1419,6 +1419,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
                             const char *csp_self_origin, const char *top_level_url,
                             const char *coep, const char *coep_endpoint,
                             const char *coep_report_only, const char *coep_report_only_endpoint,
+                            const char *referrer_policy,
                             const char *parent, const char *container_policy,
                             const char *ancestor_origins, const char *creation_sandbox_flags,
                             const char *opener, const char *arrival)
@@ -1434,6 +1435,11 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
            "a child document was about to be provisioned with no §7.1.4 EMBEDDER POLICY for its §7.1.7 "
            "container — every container has one, so this is a caller that did not state which of the two "
            "answers applies (the creator's clone, or a new embedder policy where there is no creator)");
+    /* §7.1.7's referrer policy item, stated by every caller on the embedder policy's rule; "" is a value. */
+    DCHECK(referrer_policy != NULL && fetch_is_referrer_policy(referrer_policy),
+           "a child document was about to be provisioned with no Referrer Policy §3 value for its §7.1.7 "
+           "container's referrer policy — the creator's clone carries its item and a creatorless swap states "
+           "the container's initial default referrer policy");
     /* §7.3.1.3's parent is stated by every caller for the same reason, and has no empty spelling: a navigable
        either has a parent or is a top-level traversable, and both are answers. */
     DCHECK(parent != NULL && *parent,
@@ -1473,7 +1479,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
               coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
-              ancestor_origins, creation_sandbox_flags, opener, arrival, (char *)NULL);
+              ancestor_origins, creation_sandbox_flags, opener, arrival, referrer_policy, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1702,8 +1708,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         wpt_spawn_child(WPT_CREATE(CHILD), WPT_CREATE(ADDRESS), WPT_CREATE(ORIGIN), WPT_CREATE(POLICY),
                         WPT_CREATE(CSP_SELF_ORIGIN), WPT_CREATE(TOP_LEVEL_URL), WPT_CREATE(COEP),
                         WPT_CREATE(COEP_ENDPOINT), WPT_CREATE(COEP_REPORT_ONLY),
-                        WPT_CREATE(COEP_REPORT_ONLY_ENDPOINT), WPT_CREATE(PARENT), WPT_CREATE(CONTAINER_POLICY),
-                        WPT_CREATE(ANCESTOR_ORIGINS), WPT_CREATE(SANDBOX_FLAGS), WPT_CREATE(OPENER), arrival);
+                        WPT_CREATE(COEP_REPORT_ONLY_ENDPOINT), WPT_CREATE(REFERRER_POLICY), WPT_CREATE(PARENT),
+                        WPT_CREATE(CONTAINER_POLICY), WPT_CREATE(ANCESTOR_ORIGINS), WPT_CREATE(SANDBOX_FLAGS),
+                        WPT_CREATE(OPENER), arrival);
         free(whole);
         return;
     }
@@ -1731,7 +1738,8 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            flags are its popup sandboxing flag set, which §7.1.5 makes empty at creation and only §7.3.1.7's rules
            for choosing a navigable populate, and no `window.open` reaches a swapped-to context. */
         wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "",
-                        WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "", "u",
+                        WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "",
+                        FETCH_DEFAULT_REFERRER_POLICY, "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
                         SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);
@@ -1749,7 +1757,8 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                        WPT_PROVISION(PINNED)) < (int)sizeof arrival,
               "wpt: a provisioning record's three marks did not fit an arrival word");
         wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "",
-                        WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "", "u",
+                        WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "",
+                        FETCH_DEFAULT_REFERRER_POLICY, "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
                         SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);
@@ -2481,6 +2490,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                      const char *inherited_coep, const char *inherited_coep_endpoint,
                                      const char *inherited_coep_report_only,
                                      const char *inherited_coep_report_only_endpoint,
+                                     const char *inherited_referrer_policy,
                                      const char *parent_navigable, const char *container_policy,
                                      const char *ancestor_origins, const char *creation_sandbox_flags,
                                      const char *opener_navigable)
@@ -2661,9 +2671,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                parked navigable record, carry it). Next diff builds: a flag written at the parent and read here.
                Absence shows as: an integrity-policy subtest that passes in-instance failing across the process
                boundary. */
-            NULL,
-            /* §7.1.7's referrer policy item, not on this relay for the same reason. */
-            NULL);
+            NULL, inherited_referrer_policy);
         /* §7.5.1's opener policy row for this root Document (§7.1.3's policy, from the same response as the
            params) and §7.3.1.3's parent, which for a `--document` child is a navigable in the parent process and
            for the top-level test document is none. Both go to core/frame/navigable.c's navigable_root, where
@@ -2861,6 +2869,8 @@ static int wpt_child_main(int argc, char **argv)
     /* How the parent reached this document, as engine.h's arrival word (the create or swap notice's provenance,
        drive mark and witness mark); engine_arrival_of_token refuses an absent or malformed one. */
     const char *arrival = argc > 17 ? argv[17] : NULL;
+    /* §7.1.7's referrer policy item of the inherited container, appended last. Not defaulted: "" is a value. */
+    const char *referrer_policy = argc > 18 ? argv[18] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -2921,6 +2931,10 @@ static int wpt_child_main(int argc, char **argv)
           "arrives here. Without the field this process would take the EMPTY set, which is not an absence but "
           "the positive claim that nothing about this frame is sandboxed — it would run the scripts, submit "
           "the forms and relax the `document.domain` its embedder's markup forbids");
+    CHECK(referrer_policy && fetch_is_referrer_policy(referrer_policy),
+          "wpt: a child document was started with no Referrer Policy §3 value for its §7.1.7 container's "
+          "referrer policy — the parent writes the creator's item, or the initial default where there is no "
+          "creator, so a child without it would send referrers its creator's policy strips");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
     /* `about:blank` has no bytes to fetch: its Document is the empty one §7.4 creates, which makes it synchronous
        in a browser and an <iframe> with no src scriptable immediately. */
@@ -2936,7 +2950,7 @@ static int wpt_child_main(int argc, char **argv)
        be nested in a document of another instance and only the creating zone knows which. */
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
-                             coep_report_only_endpoint, parent_navigable, container_policy,
+                             coep_report_only_endpoint, referrer_policy, parent_navigable, container_policy,
                              ancestor_origins, creation_sandbox_flags, opener_navigable);
     free(html);
     header_list_free(&html_headers);
@@ -3081,7 +3095,7 @@ int main(int argc, char **argv)
        flag set, which only §7.3.1.7's rules for choosing a navigable fill), and §7.2.2.4's opener is `N`, each in
        its grammar's own word so an empty field cannot be mistaken for a host that stopped stating it. */
     ctx = wpt_build_document("wpt", g_top_origin, g_base_url, NULL, 0, NULL, "", "",
-                             "unsafe-none", "", "unsafe-none", "", "u",
+                             "unsafe-none", "", "unsafe-none", "", FETCH_DEFAULT_REFERRER_POLICY, "u",
                              PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                              DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
                              SANDBOX_FLAGS_SERIALIZED_NONE, "N");
