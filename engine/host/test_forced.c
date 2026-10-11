@@ -836,6 +836,13 @@ static int fixture_provide(JSContext *ctx) {
             filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
                                      "blocked-signal: this origin has not been widened for a program load "
                                      "at this address, so the act is derived and reported and not spent");
+        } else if (!strncmp(abs, "https://x.test/api/decl", strlen("https://x.test/api/decl")) &&
+                   (strcmp(method, "GET") || !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
+                    !strcmp(driven, PENDING_DRIVEN_YES))) {
+            /* HTML_DECLINES's refusals, the unconfigured zone's: a method other than GET, and a request a fork
+               or a drive composed, for an origin nobody widened. */
+            filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
+                                     "blocked-method: this origin has not been widened for this request");
         } else {
             HeaderList eh = { 0 };
             /* WHAT THIS PARTICULAR ADDRESS IS SERVED AS, which for every address this table does not hold
@@ -1026,6 +1033,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
+#include "fixture/declines.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1451,6 +1459,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
+    { "declines", HTML_DECLINES },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -5270,6 +5279,20 @@ static int g_docfetch_cross_site;
 /* THE HOST'S SIDE, driven from the fixture's step loop: answer everything outstanding. A real host routes each
    record to the instance holding that document; here the answer is the request text turned back, which is
    enough to prove the value reaches the call site that asked. */
+/* Whether the `xhr.send` record `op` (`len` bytes, not NUL-terminated at its end) is one HTML_DECLINES's zone
+   refuses: a method other than GET to /api/decl, the same rule fixture_provide applies to a fetch(). */
+static int tf_xhr_declined(const char *op, size_t len) {
+    static const char URL[] = "\"url\":\"https://x.test/api/decl";
+    static const char GET[] = "\"method\":\"GET\"";
+    int at_url = 0, is_get = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        if (len - i >= sizeof URL - 1 && !memcmp(op + i, URL, sizeof URL - 1)) at_url = 1;
+        if (len - i >= sizeof GET - 1 && !memcmp(op + i, GET, sizeof GET - 1)) is_get = 1;
+    }
+    return at_url && !is_get;
+}
+
 /* Child document ids this fixture has handed out. Starts above the fixture's own document (1). */
 static int hostreq_answer_all(JSContext *ctx)
 {
@@ -5374,6 +5397,13 @@ static int hostreq_answer_all(JSContext *ctx)
                "with nothing but a `blocked` count to say it is never coming back");
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
+        /* HTML_DECLINES's XMLHttpRequest refusal: a declined rendezvous gets no value, and flow_decline_fork
+           builds its waiting and failure arms. */
+        if (!strncmp(tab + 1, "xhr.send\t", 9) && tf_xhr_declined(tab + 1, (size_t)(end - (tab + 1)))) {
+            n += engine_host_decline(ctx, id, "blocked-method: this origin has not been widened for this request");
+            p = end + 1;
+            continue;
+        }
         {
             JSValue v;
             if (!strncmp(tab + 1, "windowproxy.get\t", 16)) {
@@ -11755,6 +11785,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the close request that closed the inserted dialog also closed `c` on the arm with two groups "
              "allowed — the inserted dialog's close watcher joined `c`'s group because the removed dialog's "
              "was destroyed after it was established, where DOM §4.2.3's replace all removes before it inserts");
+    /* A frontier left parked on refusals: HTML_DECLINES's zone declines its XMLHttpRequest and every fetch()
+       but one GET, and the session parks the waiting arms, one of them suspended inside the XHR's send task
+       with a later task queued, rather than aborting. */
+    const char *declines_why = NULL; int declines_tt = 1;
+    fold_row(&declines_tt, &declines_why,
+             !!strstr(js, "\"/api/decl/redir\"") && !!strstr(js, "/api/decl/sub/rel-xhr"),
+             "NOT REACHED: there is no /api/decl/redir record or no record of the XMLHttpRequest to "
+             "/api/decl/sub/rel-xhr, so the document's program did not run to its XHR and its served GET");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15585,6 +15623,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "frag-base", fragbase_tt, "/api/fragbase", SESS_EXPLORE, fragbase_why },
         { "frag-base-multi", fragbasem_tt, "/api/fragbase", SESS_EXPLORE, fragbasem_why },
         { "frag-dialog", fragdialog_tt, "/api/fragdialog", SESS_EXPLORE, fragdialog_why },
+        { "declines-park", declines_tt, "/api/decl/redir", SESS_EXPLORE, declines_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },

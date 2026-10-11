@@ -11115,23 +11115,17 @@ static int engine_sched_slice(void) {
        list was enqueued outside a flow and nothing will run it. */
     DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
            "async: a job reached the global list (enqueued outside a flow) and was never drained");
-    /* The same rule one level up, over the flows' own queues. flow_step asserts a flow may not finish holding work,
-       but the loop above can also leave with flows alive (every member host-owed, none pickable), and a reaction on
-       one of their queues would die with the session. */
+    /* A member's queued jobs are asserted after the park below, not here: a member resting on a refusal may hold
+       work its timeline has not reached, which its recipe carries. */
     for (int i = 0; i < flow_count(); i++) {
-        DCHECK(flow_job_pending(flow_at(i)) == 0,
-               "the frontier was declared exhausted while a live flow still holds queued jobs");
-        /* Named residual. Not covered: the two asserts in this loop forbid states the park below handles.
-           `flow_job_pending == 0` forbids a state cold_park_flow's banner argues is correct (a job the replay
-           re-causes rides the recipe; only flow_job_external is refused there), and `flow_deliver_pending == 0`
-           forbids one the park repairs by writing an 'm' record per delivery, though only when the park is
-           taken, since cold_park has a declining arm. Next diff builds: confirm the `zero == 0` conservation
-           assert below holds without this walk (its premise cites the walk), then move both asserts below the
-           park, gated on the decline engine_frontier_paged() names. Absence shows as: a session whose members
-           hold replay-caused jobs, or a peer's message the park would have written, aborting at this loop
-           instead of parking. A peer owed an operation's answer is not asserted here: engine_park_frontier's
-           first act, engine_retract_operations, clears flow_owes_answer for every flow and tells the peer, and
-           engine_retract_span's postcondition and cold_park_flow assert it after that repair. */
+        /* Named residual. Not covered: `flow_deliver_pending == 0` below forbids a state the park repairs by
+           writing an 'm' record per delivery. Next diff builds: confirm the `zero == 0` conservation assert
+           below holds without this walk (its premise cites the walk), then move this assert below the park
+           beside the jobs assert. Absence shows as: a peer's message the park would have written aborting at
+           this loop instead of parking. A peer owed an operation's answer is not asserted here:
+           engine_park_frontier's first act, engine_retract_operations, clears flow_owes_answer for every flow
+           and tells the peer, and engine_retract_span's postcondition and cold_park_flow assert it after that
+           repair. */
         /* The same rule for a routed record, a work item as a job is: flow_finish asserts it for a flow that
            runs out of work, and a flow that leaves this loop alive would drop the record in flow_registry_free,
            the peer's message indistinguishable from a page with no handler. A flow suspended inside a live
@@ -11198,6 +11192,16 @@ static int engine_sched_slice(void) {
         engine_park_frontier(ctx, g_sess_cur);
         g_sess_cur = NULL;
     }
+    /* No queued job dies with the session. A member that rests holding jobs is a legal state: the waiting arm of a
+       refused synchronous request stays suspended inside the task that asked (an asynchronous XMLHttpRequest
+       places its rendezvous from its send task), so a task queued behind that one is work its timeline has not
+       reached. The replay its recipe drives re-causes it (cold.h), and cold_park_flow refuses the one kind a replay
+       does not re-cause (flow_job_external). So each holder must have had its recipe written. */
+    for (int i = 0; i < flow_count(); i++)
+        DCHECKF(flow_job_pending(flow_at(i)) == 0 || flow_at(i)->paged,
+                "the session closed while member %d of %d, resting at `%s`, holds %d queued job(s) and has no "
+                "recipe — the park above writes every member, so its queue would die with the session unwritten",
+                i, flow_count(), step_unit_name(flow_at(i)->step_unit), flow_job_pending(flow_at(i)));
     /* And the claim is asserted where it is made: a resting member is deprioritized and paged, resumable across
        sessions, never terminated, so at the instant the session stops existing every standing member must have
        its recipe written; otherwise its timeline ends with the process while `live` counted it and the result
