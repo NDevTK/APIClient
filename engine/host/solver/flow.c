@@ -2747,9 +2747,8 @@ int flow_job_external(const Flow *f) {
     return k;
 }
 
-/* THE OPERATION QUEUE'S LENGTH — see flow.h. The context is the pending register's, for the reason that file
-   gives for holding one at all: the callers that matter (the scheduler's pick, the teardown asserts) hold a
-   Flow and nothing else. */
+/* The operation queue's length (flow.h). The context is the pending register's, for that file's reason: the
+   callers that matter (the scheduler's pick, the teardown asserts) hold a Flow and nothing else. */
 int flow_perform_pending(const Flow *f) {
     JSValue v;
     int n;
@@ -2764,13 +2763,10 @@ int flow_perform_pending(const Flow *f) {
     return n;
 }
 
-/* …AND WHETHER IT OWES AN ANSWER AT ALL — see flow.h. Scanned rather than counted, and it no longer borrows
-   flow_blocked's argument for that: that one was retired above, so a cross-reference to it would send the next
-   reader to a paragraph that now says the opposite. This stands on its own facts. The two halves of the
-   question live in two structures this file owns outright — the operation queue, whose length is an O(1) read,
-   and the flow's own token row, walked over `dyn_n` — so neither half is the register the HOST settles from
-   outside, which is the thing that made a counter there both necessary and delicate. Nothing has measured this
-   as hot; if something does, the answer is the same shape and the sites are all in this file. */
+/* And whether it owes an answer at all (flow.h). Scanned rather than counted: both halves live in structures this
+   file owns outright (the operation queue, whose length is an O(1) read, and the flow's token row, walked over
+   `dyn_n`), so neither is the register the host settles from outside, which is what made a counter there
+   necessary. Nothing has measured this as hot; if something does, the sites are all in this file. */
 int flow_owes_answer(const Flow *f) {
     if (flow_perform_pending(f) > 0) return 1;
     for (int i = 0; i < f->dyn_n; i++)
@@ -2778,414 +2774,183 @@ int flow_owes_answer(const Flow *f) {
     return 0;
 }
 
-/* THE SERVICE QUANTUM — why the rank moves in steps rather than continuously.
+/* The service quantum: why the rank moves in steps rather than continuously. Aging applied continuously makes two
+ * flows of equal value (the ordinary case: most have emitted the same amount, often none) trade places after every
+ * step, a fair-share scheduler with an infinitesimal quantum that thrashes by construction, and here every trade
+ * pays a full COW swap whose cost grows with the document. With elapsed time as the charge, the running flow would
+ * fall below a tied rival between two consecutive consultations of the preempt hook.
  *
- * Aging was applied per SCHEDULER STEP, so the running flow's weight fell by a hair after every single step. Two
- * flows of equal value — the ordinary case, since most flows have emitted the same amount and very often none —
- * therefore traded places after ONE step each, forever. That is a fair-share scheduler with an infinitesimal
- * quantum, which thrashes by construction, and here every trade pays a full COW swap: the smoke fixture spent
- * 4.4 MILLION context switches on work that needed a few thousand, and the cost of each grew with the size of
- * the document, so a page with a few hundred DOM writes could not finish at all.
+ * The rate is unchanged: a flow ages by exactly cpu * FLOW_AGE_RATE in the long run, so which flow wins over any
+ * real interval is the same decision. What goes is sub-quantum resolution: rank moves one notch per quantum of
+ * service, so the leader keeps the thread for a quantum and a tied rival then takes its turn. Nothing is dropped
+ * or skipped; it is an order decision.
  *
- * The rate is UNCHANGED — a flow still ages by exactly cpu * FLOW_AGE_RATE in the long run, so which flow wins
- * over any real interval is the same decision it always was. What is gone is the sub-quantum RESOLUTION: rank
- * moves one notch per quantum of service, so the flow that holds the lead keeps it for a quantum and a tied
- * rival then takes its turn. Nothing is dropped, nothing is truncated and no flow is skipped — it is an ORDER
- * decision, which is the only thing the WFQ is allowed to be.
- *
- * QUANTISING IS NOT AN ARTEFACT OF THE OLD UNIT — it is MORE load-bearing now that the charge is a clock
- * reading. A step count moved the weight once per step; elapsed time moves it continuously, so without the
- * notch the running flow would fall below a tied rival between two consecutive consultations of the preempt
- * hook, which is the same thrash at a finer grain.
- *
- * AND THE NOTCH IS THE COOPERATIVE QUANTUM, not a number of its own. Rank moving faster than the thread can
- * actually be handed over IS the sub-quantum resolution described above, and ENGINE_QUANTUM_MS is the smallest
- * slice this scheduler ever hands anyone. A private constant here would be the hand-copied value build.mjs
- * warns about: the two would drift, and the drift would surface as thrash that neither file explained.
- *
- * AN EMIT STILL PREEMPTS IMMEDIATELY. flow_credit_emit zeroes cpu and bumps the generation, so a flow that
- * produces value jumps the queue within the quantum — the quantum bounds thrash between EQUALS, never the
- * response to something that actually changed the ranking. */
+ * The notch is the cooperative quantum, not a number of its own: ENGINE_QUANTUM_MS is the smallest slice this
+ * scheduler hands anyone, and a private constant here would drift from it. An emission still preempts at once:
+ * flow_credit_emit forgives the account's window and raises the generation, so the quantum bounds thrash between
+ * equals, never the response to something that changed the ranking. */
 #define FLOW_SERVICE_US ((int64_t)ENGINE_QUANTUM_MS * 1000)
 
-/* THE EXCHANGE RATE BETWEEN THE TWO TERMS, and it is the entire mechanism: 1e-6 POINTS PER MICROSECOND — ONE
- * EMITTED FINDING PER SECOND of thread time a flow holds without emitting one.
+/* The exchange rate between the two terms, and the mechanism: 1e-6 points per microsecond, one emitted finding per
+ * second of thread time a flow holds without emitting.
  *
- * THE NUMBER IS UNCHANGED AND ITS UNIT IS NOT, which is precisely the defect. It was points per SCHEDULER STEP,
- * and a step count cannot price a monopolizer at all: at 1e-6 per step, giving back ONE emission's worth of rank
- * took about 10^7 steps, so test_forced.c's unknown-length walk (`Array.from(state.items)`, one outcome fork per
- * position, emitting nothing further) held the thread for 227 SECONDS with `switches` still at 1 — every yield
- * offered, every yield declined, because its reward from earlier in the document outweighed an aging term
- * denominated in something the reward was not.
+ * One second per finding prices silence on the timescale at which it monopolises and leaves a producing flow
+ * alone: a flow that has emitted V findings and then stops falls below a never-run sibling (its own reward plus the
+ * full optimism bonus, so at least 1.0 above the floor) after V + 1 seconds of silence. Nothing holds the thread for
+ * a silent second and keeps its lead; nothing productive is demoted for the step in which it emits. flow_best
+ * asserts that crossing. The silence is the chain's: a walk that forks a "stop at n" arm per position, each arm
+ * running the rest of the document and departing, is charged through the family half (`fam_us`, FlowAcct) as each
+ * arm burns, so the seconds counted are the seconds the chain spent. */
+/* How many microseconds of silence one emitted finding is worth: the price. FLOW_AGE_RATE is its reciprocal, so
+ * there is one place to change it.
  *
- * WHY ONE SECOND PER FINDING. The rate has to price silence on the timescale at which silence is monopolising,
- * and it has to leave a flow that is still producing alone. It does both, exactly and checkably: a flow that has
- * emitted V findings and then stops falls below a never-run sibling — whose weight is its own reward plus the
- * full optimism bonus, hence at least 1.0 — after V + 1 seconds of unproductive thread time. Nothing holds the
- * thread for a silent second and keeps its lead; nothing productive is demoted for the step in which it emits.
- * Measured against the case above: 227 seconds of silence now costs 227 points, and no flow in any run of this
- * engine has emitted anything close to 227 findings, so the walk sinks in its first seconds instead of never.
- * That crossing is not left as prose — flow_best asserts it below, and it FIRES on the tree this replaced.
+ * The price is not the unit. A term of an order has two independent quantities: what a microsecond costs, and the
+ * smallest step the order can express. The price must be commensurate with an emitted finding; the step must be
+ * commensurate with the granularity at which the thread is handed over, because a term that steps coarser than that
+ * is invisible to every pick inside one step: the scheduler charges the flow, re-picks, and reads a weight the
+ * charge did not move. With one constant as both, a step of one second is 83.3 quanta of silence, and the order
+ * then rests on the optimism bonus alone, whose only mover is completing a unit (the same precondition as reaching
+ * a queued job, `frame == NULL`), so the one flow that can run a job is the only one paying anything and is locked
+ * out by deficits like 1/15 − 1/14 that a point-wide step cannot repay.
  *
- * AND THE UNPRODUCTIVE THREAD TIME IS THE CHAIN'S, which is the second half of the same defect and was measured
- * the same way. With the unit fixed, the walk above STILL never sank: it forks a "stop at n" arm per position and
- * each arm burns the rest of the document and DEPARTS, so the seconds this rate prices were billed to flows that
- * ceased to exist while the walker was charged only for the per-position ask. 22 of 26 probe rows on the minimal
- * fixture read 0 and were flat from sample 16 of 113. A departing flow now hands its service to the flow that
- * forked it (FlowAcct), so "V + 1 seconds of unproductive thread time" counts the seconds the CHAIN spent. */
-/* HOW MANY MICROSECONDS OF SILENCE ONE EMITTED FINDING IS WORTH — the PRICE, and nothing else. One second,
- * which is what the paragraph above argues for; FLOW_AGE_RATE is its reciprocal rather than a second number, so
- * the two cannot drift and there is one place to change the price.
+ * The flow being charged accrues silence at twice its CPU (flow_age_running adds the same microseconds to `cpu` and
+ * to the family's `fam_us`, and the notch is their sum), so a consuming flow pays two points per second where
+ * FLOW_AGE_RATE says one; that is a pricing question, left as it stands. flow.h's weight
+ * (`1/(1+v) - (s+F)*Q*RATE`, "the first quantum costs a candidate 0.012") and its census reasoning both assume a
+ * notch of one quantum.
  *
- * IT IS THE PRICE AND IT IS NOT THE UNIT, AND CONFLATING THE TWO IS WHAT THIS BLOCK NOW SEPARATES. A term of
- * an ORDER has two independent quantities in it — what a microsecond COSTS, and the smallest step the order
- * can express — and one constant cannot be both. The price has to be commensurate with an emitted finding
- * (that is the whole of the paragraph above). The step has to be commensurate with the granularity at which
- * the thread is actually handed over, because a term that steps coarser than that is INVISIBLE to every pick
- * inside one step of it: the scheduler charges the flow, re-picks, and reads a weight the charge did not move.
- *
- * WHAT THAT COST, MEASURED ON REAL PAGES. With one constant serving both, the step was one SECOND, which is
- * 83.3 cooperative quanta of SILENCE — and the flow being charged accrues silence at TWICE the rate it burns
- * CPU, because flow_age_running adds the same microseconds to `cpu` AND to the family's `fam_us` and the notch
- * is their SUM. So the running flow crossed a step once every 41.7 quanta it consumed: 40 of every 41 picks
- * were made against a weight the previous pick's service had not touched. (The 2x is worth stating rather than
- * folding into the number, because it means the price a CONSUMING flow actually pays is two points per second
- * where FLOW_AGE_RATE says one. That is a pricing question, not a resolution one, and it is untouched here.)
- * The only term left with sub-second resolution was the optimism bonus, whose sole mover is
- * COMPLETING a unit of work. A flow reaches its queued jobs only with `frame == NULL` (engine.c's job arms are
- * all under it) and is credited a completed unit under the SAME predicate, so the one flow that can run a job
- * is the only kind of flow that pays anything at all between two whole seconds, and it pays once per job. Three
- * runs of one login page, one fresh browser each: `jobsQueued` 373, 401, 417 — a network quantity — and
- * `jobsRun` 14, 14, 14. The job holder climbs 1/(1+v) until it passes the frontier's FROZEN maximum inherited
- * visit count (a mid-program arm completes no unit, so its count never moves and the wall never lowers), and
- * stops there: an integral, document-determined number with no network in it. The deficit that locks it out is
- * 1/15 − 1/14 = 0.0048 points — less than one quantum of service — and a unit of one second cannot repay it
- * with anything short of a full point, so it was never repaid at all.
- *
- * THE PROSE FOR THIS WAS ALREADY IN THE TREE, WHICH IS THE OTHER HALF OF WHY THIS IS A RESTORATION AND NOT A
- * NEW POLICY. FLOW_SERVICE_US's own preamble above still says "rank moves one notch per quantum of service, so
- * the flow that holds the lead keeps it for a quantum and a tied rival then takes its turn"; flow.h writes the
- * weight out as `1/(1+v) - (s+F)*Q*RATE` and states that "the first quantum costs a candidate 0.012"; and
- * flow.h's census paragraph reasons that raising every member's service by delta drops every weight by
- * `delta * FLOW_SERVICE_US * FLOW_AGE_RATE`. All three describe a notch of one QUANTUM. The implementation
- * moved to one notch per second when the aging acquired its family half and none of them moved with it — a
- * mechanism replaced with the prose for the old one left standing, which is exactly the scar this file's own
- * rules say to delete rather than to read as a gap.
- *
- * THE STEP MAY NOT COST MORE THAN AN EMISSION, which is what the compile-time relation below now says and is
- * the one thing the two constants genuinely owe each other: at a step of one quantum the aging moves
- * FLOW_AGE_QUANTUM points per quantum, and if that exceeded 1.0 a single slice of the thread would outweigh a
- * finding and the reward term could never order anything. Asserted at COMPILE time because it is a relation
- * between two constants and no run can tell you it broke. */
+ * The step may not cost more than an emission: at a step of one quantum the aging moves FLOW_AGE_QUANTUM points per
+ * quantum, and above 1.0 a single slice would outweigh a finding. A relation between two constants, so asserted at
+ * compile time. */
 #define FLOW_SILENCE_US ((int64_t)1000000)
 typedef char flow_quantum_costs_at_most_one_finding[(FLOW_SILENCE_US >= FLOW_SERVICE_US) ? 1 : -1];
 #define FLOW_AGE_RATE (1.0 / (double)FLOW_SILENCE_US)
-/* …AND THE PRICE OF ONE NOTCH, WHICH IS THE PRICE OF ONE QUANTUM. The aging term is `notch * this`, so the
- * exchange rate is untouched — a flow still ages by exactly `us * FLOW_AGE_RATE` in the long run, so which
- * flow wins over any real interval is the decision it always was — and what changes is only that the order can
- * now express the smallest amount of thread time it ever hands out. FLOOR-then-multiply, never
- * multiply-then-floor: two flows on the same notch get the identical product, which is what makes the
- * fork's rank-neutrality equality below an exact one. */
+/* And the price of one notch, the price of one quantum. The aging term is `notch * this`, so the exchange rate is
+ * untouched and the order can express the smallest amount of thread time it hands out. Floor then multiply, never
+ * multiply then floor: two flows on the same notch get the identical product, which keeps the fork's
+ * rank-neutrality equality exact. */
 #define FLOW_AGE_QUANTUM ((double)FLOW_SERVICE_US * FLOW_AGE_RATE)
 
-/* HOW MANY WHOLE QUANTA OF THE THREAD THIS FLOW HAS ACTUALLY CONSUMED — the ONE quantised reading of `cpu`, and
- * a CENSUS quantity: it says who is consuming the thread, at the granularity the thread is handed out in. It is
- * no longer a term of the weight, which is the correction this comment carries: it used to be the OPTIMISM
- * term's "visits", and a microsecond is not a visit (see flow_weight). */
+/* How many whole quanta of the thread this flow has consumed: the one quantised reading of `cpu`, a census quantity
+ * saying who is consuming the thread at the granularity it is handed out in. Not a term of the weight; the
+ * optimism term counts completed units (see flow_weight). */
 int64_t flow_service_notch(const Flow *f) { return flow_own_silence(f) / FLOW_SERVICE_US; }
 
-/* …AND THE SAME READING OF THE FORK FAMILY'S: how many whole quanta this flow's family has burned since any of
- * its arms last emitted. Two functions because they are two quantities with two reset points (flow_age_running
- * says why), and both are the census's — read together, their RATIO is the fork factor of the widest family in
- * the frontier, which is a fact about the document's branching. The AGING term reads their SUM, in the SAME
- * unit, below: the census and the order are no longer denominated in different quantities, which is what let a
- * census row and a rank disagree about how much service a member had been charged for. */
+/* And the same reading of the fork family's: whole quanta the family has burned since any of its arms last emitted.
+ * Two functions because they are two quantities with two reset points (flow_age_running), both the census's; their
+ * ratio is the fork factor of the widest family, a fact about the document's branching. The aging term reads their
+ * sum in the same unit, so a census row and a rank agree about how much service a member was charged for. */
 int64_t flow_family_notch(const Flow *f) { return acct_family_us(f) / FLOW_SERVICE_US; }
 
-/* HOW MANY WHOLE COOPERATIVE QUANTA OF SILENCE THIS FLOW STANDS AT — the AGING term's quantity, and the only
-   reading of it the weight makes. It is the SUM of the two notches above and it is in THEIR unit, which is the
-   granularity at which the thread is handed out: a term that stepped coarser than that would be a charge the
-   pick following it cannot see (FLOW_SILENCE_US says what that cost, in jobs never run). The PRICE is applied
-   where the term is summed, at FLOW_AGE_QUANTUM, so this stays an exact integer and nothing quantises a rank
-   on the FPU.
-   THE SUM IS THE SILENCE AND BOTH HALVES ARE OVER ONE WINDOW. `flow_own_silence` is what THIS FLOW has burned
-   since its family last emitted and `fam_us` is what its whole fork family has burned over that same window —
-   one epoch, kept by FlowAcct's `emit_gen`, which is what lets these be summed into one notch and weighed
-   against one reward. The own half used to be measured since this FLOW's own last emission, a strictly longer
-   window, and see `emit_gen` for the population that mismatch made unreachable. The aging is both because each
-   answers a comparison the other cannot: the family half orders one fork chain against another (without it a
-   family that emitted V and wears N names pays for V once and presents it N times), and the own half orders a
-   family's members against each other (without it every arm reads the identical number, so on a frontier that
-   IS one family — which a real page's is, every flow descending from the boot flow — the term cancels out of
-   every comparison it appears in and §scheduler's monopolizer sentence has nothing left to compare).
-   `int64_t` throughout: at 12 ms a quantum this counts quanta of silence, so it cannot overflow anything a
-   session can reach, and it is exact — the price is applied to it, never inside it. */
+/* How many whole cooperative quanta of silence this flow stands at: the aging term's quantity, the sum of the two
+   notches' operands in their unit, the granularity at which the thread is handed out (FLOW_SILENCE_US says what a
+   coarser step costs). The price is applied where the term is summed, at FLOW_AGE_QUANTUM, so this stays an exact
+   integer and nothing quantises a rank on the FPU.
+   Both halves are over one window, the family's silence epoch (FlowAcct's `emit_gen`), which lets them be summed
+   into one notch and weighed against one reward. Each answers a comparison the other cannot: the family half
+   orders one fork chain against another (without it a family that emitted V and wears N names pays for V once and
+   presents it N times), and the own half orders a family's members against each other (without it every arm reads
+   the same number, and on a frontier that is one family, as a real page's is, the term cancels out of every
+   comparison). `int64_t`: at 12 ms a quantum this counts quanta of silence, so it cannot overflow anything a
+   session reaches, and it is exact. */
 int64_t flow_silence_notch(const Flow *f) {
     return (flow_own_silence(f) + acct_family_us(f)) / FLOW_SERVICE_US;
 }
 
-/* …AND THE TWO PIECES OF THAT NOTCH ITS OWN PUBLISHED HALVES DO NOT ACCOUNT FOR. The notch is `(own + fam) / S`
-   and the two rows beside it are `own / S` and `fam / S`, and THOSE DO NOT SUM TO IT: integer division of a
-   SUM is the sum of the divisions plus a CARRY. The carry is a whole notch — FLOW_AGE_QUANTUM, 0.012 points —
-   against a whole-order spread this file has measured at 0.030 and 0.036 on two documents and two artifacts.
-   A THIRD OF THE ORDER LIVES IN A BIT NOTHING PUBLISHED, and flow_silence_notch's own prose calls the aging
-   "the SUM of the two notches above" while the code divides their operands' sum, which is the same sentence
-   one carry short.
-   WHY THE SPLIT IS THE ANSWER TO WHAT AN ASK COSTS RATHER THAN A SECOND READING OF WHAT IT ANSWERS. Write
-   `own = k*S + p` and `fam = K*S + R`, with `p` and `R` the two residues below and `S` = FLOW_SERVICE_US.
-   Then, exactly and for every non-negative pair,
+/* And the two pieces of that notch its published halves do not account for. The notch is `(own + fam) / S` and
+   the rows beside it are `own / S` and `fam / S`, which do not sum to it: integer division of a sum is the sum of
+   the divisions plus a carry, a whole notch (FLOW_AGE_QUANTUM, 0.012 points) against a whole-order spread of a few
+   hundredths on real documents. Write `own = k*S + p` and `fam = K*S + R`, with `p` and `R` the residues and `S` =
+   FLOW_SERVICE_US. Then, exactly for every non-negative pair,
         notch = k + K + (p + R >= S)
-   and the three terms have three DIFFERENT TEMPOS, which is the whole of what a walk is currently paying for:
-     k  moves only when the flow being CHARGED crosses a quantum, and flow_age_running charges exactly one
-        member — the running one — so between two dispatches this moves for at most ONE member of the frontier.
-     K  is the FAMILY's, read by every member of it through one pointer, so it is a COMMON OFFSET that orders
-        nothing within a family — and a real page's whole frontier is one family (`families: 1` on both
-        documents this file records).
-     the carry is ONE BIT, and its threshold `S - R` is common too and sweeps DOWNWARD as the family burns, so
-        members cross it in descending order of `p` and every crossing is the BOUNDARY MOVING rather than a
-        member being re-keyed.
-   THAT IS WHY flow_pick's "N heap updates per dispatch" IS A COUNT OF CROSSINGS AND NOT OF UPDATES, which is
-   the one clause of its argument this pair corrects. It is right that every member straddles its own boundary
-   once per quantum of family time; it reads that as N re-keyings because the straddle looked like a per-member
-   PHASE. It is a per-member RESIDUE against a COMMON threshold: indexed by `p`, the sweep costs nothing per
-   member at all and the maximum is the larger of two CONTIGUOUS RANGES of `p`. That is the sub-linear ask its
-   retirement clause asks for, and this pair is the key such an index would be built on.
-   WHAT THIS PAIR IS NOT, AND THE SECOND CLAUSE IS WHY flow_weight IS UNTOUCHED BY THIS DIFF. It is not a term,
-   nothing ranks by it, and it is not a second spelling of the notch: `-(double)notch * FLOW_AGE_QUANTUM` is ONE
-   multiply of ONE exact integer, and an index that summed three products instead would differ from it in the
-   last bit and reorder two members the order currently ties. An index over this key therefore decides WHICH
-   members can be the maximum and the exact comparison stays flow_weight's, or it has changed the answer.
-   NO ASSERT ON THE IDENTITY ABOVE, DELIBERATELY. It is a theorem of integer division for non-negative
-   operands, both of which are non-negative by flow_age_running's own charge assert, so a DCHECK comparing the
-   two spellings is one whose sides cannot disagree — a NON-check wearing the syntax of a check. What is NOT a
-   theorem is that nothing ELSE in the weight moves between two frontier generations, and that is asserted
-   where it can fail and costs O(1): engine.c's preempt hook, over the RIVAL it caches across exactly that
-   interval.
-   RETIREMENT: this pair goes when the ask no longer walks the frontier — at which point the index IS its
-   reader and these stop being a census row. */
+   and the three terms have three tempos:
+     k  moves only when the flow being CHARGED crosses a quantum, and flow_age_running charges exactly one member,
+        the running one, so between two dispatches this moves for AT MOST ONE MEMBER of the frontier.
+     K  is the family's, read by every member through one pointer: a common offset that orders nothing within a
+        family, and a real page's frontier is one family.
+     the carry is one bit, and its threshold `S - R` is common and sweeps downward as the family burns, so members
+        cross it in descending order of `p`: the boundary moving, not a member being re-keyed.
+   So flow_pick's "N heap updates per dispatch" counts crossings, not updates: indexed by `p`, the sweep costs
+   nothing per member and the maximum is the larger of two contiguous ranges of `p`. This pair is the key a
+   sub-linear ask would be built on. It is not a term and not a second spelling of the notch: `-(double)notch *
+   FLOW_AGE_QUANTUM` is one multiply of one exact integer, and an index summing three products would differ in the
+   last bit and reorder members the order ties, so an index decides which members can be the maximum and the exact
+   comparison stays flow_weight's. The identity is a theorem of integer division for non-negative operands
+   (flow_age_running asserts the charge's sign), so it is not asserted; what can fail (nothing else in the weight
+   moves between two frontier generations) is asserted in engine.c's preempt hook over its cached rival. This pair
+   retires when the ask no longer walks the frontier and the index is its reader. */
 int64_t flow_silence_phase(const Flow *f) { return flow_own_silence(f) % FLOW_SERVICE_US; }
 
-/* …AND THE BIT ITSELF, WHICH IS THE ONE PART OF A NON-RUNNING MEMBER'S WEIGHT THAT MOVES WITH NO GENERATION
-   BUMP BEHIND IT. `int` and not `int64_t` because its only readers COUNT members that carry it: a quantity
-   whose whole range is {0,1} typed as a 64-bit integer is an invitation to sum it into a notch. */
+/* And the bit itself, the one part of a non-running member's weight that moves with no generation bump behind it.
+   `int`, not `int64_t`, because its only readers count members carrying it: a {0,1} quantity typed as 64 bits
+   invites summing it into a notch. */
 int flow_silence_carry(const Flow *f) {
     return (flow_silence_phase(f) + acct_family_us(f) % FLOW_SERVICE_US) >= FLOW_SERVICE_US;
 }
 
-/* THE FLOW'S PLACE IN THE QUEUE — every term of the weight that is a TAG rather than a reading, which is
-   exactly the set an ARRIVAL has to reproduce. It is split out of flow_weight for one reason and it is the
-   defect that forced it: flow_arrive_at_virtual_time's own prose says it "assigns every term the weight is made
-   of", and it assigned three of four, leaving the REWARD at zero. Its assert was a one-sided `<=`, so the
-   omission could only ever push a newcomer DOWN and the assert passed however far down that was — while
-   flow_fork_inherit's parallel assert is an EQUALITY over flow_weight and would have fired at the first fork.
-   MEASURED, and the number is what a one-sided assert cannot see: on the smoke fixture every fork carried the
-   boot family's reward, so a 401-member frontier stood at `valMax` 118 and the ONLY members at zero were the 12
-   @S candidate sessions — `valZero:12` beside `cands:12`, the two counts identical because they are the same
-   twelve flows. Their weight was 0.976 for the whole run against a `wTop` that never fell below 56, and the
-   report said so in the field that exists to say so: `turns:0` on every one of them, after 254,181 switches.
-   §@S's whole search — the delivery probe, the derived breakout, the filter-survival distance, the fire — runs
-   only inside a candidate flow, so on any document whose exploration keeps emitting, every one of those
-   mechanisms was unreachable by construction and nothing crashed.
-   WHY THE FITNESS IS NOT IN HERE, and it is not an exception carved for convenience. §scheduler calls the
-   distance "a fraction, READ at the pick and never accumulated"; a tag is a POSITION a newcomer can be placed
-   at, and a per-payload reading is not one — the payload a newcomer carries is not the payload the flow in
-   service carries, so there is nothing for it to arrive at. It is the one term the arrival names rather than
-   copies, and naming it is what keeps the assert below an exact equality instead of a tolerance.
-   EXACT IN INTEGERS AND IN FLOATS, AND NOW BECAUSE NOTHING IS COPIED AT ALL RATHER THAN BECAUSE TWO COPIES
-   AGREE. This paragraph used to rest on the copies — the reward "copied verbatim at the one door that founds a
-   family", `visits` "copied verbatim by both entries", the notch "an integer division of copied integers" —
-   and every one of those was retired by the arrival becoming a RELATION. At a fork the reward is read through
-   a POINTER the arm shares, so there is nothing to copy; at an arrival the reward is frontier_vt() read by
-   both sides of the equality and the aging notch is an integer division of ZERO, so there is nothing to copy
-   there either. Two flows standing at one another therefore compare EQUAL with no epsilon because they are
-   reading one value twice, which is the strongest form of the property flow_fork_inherit's assert also rests
-   on. */
-/* EVERY TERM OF THE QUEUE COORDINATE EXCEPT THE REWARD, AND THE SPLIT IS STRUCTURAL RATHER THAN EDITORIAL.
-   "the reward is the only unranged term" is the sentence every ordering assertion in this file is derived from,
-   and until this split there was nowhere to ASK it: the remainder existed only as `flow_weight(f) − reward`,
-   which is a SUBTRACTION of two composed doubles and therefore both imprecise (catastrophic cancellation once
-   an account has accumulated) and, worse, re-derivable only by restating the formula at the asking site — the
-   second copy §Architecture's auditor rule forbids, and the copy that drifts. Written as a function it is the
-   SAME expression the weight is made of, so the bound below is asked of the quantity itself and a term added
-   here without a range added there is a fired assert rather than a silent widening. */
+/* Every term of the queue coordinate except the reward: the place in the queue, the tags an arrival must stand at.
+   "The reward is the only unranged term" is the sentence every ordering assertion in this file is derived from, and
+   this function is where it can be asked: as `flow_weight(f) − reward` it would be a subtraction of two composed
+   doubles (cancelling badly once an account has accumulated) and a restatement of the formula at the asking site.
+   As the same expression the weight is made of, the bound is asked of the quantity itself, and a term added here
+   without a range is a fired assert. The fitness is not here: a per-payload reading is not a position a newcomer
+   can be placed at (its payload is not the one the flow in service carries), so the arrival names it rather than
+   copying it, which keeps flow_arrive_at_virtual_time's assert an exact equality. Nothing is copied at a fork or
+   an arrival (the reward is read through a shared pointer or is frontier_vt(), and an arrival's notch is an integer
+   division of zero), so two flows at one coordinate compare equal with no epsilon. */
 static double flow_queue_nonreward(const Flow *f) {
-    /* §scheduler'S THREE QUANTITIES, AND THIS FUNCTION USED TO HOLD TWO. "accumulated emitted VALUE + a UCB
-       optimism bonus ∝ 1/(visits+1) − CPU-AGING" names emitted value, VISITS and CPU; the optimism term read
-       `cpu / FLOW_SERVICE_US`, so thread time was in both non-reward terms at two scopes and the visit count
-       did not exist. The consequence is not a rounding difference, it is which term GOVERNS. FLOW_AGE_RATE
-       prices one second of unproductive CPU at one finding, so the aging term gives a silent flow about a
-       second before an unrun sibling passes it; the optimism term keyed on service did it after ONE quantum,
-       12 ms. The priced budget was dominated eighty-three to one and decided nothing, and what a flow actually
-       got was 12 ms to reach its first emission.
-       WHAT THAT COST, MEASURED ON REAL PAGES rather than a fixture. A flow reaches its queued jobs only with
-       `frame == NULL` (engine.c: every job arm is under that test), so a promise reaction runs only after its
-       holder finishes the program it is inside, and a modern bundle's whole fetch surface hangs off reactions.
-       Under the service-keyed bonus a flow was strictly outranked by every arm it forked as soon as it crossed
-       one quantum, and those arms were outranked by the arms they forked inside their own first quantum, so the
-       set of members at notch 0 was refilled by branching faster than a quantum drained it and no flow ever
-       received a SECOND quantum. One real login page: 4650 flows, 3093 switches — under one turn per flow —
-       217 jobs QUEUED and ZERO run in ninety seconds, no endpoints. A page whose frontier stayed at 13 flows
-       ran all 32 of its jobs and learned 4 endpoints, and a third at 17947 flows learned none: the correlation
-       is with jobs RUN and the anti-correlation is with frontier size, which is exactly this arithmetic. */
-    /* OPTIMISM DECAYS WITH COMPLETED UNITS OF WORK — §scheduler's own word is "visits", and a visit is a TRIAL.
-       A flow that was handed the thread and preempted in the middle of a program has not completed one: it is
-       the same trial, still running, and charging it as a visit is what made the term a second clock. What a
-       flow has actually finished is the quantity this reads (flow.h's `visits`, credited by the scheduler at
-       the one boundary that can see it), and the two guarantees §scheduler names then belong to two terms
-       instead of one.
-       IT IS NOT THE DISPATCH COUNT THIS FILE ONCE MEASURED, and the distinction is the whole of why that
-       measurement does not refute this. Keyed on dispatches the bonus fell 0.167 the first time the scheduler
-       CHOSE a flow, so the act of switching was enough to make it no longer the best one; a dispatch is a
-       decision by the scheduler and says nothing about the flow. A completed unit is a fact about the flow, and
-       it is the fact the reward is a function of: a program that ends is a program whose fetches were reached,
-       whose microtask checkpoint is due and whose queued reactions can now run.
-       THE TIE IS WHAT MAKES THIS FAIR RATHER THAN GREEDY. An arm inherits its parent's count, so at the branch
-       the two are equal and flow_pick's STRICT comparison leaves the thread where it is; the parent finishes
-       the unit it is inside, its count advances, and every arm — and every never-run member — then STRICTLY
-       outranks it and is picked. So a flow monopolises exactly one unit of work and no more, which is
-       §scheduler's "a deep loop suspends and yields so siblings run, then resumes" measured in the unit the
-       page's own code is written in. What it may NOT do is monopolise a unit that never ends, and that is the
-       aging term's job below — not this one's. */
-    /* THE OPTIMISM TERM IS NO LONGER ONE OF THIS FUNCTION'S SUMMANDS, AND ITS ABSENCE IS THE MECHANISM. This
-       function is what an ARRIVAL is placed at (flow_queue_weight, flow_arrive_at_virtual_time), and every term
-       of that placement has to be a TAG a newcomer can stand at rather than a READING of what the newcomer has
-       done. §@S's fitness was already excluded for exactly that sentence — "a per-payload reading is not a
-       position; the payload a newcomer carries is not the payload the flow in service carries, so there is
-       nothing for it to arrive at" — and the optimism bonus is the same kind of quantity one field over: it is
-       1/(1+units this flow has COMPLETED), and a from-baseline flow has completed nothing whatever the flow in
-       service has completed. There was no position for it to arrive at either, and the arrival copied one
-       anyway. See flow_optimism below, and flow_arrive_at_virtual_time for what the copy cost. */
-    /* THE AGING IS THE FLOW'S OWN SILENCE **AND** ITS FAMILY'S, and the second half is what the family charge
-       could never do alone. The family reading was landed for a real defect and stays: `val` is copied to every
-       arm (flow_fork_inherit), so a family that emitted V with N live arms presented V exactly N times, and the
-       aging meant to cancel it was charged to whichever arm held the thread — measured at 686 members, `svcMax`
-       1124 notches against `svcFamMax` 8910, a factor of 7.93, with `candSvcMax` 1 (the whole @S search got
-       about one quantum in fifteen minutes). Charged to the family, a fork chain is one accounting unit against
-       every OTHER family, which is what that reading required.
-       AND IT IS BLIND INSIDE ONE, WHICH IS WHERE THE MONOPOLIZER ACTUALLY IS. Every arm of a family reads the
-       identical `fam_us`, so the term is a constant added to every member's weight and CANCELS out of every
-       within-family comparison. On a real page the whole frontier is one family — every flow descends from the
-       boot flow — so §scheduler's "a monopolizer that burns CPU without emitting sinks below productive+unrun
-       flows" was, exactly where it is needed, a sentence with nothing left to compare. The flow's OWN service
-       since its last emission is what restores the comparison, and it is the same currency and the same reset
-       point (flow_credit_emit zeroes both), so the two halves are one quantity read at two scopes rather than
-       two policies.
-       IT IS ALSO WHAT KEEPS THE OPTIMISM TERM HONEST NOW THAT IT COUNTS UNITS. A flow inside a program that
-       never ends completes no unit, so its bonus never decays; without an own-service charge it would hold the
-       thread for ever and the visit count would be the reset-by-not-finishing that this file forbids the fork
-       tree. With it, such a flow sinks at FLOW_AGE_RATE's price for every microsecond of unproductive CPU and
-       is passed by its siblings — the case that price was written for, finally governed.
-       IT STEPS IN COOPERATIVE QUANTA AND IT USED TO STEP IN WHOLE REWARD POINTS, WHICH IS THE HALF THAT
-       DECIDES WHETHER ANY OF THIS WORKS. Quantising at all is required — a weight that moves continuously
-       falls below a tied rival between two consultations of the preempt hook, which is thrash at a finer grain
-       — and the argument that used to stand here went on to reject the QUANTUM as the unit, on the ground that
-       "a term that steps every 12 ms therefore hands the thread on every 12 ms". That is not a defect; it is
-       start-time fair queueing, and it is §scheduler's own sentence — "a deep loop suspends and yields so
-       siblings run, then resumes". What made it look like a defect was the tree it was written against, in
-       which a newborn arm entered at the FRONT of the queue; flow_fork_inherit closed that at the fork, and
-       with an arm entering at its parent's virtual time a handover per quantum is the queue rotating, not
-       thrashing. It costs no extra switch either: the cooperative quantum ALREADY returns the thread at
-       exactly this granularity, so the aging-driven yield now coincides with the slice expiry instead of
-       firing once per 42 of them.
-       WHAT THE POINT-WIDE STEP COST, and it is the reason this is a correction rather than a preference. A
-       step of one whole point is 83.3 quanta of silence, which a CONSUMING flow accrues in 41.7 quanta of its
-       own CPU (the charge bills `cpu` and `fam_us` both, and the notch is their sum), so a flow that consumes
-       a quantum has its rank UNCHANGED and the pick that immediately follows re-reads the weight the charge
-       did not move — 40 times out of 41. The order then rests
-       entirely on whatever else has sub-second resolution, and the only such term is the optimism bonus —
-       whose sole mover is COMPLETING a unit of work, which is also the sole precondition for reaching a queued
-       job (`frame == NULL`, engine.c). So the one flow that could run a promise reaction was the one flow
-       paying anything, its rivals were mid-program arms frozen at the visit count they inherited, and it was
-       locked out by a deficit of 1/15 − 1/14 = 0.0048 points that a point-wide step could not repay with less
-       than a full finding. Measured: `jobsRun` 14, 14, 14 across three runs of one login page whose
-       `jobsQueued` was 373, 401, 417.
-       THE PRICE IS UNTOUCHED AND IT IS APPLIED HERE. One second of unproductive thread time still costs ONE
-       EMITTED FINDING (FLOW_AGE_RATE); what moved is the STEP, from a point to a quantum, which is 0.012 of a
-       point. The two are separate constants now precisely because one number could not be both without one of
-       them being wrong.
-       AN EMISSION IS WORTH AT MOST 1.0 AND NOT EXACTLY 1.0, WHICH THIS BLOCK USED TO CLAIM AND CITE AN ASSERT
-       FOR. flow_credit_emit asserts `v > 0.0` and nothing more, and the @S filter-survival RATCHET credits an
-       improvement in a ratio — the increment between two fractions in [0,1], which is what keeps that rung
-       worth at most one point over a search's whole life. The PRICE is unaffected, because it is priced
-       against the ceiling; what the wrong claim would license is an ARITHMETIC one, and it nearly did: a
-       reader deriving an exactness argument from "`val` is integral" gets a bound that is off by an ulp the
-       moment a reward is carried across a subtraction. That is why flow_nonreward's bound is asked of a
-       quantity the reward never enters: the pairwise form it replaced subtracted two composed weights against
-       two raw rewards and needed an FPU epsilon at its corner, and this one is exact there because nothing in
-       it is a difference of two accumulated ledgers. A claim about a value's SHAPE is checked at the writer or
-       it is not a claim.
-       WHAT THAT BUYS, TERM BY TERM. A flow that finishes its unit of work inside its quantum keeps the thread
-       to the end of it and hands over on its VISIT — which is the optimism term doing the fairness. A flow
-       inside a unit that never ends completes no visit, so the optimism term can never demote it, and this is
-       what does: it sinks 0.012 per quantum it consumes and its arms, which inherited a smaller silence, pass
-       it at the first quantum rather than at the 84th. Neither term can do the other's job.
-       O(1) to read: every flow points straight at its family's root, so this adds one indirection to the pick
-       and no walk. It is why the preempt hook's seam assertion snapshots this notch and the visit count
-       (engine.c) — between two of them a flow's weight cannot move except through an emission. */
+    /* The aging: the flow's own silence and its family's. The family half makes a fork chain one accounting unit
+       against every other family; it is blind inside one family, where every arm reads the same `fam_us`, and on a
+       real page the whole frontier is one family, so the own half (this flow's burn over the same window) is what
+       lets "a monopolizer that burns CPU without emitting sinks below productive+unrun flows" compare anything. Both
+       are one quantity read at two scopes, with one reset (flow_credit_emit's window bump).
+       It keeps the optimism term honest: a flow inside a program that never ends completes no unit, so its bonus
+       never decays, and only this charge makes it sink and be passed by its siblings.
+       It steps in cooperative quanta. A handover per quantum is start-time fair queueing rotating ("a deep loop
+       suspends and yields so siblings run, then resumes"), not thrash, because an arm enters at its parent's
+       virtual time (flow_fork_inherit), and it costs no extra switch: the cooperative quantum already returns the
+       thread at this granularity. The price is FLOW_AGE_RATE, one finding per second; the step is 0.012 of a point.
+       An emission is worth at most 1.0, not exactly 1.0: flow_credit_emit asserts only `v > 0.0`, and the @S
+       filter-survival ratchet credits the increment between two fractions in [0,1]. So flow_nonreward's bound is
+       asked of a quantity the reward never enters, exact because nothing in it is a difference of accumulated
+       ledgers.
+       Term by term: a flow that finishes its unit inside its quantum hands over on its visit (the optimism term's
+       fairness); a flow inside a unit that never ends sinks 0.012 per quantum and its arms, which inherited less
+       silence, pass it at the first quantum. O(1) to read, since every flow points straight at its family's root;
+       the preempt hook's seam assertion snapshots this notch and the visit count (engine.c), between which a
+       flow's weight moves only through an emission. */
     return -(double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
 }
 
-/* THE OPTIMISM TERM, ON ITS OWN, BECAUSE IT IS A READING OF THE FLOW AND NOT A PLACE IN THE QUEUE — the same
-   split the fitness distance already sits on the far side of, and made for the same reason. §scheduler: "a UCB
-   optimism bonus proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED". The population that
-   sentence is about is a flow that has COMPLETED NO UNIT OF WORK, and the value it names for such a flow is
-   1.0 — the whole range, one emission's worth of promise, which is exactly what flow_nonreward's bound prices
-   it at and no more.
-   IT IS NOT SOMETHING A NEWCOMER CAN INHERIT, and that is the whole content of moving it here. A FORK carries
-   it and must (flow_fork_inherit: an arm has, by construction, finished every program its parent finished
-   before the branch, because it IS that execution with one more arm on it). An ARRIVAL is the opposite case by
-   the very predicate that routes it — flow_add_unseeded sends a flow here when it stands on NOBODY's decisions
-   — so it has finished nothing, and handing it the count of whichever flow happened to hold the thread is
-   handing it a fact about a stranger.
-   WHAT THAT COST, MEASURED. Every from-baseline door is an arrival: the @S candidate session, a joined
-   document's boot flow, a cold-resumed recipe. On a frontier whose members carried 8 to 13 completed units,
-   an arriving candidate was born with a bonus of 1/9 to 1/14 instead of 1.0 — so §scheduler's never-starved
-   guarantee, whose entire content is the value of this term at zero, was VOIDED at the one door it was written
-   for, and voided in favour of a number belonging to a flow the newcomer had nothing to do with. Twelve
-   candidate sessions stood at one coordinate for a whole run with `turns:0` on every one of them.
-   AND IT IS THE TWO-INSTANTS TEST, FAILED AT THE ARRIVAL DOOR. CLAUDE.md's rule for a weight term is not "does
-   a fork carry it" but "would two arms of ONE parent, forked at TWO instants, read it the same"; the same
-   question at this door is whether two newcomers arriving at two instants read it the same, and copying the
-   incumbent's count answered 1/9 for one and 1/14 for the other — a whole range apart, for units NEITHER of
-   them completed. Read at zero for both, they do.
-   AND THE FORK IS THE OTHER SIDE OF THAT SPLIT AND STAYS THERE, WHICH IS THE ONE READING OF THIS BLOCK THAT
-   KEEPS BEING RE-DERIVED AND IS WRONG. The hypothesis writes itself: a fork copies the count, so an arm that
-   has never held the thread reads whatever bonus its parent's completed work left, ties with it exactly, and
-   §scheduler's never-starved sentence cannot identify a never-run member — therefore stop copying. It has been
-   tried and MEASURED, and flow_fork_inherit records what it cost: every fork minted a flow at the full 1.0,
-   strictly above every flow that had consumed a quantum, so no flow ever got a second turn. The premise is
-   right and the conclusion inverts because the copy is not a stranger's number — CLAUDE.md's two-instants test
-   asks WHOSE FACT a quantity is, and completed units are a fact about the EXECUTED PREFIX, which an arm IS.
-   Two arms forked either side of a completed unit read differently because their prefixes differ by it, and
-   the reading is monotone DECREASING in that count, so the older arm ranks higher and the queue drains
-   oldest-first. What separates an arm from the parent it tied with is the AGING, whose own half the arm freezes
-   at the fork while the parent goes on burning — not this term, which has no work to do between a flow and its
-   own continuation.
-   ITS RANGE IS UNCHANGED AND SO IS flow_weight'S VALUE. This is the same summand it always was, moved from one
-   side of the arrival split to the other; flow_nonreward adds it back and FLOW_NONREWARD_MAX still prices it
-   at its reading at zero visits. What changed is only which of the two questions it belongs to. */
+/* The optimism term, on its own, because it is a reading of the flow and not a place in the queue (the fitness
+   distance's side of the split). "a UCB optimism bonus proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER
+   STARVED": for a flow that has completed no unit it is 1.0, one emission's worth of promise, which
+   flow_nonreward's bound prices. A visit is a trial: a flow preempted mid-program has not completed one, and a
+   dispatch is the scheduler's decision, not a fact about the flow. A completed unit is the fact the reward
+   depends on: a program that ends has reached its fetches, owes its checkpoint and can run its reactions.
+   A newcomer cannot inherit it: an arrival stands on nobody's decisions (flow_add_unseeded), so it has finished
+   nothing, and the incumbent's count would be a stranger's fact, differing between two newcomers by units neither
+   completed. A fork carries it (flow_fork_inherit), because completed units are a fact about the executed prefix,
+   which an arm is: two arms forked either side of a completed unit differ by it, the reading decreases in that
+   count, and the older arm ranks higher, so the queue drains oldest-first. At the branch the arm ties with its
+   parent and flow_pick's strict comparison leaves the thread there; the parent finishes its unit, its count
+   advances, and every arm and never-run member then outranks it. So a flow monopolises one unit of work; a unit
+   that never ends is the aging's job. Its range is unchanged: flow_nonreward adds it back and FLOW_NONREWARD_MAX
+   prices it at zero visits. */
 static double flow_optimism(const Flow *f) {
     return 1.0 / (1.0 + (double)f->visits);
 }
 
-/* THE QUEUE COORDINATE — the reward plus the remainder above, and this function is now the reward and nothing
-   else, which is the whole point of the split. It is what an ARRIVAL can be placed at (flow_arrive_at_virtual
-   _time), and every term of it is a TAG a newcomer copies rather than a reading of the newcomer's own payload.
-   THE REWARD IS THE FORK FAMILY'S, NOT THE FLOW'S, and that is the one substantive thing this function says.
-   §scheduler's reward is "accumulated emitted VALUE", and the accumulator is the same account the aging is
-   charged to — one emission raises it once, one second of that account's silence gives one point of it back,
-   and the two terms are then commensurate at the same scope. Read off the FLOW it was a per-chain prefix: two
-   arms of one family held what their common parent held at two different instants, so they differed by an
-   amount NEITHER of them earned, that difference was unbounded while every other term's range is at most 1.0,
-   and the family charge that was supposed to cancel it is a common offset that cancels out of the comparison
-   instead. On a page whose whole frontier is one family — which is the ordinary case, every flow descending
-   from the boot flow — the order was then birth position read newest-first, and no silence at any price could
-   reach the tail. See FlowAcct's `val`.
-   IT IS ALSO WHY THE REWARD HAS NO RANGE AND NEEDS NONE. Every other term answers "where does this item stand
-   NOW", which is a question with two ends; the reward answers "what has this account produced since the
-   session began", which is a LEDGER and is unbounded by §NO BOUNDS. Bounding it would be a cap on how much a
-   family may be worth. That asymmetry is exactly what flow_nonreward's bound rests on, and it is why that
-   bound is one-sided. */
+/* The queue coordinate: the reward plus the remainder above, what an arrival is placed at
+   (flow_arrive_at_virtual_time); every term is a tag a newcomer can stand at, not a reading of its own payload.
+   The reward is the fork family's, not the flow's. The scheduler's reward is "accumulated emitted VALUE", and the
+   accumulator is the account the aging is charged to: one emission raises it once, one second of that account's
+   silence gives one point back, and the two terms are commensurate at one scope. Read off the flow it would be a
+   per-chain prefix, two arms differing by what their parent held at two instants, unbounded against terms of range
+   1.0, and on a one-family frontier the order would be birth position read newest-first. See FlowAcct's `val`.
+   The reward has no range and needs none: every other term answers where an item stands now, while the reward is a
+   ledger of what an account has produced, and bounding it would cap what a family may be worth. That asymmetry is
+   why flow_nonreward's bound is one-sided. */
 static double flow_queue_weight(const Flow *f) {
     return acct_family_val(f) + flow_queue_nonreward(f);
 }
