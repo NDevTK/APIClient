@@ -2,6 +2,7 @@
    what each unit family resolves against, and why each one this engine cannot absolutize crashes with its OWN
    message. */
 #include <ctype.h>
+#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -115,10 +116,10 @@ typedef struct {
     CssPxMonomial m[CSS_PX_FORM_MAX * CSS_PX_FORM_MAX + 2 * CSS_PX_FORM_MAX];
 } CssPxPoly;
 
-static void css_px_poly_add(CssPxPoly *p, const unsigned char *e, double k)
+static void css_px_poly_add(CssPxPoly *p, const CssPxMonomial *m, double k)
 {
     DCHECK(p->n < (int)(sizeof p->m / sizeof p->m[0]), "a composed form outgrew its scratch space");
-    memcpy(p->m[p->n].e, e, CSS_ENV_FACT_COUNT);
+    p->m[p->n] = *m;
     p->m[p->n++].k = k;
 }
 
@@ -129,13 +130,20 @@ static void css_px_poly_axpy(CssPxPoly *p, double k, CssPx a)
 
     p->c += k * css_px_form_c(a);
     if (a.env == CSS_ENV_NONE) return;
-    for (i = 0; i < a.form.n; i++) css_px_poly_add(p, a.form.m[i].e, k * a.form.m[i].k);
+    for (i = 0; i < a.form.n; i++) css_px_poly_add(p, &a.form.m[i], k * a.form.m[i].k);
 }
 
 static int css_px_mono_cmp(const void *x, const void *y)
 {
-    return memcmp(((const CssPxMonomial *)x)->e, ((const CssPxMonomial *)y)->e, CSS_ENV_FACT_COUNT);
+    const CssPxMonomial *a = x, *b = y;
+
+    if (a->atom != b->atom) return a->atom < b->atom ? -1 : 1;
+    return memcmp(a->e, b->e, CSS_ENV_FACT_COUNT);
 }
+
+/* The counter an atom's name is drawn from. Names are never reused, so two atoms are one only where one opaque
+   result was carried to both places. */
+static unsigned g_css_px_atom;
 
 /* Whether known `a` has a monomial over fact `f`, which is when its `val[f]` is written. */
 static bool css_px_uses(CssPx a, int f)
@@ -157,7 +165,11 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
     while (i < p->n) {
         CssPxMonomial t = p->m[i++];
 
-        while (i < p->n && css_px_mono_cmp(&t, &p->m[i]) == 0) t.k += p->m[i++].k;
+        while (i < p->n && css_px_mono_cmp(&t, &p->m[i]) == 0) {
+            DCHECK(!t.atom || t.aval == p->m[i].aval,
+                   "one atom reached a sum with two values — an atom is one opaque result, minted once");
+            t.k += p->m[i++].k;
+        }
         if (t.k != 0.0) p->m[n++] = t;
     }
     if (out->env == CSS_ENV_NONE) {
@@ -204,7 +216,8 @@ double css_px_form_eval(CssPx a)
     for (i = 0; i < a.form.n; i++) {
         double t = a.form.m[i].k;
 
-        for (f = 0; f < CSS_ENV_FACT_COUNT; f++) t *= pow(a.form.val[f], a.form.m[i].e[f]);
+        if (a.form.m[i].atom) t *= a.form.m[i].aval;
+        else for (f = 0; f < CSS_ENV_FACT_COUNT; f++) t *= pow(a.form.val[f], a.form.m[i].e[f]);
         v += t;
     }
     return v;
@@ -272,6 +285,8 @@ static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
     for (i = 0; i < d.form.n; i++) {
         double k = d.form.m[i].k, mlo = 1.0, mhi = 1.0;
 
+        /* An atom is a function the form cannot state, so nothing bounds it. */
+        if (d.form.m[i].atom) { *lo = -INFINITY; *hi = INFINITY; return; }
         for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
             if (!d.form.m[i].e[f]) continue;
             DCHECK(CSS_ENV_RANGE[f].lo >= 0.0, "a fact's range reaches below zero, so its monomials are not "
@@ -290,7 +305,7 @@ static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
    surround at 320, so a result that kept only the winner would report a length as environment-independent in
    exactly the world where it is not. Over-reporting the dependence forks a world the page might not have
    needed; under-reporting it deletes one it did, and CLAUDE.md's §Headless errs toward the first.
-   The form survives only where the ranges decide the winner for every world, and the examples must agree
+   The winner's form survives where the ranges decide it for every world, and the examples must agree
    with that decision, which is what makes it falsifiable here. `want_hi` picks the larger. */
 static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
 {
@@ -302,7 +317,24 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     css_px_diff_range(a, b, &lo, &hi);
     if (lo >= 0.0) win = want_hi ? &a : &b;
     else if (hi <= 0.0) win = want_hi ? &b : &a;
-    if (win == NULL) return out;
+    /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
+       atom so that every place this one result is carried to can still subtract it.
+       Named residual. Not covered: the other opaque results (css_px_opaque's writers, a snap, a quotient by a
+       derived length, a product with an atom) still leave no form. Next diff: each mints an atom here the same
+       way. How its absence shows: two lengths downstream of one such result that differ by a constant and still
+       cross the `long` boundary as two forks. */
+    if (win == NULL) {
+        DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
+        DCHECK(g_css_px_atom != UINT_MAX, "the atom counter ran out of names");
+        out.form.known = true;
+        out.form.n = 1;
+        out.form.c = 0.0;
+        memset(&out.form.m[0], 0, sizeof out.form.m[0]);
+        out.form.m[0].atom = ++g_css_px_atom;
+        out.form.m[0].k = 1.0;
+        out.form.m[0].aval = out.px;
+        return out;
+    }
     tol = 1e-9 * fmax(1.0, fmax(fabs(a.px), fabs(b.px)));
     DCHECKF(fabs(out.px - win->px) <= tol,
             "an extreme over %g and %g was decided for every world by the facts' ranges (a - b in [%g, %g]) "
@@ -334,19 +366,22 @@ CssPx css_px_mul(CssPx a, CssPx b)
     p.c = css_px_form_c(a) * css_px_form_c(b);
     p.n = 0;
     if (b.env != CSS_ENV_NONE)
-        for (j = 0; j < b.form.n; j++) css_px_poly_add(&p, b.form.m[j].e, css_px_form_c(a) * b.form.m[j].k);
+        for (j = 0; j < b.form.n; j++) css_px_poly_add(&p, &b.form.m[j], css_px_form_c(a) * b.form.m[j].k);
     if (a.env != CSS_ENV_NONE)
-        for (i = 0; i < a.form.n; i++) css_px_poly_add(&p, a.form.m[i].e, css_px_form_c(b) * a.form.m[i].k);
+        for (i = 0; i < a.form.n; i++) css_px_poly_add(&p, &a.form.m[i], css_px_form_c(b) * a.form.m[i].k);
     if (a.env != CSS_ENV_NONE && b.env != CSS_ENV_NONE)
         for (i = 0; i < a.form.n; i++)
             for (j = 0; j < b.form.n; j++) {
-                unsigned char e[CSS_ENV_FACT_COUNT];
+                CssPxMonomial m;
 
+                /* A product with an atom is a function of it the form has no term for. */
+                if (a.form.m[i].atom || b.form.m[j].atom) return out;
+                memset(&m, 0, sizeof m);
                 for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
                     DCHECK(a.form.m[i].e[f] + b.form.m[j].e[f] <= 255, "a monomial's exponent overflowed");
-                    e[f] = (unsigned char)(a.form.m[i].e[f] + b.form.m[j].e[f]);
+                    m.e[f] = (unsigned char)(a.form.m[i].e[f] + b.form.m[j].e[f]);
                 }
-                css_px_poly_add(&p, e, a.form.m[i].k * b.form.m[j].k);
+                css_px_poly_add(&p, &m, a.form.m[i].k * b.form.m[j].k);
             }
     css_px_form_set(&out, &p, a, b);
     return out;
