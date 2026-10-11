@@ -2,8 +2,7 @@
  * flex line: which items participate (§9.4 "Cross Size Determination"' step 8.1), each item's alignment baseline
  * (css-align-3 §9.1 "Determining the Baselines of a Box"), the baseline-sharing groups of css-align-3 §9.2
  * "Baseline Alignment Grouping", and an item's cross-axis offset under css-align-3 §9.3 "Aligning Boxes by
- * Baseline". The container must be one core/layout/flex_position.h places: single- or multi-line `row` in
- * `horizontal-tb`, whose cross axis is the vertical one. Nothing is stored (per-flow state, solver/dom_cow.h). */
+ * Baseline". The container must be `horizontal-tb`. Nothing is stored (per-flow state, solver/dom_cow.h). */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_BASELINE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_BASELINE_H
 
@@ -27,20 +26,17 @@ typedef struct {
    `align-items` and has no margins. */
 bool flex_baseline_participates(lxb_dom_element_t *container, const FlexLineMember *m);
 
-/* The participating member's alignment baseline: its first or last baseline set as css-align-3 §4.2's
-   preference names, from its first or last in-flow line box, or synthesized from its border box when it has
-   none (§8.3: "If the item does not have a baseline in the necessary axis, then one is synthesized from the
-   flex item's border box"). `m` must participate. */
-FlexBaselineExtent flex_baseline_member_extent(lxb_dom_element_t *container, const FlexLineMember *m);
-
 /* Step 8.1's two maxima over every participating member of `line`, whose sum the step adds to the line's cross
    size. FALSE when no member of the line participates. */
 bool flex_baseline_line_extent(lxb_dom_element_t *container, size_t line, FlexBaselineExtent *out);
 
-/* css-align-3 §9.3 for the participating element `item` on a line `line_size` tall: the distance from the line's
-   cross-start edge to the item's cross-start margin edge, its group aligned by baseline and positioned by its
-   fallback alignment (css-align-3 §4.2: `safe self-start` for `first baseline`, `safe self-end` for `last
-   baseline`). */
+/* css-align-3 §9.3 for the baseline-aligned element `item` on a line `line_size` long in the cross axis: the
+   distance from the line's cross-start edge to the item's cross-start margin edge, its group aligned by baseline
+   and positioned by its fallback alignment (css-align-3 §4.2: `safe self-start` for `first baseline`, `safe
+   self-end` for `last baseline`). Each member's baseline is its first or last baseline set as the preference
+   names, from its first or last in-flow line box, or synthesized from its border box where it has none or has
+   none in the cross axis (§8.3: "If the item does not have a baseline in the necessary axis, then one is
+   synthesized from the flex item's border box"). */
 CssPx flex_baseline_margin_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx line_size);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_BASELINE_H */

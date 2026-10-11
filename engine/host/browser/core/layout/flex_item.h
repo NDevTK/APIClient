@@ -66,6 +66,20 @@ bool flex_container_axis_is_vertical(lxb_dom_element_t *container, FlexAxis axis
    cross-start swap is invisible here. */
 bool flex_container_is_multi_line(lxb_dom_element_t *el);
 
+/* The physical side of `container`'s main-start (§5.1) or cross-start (§5.2) edge, named by the margin longhand on
+   it (`margin-left`, `margin-right`, `margin-top` or `margin-bottom`). §5.1's main-start is the inline-start
+   (`row`) or block-start (`column`) direction, "swapped" by `-reverse`; §5.2's cross-start is "either the
+   inline-start or block-start direction of the current writing mode (whichever is in the cross axis)", and
+   "When flex-wrap is wrap-reverse, the cross-start and cross-end directions are swapped." The flow-relative side
+   is mapped through css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings" (core/css/css_logical.h). STATIC. */
+const char *flex_container_start_margin(lxb_dom_element_t *container, FlexAxis axis);
+
+/* The margin longhand on the side opposite `side`'s, `side` one of the four physical margins. STATIC. */
+const char *flex_margin_opposite(const char *side);
+
+/* Is `side` (one of the four physical margins) on the box's left or top edge, where physical offsets start? */
+bool flex_margin_is_low(const char *side);
+
 /* §4's classification of one child node, exhaustive over a flex container's child list. It answers rather
    than refuses: what a caller does with the fact is its own section's concern. */
 typedef enum {

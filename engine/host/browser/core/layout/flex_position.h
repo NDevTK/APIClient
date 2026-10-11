@@ -2,11 +2,12 @@
  * sits inside its flex container's content box, over the used main sizes of core/layout/flex_line.h and the
  * used cross sizes core/layout/used_value.h answers through core/layout/flex_cross_size.h.
  *
- * Named residual: a single-line `row` or `row-reverse` container in `horizontal-tb` only. Not covered: a
- * multi-line container (§9.4's per-line cross sizes and §9.6's `align-content`), a `column` container (§9.5
- * over the block axis), a collapsed item's strut, and `baseline` alignment (§8.3's baseline group). Next: §9.6's
- * line placement over the per-line cross sizes flex_cross_size.c sums. How its absence shows: the crash naming
- * the case at this component's entry. */
+ * Every `flex-direction` is placed: §5.1 "Flex Flow Direction: the flex-direction property" and §5.2's
+ * cross-start are mapped to physical sides by core/layout/flex_item.h's `flex_container_start_margin`.
+ * Named residual: a single-line container in `horizontal-tb` only. Not covered: a multi-line container (§9.4's
+ * per-line cross sizes and §9.6's `align-content`), a vertical writing mode, and a collapsed item's strut.
+ * Next: §9.6's line placement over the per-line cross sizes flex_cross_size.c sums. How its absence shows: the
+ * crash naming the case at this component's entry. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_POSITION_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_POSITION_H
 

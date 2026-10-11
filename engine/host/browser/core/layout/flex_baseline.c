@@ -10,6 +10,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_baseline.h"
 #include "core/layout/flex_cross_size.h"
+#include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
@@ -21,26 +22,41 @@ static CssAlign fb_align(lxb_dom_element_t *container, const FlexLineMember *m)
     return flex_cross_size_resolved_align(container, m->anonymous ? NULL : lxb_dom_interface_element(m->first));
 }
 
-bool flex_baseline_participates(lxb_dom_element_t *container, const FlexLineMember *m)
+/* Is the member baseline-aligned: css-flexbox-1 §8.3's `baseline` with both cross-axis margins non-auto ("If
+   either of the flex item's cross-axis margins are auto, align-self has no effect")? §4's anonymous item has no
+   margins. */
+static bool fb_aligns(lxb_dom_element_t *container, const FlexLineMember *m)
 {
+    const char *start;
     lxb_dom_element_t *item;
-    char nbuf[160];
 
     DCHECK(container != NULL && m != NULL && m->first != NULL, "baseline participation was asked of no member");
     if (fb_align(container, m).value != CSS_KEYWORD_BASELINE) return false;
     if (m->anonymous) return true;
     item = lxb_dom_interface_element(m->first);
-    if (css_computed_length_is(item, "margin-top", CSS_KEYWORD_AUTO) ||
-        css_computed_length_is(item, "margin-bottom", CSS_KEYWORD_AUTO))
-        return false;
-    /* The container is `horizontal-tb` and its main axis its inline one, so an item's inline axis is parallel
-       to it exactly when the item is `horizontal-tb` too. */
-    if (!css_computed_keyword_is(item, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB))
-        DFAILF("%s: a baseline-aligned flex item whose inline axis is not parallel to the main axis is left out "
-               "of §9.4 step 8.1 and aligns by a baseline synthesized from its border box (§8.3); build that "
-               "item's step 8.2 measurement and its synthesized baseline together",
-               box_subject(item, nbuf, sizeof nbuf));
-    return true;
+    start = flex_container_start_margin(container, FLEX_AXIS_CROSS);
+    return !css_computed_length_is(item, start, CSS_KEYWORD_AUTO) &&
+           !css_computed_length_is(item, flex_margin_opposite(start), CSS_KEYWORD_AUTO);
+}
+
+/* Is the member's inline axis parallel to the main axis? The container is `horizontal-tb` (core/layout/
+   flex_position.h), so for a `horizontal-tb` item exactly when the main axis is the inline one; §4's anonymous
+   item has the container's writing mode. */
+static bool fb_parallel(lxb_dom_element_t *container, const FlexLineMember *m)
+{
+    char nbuf[160];
+
+    if (!m->anonymous && !css_computed_keyword_is(lxb_dom_interface_element(m->first), "writing-mode",
+                                                  CSS_KEYWORD_HORIZONTAL_TB))
+        DFAILF("%s: a baseline-aligned flex item whose writing mode is not its container's is a css-writing-modes-4 "
+               "§7.3 \"Orthogonal Flows\" box; build its axes and its baseline in that mode together",
+               box_subject_node(m->first, nbuf, sizeof nbuf));
+    return flex_container_main_axis(container) == FLEX_MAIN_AXIS_INLINE;
+}
+
+bool flex_baseline_participates(lxb_dom_element_t *container, const FlexLineMember *m)
+{
+    return fb_aligns(container, m) && fb_parallel(container, m);
 }
 
 /* An element item's alignment baseline. css-align-3 §9.1: a block container's first/last baseline set "is taken
@@ -77,13 +93,47 @@ static FlexBaselineExtent fb_element_extent(lxb_dom_element_t *item, bool last)
     return e;
 }
 
-FlexBaselineExtent flex_baseline_member_extent(lxb_dom_element_t *container, const FlexLineMember *m)
+/* A member whose inline axis is not parallel to the main axis (a `horizontal-tb` item of a `column`
+   container) has no baseline in the cross axis, so css-flexbox-1 §8.3 synthesizes one from its border box.
+   css-align-3 §9.1: "when that writing mode's block flow direction is parallel to the axis of the alignment
+   context, an axis-compatible writing mode must be assumed: ... If the box's own writing mode is horizontal,
+   assume vertical-lr if direction is ltr and vertical-rl if direction is rtl", and in both "line-over is on
+   right, and line-under is on left" (css-writing-modes-4 §6.3 "Line-relative Directions"), so the alphabetic
+   baseline is the item's left border edge. */
+static FlexBaselineExtent fb_synthesized_extent(lxb_dom_element_t *container, const FlexLineMember *m)
+{
+    FlexBaselineExtent e;
+    lxb_dom_element_t *item;
+    const char *start = flex_container_start_margin(container, FLEX_AXIS_CROSS);
+    CssPx ml, mr, width;
+    char nbuf[160];
+
+    DCHECK(!flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS),
+           "a baseline was synthesized across the main axis of a container whose cross axis is the vertical one");
+    if (m->anonymous)
+        DFAILF("%s: §4's anonymous item of a `column` container synthesizes its baseline from its border box, "
+               "whose width is its used cross size; build that size for the anonymous item first",
+               box_subject_node(m->first, nbuf, sizeof nbuf));
+    item = lxb_dom_interface_element(m->first);
+    ml = used_value_px(item, "margin-left");
+    mr = used_value_px(item, "margin-right");
+    width = used_value_border_edge_px(item, false);
+    e.before = flex_margin_is_low(start) ? ml : css_px_add(mr, width);
+    e.after = css_px_sub(css_px_add(css_px_add(ml, width), mr), e.before);
+    return e;
+}
+
+/* The member's alignment baseline as css-align-3 §4.2's preference names it. */
+static FlexBaselineExtent fb_member_extent(lxb_dom_element_t *container, const FlexLineMember *m)
 {
     FlexBaselineExtent e;
     CssPx first, last, inner;
     bool want_last;
 
-    DCHECK(flex_baseline_participates(container, m), "a baseline was measured for a member that does not participate");
+    DCHECK(fb_aligns(container, m), "a baseline was measured for a member that is not baseline-aligned");
+    if (!fb_parallel(container, m)) return fb_synthesized_extent(container, m);
+    DCHECK(flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS),
+           "a member whose inline axis is parallel to the main axis was measured across a horizontal cross axis");
     want_last = fb_align(container, m).baseline == CSS_KEYWORD_LAST;
     if (!m->anonymous) return fb_element_extent(lxb_dom_interface_element(m->first), want_last);
     /* §4's anonymous item is an anonymous block container holding only line boxes, with no edges. */
@@ -100,9 +150,9 @@ static void fb_take(FlexBaselineExtent *group, FlexBaselineExtent e, bool *any)
     *any = true;
 }
 
-/* The maxima over the participating members of `line`; with `pref` other than INVALID, only those whose
-   baseline preference (css-align-3 §4.2: "either “first” or “last”") is `pref`, which css-align-3 §9.2 makes
-   one baseline-sharing group: one line is one shared alignment context, and every item in it has the
+/* The maxima over the members of `line` that step 8.1 collects (`pref` INVALID), or over the baseline-aligned
+   members whose baseline preference (css-align-3 §4.2: "either “first” or “last”") is `pref`, which css-align-3
+   §9.2 makes one baseline-sharing group: one line is one shared alignment context, and every item in it has the
    container's block flow direction. */
 static bool fb_group_extent(lxb_dom_element_t *container, size_t line, CssKeyword pref, FlexBaselineExtent *out)
 {
@@ -112,9 +162,11 @@ static bool fb_group_extent(lxb_dom_element_t *container, size_t line, CssKeywor
 
     out->before = out->after = css_px(0.0);
     for (i = 0; i < n; i++) {
-        if (m[i].line != line || !flex_baseline_participates(container, &m[i])) continue;
-        if (pref != CSS_KEYWORD_INVALID && fb_align(container, &m[i]).baseline != pref) continue;
-        fb_take(out, flex_baseline_member_extent(container, &m[i]), &any);
+        if (m[i].line != line) continue;
+        if (pref == CSS_KEYWORD_INVALID ? !flex_baseline_participates(container, &m[i])
+                                        : !fb_aligns(container, &m[i]) || fb_align(container, &m[i]).baseline != pref)
+            continue;
+        fb_take(out, fb_member_extent(container, &m[i]), &any);
     }
     free(m);
     return any;
@@ -140,7 +192,7 @@ CssPx flex_baseline_margin_offset(lxb_dom_element_t *container, lxb_dom_element_
     DCHECKF(self != NULL, "%s: §9.3 collected no flex line member for this item of its container",
             box_subject(item, nbuf, sizeof nbuf));
     pref = fb_align(container, self).baseline;
-    e = flex_baseline_member_extent(container, self);
+    e = fb_member_extent(container, self);
     (void)fb_group_extent(container, self->line, pref, &group);
     free(m);
     /* css-align-3 §9.3 aligns the group's baselines; css-flexbox-1 §8.3 then puts "the item with the largest

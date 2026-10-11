@@ -78,6 +78,40 @@ bool flex_container_axis_is_vertical(lxb_dom_element_t *container, FlexAxis axis
     return css_logical_axis_is_vertical(container, abstract);
 }
 
+const char *flex_container_start_margin(lxb_dom_element_t *container, FlexAxis axis)
+{
+    bool inline_axis = (flex_container_main_axis(container) == FLEX_MAIN_AXIS_INLINE) == (axis == FLEX_AXIS_MAIN);
+    bool swapped;
+    const char *side;
+
+    DCHECK(axis == FLEX_AXIS_MAIN || axis == FLEX_AXIS_CROSS, "a flex container's start side was asked of no axis");
+    swapped = axis == FLEX_AXIS_MAIN
+                  ? css_computed_keyword_is(container, "flex-direction", CSS_KEYWORD_ROW_REVERSE) ||
+                        css_computed_keyword_is(container, "flex-direction", CSS_KEYWORD_COLUMN_REVERSE)
+                  : css_computed_keyword_is(container, "flex-wrap", CSS_KEYWORD_WRAP_REVERSE);
+    side = css_logical_partner_of(container, inline_axis ? (swapped ? "margin-inline-end" : "margin-inline-start")
+                                                         : (swapped ? "margin-block-end" : "margin-block-start"));
+    DCHECK(side != NULL, "css-writing-modes-4 §6.4 mapped a flow-relative margin to no physical one");
+    return side;
+}
+
+const char *flex_margin_opposite(const char *side)
+{
+    if (strcmp(side, "margin-left") == 0) return "margin-right";
+    if (strcmp(side, "margin-right") == 0) return "margin-left";
+    if (strcmp(side, "margin-top") == 0) return "margin-bottom";
+    DCHECKF(strcmp(side, "margin-bottom") == 0, "`%s` is none of the four physical margins", side);
+    return "margin-top";
+}
+
+bool flex_margin_is_low(const char *side)
+{
+    DCHECKF(strcmp(side, "margin-left") == 0 || strcmp(side, "margin-right") == 0 ||
+                strcmp(side, "margin-top") == 0 || strcmp(side, "margin-bottom") == 0,
+            "`%s` is none of the four physical margins", side);
+    return strcmp(side, "margin-left") == 0 || strcmp(side, "margin-top") == 0;
+}
+
 bool flex_container_is_multi_line(lxb_dom_element_t *el)
 {
     CssKeyword v;
