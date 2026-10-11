@@ -68678,12 +68678,18 @@ static int js_create_module_bytecode_function(JSContext *ctx, JSModuleDef *m)
     JSObject *p;
 
     bfunc = m->func_obj;
+    b = JS_VALUE_GET_PTR(bfunc);
+    /* The object's class is its bytecode's kind, as js_closure makes it: every call shape dispatches on the
+       class, so a module body (always JS_FUNC_ASYNC) called as a plain bytecode function runs its
+       OP_return_async with no async activation to settle and unwinds its caller's frame instead. */
+    DCHECK(b->func_kind == JS_FUNC_ASYNC,
+           "a Source Text Module Record's body was compiled with a kind other than async — "
+           "js_parse_program compiles every module body as an async function");
     func_obj = JS_NewObjectProtoClass(ctx, ctx->function_proto,
-                                      JS_CLASS_BYTECODE_FUNCTION);
+                                      func_kind_to_class_id[b->func_kind]);
 
     if (JS_IsException(func_obj))
         return -1;
-    b = JS_VALUE_GET_PTR(bfunc);
 
     p = JS_VALUE_GET_OBJ(func_obj);
     p->u.func.function_bytecode = b;
@@ -69439,6 +69445,7 @@ static __exception int js_load_module_then(JSContext *ctx, JSModuleDef *m,
                                            const JSTrampStepDef *on_loaded);
 
 static JSValue js_module_eval_capability(JSContext *ctx, JSModuleDef *m);
+static void js_promise_set_handled(JSContext *ctx, JSValueConst promise);
 
 /* 16.2.1.6.1.3 Evaluate ( ) AS A REQUEST SUB-SEQUENCE, Link's twin below. 16.2.1.6.1.3.1 InnerModuleEvaluation
    ( module, stack, index ) runs module bodies inside its walk, so each body is a CALL request on the running
@@ -69505,13 +69512,27 @@ static int step_module_link_run(JSContext *ctx, JSModuleLinkOp *op, JSModuleDef 
             return -1;
     } else if (op->phase != 0) {
         /* the prologue this parked on has completed: END the request where it was made, whatever it completed
-           with. A THROW does not come back here at all — this machine does not declare catches_abrupt, so the
-           driver tears it down and 16.2.1.6.1.2 step 4's reset runs from the teardown. */
+           with. A throw inside it rejects its promise and is rethrown below, so the driver tears this machine
+           down and 16.2.1.6.1.2 step 4's reset runs from the teardown. */
         r = step_call_run(ctx, &op->phase, STEP_CB(op->cb), JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
                           in, &op->res, out_cb, out_argc);
         DCHECK(r == 0,
                "a module prologue's CALL request resumed and did not end — step_call_run's second phase always "
                "completes, so a step code here is a cursor that names a request nobody issued");
+        /* The body is an async function, so the prologue's completion is its promise: an abrupt one (an
+           allocation inside InstantiateFunctionObject) is the link's throw. The prologue has no await, so the
+           promise is settled when the CALL returns. */
+        DCHECK(JS_GetOpaque(op->res, JS_CLASS_PROMISE) != NULL
+               && JS_PromiseState(ctx, op->res) != JS_PROMISE_PENDING,
+               "a module prologue's CALL completed with something other than a settled promise — the prologue "
+               "arm has no await, so its async activation settles before the CALL returns");
+        if (JS_PromiseState(ctx, op->res) == JS_PROMISE_REJECTED) {
+            js_promise_set_handled(ctx, op->res);
+            JS_Throw(ctx, JS_PromiseResult(ctx, op->res));
+            JS_FreeValue(ctx, op->res);
+            op->res = JS_UNDEFINED;
+            return -1;
+        }
         JS_FreeValue(ctx, op->res);
         op->res = JS_UNDEFINED;
     } else {
@@ -70862,7 +70883,6 @@ static int exec_module_list_cmp(const void *p1, const void *p2, void *opaque)
 static int js_execute_async_module(JSContext *ctx, JSModuleDef *m);
 static int js_execute_sync_module(JSContext *ctx, JSModuleDef *m,
                                   JSValue *pvalue);
-static void js_promise_set_handled(JSContext *ctx, JSValueConst promise);
 
 /* AsyncModuleExecutionRejected, as an explicit STACK rather than C recursion, and so with no stack guard: the
    depth was the async module graph's, which the imported source picks.
@@ -74425,7 +74445,11 @@ static void instantiate_hoisted_definitions(JSContext *ctx, JSFunctionDef *s, Dy
     }
 
     if (s->module) {
-        dbuf_putc(bc, OP_return_undef);
+        /* The prologue arm returns the way its async body does: undefined on the stack, then OP_return_async,
+           so a call of the module's function settles an async activation whichever arm it takes. */
+        DCHECK(s->func_kind == JS_FUNC_ASYNC, "a module body is compiled as an async function");
+        dbuf_putc(bc, OP_undefined);
+        dbuf_putc(bc, OP_return_async);
 
         dbuf_putc(bc, OP_label);
         dbuf_put_u32(bc, label_next);
