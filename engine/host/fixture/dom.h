@@ -449,6 +449,7 @@ static const char HTML_DOM[] =
     "var uawh = '';"
     "document.body.addEventListener('wheel', function(e){ e.preventDefault();"
     " uawh += e.defaultPrevented ? 'U-cancel' : 'U-passive'; });"
+    "document.body.dispatchEvent(new Event('wheel', { bubbles: true, cancelable: true }));"
     "var uawhx = '';"
     "bpar.addEventListener('wheel', function(e){ e.preventDefault();"
     " uawhx += e.defaultPrevented ? 'E-cancel' : 'E-passive'; });"

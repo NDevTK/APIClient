@@ -1262,7 +1262,6 @@ static const char HTML_PLATFORM[] =
     "uaseq += uapop.togglePopover({ force: false }) ? '1' : '0';"    /* present false        -> hide   */
     "} catch (uaerr) { uaseq += 'E'; }"
     "fetch('/api/toggleforce?v=' + (uaseq === '1010100110' ? 'istoggle' : 'seq' + uaseq));"
-    "document.body.dispatchEvent(new Event('wheel', { bubbles: true, cancelable: true }));"
     /* HTML §8.11.1 "The ImageData interface". Web IDL §3.6's distinguishing argument index for its two
        constructors is 0 (`unsigned long sw` against `ImageDataArray data`), and the entry chosen there decides
        position 2: `optional ImageDataSettings settings = {}` on the shorter, `optional unsigned long sh` on
