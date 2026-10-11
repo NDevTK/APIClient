@@ -1400,10 +1400,11 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    jar adds nothing and a reply's Set-Cookie is not stored. `stated` is null, or the operator tier's
    Send-panel record (safeFetchStatedShape), whose Origin and Referer replace the identity's on every rule of
    the send. A request with no identity runs `send` as this extension, uncredentialed.
-   Named residual. Not covered: a reply's Set-Cookie, which the frame's own request would store in its jar and
-   this send stores nowhere. Next diff reads it (webRequest onHeadersReceived, extraHeaders) and writes it into
-   the identity's partition with chrome.cookies.set. Its absence shows as a server that replaces a cookie on a
-   zone send finding the person's browser still presenting the value it replaced. */
+   Named residual. Not covered: a credentialed send's reply Set-Cookie, which the identity's own request would
+   store in its jar and this send stores nowhere. Next diff stores it there through a route that reads this
+   extension's own reply headers; webRequest reports none of the offscreen document's requests. Its absence
+   shows as a server that rotates a token on a tool-sent credentialed request leaving the person's next own
+   request presenting the retired value. */
 async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
   if (!identity) return send();
   CHECK(typeof withSpeakAsRules === "function",

@@ -294,12 +294,10 @@ Residuals, each a difference from the document's own request:
 - The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
   `chrome.cookies` states no creation time.
 - The storage access status is assumed `active`.
-- A cross-site reply's cookies are not stored. The zone's fetch omits credentials there, so a `Set-Cookie`
-  never lands in a jar the document would not have written. A same-site reply's lands in the browser's
-  unpartitioned jar, which is the document's.
+- A reply's cookies are not stored. The zone's fetch omits credentials on every send, so a `Set-Cookie`
+  never lands in a jar, the document's included ("Known residuals").
 - The partition bit is computed as the request's own cross-site status, with the frame's
-  `hasCrossSiteAncestor`. A same-site send's partitioned cookies are not attached, and the person's
-  third-party-cookie setting is not read.
+  `hasCrossSiteAncestor`. The person's third-party-cookie setting is not read.
 - A redirect leaves the rule behind. The rule matches the first URL only, so a redirected request goes out
   as this extension.
 - An operator's frame policy is not observable from this zone, so an operator send that states none uses the
@@ -517,6 +515,7 @@ Each residual states what is not covered, what would close it, and how its absen
 
 | Residual | Not covered | What closes it | How its absence shows |
 |----------|-------------|----------------|-----------------------|
+| A credentialed send's reply cookies | A send that speaks as a document carries the identity's cookies, with the zone's fetch omitting credentials, so the reply's `Set-Cookie` is stored nowhere, where the identity's own request would store it in its jar. `webRequest` reports none of the offscreen document's requests to this extension, measured in Chrome 148, so it cannot read them; letting the browser store them applies the extension's own storage rules and writes the real jar first | a route that reads this extension's own reply headers, then RFC 6265bis §5.7's storage model run on the identity's site for cookies | a server that rotates a token on a tool-sent credentialed request leaving the person's next own request presenting the retired value |
 | Private network by name (write side unmitigated) | `_ipAddressSpace` classifies IP literals by Local Network Access's "Non-public IP address blocks" table and the names `localhost`, `*.localhost` and `*.local`; any other name is `public`. A name that resolves to a local or loopback address (an intranet name, `.internal`, `.lan`, a single-label host, `127.0.0.1.nip.io`) is therefore sent from a public page, including by the default arm for the page's own unpinned `fetch()`. The reply is unreadable unless that host answers `Access-Control-Allow-Origin` for the page or `*` (`_corsCheck`). No stable MV3 surface resolves a name before the connection: `chrome.dns` is Chrome Dev only, `webRequest` reports the address only on events after the request was sent, and blocking `webRequest` is policy-installed only. Whether Chrome's own Local Network Access check applies to this extension's offscreen fetches is unmeasured | Chrome's local-network gate shown, in real Chrome, to apply to this extension's fetches, or a resolver this zone can ask before connecting | a page analysed from a public origin causing a request to a host on the person's network |
 | Redirect hops between the first and last URL | `safeFetch` sees only the requested and the landed URL, so a redirect chain that leaves the origin and returns is tainted `basic` where Fetch would taint it, and an intermediate redirect response's own CORS check is not run | each hop recorded per request. `fetch`'s `redirect: "manual"` cannot supply it: it answers Fetch §2.2.6 "Responses"' opaque-redirect filtered response (status 0, empty header list, null body), so the `Location` is not readable. `webRequest.onBeforeRedirect`, non-blocking in MV3, reports each hop's `redirectUrl`, `responseHeaders` and `ip`, if it is shown this extension's offscreen fetches and an event can be tied to one `fetch` call, neither of which is measured | a `cors` reply delivered `basic` after a chain that crossed origins |
 | The request carries no page `Origin` header | `Origin` is a forbidden request header, so the zone's request carries this extension's origin or none, and a server that reflects the request's `Origin` answers an `Access-Control-Allow-Origin` that is not the page's. The page then gets a network error where a browser's request would pass: a narrowing | a transport that can state the page's origin | a cross-origin API that works in a browser failing `blocked-cors:allow-origin-mismatch` here |
