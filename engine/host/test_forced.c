@@ -15333,7 +15333,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            and `lhAttr` through the page's `.slice(1)` — both are its parse contexts — and never `lhOther`, which
            in its runs carries `state.other` unknown. Exactly two is the positive and the negative together,
            and `s-other-ownwrites` is the same question asked of the other source. */
-        { "s-park-ownwrites", s_park_nwit == 2, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
+        { "s-park-ownwrites", s_park_nwit == 2, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .gate = "s-park-ran" },
         { "s-other-ownwrites", s_other_nwit == 1, "lhOther.innerHTML", SESS_EXPLORE },
         /* WHAT IT BUILDS FROM THEM IS DELIVERABLE OR WITHDRAWN. §13.2.5.1 "Data state" is left only through
            `<`, which the fragment percent-encode set holds; the attribute-value context `lhAttr` gives it is
@@ -15341,7 +15341,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            no byte the source's declaration encodes — a kept one that does is a regressed delivery table, seen
            here before it could arrive, escape or fire. Its premise is that something was built. */
         { "s-park-keptdeliverable", s_park_built && s_park_kept == 0, "lhHost.innerHTML = location.hash",
-          SESS_EXPLORE, .reach = "s-park-ran" },
+          SESS_EXPLORE, .gate = "s-park-ran" },
         /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one — and now names ONE. The three
            rows that stood here read `seen`, `ran` and `atsink`, and the middle one was computed from `tried`,
            which is raised where a candidate FLOW IS CREATED: it said 1 for a search whose flows the scheduler
