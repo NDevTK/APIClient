@@ -22,7 +22,6 @@
 #include "core/idl_args.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
-#include "core/layout/layout_job.h"
 #include "core/layout/used_value.h"
 
 /* THE MEMBERS. §7 declares six and this file answers five; `scrollParent` is absent for the reason the header
@@ -396,23 +395,18 @@ static JSValue hev_offset_position(JSContext *ctx, const HevTarget *t, bool vert
 {
     lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
     lxb_dom_element_t *op;
-    LayoutJobDrive d;
     FlowPoint o;
-    CssPx edge;
 
     /* step 1 */
     if (t->is_body || !t->has_box) return element_view_length_long(ctx, css_px(0.0));
     /* step 2 */
     op = hev_offset_parent(t);
-    /* One drive spans both edges, so both read one cascade record: the offset parent's border width, which
-       each edge contains, is then one value and cancels in step 3. */
-    layout_job_drive_begin(&d);
     o = flow_border_box_origin(el);
-    edge = op != NULL ? hev_padding_edge_origin(op, vertical) : css_px(0.0);
-    layout_job_drive_end(&d);
     if (op == NULL) return element_view_length_long(ctx, vertical ? o.y : o.x);
-    /* step 3 */
-    return element_view_length_long(ctx, css_px_sub(vertical ? o.y : o.x, edge));
+    /* step 3. Both edges contain the offset parent's border width, an atom named by its definition, so it
+       cancels however many derivations the two edges took. */
+    return element_view_length_long(ctx, css_px_sub(vertical ? o.y : o.x,
+                                                    hev_padding_edge_origin(op, vertical)));
 }
 
 /* ---- §7's `offsetWidth` and `offsetHeight` --------------------------------------------------------------- */
