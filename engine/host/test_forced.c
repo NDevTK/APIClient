@@ -1021,6 +1021,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragxml.h"
 #include "fixture/fragce.h"
 #include "fixture/fragscript.h"
+#include "fixture/fragbase.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
 
@@ -1446,6 +1447,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "fragxml", HTML_FRAGXML },
     { "fragce", HTML_FRAGCE },
     { "fragscript", HTML_FRAGSCRIPT },
+    { "fragbase", HTML_FRAGBASE },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
 };
@@ -11646,6 +11648,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&fragscript_tt, &fragscript_why, param_value_is(js, "/api/fragscriptu", "w", "3"),
              "the /api/fragscriptu record does not say the runScripts script ran after all three of its target's "
              "children were inserted — DOM §4.2.3 insert runs the post-connection steps after its per-node loop");
+    /* A link placed in front of a base element by one innerHTML: its insertion steps run inside insert's per-node
+       loop, before the base is in the tree, so the preload resolves against the document's own address. */
+    const char *fragbase_why = NULL; int fragbase_tt = 1;
+    fold_row(&fragbase_tt, &fragbase_why, !!strstr(js, "\"/api/fragbase\"") && !!strstr(js, "fragbase.js"),
+             "NOT REACHED: there is no /api/fragbase record or no request for fragbase.js, so the setter or the "
+             "link's insertion steps never ran");
+    fold_row(&fragbase_tt, &fragbase_why, !!strstr(js, "fbsub") && !strstr(js, "/fbsub/fragbase.js"),
+             "the preload was resolved against the base element placed after it — DOM §4.2.3 insert runs the "
+             "link's insertion steps before the next node is inserted, so the base was not yet in the tree");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15454,6 +15465,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "frag-xml", fragxml_tt, "/api/fragxml", SESS_EXPLORE, fragxml_why },
         { "frag-ce", fragce_tt, "/api/fragce", SESS_EXPLORE, fragce_why },
         { "frag-script", fragscript_tt, "/api/fragscript", SESS_EXPLORE, fragscript_why },
+        { "frag-base", fragbase_tt, "/api/fragbase", SESS_EXPLORE, fragbase_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },

@@ -2350,18 +2350,17 @@ static void *element_tree_steps_take(JSContext *ctx)
     return b;
 }
 
-/* The same copy onto a held batch. Only an unwalked buffer may grow: the walk's cursors index `e[]`, and
-   staticNodeList is filled by the walk, so an entry added behind a started walk would be missed by step 11 or
-   reached after step 12 began. */
+/* The same copy onto a held batch, whose open walk has run the insertion steps of every entry it holds (step 11
+   has collected their nodes) and has not begun step 12, so the new entries are the next nodes of one insert. */
 static void *element_tree_steps_take_more(JSContext *ctx, void *vb)
 {
     TreeStepBuf *b = vb;
 
     DCHECK(b != NULL, "records were appended to no tree-steps batch");
-    DCHECK(b->i == 0 && b->k == 0 && b->phase == TS_PHASE_INSERTION && b->nphase == TS_NODE_EFFECTS &&
-               b->list_n == 0 && b->pcphase == TS_PC_STEPS,
-           "records were appended to a tree-steps batch whose walk has begun — the member must hold its batch "
-           "unwalked until it drains it");
+    DCHECK(b->i == b->n && b->k == 0 && b->phase == TS_PHASE_INSERTION && b->nphase == TS_NODE_EFFECTS &&
+               b->ua_phase == 0 && b->pcphase == TS_PC_STEPS,
+           "records were appended to a tree-steps batch that has insertion steps left or has begun insert step "
+           "12 — the member runs each node's insertion steps before it inserts the next one");
     if (!g_ts_n) return b;
     b = js_realloc(ctx, b, sizeof(TreeStepBuf) + sizeof(TreeStepEntry) * (size_t)(b->n + g_ts_n));
     CHECK(b != NULL, "the tree-steps buffer could not grow — dropping it means an inserted <script> never runs "
@@ -2552,10 +2551,15 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
    JS_STEP_FORK when a per-node effect's answer depends on unknown external state, and 0 only when the SECOND
    phase is over too. `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm
    is delivered back to the same call site inside the same node's phase. */
-static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSValue in,
-                                   JSValue **out_cb, int *out_argc)
+/* `open`: the member is still inside its insert's per-node loop (idl_args.c's held batch), so the walk runs the
+   insertion steps of the entries recorded so far and answers 0 at their end without beginning insert step 12.
+   NAMED RESIDUAL: a member that inserts several nodes in ONE body call (`append(a, b)`, `replaceChildren`) runs
+   every node's insertion steps after its last node is in the tree, where insert runs each inside the per-node
+   loop. The next diff runs the insertion steps that cannot rest at the chokepoint, leaving only §6.6.7's forking
+   step to this walk. Its absence shows as `head.append(link, base)` resolving the link against that base. */
+static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue in, JSValue **out_cb,
+                           int *out_argc, bool open)
 {
-    TreeStepBuf *b = vb;
     TreeStepEntry *e;
     lxb_dom_node_t *n;
 
@@ -2585,6 +2589,11 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
     JS_FreeValue(ctx, in);
     (void)out_cb; (void)out_argc;
     DCHECK(b->phase == TS_PHASE_INSERTION, "the tree-steps drain is standing in a phase §4.2.3 does not have");
+    /* A batch held open ran every entry's insertion steps already, so closing it begins insert step 12. */
+    if (b->i == b->n && !open) {
+        b->phase = TS_PHASE_POST_CONNECTION;
+        return b->list_n ? JS_STEP_YIELD : 0;
+    }
     DCHECK(b->i < b->n, "the tree-steps drain was stepped past its end");
     e = &b->e[b->i];
     n = e->cursor;
@@ -2616,6 +2625,7 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
         tree_steps_list_push(ctx, b, n);
         e->cursor = NULL;
         if (++b->i < b->n) return JS_STEP_YIELD;
+        if (open) return 0;
         b->phase = TS_PHASE_POST_CONNECTION;
         return b->list_n ? JS_STEP_YIELD : 0;
     }
@@ -2853,10 +2863,28 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
     e->cursor = n;
     if (n) return JS_STEP_YIELD;
     if (++b->i < b->n) return JS_STEP_YIELD;
+    if (open) return 0;
     /* EVERY NODE'S INSERTION STEPS ARE DONE, so and only so does insert step 12 begin. A batch of nothing but
        removals collects no staticNodeList and the walk is over here. */
     b->phase = TS_PHASE_POST_CONNECTION;
     return b->list_n ? JS_STEP_YIELD : 0;
+}
+
+static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSValue in,
+                                   JSValue **out_cb, int *out_argc)
+{
+    return tree_steps_walk(ctx, vb, h, in, out_cb, out_argc, false);
+}
+
+static int element_tree_steps_step_open(JSContext *ctx, void *vb, JSStepHdr *h, JSValue in,
+                                        JSValue **out_cb, int *out_argc)
+{
+    TreeStepBuf *b = vb;
+
+    DCHECK(b != NULL && b->phase == TS_PHASE_INSERTION,
+           "a held tree-steps batch was stepped past its insertion steps — step 12 begins only when it closes");
+    if (b->i == b->n) { JS_FreeValue(ctx, in); return 0; }
+    return tree_steps_walk(ctx, b, h, in, out_cb, out_argc, true);
 }
 
 static void element_tree_steps_free(JSContext *ctx, void *vb)
@@ -2929,8 +2957,8 @@ static void element_tree_steps_unlock(JSContext *ctx, void *vb)
 }
 
 static const IdlTreeSteps ELEMENT_TREE_STEPS = {
-    element_tree_steps_take, element_tree_steps_take_more, element_tree_steps_step, element_tree_steps_free,
-    element_tree_steps_recorded, element_tree_steps_visit, element_tree_steps_unlock
+    element_tree_steps_take, element_tree_steps_take_more, element_tree_steps_step, element_tree_steps_step_open,
+    element_tree_steps_free, element_tree_steps_recorded, element_tree_steps_visit, element_tree_steps_unlock
 };
 
 /* §4.9 `[SameObject] readonly attribute NamedNodeMap attributes`. [SameObject] is an identity the IDL states,

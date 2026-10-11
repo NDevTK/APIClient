@@ -3709,13 +3709,26 @@ static void idl_tree_take(JSContext *ctx, JSIdlArgsState *s)
     s->tree = s->tree ? g_tree->take_more(ctx, s->tree) : g_tree->take(ctx);
 }
 
-/* WHETHER THE MEMBER HOLDS ITS BATCH RATHER THAN DRAINING IT: while its body stands where the page's code must
-   not run (JSTrampStepDef.script_forbidden). DOM §4.2.3 insert runs the post-connection steps over staticNodeList
-   only after its per-node loop, and a body that inserts one node per step is in that loop until it leaves the
-   forbidden stages, so its records are one batch drained then — the order the standard gives. */
+/* WHETHER THE MEMBER HOLDS ITS BATCH OPEN: while its body stands where the page's code must not run
+   (JSTrampStepDef.script_forbidden). A body that inserts one node per step is inside DOM §4.2.3 insert's per-node
+   loop until it leaves those stages, so after each step it runs the insertion steps of what that step inserted
+   (idl_tree_drain_open) and holds the post-connection steps, which insert runs over staticNodeList after the
+   loop, until the batch closes. */
 static bool idl_tree_held(const JSIdlArgsState *s)
 {
     return js_idl_args_script_forbidden(s) != NULL;
+}
+
+/* A held batch's insertion steps, one node per entry; 0 once every node recorded so far has run them. They make
+   no request (§4.2.3 forbids them script), and may fork (§6.6.7's autofocus). */
+static int idl_tree_drain_open(JSContext *ctx, JSIdlArgsState *s, JSValue in, JSValue **out_cb, int *out_argc)
+{
+    int r = g_tree->step_open(ctx, s->tree, &s->hdr, in, out_cb, out_argc);
+
+    DCHECK(r == 0 || r == JS_STEP_YIELD || r == JS_STEP_FORK,
+           "a held batch's insertion steps answered with a request — §4.2.3 forbids them script, so only a "
+           "rest or a fork can come back from them");
+    return r;
 }
 
 /* THE DRAIN, one node per entry. It FORWARDS whatever the walk answers with — JS_STEP_YIELD when it has more
@@ -4200,7 +4213,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
        page's own code (§4.2.3 insert step 12), the value arriving on a re-entry the WALK caused is that
        program's completion, and freeing it would deliver JS_UNDEFINED to a machine standing on a request. The
        drain owns `in` from here, on both arms. */
-    if (s->tree && !idl_tree_held(s)) {
+    if (s->tree && idl_tree_held(s)) {
+        r = idl_tree_drain_open(ctx, s, cb_result, out_cb, out_argc);
+        if (r) return r;
+        cb_result = JS_UNDEFINED;
+    } else if (s->tree) {
         r = idl_tree_drain(ctx, s, cb_result, out_cb, out_argc);
         if (r) return r;
         if (s->tree_after_body) return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
@@ -6154,8 +6171,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         /* JS_UNDEFINED IS THE WHOLE OF WHAT A FIRST ENTRY HAS TO SAY: the walk has just been handed its buffer
            and has made no request, so there is no completion owed to it. The re-entry above is the only site
            that ever carries one. */
-        if (s->tree && !idl_tree_held(s)) {
-            int d = idl_tree_drain(ctx, s, JS_UNDEFINED, out_cb, out_argc);
+        if (s->tree) {
+            int d = idl_tree_held(s) ? idl_tree_drain_open(ctx, s, JS_UNDEFINED, out_cb, out_argc)
+                                     : idl_tree_drain(ctx, s, JS_UNDEFINED, out_cb, out_argc);
             if (d) return d;
         }
         if (r) return r;

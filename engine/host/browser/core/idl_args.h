@@ -1046,11 +1046,14 @@ bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
    with no request outstanding is asserted. */
 typedef struct {
     void *(*take)(JSContext *ctx);                 /* everything recorded so far, or NULL; leaves none behind */
-    /* Everything recorded since, appended to `buf`, a buffer `take` returned and no `step` has walked yet; returns
-       the buffer, which may have moved. One member's records across several body steps are then one batch. */
+    /* Everything recorded since, appended to `buf`, a held batch whose `step_open` answered 0; returns the
+       buffer, which may have moved. One member's records across several body steps are then one insert. */
     void *(*take_more)(JSContext *ctx, void *buf);
     /* One node; returns a step code. `in`/`out_cb`/`out_argc` are the step-machine request contract. */
     int   (*step)(JSContext *ctx, void *buf, JSStepHdr *h, JSValue in, JSValue **out_cb, int *out_argc);
+    /* The same over a held batch's insertion steps only (insert step 7.7, which makes no request): 0 once every
+       entry recorded so far has run them, leaving the buffer for `take_more` and, later, `step`. */
+    int   (*step_open)(JSContext *ctx, void *buf, JSStepHdr *h, JSValue in, JSValue **out_cb, int *out_argc);
     void  (*release)(JSContext *ctx, void *buf);
     bool  (*recorded)(void);                       /* is anything waiting to be taken */
     /* The buffer across a fork: the deep fork byte-copies the driving state and re-takes only what a `visit`
