@@ -342,6 +342,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     if (pending_kind_is_program(pkind)) {
         /* The grade and the mark are read once each, for the same reason as `pkind`. */
         int prov = (int)pending_get_int(e, PEND_PROV);
+        int driven = (int)pending_get_int(e, PEND_DRIVEN);
         int door = program_load_door(pkind, (int)pending_get_int(e, PEND_PARSER_INS));
         JSValue uv = JS_NewString(ctx, req->url);
         CHECK(!JS_IsException(uv), "engine: OOM naming a program load for the endpoint surface");
@@ -358,7 +359,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
                 "parse cannot reach an address its own element carries", door, pkind);
         /* HTML §8.1.4.2 sets no method, so it is Fetch §2.2.5's `GET`; `req->method` is what the producer
            stated, already asserted present at this function's entry. */
-        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, prov, door);
+        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, prov, driven, door);
         JS_FreeValue(ctx, uv);
     }
     /* Fetch §4.1 Main fetch step 6, run before the key is composed. The reply seam is keyed on (method, mode,
@@ -2990,11 +2991,10 @@ const char *engine_provenance_token(int prov) {
     case PROV_OBSERVED: return PENDING_PROVENANCE_OBSERVED;
     case PROV_DERIVED:  return PENDING_PROVENANCE_DERIVED;
     case PROV_FORCED:   return PENDING_PROVENANCE_FORCED;
-    case PROV_DRIVEN:   return PENDING_PROVENANCE_DRIVEN;
     }
     /* A CHECK, not a DCHECK, for engine_pending_split's reason: the trusted zone's firing decision reads this
        field, and a release fallthrough would emit whatever was left in the register. */
-    CHECK_FAILF("engine: a park's provenance is %d, which is none of the four pending.h defines — the trusted "
+    CHECK_FAILF("engine: a park's provenance is %d, which is none of the three pending.h defines — the trusted "
                 "zone's firing decision reads this field", prov);
 }
 
@@ -3007,8 +3007,6 @@ int engine_prov_of_running_path(void)
 {
     const Flow *f = flow_running();
 
-    /* The drive decides first, as pending_prov_compose's does: an act inside it is this tool's. */
-    if (f != NULL && flow_path_driven(f)) return PROV_DRIVEN;
     return f != NULL && flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED;
 }
 
@@ -3046,6 +3044,25 @@ int engine_pinned_of_running_path(void)
     return f != NULL && flow_path_pinned(f);
 }
 
+/* See engine.h. */
+int engine_driven_of_running_path(void)
+{
+    const Flow *f = flow_running();
+
+    return f != NULL && flow_path_driven(f);
+}
+
+/* See engine.h. A CHECK for engine_provenance_token's reason: the firing decision reads this field. */
+const char *engine_driven_token(int driven)
+{
+    switch (driven) {
+    case 0: return PENDING_DRIVEN_NO;
+    case 1: return PENDING_DRIVEN_YES;
+    }
+    CHECK_FAILF("engine: a request's drive mark is %d, which is neither bit engine.h defines — the trusted "
+                "zone's firing decision reads this field", driven);
+}
+
 /* The same trip back, for a token already in the join; length-delimited because the caller holds a field of a
    line, not a NUL-terminated string. */
 static int prov_of_token(const char *tok, size_t n) {
@@ -3055,8 +3072,6 @@ static int prov_of_token(const char *tok, size_t n) {
         return PROV_DERIVED;
     if (n == sizeof PENDING_PROVENANCE_FORCED - 1 && !memcmp(tok, PENDING_PROVENANCE_FORCED, n))
         return PROV_FORCED;
-    if (n == sizeof PENDING_PROVENANCE_DRIVEN - 1 && !memcmp(tok, PENDING_PROVENANCE_DRIVEN, n))
-        return PROV_DRIVEN;
     CHECK_FAILF("engine: a line this join wrote carries the provenance token `%.*s`, which it cannot have "
                 "written — the buffer is this function's alone", (int)n, tok);
 }
@@ -3117,6 +3132,14 @@ static int pinned_is_yes(const char *tok, size_t n) {
                 "declares", (int)n, tok);
 }
 
+/* The drive mark's trip back, for a token already in the join. */
+static int driven_is_yes(const char *tok, size_t n) {
+    if (n == sizeof PENDING_DRIVEN_YES - 1 && !memcmp(tok, PENDING_DRIVEN_YES, n)) return 1;
+    if (n == sizeof PENDING_DRIVEN_NO - 1 && !memcmp(tok, PENDING_DRIVEN_NO, n)) return 0;
+    CHECK_FAILF("engine: a pending line carries the drive token `%.*s`, which is neither token engine.h "
+                "declares", (int)n, tok);
+}
+
 /* The URLs the host owes, newline-joined across every live flow and deduplicated over the request's identity,
    or "". Several flows park on one request (a candidate re-fire re-runs the exploring flow's fetches) and
    engine_provide fills every entry that names it, so the list is a set of requests, not of waiters;
@@ -3124,7 +3147,7 @@ static int pinned_is_yes(const char *tok, size_t n) {
    deduplicating without the mode (Fetch §2.2.5's request mode) would answer a `<script src=u>` and a
    `fetch(u)` with one reply, where Fetch §4.1 Main fetch gives the first the body and the second a CORS check.
    The buffer is this function's, valid until the next call. Each line is
-   `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>
+   `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
    REFERRER_POLICY<TAB>REFERRER<TAB>URL`. */
 const char *engine_pending_fetches(void) {
     static char *join;
@@ -3177,7 +3200,11 @@ const char *engine_pending_fetches(void) {
                reason: a pin taken after parking could not have reached this address's bytes. */
             int pinned_v = (int)pending_get_int(pe, PEND_PINNED);
             const char *pinned = engine_pinned_token(pinned_v);
-            size_t il = strlen(ini), pl = strlen(prov), nl = strlen(pinned);
+            /* Whose act it is, off the record: the drive mark of the flow that parked, independent of the two
+               grades above (engine.h's PENDING_DRIVEN_*). */
+            int driven_v = (int)pending_get_int(pe, PEND_DRIVEN);
+            const char *driven = engine_driven_token(driven_v);
+            size_t il = strlen(ini), pl = strlen(prov), nl = strlen(pinned), vl = strlen(driven);
             /* A request the zone already refused is not listed, which keeps a decline a fork rather than a spin:
                unanswered entries are re-joined every step, and each decline reaching the engine forks another
                failure arm. A refusal answers "will you make this request", and this list is what the host can
@@ -3275,18 +3302,20 @@ const char *engine_pending_fetches(void) {
                     char *t7 = t6 ? memchr(t6 + 1, '\t', (size_t)(lend - t6 - 1)) : NULL;
                     char *t8 = t7 ? memchr(t7 + 1, '\t', (size_t)(lend - t7 - 1)) : NULL;
                     char *t9 = t8 ? memchr(t8 + 1, '\t', (size_t)(lend - t8 - 1)) : NULL;
-                    DCHECK(t9 != NULL,
-                           "a line already in this join carries fewer than nine TABs — the buffer is this "
+                    char *t10 = t9 ? memchr(t9 + 1, '\t', (size_t)(lend - t9 - 1)) : NULL;
+                    DCHECK(t10 != NULL,
+                           "a line already in this join carries fewer than ten TABs — the buffer is this "
                            "function's alone and every line it writes is `METHOD<TAB>DESTINATION<TAB>"
-                           "INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>"
-                           "REFERRER<TAB>URL`, so this is the writer and the reader having parted");
+                           "INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>"
+                           "REFERRER_POLICY<TAB>REFERRER<TAB>URL`, so this is the writer and the reader having "
+                           "parted");
                     /* The key is (method, mode, referrer policy, referrer, url); none of the last four is
                        folded, because a line is one request. */
                     if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
-                        (size_t)(t7 - (t6 + 1)) == ol && !memcmp(t6 + 1, o, ol) &&
-                        (size_t)(t8 - (t7 + 1)) == rpl && !memcmp(t7 + 1, rp, rpl) &&
-                        (size_t)(t9 - (t8 + 1)) == rl && !memcmp(t8 + 1, r, rl) &&
-                        (size_t)(lend - (t9 + 1)) == ul && !memcmp(t9 + 1, u, ul)) {
+                        (size_t)(t8 - (t7 + 1)) == ol && !memcmp(t7 + 1, o, ol) &&
+                        (size_t)(t9 - (t8 + 1)) == rpl && !memcmp(t8 + 1, rp, rpl) &&
+                        (size_t)(t10 - (t9 + 1)) == rl && !memcmp(t9 + 1, r, rl) &&
+                        (size_t)(lend - (t10 + 1)) == ul && !memcmp(t10 + 1, u, ul)) {
                         /* One reply fills every entry on the key, so each folded field states what survives
                            every member, independent of walk order. The initiator and the provenance fold to
                            the most observed (monotone): if any member's path stood on no contradicted arm, a
@@ -3296,14 +3325,16 @@ const char *engine_pending_fetches(void) {
                            the bytes must pass the code rule, so script-like (§2.2.5) wins; otherwise the line
                            keeps what it has, since no consumer distinguishes, say, `image` from `font` (one
                            that does needs the register keyed on the destination). Every offset and verdict is
-                           taken before the first write, and the five writes run back to front (credentials,
-                           witness, provenance, initiator, destination), because a rewrite shifts everything
-                           after its field. */
+                           taken before the first write, and the six writes run back to front (credentials,
+                           drive mark, witness, provenance, initiator, destination), because a rewrite shifts
+                           everything after its field. The drive mark folds to `undriven` if any member's flow
+                           was not a drive: then the page itself makes this request. */
                         size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
                         size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
                         size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
                         size_t n_at = (size_t)(t4 + 1 - join), n_len = (size_t)(t5 - (t4 + 1));
-                        size_t c_at = (size_t)(t5 + 1 - join), c_len = (size_t)(t6 - (t5 + 1));
+                        size_t v_at = (size_t)(t5 + 1 - join), v_len = (size_t)(t6 - (t5 + 1));
+                        size_t c_at = (size_t)(t6 + 1 - join), c_len = (size_t)(t7 - (t6 + 1));
                         /* The (provenance, witness) pair folds as a pair, taking one member's whole, so it
                            cannot state a pair no member held. The facts are nested (solver/flow.h declares
                            `path_pinned` inside `path_forced`; `pending_pinned_compose` asserts it), so the legal
@@ -3326,7 +3357,7 @@ const char *engine_pending_fetches(void) {
                         /* The nesting is checked where the pair is made, the one place able to compose a pair
                            neither the park nor the chokepoint saw; it fails if either field is again folded by
                            an extremum of its own. */
-                        DCHECKF(!mo_pinned || mo_prov == PROV_FORCED || mo_prov == PROV_DRIVEN,
+                        DCHECKF(!mo_pinned || mo_prov == PROV_FORCED,
                                 "this join folded a (provenance, witness) pair no park can hold — provenance "
                                 "%d with the witness mark SET, where solver/flow.h declares `path_pinned` "
                                 "strictly inside `path_forced`. The fold takes ONE member's pair whole for "
@@ -3341,14 +3372,16 @@ const char *engine_pending_fetches(void) {
                            for the rule and its residual). */
                         FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
                                                                     cred_of_token(c, cl));
+                        int mo_driven = driven_v && driven_is_yes(join + v_at, v_len);
                         join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
+                        join_set_field(&join, &n_out, &cap, v_at, v_len, engine_driven_token(mo_driven));
                         join_set_field(&join, &n_out, &cap, n_at, n_len,
                                        engine_pinned_token(mo_pinned));
                         join_set_field(&join, &n_out, &cap, p_at, p_len, engine_provenance_token(mo_prov));
                         join_set_field(&join, &n_out, &cap, i_at, i_len,
                                        mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
                         if (widen_dst) join_set_field(&join, &n_out, &cap, d_at, d_len, d);
-                        /* Both rewrites can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t9`) is
+                        /* Both rewrites can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t10`) is
                            dead from here; the break is what makes that safe. */
                         skip = 1; break;
                     }
@@ -3357,7 +3390,7 @@ const char *engine_pending_fetches(void) {
                 }
             }
             if (!skip) {
-                while (n_out + ml + dl + il + pl + nl + cl + ol + rpl + rl + ul + 11 > cap) {
+                while (n_out + ml + dl + il + pl + nl + vl + cl + ol + rpl + rl + ul + 12 > cap) {
                     cap *= 2;
                     join = realloc(join, cap);
                     CHECK(join, "engine: OOM growing the pending-request join");
@@ -3371,6 +3404,8 @@ const char *engine_pending_fetches(void) {
                 memcpy(join + n_out, prov, pl); n_out += pl;
                 join[n_out++] = '\t';
                 memcpy(join + n_out, pinned, nl); n_out += nl;
+                join[n_out++] = '\t';
+                memcpy(join + n_out, driven, vl); n_out += vl;
                 join[n_out++] = '\t';
                 memcpy(join + n_out, c, cl); n_out += cl;
                 join[n_out++] = '\t';
@@ -3404,103 +3439,31 @@ const char *engine_pending_fetches(void) {
 }
 
 void engine_pending_split(char *line, const char **method, const char **destination, const char **initiator,
-                          const char **provenance, const char **pinned, const char **credentials,
-                          const char **mode, const char **referrer_policy, const char **referrer,
-                          const char **url) {
-    char *tab, *tab2, *tab3, *tab4, *tab5, *tab6, *tab7, *tab8, *tab9;
+                          const char **provenance, const char **pinned, const char **driven,
+                          const char **credentials, const char **mode, const char **referrer_policy,
+                          const char **referrer, const char **url) {
+    const char **field[] = { method, destination, initiator, provenance, pinned, driven, credentials, mode,
+                             referrer_policy, referrer, url };
+    enum { NFIELDS = sizeof field / sizeof field[0] };
+    char *at = line;
 
-    DCHECK(line && method && destination && initiator && provenance && pinned && credentials && mode &&
-           referrer_policy && referrer && url,
-           "a pending line was split with nowhere to put its fields");
-    tab = strchr(line, '\t');
-    /* CHECKs, not DCHECKs: release has no defined answer, because the fields key the delivery, and a line not
-       in this engine's grammar would key it on a method nobody asked for. Each missing TAB is checked on its own
-       so the message says which field would have been misread; a URL cannot contain a TAB (URL Standard §4.4),
-       so the URL is the remainder of the line. */
-    CHECK(tab != NULL,
-          "engine: a host split a pending line that carries no TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` lines and this "
-          "one is none of that");
-    tab2 = strchr(tab + 1, '\t');
-    /* Without the second TAB the initiator would become the address. */
-    CHECK(tab2 != NULL,
-          "engine: a host split a pending line carrying one TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
-          "reading a shorter grammar that preceded it, so its address is about to be a destination");
-    tab3 = strchr(tab2 + 1, '\t');
-    /* Without the third the provenance would become the address, and the firing decision could not see whether
-       a running-code park was derived or forced. */
-    CHECK(tab3 != NULL,
-          "engine: a host split a pending line carrying two TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
-          "reading a shorter grammar that preceded it, so its address is about to be an initiator token");
-    tab4 = strchr(tab3 + 1, '\t');
-    /* Without the fourth the CORB class would be decided on a field that is not there. */
-    CHECK(tab4 != NULL,
-          "engine: a host split a pending line carrying three TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
-          "reading the four-field grammar that preceded it, so its address is about to be a provenance token "
-          "and its CORB class is about to be decided on a field that is not there");
-    tab5 = strchr(tab4 + 1, '\t');
-    /* Without the fifth the credentials mode would become the address, and whose session pays would be
-       decided by silence (Fetch §2.2.5 Requests: only the creating algorithm knows it). */
-    CHECK(tab5 != NULL,
-          "engine: a host split a pending line carrying four TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
-          "reading the five-field grammar that preceded it, so its address is about to be a credentials "
-          "token and whose session pays for this fetch is about to be decided on a field that is not there");
-    tab6 = strchr(tab5 + 1, '\t');
-    /* Without the sixth the pinned mark would become the address, and the zone could not tell a lazy chunk of
-       the page's own bundle from a data request whose address rests on a witness this engine picked. */
-    CHECK(tab6 != NULL,
-          "engine: a host split a pending line carrying five TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this "
-          "host is reading the six-field grammar that preceded it, so its address is about to be a pinned "
-          "token and whether this act may be spent is about to be decided on a field that is not there");
-    tab7 = strchr(tab6 + 1, '\t');
-    /* Without the seventh the mode would become the address, and the zone could not tell a `fetch(u)` whose
-       reply passes a CORS check from a `<script src=u>` whose reply the page never reads. */
-    CHECK(tab7 != NULL,
-          "engine: a host split a pending line carrying six TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` "
-          "and this host is reading the seven-field grammar that preceded it, so its address is about to be a "
-          "mode token and what the page may read of the reply is about to be decided on a field that is not "
-          "there");
-    tab8 = strchr(tab7 + 1, '\t');
-    tab9 = tab8 ? strchr(tab8 + 1, '\t') : NULL;
-    /* Without the eighth and ninth the referrer policy or the referrer would become the address, and the
-       request's identity would be read off a field that is not there. */
-    CHECK(tab8 != NULL && tab9 != NULL,
-          "engine: a host split a pending line carrying seven or eight TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
-          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is reading the grammar that preceded it, so "
-          "its address is about to be a referrer");
-    *tab = 0;
-    *tab2 = 0;
-    *tab3 = 0;
-    *tab4 = 0;
-    *tab5 = 0;
-    *tab6 = 0;
-    *tab7 = 0;
-    *tab8 = 0;
-    *tab9 = 0;
-    *method = line;
-    *destination = tab + 1;
-    *initiator = tab2 + 1;
-    *provenance = tab3 + 1;
-    *pinned = tab4 + 1;
-    *credentials = tab5 + 1;
-    *mode = tab6 + 1;
-    *referrer_policy = tab7 + 1;
-    *referrer = tab8 + 1;
-    *url = tab9 + 1;
+    DCHECK(line && method && destination && initiator && provenance && pinned && driven && credentials && mode &&
+           referrer_policy && referrer && url, "a pending line was split with nowhere to put its fields");
+    /* A CHECK per TAB, not a DCHECK: release has no defined answer, because the fields key the delivery and
+       decide what fires, and a line not in this engine's grammar would decide them from the wrong field. A URL
+       cannot contain a TAB (URL Standard §4.4), so the URL is the remainder of the line. */
+    for (int k = 0; k < NFIELDS - 1; k++) {
+        char *tab = strchr(at, '\t');
+        CHECKF(tab != NULL,
+               "engine: a host split a pending line carrying %d TABs where engine_pending_fetches writes %d "
+               "(`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>"
+               "MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`) — the host is reading another grammar, and field "
+               "%d would be decided from the wrong bytes", k, NFIELDS - 1, k + 1);
+        *tab = 0;
+        *field[k] = at;
+        at = tab + 1;
+    }
+    *field[NFIELDS - 1] = at;
     /* Fetch §2.2.5's enumeration, asked of the line: the join asked it before writing, and both parties check a
        contract. The empty string passes: it is §2.2.5's default and what `fetch()` has. */
     DCHECK(fetch_is_destination_type(*destination),
@@ -3512,15 +3475,17 @@ void engine_pending_split(char *line, const char **method, const char **destinat
            "field to decide whether an ACT MAY BE SPENT on an address that may rest on a witness this engine "
            "chose, and a value it does not know would be answered by whichever of its arms is the default, "
            "which for a firing question is the permissive one");
+    DCHECK(!strcmp(*driven, PENDING_DRIVEN_YES) || !strcmp(*driven, PENDING_DRIVEN_NO),
+           "a pending line's DRIVE MARK is neither of the two tokens engine.h declares — the trusted zone's "
+           "`actor` row reads it, and an unknown word would let a drive's request fire as the page's own");
     DCHECK(!strcmp(*initiator, PENDING_INITIATOR_PARSER) || !strcmp(*initiator, PENDING_INITIATOR_SCRIPT),
            "a pending line's INITIATOR is neither of the two tokens engine.h declares — a zone reads this "
            "field for what a REAL LOAD of the document makes, and a value it does not know would be answered "
            "by whichever of its arms happened to be the default");
     DCHECK(!strcmp(*provenance, PENDING_PROVENANCE_OBSERVED) ||
            !strcmp(*provenance, PENDING_PROVENANCE_DERIVED) ||
-           !strcmp(*provenance, PENDING_PROVENANCE_FORCED) ||
-           !strcmp(*provenance, PENDING_PROVENANCE_DRIVEN),
-           "a pending line's PROVENANCE is none of the four tokens engine.h declares — the trusted zone's "
+           !strcmp(*provenance, PENDING_PROVENANCE_FORCED),
+           "a pending line's PROVENANCE is none of the three tokens engine.h declares — the trusted zone's "
            "FIRING decision reads this field, and CLAUDE.md forbids a reply to a FORCED request ever being "
            "reported as OBSERVED, which a defaulted fourth value is exactly how it would be");
     /* The credentials mode, through core/fetch/fetch.h's one mapping, `fetch_credentials_of_token`, which is
@@ -3602,6 +3567,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
     /* The reply's own grade, joined from the records it answers (see the fill loop). `-1` is "no record read
        yet", which the tail refuses to hand on. */
     int reply_prov = -1;
+    int reply_driven = -1;   /* the same join for the drive mark: `undriven` if any record's flow was not a drive */
     DCHECK(url != NULL, "a body was provided for no URL");
     /* What the host sends back must be what the join emitted: an absent method is a host not converted to the
        pair (the JS bridge's `Provide` carries one), and an address in the method's place is that host with its
@@ -3662,8 +3628,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
            issued is engine_pending_fetches' deduplicated line, graded most observed over the records on the pair
            (the argument is at that join). The sets are the same by construction: the join lists a record exactly
            when it has an address and no value, which is the index's membership predicate. Most observed is `min`,
-           because pending.h numbers PROV_OBSERVED < PROV_DERIVED < PROV_FORCED < PROV_DRIVEN as the join's
-           order. */
+           because pending.h numbers PROV_OBSERVED < PROV_DERIVED < PROV_FORCED as the join's order. */
         {
             int rp = (int)pending_get_int(p, PEND_PROV);
 
@@ -3672,6 +3637,12 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
                client's. */
             (void)engine_provenance_token(rp);
             if (reply_prov < 0 || rp < reply_prov) reply_prov = rp;
+        }
+        {
+            int rd = (int)pending_get_int(p, PEND_DRIVEN);
+
+            (void)engine_driven_token(rd);
+            reply_driven = reply_driven < 0 ? rd : (reply_driven && rd);
         }
         pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
         pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
@@ -3703,7 +3674,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
             "a reply filled %d parked record(s) and none of them yielded a provenance — the fold runs on every "
             "record this call writes, so a fill with no grade is a record that reached the write without "
             "passing it. request=%s %s", n, method, url);
-    if (n) reply_decode_learn(ctx, method, url, value, reply_prov);
+    if (n) reply_decode_learn(ctx, method, url, value, reply_prov, reply_driven);
     /* A request answered twice, told apart from one answered for nobody. Every entry naming the request already
        has a reply, so this call wrote none. `n == 0` with nothing matched is the host's pairing being off, the
        caller's assert (it owns the paged-sale credit that can explain it); this case no credit excuses, since a

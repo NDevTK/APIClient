@@ -335,9 +335,9 @@ not. Nothing is refused at every setting.
 | Signal | Values | Reliability |
 |--------|--------|-------------|
 | `destination` | `program`, `subresource`, `navigation`, `value` | stated (engine) |
-| `actor` | `page`, `tool` | certain: a literal in trusted-zone source at every caller, narrowed to `tool` by `provenance=driven` |
-| `provenance` | `observed`, `derived`, `forced`, `driven` | stated (engine) |
-| `doc-reach` | `observed`, `derived`, `forced`, `driven` | stated (the zone that loaded the document) |
+| `actor` | `page`, `tool` | certain: a literal in trusted-zone source at every caller, narrowed to `tool` by the engine's drive mark |
+| `provenance` | `observed`, `derived`, `forced` | stated (engine) |
+| `doc-reach` | `observed`, `derived`, `forced` | stated (the zone that loaded the document) |
 | `cookies` | `yes`, `no` | certain |
 | `header-authority` | `none`, `unknown` | certain |
 | `witness` | `pinned`, `unpinned`, `unstated` | stated (engine) |
@@ -359,12 +359,15 @@ address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`); 
 named (`destination=navigation`, `actor=page`, `provenance=derived`). Probes, discovery and tool-composed data
 requests fire only at an origin a person widened.
 
-`driven` is the engine's word for a request minted inside a flow that is its own act (`flow_path_driven`,
-asserted at `endpoint_record`): a drive of a function the page never called, or a candidate run that re-executes
-the page with a payload the engine chose (an @S breakout, or a witness value under verification). The page's
-code composed it, but it exists because this tool called that code or chose those bytes, so it is this tool's act: the `actor` row reads `tool` for it, and neither the data-request
-arm nor the navigation arm admits it. The engine's word can only narrow `actor`, never widen it. A program or
-subresource load a drive reaches still fires by its destination arm, which is the app's own public code.
+Beside the provenance, every engine record of a request states a drive mark, `driven` or `undriven`
+(`PENDING_DRIVEN_*`, read off `flow_path_driven` and asserted at `endpoint_record`): `driven` means the request
+was minted inside a flow driven by this tool: a drive of a function the page never called, or a candidate run
+that re-executes the page with a payload the engine chose (an @S breakout, or a witness value under
+verification). It is a separate fact from the provenance, because a drive that forced no branch computes its
+values from real inputs and stays `derived`; a candidate's path is marked forced and pinned at the substitution. The
+`actor` row reads it alone: a `page` request that is `driven` reads `tool`, so neither the data-request arm nor
+the navigation arm admits it, while a program or subresource load a drive reaches still fires by its destination
+arm. The mark can only narrow `actor`, never widen it, and a `page` caller must relay it (`_drivenOf`).
 
 - A person widens an origin through the popup's `EGRESS_POLICY` command (`renderEgressPolicy` in `popup.js`,
   which states `initiator: "user-initiated"`). The router admits it only on the document→document rule,

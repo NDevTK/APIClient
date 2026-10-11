@@ -253,7 +253,7 @@ const _ENDPOINT_SOURCES = ["ast_analysis", "ast_shape_origin"];
    popup.html (before lib/popup-send.js, which renders it). A second copy of the three words is two
    vocabularies free to drift, and the drift is silent — a comparison against a word the producer stopped
    emitting is simply never true, and a `forced` endpoint then renders as one the bundle can reach. */
-const CALLSITE_PROVENANCE = Object.freeze(["observed", "derived", "forced", "driven"]);
+const CALLSITE_PROVENANCE = Object.freeze(["observed", "derived", "forced"]);
 
 function isCallSiteProvenance(p) { return CALLSITE_PROVENANCE.indexOf(p) >= 0; }
 
@@ -412,9 +412,7 @@ function provenanceOffersExample(p) {
          " — every producer of a value states the grade of the sighting that computed it, so a word outside " +
          "that set is that producer and this vocabulary having parted, and this predicate would answer " +
          "`offerable` for a value nothing graded");
-  /* `driven` is a sighting inside the engine's drive of uncalled code; its values join the forced pool (see
-     solver/pending.h's PROV_DRIVEN for the residual). */
-  return p !== "forced" && p !== "driven";
+  return p !== "forced";
 }
 
 /* THE PER-VALUE FOLD ITSELF — most-observed, performed as a MOVE BETWEEN POOLS, spelled ONCE.
@@ -581,6 +579,29 @@ function methodProvenance(m, where) {
          "`_astInferred` on every call site it registers, so this record has one half of that write and not " +
          "the other and the row would render with no grade, which a reviewer reads as `not forced`");
   return m._astProvenance;
+}
+
+/* Whose act the engine's sightings of a learned method were: `true` while every sighting was minted inside the
+   engine's drive of a function the page never called (the @H record's `driven`, solver/engine.h's
+   PENDING_DRIVEN_*), `false` once any sighting was the page's own. It is not a grade and decides no pool: a
+   driven method's values are offered by their provenance alone, and this mark is what tells a reviewer that
+   no page path was seen making the request. `null` for a method with no bundle sighting, as
+   `methodProvenance` answers; lib/learn.js writes it beside `_astProvenance`. */
+function methodDriven(m, where) {
+  if (methodProvenance(m, where) === null) return null;
+  DCHECK(typeof m._astDriven === "boolean",
+         "a bundle-inferred method carries the drive mark " + JSON.stringify(m._astDriven) + " (" + where +
+         ") — lib/learn.js writes it beside `_astProvenance` on every call site it registers");
+  return m._astDriven;
+}
+
+/* The fold over sightings: a method is driven only while every sighting is, since one sighting from the page's
+   own code is the page making the request. */
+function drivenJoin(a, b) {
+  DCHECK(typeof a === "boolean" && typeof b === "boolean",
+         "a drive-mark fold was handed " + JSON.stringify(a) + " and " + JSON.stringify(b) + " — endpoint.c " +
+         "writes a boolean on every @H record");
+  return a && b;
 }
 
 /* THE RECORD'S TEMPLATED HOLES AS PER-NAME PAIRS — the ONE read of the two lists together, because a hole is

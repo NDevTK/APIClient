@@ -507,7 +507,7 @@ async function main() {
                                           addresses are this harness's own literals and each `/beacon/` one
                                           is built from a value this run computed, so no page's code is
                                           anywhere in the composition. */
-                                       actor: 'tool',
+                                       actor: 'tool', driven: 'unstated',
                                        docReach: 'observed', credentialed: false });
   if (!probe || typeof probe.status !== 'number')
     record('pna', 'missing', 'safeFetch returned no reply record at all');

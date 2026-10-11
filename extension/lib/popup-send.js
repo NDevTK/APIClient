@@ -101,8 +101,7 @@ function _renderServiceGrouping() {
            this says whether a real client's code composes it at all. A forced-only method inflating the UNUSED
            headline is the fabrication at the level of the COUNT: "N things the bundle can do but didn't", of
            which some are requests no client makes. */
-        const _g = methodProvenance(m, "lib/popup-send.js service summary");
-        if (_g === "forced" || _g === "driven") forced++;
+        if (methodProvenance(m, "lib/popup-send.js service summary") === "forced") forced++;
       }
     }
     if (total > 0) {
@@ -212,6 +211,9 @@ function renderMethodDropdown() {
                field with a rendering instead of a `||`. */
             const prov = methodProvenance(m, "lib/popup-send.js method dropdown");
             if (prov !== null) tag += " [" + prov + "]";
+            /* …and whose act the engine's sightings were: `[driven]` when only the engine's drive of a
+               function the page never called made the request (lib/endpoint-record.js's `methodDriven`). */
+            if (methodDriven(m, "lib/popup-send.js method dropdown") === true) tag += " [driven]";
             /* THE METHOD ID AS THE STORE HOLDS IT. A rewrite stood here that substituted a declared name
                recovered from the page's source map into each `{hole}` of the displayed id (`{e}` → `{owner}`)
                — reading `p._sourceMapName` and `p.location === "path"`. It could not fire, and the reason is

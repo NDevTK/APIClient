@@ -200,6 +200,7 @@ function _chokepointGetFn(tab, who) {
          which is the same sentence `provenance: "derived"` above makes about the PATH and this one makes
          about the CALLER. See safe-fetch.js's `_actorOf`. */
       actor: "tool",
+      driven: "unstated",
       destination: "",
       /* `cors`, the mode of this zone's own `fetch()` (Fetch §5.4 Request class: a request built from a string).
          Its origin is this extension's, which holds `<all_urls>`, so the chokepoint asks it no page-origin CORS

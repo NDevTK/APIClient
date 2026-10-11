@@ -362,14 +362,19 @@ char   *endpoint_razor_hist_json(void);
    the act, and a reply-learned address states the grade of the reply that named it, which is a fact about the
    request that reply answers and never about whatever flow stands when its bytes land. A default would be
    `observed` by the numbering, on a record nobody graded. */
+/* `driven` is whose act the sighting was (solver/engine.h's PENDING_DRIVEN_*), part of the identity beside
+   `prov` and independent of it: running code states `engine_driven_of_running_path()` (asserted against the
+   running flow), and a reply-learned or park address states the request's. */
 /* `door` is which mechanism composed the address, stated by the producer; see ENDPOINT_DOORS. */
 void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
-                        const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int door);
+                        const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int driven,
+                        int door);
 
 /* The @H surface as a malloc'd JSON array (caller frees), one object per record not marked an asset; it is an
    array and not a document because result.h composes the document. Record keys:
      `method`; `url` (the path shape); `bodyMime` with one of `bodyBase64`, `bodyShape` or
-       `bodyExampleBase64` (see EndpointBodyKind); `provenance` (`observed`|`derived`|`forced`); `door`;
+       `bodyExampleBase64` (see EndpointBodyKind); `provenance` (`observed`|`derived`|`forced`); `driven`
+       (a boolean: the sighting was minted inside a drive of a function the page never called); `door`;
        `mintedAt` (`pre-program`|`post-program`); `addressClass`; `razorClass`; `witnessClass`; `witness`
        (below); `addressRoot` (null for a `concrete` address, false when the value has no root, else the
        root's name); `params`; and `headers` (an object, present only when some header was seen).

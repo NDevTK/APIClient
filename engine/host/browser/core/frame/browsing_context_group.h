@@ -190,7 +190,9 @@ void browsing_context_group_release(void);
  * a crash at the decision rather than a load. It is a PARAMETER and never a read of the running flow, for the
  * reason the address beside it is one: this is reached from inside a queued task, by whichever flow adopted
  * it, long after the operation that decided what this navigation is evidence of. */
+/* `driven` (solver/engine.h's PENDING_DRIVEN_*) rides beside `provenance` for the same reason: it is whose act
+ * the navigation is, and the zone's `actor` row reads it. */
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
-                                 SandboxFlags final_sandbox_flags, const char *provenance);
+                                 SandboxFlags final_sandbox_flags, const char *provenance, const char *driven);
 
 #endif

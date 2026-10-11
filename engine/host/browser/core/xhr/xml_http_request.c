@@ -171,6 +171,10 @@ typedef struct {
        is `unpinned`, which is the word that lets a widened origin SPEND the act. An ungraded request would be
        fired rather than refused. */
     int8_t   request_pinned;
+    /* …and whose act the request is (solver/engine.h's `engine_driven_of_running_path`), taken on the same
+       line for the same reason; -1 until §3.5.6 step 6 composes a request, since 0 (`undriven`) would let a
+       drive's request fire as the page's own. */
+    int8_t   request_driven;
 } XhrData;
 
 static JSClassID g_xhr_class;
@@ -703,6 +707,7 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
     d->request_prov = -1;           /* …and the grade goes with the request it is about */
     d->request_pinned = -1;         /* …as does the witness mark composed beside it */
+    d->request_driven = -1;         /* …and the drive mark */
     d->upload_listener = 0;
     /* "Set this's response to a network error", which is the initial value of every response field. */
     d->network_error = 1;
@@ -1873,6 +1878,15 @@ static int xhr_request_pinned(const XhrData *d)
     return d->request_pinned;
 }
 
+/* …and the drive mark, read back and asserted for the witness mark's reason. */
+static int xhr_request_driven(const XhrData *d)
+{
+    DCHECKF(d->request_driven >= 0,
+            "an XMLHttpRequest was asked whose act its request is before XHR §3.5.6 \"The send() method\" step 6 "
+            "composed one. request_driven=%d", (int)d->request_driven);
+    return d->request_driven;
+}
+
 /* Take the host's reply onto the record. A null reply — or none at all — leaves the response a network error,
    which is what §5.5's network error is on the Fetch side too. */
 static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
@@ -2007,7 +2021,7 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
               "XMLHttpRequest: OOM reading back the (method, url) pair a reply answered — the reply register "
               "is keyed on that pair, so a half-named one can only file what it learns under an endpoint "
               "nobody requested");
-        reply_decode_learn(ctx, lm, lu, reply, xhr_request_prov(d));
+        reply_decode_learn(ctx, lm, lu, reply, xhr_request_prov(d), xhr_request_driven(d));
         JS_FreeCString(ctx, lm);
         JS_FreeCString(ctx, lu);
     }
@@ -2227,6 +2241,8 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
        credentials line above records, for the same reason: a seam that spells a vocabulary inline is the only
        place in the engine that can say it, and it says it in a dialect. */
     json_buf_str(&b, engine_pinned_token(xhr_request_pinned(d)));
+    json_buf_raw(&b, ","); json_buf_key(&b, "driven");
+    json_buf_str(&b, engine_driven_token(xhr_request_driven(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
@@ -2390,7 +2406,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
        the sighting, the trusted zone's record and the reply's learning three independent answers to one
        question about one exchange. See the `request_prov` field. */
     endpoint_record(ctx, method, xhr_request_address(d), eh, (int)n, ebp,
-                    xhr_request_prov(d), EPD_XHR);
+                    xhr_request_prov(d), xhr_request_driven(d), EPD_XHR);
     if (body) JS_FreeCString(ctx, body);
     free(body_ct);
     if (owned) {
@@ -2667,6 +2683,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            arm that answers the analysed document's own data requests cannot fire on an act that does not
            carry the fact. */
         d->request_pinned = (int8_t)engine_pinned_of_running_path();
+        d->request_driven = (int8_t)engine_driven_of_running_path();
         /* THE NESTING, ASSERTED WHERE BOTH HALVES ARE IN ONE HAND AND NOWHERE ELSE THEY COULD BE. solver/flow.h
            declares `path_pinned` strictly inside `path_forced`; the park asserts the pair it composes and
            safe-fetch.js's `_firingRefusal` CHECKs the pair it consumes — fatal in release — and this is the
@@ -2680,8 +2697,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            the spelling the chokepoint's own CHECK compares, so the two ends of the contract are asserted in one
            language. */
         DCHECKF(!d->request_pinned ||
-                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_FORCED) ||
-                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_DRIVEN),
+                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_FORCED),
                 "an XMLHttpRequest composed a (provenance, witness) pair no park can hold — provenance `%s` "
                 "with the witness mark SET, where solver/flow.h declares the mark strictly inside the "
                 "forced-path bit. Both come from the running path on adjacent lines, so a disagreement is one "
@@ -3621,6 +3637,7 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     d->network_error = 1;   /* §3: "response — a response, initially a network error" */
     d->request_prov = -1;   /* no request has been composed — see the field */
     d->request_pinned = -1; /* …nor a witness mark for one */
+    d->request_driven = -1; /* …nor a drive mark */
     JS_SetOpaque(obj, d);
     *presult = obj;
     return 0;

@@ -1501,7 +1501,7 @@ static int wpt_issue_pending(void)
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
-        const char *method, *destination, *initiator, *provenance, *pinned, *credentials, *mode, *url;
+        const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
         const char *referrer_policy, *referrer;
         FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the RUNNER's own
                                      HTTP client requests and reach no park, so a zero is the named abort a
@@ -1519,17 +1519,18 @@ static int wpt_issue_pending(void)
            WHO ASKED and of WHAT THE REQUEST IS EVIDENCE OF is the zone that talks to the real web
            (engine/trusted.mjs); what is owed here is the vocabulary assert, because a runner that read a field
            it never checked would be the first to see the producer drift. */
-        engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &credentials, &mode,
-                             &referrer_policy, &referrer, &url);
+        engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
+                             &mode, &referrer_policy, &referrer, &url);
+        DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
+               "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
         DCHECK(!strcmp(pinned, PENDING_PINNED_YES) || !strcmp(pinned, PENDING_PINNED_NO),
                "the pending join stated a pinned mark that is neither token engine.h declares");
         DCHECK(!strcmp(provenance, PENDING_PROVENANCE_OBSERVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
-               !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
-               !strcmp(provenance, PENDING_PROVENANCE_DRIVEN),
-               "the pending join stated a provenance that is none of the four tokens engine.h declares");
+               !strcmp(provenance, PENDING_PROVENANCE_FORCED),
+               "the pending join stated a provenance that is none of the three tokens engine.h declares");
         /* …AND FETCH §2.2.5's CREDENTIALS MODE, ASSERTED THE SAME WAY AND THROUGH THE ONE MAPPING THAT OWNS
            THE THREE WORDS (core/fetch/fetch.h). This runner's loopback corpus has no session to spend, so it
            issues every park whatever the mode says — but the vocabulary is the producer's contract and this
@@ -1866,7 +1867,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[17]; int nf = 0; char *q;
+    char *f[19]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -1875,9 +1876,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 18; q++)
+    for (q = line, f[nf++] = q; *q && nf < 19; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 18 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 19 && !strcmp(f[0], "navigable.create")) {
         /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
            7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
            report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
@@ -1892,7 +1893,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            and not a derivation of those two: its steps read the parent Document's own recorded list, that
            Document's ORIGIN RECORD and the container element, and the origin RECORD is exactly what a
            serialization drops — §7.1.1 decides an opaque origin by IDENTITY. They all come BEFORE the policy
-           at FIELD 16 because the policy is the record's remainder: neither an origin's serialization, nor an
+           at FIELD 18 because the policy is the record's remainder: neither an origin's serialization, nor an
            §7.1.4 value's token, nor remote_object.h's base64 identity, nor §4.1's feature tokens with §4.2's
            two words, nor a SPACE-separated list of origin serializations (URL §3.2 "Host miscellaneous" makes
            both TAB and SPACE forbidden host code points) can contain a tab, while a raw CSP header may.
@@ -1900,7 +1901,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            statement about it rather than an item of the container, since §7.1.7's container is five policies
            and none of them is a flag set. §7.1.5's two inputs are the embedder ELEMENT's iframe sandboxing
            flag set and that element's node document's active set, so the algorithm runs in the instance that
-           holds the element and its RESULT crosses. It sits before the policy at FIELD 16 for the reason
+           holds the element and its RESULT crosses. It sits before the policy at FIELD 18 for the reason
            everything else does, and its members are separated by COMMA rather than by the SPACE that joins
            §3.1.3's list and §9.5's answer: §7.1.5's flag names CONTAIN SPACES ("sandboxed navigation browsing
            context flag"), so a space-joined set could not be taken apart at all.
@@ -1920,35 +1921,40 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            record, naming what moved. That is the same read wpt_route_pending already makes of the pending
            line's provenance for the same reason — counted, never acted on. */
         DCHECK(!strcmp(f[15], PENDING_PROVENANCE_OBSERVED) || !strcmp(f[15], PENDING_PROVENANCE_DERIVED) ||
-               !strcmp(f[15], PENDING_PROVENANCE_FORCED) || !strcmp(f[15], PENDING_PROVENANCE_DRIVEN),
+               !strcmp(f[15], PENDING_PROVENANCE_FORCED),
                "the create notice's fifteenth field is not one of the three provenance tokens engine.h "
                "declares — a field was inserted into the record and this walk's indices did not move with it, "
                "so the CSP container below is about to be taken from one field too early and the policy text "
                "carries the token that displaced it");
         /* FIELD 16 IS WHICH BROWSING CONTEXT GROUP THE NEW NAVIGABLE IS IN, `creator` or `new` (HTML §7.3.1.7's
            noopener arm). This runner provisions one child per notice and keys nothing on a group, so it reads
-           the token for the grammar only, as it reads field 15, and the policy is FIELD 17. */
+           the token for the grammar only, as it reads field 15. */
         DCHECK(!strcmp(f[16], "creator") || !strcmp(f[16], "new"),
                "the create notice's sixteenth field is not `creator` or `new` — a field was inserted into the "
                "record and this walk's indices did not move with it, so the policy below is one field early");
-        wpt_spawn_child(f[1], f[3], f[4], f[17], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
+        /* Field 17 is whose act the navigation is (solver/engine.h's PENDING_DRIVEN_*), read for the same
+           grammar check and for no decision. */
+        DCHECK(!strcmp(f[17], PENDING_DRIVEN_YES) || !strcmp(f[17], PENDING_DRIVEN_NO),
+               "the create notice's seventeenth field is not a drive-mark token engine.h declares — the walk's "
+               "indices and the record's fields have parted");
+        wpt_spawn_child(f[1], f[3], f[4], f[18], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
                         f[14]);
         free(whole);
         return;
     }
-    /* `navigable.swap <new doc> <url> <origin> <provenance>` — HTML §7.1.3.2's browsing context group SWAP,
+    /* `navigable.swap <new doc> <url> <origin> <provenance> <driven>` — HTML §7.1.3.2's browsing context group SWAP,
        which is the SAME provisioning act and a different record because the two operations differ in every
        field the create carries beyond these. There is no CREATOR (§7.3.2.3 creates the new browsing context
        "with null, null, and group"), so there is no policy container to clone and no opener policy to inherit;
        and the swapped-to navigable IS a top-level traversable, so HTML §8.1.3.1's top-level creation URL for
        its environments is its own address rather than something only the creator could state. Hence the empty
        policy and the address passed twice below — derived here, not sent twice and able to disagree.
-       THE FOURTH FIELD IS THE NAVIGATION'S PROVENANCE and this host reads it nowhere, for the create arm's
+       THE FOURTH AND FIFTH FIELDS ARE THE NAVIGATION'S PROVENANCE AND DRIVE MARK and this host reads them nowhere, for the create arm's
        reason exactly: a corpus fetch spends no session. It is COUNTED and not read, which is what keeps a
        record that grew from arriving here as a record that is merely long.
        A NEW GROUP IS A NEW PROCESS HERE FOR THE SAME REASON A CROSS-ORIGIN CHILD IS: SECURITY.md keys an
        instance on `(browsing context group, origin)`, and a swap changes the first half. */
-    if (nf == 5 && !strcmp(f[0], "navigable.swap")) {
+    if (nf == 6 && !strcmp(f[0], "navigable.swap")) {
         /* NO CREATOR MEANS NO CONTAINER TO CLONE, so both halves of the CSP list are empty rather than one of
            them being guessed at — an empty policy resolves no `'self'`, so there is no self-origin to state.
            §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" FOR THE SAME REASON AND IS SPELLED OUT RATHER THAN LEFT
@@ -1976,13 +1982,13 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
-    /* `navigable.navigate <new doc> <url> <origin> <provenance>` — a TOP-LEVEL traversable whose navigation
+    /* `navigable.navigate <new doc> <url> <origin> <provenance> <driven>` — a TOP-LEVEL traversable whose navigation
        response's origin is another agent's, with §7.1.3.2 keeping the browsing context (core/frame/navigable.c's
        nav_navigate_to_peer). The child this provisions is the swap's in every field: a top-level document with
        no creator-side container, no parent, no element presenting it and its own address as its environments'
        top-level creation URL — the browsing context is kept, but nothing a creator would clone exists for a
-       top-level navigation. The provenance is counted and not read, for the create arm's reason. */
-    if (nf == 5 && !strcmp(f[0], "navigable.navigate")) {
+       top-level navigation. The provenance and drive mark are counted and not read, for the create arm's reason. */
+    if (nf == 6 && !strcmp(f[0], "navigable.navigate")) {
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
@@ -2031,7 +2037,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
-    /* `document.seed <address> <provenance>` — an address the DOCUMENT UNDER TEST declared is a page of its own
+    /* `document.seed <address> <provenance> <driven>` — an address the DOCUMENT UNDER TEST declared is a page of its own
        application (solver/route_seed.h), reached whenever a test calls `history.pushState` with a URL, which
        `html/browsers/browsing-the-web/history-*` and half of `navigation-api` do on purpose.
        THIS HOST'S ANSWER IS A REFUSAL AND IT IS A POSITIVE ONE, in the same shape as the two records below it:
@@ -2045,16 +2051,17 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        THE GRAMMAR IS STILL ASSERTED. A record that arrives malformed is a WRITER that has changed, and that is
        a defect whatever this host would then do with it — so the fields are checked here even though the
        record is discarded, rather than the check living only in the zone that acts on one. */
-    if (nf == 3 && !strcmp(f[0], ROUTE_SEED_NOTICE)) {
+    if (nf == 4 && !strcmp(f[0], ROUTE_SEED_NOTICE)) {
         DCHECK(*f[1] != '\0',
                "a route declaration named no address — solver/route_seed.c refuses an empty one at the "
                "emitting end, so a record that arrives with one is a writer this host no longer shares a "
                "grammar with and the field it read as an address is somebody else's");
-        DCHECK(!strcmp(f[2], PENDING_PROVENANCE_DERIVED) || !strcmp(f[2], PENDING_PROVENANCE_FORCED) ||
-               !strcmp(f[2], PENDING_PROVENANCE_DRIVEN),
+        DCHECK(!strcmp(f[2], PENDING_PROVENANCE_DERIVED) || !strcmp(f[2], PENDING_PROVENANCE_FORCED),
                "a route declaration carries a provenance token that is neither `derived` nor `forced` — a "
                "declaration is made by RUNNING the page's code and no load of anything produces one, so "
                "`observed` is unreachable for it and any other word is a field read at the wrong offset");
+        DCHECK(!strcmp(f[3], PENDING_DRIVEN_YES) || !strcmp(f[3], PENDING_DRIVEN_NO),
+               "a route declaration carries a drive mark that is neither token engine.h declares");
         free(whole);
         return;
     }
@@ -2218,22 +2225,19 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                flow that would. The answer is built at the completion (wpt_request_finish's DOCUMENT arm),
                which is where the response's header list and its bytes arrive together. */
             if (!wpt_request_asked_id(id)) {
-                /* `document.fetch<TAB><provenance><TAB><url>` — TWO tabs, and the ADDRESS IS THE REMAINDER.
-                   The provenance is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for this navigation
-                   and this host reads it nowhere, for the notice router's reason above: a corpus fetch at
-                   wptserve spends no session and has no person to act as, so it makes no firing decision and
-                   states none. What it must do is SKIP the field rather than take the line's tail for a URL,
-                   which is why the address is found past the SECOND tab: one `strchr` here would have GET the
-                   nine characters `derived<TAB>` glued to every navigated address in the corpus.
-                   ASSERTED, because a record whose second tab is missing is the two grammars having parted and
-                   the arithmetic below would then run off this buffer. */
-                char *url_at = strchr(strchr(op, '\t') + 1, '\t');
+                /* `document.fetch<TAB><provenance><TAB><driven><TAB><url>` — the ADDRESS IS THE REMAINDER past
+                   the third tab. The provenance and drive mark are read nowhere here, for the notice router's
+                   reason above: a corpus fetch at wptserve spends no session, so this host makes no firing
+                   decision. It must skip both fields rather than take the line's tail for a URL. */
+                char *prov_at = strchr(op, '\t');
+                char *drv_at = prov_at ? strchr(prov_at + 1, '\t') : NULL;
+                char *url_at = drv_at ? strchr(drv_at + 1, '\t') : NULL;
 
                 DCHECK(url_at != NULL && url_at[1],
-                       "a document.fetch request carried no ADDRESS after its provenance — the load job writes "
-                       "`document.fetch<TAB><provenance><TAB><url>` (core/frame/navigable.c) and both fields "
-                       "are non-empty on every path, so one tab means this host and that job no longer share a "
-                       "grammar and the URL read here would be a provenance token");
+                       "a document.fetch request carried no ADDRESS after its provenance and drive mark — the "
+                       "load job writes `document.fetch<TAB><provenance><TAB><driven><TAB><url>` "
+                       "(core/frame/navigable.c), so a missing tab means this host and that job no longer share "
+                       "a grammar");
                 req.method = "GET";
                 req.url = url_at + 1;
                 /* §7.4.5's navigation request, whose destination is Fetch §2.2.5's `document` — HTML's

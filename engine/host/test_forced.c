@@ -746,7 +746,7 @@ static int fixture_provide(JSContext *ctx) {
         const char *nl = strchr(urls, '\n');
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
-        const char *method, *destination, *initiator, *provenance, *pinned, *credentials, *mode, *url;
+        const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
         const char *referrer_policy, *referrer;
         UrlRecord rec;
         char *abs;
@@ -755,7 +755,7 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>
+        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
            REFERRER_POLICY<TAB>REFERRER<TAB>URL` AND IT IS SPLIT BY THE
            ENGINE'S OWN SPLITTER — the reply seam is keyed on the pair, so a fixture that answered the whole
            line as an address would match nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT
@@ -764,17 +764,18 @@ static int fixture_provide(JSContext *ctx) {
            anything. What is asserted here is their VOCABULARY, which is the producer's contract and is exactly
            what a fixture is for; the DESTINATION's is asserted inside the splitter against Fetch §2.2.5's own
            enumeration, which is too long to restate at each host and is one table for that reason. */
-        engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &credentials, &mode,
-                             &referrer_policy, &referrer, &url);
+        engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
+                             &mode, &referrer_policy, &referrer, &url);
+        DCHECK(!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO),
+               "the pending join stated a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
         DCHECK(!strcmp(pinned, PENDING_PINNED_YES) || !strcmp(pinned, PENDING_PINNED_NO),
                "the pending join stated a pinned mark that is neither token engine.h declares");
         DCHECK(!strcmp(provenance, PENDING_PROVENANCE_OBSERVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
-               !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
-               !strcmp(provenance, PENDING_PROVENANCE_DRIVEN),
-               "the pending join stated a provenance that is none of the four tokens engine.h declares");
+               !strcmp(provenance, PENDING_PROVENANCE_FORCED),
+               "the pending join stated a provenance that is none of the three tokens engine.h declares");
         /* …AND FETCH §2.2.5's CREDENTIALS MODE, through the one mapping that owns the three words
            (core/fetch/fetch.h), which is fatal on a word §2.2.5 does not define — so the call IS the assert
            and this fixture reads the field it is handed rather than dropping it. */
@@ -5230,8 +5231,10 @@ static int hostreq_answer_all(JSContext *ctx)
             !memcmp(nz, ROUTE_SEED_NOTICE "\t", sizeof(ROUTE_SEED_NOTICE))) {
             const char *addr = nz + sizeof(ROUTE_SEED_NOTICE);
             const char *tab = memchr(addr, '\t', len - sizeof(ROUTE_SEED_NOTICE));
+            const char *dtab;
             size_t alen;
             size_t plen;
+            size_t dlen;
 
             DCHECK(tab != NULL,
                    "a route declaration carried no PROVENANCE after its address — solver/route_seed.c writes "
@@ -5239,7 +5242,17 @@ static int hostreq_answer_all(JSContext *ctx)
                    "having parted, and the field this host would read as an address is the whole record");
             if (!tab) { nz = end ? end + 1 : nz + len; continue; }
             alen = (size_t)(tab - addr);
-            plen = len - (size_t)(tab + 1 - nz);
+            /* …and the drive mark after the provenance, the record's last field. */
+            dtab = memchr(tab + 1, '\t', len - (size_t)(tab + 1 - nz));
+            DCHECK(dtab != NULL,
+                   "a route declaration carried no DRIVE MARK after its provenance — solver/route_seed.c writes "
+                   "`document.seed<TAB><address><TAB><provenance><TAB><driven>` with one snprintf");
+            if (!dtab) { nz = end ? end + 1 : nz + len; continue; }
+            plen = (size_t)(dtab - (tab + 1));
+            dlen = len - (size_t)(dtab + 1 - nz);
+            DCHECK((dlen == strlen(PENDING_DRIVEN_YES) && !memcmp(dtab + 1, PENDING_DRIVEN_YES, dlen)) ||
+                   (dlen == strlen(PENDING_DRIVEN_NO) && !memcmp(dtab + 1, PENDING_DRIVEN_NO, dlen)),
+                   "a route declaration stated a drive mark that is neither token engine.h declares");
             DCHECK(alen > 0, "a route declaration named no address — the emitter refuses an empty one, so an "
                              "empty field here is a record split at the wrong tab");
             /* TWO RUNGS, because they are two different failures. The first is the one this record can be
@@ -5257,12 +5270,9 @@ static int hostreq_answer_all(JSContext *ctx)
             DCHECK((plen == strlen(PENDING_PROVENANCE_DERIVED) &&
                     !memcmp(tab + 1, PENDING_PROVENANCE_DERIVED, plen)) ||
                    (plen == strlen(PENDING_PROVENANCE_FORCED) &&
-                    !memcmp(tab + 1, PENDING_PROVENANCE_FORCED, plen)) ||
-                   (plen == strlen(PENDING_PROVENANCE_DRIVEN) &&
-                    !memcmp(tab + 1, PENDING_PROVENANCE_DRIVEN, plen)),
-                   "a route declaration stated a provenance that is none of `derived`, `forced` and `driven` — "
-                   "the only three words a declaration can carry, so any other is a field read at the wrong "
-                   "offset");
+                    !memcmp(tab + 1, PENDING_PROVENANCE_FORCED, plen)),
+                   "a route declaration stated a provenance that is neither `derived` nor `forced` — the only "
+                   "two words a declaration can carry, so any other is a field read at the wrong offset");
             g_seed_declarations++;
             if (alen == strlen(FIXTURE_DECLARED_ROUTE) &&
                 !memcmp(addr, FIXTURE_DECLARED_ROUTE, alen) &&
@@ -5325,15 +5335,14 @@ static int hostreq_answer_all(JSContext *ctx)
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
-                /* `document.fetch<TAB><provenance><TAB><url>` — the ADDRESS IS THE REMAINDER, past the SECOND
-                   tab. The provenance is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for this
-                   navigation and this fixture reads it nowhere: it stands in for a trusted zone's network and
-                   has no session to spend, so it makes no firing decision and states none. Skipping the field
-                   is not optional, though — taking the tail for a URL would serve every navigated document
-                   under an address with a provenance token glued to its front, which the response-URL write
-                   below would then make that Document's ORIGIN. */
+                /* `document.fetch<TAB><provenance><TAB><driven><TAB><url>` — the ADDRESS IS THE REMAINDER,
+                   past the THIRD tab. This fixture reads the provenance and drive mark nowhere: it stands in
+                   for a trusted zone's network and has no session to spend. Skipping both is not optional —
+                   the response-URL write below would make a glued token part of that Document's ORIGIN. */
                 const char *prov_end = memchr(tab + 1 + 15, '\t', (size_t)(end - (tab + 1 + 15)));
-                const char *asked = prov_end ? prov_end + 1 : end;
+                const char *drv_end = prov_end ? memchr(prov_end + 1, '\t', (size_t)(end - (prov_end + 1)))
+                                               : NULL;
+                const char *asked = drv_end ? drv_end + 1 : end;
 
                 v = JS_NewObject(ctx);
                 /* FETCH §2.2.6 "Responses"' RESPONSE URL, WHICH THIS FIXTURE SERVES OUT OF A LITERAL AND
@@ -5342,12 +5351,11 @@ static int hostreq_answer_all(JSContext *ctx)
                    satisfy a reader. HTML §7.4.5 determines the loaded Document's ORIGIN over this string, so a
                    host that DID redirect would put a different one here and the Document would belong to
                    another agent cluster. */
-                DCHECK(prov_end != NULL && asked < end,
-                       "a document.fetch request carried no address after its provenance — the load job writes "
-                       "`document.fetch<TAB><provenance><TAB><url>` with an absolute serialization and a "
-                       "non-empty token from solver/engine.h's three (core/frame/navigable.c), so a missing "
-                       "second tab or an empty tail is that record's two ends disagreeing rather than a page "
-                       "navigating to nothing");
+                DCHECK(drv_end != NULL && asked < end,
+                       "a document.fetch request carried no address after its provenance and drive mark — the "
+                       "load job writes `document.fetch<TAB><provenance><TAB><driven><TAB><url>` "
+                       "(core/frame/navigable.c), so a missing tab or an empty tail is that record's two ends "
+                       "disagreeing rather than a page navigating to nothing");
                 JS_DefinePropertyValueStr(ctx, v, "url",
                                           JS_NewStringLen(ctx, asked, (size_t)(end - asked)), JS_PROP_C_W_E);
                 /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one.

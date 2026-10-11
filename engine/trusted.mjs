@@ -512,7 +512,7 @@ async function main() {
      exactly the kind nothing tests. */
   const seed = await ZONE.safeFetch(target, { pageUrl: target, destination: 'document', mode: 'navigate',
                                               provenance: 'observed', pinned: 'unpinned',
-                                              actor: 'tool',
+                                              actor: 'tool', driven: 'unstated',
                                               docReach: 'observed', credentialed: false });
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
@@ -605,13 +605,13 @@ async function main() {
      feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
      engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
      rather than by SPACE, because that section's flag names CONTAIN spaces.
-     THE POLICY IS THE REMAINDER FROM FIELD 17 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
+     THE POLICY IS THE REMAINDER FROM FIELD 18 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
      not fail, it silently joins the field before the policy onto the FRONT of it, which is a creator's CSP
      arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. The
-     PROVENANCE (field 15) and the GROUP (field 16) are not in this list: they decide the LOAD and which
+     PROVENANCE (field 15), the GROUP (field 16) and the DRIVE MARK (field 17) are not in this list: they decide the LOAD and which
      instance hosts it, not the Document the child instance is built from. */
   const createFacts = (f) =>
-    [f[5], b64(f.slice(17).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
+    [f[5], b64(f.slice(18).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -796,16 +796,17 @@ async function main() {
      empty byte sequence is the `about:blank`-shaped one the engine's own child_document builds. The ADDRESS
      is then the one that was asked for, because a refusal has no response URL to have been redirected to, and
      saying so is a fact about this zone's own network rather than a field filled to satisfy a reader. */
-  /* `fromReach` IS HOW THE DOCUMENT ISSUING THIS NAVIGATION WAS ITSELF REACHED, AND IT IS A DIFFERENT FACT
-     FROM `provenance` — which is why it is a fifth operand rather than something derived from the fourth.
-     `provenance` is the ENGINE's word about this navigation act; `fromReach` is THIS ZONE's word about a
-     load it performed before the issuing document existed, and the chokepoint reads both. It is trailing, so
-     no existing operand shifts; a caller that forgets it composes `undefined`, which `_docReachOf` refuses
-     with a fatal CHECK rather than taking a permissive arm.
+  /* `driven` is the engine's drive mark for this navigation (`driven`/`undriven`, off the same record as
+     `provenance`): the chokepoint's `actor` row reads it, so a drive's navigation is this tool's act.
+     `fromReach` IS HOW THE DOCUMENT ISSUING THIS NAVIGATION WAS ITSELF REACHED, AND IT IS A DIFFERENT FACT
+     FROM `provenance`. `provenance` is the ENGINE's word about this navigation act; `fromReach` is THIS
+     ZONE's word about a load it performed before the issuing document existed, and the chokepoint reads both.
+     A caller that forgets it composes `undefined`, which `_docReachOf` refuses with a fatal CHECK rather than
+     taking a permissive arm.
      WHAT THE DOCUMENT THIS PRODUCES WILL BE REACHED UNDER IS NOT THIS VALUE — it is the JOIN of the two
      (`safeFetchReachJoin`), composed by the caller at `provision`, because a child of a page this tool chose
      to open is a page this tool chose to open however the engine graded the navigation that created it. */
-  async function navigate(url, fromDocUrl, what, provenance, fromReach) {
+  async function navigate(url, fromDocUrl, what, provenance, driven, fromReach) {
     const abs = new URL(url, fromDocUrl).href;
 
     /* THE PROVENANCE IS THE WHOLE DECISION AND IT IS STATED BY THE CALLER, never derived here, and one whose
@@ -856,7 +857,7 @@ async function main() {
        fewer facts than the real request states is a question about a different request. */
     const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination: 'document', provenance,
                                                   pinned: 'unstated', docReach: fromReach, actor: 'page',
-                                                  credentialed: false, headers: null });
+                                                  driven, credentialed: false, headers: null });
     if (refusal)
       return { declined: `${what} ${abs} — a DOCUMENT LOAD this origin's egress policy refuses on ` +
                          `\`${refusal}\`, which names the SIGNAL and the VALUE that held it rather than a ` +
@@ -881,7 +882,7 @@ async function main() {
     const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
                                                         mode: 'navigate',
                                                         provenance, pinned: 'unstated', docReach: fromReach,
-                                                        actor: 'page',
+                                                        actor: 'page', driven,
                                                         credentialed: false }),
                             `${what} ${abs}`);
     /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
@@ -900,7 +901,7 @@ async function main() {
      refusal is §3.5.6's network error, an answer with no body, so the page's XHR runs its error steps. */
   const workXhr = async (e, id, record) => {
     const q = JSON.parse(record);
-    for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned'])
+    for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned', 'driven'])
       if (typeof q[k] !== 'string' || q[k] === '')
         throw new Error(`the engine's xhr.send record states no \`${k}\` — xhr_request_op writes every field`);
     if (!Array.isArray(q.headers))
@@ -918,7 +919,7 @@ async function main() {
     if (methodRefusal) { e.ready.push(declineAnswer(id, `${q.method} ${q.url} — ${methodRefusal.reason}`)); return; }
     const abs = new URL(q.url, e.docUrl).href;
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination: '',
-                                            mode: q.mode, provenance: q.provenance, pinned: q.pinned,
+                                            mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
                                             actor: 'page', docReach: e.docReach, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined,
@@ -936,7 +937,7 @@ async function main() {
     e.ready.push(['answer', String(id), b64(JSON.stringify(meta)), '0', rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
-  const workFetch = async (e, method, destination, initiator, provenance, pinned, credentials, mode,
+  const workFetch = async (e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
                            referrerPolicy, referrer, url) => {
     const abs = new URL(url, e.docUrl).href;
     /* EVERY ANSWER THIS FUNCTION HAS LEAVES THROUGH ONE DOOR, AND THE DOOR IS WHAT RELEASES THE KEY. Pushing
@@ -1040,7 +1041,7 @@ async function main() {
     /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
        which a GET cannot carry. */
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination, mode,
-                                            provenance, pinned, credentials, useCorsPreflight: false,
+                                            provenance, pinned, driven, credentials, useCorsPreflight: false,
                                             actor: 'page',
                                             docReach: e.docReach, credentialed: false,
                                             identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
@@ -1069,7 +1070,7 @@ async function main() {
          question about THAT request and not about a simpler one. `credentialed: false` is what `fetched`
          passes and `headers: null` is what a park carries here. */
       const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
-                                                    actor: 'page',
+                                                    actor: 'page', driven,
                                                     docReach: e.docReach, credentialed: false, headers: null });
       if (!refusal) {
         settle(declineRequest(method, mode, referrerPolicy, referrer, url,
@@ -1221,14 +1222,15 @@ async function main() {
     if (f[0] === 'navigable.create') {
       /* EIGHTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one
          an unmoved count would let arrive as `undefined`, and every one of them below is read. */
-      if (f.length < 18 || (f[16] !== 'creator' && f[16] !== 'new'))
+      if (f.length < 19 || (f[16] !== 'creator' && f[16] !== 'new') ||
+          (f[17] !== 'driven' && f[17] !== 'undriven'))
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
                         'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
                         '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s parent ' +
                         'navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ' +
                         'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION ' +
                         'is evidence of, which browsing context group the navigable is in (`creator` or ' +
-                        '`new`), and the policy');
+                        '`new`), whose act it is, and the policy');
       /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
          against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
          re-announcing it under the same name. A second instance would give one document two heaps and two
@@ -1254,7 +1256,7 @@ async function main() {
          neither script-like nor a subresource, and the `value` arm wants a `witness=unpinned` a navigation
          cannot state. The clause is kept because a reader re-derives it from CLAUDE.md's own sentence, and
          because a caller that believes it deletes the `--explore` its own fixture needs. */
-      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, f[15], e.docReach);
+      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, f[15], f[17], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
@@ -1302,7 +1304,7 @@ async function main() {
                         referenced: 1 });
       return;
     }
-    /* `navigable.swap <new document> <url> <origin> <provenance>` — HTML §7.1.3.2 "Browsing context group switches due to
+    /* `navigable.swap <new document> <url> <origin> <provenance> <driven>` — HTML §7.1.3.2 "Browsing context group switches due to
        opener policy": a navigation whose response's opener policy does not match its navigable's active
        document's builds that Document in a NEW top-level browsing context in a NEW browsing context group. It
        is the same provisioning act and a different record because §7.3.2.3 creates that context "with null,
@@ -1311,14 +1313,14 @@ async function main() {
        URL. A new GROUP is a new instance for the same reason a cross-origin child is: SECURITY.md keys one on
        `(browsing context group, origin)` and a swap changes the first half. */
     if (f[0] === 'navigable.swap') {
-      if (f.length < 5 || !f[1] || !f[2] || !f[4])
+      if (f.length < 6 || !f[1] || !f[2] || !f[4] || !f[5])
         throw new Error(`a navigable.swap notice was short of its fields: ${record} — the fourth is what the ` +
                         'navigation that caused the swap is EVIDENCE OF, taken off that navigation\'s own ' +
                         'load job (core/frame/browsing_context_group.c), and the load below is decided from it');
       if (holderOf(f[1])) return;
       /* AND IT IS THE SAME NAVIGATION'S WORD, which is what keeps a swap from being a door an address this
          zone declined at `document.fetch` could be fetched through one notice later. */
-      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`, f[4], e.docReach);
+      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`, f[4], f[5], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE NAMED IT" IS THE WRONG READING. §7.1.3.2 step
          10's note says the old browsing context "will not be used by the new Document that we are about to
@@ -1338,19 +1340,20 @@ async function main() {
                         group: newGroup(), referenced: 0 });
       return;
     }
-    /* `navigable.navigate <new document> <url> <origin> <provenance>` — a TOP-LEVEL traversable navigated to a
+    /* `navigable.navigate <new document> <url> <origin> <provenance> <driven>` — a TOP-LEVEL traversable navigated to a
        response whose origin is another agent's, with HTML §7.1.3.2 keeping the browsing context: the incoming
        Document is built in a peer instance and the emitting instance's navigable becomes a remote one over it
        (core/frame/navigable.c's nav_navigate_to_peer). The provisioning is the swap's — a top-level document at
        this address, loaded by this zone under the navigation's word — and the difference is `referenced`: the
        emitting instance's proxy names this document, so its timelines may not run out under a read. */
     if (f[0] === 'navigable.navigate') {
-      if (f.length < 5 || !f[1] || !f[2] || !f[4])
+      if (f.length < 6 || !f[1] || !f[2] || !f[4] || !f[5])
         throw new Error(`a navigable.navigate notice was short of its fields: ${record} — the engine writes the ` +
-                        'new document\'s name, the address, the origin it computed and the navigation\'s ' +
-                        'provenance (core/frame/navigable.c), and the load below is decided from the last');
+                        'new document\'s name, the address, the origin it computed, the navigation\'s ' +
+                        'provenance and its drive mark (core/frame/navigable.c), and the load below is decided ' +
+                        'from the last two');
       if (holderOf(f[1])) return;
-      const loaded = await navigate(f[2], e.docUrl, `navigable.navigate ${f[1]}`, f[4], e.docReach);
+      const loaded = await navigate(f[2], e.docUrl, `navigable.navigate ${f[1]}`, f[4], f[5], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
@@ -1358,7 +1361,7 @@ async function main() {
                         group: e.group, referenced: 1 });
       return;
     }
-    /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
+    /* `document.seed <address> <provenance> <driven>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
        HTML §7.4.4 "Non-fragment synchronous \"navigations\""' URL and history update steps (which is where
        every client-side router's `history.pushState` ends up). It is the one document this zone provisions
        that nothing NAVIGATED to: the bundle merely NAMED the route, which is precisely the surface
@@ -1384,19 +1387,19 @@ async function main() {
        already exploring would run one page twice under two heaps. Nothing is refused — the address keeps its
        instance, and this driver's session is one pass over one document rather than a frontier that re-visits. */
     if (f[0] === 'document.seed') {
-      if (f.length < 3 || !f[1] || !f[2])
+      if (f.length < 4 || !f[1] || !f[2] || !f[3])
         throw new Error(`a document.seed notice was short of its fields: ${record} — solver/route_seed.c ` +
-                        'writes the ADDRESS and the PROVENANCE with one snprintf, and the second is the ' +
-                        'whole of what this zone decides whether to load it from');
-      if (f[2] !== 'derived' && f[2] !== 'forced' && f[2] !== 'driven')
-        throw new Error(`a document.seed notice states the provenance \`${f[2]}\`, which is none of ` +
-                        '`derived`, `forced` and `driven` — a declaration is made by RUNNING the page\'s code and no ' +
+                        'writes the ADDRESS, the PROVENANCE and the DRIVE MARK with one snprintf, and the ' +
+                        'last two are what this zone decides whether to load it from');
+      if (f[2] !== 'derived' && f[2] !== 'forced')
+        throw new Error(`a document.seed notice states the provenance \`${f[2]}\`, which is neither ` +
+                        '`derived` nor `forced` — a declaration is made by RUNNING the page\'s code and no ' +
                         'load of anything produces one, so `observed` is unreachable on this record and any ' +
                         'other word is a field read at the wrong tab');
       const seedAbs = new URL(f[1], e.docUrl).href;
       if (seededRoutes.has(seedAbs)) return;
       seededRoutes.add(seedAbs);
-      const loaded = await navigate(seedAbs, e.docUrl, `document.seed ${seedAbs}`, f[2], e.docReach);
+      const loaded = await navigate(seedAbs, e.docUrl, `document.seed ${seedAbs}`, f[2], f[3], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* A TOP-LEVEL TRAVERSABLE WITH NO CREATOR — nothing embedded this document and nothing opened it, so
          §7.1.7 has no container to clone, §7.3.1.3 gives it no parent and no container element, and §3.1.3's
@@ -1663,15 +1666,15 @@ async function main() {
     }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 11)
+      if (f.length !== 12)
         throw new Error('the host announced a fetch that is not ' +
-                        '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>' +
+                        '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>' +
                         'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`: ' +
                         `${line} — the bill is ` +
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
-      const [, method, destination, initiator, provenance, pinned, credentials, mode, referrerPolicy, referrer,
-             url] = f;
+      const [, method, destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
+             referrer, url] = f;
       /* The request's referrer policy (after Fetch §4.1 "Main fetch" gave an empty one the policy container's)
          and its referrer ("no-referrer" or a URL), both part of the identity the reply is keyed on;
          extension/bridge.js's `pendingRequest` asserts the same shape. */
@@ -1692,7 +1695,7 @@ async function main() {
          the answer was composed, so working it a second time would fetch one address twice for one park. Once
          the write goes out the key is released and the next announcement is a FRESH park (see `track`). */
       if (e.answered.has(key)) return;
-      track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, credentials, mode,
+      track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
                               referrerPolicy, referrer, url));
     } else if (f[0] === 'request') {
       const id = Number(f[1]), op = f.slice(2).join('\t');
@@ -1710,7 +1713,7 @@ async function main() {
       if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
         askOperation(e, id, op);
       } else if (op.startsWith('document.fetch\t')) {
-        /* `document.fetch<TAB><provenance><TAB><url>` — §7.4.5's load for a document THIS instance holds,
+        /* `document.fetch<TAB><provenance><TAB><driven><TAB><url>` — §7.4.5's load for a document THIS instance holds,
            answered here rather than routed, because routing a same-origin load to a peer would be answering
            it out of another agent.
            THE RECORD STATES ITS PROVENANCE NOW AND THIS ARM USED TO PASS `null` FOR IT — `navigate`'s own word
@@ -1719,19 +1722,20 @@ async function main() {
            names the same word its cross-agent twin above carries, taken off the same load job, so the two
            callers reach one decision from one fact: the agent boundary decides WHERE a document is built and
            never WHETHER this zone may spend the network on it.
-           SPLIT AT THE FIRST TAB AFTER THE VERB, ADDRESS LAST — a URL cannot contain a tab (URL Standard §4.4
-           "URL parsing" strips every ASCII tab from its input) and the vocabulary in front of it is three
-           words of ASCII lowercase letters, so this grammar has exactly one place it comes apart. */
+           SPLIT AT THE FIRST TWO TABS AFTER THE VERB, ADDRESS LAST — a URL cannot contain a tab (URL Standard
+           §4.4 "URL parsing" strips every ASCII tab from its input) and the two tokens in front of it are ASCII
+           lowercase words. */
         track(e, key, (async () => {
           const args = op.slice('document.fetch\t'.length);
           const t = args.indexOf('\t');
-          if (t <= 0 || t >= args.length - 1)
-            throw new Error(`a document.fetch request is not \`document.fetch<TAB><provenance><TAB><url>\`: ` +
-                            `${op} — core/frame/navigable.c writes both fields non-empty on every path, so a ` +
-                            'record with one tab is this zone and that job no longer sharing a grammar and ' +
-                            'the address read out of it would be a provenance token');
-          const loaded = await navigate(args.slice(t + 1), e.docUrl, 'document.fetch', args.slice(0, t),
-                                        e.docReach);
+          const u = t > 0 ? args.indexOf('\t', t + 1) : -1;
+          if (t <= 0 || u <= t + 1 || u >= args.length - 1)
+            throw new Error('a document.fetch request is not ' +
+                            `\`document.fetch<TAB><provenance><TAB><driven><TAB><url>\`: ${op} — ` +
+                            'core/frame/navigable.c writes all three fields non-empty on every path, so this ' +
+                            'zone and that job no longer share a grammar');
+          const loaded = await navigate(args.slice(u + 1), e.docUrl, 'document.fetch', args.slice(0, t),
+                                        args.slice(t + 1, u), e.docReach);
           if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
              byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would

@@ -686,7 +686,7 @@ try {
     const st = await opener.renderer.step();
     steps++;
     /* THE REQUESTS FLOWS ARE PARKED ON, ANSWERED THE WAY THE PRODUCTION CONSUMER ANSWERS THEM — one
-       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` line each, and the reply record crossing
+       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` line each, and the reply record crossing
        as JSON with the BODY BESIDE
        IT as bytes, because §2.2.5 makes a response's body a byte sequence and every way of putting one inside JSON is an
        encode or a decode run by the zone that fetched. `computedType` is this zone's own decision and is
@@ -706,11 +706,11 @@ try {
        joined the line after the provenance and is answered the same way and for the same reason. */
     for (const line of (await opener.renderer.getPending()).requests.split('\n').filter(Boolean)) {
       const t = line.split('\t');
-      if (t.length !== 10 || t[0] === '' || t[9] === '')
+      if (t.length !== 11 || t[0] === '' || t[10] === '')
         fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>' +
-             'CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`, and the reply is delivered ' +
-             `against the five-field identity it names: ${line}`);
-      const method = t[0], mode = t[6], referrerPolicy = t[7], referrer = t[8], u = t[9];
+             'DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`, and the reply is ' +
+             `delivered against the five-field identity it names: ${line}`);
+      const method = t[0], mode = t[7], referrerPolicy = t[8], referrer = t[9], u = t[10];
       console.log(`${TAG}   pending: ${method} ${u}`);
       await opener.renderer.provide({
         method, mode, referrerPolicy, referrer, url: u,
@@ -738,7 +738,7 @@ try {
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
      origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
      coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>ancestorOrigins<TAB>
-     creationSandboxFlags<TAB>provenance<TAB>policy`, built by
+     creationSandboxFlags<TAB>provenance<TAB>group<TAB>driven<TAB>policy`, built by
      core/frame/navigable.c. The policy is LAST
      because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
      field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
@@ -751,8 +751,8 @@ try {
      those names contain spaces ("sandboxed navigation browsing context flag").
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 17)
-    fail(`the create notice carries ${create.length} field(s) where the record has seventeen — ` +
+  if (create.length < 19)
+    fail(`the create notice carries ${create.length} field(s) where the record has nineteen — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -882,8 +882,12 @@ try {
          'as `derived`. `observed` would be an engine claiming a real load of this document makes this ' +
          'request, and `forced` is the arm both hosts decline to load at an unwidened origin, so a wrong ' +
          'word here is a peer that is never provisioned or a reply carried into the observed pool');
-  if (create.slice(16).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(16).join('\t')}\`) and this ` +
+  /* The opener's `window.open` runs in the page's own script, not in a drive of uncalled code. */
+  if (create[17] !== 'undriven')
+    fail(`the create notice states the drive mark \`${create[17]}\` and this document created the child from ` +
+         'its own top-level script, which no drive of uncalled code ran');
+  if (create.slice(18).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(18).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

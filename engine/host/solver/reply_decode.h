@@ -129,7 +129,9 @@
    §3.5.6 "The send() method" step 6 composed the request on, and carries the grade it took at that step on
    its own record. A caller that asked the running path here would be the second answer that rule forbids —
    and on the XHR door it would be a different one from the grade the trusted zone made its firing decision
-   from, which is one exchange graded twice. */
-void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov);
+   from, which is one exchange graded twice. `driven` is the same request's drive mark (solver/engine.h's
+   PENDING_DRIVEN_*), a parameter for the same reason: what the reply teaches is marked as a drive's. */
+void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov,
+                        int driven);
 
 #endif

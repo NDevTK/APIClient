@@ -126,7 +126,7 @@ static bool status_denies(int status)
    would produce an address that parses, looks plausible and was never served — §RUN, DON'T MATCH's "COMPUTE OR
    SHAPE, NEVER INVENT", where inventing is the worse half. So a bare chunk is skipped and nothing is recorded
    for it. */
-static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chunk, int prov)
+static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chunk, int prov, int driven)
 {
     UrlRecord u;
     char *abs;
@@ -144,7 +144,7 @@ static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chun
        an answer to a request whose grade solver/engine.c joined; a chunk the page will fetch is worth exactly
        what the reply that named it is worth, and no less — a route reached only because a gate was forced
        names its chunks to nobody but this run. */
-    endpoint_record(ctx, "GET", uv, NULL, 0, NULL, prov, EPD_REPLY_CHUNK);
+    endpoint_record(ctx, "GET", uv, NULL, 0, NULL, prov, driven, EPD_REPLY_CHUNK);
     JS_FreeValue(ctx, uv);
     free(abs);
     url_record_free(&u);
@@ -231,7 +231,8 @@ static FlightRow *flight_row_of(FlightRows *rs, const char *id, size_t id_n)
  * EVERY STRING UNDER THE CHUNK LIST IS A CHUNK NAME OR A REFERENCE TO ONE, which is what the field IS; the
  * numbers beside them are sizes and are not walked because a number is not an address. record_chunk decides
  * what is addressable, and a bare (asset-prefix-relative) name is refused there for the reason stated at it. */
-static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, JSValue root, int prov)
+static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, JSValue root, int prov,
+                        int driven)
 {
     JSValue *work = NULL;
     size_t n = 0, cap = 0, i;
@@ -266,7 +267,7 @@ static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, J
                     else { r->walking = 1; FLIGHT_PUSH(rv); }
                 }
             } else {
-                record_chunk(ctx, base, s, prov);
+                record_chunk(ctx, base, s, prov, driven);
             }
             JS_FreeCString(ctx, s);
         } else if (JS_IsArray(v)) {
@@ -289,7 +290,7 @@ static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, J
    about a stream half of whose rows are not. Element 1 is the chunk list and is handed to the walk WHOLE,
    because it may itself be a reference rather than an array. */
 static void learn_client_reference(JSContext *ctx, const UrlRecord *base, FlightRows *rs,
-                                   const char *payload, size_t n, int prov)
+                                   const char *payload, size_t n, int prov, int driven)
 {
     JSValue arr, chunks;
 
@@ -303,14 +304,15 @@ static void learn_client_reference(JSContext *ctx, const UrlRecord *base, Flight
 
     chunks = JS_GetPropertyUint32(ctx, arr, 1);
     if (JS_IsException(chunks)) { JS_FreeValue(ctx, JS_GetException(ctx)); JS_FreeValue(ctx, arr); return; }
-    walk_chunks(ctx, base, rs, chunks, prov);   /* consumes `chunks` */
+    walk_chunks(ctx, base, rs, chunks, prov, driven);   /* consumes `chunks` */
     JS_FreeValue(ctx, arr);
 }
 
 /* OVER A LENGTH AND NOT A NUL, because what arrives is a BYTE SEQUENCE decoded to text: §6's UTF-8 decode
    preserves a U+0000, and a `strchr` walk would have read the rest of a stream that contains one as absent.
    TWO PASSES, because a reference may name a row that has not been seen yet — see the row table above. */
-static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body, size_t body_n, int prov)
+static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body, size_t body_n, int prov,
+                         int driven)
 {
     FlightRows rows = { 0 };
     const char *p, *body_end = body + body_n;
@@ -332,14 +334,15 @@ static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body
 
     for (i = 0; i < rows.n; i++)
         if (rows.v[i].payload_n >= 2 && rows.v[i].payload[0] == 'I' && rows.v[i].payload[1] == '[')
-            learn_client_reference(ctx, base, &rows, rows.v[i].payload, rows.v[i].payload_n, prov);
+            learn_client_reference(ctx, base, &rows, rows.v[i].payload, rows.v[i].payload_n, prov, driven);
 
     free(rows.v);
 }
 
 /* ── the entry ───────────────────────────────────────────────────────────────────────────────────────────── */
 
-void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov)
+void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov,
+                        int driven)
 {
     MimeType computed;
     UrlRecord base;
@@ -362,10 +365,13 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
        missing one is `observed`, the strongest of the three, which is exactly the fabrication
        §A-REQUEST-CARRIES-THE-PROVENANCE forbids. It is asked before the shape test below because a network
        error's grade is as much a fact as a body's. */
-    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED || prov == PROV_DRIVEN,
-            "a reply arrived carrying the provenance %d, which is none of the four solver/pending.h defines — "
+    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
+            "a reply arrived carrying the provenance %d, which is none of the three solver/pending.h defines — "
             "everything this file learns is filed under it, so an unrecognised grade would file a forced "
             "route's chunk addresses beside a real load's. request=%s %s", prov, method, url);
+    DCHECKF(driven == 0 || driven == 1,
+            "a reply arrived carrying the drive mark %d, which is neither bit — it is the request's, stated by the "
+            "door that fired it. request=%s %s", driven, method, url);
     /* A NETWORK ERROR IS AN ANSWER, and it carries no record at all. This is a shape test on what the host
        delivered rather than an `if` past a broken invariant. */
     if (!JS_IsObject(reply)) return;
@@ -457,7 +463,7 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
         char *text = encoding_utf8_decode((const char *)body, body_n, &text_n);
         CHECK(text, "reply_decode: OOM decoding a Flight stream's bytes");
         if (url_parse(&base, url, strlen(url), NULL))
-            learn_flight(ctx, &base, text, text_n, prov);
+            learn_flight(ctx, &base, text, text_n, prov, driven);
         else
             DFAIL("a reply arrived naming an address the URL parser rejects — every address this engine parks "
                   "on was built by a component that parsed it first, so a failure here is a park recorded from "

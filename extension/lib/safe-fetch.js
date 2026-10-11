@@ -347,21 +347,18 @@ function _modeOf(opts) {
 // "Processing model"'s parser-inserted script, a `script` whose parser document is non-null); a zone that
 // originated an act states it for itself. This file decides from it and may not re-derive it: nothing in an
 // address distinguishes a request a session would have made from one that exists because a gate was forced.
-// `driven` is a request minted inside a flow that is the engine's own act (a drive of a function the page never
-// called, or a candidate run re-executing the page with a payload the engine chose): this tool's act, whatever
-// its path forced. The actor row reads it (see that row).
-var _PROVENANCE_TYPES = ["observed", "derived", "forced", "driven"];
+var _PROVENANCE_TYPES = ["observed", "derived", "forced"];
 // Every caller must state one, and it is a CHECK: the firing decision and the deny list's scope rest on it,
 // and a missing or invented word must not be answered by whichever arm it happens to fall to. The value
 // crosses from the untrusted engine, and asserting it at the chokepoint covers both hosts. There is no
 // `unknown` grade: a request whose provenance is not established crashes at the decision rather than loading.
 function _provenanceOf(opts) {
   CHECK(typeof opts.provenance === "string" && _PROVENANCE_TYPES.indexOf(opts.provenance) >= 0,
-        "safeFetch was called with a PROVENANCE that is none of the four CLAUDE.md " +
+        "safeFetch was called with a PROVENANCE that is none of the three CLAUDE.md " +
         "§A-REQUEST-CARRIES-THE-PROVENANCE declares (solver/engine.h's PENDING_PROVENANCE_*): " +
         JSON.stringify(opts.provenance) + " — this file decides whether to FIRE the request from it, and " +
         "an absent or invented value takes the same arm `derived` does, which is the arm that spends the " +
-        "network. State `observed`, `derived`, `forced` or `driven` and mean it");
+        "network. State `observed`, `derived` or `forced` and mean it");
   return opts.provenance;
 }
 /* How the document holding this request was itself reached. `provenance` is a fact about this request and
@@ -386,7 +383,7 @@ function _docReachOf(opts) {
    this tool chose to open is itself such a page, so the composition is the weaker grade. The order is an
    explicit map, not array positions, so a word added to the vocabulary cannot silently re-rank the others;
    the CHECKs make an unranked word a crash rather than an `undefined` that compares false. */
-var _REACH_RANK = { observed: 0, derived: 1, forced: 2, driven: 3 };
+var _REACH_RANK = { observed: 0, derived: 1, forced: 2 };
 function safeFetchReachJoin(outer, own) {
   CHECK(_PROVENANCE_TYPES.indexOf(outer) >= 0 && _PROVENANCE_TYPES.indexOf(own) >= 0,
         "two reach grades were composed and one of them is not a word this file declares (" +
@@ -453,6 +450,24 @@ function _actorOf(opts) {
         "than an act that cannot");
   return opts.actor;
 }
+/* The engine's drive mark (solver/engine.h's PENDING_DRIVEN_*): `driven` when the request was minted inside the
+   engine's own drive of a function the page never called, `undriven` otherwise. It is a separate fact from the
+   provenance (a drive that forced no arm is `derived`), and the `actor` row reads it alone: a `page` request
+   that is `driven` is this tool's act. `unstated` is this zone's word for an act no engine record describes,
+   and only a `tool` asker may state it, so every relay of an engine record carries the mark it was given. */
+var _DRIVEN_MARKS = ["driven", "undriven", "unstated"];
+function _drivenOf(opts) {
+  CHECK(_DRIVEN_MARKS.indexOf(opts.driven) >= 0,
+        "safeFetch was called with a DRIVE MARK that is none of the three this file declares: " +
+        JSON.stringify(opts.driven) + " — the `actor` row reads it, so an absent one could fire a drive's " +
+        "request as the page's own. Relay `driven`/`undriven` from the engine's record, or state `unstated` " +
+        "for an act this tool composed");
+  CHECK(opts.actor !== "page" || opts.driven !== "unstated",
+        "safeFetch was called with actor `page` and an unstated drive mark — a `page` asker relays an engine " +
+        "record, and every such record carries the mark, so this caller dropped the field that decides whose " +
+        "act the request is");
+  return opts.driven;
+}
 /* What this function does not read: a field outside this set is refused rather than dropped in silence and
    read by its caller as carried. The option that matters is `method`: `init` hardcodes `method: "GET"` and
    nothing reads `opts.method` or `opts.body`, so a caller stating a verb would otherwise get the reply to a
@@ -461,9 +476,9 @@ function _actorOf(opts) {
    rule also refuses `as`, since the CORB class is the request's destination. A closed set restates what the
    body reads, and the drift direction is safe: an option added to the body and not here aborts on its
    author's first call. */
-var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "mode", "provenance", "pinned", "docReach",
-                          "actor", "credentialed", "credentials", "headers", "useCorsPreflight", "identity",
-                          "signal", "onChunk"];
+var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "mode", "provenance", "pinned", "driven",
+                          "docReach", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
+                          "identity", "signal", "onChunk"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
    words `fetch_credentials_token` writes on the pending line. Written here because this zone is the other
    party to that contract. */
@@ -650,12 +665,12 @@ var _SIGNALS = [
   /* Whose act this request is (see `_actorOf`). Second, so after "this origin does not permit data requests"
      a person reads "and this is a request this tool composed rather than one your page made". `certain`, the
      one gating row that can say so: it is a literal in trusted-zone source at every asker, while the grades
-     beside it are words the attacker-controlled engine composes. */
-  /* A request the engine states it minted inside its own act (`provenance=driven`: a drive of uncalled code or
-     a candidate run) is this tool's act although the page's code composed it, so the row reads `tool` for it. The engine's word can
-     only narrow the row, never widen it: `page` still needs the asker's literal. */
+     beside it are words the attacker-controlled engine composes. A `page` request the engine states it minted
+     inside a flow this tool drives (`driven`: a drive of uncalled code or a candidate run, see
+     `_drivenOf`) reads `tool`: the engine's word can only
+     narrow the row, never widen it. */
   { name: "actor", gates: true, certainty: "certain", values: _ACTOR_WORDS,
-    of: function (f) { return f.actor === "page" && f.provenance === "driven" ? "tool" : f.actor; } },
+    of: function (f) { return f.actor === "page" && f.driven === "driven" ? "tool" : f.actor; } },
   /* The request's provenance (see `_provenanceOf`). `stated`: the engine composes it at the park from the
      park's kind and the flow's `path_forced`, and the CHECK catches only a word outside the three. */
   { name: "provenance", gates: true, certainty: "stated", values: _PROVENANCE_TYPES,
@@ -796,12 +811,14 @@ function _requireFacts(facts) {
   CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
         _PROVENANCE_TYPES.indexOf(facts.docReach) >= 0 &&
         _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
+        _DRIVEN_MARKS.indexOf(facts.driven) >= 0 &&
         typeof facts.credentialed === "boolean" &&
         facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
         "a signal vector was asked for without the facts that decide it — Fetch §2.2.5 \"Requests\"' " +
         "DESTINATION says " +
         "whether this reply becomes a PROGRAM or a VALUE, the actor says whether the ANALYSED PAGE composed " +
-        "this request or THIS TOOL did, the provenance says what its path is evidence of, the reach " +
+        "this request or THIS TOOL did, the drive mark says whether the engine's own drive minted it, the " +
+        "provenance says what its path is evidence of, the reach " +
         "grade says whose act the DOCUMENT it was made from was, the witness " +
         "mark says whether the address may rest on a value this engine chose, the credential flag says " +
         "whether the person's session pays, and the parsed URL is what the address-borne authority is read " +
@@ -1157,7 +1174,7 @@ function _firingRefusal(facts) {
   /* The nesting, asserted at the consumer: solver/flow.h declares `path_pinned` strictly inside
      `path_forced`, so a request that is not `forced` cannot carry a witness this engine chose
      (`pending_pinned_compose` asserts the other end). */
-  CHECK(facts.provenance === "forced" || facts.provenance === "driven" || facts.pinned !== "pinned",
+  CHECK(facts.provenance === "forced" || facts.pinned !== "pinned",
         "a request states that its address may rest on a witness this engine DETERMINED, while stating a " +
         "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
         "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
@@ -1203,7 +1220,7 @@ function safeFetchFiringRefusal(facts) {
         "make and a caller that parsed one for itself would be the second copy of that rule");
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
                           provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
-                          actor: facts.actor,
+                          actor: facts.actor, driven: facts.driven,
                           credentialed: facts.credentialed, headers: facts.headers });
 }
 /* The vector for a hypothetical request, for a surface that shows a person what they are deciding about. It
@@ -1217,7 +1234,7 @@ function safeFetchSignalVector(facts) {
      space and render a row about nothing. */
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
                          provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
-                         actor: facts.actor,
+                         actor: facts.actor, driven: facts.driven,
                          credentialed: facts.credentialed, headers: facts.headers });
 }
 /* Fetch §4.10 "CORS check", over the reply's own headers: "Let origin be the result of getting
@@ -1689,6 +1706,7 @@ async function safeFetch(url, opts) {
   var pinnedMark = _pinnedOf(opts);
   var docReach = _docReachOf(opts);
   var actor = _actorOf(opts);
+  var driven = _drivenOf(opts);
   /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
      cookie-bearing request. */
   var credentialed = _credentialedOf(opts);
@@ -1795,7 +1813,7 @@ async function safeFetch(url, opts) {
      the day the origin is widened, and the address is still reported. The reason names the signal and value
      that refused. */
   var _ptok = _firingRefusal({ url: parsed, destination: destination, provenance: provenance,
-                               pinned: pinnedMark, docReach: docReach, actor: actor,
+                               pinned: pinnedMark, docReach: docReach, actor: actor, driven: driven,
                                credentialed: credentialed, headers: opts.headers });
   if (_ptok)
     return _refused("decline", "blocked-signal:" + _ptok, [parsed.href], {});
@@ -1930,7 +1948,7 @@ async function safeFetch(url, opts) {
      travel as one object, so a new signal is a key a caller omits and a CHECK names, never a shifted
      positional argument. */
   var _rptok = _firingRefusal({ url: _finalUrl, destination: destination, provenance: provenance,
-                                pinned: pinnedMark, docReach: docReach, actor: actor,
+                                pinned: pinnedMark, docReach: docReach, actor: actor, driven: driven,
                                 credentialed: credentialed, headers: opts.headers });
   if (_rptok)
     return _refused("decline", "blocked-signal-redirect:" + _rptok,

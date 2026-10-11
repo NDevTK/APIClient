@@ -1022,8 +1022,7 @@ function frontierPlace(e, when) {
   /* How the load that stored it got its address: absent (an entry written before the field existed, see
      frontierProvenance) or one of the three words; a fourth would reach `safeFetch` as an invented grade. */
   DCHECK(e.provenance === undefined || e.provenance === PROVENANCE_OBSERVED ||
-         e.provenance === PROVENANCE_DERIVED || e.provenance === PROVENANCE_FORCED ||
-         e.provenance === PROVENANCE_DRIVEN,
+         e.provenance === PROVENANCE_DERIVED || e.provenance === PROVENANCE_FORCED,
          "a cold-tier entry " + when + " stating the provenance `" + String(e.provenance) + "`, which is none " +
          "of the three — the re-derivation of a shed entry is decided from this word, and one the chokepoint " +
          "does not know would abort the fetch rather than be refused by the policy it names");
@@ -1430,7 +1429,7 @@ async function frontierRederive(e) {
                                                   destination: "document", mode: "navigate",
                                                   provenance: frontierProvenance(e),
                                                   docReach: frontierProvenance(e),
-                                                  actor: "tool",
+                                                  actor: "tool", driven: "unstated",
                                                   pinned: "unstated",
                                                   credentials: "include",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
@@ -1819,7 +1818,7 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    refuses by construction. */
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
-                              actor) {
+                              actor, driven) {
   /* `refusalArm` is required; an unstated word takes the refusing arm, exactly as `none` does. */
   DCHECK(DOC_REFUSAL_ARMS.indexOf(refusalArm) >= 0,
          "a §7.4 navigation was loaded stating the refusal arm " + JSON.stringify(refusalArm) + ", which " +
@@ -1840,6 +1839,8 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
          "absent one. It is stated per caller rather than once here because this loader serves a child " +
          "navigable (the page), a route an application declared of itself (the page), and an ambient seed " +
          "this tool composed from an address the person's browser navigated to (the tool)");
+  /* `driven` is the engine's drive mark for a `page` navigation (`driven`/`undriven`, off the notice beside the
+     provenance), and `unstated` for a `tool` one; safe-fetch.js's `_drivenOf` CHECKs the pairing. */
   /* The requested address, resolved once because every arm owes a URL: a navigable whose load did not load
      still gets a Document, at the URL that was requested. An unparseable address is a caller's serializer
      disagreeing with the URL parser, a broken contract, so it throws (a DFAIL would leave arms reading
@@ -1895,7 +1896,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        document becomes, not the page that named it. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", mode: "navigate", provenance: provenance,
-                                          docReach: fromReach, actor: actor,
+                                          docReach: fromReach, actor: actor, driven: driven,
                                           /* `unstated`: a navigation's provenance arrives by notice, not by
                                              park, so no witness mark was composed (see safe-fetch.js's
                                              `_pinnedOf`). Navigations fire through their own arm
@@ -2427,7 +2428,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      error of XHR §3 "Interface XMLHttpRequest", and a decline as `{declined}`, which goes to `hostDecline`. */
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
-  const fetched = async (method, u, destination, provenance, pinned, credentials, mode, referrerPolicy, referrer) => {
+  const fetched = async (method, u, destination, provenance, pinned, driven, credentials, mode, referrerPolicy,
+                         referrer) => {
     DCHECK(pinned === "pinned" || pinned === "unpinned",
            "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
            "`pinned` or `unpinned` on every line of the pending join, and the chokepoint reads it WITH the " +
@@ -2436,19 +2438,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "an act that never had one");
     DCHECK(typeof destination === "string",
            "a pending request reached the chokepoint with no DESTINATION — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and Fetch §2.2.5 " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and Fetch §2.2.5 " +
            "makes the destination part of the request, so a caller that omits it is one whose code load " +
            "would be fetched as data and compiled. The empty string is a real destination and means DATA");
     DCHECK(typeof method === "string" && method !== "",
            "a pending request reached the chokepoint with no method — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and the " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and the " +
            "(method, url) pair is what the flow parked on, so a request whose method is unknown can be " +
            "neither refused nor issued");
     /* The credentials mode is passed through for the same reason; reducing it with this zone's willingness is
        the chokepoint's job (`_credentialedOf`). */
     DCHECK(typeof credentials === "string" && credentials !== "",
            "a pending request reached the chokepoint with no CREDENTIALS MODE — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`, Fetch §2.2.5 " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL`, Fetch §2.2.5 " +
            "\"Requests\" gives every request one, and only the algorithm that created it knows which. A " +
            "caller that drops it hands `safe-fetch.js` a request it can decide nothing about");
     /* The method half of the firing question is asked of the chokepoint (`safeFetchMethodRefusal`), so this
@@ -2505,8 +2507,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          what the request IS, and the chokepoint's `_modeOf` CHECKs the word. */
       /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
          and a request on this seam is a GET, which §5.4 refuses a body. */
+      /* `driven` is the engine's drive mark off the same line (solver/engine.h's PENDING_DRIVEN_*), relayed:
+         the chokepoint's `actor` row reads it. */
       const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
-                     credentials, actor: "page", useCorsPreflight: false,
+                     driven, credentials, actor: "page", useCorsPreflight: false,
                      docReach: msg.provenance, credentialed: false,
                      identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
@@ -2598,7 +2602,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
      be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
      gains such an arm widens this list deliberately. */
-  const fetchedDocument = async (u, provenance, refusalArm) => {
+  const fetchedDocument = async (u, provenance, driven, refusalArm) => {
     DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
            "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
            ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
@@ -2607,7 +2611,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
-                                   refusalArm, /*actor*/"page");
+                                   refusalArm, /*actor*/"page", driven);
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
     DCHECK(refusalArm === "rendezvous" || r.declined === null,
@@ -2694,7 +2698,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          stopped stating one could fire a request whose values exist only past a gate. The chokepoint CHECKs the
          vocabulary again in release; this names the producer. */
       DCHECK(q.provenance === PROVENANCE_OBSERVED || q.provenance === PROVENANCE_DERIVED ||
-             q.provenance === PROVENANCE_FORCED || q.provenance === PROVENANCE_DRIVEN,
+             q.provenance === PROVENANCE_FORCED,
              "the engine's xhr.send record states the provenance `" + q.provenance + "`, which is none of " +
              "the three solver/engine.h declares — xhr_request_op writes one on every record from " +
              "engine_provenance_of_running_path, and the firing decision is made from it, so an absent or " +
@@ -2723,8 +2727,14 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `actor: "page"`: every XHR is made by running the page's code, the same population as the `fetch()`
          relay. With a real witness mark, an XHR whose path pinned nothing fires at an origin the person
          permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
+      /* The drive mark is relayed off the record (`xhr_request_op` writes it beside the grade); the chokepoint
+         CHECKs that a `page` request states one. */
+      DCHECK(q.driven === DRIVEN_YES || q.driven === DRIVEN_NO,
+             "the engine's xhr.send record states the drive mark `" + q.driven + "`, which is neither token " +
+             "solver/engine.h declares — `xhr_request_op` writes one through `engine_driven_token`");
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination: "",
                                             mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
+                                            driven: q.driven,
                                             docReach: msg.provenance, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers,
@@ -2795,7 +2805,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      navigable, swapped-to document, cold rehydration) rather than the chokepoint at whichever park runs
      first. It applies to runs that persist nothing too, since their requests still fire by it. */
   DCHECK(msg.provenance === PROVENANCE_OBSERVED || msg.provenance === PROVENANCE_DERIVED ||
-         msg.provenance === PROVENANCE_FORCED || msg.provenance === PROVENANCE_DRIVEN,
+         msg.provenance === PROVENANCE_FORCED,
          "a document is being rooted with the reach grade `" + String(msg.provenance) + "`, which is none of " +
          "CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three — every composer of an AST_ANALYZE states one " +
          "(the ambient seed `observed`, a declared route the join of the declaring document's grade and its " +
@@ -3090,12 +3100,12 @@ async function engineDecline(eng, method, mode, referrerPolicy, referrer, url, r
    (Fetch §2.2.5 Requests: "" for a `fetch()`), so the shape assert is over the field count and the two ends. */
 function pendingRequest(line) {
   const f = line.split("\t");
-  CHECK(f.length === 10 && f[0] !== "" && f[6] !== "" && f[8] !== "" && f[9] !== "",
+  CHECK(f.length === 11 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[10] !== "",
         "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>" +
-        "PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`: `" + line +
-        "` — the engine joins the ten and this zone must deliver against (method, mode, referrer policy, " +
-        "referrer, url), so a line missing a field puts a token where the address belongs and keys a reply on " +
-        "a request nothing parked on");
+        "PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`: `" +
+        line + "` — the engine joins the eleven and this zone must deliver against (method, mode, referrer " +
+        "policy, referrer, url), so a line missing a field puts a token where the address belongs and keys a " +
+        "reply on a request nothing parked on");
   const destination = f[1];
   const initiator = f[2];
   const provenance = f[3];
@@ -3103,7 +3113,10 @@ function pendingRequest(line) {
      composed at the park from solver/flow.h's `path_pinned`. Relayed; safe-fetch.js decides from it with the
      destination. */
   const pinned = f[4];
-  const credentials = f[5];
+  /* Whose act the request is: solver/engine.h's `driven`/`undriven`, the parking flow's drive mark. Relayed;
+     safe-fetch.js's `actor` row reads it. */
+  const driven = f[5];
+  const credentials = f[6];
   /* The destination (Fetch §2.2.5 Requests) is what this zone acts on: safe-fetch.js decides the CORB class
      with §2.2.5's script-like predicate over it. The initiator is HTML §4.12.1.1 Processing model's
      parser-inserted (solver/engine.h), whether a real load of the document makes this request; nothing here
@@ -3119,10 +3132,9 @@ function pendingRequest(line) {
         "GetPending stated an initiator this zone does not know: `" + initiator + "` — solver/engine.h " +
         "declares exactly `parser` and `script`, and a third value would be answered by whichever arm a " +
         "consumer happened to write first");
-  CHECK(provenance === PROVENANCE_OBSERVED || provenance === PROVENANCE_DERIVED ||
-        provenance === PROVENANCE_FORCED || provenance === PROVENANCE_DRIVEN,
+  CHECK(provenance === "observed" || provenance === "derived" || provenance === "forced",
         "GetPending stated a provenance this zone does not know: `" + provenance + "` — solver/engine.h " +
-        "declares exactly `observed`, `derived`, `forced` and `driven`, and a fifth value would be answered by " +
+        "declares exactly `observed`, `derived` and `forced`, and a fourth value would be answered by " +
         "whichever arm the firing policy happens to be written with as its else");
   CHECK(pinned === "pinned" || pinned === "unpinned",
         "GetPending stated a witness mark this zone does not know: `" + pinned + "` — solver/engine.h " +
@@ -3130,6 +3142,9 @@ function pendingRequest(line) {
         "whether an ACT MAY BE SPENT on an address that may be one this engine composed, so an unknown word " +
         "would take that policy's permissive arm. `unstated` is safe-fetch.js's word for an act that carries " +
         "no mark at all and is never one a pending line may state");
+  CHECK(driven === DRIVEN_YES || driven === DRIVEN_NO,
+        "GetPending stated a drive mark this zone does not know: `" + driven + "` — solver/engine.h declares " +
+        "exactly `driven` and `undriven` on this line, and the chokepoint's `actor` row reads it");
   /* The credentials mode (Fetch §2.2.5 Requests) says whose session pays. Only the algorithm that created the
      request knows it (an `<img>`'s potential-CORS request, a `<script src>`'s CORS settings attribute, a
      `fetch()`'s `RequestInit`), so it is relayed, never re-derived; its membership is checked at the deciding
@@ -3140,7 +3155,7 @@ function pendingRequest(line) {
      asking page; a `navigate` request is a host request whose bytes become another instance's document
      (fetchedDocument), and an engine stating it here would be asking for another origin's bytes with no CORS
      question asked. */
-  const mode = f[6];
+  const mode = f[7];
   CHECK(mode === "same-origin" || mode === "cors" || mode === "no-cors",
         "GetPending stated the mode `" + mode + "` on a request whose reply returns to the asking page — " +
         "only `same-origin`, `cors` and `no-cors` requests are read by their requester, and anything else " +
@@ -3149,16 +3164,16 @@ function pendingRequest(line) {
      and its referrer, "no-referrer" or a URL (core/fetch/fetch.h's fetch_referrer_for_wire resolved "client"
      against the parking document). Both are part of the request's identity and are relayed for the
      `Referer` this zone composes with Referrer Policy §8.3's later steps. */
-  const referrerPolicy = f[7];
-  const referrer = f[8];
+  const referrerPolicy = f[8];
+  const referrer = f[9];
   CHECK(_REFERRER_POLICIES.indexOf(referrerPolicy) >= 0,
         "GetPending stated the referrer policy `" + referrerPolicy + "`, which Referrer Policy §3 does not " +
         "define — the `Referer` this request carries is composed from it, so an unknown word cannot be relayed");
   CHECK(referrer === "no-referrer" || URL.canParse(referrer),
         "GetPending stated the referrer `" + referrer + "`, which is neither \"no-referrer\" nor a URL — the " +
         "engine resolves Fetch §2.2.5's \"client\" before the line is joined, so nothing else may arrive here");
-  return { method: f[0], destination, initiator, provenance, pinned, credentials, mode, referrerPolicy, referrer,
-           url: f[9] };
+  return { method: f[0], destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
+           referrer, url: f[10] };
 }
 /* Referrer Policy §3 "Referrer Policies", the empty string included. */
 const _REFERRER_POLICIES = ["", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
@@ -3249,7 +3264,7 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
      outstanding to wait on. */
   let issued = 0;
   for (const line of requests) {
-    const { method, destination, provenance, pinned, credentials, mode, referrerPolicy, referrer, url } =
+    const { method, destination, provenance, pinned, driven, credentials, mode, referrerPolicy, referrer, url } =
       pendingRequest(line);
     /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
        the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
@@ -3265,8 +3280,8 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
        re-listed request is counted once and the containment with the declined histogram holds. */
     issued += engineIssue(eng, key,
       () => { eng._egress.asked++;
-              return eng.fetched(method, url, destination, provenance, pinned, credentials, mode, referrerPolicy,
-                                 referrer); },
+              return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
+                                 referrerPolicy, referrer); },
       (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
   }
   return issued;
@@ -3375,9 +3390,10 @@ const ROUTE_SEED_NOTICE = "document.seed";
 const PROVENANCE_OBSERVED = "observed";
 const PROVENANCE_DERIVED = "derived";
 const PROVENANCE_FORCED = "forced";
-/* Minted inside a flow that is the engine's own act (a drive of uncalled code, or a candidate run): safe-fetch.js
-   reads it as this tool's act. */
-const PROVENANCE_DRIVEN = "driven";
+/* The drive mark's two words, solver/engine.h's `PENDING_DRIVEN_*`: whose act a request is, a separate field
+   from provenance. */
+const DRIVEN_YES = "driven";
+const DRIVEN_NO = "undriven";
 /* The witness mark's two words, solver/engine.h's `PENDING_PINNED_*`: a separate field from provenance
    (provenance says what a reply is worth; this says whether the act may be spent). `unstated` is not here: it
    is safe-fetch.js's word for a record with no mark (its `_PINNED_MARKS` lists all three), and the engine
@@ -3392,8 +3408,8 @@ const PINNED_NO = "unpinned";
    <creationSandboxFlags> <provenance> <csp>` — the engine has named the document and handed the page a
    WindowProxy for it; this provisions (or joins) an instance under that name, loading the child's document
    through the safeFetch chokepoint.
-   `navigable.swap <new document> <url> <origin> <provenance>` — see that arm.
-   `navigable.navigate <new document> <url> <origin> <provenance>` — see that arm.
+   `navigable.swap <new document> <url> <origin> <provenance> <driven>` — see that arm.
+   `navigable.navigate <new document> <url> <origin> <provenance> <driven>` — see that arm.
    `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed verbatim to the instance holding
    <target>, with this engine's origin stamped on it: the untrusted engine may not state its own origin, since
    a forgeable event.origin defeats every origin check in every bundle. */
@@ -3402,7 +3418,7 @@ async function hostNotice(eng, line) {
   if (f[0] === "navigable.create") {
     /* The count covers every field the reader below indexes and moves when the record grows, because the
        field added last is the one a stale count would let arrive as `undefined`. */
-    DCHECK(f.length >= 18 && (f[16] === "creator" || f[16] === "new"), "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, which browsing context group the navigable is in (`creator` or `new`), and the policy");
+    DCHECK(f.length >= 19 && (f[16] === "creator" || f[16] === "new") && (f[17] === DRIVEN_YES || f[17] === DRIVEN_NO), "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, which browsing context group the navigable is in (`creator` or `new`), its drive mark, and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     /* Field 16: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing context
        group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's group, where the
@@ -3411,11 +3427,11 @@ async function hostNotice(eng, line) {
        re-rooted and by the join arms below. */
     const _inCreatorGroup = f[16] === "creator";
     if (_inCreatorGroup) eng.referenced = 1;
-    /* Field 15 is the engine's word for what this navigation is evidence of; navigationLoad and the chokepoint
-       decide on it, and this arm passes it through without testing it. */
+    /* Field 15 is the engine's word for what this navigation is evidence of and field 17 its drive mark;
+       navigationLoad and the chokepoint decide on them, and this arm passes them through without testing. */
     /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
-    const loaded = await eng.fetchedDocument(f[3], f[15], /*refusalArm*/"none");
+    const loaded = await eng.fetchedDocument(f[3], f[15], f[17], /*refusalArm*/"none");
     /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
        this zone followed), not the notice's f[4]: SECURITY.md makes routing and the origin stamped on a
        delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
@@ -3465,10 +3481,10 @@ async function hostNotice(eng, line) {
        fields: their values are fixed tokens, and `report-to` is a structured-field string (RFC 8941 §3.3.3
        Strings: printable ASCII %x20-%x7E, no tabs). Relayed verbatim; only the receiving engine maps the tokens,
        and it crashes on an unknown one (see NEW_EMBEDDER_POLICY). */
-    /* The policy is the remainder from field 17; every field added to the record is added in front of it, so
+    /* The policy is the remainder from field 18; every field added to the record is added in front of it, so
        this index and the count above move together. A wrong index would join a neighbouring field onto the
        creator's CSP, which CSP's parser drops as an unreadable directive without a crash. */
-    const inherited = { csp: f.slice(17).join("\t"), selfOrigin: f[6],
+    const inherited = { csp: f.slice(18).join("\t"), selfOrigin: f[6],
                         embedder: { value: f[7], endpoint: f[8],
                                     reportOnlyValue: f[9], reportOnlyEndpoint: f[10] } };
     /* HTML §7.3.1.3 Child navigables' parent navigable at field 11, separate from the container policy: an
@@ -3595,7 +3611,7 @@ async function hostNotice(eng, line) {
      Absence shows as a swapped-to document whose content or headers differ from the response that decided
      the swap when the server answers the two requests differently. */
   if (f[0] === "navigable.swap") {
-    DCHECK(f.length >= 5 && !!f[1] && !!f[2] && !!f[4],
+    DCHECK(f.length >= 6 && !!f[1] && !!f[2] && !!f[4] && !!f[5],
            "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
            "address it is loading, the origin it computed and what the navigation that caused the swap is " +
            "EVIDENCE OF; a record missing either of the first two names a Document this zone cannot provision " +
@@ -3610,7 +3626,7 @@ async function hostNotice(eng, line) {
        an address this zone declined at `document.fetch`. */
     /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
        an empty Uint8Array. */
-    const swapped = await eng.fetchedDocument(f[2], f[4], /*refusalArm*/"none");
+    const swapped = await eng.fetchedDocument(f[2], f[4], f[5], /*refusalArm*/"none");
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -3659,14 +3675,14 @@ async function hostNotice(eng, line) {
      container and no ancestor list, and its own address is its top-level creation URL. Referenced, since the
      emitting engine's proxy names it. This zone loads the bytes, for the swap arm's reason. */
   if (f[0] === "navigable.navigate") {
-    DCHECK(f.length >= 5 && !!f[1] && !!f[2] && !!f[4],
+    DCHECK(f.length >= 6 && !!f[1] && !!f[2] && !!f[4] && !!f[5],
            "a navigable.navigate notice was short of its fields — the engine writes the new document's name, " +
-           "the address, the origin it computed and the navigation's provenance, and the load below is decided " +
-           "from the last");
+           "the address, the origin it computed, the navigation's provenance and its drive mark, and the load " +
+           "below is decided from the last two");
     DCHECK(!hostHolderOf(f[1]),
            "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
-    const navd = await eng.fetchedDocument(f[2], f[4], /*refusalArm*/"none");
+    const navd = await eng.fetchedDocument(f[2], f[4], f[5], /*refusalArm*/"none");
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
@@ -3698,21 +3714,22 @@ async function hostNotice(eng, line) {
                        "none", "none", 1)._readyP;
     return;
   }
-  /* `document.seed <address> <provenance>` — an address the application declared is a page of itself, reached
+  /* `document.seed <address> <provenance> <driven>` — an address the application declared is a page of itself, reached
      when forced execution ran the bundle's own `history.pushState`/`replaceState` (solver/route_seed.h says what
      a declaration is). This branch spends no network: a declared route is a work item whose fetch is a cost the
      Level-1 order carries, so it records and `admit` loads (see `_seeds`). */
   if (f[0] === ROUTE_SEED_NOTICE) {
-    DCHECK(f.length >= 3 && !!f[1] && !!f[2],
-           "a route declaration was short of its fields — the engine writes the ADDRESS and the PROVENANCE, " +
+    DCHECK(f.length >= 4 && !!f[1] && !!f[2] && (f[3] === DRIVEN_YES || f[3] === DRIVEN_NO),
+           "a route declaration was short of its fields — the engine writes the ADDRESS, the PROVENANCE and " +
+           "the DRIVE MARK, " +
            "and a record missing either is a writer this zone no longer shares a grammar with: an absent " +
            "address is a page nothing can load, and an absent provenance is the one field the decision to " +
            "load it at all is made from");
     /* Enumerated, not defaulted. `observed` is unreachable for a declaration (HTML §7.4.4 is reached only by
        running the page's code), so a record carrying it is a field read at the wrong offset. */
-    DCHECK(f[2] === PROVENANCE_DERIVED || f[2] === PROVENANCE_FORCED || f[2] === PROVENANCE_DRIVEN,
-           "a route declaration carries the provenance `" + f[2] + "`, which is none of `derived`, `forced` " +
-           "and `driven` — those are the only three a declaration can have, so this is either the field split at " +
+    DCHECK(f[2] === PROVENANCE_DERIVED || f[2] === PROVENANCE_FORCED,
+           "a route declaration carries the provenance `" + f[2] + "`, which is neither `derived` nor " +
+           "`forced` — those are the only two a declaration can have, so this is either the field split at " +
            "the wrong tab or an engine speaking a vocabulary this zone does not");
     /* A route of this document, established from the two addresses: HTML §7.2.5 The History interface's
        can-have-its-URL-rewritten already refuses a cross-origin rewrite in the engine, and this zone checks the
@@ -3741,7 +3758,7 @@ async function hostNotice(eng, line) {
     /* `actor: "page"`: the route was declared by this document's own code, as the load will state. */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: "unstated",
-      docReach: eng.msg.provenance, actor: "page",
+      docReach: eng.msg.provenance, actor: "page", driven: f[3],
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -3758,7 +3775,7 @@ async function hostNotice(eng, line) {
     if (!_seeds.has(f[1]))
       /* The declaring document's reach grade travels with the item for the same reason. */
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
-                         provenance: f[2], reach: eng.msg.provenance });
+                         provenance: f[2], driven: f[3], reach: eng.msg.provenance });
     /* Nothing is kicked: this router runs inside serviceFetch within the one scheduling loop, so `_hostDriving`
        is true and a `_hostKick()` would return on its first line. `admit` ranks this entry next round. */
     return;
@@ -3962,26 +3979,25 @@ async function engineServiceHostRequests(eng) {
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
-    /* `document.fetch<TAB><provenance><TAB><url>`, split once at the first tab after the verb so the address
-       is the remainder. A URL cannot contain a tab (URL Standard §4.4 URL parsing strips them, and the C0
-       control percent-encode set escapes one), and the provenance is a lowercase word. Indexed rather than
-       split on every tab, which would silently take the tail of a malformed record. */
+    /* `document.fetch<TAB><provenance><TAB><driven><TAB><url>`, split at the first two tabs after the verb so
+       the address is the remainder. A URL cannot contain a tab (URL Standard §4.4 URL parsing strips them), and
+       the two tokens are lowercase words. Indexed rather than split on every tab, which would silently take the
+       tail of a malformed record. */
     const fetchArgs = op.slice("document.fetch\t".length);
     const fetchTab = fetchArgs.indexOf("\t");
-    DCHECK(fetchTab > 0 && fetchTab < fetchArgs.length - 1,
-           "a document.fetch request is not `document.fetch<TAB><provenance><TAB><url>`: `" + op + "` — " +
-           "core/frame/navigable.c writes both fields non-empty on every path (the provenance from " +
-           "solver/engine.h's three tokens, the address as an absolute serialization), so a record with one " +
-           "tab is this zone and that job no longer sharing a grammar, and the address read out of it would " +
-           "be a provenance token");
+    const drivenTab = fetchTab > 0 ? fetchArgs.indexOf("\t", fetchTab + 1) : -1;
+    DCHECK(fetchTab > 0 && drivenTab > fetchTab + 1 && drivenTab < fetchArgs.length - 1,
+           "a document.fetch request is not `document.fetch<TAB><provenance><TAB><driven><TAB><url>`: `" + op +
+           "` — core/frame/navigable.c writes all three fields non-empty on every path, so this zone and that " +
+           "job no longer share a grammar, and the address read out of it would be a token");
     /* Issued, not awaited, for the XHR seam's reason (a page states a document load with `location.href` or an
        `iframe src`, and its body may never end), keyed on the request id. The asking navigable stays parked on
        its load; every other flow keeps running. */
     did += engineIssue(eng, "doc\n" + id,
       /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
          parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
-      () => eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab),
-                                /*refusalArm*/"rendezvous"),
+      () => eng.fetchedDocument(fetchArgs.slice(drivenTab + 1), fetchArgs.slice(0, fetchTab),
+                                fetchArgs.slice(fetchTab + 1, drivenTab), /*refusalArm*/"rendezvous"),
       (r) => engineDeliverDocument(eng, id, r));
     continue;
   }
@@ -5002,8 +5018,9 @@ const _hostOps = {
                                               the chokepoint refuses `blocked-destructive:<token>`. */
                                            /*refusalArm*/"report",
                                            /* `page`: HTML §7.4.4's steps ran in the analysed document, so
-                                              its own code composed the address. */
-                                           /*actor*/"page"));
+                                              its own code composed the address; the declaration's drive
+                                              mark says whether a drive of uncalled code ran them. */
+                                           /*actor*/"page", seed.driven));
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -5081,7 +5098,7 @@ const _hostOps = {
          the store, whose entries outlive their build, separately from engineRoot's assert, which is owed to the
          fetch closures. */
       DCHECK(eng.msg.provenance === PROVENANCE_OBSERVED || eng.msg.provenance === PROVENANCE_DERIVED ||
-             eng.msg.provenance === PROVENANCE_FORCED || eng.msg.provenance === PROVENANCE_DRIVEN,
+             eng.msg.provenance === PROVENANCE_FORCED,
              "a run about to park its residue carries the provenance `" + String(eng.msg.provenance) +
              "` — every composer of an AST_ANALYZE states one (the ambient seed `observed`, a declared route " +
              "and a child navigable the JOIN of the reaching document's grade and their own word, a " +
@@ -5467,7 +5484,7 @@ self.astDispatch = async function astDispatch(msg) {
          origin's own root, the only address the surface has, so its `url-authority` row reads `unknown`. It
          claims nothing about how anything at this origin was actually reached or composed. */
       const _probe = { url: msg.subject + "/", destination: "", provenance: PROVENANCE_FORCED,
-                       pinned: "unstated", docReach: PROVENANCE_FORCED, actor: "tool",
+                       pinned: "unstated", docReach: PROVENANCE_FORCED, actor: "tool", driven: "unstated",
                        credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),
@@ -5553,7 +5570,7 @@ self.astDispatch = async function astDispatch(msg) {
                                            scoped to `provenance !== "observed"` and the observed/observed
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
-                                        /*actor*/"tool");
+                                        /*actor*/"tool", /*driven*/"unstated");
     /* The seed's own rule on top of the loader's: an OK empty body is an ordinary empty Document (HTML §7.4.5),
        but a seeded document with no bytes cannot be the program this run explores, and analysing it would read
        as a clean page. */

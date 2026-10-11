@@ -1556,7 +1556,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     JSValueConst input = argc > 0 ? argv[0] : JS_UNDEFINED;
     JSValueConst init  = argc > 1 ? argv[1] : JS_UNDEFINED;
     HeadersGuard guard;
-    int r, prov;
+    int r, prov, driven;
     /* THE HOST EDGE'S ONE READING OF WHAT THIS REQUEST'S BODY IS — see the switch at the edge below. */
     const char *body_bytes = NULL;
     size_t body_bytes_len = 0;
@@ -1913,6 +1913,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        if the path forked between the two reads. §scheduler's "an operation takes its inputs with it", read at
        the smallest scale there is. */
     prov = engine_prov_of_running_path();
+    driven = engine_driven_of_running_path();
     {
         /* The surface's own header shape, built from the list — two fields either way, so this is a projection
            and not a second representation. The solver must not learn what a HeaderList is. */
@@ -2024,7 +2025,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         {
             const char *em = JS_ToCString(ctx, s->rec.method);
             CHECK(em != NULL, "OOM borrowing §2.2.5's method for the @H surface's endpoint identity");
-            endpoint_record(ctx, em, s->url, eh, s->hdrs->n, ebp, prov, EPD_FETCH);
+            endpoint_record(ctx, em, s->url, eh, s->hdrs->n, ebp, prov, driven, EPD_FETCH);
             JS_FreeCString(ctx, em);
         }
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
@@ -2045,7 +2046,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        genuinely names no sub-requests THIS RUN KNOWS OF, which is what passing none says. */
     multipart_batch_learn(ctx, s->hdrs, s->body_mime,
                           body_kind == BODY_BYTES ? body_bytes : NULL,
-                          body_kind == BODY_BYTES ? body_bytes_len : 0, prov);
+                          body_kind == BODY_BYTES ? body_bytes_len : 0, prov, driven);
     /* Fetch §5.6 "Fetch methods" STEP 12's "fetch given request", and steps 1 and 13's promise: the endpoint the flow parks on. */
     /* THE SHAPE GOES TO THE PARK TOO, exactly as fetch_park sends a concolic URL's shape in place of an
        address it cannot know — one rule for both halves of a request built out of unknown external input, so

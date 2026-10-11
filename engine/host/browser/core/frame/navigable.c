@@ -456,12 +456,13 @@ static bool child_in_this_agent(const Origin *child_origin)
 /* A TOP-LEVEL traversable's navigation whose response origin is another agent's, with §7.1.3.2 having kept the
    browsing context: the incoming Document is created in a peer instance of this browsing context group, and the
    navigable here becomes a remote one presenting it. The record is `navigable.navigate <new document> <url>
-   <origin> <provenance>` — the address and what the load is evidence of, never the bytes: the trusted zone
+   <origin> <provenance> <driven>` — the address, what the load is evidence of and whose act it is, never the
+   bytes: the trusted zone
    loads the address and derives the principal from its own load (SECURITY.md). A top-level traversable has no
    parent, container or ancestor list, and its environments' top-level creation URL is its own address, so the
    zone derives those rather than being sent them. */
 static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
-                                 SandboxFlags final_sandbox_flags, const char *provenance)
+                                 SandboxFlags final_sandbox_flags, const char *provenance, const char *driven)
 {
     uint32_t incoming;
     char *op;
@@ -470,6 +471,8 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
            "a navigation was sent to a peer with no address, no origin, or an origin this agent hosts");
     DCHECK(provenance != NULL && *provenance,
            "a navigation was sent to a peer with no provenance — the zone decides whether to load it from that");
+    DCHECK(driven != NULL && (!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO)),
+           "a navigation was sent to a peer with no drive mark — the zone's `actor` row reads it");
     DCHECK(final_sandbox_flags == 0,
            "a top-level navigation into a peer carries a non-empty final sandboxing flag set, and the "
            "`navigable.navigate` record carries no flag set — add the set to the record and hand it to the peer's "
@@ -478,7 +481,8 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
        adopted: this agent does not host it (solver/world.h). */
     incoming = world_mint_doc(window_proxy_doc(proxy));
     {
-        const char *const fields[] = { world_doc_name(incoming), url, origin_serialized(origin), provenance };
+        const char *const fields[] = { world_doc_name(incoming), url, origin_serialized(origin), provenance,
+                                       driven };
 
         op = engine_notice_build("navigable.navigate", fields, sizeof fields / sizeof fields[0]);
     }
@@ -1316,6 +1320,7 @@ enum {
     NAV_LOAD_ARG_COEP_REPORT_ONLY,
     NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT,
     NAV_LOAD_ARG_PROVENANCE,                   /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for it */
+    NAV_LOAD_ARG_DRIVEN,                       /* …and whose act it is (solver/engine.h's PENDING_DRIVEN_*) */
     NAV_LOAD_ARG_INTEGRITY,                    /* SRI §3.8's item of that container */
     NAV_LOAD_ARG_REFERRER_POLICY,              /* …its referrer policy item, or JS_NULL for none stated */
     NAV_LOAD_ARG_DOCUMENT_RESOURCE,            /* §7.4.2.2's documentResource: §4.8.5's srcdoc text, or JS_NULL */
@@ -1566,6 +1571,9 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "it on the job because §scheduler's \"an operation that becomes a work item takes its inputs with "
            "it\" applies to what a request is evidence of exactly as it applies to its address; the trusted "
            "zone decides whether to spend the network, and whose session, on this one word");
+    DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN)),
+           "a document load carried no DRIVE MARK — navigable_load_enqueue puts one on the job beside the "
+           "provenance, and the trusted zone's `actor` row reads it");
     /* IS THERE ANYTHING TO FETCH — one spec fact about the SCHEME, asked where the fetch is. `about:blank` has
        no response and no content, so navigating to it produces a Document from nothing: asking the host for it
        would be a GET of the literal text `about:blank`, and every host would answer 404 or nothing at all.
@@ -1596,22 +1604,20 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "script source as the request target. The branch is in navigable_navigate, which every navigation "
            "converges on, so whatever enqueued this load bypassed it");
     if (fetches && !s->req) {
-        /* `document.fetch<TAB><provenance><TAB><url>` — THE ADDRESS LAST, WHICH IS THE PENDING LINE'S OWN
-           SHAPE (solver/engine.h joins `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`) and is
-           the only ordering a host can split without knowing how many fields there will be next time: every
-           fixed-vocabulary token comes first and the URL is the remainder. This record carried the address
-           ALONE, and a host handed an address and nothing else has no way to tell a navigation a real client
-           makes from one that exists only because a gate was forced — so one host declined all of them and the
-           other fetched all of them with the person's cookies. */
+        /* `document.fetch<TAB><provenance><TAB><driven><TAB><url>` — the address last, as on the pending line,
+           so every fixed-vocabulary token comes first and the URL is the remainder. The provenance says what
+           the load is evidence of and the drive mark whose act it is; the host decides from both. */
         const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
+        const char *drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
         char *op;
 
-        CHECK(prov != NULL, "navigable: OOM taking §7.4.5's provenance off the load job");
-        op = malloc(strlen(addr) + strlen(prov) + 20);
+        CHECK(prov != NULL && drv != NULL, "navigable: OOM taking §7.4.5's provenance off the load job");
+        op = malloc(strlen(addr) + strlen(prov) + strlen(drv) + 20);
         CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
-        sprintf(op, "document.fetch\t%s\t%s", prov, addr);
+        sprintf(op, "document.fetch\t%s\t%s\t%s", prov, drv, addr);
         s->req = engine_host_request(ctx, op);
         free(op);
+        JS_FreeCString(ctx, drv);
         JS_FreeCString(ctx, prov);
         JS_FreeCString(ctx, addr);
         return JS_STEP_YIELD;   /* park on the response; siblings run meanwhile */
@@ -2067,9 +2073,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                has come back, and the flow standing at this line need not be the one that navigated. */
             {
                 const char *swap_prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
+                const char *swap_drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
 
-                CHECK(swap_prov != NULL, "navigable: OOM taking §7.1.3.2's provenance off the load job");
-                browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags, swap_prov);
+                CHECK(swap_prov != NULL && swap_drv != NULL,
+                      "navigable: OOM taking §7.1.3.2's provenance off the load job");
+                browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags, swap_prov, swap_drv);
+                JS_FreeCString(ctx, swap_drv);
                 JS_FreeCString(ctx, swap_prov);
             }
         }
@@ -2081,7 +2090,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        answer (never the bytes — SECURITY.md), and the host route that attaches a Document to a navigable whose
        parent and container stay here. */
     if (!swapped && !in_agent) {
-        const char *peer_prov;
+        const char *peer_prov, *peer_drv;
 
         DCHECK(window_proxy_is_top_level(proxy),
                "§7.4.5 determined a NESTED navigable's response origin and it is not this agent's, so its "
@@ -2090,8 +2099,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                "§7.3.1.3's parent and §9.5's container answer (not the bytes), the nested form of "
                "window_proxy_navigate_to_peer, and the host route for it");
         peer_prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
-        CHECK(peer_prov != NULL, "navigable: OOM taking the provenance off a load whose Document is a peer's");
-        nav_navigate_to_peer(ctx, proxy, dest_url, origin, final_flags, peer_prov);
+        peer_drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
+        CHECK(peer_prov != NULL && peer_drv != NULL,
+              "navigable: OOM taking the provenance off a load whose Document is a peer's");
+        nav_navigate_to_peer(ctx, proxy, dest_url, origin, final_flags, peer_prov, peer_drv);
+        JS_FreeCString(ctx, peer_drv);
         JS_FreeCString(ctx, peer_prov);
     }
     /* THE RESPONSE'S HEADER LIST OUTLIVES THIS POINT NOW, and it has to: HTML §13.2.3.2 "Determining the
@@ -2477,13 +2489,13 @@ static int g_nav_load_stepid = -1;
    reason: the operation takes its inputs with it. NULL for every destination that has a response of its own. */
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
                                    SerializedPolicyContainer inherit_policy, const char *about_base,
-                                   const char *document_resource, const char *provenance)
+                                   const char *document_resource, const char *provenance, const char *driven)
 {
     /* THE SIZE IS THE SLOT LIST'S LAST MEMBER AND EVERY ASSIGNMENT BELOW NAMES ITS SLOT — see the enum beside
        NAV_LOAD_STEPS for the incident that cost, and for why a hand-written extent standing beside a
        hand-written enumeration is two copies of one number with only one of them ever read. */
     JSValueConst argv[NAV_LOAD_ARG_COUNT];
-    JSValue fn, url, org, csp, self, about, prov, res;
+    JSValue fn, url, org, csp, self, about, prov, drv, res;
     JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol;
 
     if (g_nav_load_stepid < 0)
@@ -2577,6 +2589,13 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
            "address and whether to send the person's cookies with it on exactly this word");
     prov = JS_NewString(ctx, provenance);
     CHECK(!JS_IsException(prov), "the document-load job's provenance could not be allocated");
+    /* …and whose act it is, a separate fact for the same reason: the flow that runs the job need not be the
+       flow that enqueued it. */
+    DCHECK(driven != NULL && (!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO)),
+           "a document load was enqueued with no drive mark — every caller states engine_driven_token of the "
+           "running path, and the trusted zone's `actor` row reads it");
+    drv = JS_NewString(ctx, driven);
+    CHECK(!JS_IsException(drv), "the document-load job's drive mark could not be allocated");
     /* §7.4.2.2's `documentResource`, AND THE ONE ADDRESS IT MAY ARRIVE WITH. §7.4.5 reads a resource in exactly
        one constructor — create navigation params from a SRCDOC resource, whose response it gives the URL
        `about:srcdoc` — so a resource riding any other destination is a document body nothing would parse, and
@@ -2645,6 +2664,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[NAV_LOAD_ARG_COEP_REPORT_ONLY] = coep_ro;
     argv[NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT] = coep_ro_endpoint;
     argv[NAV_LOAD_ARG_PROVENANCE] = prov;
+    argv[NAV_LOAD_ARG_DRIVEN] = drv;
     argv[NAV_LOAD_ARG_INTEGRITY] = integ;
     argv[NAV_LOAD_ARG_REFERRER_POLICY] = refpol;
     argv[NAV_LOAD_ARG_DOCUMENT_RESOURCE] = res;
@@ -2653,6 +2673,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     JS_FreeValue(ctx, res);
     JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, refpol);
+    JS_FreeValue(ctx, drv);
     JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);
     JS_FreeValue(ctx, coep_ro);
@@ -2911,7 +2932,8 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, 
                            /* §7.4.2.2's `documentResource`, straight from the caller — §4.8.5's srcdoc arm is
                               the only one that states it and every other navigation states null. */
                            document_resource,
-                           engine_provenance_of_running_path());
+                           engine_provenance_of_running_path(),
+                           engine_driven_token(engine_driven_of_running_path()));
     free(addr);
     return JS_DupValue(ctx, proxy);
 }
@@ -3111,7 +3133,8 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
                                serialized_policy_container_of(document_policy(ctx)),
                                strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
                                resource,
-                               engine_provenance_of_running_path());
+                               engine_provenance_of_running_path(),
+                               engine_driven_token(engine_driven_of_running_path()));
         if (resource) JS_FreeCString(ctx, resource);
         JS_FreeValue(ctx, entry_resource);
     }
@@ -3556,6 +3579,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        say whether a gate was forced does not exist and no gate was forced — which is what
        engine_provenance_of_running_path answers `derived` for, in the under-claiming direction. */
     const char *provenance = engine_provenance_of_running_path();
+    const char *driven = engine_driven_token(engine_driven_of_running_path());
     char *addr = NULL;
     const Origin *origin = NULL;
     /* §7.4.2.2's scheme dispatch, as child_address answered it — see the assertion below for why a create is
@@ -3840,7 +3864,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                than recomputed: one operation, one answer. */
             navigable_load_enqueue(ctx, proxy, addr, origin, creator_policy,
                                    strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
-                                   document_resource, provenance);
+                                   document_resource, provenance, driven);
     } else {
         /* AND A SRCDOC FRAME CAN REACH THIS ARM, WHICH IS A CAPABILITY AND NOT A CONTRADICTION. §7.3.2.1's
            determine the origin answers a srcdoc destination with the SOURCE origin — step 3, "if url is
@@ -4194,6 +4218,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             sandbox_flags,
             provenance,
             peer_in_creator_group ? "creator" : "new",
+            driven,   /* whose act it is (solver/engine.h's PENDING_DRIVEN_*), read by the zone's `actor` row */
             creator_policy.csp ? creator_policy.csp : "",
         };
 

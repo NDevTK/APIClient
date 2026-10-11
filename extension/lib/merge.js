@@ -188,6 +188,11 @@ function mergeASTResultsIntoVDD(tab, results) {
              ", which is none of " + CALLSITE_PROVENANCE.join("/") + " — endpoint.c writes one on every " +
              "record through solver/engine.h's one mapping, so this is that emission and lib/endpoint-record" +
              ".js's vocabulary having parted, and every learned address would be read at the wrong grade");
+      /* …and whose act the sighting was, a boolean endpoint.c writes on every record beside the grade. */
+      DCHECK(typeof callSite.driven === "boolean",
+             "a fetchCallSites entry carries the drive mark " + JSON.stringify(callSite.driven) + " — " +
+             "endpoint.c writes `driven` as a boolean on every record, so this is that emission and this " +
+             "zone having parted");
       // Structural @T candidate (url:null — unreached site, value
       // unresolved): surfaced via focusedView/structuralCandidates, not
       // a learnable endpoint. Skip before new URL(null) fabricates a

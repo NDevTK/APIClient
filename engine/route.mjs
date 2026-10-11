@@ -199,7 +199,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     M.HEAPU8[p + u8.length] = 0;
     return [p, u8.length];
   };
-  /* KEYED ON THE REQUEST: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>
+  /* KEYED ON THE REQUEST: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>
      CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` lines and the delivery matches the five-field
      identity, so a GET and a POST to one address are two questions with two replies. */
   const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
@@ -417,9 +417,9 @@ async function service(e) {
   let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const t = line.split('\t');
-    if (t.length !== 10 || t.some((x, i) => i !== 1 && i !== 7 && x === ''))
+    if (t.length !== 11 || t.some((x, i) => i !== 1 && i !== 8 && x === ''))
       fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>' +
-           `CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL\`: ${line} — ` +
+           `DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL\`: ${line} — ` +
            'the empty DESTINATION is Fetch §2.2.5\'s own default and the empty REFERRER POLICY is Referrer ' +
            'Policy §3\'s, and they are the fields that may be empty');
     /* THE DESTINATION IS NOT NAMED HERE, AND THAT IS A STATEMENT. It is the CORB class — whether a reply may
@@ -433,20 +433,22 @@ async function service(e) {
        data request whose address rests on a witness this engine chose from one the app's own text spells, and
        this driver fires nothing — it answers every park out of a literal. Its vocabulary is checked below all
        the same, for the reason the other two vocabularies are. */
-    const [method, , initiator, provenance, pinned, , mode, referrerPolicy, referrer, u] = t;
+    const [method, , initiator, provenance, pinned, driven, , mode, referrerPolicy, referrer, u] = t;
     /* THIS DRIVER ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF — its fixtures' fetches are named `/hold`,
        `/resume`, `/got` and `/closed` and the reply is `{}` served out of a literal, so there is no network
        here for a firing policy to be about. The vocabularies are checked because a driver that read a field it
        never verified is the one that would carry a producer's drift into every assertion below it. */
     if (initiator !== 'parser' && initiator !== 'script')
       fail(`a pending line states the initiator \`${initiator}\`, which is neither token solver/engine.h declares`);
-    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced' && provenance !== 'driven')
-      fail(`a pending line states the provenance \`${provenance}\`, which is none of the four tokens ` +
+    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
+      fail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
            'solver/engine.h declares');
     if (pinned !== 'pinned' && pinned !== 'unpinned')
       fail(`a pending line states the pinned mark \`${pinned}\`, which is neither token solver/engine.h ` +
            'declares — a third value would be answered by whichever arm a firing policy happens to have as ' +
            'its else, which is the permissive one');
+    if (driven !== 'driven' && driven !== 'undriven')
+      fail(`a pending line states the drive mark \`${driven}\`, which is neither token solver/engine.h declares`);
     if (u.includes('/hold')) continue;
     if (u.includes('/resume') && resumeOwed) continue;
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }
@@ -572,18 +574,17 @@ async function service(e) {
        redirect, so the response's URL is the ADDRESS THAT WAS ASKED FOR; stating it is a fact about this
        driver's own network rather than a field copied to satisfy a reader, and a host that DOES follow a
        redirect reports a different string in the same slot.
-       `document.fetch<TAB><provenance><TAB><url>` — SPLIT AT THE FIRST TAB AFTER THE VERB, ADDRESS LAST. This
-       driver reads the provenance nowhere and makes no firing decision from it: it serves one literal document
-       out of memory, spends no network and has no session to spend, so it has nothing that field decides. What
-       it must not do is take the line's tail for a URL, which would answer every navigation with a Document
-       whose §7.4.5 origin is determined over a string beginning `derived<TAB>`. */
+       `document.fetch<TAB><provenance><TAB><driven><TAB><url>` — ADDRESS LAST, past the second tab after the
+       verb. This driver reads the provenance and drive mark nowhere: it serves one literal document out of
+       memory and spends no network. What it must not do is take the line's tail for a URL. */
     const fetchArgs = op.slice('document.fetch\t'.length);
     const fetchTab = fetchArgs.indexOf('\t');
-    if (fetchTab <= 0 || fetchTab >= fetchArgs.length - 1)
-      fail(`a document.fetch request is not \`document.fetch<TAB><provenance><TAB><url>\`: ${op} — ` +
-           'core/frame/navigable.c writes both fields non-empty on every path, so a record with one tab is ' +
-           'this driver and that job no longer sharing a grammar');
-    e.answer(id, { url: fetchArgs.slice(fetchTab + 1), headers: "" }, HTML_B);
+    const drivenTab = fetchTab > 0 ? fetchArgs.indexOf('\t', fetchTab + 1) : -1;
+    if (fetchTab <= 0 || drivenTab <= fetchTab + 1 || drivenTab >= fetchArgs.length - 1)
+      fail('a document.fetch request is not ' +
+           `\`document.fetch<TAB><provenance><TAB><driven><TAB><url>\`: ${op} — core/frame/navigable.c ` +
+           'writes all three fields non-empty on every path');
+    e.answer(id, { url: fetchArgs.slice(drivenTab + 1), headers: "" }, HTML_B);
     paid++;
   }
   return { step: r, paid };
@@ -658,13 +659,13 @@ async function drainNotices(e) {
          under a policy container nobody stated. That is §A-FIELD-A-CONSUMER-DEFAULTS exactly: `slice(16)` on a
          sixteen-field record is `[]` and joins to the empty string, which is indistinguishable from a document
          that really sent no policy. The count is what tells those apart, and it is the only thing that can. */
-      if (f.length < 17)
-        fail(`a navigable.create notice was short of its fields (${f.length} of seventeen): ${n} — ` +
+      if (f.length < 19)
+        fail(`a navigable.create notice was short of its fields (${f.length} of nineteen): ${n} — ` +
              'navigable.c writes the child, the creator, the address, the origin, §8.1.3.1\'s top-level ' +
              'creation URL, CSP §2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s ' +
              'parent navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ancestor ' +
-             'origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION is evidence of, and ' +
-             'the policy');
+             'origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION is evidence of, its ' +
+             'drive mark, and the policy');
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
       /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list, FIELDS 7-10 ARE §7.1.4's EMBEDDER POLICY —
          its value, its reporting endpoint, its report-only value and its report-only endpoint — FIELD 11 IS
@@ -681,9 +682,9 @@ async function drainNotices(e) {
          result travels), FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF (CLAUDE.md
          §A-REQUEST-CARRIES-THE-PROVENANCE's `observed`/`derived`/`forced`, which this driver reads nowhere for
          the `document.fetch` branch's reason exactly — it serves a literal and spends no network — but which
-         it must COUNT, because the policy behind it is the remainder and an uncounted field moves it), and
-         FIELD 16 IS
-         THE LIST. The policy is the record's REMAINDER (a
+         it must COUNT, because the policy behind it is the remainder and an uncounted field moves it), FIELD
+         16 IS ITS BROWSING CONTEXT GROUP (`creator` or `new`), FIELD 17 ITS DRIVE MARK (both counted for the same
+         reason), and FIELD 18 IS THE LIST. The policy is the record's REMAINDER (a
          raw CSP header may contain HTAB), which is why everything that is not the policy sits before it: an
          origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
          one-letter tag and '.'-terminated base64, RFC 8941 §3.3.3 "Strings" excludes one from a
@@ -694,10 +695,10 @@ async function drainNotices(e) {
          parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
          either of them into the container beside them could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(16).join('\t'),
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(18).join('\t'),
                                          f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]));
     }
-    /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin> <provenance>`. The same act as
+    /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin> <provenance> <driven>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a
        NULL CREATOR, so there is no policy container to clone and no top-level creation URL only the creator
        could state (a top-level traversable's is its own address). The instance is NEW rather than joined
@@ -709,9 +710,9 @@ async function drainNotices(e) {
        branch above with a `cross-origin-opener-policy: same-origin` field line, which `a`'s own `unsafe-none`
        does not match. That is one line in HTML_A and one URL-keyed header in the reply this driver serves. */
     else if (f[0] === 'navigable.swap') {
-      /* FIVE FIELDS, the fourth being the provenance of the navigation that caused the swap — counted here
-         and read nowhere, for the create arm's reason. */
-      if (f.length < 5 || !f[1] || !f[2] || !f[4])
+      /* SIX FIELDS, the fourth and fifth being the provenance and drive mark of the navigation that caused the
+         swap — counted here and read nowhere, for the create arm's reason. */
+      if (f.length < 6 || !f[1] || !f[2] || !f[4] || !f[5])
         fail(`a navigable.swap notice was short of its fields: ${n}`);
       if (holderOf(f[1])) fail(`§7.1.3.2's swap named a document an instance already holds: ${f[1]}`);
       /* NO CREATOR (§7.3.2.3 makes the new browsing context "with null, null, and group"), so no container to
@@ -798,7 +799,7 @@ async function drainNotices(e) {
       if (f.length < 2 || !f[1]) fail(`a world.parked notice carried no vector: ${n}`);
       worldsParked.push(f[1]);
     }
-    /* `document.seed <address> <provenance>` — an address a document declared is a page of its own application
+    /* `document.seed <address> <provenance> <driven>` — an address a document declared is a page of its own application
        (engine/host/solver/route_seed.h), reached whenever a fixture here calls `history.pushState` with a URL.
        THIS DRIVER REFUSES IT, AND THE REFUSAL IS ABOUT WHAT THIS DRIVER IS. It provisions the peer instances a
        CROSS-INSTANCE fixture needs — a create, a swap, a routed post — from records that name the document
@@ -809,12 +810,12 @@ async function drainNotices(e) {
        THE GRAMMAR IS STILL CHECKED, because a malformed record is a WRITER that changed and that is a defect
        whichever host reads it. */
     else if (f[0] === 'document.seed') {
-      if (f.length < 3 || !f[1] || !f[2])
-        fail(`a document.seed notice was short of its fields — every declaration names the ADDRESS and the ` +
-             `PROVENANCE the trusted zone decides whether to load it from: ${n}`);
-      if (f[2] !== 'derived' && f[2] !== 'forced' && f[2] !== 'driven')
-        fail(`a document.seed notice carries the provenance \`${f[2]}\`, which is none of \`derived\`, ` +
-             `\`forced\` and \`driven\` — a declaration is made by RUNNING the page's code and no load produces one, so ` +
+      if (f.length < 4 || !f[1] || !f[2] || (f[3] !== 'driven' && f[3] !== 'undriven'))
+        fail(`a document.seed notice was short of its fields — every declaration names the ADDRESS, the ` +
+             `PROVENANCE and the DRIVE MARK the trusted zone decides whether to load it from: ${n}`);
+      if (f[2] !== 'derived' && f[2] !== 'forced')
+        fail(`a document.seed notice carries the provenance \`${f[2]}\`, which is neither \`derived\` nor ` +
+             `\`forced\` — a declaration is made by RUNNING the page's code and no load produces one, so ` +
              `\`observed\` is unreachable for it and any other word is a field read at the wrong tab`);
       fail(`a document at \`${f[1]}\` was declared a page of its own application, and this driver holds no ` +
            `frontier to make it a work item on. It provisions PEERS for a cross-instance fixture (a create, ` +

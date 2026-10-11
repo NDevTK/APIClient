@@ -120,15 +120,6 @@
 #define PROV_OBSERVED 0
 #define PROV_DERIVED  1
 #define PROV_FORCED   2
-/*   DRIVEN   — it was minted inside a flow that is this tool's own act (flow_path_driven: a drive of a function
- *              the page never called, or a candidate session carrying a payload this engine chose), so it is
- *              this tool's act, whatever arms its path forced. Weakest in the join's order: a request any
- *              member made outside a drive is one the page makes, and the drive's own copy adds nothing.
- *              NAMED RESIDUAL. Not covered: a drive that forced no arm computes its values from real inputs,
- *              which could be offered as examples as `derived` ones are. The next diff carries the forced bit
- *              beside this one so the example pools can read both. Its absence shows as an unused endpoint
- *              whose every value sits in the forced pool although its drive forced no branch. */
-#define PROV_DRIVEN   3
 /* THE COMPOSITION, IN ONE PLACE, FROM THE TWO FACTS AND THEIR TWO OWNERS. The parser-inserted mark is the
    BROWSER's (only the party that inserted the element knows whether a parser did it — core/html/html_script.h
    states the same thing about its own parameter), and the forced mark is the FLOW's (only the solver knows
@@ -138,7 +129,7 @@
    `kind` COMPUTES NOTHING AND IS TAKEN FOR THE ASSERTS, exactly as `pending_pinned_compose` below takes it:
    it is the one coordinate a reader of either abort would otherwise have to reconstruct. It used to be the
    FIRST conjunct's proxy; see PROV_OBSERVED above for what that cost and why a kind cannot answer this. */
-int pending_prov_compose(int kind, int path_forced, int path_driven, int parser_inserted);
+int pending_prov_compose(int kind, int path_forced, int parser_inserted);
 /* …AND WHETHER THIS PARK'S REPLY BECOMES A PROGRAM, WHICH IS THE ONE QUESTION THE THREE KINDS ABOVE ALREADY
    ANSWER TOGETHER AND WHICH NOTHING COULD ASK. Their own documentation names them as a set — an injected
    `<script src>`, a document's own external script and a dynamic `import()` — and FLOW_PENDING_RESOURCE's
@@ -168,6 +159,11 @@ int pending_kind_is_program(int kind);
  * path bit refuses. Both halves arrive here together, from one park, which is the only place they can be
  * compared at all. */
 int pending_pinned_compose(int kind, int path_forced, int path_pinned);
+/* …and whether the parking flow is driven by this tool (`flow_path_driven`: a drive of uncalled code or a
+ * candidate session), which makes the request this tool's act. It is not a provenance word: provenance grades what the values are worth
+ * and a drive that forced no arm computes them from real inputs, so the two facts travel side by side and the
+ * trusted zone's `actor` row reads only this one. `kind` is taken for the assert's message. */
+int pending_driven_compose(int kind, int path_driven);
 
 /* THE RECORD'S FIELDS, IN ONE PLACE, WITH WHAT THE FORK DOES WITH EACH.
  *   SHARE  — the sibling takes a REFERENCE. Right for an immutable value (a JS string, the request body's
@@ -366,10 +362,14 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     X(PARSER_INS, "parserIns", PEND_SHARE, JS_NewBool(pend_ctx(), parser_inserted))    \
     /* what this request is evidence of, composed from the pusher's markup fact and its path */ \
     X(PROV,       "prov",      PEND_SHARE,                                             \
-      JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced, path_driven, parser_inserted))) \
+      JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced, parser_inserted))) \
     /* …and whether the ADDRESS may rest on a witness this engine chose, which PROV cannot say */ \
     X(PINNED,     "pinned",    PEND_SHARE,                                             \
       JS_NewBool(pend_ctx(), pending_pinned_compose(kind, path_forced, path_pinned)))  \
+    /* …and whose act it is: set when this tool drives the parking flow (flow_path_driven: an orphan \
+       drive or a candidate). Independent of PROV: a drive that forced no arm computes real values. */ \
+    X(DRIVEN,     "driven",    PEND_SHARE,                                             \
+      JS_NewBool(pend_ctx(), pending_driven_compose(kind, path_driven)))               \
     X(SCRIPT_ROW, "scriptRow", PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
     /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the delivery */ \
     X(SCRIPT_TYPE, "scriptType", PEND_SHARE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE))  \

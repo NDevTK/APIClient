@@ -644,7 +644,6 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
 #define PENDING_PROVENANCE_OBSERVED "observed" /* a real load of this document makes exactly this request */
 #define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
 #define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
-#define PENDING_PROVENANCE_DRIVEN   "driven"   /* minted inside a flow that is this tool's act (flow_path_driven) */
 
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
  * because provenance grades what a reply is worth while this decides whether the act may be spent, and a
@@ -662,7 +661,7 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
 /* The provenance word for a request built by running the page's code rather than by a park: a navigation
  * (core/frame/navigable.c's §7.4.5 "Populating a session history entry" load and `navigable.create`) or a route
  * declaration (solver/route_seed.c). One composition in one place, read off the running flow.
- *   It answers `derived`, `forced` or `driven`, never `observed`: `observed`'s first conjunct is HTML §4.12.1.1's parser
+ *   It answers `derived` or `forced`, never `observed`: `observed`'s first conjunct is HTML §4.12.1.1's parser
  * document, which only a park record carries, and no element is in scope where code runs. With no running flow
  * the answer is `derived`, which under-claims (costing a per-origin authorisation) rather than over-claims
  * into the observed pool; a caller for which a flow-less act is a broken invariant asserts it (route_seed.c
@@ -698,6 +697,24 @@ int engine_pinned_of_running_path(void);
  * for the firing decision that reads them. An unknown value is fatal (CHECK), as for engine_provenance_token. */
 const char *engine_pinned_token(int pinned);
 
+/* Whose act a request is: `driven` means driven by this tool — the flow that made it is a drive of a function
+ * the page never called or a candidate session re-running the page with a payload this engine chose
+ * (solver/flow.h's `flow_path_driven`, inherited by every fork) — and `undriven` that the page's own code ran.
+ * A third field beside provenance and the witness mark, independent of both: a drive that forced no arm
+ * computes its values from real inputs, so its provenance stays `derived` and its values stay offerable as
+ * examples, while extension/lib/safe-fetch.js's `actor` row reads this field alone and refuses it as this
+ * tool's act. A deduped set states `undriven` if any member's flow was not driven, since then the page makes
+ * the request. */
+#define PENDING_DRIVEN_YES "driven"
+#define PENDING_DRIVEN_NO  "undriven"
+
+/* The drive mark for an act that is not a park, read off the running flow. With no running flow the answer is
+ * 0, which is the fact: a drive is always a flow (engine.c's orphan seed), so no flow is no drive. */
+int engine_driven_of_running_path(void);
+
+/* The drive mark's wire spelling, shared by every writer of the field. An unknown value is fatal (CHECK). */
+const char *engine_driven_token(int driven);
+
 /* What the bytes are for: Fetch §2.2.5 "Requests"' destination, stated verbatim off the request record the park
  * carried (core/fetch/fetch.h), never derived here. It is a different fact from the initiator: an injected
  * `<script src>`, a dynamic `import()` and a `fetch()` all have initiator `script`, and only the first two
@@ -717,7 +734,7 @@ const char *engine_pinned_token(int pinned);
    the same predicate in `extension/lib/safe-fetch.js` over the bytes it read. */
 
 /* What the host still owes the frontier's network parks: one `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>
- * PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` line per outstanding
+ * PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` line per outstanding
  * request, newline-terminated, "" for none, deduped by the request's identity (solver/pending_index.h's
  * PendRequestKey); engine_pending_split is the authority on the shape, and the buffer is valid until the next
  * call. The method, mode, referrer policy and referrer are in the identity: a GET and a POST, or a `no-cors`
@@ -730,15 +747,15 @@ const char *engine_pinned_token(int pinned);
  * RFC 9110 §5.6.2 token, and the vocabularies are lowercase ASCII; the join asserts them. */
 const char *engine_pending_fetches(void);
 /* Split one engine_pending_fetches line where it was joined, so hosts do not each re-derive the grammar. `line`
-   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the ten fields
+   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the eleven fields
    are returned pointing into it. Every out-parameter is required (asserted): a host that skipped the
    destination would fetch a script as data, one that skipped the provenance would carry a forced reply as an
    observation, one that skipped the credentials mode would decide by silence whose session pays, and one that
    skipped the mode could not deliver the reply against the request it answers. A missing TAB is fatal (CHECK). */
 void engine_pending_split(char *line, const char **method, const char **destination,
                           const char **initiator, const char **provenance, const char **pinned,
-                          const char **credentials, const char **mode, const char **referrer_policy,
-                          const char **referrer, const char **url);
+                          const char **driven, const char **credentials, const char **mode,
+                          const char **referrer_policy, const char **referrer, const char **url);
 /* Deliver a body for one request, keyed on the (method, mode, referrer policy, referrer, url) the flow parked
    on. Returns how many entries it filled; 0 means the host's pairing is off or the record was sold
    (engine_take_paged_owed), which the caller tells apart because it owns the credit. */

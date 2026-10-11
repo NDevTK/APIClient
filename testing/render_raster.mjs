@@ -279,9 +279,9 @@ function readPaint(M, labels) {
    origin, the flow keeps its park, and the engine forks the arm that runs the page's failure path. */
 const PROGRAM_DESTINATIONS = new Set(['script', 'style', 'worker', 'sharedworker', 'serviceworker']);
 
-/* The ten fields of solver/engine.h's pending line, in engine_pending_split's order. */
-const PENDING_FIELDS = ['method', 'destination', 'initiator', 'provenance', 'pinned', 'credentials', 'mode',
-                        'referrerPolicy', 'referrer', 'url'];
+/* The eleven fields of solver/engine.h's pending line, in engine_pending_split's order. */
+const PENDING_FIELDS = ['method', 'destination', 'initiator', 'provenance', 'pinned', 'driven', 'credentials',
+                        'mode', 'referrerPolicy', 'referrer', 'url'];
 function splitPending(line) {
   /* Split where the engine joined it. No field can hold a TAB (URL Standard §4.4 URL parsing removes them and
      the rest are tokens), so a line with another field count is a grammar this host does not share, and

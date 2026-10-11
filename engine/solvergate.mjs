@@ -189,7 +189,7 @@ const SCRIPT_LIKE = scriptLikeDestinations();
    and not here trips the check LOUDLY, and a field added here and not to the join trips it too. Neither can
    quietly re-point the address. */
 const PENDING_LINE_FIELDS = ["method", "destination", "initiator", "provenance",
-                             "pinned", "credentials", "mode", "referrerPolicy", "referrer", "url"];
+                             "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "url"];
 
 /* THE SCHEDULES, AND EACH ONE IS A TRIPLE RATHER THAN A NAME. Every knob is one the production host already
    has and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule
@@ -513,7 +513,7 @@ async function child(docPath, schedName) {
        classic-script decode had never once seen the bytes whose charset it exists to honour. The mock body is
        written as source text here, so this is an ENCODE. */
     /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers
-       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>
+       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>
        REFERRER<TAB>URL` and the reply is delivered against its five-field identity, so a GET and a POST to one
        address are two questions here. */
     const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
@@ -772,9 +772,8 @@ async function child(docPath, schedName) {
       if (initiator !== "parser" && initiator !== "script")
         gateFail(`a pending line states the initiator \`${initiator}\`, which is neither token ` +
                  "solver/engine.h declares — the vocabulary moved under every host that reads it");
-      if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced" &&
-          provenance !== "driven")
-        gateFail(`a pending line states the provenance \`${provenance}\`, which is none of the four tokens ` +
+      if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced")
+        gateFail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
                  "solver/engine.h declares — the vocabulary moved under every host that reads it");
       /* `computedType` IS THIS ZONE'S DECISION, AND WITHOUT IT THIS GATE COULD NOT MEASURE A REPLY AT ALL.
          The sniff belongs to whoever READ the bytes, so fetch_reply_computed_type asserts the field rather

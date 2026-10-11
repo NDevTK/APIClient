@@ -50,7 +50,7 @@ void browsing_context_group_release(void)
 }
 
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
-                                 SandboxFlags final_sandbox_flags, const char *provenance)
+                                 SandboxFlags final_sandbox_flags, const char *provenance, const char *driven)
 {
     uint32_t swapped;
     char *op;
@@ -67,6 +67,9 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
            "caused it — the load job carries the word (core/frame/navigable.c) and the trusted zone re-fetches "
            "this address to build the Document, so without it that zone is deciding whether to spend the "
            "network, and whose session, on a navigation nothing has told it who named");
+    DCHECK(driven != NULL && (!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO)),
+           "§7.1.3.2's group swap was asked to announce an instance with no drive mark for the navigation that "
+           "caused it — the load job carries it beside the provenance, and the zone's `actor` row reads it");
     /* §7.1.3.2 STEP 2 — "if browsingContext is not a top-level browsing context, then return browsingContext".
        Reaching the swap for a child navigable means the predicate was asked where the standard never asks it;
        §7.4.5 obtains an opener policy only for a top-level traversable, which is the same fact from the other
@@ -119,6 +122,7 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
         url,
         origin_serialized(origin),
         provenance,
+        driven,
     };
 
     op = engine_notice_build("navigable.swap", fields, sizeof fields / sizeof fields[0]);

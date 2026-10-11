@@ -510,7 +510,7 @@ int pending_owed_replies(JSValueConst reg)
            reached through the one entry kind for which no reply exists at all. */
         if (kind != FLOW_PENDING_HOSTREQ && pending_entry_host_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
-               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and engine_provide delivers
+               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and engine_provide delivers
                against the pair, so an owed
                entry missing either is one the host was never shown and never will be — counting it credits a reply nobody is
                going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at
@@ -558,11 +558,8 @@ static int pend_own_count(JSValueConst e);
    parser-inserted park is a request a real load makes ONLY while the path that produced the row has stood on
    no contradicted arm, because a `document.write` on a forced arm produces a parser-inserted row of that
    flow's own sequence and of nothing else. Taking either fact alone reports the other one's answer. */
-int pending_prov_compose(int kind, int path_forced, int path_driven, int parser_inserted)
+int pending_prov_compose(int kind, int path_forced, int parser_inserted)
 {
-    DCHECK(path_driven == 0 || path_driven == 1,
-           "a park stated a drive mark that is neither set nor clear — it comes from flow_path_driven, so a "
-           "third value is a caller that computed this somewhere else");
     DCHECK(path_forced == 0 || path_forced == 1,
            "a park stated a forced-path mark that is neither set nor clear — it comes from flow_path_forced, "
            "which asserts the same thing at the other end, so a third value is a caller that computed this "
@@ -591,9 +588,6 @@ int pending_prov_compose(int kind, int path_forced, int path_driven, int parser_
             "`parser document` to `script` elements only, and this register's other kinds are parks no "
             "element causes, so this request would be graded `observed` on a flag nothing could have set",
             kind);
-    /* The drive decides first: the request exists because this engine called the function, so it is this
-       tool's act whatever the path forced or whoever inserted the element. */
-    if (path_driven) return PROV_DRIVEN;
     if (path_forced) return PROV_FORCED;
     return parser_inserted ? PROV_OBSERVED : PROV_DERIVED;
 }
@@ -647,6 +641,16 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned)
             "a NARROWING of the forced set, so this park would have the chokepoint decide a request the "
             "provenance beside it refuses", kind);
     return path_pinned;
+}
+
+/* See pending.h. The drive mark and the forced mark are separate facts about one path: a drive may stand on
+   no forced arm, and a page-called path may stand on one. */
+int pending_driven_compose(int kind, int path_driven)
+{
+    DCHECKF(path_driven == 0 || path_driven == 1,
+            "a park of kind %d stated a drive mark that is neither set nor clear — it comes from "
+            "flow_path_driven, so a third value is a caller that computed it somewhere else", kind);
+    return path_driven;
 }
 
 JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int path_driven,

@@ -74,6 +74,10 @@ typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *can
    needed the page's code to run, and a flag re-armed on every merge would answer it about the last sighting. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; int is_asset; int prov; int pre_program; int door;
+                 /* `driven` is whose act the sighting was (solver/engine.h's PENDING_DRIVEN_*), part of the
+                    identity beside `prov`: a drive's values are offered as examples marked driven, so they may
+                    not merge into the page's own record. */
+                 int driven;
                  /* `addr_class` is whether the run had determined the address when it recorded it (endpoint.h's
                     ENDPOINT_ADDRESS_CLASSES has each word's claim and why it is a floor under the hard bar). No
                     producer states it: it is read off the `url` value's own concolic provenance at the door.
@@ -1856,8 +1860,10 @@ static void param_add_val(Param *p, const char *v) {   /* merge a validValue (de
    structure: a forced sighting cannot reach a record built from derived ones, so no value learned only because a
    gate was forced is published as one the app computes (endpoint.h has why the pending line folds and this does
    not). */
-static int same_identity(Endpoint *e, const char *method, const char *path, int prov, const KvBuf *kv) {
-    if (e->prov != prov || strcmp(e->method, method) || strcmp(e->path, path) || e->np != kv->n) return 0;
+static int same_identity(Endpoint *e, const char *method, const char *path, int prov, int driven,
+                         const KvBuf *kv) {
+    if (e->prov != prov || e->driven != driven || strcmp(e->method, method) || strcmp(e->path, path) ||
+        e->np != kv->n) return 0;
     for (int i = 0; i < kv->n; i++)
         if (e->params[i].loc != kv->e[i].loc || strcmp(e->params[i].name, kv->e[i].name)) return 0;
     return 1;
@@ -1915,22 +1921,36 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
 }
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
-                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int door) {
+                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int driven,
+                     int door) {
     /* What this sighting is evidence of, asserted at the mint for `kv_add`'s reason: every site that records an
        endpoint passes through here. A value outside the vocabulary is the dangerous one: `0` is `observed`, so an
        uninitialised grade reads as the strongest claim this surface makes. */
-    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED || prov == PROV_DRIVEN,
-            "an endpoint was recorded with the provenance %d, which is none of the four solver/pending.h "
+    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
+            "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h "
             "defines; the grade is part of the record's identity and is emitted on it. method=%s", prov, method);
-    /* An act minted inside a flow that is this tool's act (a drive of a function the page never called, or a
-       candidate session) states `driven`, and any other grade would let the trusted zone fire it as the page's.
-       A reply chunk is exempt, being graded by the request it answers, whose join may hold a page member's
-       grade. */
+    /* And whose act it was, asserted at the producer with the grade beside it, because the two are independent
+       facts about one path: the drive mark is flow_path_driven (an orphan drive or a candidate session) and the
+       grade is `forced` exactly when the path stood on a forced arm, so a drive that forced no arm is `derived` and driven, and its values are
+       offered as the drive computed them. A door stated off a record is exempt: a reply chunk takes the request's
+       facts, and a program load takes its park's, composed at pending_push off the parking flow, which need not
+       be the running one (a joined document's boot flow is seeded from inside its creator's). */
+    DCHECKF(driven == 0 || driven == 1, "an endpoint was recorded with the drive mark %d. method=%s", driven,
+            method);
     {
         const Flow *rf = flow_running();
-        DCHECKF(door == EPD_REPLY_CHUNK || rf == NULL || !flow_path_driven(rf) || prov == PROV_DRIVEN,
-                "an endpoint minted inside a flow that is this tool's act has provenance %d, not "
-                "`driven`; its producer must ask flow_path_driven. method=%s", prov, method);
+        int off_record = door == EPD_REPLY_CHUNK || door == EPD_DOCUMENT_SCRIPT || door == EPD_INJECTED_SCRIPT ||
+                         door == EPD_MODULE_IMPORT;
+        DCHECKF(off_record || rf == NULL || driven == flow_path_driven(rf),
+                "an endpoint minted by running code states the drive mark %d while the running flow's is %d — "
+                "the producer composed it without asking engine_driven_of_running_path, so the trusted zone and "
+                "the example pools would read this sighting as the wrong party's act. method=%s", driven,
+                rf ? flow_path_driven(rf) : -1, method);
+        DCHECKF(off_record || rf == NULL || (prov == PROV_FORCED) == flow_path_forced(rf),
+                "an endpoint minted by running code states the grade %d while the running flow's forced bit is "
+                "%d — the grade must be composed off `path_forced` alone, never off the drive mark, or a drive "
+                "that forced nothing would lose its examples. method=%s", prov,
+                rf ? flow_path_forced(rf) : -1, method);
     }
     /* And which mechanism composed the address, asserted at the same mint for the same reason. A membership test
        despite its spelling: `ENDPOINT_DOORS` gives its members no explicit values, so the enum is dense from
@@ -2047,7 +2067,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     int body_named = body_params(ctx, &kvb, body);
 
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
-        if (same_identity(&g_eps[i], method, path, prov, &kvb)) {
+        if (same_identity(&g_eps[i], method, path, prov, driven, &kvb)) {
             for (int j = 0; j < kvb.n; j++) {
                 param_add_val(&g_eps[i].params[j], kvb.e[j].val);
                 param_intersect_excl(&g_eps[i].params[j], kvb.e[j].excl, kvb.e[j].nexcl);
@@ -2108,7 +2128,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     if (g_eps_n >= g_eps_cap) { g_eps_cap = g_eps_cap ? g_eps_cap * 2 : 16; g_eps = realloc(g_eps, (size_t)g_eps_cap * sizeof(Endpoint)); CHECK(g_eps, "endpoint: OOM surface"); }
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
-    e->method = strdup(method); e->path = strdup(path); e->prov = prov;
+    e->method = strdup(method); e->path = strdup(path); e->prov = prov; e->driven = driven;
     /* Whether any program had started when this record was born, read at the mint, the instant the fact is about;
        a read at the census would answer for the end of the run. */
     e->pre_program = !engine_any_program_started();
@@ -2916,6 +2936,9 @@ char *endpoint_json_array(void) {
            engine comes to know an address, so a silent grade would be read as `observed`, the strongest. */
         json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
         json_buf_str(&b, engine_provenance_token(e->prov));
+        /* …and whose act the sighting was, always: a boolean the zone folds per method (endpoint.h). */
+        json_buf_raw(&b, ","); json_buf_key(&b, "driven");
+        json_buf_raw(&b, e->driven ? "true" : "false");
         /* And which mechanism composed the address and whether the page's code had run when it did, always, for
          * `provenance`'s reason: `epEmitted - epPreProgram` bounds how many addresses forced execution can have
          * contributed and names none, so a reader could not tell a run that learned ten gated API calls from one

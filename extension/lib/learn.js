@@ -563,6 +563,14 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   {
     const _prev = m._astProvenance === undefined ? callSite.provenance : m._astProvenance;
     m._astProvenance = mostObservedProvenance(_prev, callSite.provenance);
+    /* …and whose act the sightings were, folded beside it (lib/endpoint-record.js's `drivenJoin`): a method
+       stays `driven` only while no sighting was the page's own. It decides no pool — the values below are
+       pooled by provenance alone, so a drive that forced nothing offers its values marked by this field.
+       Named residual. Not covered: a value only a drive computed, under a method a page sighting folded to
+       `false`, is offered unmarked. Next diff: a per-value drive mark beside the two pools, promoted one way
+       as the forced pool is. Its absence shows as a Send-panel example the page's own code never computed
+       on a method that shows no drive mark. */
+    m._astDriven = m._astDriven === undefined ? callSite.driven : drivenJoin(m._astDriven, callSite.driven);
   }
   /* …and what this sighting proved about the address against the product's bar, collected as a set
      (lib/endpoint-record.js states why it is not folded). A row from an engine build that predates the key

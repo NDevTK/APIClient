@@ -424,18 +424,21 @@ for (;;) {
   let filled = 0;
   for (const line of pending) {
     const t = line.split("\t");
-    if (t.length !== 10 || t.some((x, i) => i !== 1 && i !== 7 && x === ""))
+    if (t.length !== 11 || t.some((x, i) => i !== 1 && i !== 8 && x === ""))
       fail("a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>" +
-           "CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` — qjs_pending joins the ten and the " +
-           "reply is delivered against (method, mode, referrer policy, referrer, url), so a short line makes a " +
-           "token the address. The empty DESTINATION is Fetch §2.2.5's own default and the empty REFERRER POLICY " +
-           "is Referrer Policy §3's, and they are the fields that may be empty");
-    const [method, , initiator, provenance, , , mode, referrerPolicy, referrer, u] = t;
+           "DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` — qjs_pending joins the " +
+           "eleven and the reply is delivered against (method, mode, referrer policy, referrer, url), so a short " +
+           "line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default and the empty " +
+           "REFERRER POLICY is Referrer Policy §3's, and they are the fields that may be empty");
+    const [method, , initiator, provenance, , driven, , mode, referrerPolicy, referrer, u] = t;
+    if (driven !== "driven" && driven !== "undriven")
+      fail(`a pending line states the drive mark \`${driven}\`, which is neither token solver/engine.h ` +
+           "declares — the vocabulary moved under every host that reads it");
     if (initiator !== "parser" && initiator !== "script")
       fail(`a pending line states the initiator \`${initiator}\`, which is neither token solver/engine.h ` +
            "declares — the vocabulary moved under every host that reads it");
-    if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced" && provenance !== "driven")
-      fail(`a pending line states the provenance \`${provenance}\`, which is none of the four tokens ` +
+    if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced")
+      fail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
            "solver/engine.h declares — the vocabulary moved under every host that reads it");
 
     /* TWO FACTS, TWO NAMES — THE ADDRESS TO FETCH AND THE KEY THAT ANSWERS THE PARK, WHICH THIS LOOP HELD
