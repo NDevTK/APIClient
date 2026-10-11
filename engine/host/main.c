@@ -1281,6 +1281,11 @@ QJS_EXPORT void qjs_teardown(void)
            "qjs_teardown with SYNCHRONOUS requests still owed — a flow blocked on one is suspended mid-frame "
            "with its snapshot intact, and tearing down drops it exactly where the pending assert above says "
            "not to. Answer them, step to DONE, or park the frontier, before ending the session");
+    /* This is where the ABI host stops stepping, so the session ends here (solver/engine.h's engine_sched_end):
+       an exit other than DONE, such as a referenced instance resting on a stall, leaves one flow switched in,
+       and the release below would free its live state as if it were parked. Before the scripts, which the
+       session borrows. After DONE it does nothing. */
+    engine_sched_end();
     doc_scripts_free(&g_scripts);
     /* The order and membership of this list match test_forced.c's main(), whose gate walks gc_obj_list. */
     /* The frontier first: a suspended flow's heap-frame chain holds the step machines of browser algorithms it is

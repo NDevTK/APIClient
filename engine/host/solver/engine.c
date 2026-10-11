@@ -11153,6 +11153,8 @@ void solver_frontier_free(JSContext *ctx)
     DCHECK(ctx != NULL, "the frontier was released against no realm");
     DCHECK(!g_frontier_released,
            "the frontier was released twice in one agent");
+    DCHECK(!g_sess_live && g_sess_cur == NULL,
+           "the frontier was released under a live session; call engine_sched_end where the host stops stepping");
     /* The @S searches go back before the frontier, and the order is the reason. A search takes a reference on the
        decision chain when its sink is detected (add_pending's decide_freeze_path, the re-injection point later
        candidates are seeded from), held neither by a flow nor by the running flow's globals. flow_registry_free
