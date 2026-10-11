@@ -1,19 +1,14 @@
-/* THE PRODUCTION ABI ENTRY — the `qjs_*` exports `extension/bridge.js` drives, and nothing else.
+/* The production ABI entry: the `qjs_*` exports `extension/bridge.js` drives, and nothing else. It holds no
+ * semantics: it is written against JS_SetTimeTravelHooks, JS_FlowNew/Resume and engine_sched_begin/step;
+ * identity is browser/core/loader's Lexbor <script> scan, and the frontier is solver/engine.c's WFQ dispatch loop.
  *
- * The OLD main.c was deleted with the rest of the pre-rewrite host because it was written against the fork's
- * previous hook API. This one is written against the current one (JS_SetTimeTravelHooks + JS_FlowNew/Resume +
- * engine_sched_begin/step) and holds NO semantics: identity is browser/core/loader's Lexbor <script> scan, the
- * frontier is solver/engine.c's WFQ dispatch loop, and both were extracted into components so this layer could
- * be exactly this thin.
+ * The ABI is begin plus step rather than one run because of the cooperative-quantum yield: the host has a message
+ * port to pump, other documents' engines to interleave and findings to stream, so the scheduler returns on a
+ * bounded slice and resumes the byte-identical frontier.
  *
- * The ABI is begin+step rather than one run because of the cooperative-quantum yield: the host has a message
- * port to pump, other documents' engines to interleave and findings to stream, so the scheduler RETURNS on a
- * bounded slice and resumes the byte-identical frontier. engine_sched_step already speaks that protocol.
- *
- * The WEB-PLATFORM host edges (fetch/DOM/location relayed to the trusted bridge) are NOT installed here yet, and
- * they are honestly ABSENT rather than stubbed: a page reading a global this engine does not provide throws its
- * own TypeError, which is the forcing function that names the edge to build. A stub answering undefined would
- * let a flow run past the missing capability and report a surface it never actually reached. */
+ * A web-platform edge this engine does not provide is absent rather than stubbed: a page reading it throws its own
+ * TypeError, which names the edge to build, where a stub answering undefined would let a flow report a surface it
+ * never reached. */
 #include <limits.h>   /* UINT_MAX — the pixel run's extent is narrowed to this ABI's own length type */
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,17 +22,17 @@
 #include "browser/core/fetch/response.h"
 #include "browser/core/fetch/request.h"
 #include "browser/core/url/url.h"
-#include "browser/core/url/origin.h"   /* §7.1.1's same origin: the one check that decides what may JOIN this agent */
+#include "browser/core/url/origin.h"   /* §7.1.1's same origin: the one check that decides what may join this agent */
 #include "browser/core/frame/window_proxy.h"
 #include "browser/core/frame/remote_location.h"
 #include "browser/core/events/broadcast_channel.h"
 #include "browser/core/frame/window_message.h"
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
-#include "browser/core/loader/document_load_type.h"  /* §7.4.5: WHICH document a response loads as */
-#include "browser/core/loader/document_load_decode.h"  /* §13.2.3.2: WHICH DECODER that response's bytes need */
+#include "browser/core/loader/document_load_type.h"  /* §7.4.5: which document a response loads as */
+#include "browser/core/loader/document_load_decode.h"  /* §13.2.3.2: which decoder that response's bytes need */
 #include "browser/core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection it runs */
-#include "browser/core/mime/mime_type.h"             /* §7.4.5's computed type is a MIME type RECORD */
+#include "browser/core/mime/mime_type.h"             /* §7.4.5's computed type is a MIME type record */
 #include "browser/core/frame/navigable.h"
 #include "browser/core/frame/navigation_params.h"
 #include "browser/core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
@@ -85,7 +80,7 @@
 #include "browser/core/paint/document_paint.h"   /* CSS 2.1 §E.2's ink on CSS 2.1 §2.3.1's region */
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
-#include "browser/core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
+#include "browser/core/dom/node_interface.h"   /* the one place a Document is made; see that header */
 #include "solver/absent.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
@@ -96,18 +91,15 @@
 #include "solver/world.h"
 #include "solver/result.h"
 #include "solver/solve.h"
-/* THE ENTRIES BELOW ARE DECLARED THERE AND DEFINED HERE, so the compiler checks the two against each other.
-   `QJS_EXPORT` came with them: the marker and the signature are one fact about an entry, and this file held
-   both while no C caller existed to disagree with either. One does now (`test_forced.c --abi`), and a caller
-   that wrote its own declarations would be the hand-aligned copy route.mjs's own comment records going short
-   twice — with emscripten's wrapper silent about the direction that matters, since too FEW arguments are
-   zero-filled and reach a `const char *` parameter as NULL. */
+/* The entries below are declared in qjs_abi.h and defined here, so the compiler checks the two against each
+   other, `QJS_EXPORT` marker included. A C caller (`test_forced.c --abi`) uses the same declarations, since
+   emscripten's wrapper zero-fills missing arguments, which reach a `const char *` parameter as NULL. */
 #include "qjs_abi.h"
 
-/* One WASM instance per ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), and these are the ROOT document's: the parse
- * the host handed over, its script inventory, and the one engine that runs the agent's whole frontier. Nothing
- * here is a registry — a same-origin child document is a second REALM (engine_child_realm, whose realms the
- * agent owns in navigable.c), and a cross-origin one is a second instance. */
+/* One WASM instance per origin-keyed agent cluster (SECURITY.md), and these are the root document's: the parse the
+ * host handed over, its script inventory, and the one engine that runs the agent's whole frontier. Nothing here is
+ * a registry: a same-origin child document is a second realm (engine_child_realm, whose realms the agent owns in
+ * navigable.c), and a cross-origin one is a second instance. */
 static lxb_html_document_t *g_dom;
 static DocScripts           g_scripts;
 static unsigned             g_bundle_id;
@@ -115,148 +107,85 @@ static JSRuntime           *g_rt;
 static JSContext           *g_ctx;
 static int                  g_begun;
 static int                  g_done;
-/* WHAT THE PROVISIONING ZONE STATED ABOUT THIS INSTANCE — see qjs_set_referenced. It is not a copy of
- * solver/engine.c's flag: that one is the SCHEDULER's reading of this fact and this one is the ABI's record of
- * having been handed it, which is what lets the stall assert below tell a bill from a document that is merely
- * waiting to be asked something. It survives a session boundary for the reason engine.h gives — whether a peer
- * holds a WindowProxy for this document is a property of the instance's PROVISIONING and not of any one run of
- * its frontier — so qjs_teardown does not clear it. */
+/* What the provisioning zone stated about this instance (see qjs_set_referenced). It is the ABI's record of
+ * having been handed the fact, distinct from solver/engine.c's scheduler reading of it, which lets the stall
+ * assert below tell a bill from a document waiting to be asked something. Whether a peer holds a WindowProxy for
+ * this document is a property of the instance's provisioning, not of one run, so qjs_teardown does not clear it. */
 static int                  g_referenced;
 
-/* THE DOCUMENT THIS INSTANCE LAST ANSWERED WITH, HELD BECAUSE THE ANSWER IS A POINTER AND THE HOST CANNOT FREE
- * ONE. `result_json` composes a FRESH malloc'd document per call and says so (solver/result.h: "caller frees"),
- * and the trusted zone reads this ABI's string returns through a binding that copies the C string and drops the
- * address it copied from — so that obligation is discharged HERE or by nobody, and it was nobody. Holding it is
- * not a cache: it is what makes this entry answer the way every other `const char *` entry in this file already
- * does, with a buffer the ANSWERING side owns and the host may read until it asks again, which is the only
- * arrangement that survives a boundary no pointer comes back across. */
+/* The document this instance last answered with. `result_json` returns a fresh malloc'd document per call
+ * (solver/result.h: "caller frees"), and the trusted zone's binding copies the C string and drops the address, so
+ * this file frees it: like every other `const char *` entry here, the buffer is the answering side's and the host
+ * may read it until it asks again. */
 static char                *g_result;
 
-/* THE IMAGE THIS INSTANCE LAST RENDERED, HELD FOR `g_result`'s REASON AND NOT FOR A CACHE'S. A paint is bytes
- * rather than a C string, so the host cannot even recover its extent from the address — every byte value
- * occurs in non-premultiplied RGBA and core/graphics/raster_surface.h says so ("a byte run of pixels has no
- * spelling as a C string and its extent can be carried only as a number beside it") — which is why the run
- * and its length are two entries and why the buffer that holds them is the ANSWERING side's.
- * IT IS THIS FILE'S TO FREE AND THE HOST NEVER FREES IT. The trusted zone reads it across a boundary no
- * pointer comes back across, so the previous image is released before a new one is rendered and the last one
- * goes at teardown, exactly as the result document above does. A host that kept the address across a second
- * `qjs_paint` would be reading whatever the next render allocated.
- * `g_painted` IS NOT `g_paint.px != NULL`, AND THAT IS THE WHOLE REASON IT EXISTS. A zero-area image — a
- * document CSS 2.1 §2.3.1 "The canvas" establishes no rendered region for — holds NULL pixels and zero bytes,
- * which is a real ANSWER; an instance nobody has asked to paint holds the same two values and has answered
- * nothing. Those are the absent-and-zero pair CLAUDE.md names by hand, and the flag is what keeps
- * `qjs_paint_bytes` from reporting the second as the first. */
+/* The image this instance last rendered, held for `g_result`'s reason. A paint is bytes, not a C string (every
+ * byte value occurs in non-premultiplied RGBA; core/graphics/raster_surface.h), so the run and its length are two
+ * entries. This file frees it: the previous image before a new render, the last at teardown; a host that kept the
+ * address across a second `qjs_paint` would read whatever the next render allocated.
+ * `g_painted` is not `g_paint.px != NULL`: a zero-area image (a document CSS 2.1 §2.3.1 "The canvas" establishes no
+ * rendered region for) holds NULL pixels and zero bytes as a real answer, while an instance never asked to paint
+ * holds the same values and has answered nothing. */
 static RasterSurface        g_paint;
 static int                  g_painted;
 
-/* WHAT THAT RENDER DID, HELD BESIDE THE IMAGE BECAUSE THE IMAGE CANNOT STATE IT. core/paint/document_paint.h
- * spends three paragraphs on exactly this and its own DCHECK says it in one line: "a surface with no ink on
- * it means the walk reached no box, or every box painted nothing, or the walk was stopped — three things a
- * caller must tell apart and a bitmap cannot". Until this register existed the count was a LOCAL of `qjs_paint`
- * below: it was asserted over and then discarded, so every one of those three arrived at a host as the same
- * run of transparent bytes, and the third is the one that matters most — `complete` false is a PARTIAL
- * picture, and a host that writes one out without knowing publishes a fragment of a page as the page.
- * IT IS NOT A SECOND ANSWER TO ANYTHING THE SURFACE ALREADY GIVES. The SHAPE of the image is read off
- * `g_paint` itself, which is the only party that holds it; what is here is the provenance of the INK. */
+/* What that render did, held beside the image because the image cannot state it. As core/paint/document_paint.h's
+ * DCHECK says, "a surface with no ink on it means the walk reached no box, or every box painted nothing, or the
+ * walk was stopped — three things a caller must tell apart and a bitmap cannot"; `complete` false is a partial
+ * picture, which a host must not publish as the page. The image's shape is read off `g_paint`; this is the
+ * provenance of the ink. */
 static DocumentPaintCount   g_paint_count;
 
-/* …AND WHOSE TIMELINE THAT RENDER WAS TAKEN IN, WHICH IS THE ONE THING NEITHER THE BITMAP NOR THE COUNT CAN
- * BE ASKED. The count above separates three reasons a surface can be blank; this separates the WORLDS a
- * surface can be an image OF, and under this engine a document has as many as it has flows: §Boot's
- * `if(__FLAGS.admin)` FORKS a sibling boot flow whose DOM and whose heap the primary never held, so the same
- * page has an admin appearance and a logged-out one at the same instant. `qjs_paint` renders whichever of
- * those the heap is standing in, and until this register existed it said nothing about which — so two images
- * of two worlds were two files, and a reader holding them could not tell them from two reads of one.
- *
- * IT IS CAPTURED AT THE RENDER AND NOT READ LIVE, WHICH IS THE SAME RULE `g_paint_count` IS HELD UNDER AND
- * HAS A SHARPER REASON HERE. The world the engine is standing in MOVES: `qjs_step` switches flows, and the
- * scheduler's own contract is that a yield leaves the flow it was holding switched in. So a host that painted,
- * stepped, and then asked would be told the name of a timeline that is not the one in the bytes it is
- * holding — a fact about NOW answering a question about an ARTIFACT, which is exactly the gauge-read-as-a-
- * history shape. What is written here is a fact about the image, and it is written on the line that makes it.
- *
- * IT IS THIS FILE'S ALLOCATION AND IT IS FREED ON THE SAME TERMS AS THE IMAGE — released before a new render
- * and at teardown, because the trusted zone reads a `const char *` across a boundary no pointer comes back
- * across. `solver/world.h`'s `world_name` is what composes it, and it is that entry rather than
- * `world_serialize` for a reason stated in full there: serializing a world MARKS IT AS HAVING CROSSED to a
- * peer, and a picture crosses to nobody.
- *
- * `g_painted` GOVERNS IT LIKE EVERY OTHER PAINT REGISTER. A NULL here means no render has been asked for,
- * which is what the flag already says and says once; it is NEVER the baseline, which is a world with a name
- * of its own below. */
+/* Whose timeline that render was taken in. A document has as many worlds as it has flows (a forked boot flow under
+ * `if(__FLAGS.admin)` holds a DOM and heap the primary never held), and `qjs_paint` renders whichever one the heap
+ * is standing in, so the name tells two images of two worlds from two reads of one. It is captured at the render,
+ * not read live: `qjs_step` switches flows, so a later read would name a timeline other than the one in the
+ * bytes. It is this file's allocation, freed on the image's terms. It is composed by solver/world.h's
+ * `world_name`, not `world_serialize`, because serializing a world marks it as having crossed to a peer. NULL
+ * means no render has been asked for, which `g_painted` also says; it is never the baseline, which has a name. */
 static char                *g_paint_world;
 
-/* …AND WHAT THAT TIMELINE'S APPEARANCE IS WORTH, WHICH THE NAME ABOVE DOES NOT SAY. A world's name says
- * WHICH of a document's appearances this is; solver/flow.h's `path_forced` says whether the path that laid
- * the ink ever took an arm its own concrete example CONTRADICTS, and the argument for why no VALUE can answer
- * that is at the field: the same bytes are the same bytes whichever arm reached them, so the discriminator is
- * recorded where the ARM was taken and nowhere else.
- *
- * IT IS A STRING LITERAL AND NOT AN ALLOCATION, which is the one way this register differs from the two above
- * it: the words are this file's own constants, so there is nothing to release before a new render and nothing
- * to release at teardown. What teardown does to it is CLEAR it, which is not a free — it is the register
- * agreeing with `g_painted` about whether a render has been asked for at all.
- *
- * CAPTURED AT THE RENDER FOR `g_paint_world`'s REASON EXACTLY, and out of the SAME read of the running-flow
- * stamp rather than a second one. Two reads of a register that MOVES are two facts about worlds nothing
- * forces to be one world; holding them a line apart makes them agree by ADJACENCY where `qjs_paint` can make
- * them agree by construction. */
+/* What that timeline's appearance is worth: whether the path that laid the ink took an arm its own concrete
+ * example contradicts (solver/flow.h's `path_forced`; no value can answer that, since the same bytes are the same
+ * whichever arm reached them). It is a string literal, so teardown clears it rather than freeing it. It is
+ * captured at the render from the same read of the running-flow stamp as `g_paint_world`, so the two describe
+ * one world by construction. */
 static const char          *g_paint_forced;
 
-/* THE DOCUMENTS THAT JOINED THIS AGENT AFTER IT WAS ROOTED — `qjs_join`'s realms and trees, held because THIS
- * host is what gives them back. It is not a registry and does not answer any question about the agent: the
- * world registry names documents, `navigable.c` owns the §7.4 child realms, and these two arrays exist for the
- * one reason a host holds anything, which is that `qjs_teardown` must free exactly what `qjs_*` allocated. A
- * joined realm freed by nobody is a leak `JS_FreeRuntime`'s gc_obj_list walk reports and nothing else would,
- * and a joined tree freed by nobody outlives the arenas it came out of. */
+/* The documents that joined this agent after it was rooted (`qjs_join`'s realms and trees), held because this
+ * host gives them back: `qjs_teardown` frees exactly what `qjs_*` allocated. It answers no question about the
+ * agent; the world registry names documents and navigable.c owns the §7.4 child realms. An unfreed joined realm is
+ * a leak `JS_FreeRuntime`'s gc_obj_list walk reports, and an unfreed tree outlives its arenas. */
 static JSContext          **g_joined_ctx;
 static lxb_html_document_t **g_joined_dom;
 static int                  g_joined_n;
 static int                  g_joined_cap;
 
-/* THE AGENT AND THE DOCUMENT, SPLIT. An AGENT is a JSRuntime: every class registration, the world registry,
-   the flow frontier. A DOCUMENT is a JSContext in it. A SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN
-   THIS AGENT, so what a document IS has to be one description that runs twice.
-
-   AND IT IS NOW ONE DESCRIPTION FOR THE THREE HOSTS AS WELL — core/platform.h. This file used to write out by
-   hand which components an agent declares and which a document installs, and so did wpt_runner.c and
-   test_forced.c; three copies is the point at which a list stops being maintained, and they had already
-   drifted (the WPT gate had no `navigator` and therefore none of Permissions, Storage, File System Access or
-   UserActivation, and reported numbers for those areas as if it had run them). What is left in a host is only
-   what is genuinely the host's: its EDGES — WHO answers the network, WHO evaluates a string handler — which
-   are parameters rather than presence, and which each component asserts for itself at its first use. */
+/* The agent and the document, split. An agent is a JSRuntime (every class registration, the world registry, the
+   flow frontier); a document is a JSContext in it, and a same-origin child navigable is a second document in this
+   agent. core/platform.h is the one description of what an agent declares and a document installs, shared by all
+   three hosts. What is left here is the host's edges (who answers the network, who evaluates a string handler),
+   which each component asserts at its first use. */
 static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
                               OpenerPolicyValue opener_policy)
 {
-    /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
-       answer is to PARK the request on the flow's pending register and let the trusted zone fetch it.
-       fetch.c aborts on a fetch issued with no provider, which is what asserts this line is here. */
+    /* The host's network: SECURITY.md puts every byte behind the trusted chokepoint, so a request parks on the
+       flow's pending register and the trusted zone fetches it. fetch.c aborts on a fetch with no provider. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
-    /* …AND WHO READS AN UNCAUGHT PAGE ERROR, which is an edge of the same kind and the one this host answers
-       with its document: `qjs_result` publishes result_json for every page unconditionally, so `pageErrors`
-       reaches the zone whether or not the frontier drained. Stated rather than left as a NULL hook — see
-       solver/result.h for the host that was counted as this answer and was not. */
+    /* Who reads an uncaught page error: `qjs_result` publishes result_json for every page, so `pageErrors` reaches
+       the zone whether or not the frontier drained (see solver/result.h). */
     result_page_errors_ride_the_document();
 
-    /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's and `opener_policy` is §7.1.3's,
-       both decided by the browser component that reads the response (§7.4.2.1 "Supporting concepts"'s
-       navigation params struct, which §7.4.5 "Populating a session history entry" creates BY FETCHING and
-       which `qjs_init` and `qjs_join` run over the header list the zone hands them — §7.4.6 stood here and is
-       "Applying the history step", which never mentions navigation params) and merely CARRIED through here.
-       They used to be assignments into a struct this function DECLARED UNINITIALIZED and filled field by
-       field, as did the two other hosts — see core/platform.h for why a fact added to that struct was garbage
-       in whichever host the adder was not editing, and why there is no such struct outside that file now. */
+    /* The facts, passed rather than assigned: `requests_oac` (§7.5.1) and `opener_policy` (§7.1.3) are decided by
+       the component that reads the response (§7.4.2.1 "Supporting concepts"'s navigation params, which §7.4.5
+       "Populating a session history entry" creates by fetching, and which `qjs_init` and `qjs_join` run over the
+       zone's header list). core/platform.h says why no host builds the fact struct itself. */
     platform_agent_init(ctx, origin, top_level_url, requests_oac, opener_policy);
 }
 
-/* ONE DOCUMENT — the per-realm half, run once per document including the first.
-   `url` IS THE DOCUMENT'S ADDRESS AND `origin` IS ITS PRINCIPAL, and they are two different facts. This host
-   passed the ORIGIN for both, so every document's §8.1.3.2 "Environment settings objects" API BASE URL (§4.4
-   stood here and is "Grouping content") was `https://site` where the page was at
-   `https://site/app/dashboard` — and the base URL is what `fetch("api/users")` resolves against, so the tool's
-   own headline output named `https://site/api/users` for a request the page makes to
-   `https://site/app/api/users`. They are two ARGUMENTS of the one document install now, which is what makes
-   that substitution unspellable rather than merely fixed. */
+/* One document: the per-realm half, run once per document including the first. `url` is the document's address
+   and `origin` its principal: §8.1.3.2 "Environment settings objects"'s API base URL is the address, which
+   `fetch("api/users")` resolves against, so the two are separate arguments. */
 static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                                  DocumentKind kind,
                                  SerializedPolicyContainer policy,
@@ -272,46 +201,27 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     JS_FreeValue(ctx, g);
 }
 
-/* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime, which is what HTML's
-   similar-origin window agent is. It gets the identical per-document install the first document got. */
-/* THE ADDRESS IS A FACT ABOUT THE DOCUMENT, NOT A FETCH — the fetch is navigable.c's, through the document
-   fetcher, and THIS HOST DECLARES NONE. That is not an omission to fill in with a shrug: this host's network is
-   the trusted zone's and every request PARKS the running flow on a host-owed answer, so it cannot answer a
-   synchronous fetch at all. §7.4's navigate has to become a scheduled work item here — the navigating flow
-   parks on the response and resumes with it — and until it is, navigable.c asserts at the address rather than
-   letting this host hand back the empty about:blank Document. It did exactly that, silently, behind a
-   `(void)url;`: `window.open("/admin")` produced a popup whose scripts never ran and nothing in the output
-   distinguished it from a page that had none. */
-/* THE REALM, BEFORE ITS DOCUMENT — the half every realm this host builds after the agent's first one shares,
-   and the ONE place the per-realm intrinsic list is run for one. It is a step of its own rather than folded
-   into the builder below because its TWO callers differ in exactly one thing, and that thing has to happen
-   BETWEEN these two lines: WHOSE WindowProxy the document is installed with. §7.3.1.3 "Child navigables"'s
-   child navigable already has one — its "create a new child navigable" minted it, so the proxy precedes the
-   realm (§7.4 stood here and is "Navigation and session history", which navigates a navigable rather than
-   creating one) — while a
-   document the host JOINS is its navigable's first, so the proxy is minted ON this realm
-   (window_proxy_new_self reads §8.1.3.1's fields off it and adopts it) and cannot exist before it.
-   §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a realm
-   sharing the agent realm's EventTarget.prototype would resolve every unqualified `addEventListener` against
-   the FIRST realm's window. They come from the ONE list the components declared themselves into, so a
-   component added anywhere is installed in every realm with no host to edit — and a document that joins a
-   live agent goes through the same one call, which is the whole point of there being one.
-   `top_level_url` is HTML §8.1.3.1's, DECIDED BY THE OPERATION and handed over — §7.4's creator's for a
-   nested navigable, the navigable's own address for an auxiliary one, and the trusted zone's statement for a
-   joined document, whose embedder this instance cannot see. Passing `url` instead would make an about:blank
-   iframe of an http page a secure context. */
+/* A same-origin child navigable's realm: a second JSContext in the same JSRuntime, which is what HTML's
+   similar-origin window agent is, given the identical per-document install. The address is a fact about the
+   document, not a fetch: navigable.c fetches through the document fetcher, and this host declares none, because
+   its network parks the flow on a host-owed answer and cannot answer synchronously. navigable.c asserts at the
+   address until §7.4's navigate becomes a scheduled work item that parks on the response.
+   engine_realm_new is the realm before its document, the one place the per-realm intrinsic list runs for a realm
+   after the agent's first. It is separate from the builder below because its two callers differ in whose
+   WindowProxy the document is installed with: a §7.3.1.3 "Child navigables" child already has one (its "create a
+   new child navigable" minted it), while a joined document is its navigable's first, so window_proxy_new_self
+   mints it on this realm. §3.7 gives a realm its own intrinsics, since members run in the realm that defined them.
+   `top_level_url` is HTML §8.1.3.1's, decided by the operation: §7.4's creator's for a nested navigable, the
+   navigable's own address for an auxiliary one, the zone's statement for a joined document. Passing `url` would
+   make an about:blank iframe of an http page a secure context. */
 static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
 {
     JSContext *ctx = JS_NewContext(rt);
 
-    /* NAMED, BECAUSE "OOM" TELLS THE READER OF A `@WHY` NOTHING ABOUT WHAT RAN OUT. A realm is materialized per
-       DOCUMENT of this agent — one per same-origin child navigable, and one per cross-document NAVIGATION of
-       the tab, which in continuous browsing is one per page the user visits. §7.5.10's destruction is a
-       reference DROP (core/frame/navigable.c), so a replaced document's realm goes when nothing holds it; what
-       this host still holds after it is the entry in `g_joined_ctx`/`g_joined_dom` below, released only at
-       `qjs_teardown`. That is the ceiling this line is standing on, and it is a fact about ownership rather
-       than about memory pressure — the reader who arrives here is being told which reference to move, not to
-       find a smaller page. */
+    /* Named, because the reader of a `@WHY` needs to know what ran out: a realm is materialized per document of
+       this agent (each same-origin child navigable and each cross-document navigation of the tab). §7.5.10's
+       destruction is a reference drop (core/frame/navigable.c), but this host's `g_joined_ctx`/`g_joined_dom`
+       entry is released only at `qjs_teardown`, so the ceiling is ownership, not memory pressure. */
     CHECK(ctx != NULL,
           "a realm of this agent could not be created — an agent materializes ONE REALM PER DOCUMENT (a "
           "same-origin child navigable, and every cross-document navigation of the tab), and this host holds a "
@@ -320,8 +230,8 @@ static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
           "in core/frame/navigable.c is what releases a realm's Document, and the tree a joined document was "
           "parsed into has to travel with it rather than staying on this host's array");
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a realm");
-    /* §3.3.7 [Exposed] step 1's realm side: every realm this host builds is a NAVIGABLE's, and a navigable's
-       global object is a Window. */
+    /* §3.3.7 [Exposed] step 1's realm side: every realm this host builds is a navigable's, whose global is a
+       Window. */
     realm_install_intrinsics(ctx, top_level_url, "Window", false);   /* §8.1.3.5 step 1.2.1: a Window has no owner set */
     return ctx;
 }
@@ -341,55 +251,21 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
     return ctx;
 }
 
-/* PARSE A DOCUMENT THIS HOST WAS HANDED — the root's at qjs_init, a joined one at qjs_join, and it is ONE
-   description because it is one operation: a Document of this agent is a real Lexbor tree over the bytes the
-   trusted zone captured, and tree construction always produces <html><head><body> so an empty or absent body
-   is still a document a page can append to.
-   A SECOND DOCUMENT PARSES INTO THE SAME ARENAS, and that is what makes joining possible at all rather than a
-   detail of it: core/dom/node_heap.h puts every node's storage on the AGENT's heap, not the Document's, so
-   the arenas outlive every document and DOM §4.5's adopt across two of this agent's documents is a pointer
-   write. A per-document arena could not do this — `iframe.contentDocument.body.appendChild(x)` would free one
-   document's bytes out of another's allocator — which is exactly why HTML's similar-origin window agent is
-   the boundary an instance is keyed on.
-   THE BYTES ARRIVE AS `(html, html_n)` AND A 0x00 IS ONE OF THEM. This used to `strlen` its argument, which
-   made the tokenizer's input END at the document's first NUL byte — and a NUL is a byte a document may
-   legitimately contain: HTML §13.2.3.5 "Preprocessing the input stream" says so in as many words ("The
-   handling of U+0000 NULL characters varies based on where the characters are found and happens at the later
-   stages of the parsing. They are either ignored or, for security reasons, replaced with a U+FFFD REPLACEMENT
-   CHARACTER"), and the tokenizer then has a rule per state: §13.2.5.1 "Data state" EMITS it as a character
-   token, §13.2.5.4 "Script data state" and §13.2.5.2 "RCDATA state" emit a U+FFFD instead, and tree
-   construction finishes the job — §13.2.6.4.7 The "in body" insertion mode IGNORES a U+0000 character token,
-   §13.2.6.5 "The rules for parsing tokens in foreign content" inserts a U+FFFD.
-   None of that is reachable if the bytes stop at the first one. Measured on a 30-site frozen mirror, one site's
-   own document carried five: with a `strlen` here the parse produced a truncated tree, so every `<script>`
-   after that byte was a script this engine never knew the page had.
-   WHAT THIS DOES NOT DO IS DECIDE THE ENCODING. The bytes are handed to lexbor as UTF-8, which is HTML
-   §13.2.3.2 "Determining the character encoding" left unbuilt — a separate capability, and one the length is a
-   PRECONDITION for rather than a part of: sniffing is defined over a byte sequence, and there was none.
-   WHAT IT DOES DO IS ASK WHICH KIND OF DOCUMENT THIS RESPONSE LOADS AS, which is why the RESPONSE'S HEADER
-   LIST arrives beside its bytes. HTML §7.4.5 "Populating a session history entry"'s load-a-document dispatches
-   on the COMPUTED TYPE of the response, and this host asked nothing at all: every response the trusted zone
-   captured went to the HTML parser, so an XML document came back as a real tree with `<html>` and `<body>`
-   synthesised around its root element and nothing to say so. That is not a missing feature, it is a wrong
-   answer — and it made this host DISAGREE WITH ITS OWN CHILD LOADER, which has always crashed by name for a
-   non-HTML child navigable (core/frame/navigable.c's child_document): one absent capability reporting under
-   two different names depending on which loader the response arrived through. Both halves are the loader's now —
-   the classification (core/loader/document_load_type.h) and the §7.5 subsection that runs
-   (core/loader/document_load.h) — and this host names neither: it computes the type where the response is and
-   hands the type and the bytes over together. */
-/* `out_kind` IS THE §7.5.1 PAIR THIS PARSE ALREADY DECIDED — DOM §4.5's type and content type, from the very
-   computed type this function dispatches the parse on. It is handed BACK rather than recomputed at the
-   install below for the reason the dispatch is one component: the response is here and nowhere else, and an
-   install that classified it a second time would be the second entry asking one question. */
-/* `out_encoding` IS THE SAME SENTENCE FOR THE OTHER HALF OF WHAT THESE BYTES ARE — HTML §13.2.3.2 "Determining
-   the character encoding"'s answer, which DOM §4.5 "Interface Document"'s `characterSet` reports and which
-   this host must write onto the Document once its realm exists. It is handed back for `out_kind`'s reason
-   exactly: the RESPONSE is here and nowhere else, and the realm is built after this returns.
-   THIS ENTRY ASKED NEITHER QUESTION AND THEN ASKED ONE OF THEM. It used to hand the response's own bytes
-   straight to the parser, so a document served in anything but UTF-8 reached the tree builder with every byte
-   above 0x7F already replaced by U+FFFD, and `document.characterSet` answered UTF-8 — while the child-navigable
-   entry, over the same kind of response, sniffed and decoded. One capability, two names, and the name this
-   host wore was silence: nothing crashed, and the tree it produced was REAL. */
+/* Parse a document this host was handed: the root's at qjs_init, a joined one at qjs_join. A document of this
+   agent is a real Lexbor tree over the bytes the trusted zone captured, and tree construction always produces
+   <html><head><body>. A second document parses into the same arenas: core/dom/node_heap.h puts node storage on
+   the agent's heap, so DOM §4.5's adopt across two of this agent's documents is a pointer write, which is why
+   HTML's similar-origin window agent is the instance boundary.
+   The bytes arrive as `(html, html_n)` and a 0x00 is one of them: HTML §13.2.3.5 "Preprocessing the input stream"
+   leaves U+0000 to later stages (§13.2.5.1 "Data state" emits it, §13.2.5.4 "Script data state" and §13.2.5.2
+   "RCDATA state" emit U+FFFD, §13.2.6.4.7 The "in body" insertion mode ignores it, §13.2.6.5 "The rules for parsing
+   tokens in foreign content" inserts U+FFFD), so the length is never taken with `strlen`.
+   It asks which kind of document the response loads as (§7.4.5's load-a-document dispatches on the computed type,
+   from the response's header list) and which encoding it is in (§13.2.3.2 "Determining the character encoding"),
+   through core/loader's classification, decoder and §7.5 subsection, the same ones the child loader uses.
+   `out_kind` (DOM §4.5's type and content type) and `out_encoding` (what DOM §4.5 "Interface Document"'s
+   `characterSet` reports) are handed back for the install, because the response is here and the realm is built
+   after this returns. */
 static lxb_html_document_t *engine_parse_document(const char *html, size_t html_n,
                                                   const HeaderList *response_headers, DocumentKind *out_kind,
                                                   int *out_encoding)
@@ -401,53 +277,39 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
     size_t decoded_n;
     int encoding;
 
-    /* NO `html ? html : ""` ANYWHERE HERE. That ternary turned "the caller handed over no document" into a
-       document that parses to nothing — a successful analysis of an empty page, which reads exactly like a
-       page with no endpoints and no sinks (the same default bridge.js deleted at its own end of this
-       argument). Both entries CHECK the pointer, so this asserts rather than substituting. A zero LENGTH is a
-       different statement and a legitimate one: an empty response is still a Document, and tree construction
-       still produces <html><head><body>. It is asked FIRST because the type dispatch below reads those bytes. */
+    /* No default for a missing document: an empty-page analysis reads exactly like a page with no endpoints and
+       no sinks. Both entries CHECK the pointer, so this asserts. A zero length is legitimate: an empty response
+       is still a Document, and tree construction still produces <html><head><body>. */
     DCHECK(html != NULL,
            "a document was parsed from no bytes at all — both entries CHECK the pointer before reaching here, "
            "so a null one is a third caller that does not");
-    /* §7.4.5's FIRST STEP — "Let type be the computed type of navigationParams's response" — asked where the
-       response is, and carried to the parse below with the bytes it is a fact about. */
+    /* §7.4.5's first step, "Let type be the computed type of navigationParams's response", asked where the
+       response is and carried to the parse with the bytes it describes. */
     DCHECK(response_headers != NULL,
            "a Document was built out of a response with no header list — MIME Sniffing §7's computed type is "
            "what HTML §7.4.5 dispatches on, and a caller with bytes and no headers is one that never asked "
            "which kind of document it fetched");
     document_load_computed_type(&computed, response_headers, html, html_n);
-    /* §13.2.3.2 OVER THE SAME RESPONSE, AND THE DECODE ITS ANSWER NAMES — asked here for the reason the line
-       above is: this is where the response is, and both questions are about the RAW bytes. The type is
-       computed from `html` and not from `decoded` deliberately: MIME Sniffing §5.2 "Reading the resource
-       header" reads the resource's own bytes, and a decode has already turned some of them into other bytes.
-       NO PARENT ENCODING. §13.2.3.2's container-document step is about a document whose navigable has a
-       parent, and this Document is the one this instance was rooted on — the child navigable's entry passes
-       its container's encoding, and this one has none to pass, which is a positive statement and not a hole. */
+    /* §13.2.3.2 over the same response, and the decode its answer names. The type is computed from `html`, not
+       `decoded`, because MIME Sniffing §5.2 "Reading the resource header" reads the resource's own bytes. No
+       parent encoding: §13.2.3.2's container-document step is for a document whose navigable has a parent, and
+       this is the instance's root; the child navigable's entry passes its container's. */
     encoding = document_load_decode(&decoded, &decoded_n, response_headers, html, html_n,
                                     /*parent_encoding*/-1);
     dom = dom_document_create();
 
     CHECK(dom != NULL, "the document allocation failed");
-    /* SHARED: this is the ACTIVE document. Its tree is the baseline every flow of this instance reads, so
-       §13.2.6's writes are the ones a live parse would have to capture — which is what makes §8.4.3
-       `document.write()` a lifecycle change here and not a new mechanism (solver/dom_cow.h).
-       WHICH PARSER THIS REACHES IS §7.4.5's ARM AND NOT THIS FUNCTION'S — core/loader/document_load.h routes
-       the computed type onto its §7.5 subsection, and the assert that keeps the HTML parser unreachable for a
-       type it does not serve is at that loader, where the parse is. The CHECK_FAIL below is also this host's
-       RELEASE half of an unbuilt arm: `DFAIL` is compiled out at APICLIENT_DEV=0 and the router then answers
-       with a status, so the response stops here rather than reaching a parser that does not serve it. */
-    /* §13.2.4.5 ENABLED: this is the document this agent was STARTED to run. Its scripts are `g_scripts` two
-       statements below and the boot flow drives every one of them, so its parser takes the arm a browser's
-       does — and it cannot be read off the Document here, because the navigable and the realm are given to it
-       AFTER this returns (core/html/html_parse.h states why the flag is a parameter). */
-    /* WHAT THE PARSER IS GIVEN IS THE DECODE, NEVER THE RESPONSE'S BYTES — HTML §13.2.3.1 "Parsing with a
-       known character encoding": "When the HTML parser is to operate on an input byte stream that has a known
-       definite encoding, then the character encoding is that encoding and the confidence is certain". The
-       encoding travels beside the characters so the loader can refuse a caller that determined none. */
+    /* Shared: this is the active document, whose tree is the baseline every flow reads, so §13.2.6's writes are
+       the ones a live parse captures, which makes §8.4.3 `document.write()` a lifecycle change (solver/dom_cow.h).
+       Which parser runs is §7.4.5's arm, routed by core/loader/document_load.h, which asserts the HTML parser is
+       unreachable for a type it does not serve; the CHECK_FAIL below is this host's release half of an unbuilt arm.
+       §13.2.4.5 scripting is enabled: the boot flow drives this document's scripts, and the navigable and realm
+       come after this returns (core/html/html_parse.h says why the flag is a parameter). The parser is given the
+       decode, never the response's bytes (§13.2.3.1 "Parsing with a known character encoding"), with the
+       encoding beside it so the loader can refuse a caller that determined none. */
     st = document_load(dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed, encoding,
                        (const lxb_char_t *)decoded, decoded_n);
-    /* BEFORE THE RECORD IS FREED, because the pair is read out of it. */
+    /* Before the record is freed, because the pair is read out of it. */
     DCHECK(out_kind != NULL, "a document was parsed with nowhere to put its §7.5.1 type and content type — "
                              "the Document those two facts belong to is installed by this host and there is "
                              "exactly one caller shape, so a null here is an entry that will install a "
@@ -460,60 +322,41 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
     *out_kind     = document_load_kind(&computed);
     *out_encoding = encoding;
     mime_type_free(&computed);
-    /* THE DECODE IS BORROWED FOR THE LIFE OF THE LOAD (core/loader/document_load.h) and this load is the
-       completing one, so the borrow ended at the line above and these bytes are this frame's to release. */
+    /* The decode is borrowed for the life of the load (core/loader/document_load.h), and this load is complete,
+       so these bytes are this frame's to release. */
     free(decoded);
     if (st != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
     return dom;
 }
 
-/* PHASE 1 — parse and identify. No script runs, which is the whole point: the host reads the frontier key back
- * synchronously and looks up the prior session before any flow is seeded. */
-/* `doc_id` NAMES THIS INSTANCE'S DOCUMENT, and the host names the ROOT one because the host is what knows
- * there is more than one at all. An instance is an ORIGIN-KEYED AGENT CLUSTER, so a same-origin iframe or popup
- * is a second REALM here and a CROSS-ORIGIN one is a peer instance — and that peer keys its segment of the
- * flow's world by this name. Two instances sharing a name would hand each other's flows the same segment: one
- * timeline wearing two names. Every document BELOW this one is named by the document that created it (world.h),
- * which is what lets §4.8.5 create a child navigable without asking anyone. */
-/* THERE IS NO `code` ARGUMENT. The bridge used to hand the engine a concatenation of the page's scripts beside
- * the HTML, and this entry deliberately ignored it — identity and the script inventory come from the DOM's own
- * `<script>` scan, because a concatenation cannot represent per-script scope and shifts with an inline script
- * the page did not ship. An argument that is cast to `(void)` is not "documented as unused", it is a second
- * source of truth the next reader will wire up; it is gone from the ABI instead. */
-/* `url` IS THE DOCUMENT'S ADDRESS, not its origin, and the ORIGIN IS DERIVED FROM IT HERE. The host used to
- * send the origin it had computed itself with `new URL(u).origin`, which is one fact arriving from two places
- * and the address arriving from none: §8.1.3.2 "Environment settings objects"'s API base URL (§4.4 stood here
- * and is "Grouping content"), `location.pathname` and `document.baseURI` were all
- * the bare origin. Deriving it here also makes it §4.7's real serialization, which url.c already implements. */
-/* `top_level_url` IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, and only the trusted zone can state it. One
- * WASM instance is one DOCUMENT regardless of origin, so this instance's document may itself be NESTED in a
- * document of another instance — and §8.1.3.5 decides whether this realm is a SECURE CONTEXT from the address
- * at the TOP of that chain, not from this document's own. Deriving it from `url` here would report an https
- * frame inside an http page as secure, which is exactly the ancestral hole Secure Contexts §4.2 exists to
- * close, and this engine cannot see its own embedder: the offscreen is the only zone that knows which instance
- * holds which document. For a top-level document the zone passes the address itself; for a document this
- * engine's peer created, it passes the field that peer put on its `navigable.create` notice. */
-/* HTML §7.1.7's CLONE OF THE CREATOR'S CONTAINER AS IT ARRIVES OVER THIS ABI, READ IN ONE PLACE FOR BOTH
- * ENTRIES. `qjs_init` and `qjs_join` take the identical contract — a Document this instance did not root is
- * created with a clone of its creator's container whichever entry it comes through — so a second reading here
- * would be a second grammar for one record, which is how two readers of one format come to disagree about what
- * a field means.
- *
- * THE VALUES ARRIVE AS §7.1.4's OWN TOKENS. The relaying zone reads them off the emitting engine's
- * `navigable.create` notice and passes them through verbatim; it does not interpret them, and it could not —
- * §7.1.4 names three STRINGS and this is the only file that turns one back into a value. A token naming none of
- * them is not §7.1.4.1's fail-open (that is about a HEADER a server sent, which this is not): it is a relay
- * that stopped writing the field, and it crashes at the boundary that produced it. */
+/* Phase 1: parse and identify. No script runs: the host reads the frontier key back synchronously and looks up
+ * the prior session before any flow is seeded.
+ * `doc_id` names this instance's document; the host names the root one because only it knows there is more than
+ * one. A cross-origin iframe or popup is a peer instance that keys its segment of the flow's world by this name,
+ * so two instances sharing a name would be one timeline wearing two names. Documents below this one are named by
+ * their creator (world.h), so §4.8.5 can create a child navigable without asking.
+ * There is no script-text argument: identity and the script inventory come from the DOM's own `<script>` scan,
+ * since a concatenation cannot represent per-script scope.
+ * `url` is the document's address, and the origin is derived from it here (§4.7's serialization in url.c), so
+ * §8.1.3.2's API base URL, `location.pathname` and `document.baseURI` see the address.
+ * `top_level_url` is HTML §8.1.3.1's top-level creation URL, which only the trusted zone can state: this
+ * instance's document may be nested in another instance's, and §8.1.3.5 decides a secure context from the top of
+ * that chain (Secure Contexts §4.2's ancestral rule). A top-level document passes its own address; a document a
+ * peer created passes the field that peer put on its `navigable.create` notice. */
+/* HTML §7.1.7's clone of the creator's container as it arrives over this ABI, read in one place for both entries
+ * (`qjs_init` and `qjs_join` take the identical contract). The values arrive as §7.1.4's own tokens, relayed
+ * verbatim by the zone from the emitting engine's `navigable.create` notice; a token naming none of the three
+ * strings is a relay that stopped writing the field (not §7.1.4.1's fail-open, which is about a server header),
+ * and it crashes at that boundary. */
 static SerializedPolicyContainer qjs_inherited_container(const char *csp, const char *self_origin,
                                                          const char *coep, const char *coep_endpoint,
                                                          const char *coep_report_only,
                                                          const char *coep_report_only_endpoint)
 {
     EmbedderPolicyValue v = EMBEDDER_POLICY_UNSAFE_NONE, ro = EMBEDDER_POLICY_UNSAFE_NONE;
-    /* THE PARSE RUNS, THEN THE ASSERT READS ITS ANSWER — never the other way round. A `DCHECK` condition is
-       compiled out in release (engine/host/check.h), so a parse performed INSIDE one is a parse that does not
-       happen in the build that ships: both values would stay at `unsafe-none` whatever the record said. */
+    /* The parse runs, then the assert reads its answer: a DCHECK condition is compiled out in release, so a parse
+       inside one would not happen in the shipped build. */
     bool ok = embedder_policy_value_of_token(coep, &v);
     bool ok_ro = embedder_policy_value_of_token(coep_report_only, &ro);
 
@@ -531,165 +374,67 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
     return serialized_policy_container_or_none(csp, self_origin,
                                                serialized_embedder_policy(v, coep_endpoint, ro,
                                                                           coep_report_only_endpoint),
-                                               /* §7.1.7's INTEGRITY POLICY ITEM IS NOT ON THIS ABI ENTRY,
-                                                  AND THIS IS A THIRD CARRIER RATHER THAN THE TWO ENGINE
-                                                  WIRES. Those two — the navigate job's arguments and the
-                                                  parked navigable record — now carry it, so a container
-                                                  INHERITED inside one instance keeps its item. What arrives
-                                                  HERE is a container a PEER INSTANCE stated, relayed by the
-                                                  trusted zone, so carrying it is a cross-boundary change:
-                                                  this signature gains a parameter and the zone must send the
-                                                  field. WHAT IS NOT COVERED: a document whose creator lives
-                                                  in another instance inherits its creator's CSP and not its
-                                                  integrity policy. WHAT THE NEXT DIFF BUILDS: the field on
-                                                  the `navigable.create` notice, written where the emitting
-                                                  engine serializes its container and read here. HOW ITS
-                                                  ABSENCE SHOWS: such a child loads a `<script src>` with no
-                                                  `integrity` that its creator's policy refuses, while a
-                                                  SAME-INSTANCE sibling of the same document is refused it —
-                                                  the two disagree, which is now the ONLY way this is
-                                                  visible, because the in-instance case is fixed. */
+                                               /* Named residual: §7.1.7's integrity policy item is not on this
+                                                  ABI entry. The in-instance carriers (the navigate job's
+                                                  arguments and the parked navigable record) carry it; this is a
+                                                  container a peer instance stated, relayed by the zone.
+                                                  Not covered: a document whose creator lives in another
+                                                  instance inherits its CSP but not its integrity policy.
+                                                  Next diff builds: the field on the `navigable.create` notice,
+                                                  written where the emitting engine serializes its container
+                                                  and read here. How its absence shows: such a child loads a
+                                                  `<script src>` without `integrity` that its creator's policy
+                                                  refuses, while a same-instance sibling is refused it. */
                                                NULL);
 }
 
-/* `headers` IS THE NAVIGATION RESPONSE'S HEADER LIST, and it replaces the single `csp` argument that used to
- * stand here. That argument was the whole of what a Document in this engine could be created with, and three
- * separate capabilities were stuck behind it: §7.1.7's policy container has an EMBEDDER POLICY item that then
- * had no writer, §7.5.1's creation table gives a Document an OPENER POLICY row that did not exist, and §7.5.1's
- * own `Origin-Agent-Cluster` read never happened — so §8.1.2.2's agent cluster key was the SITE for every
- * document this engine has ever built, and `originAgentCluster` answered `false` without ever having asked.
- * One header cannot be widened into three by adding three arguments: the standard reads a HEADER LIST, several
- * algorithms read different names out of the same one, and Fetch's own `get` is what decides what a REPEATED
- * header means (§7.1.4.1's table turns on `require-corp, require-corp` failing to parse as an item). So the
- * whole list crosses, as HTTP field lines — `name: value`, one per line — and core/fetch/headers.c parses it
- * into the list Fetch defines. An empty or NULL block is a response that carried no headers.
+/* `headers` is the navigation response's header list, as HTTP field lines (`name: value`, one per line), which
+ * core/fetch/headers.c parses into Fetch's list. §7.1.7's embedder policy, §7.5.1's opener policy row and §7.5.1's
+ * `Origin-Agent-Cluster` read (§8.1.2.2's agent cluster key) all read names out of one list, and Fetch's `get`
+ * decides what a repeated header means (§7.1.4.1 turns on `require-corp, require-corp` failing to parse), so it
+ * is a list of lines, not a map. An empty or NULL block is a response with no headers. The engine cannot forge
+ * these: no ABI entry or page-reachable member writes a response header (a `<meta>` carries only a CSP, CSP §3.3,
+ * merged by core/dom/document.c), and the list is read once, here, then freed.
  *
- * IT IS A LIST OF LINES AND NOT A MAP FOR THAT SAME REASON. The trusted zone holds a `Headers` object, whose
- * iteration already combines repeats the way Fetch's `get` does; a map keyed by name would arrive here having
- * silently made a two-header COEP look like a one-header COEP, which is the difference between a document a
- * browser isolates and one it does not.
- *
- * THE ENGINE CANNOT FORGE THESE HEADERS, and that is structural rather than checked. There is no ABI entry
- * that writes a response header and no page-reachable member that adds one — a `<meta>` element can carry a
- * CSP (CSP §3.3, merged by core/dom/document.c) and nothing else, which is the standard's own answer for why
- * COOP, COEP and `Origin-Agent-Cluster` are response headers only. The list is read ONCE, here, into the
- * decisions §7.5.1 creates the Document from, and then freed: nothing the bundle runs can reach it afterwards.
- * SECURITY.md's boundary is unchanged by this — the zone that captured the response states the bytes, exactly
- * as it states the address, the origin and the top-level creation URL.
- *
- * `html_len` IS THE DOCUMENT'S LENGTH, AND IT IS AN ARGUMENT BECAUSE A DOCUMENT MAY CONTAIN A 0x00. This entry
- * used to take the bytes as a NUL-terminated pointer it `strlen`d, which is a shape the wire never had —
- * `Init`'s parameter is mojom's `array<uint8>`, a byte sequence with its own length — and the zone on the
- * other side was asserting the hole shut instead: bridge.js DCHECKed `_doc.indexOf(0) < 0` and named this fix
- * ("Give qjs_init a LENGTH beside the pointer, the way qjs_provide already carries one"). A NUL is a byte a
- * document may legitimately contain (HTML §13.2.3.5 "Preprocessing the input stream" defines its handling
- * rather than forbidding it), and one site of a 30-site mirror shipped five in its own markup, so the assert
- * fired on real pages that a browser parses whole. `unsigned` and not `size_t` because that is the width every
- * other length crosses this ABI in (`qjs_provide`'s `body_len`), and the wire declares an i32.
- * THE GUARD BYTE IS ASSERTED, NOT USED AS THE LENGTH: renderer.html's byte placement writes a NUL after the
- * document, so `html[html_len]` is readable and is what the two sides agree on — a placement that stopped
- * writing it, or a length that disagreed with it, is the one thing that would put this read past the buffer,
- * and it crashes HERE rather than inside lexbor.
- *
- * `inherited_csp` AND `inherited_csp_self_origin` ARE THE CREATOR'S POLICY CONTAINER, AND THEY STAND BESIDE
- * `headers` PRECISELY BECAUSE THEY ARE NOT PART OF IT. A Document that this instance did not root itself — a
- * cross-origin child navigable, announced by the creating engine's `navigable.create` notice — is created with
- * HTML §7.1.7 "Policy containers"' CLONE of its creator's container (HTML §7.3.2.1 "Creating browsing
- * contexts": "Set document's policy container to a clone of creator's policy container"), and a clone is not a
- * response header. The trusted zone used to relay it as one, writing the creator's text into this document's
- * `Content-Security-Policy`, and the whole defect is in the half that could not be written: CSP §2.2 "Policies"
- * makes a CSP list "a struct consisting of policies (a list of policies) and a self-origin (an origin which is
- * used when matching the 'self' keyword)", §2.2.2 "Parse response's Content Security Policies" sets that
- * self-origin to "response's URL's origin" — so a policy arriving as a response header is a policy whose
- * `'self'` resolves against THIS document's address. For an inherited list that is the wrong origin by
- * construction, and CSP §2.2's own note names this exact case: the self-origin is there "to facilitate the
- * 'self' checks of local scheme documents/workers that have inherited their policy but have an opaque origin".
- * §6.7.2.8 "Does url match expression in origin with redirect count?" is what reads it, so the consequence is
- * one directive answered backwards — a creator's `script-src 'self'` permitting the CHILD's origin and
- * refusing the creator's.
- *
- * SO THE TWO TRAVEL TOGETHER AND THE ENTRY ASSERTS THAT THEY DO. The empty string in BOTH is the positive
- * statement that this Document has no creator to inherit from (a root document reported by a content script,
- * a rehydrated cold recipe); a non-empty self-origin with an empty policy is a creator whose container held no
- * policies, which is a real state and resolves nothing. A non-empty POLICY with no self-origin is the state
- * that cannot exist, because a CSP list is the struct §2.2 says it is.
- *
- * WHICH OF THE TWO CONTAINERS THIS DOCUMENT IS CREATED WITH IS NOT THIS FILE'S RULE. It is HTML §7.1.7's
- * determine-navigation-params-policy-container, which lives once beside the container it is about
- * (core/frame/policy_container.h) and is called from here with both in hand. This entry's job is to STATE the
- * two facts a host knows and nothing else — restating the ordering here would make the WPT runner's entry a
- * second copy of it, and two copies of an ordering are two orderings.
- *
- * AND THE FOUR `inherited_coep*` ARGUMENTS ARE THE SAME CONTAINER'S §7.1.4 ITEM, which is why they stand with
- * the two above rather than in `headers`. A clone moves EVERY item of a container (§7.1.7's clone-a-policy-
- * container sets the clone's embedder policy to a COPY of the source's), so an item that did not cross would
- * be a clone that silently downgraded a cross-origin-isolated creator's child to `unsafe-none` — with no
- * header anywhere to say so, because the child's own response never carried one. They are read through
- * qjs_inherited_container above, once, for both entries.
- *
- * `parent_navigable` IS HTML §7.3.1.3 "Child navigables"' PARENT OF THE NAVIGABLE THIS DOCUMENT IS ROOTED IN,
- * and it is NOT part of the container beside it — a policy container is §7.1.7's five policies and says nothing
- * about a tree. It is a separate fact stated by the same zone for a related reason: an instance is an
- * ORIGIN-KEYED AGENT CLUSTER, so a cross-origin `<iframe>` is the ROOT of its own instance, and the only party
- * that knows a root is nested is the zone that routed the create. navigable_root (core/frame/navigable.h)
- * states what it is, why it is an identity rather than a name, and what reads it.
- *
- * `container_policy` IS §7.3.1.3's OTHER LINK FOR THAT SAME NAVIGABLE — its CONTAINER — and it carries an
- * ANSWER rather than an element, because the element is in the creating instance's tree and an OBJECT does not
- * cross an instance boundary. Permissions Policy §9.5 is "given null or an element (container) and an origin
- * (origin)", and both of those arguments belong to the creator: it holds the `<iframe>` and it computed the
- * child's origin. So the creator runs §9.5 once and this field is its RESULT, in the text
- * core/permissions_policy/permissions_policy.h serializes an inherited policy into; "there is no container" is
- * that grammar's own word and is what an AUXILIARY navigable and a root document with no embedder both state.
- * IT IS NOT PART OF THE CONTAINER ABOVE IT EITHER: §7.1.7's policy container is five policies and a
- * permissions policy is none of them — §7.3.2.1 sets the two in different steps, from different algorithms.
- * WITHOUT IT §9.7 step 1 answered for a frame that HAS a container ("if container is null, return
- * `Enabled`"), which grants a cross-origin child every supported feature its embedder was never asked about;
- * core/dom/document.c crashes on the absence instead of taking that step.
- *
- * `ancestor_origins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for this
- * Document, and it is a THIRD statement about the same navigable rather than a field of either above it.
- * §3.1.3's steps read three things: the PARENT DOCUMENT's own recorded list (step 5), that Document's ORIGIN
- * RECORD (steps 9 and 10), and the CONTAINER ELEMENT (step 6). The parent field beside it names a NAVIGABLE
- * and carries no Document's recorded ancestry; the container field is Permissions Policy §9.5's answer, a
- * different algorithm over two of the same inputs. Neither yields this one, and two of §3.1.3's three inputs
- * cannot cross at all — an element is an OBJECT, and an origin RECORD is precisely what a serialization drops,
- * since §7.1.1 decides an opaque origin by IDENTITY and every opaque origin is the three bytes `null`. Step 10
- * compares an ancestor against "parentDoc's origin", so an instance re-running the steps over carried text
- * would mask an ancestor that is not the parent's whenever the parent is itself opaque — which is the ORDINARY
- * case on this route rather than a corner, since a `data:` document is in its own instance BECAUSE its origin
- * is opaque. So the creating instance runs §3.1.3 once, where all three inputs are, and this field is its
- * RESULT, in the text core/dom/document.h serializes a list into; "there are no ancestors" is that grammar's
- * own word and is what a top-level document and an AUXILIARY navigable both state. WITHOUT IT this instance
- * would install the EMPTY list, which is the positive claim that this Document is at the top of its own tree —
- * a cross-origin frame answering every `location.ancestorOrigins` read wrongly, with nothing anywhere to
- * disagree; core/dom/document.c crashes on the absence instead.
- *
- * `creation_sandbox_flags` IS HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for the navigable this
- * document is rooted in — a FOURTH statement about that navigable and not an item of the container above it.
- * §7.1.7's policy container is a CSP list, an embedder policy, a referrer policy and two integrity policies;
- * a sandboxing flag set is none of them, and §7.3.2.1 sets the two in different steps from different
- * algorithms (`sandboxFlags` comes from determine-the-creation-sandboxing-flags, the container from a clone).
- * §7.1.5's algorithm reads TWO things and this process holds NEITHER for a navigable a peer created: "if
- * embedder is an element, then the flags set on embedder's IFRAME SANDBOXING FLAG SET" and "…on embedder's
- * node document's ACTIVE SANDBOXING FLAG SET" — an `<iframe sandbox>` element in the creating instance's
- * tree, and that document's own set. An element does not cross an instance boundary at all, so the algorithm
- * runs ONCE where its arguments are and this parameter is its RESULT, in §7.1.5's own flag names
- * (core/frame/sandboxing.h). `none` is that grammar's word for the empty set, which is what a top-level
- * traversable and an unsandboxed frame both state; there is no empty spelling, because a navigable either has
- * flags or has none and both are facts a host states.
- * IT IS THE §7.4.2.1 TARGET SNAPSHOT PARAMS OF EVERY NAVIGATION THIS INSTANCE'S ROOT MAKES. "To snapshot
- * target snapshot params given a navigable targetNavigable, return a new target snapshot params with:
- * sandboxing flags — the result of determining the creation sandboxing flags given targetNavigable's active
- * browsing context and targetNavigable's container", and §7.4.2.2 makes finalSandboxFlags "the union of
- * targetSnapshotParams's sandboxing flags and policyContainer's CSP list's CSP-derived sandboxing flags". The
- * second half is this response's and navigation_params computes it; the first can only arrive here.
- * WITHOUT IT THIS ENTRY PASSED ZERO, which was the right answer for the only document it could once be
- * handed — a top-level traversable, whose §7.1.5 set comes from a POPUP sandboxing flag set nothing filled —
- * and is the WRONG one for the document it exists to serve: a cross-origin `<iframe sandbox>` child is in
- * another agent cluster BECAUSE the sandboxed origin flag made its origin opaque, so the sandboxed case is
- * not a corner on this route, it is the route. The child then ran the scripts, submitted the forms and
- * relaxed the `document.domain` its embedder's markup forbids, with no field anywhere to say so. */
+ * `html_len` is the document's length, an argument because a document may contain a 0x00 (§13.2.3.5 defines its
+ * handling); `Init`'s wire parameter is mojom's `array<uint8>`. `unsigned` because every length crosses this ABI
+ * at that width (`qjs_provide`'s `body_len`) and the wire declares an i32. renderer.html writes a guard NUL after
+ * the document; it is asserted, not used as the length, so a placement or length disagreement crashes here rather
+ * than inside lexbor. */
+/* `inherited_csp` and `inherited_csp_self_origin` are the creator's policy container, beside `headers` because
+ * they are not part of it: a document this instance did not root (a cross-origin child navigable announced by a
+ * `navigable.create` notice) is created with HTML §7.1.7 "Policy containers"' clone of its creator's container
+ * (§7.3.2.1 "Creating browsing contexts": "Set document's policy container to a clone of creator's policy
+ * container"). CSP §2.2 "Policies" makes a CSP list "a struct consisting of policies (a list of policies) and a
+ * self-origin", and §2.2.2 sets a header policy's self-origin to "response's URL's origin", so an inherited list
+ * relayed as a header would resolve `'self'` (§6.7.2.8) against the child's origin. The empty string in both means
+ * no creator; a self-origin with an empty policy is a creator with no policies; a policy without a self-origin
+ * cannot exist and is asserted. Which container the document is created with is §7.1.7's
+ * determine-navigation-params-policy-container (core/frame/policy_container.h), called with both in hand.
+ * The four `inherited_coep*` arguments are the same container's §7.1.4 item, since a clone copies every item;
+ * without them a cross-origin-isolated creator's child would silently be `unsafe-none`. They are read through
+ * qjs_inherited_container. */
+/* `parent_navigable` is §7.3.1.3 "Child navigables"' parent of this document's navigable, stated by the zone that
+ * routed the create, since a cross-origin `<iframe>` is the root of its own instance (navigable_root in
+ * core/frame/navigable.h). `container_policy` is the creator's result of Permissions Policy §9.5 ("given null or
+ * an element (container) and an origin (origin)"), whose arguments are both the creator's, in the text
+ * core/permissions_policy/permissions_policy.h serializes; "there is no container" is that grammar's word for an
+ * auxiliary navigable or a root with no embedder. Without it Permissions Policy §9.7 step 1 would grant every
+ * feature, so core/dom/document.c crashes on its absence.
+ * `ancestor_origins` is HTML §3.1.3 "Ancestor origins"' internal ancestor origin objects list, computed by the
+ * creating instance, where its three inputs are: the parent document's recorded list (step 5), its origin record
+ * (steps 9 and 10) and the container element (step 6). An element and an origin record cannot cross (every opaque
+ * origin serializes to `null`, and step 10 compares by identity), so this is the result, in core/dom/document.h's
+ * grammar; "there are no ancestors" is a top-level or auxiliary document's statement. core/dom/document.c crashes
+ * on its absence, since an empty list would claim this document is at the top. */
+/* `creation_sandbox_flags` is HTML §7.1.5 "Sandboxing"'s creation sandboxing flag set for this document's
+ * navigable, separate from the container (§7.3.2.1 sets them in different steps). §7.1.5 reads the embedder's
+ * iframe sandboxing flag set and its node document's active sandboxing flag set, which live in the creating
+ * instance, so this is the result, in §7.1.5's own flag names (core/frame/sandboxing.h), `none` for the empty set.
+ * It is the sandboxing flags of every §7.4.2.1 target snapshot params this root's navigations take, and §7.4.2.2
+ * unions it with the response's CSP-derived flags (navigation_params computes those). A cross-origin
+ * `<iframe sandbox>` child is in another agent cluster because the sandboxed origin flag made its origin opaque,
+ * so the sandboxed case is the ordinary one on this route. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
@@ -699,33 +444,26 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                         const char *parent_navigable, const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags)
 {
-    /* §7.1.5's SET, PARSED BEFORE ANYTHING IS BUILT FROM IT — see the read below. */
+    /* §7.1.5's set, parsed before anything is built from it; see the read below. */
     SandboxFlags creation_flags = 0;
     char *origin;
     HeaderList response_headers;
-    /* §7.5.1's TYPE AND CONTENT TYPE for the Document this entry installs, decided by the same §7.4.5
-       dispatch the parse below runs and carried to the install rather than restated there. */
+    /* §7.5.1's type and content type for the Document this entry installs, decided by the parse's §7.4.5 dispatch
+       and carried to the install. */
     DocumentKind      root_kind;
     int               root_encoding;
     NavigationParams np;
 
-    /* THIS ENTRY ROOTS THE AGENT AT ONE DOCUMENT, which is not the same statement as "one instance is one
-       document" — the sentence that used to stand here and the model the host was keyed on. An instance is an
-       ORIGIN-KEYED AGENT CLUSTER and holds one realm per same-origin document (engine_child_realm below), so
-       what may not happen twice is the ROOTING: the runtime, the class registrations, the world registry and
-       the frontier are the agent's and exist once. A SECOND document of this cluster that this agent did not
-       itself create — the trusted zone reporting a same-origin frame it did not model, or a navigation
-       replacing the root — has no entry to arrive through yet: it needs a `qjs_join` beside this one that
-       parses a second document, builds its realm through engine_child_realm, and seeds its scripts on the SAME
-       frontier. Calling this twice is not that entry, and it would silently be a second agent. */
+    /* This entry roots the agent at one document. An instance is an origin-keyed agent cluster with one realm per
+       same-origin document (engine_child_realm), so what may not happen twice is the rooting: the runtime, class
+       registrations, world registry and frontier exist once. A second document of the cluster joins through
+       `qjs_join`; calling this twice would silently be a second agent. */
     CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — it ROOTS the agent, and a second document "
                          "of this origin-keyed cluster joins through the join entry rather than re-rooting it");
     CHECK(html != NULL, "the host started this engine with no document at all — a Document is a tree over the "
                         "bytes the trusted zone captured, and there is no tree to build from nothing");
-    /* THE LENGTH AND THE GUARD ARE ONE FACT AND BOTH SIDES STATE IT. renderer.html's byte placement writes a
-       NUL after the sequence it puts in linear memory; this reads that byte and nothing else past `html_len`.
-       A placement that stopped writing it, or a length that named a different end, would otherwise be a
-       document this entry and the trusted zone disagree about, and the only symptom would be a shorter tree. */
+    /* The length and the guard are one fact both sides state: renderer.html writes a NUL after the sequence, and
+       this reads that byte and nothing else past `html_len`. */
     DCHECK(html[html_len] == '\0',
            "a document's bytes carry no guard byte at their stated length — the ABI placement writes one past "
            "the sequence, so a length that does not name that byte is this entry and the trusted zone holding "
@@ -745,34 +483,16 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
           "that answer, so the platform surface this bundle runs against would be a guess. A top-level document "
           "passes its own address; a nested one passes its embedder's, which only the trusted zone knows");
 
-    /* THE RESPONSE, READ ONCE, BEFORE ANYTHING IS BUILT OUT OF IT. §7.4.2.1 "Supporting concepts"'s navigation
-       params — created from the response by §7.4.5 "Populating a session history entry"'s "create navigation
-       params by fetching" — are what §7.5.1 "Shared document creation infrastructure" creates a Document from,
-       and they are decided at the RESPONSE and carried (§7.4.6 stood here and is "Applying the history step",
-       which never mentions navigation params at all) — never read back off the
-       Document later, which is CLAUDE.md's rule about an operation taking its inputs with it and is why the
-       standard splits these into two algorithms.
-       THE SECURE-CONTEXT ANSWER IS §8.1.3.5's OVER THE TOP-LEVEL CREATION URL, asked here rather than of a
-       realm because §7.1.3's and §7.1.4's obtains and §7.5.1's `requestsOAC` all run BEFORE the realm whose
-       environment it is exists — the standard calls that environment the RESERVED one for exactly this reason.
-       §7.4.2.1 "Supporting concepts"'s TARGET SNAPSHOT PARAMS' SANDBOXING FLAGS ARE THE CALLER'S ANSWER AND
-       NOT A ZERO THIS ENTRY WRITES. (Spelt as the struct's member rather than as "target snapshot sandboxing
-       flags", which §7.4.2.3.4 "Non-fetch schemes and external software" defines as a row of its OWN struct,
-       taken FROM this one — two names one word apart for a value and a copy of it.)
-       A ZERO STOOD HERE with the spec sentence that makes it right for ONE of the two navigables this entry
-       roots — "a top-level traversable has no embedder element, so §7.1.5 answers its creation flags from the
-       POPUP sandboxing flag set, which begins empty and which only §7.3.1.7's rules for choosing a navigable
-       ever fill" — and that sentence is TRUE and was being applied to a document it is not about. This entry
-       also roots a navigable a PEER CREATED, whose §7.1.5 set is its embedder's `<iframe sandbox>` attribute
-       unioned with the embedder document's own set, and for which zero is not an answer but the absence of
-       one. The two are told apart by nobody here: `parent_navigable` beside it is what says which this is, and
-       the flag set is stated for both rather than derived from it, because a top-level traversable's empty set
-       is a FACT the zone states in §7.1.5's own grammar (`none`) exactly as it states the `u` parent.
-       The other half of §7.4.5's union, this response's CSP-derived flags, is what navigation_params computes.
-       PARSED, THEN ASSERTED — never parsed inside the assert. A `DCHECK` condition is compiled out in release
-       (engine/host/check.h), so a parse performed in one is a parse that does not happen in the build that
-       ships, and every peer would be created with the empty set whatever the record said. This is the same
-       shape qjs_inherited_container states above it, for the same reason. */
+    /* The response, read once before anything is built from it. §7.4.2.1 "Supporting concepts"'s navigation
+       params, created by §7.4.5 "Populating a session history entry"'s "create navigation params by fetching", are
+       what §7.5.1 "Shared document creation infrastructure" creates a Document from, decided at the response and
+       carried, never read back off the Document. The secure-context answer is §8.1.3.5's over the top-level
+       creation URL, asked before the realm exists because §7.1.3's and §7.1.4's obtains and §7.5.1's `requestsOAC`
+       run against the reserved environment. The target snapshot params' sandboxing flags are the caller's
+       statement for both navigables this entry roots: a top-level traversable states `none` (§7.1.5 answers it
+       from an empty popup sandboxing flag set), and a peer-created navigable states its embedder's set;
+       `parent_navigable` says which this is. The response's CSP-derived half is navigation_params'. Parsed, then
+       asserted, as in qjs_inherited_container. */
     {
         bool ok = sandbox_flags_of_serialized(creation_sandbox_flags, &creation_flags);
 
@@ -785,21 +505,15 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                "flags. Read as the empty set it would create a cross-origin `<iframe sandbox>` child that runs "
                "the scripts, submits the forms and relaxes the `document.domain` its embedder's markup forbids");
     }
-    /* AND §7.3.2.1's DETERMINE THE ORIGIN, ASKED OF THE TWO FACTS THAT HAVE JUST MET FOR THE FIRST TIME.
-       "To determine the origin, given a URL url, a sandboxing flag set sandboxFlags and an origin-or-null
-       sourceOrigin: if sandboxFlags's SANDBOXED ORIGIN browsing context flag is set, then return a new opaque
-       origin." So a navigable whose creation set carries that flag has a Document whose principal is OPAQUE —
-       same origin with NOTHING, not even another opaque one — and this instance's principal is the tuple
-       origin the trusted zone derived from the address it fetched. The two cannot both be right.
-       IT IS ASSERTED RATHER THAN CORRECTED HERE, and the difference matters. SECURITY.md makes the PRINCIPAL
-       the trusted zone's to state, because the untrusted engine may not name its own; an engine that quietly
-       demoted itself to an opaque origin would also be an engine whose SOP answers no longer match the ones
-       `safeFetch` enforces on its behalf, which is one policy in two places disagreeing rather than a fix.
-       WHAT BUILDS IT is the zone minting a per-document opaque token for a child whose announced flag set
-       carries this flag — extension/bridge.js already derives the child's principal from the URL it fetched
-       and names this as the next thing (`_senderOrigin` is the shape), and engine/trusted.mjs derives it the
-       same way one line along. Until then a sandboxed cross-origin frame would run under its server's real
-       origin: same origin with its siblings from that host, which is the whole of what `sandbox` removes. */
+    /* §7.3.2.1's determine the origin returns a new opaque origin when the sandboxed origin browsing context flag
+       is set, so a navigable whose creation set carries that flag has an opaque principal,
+       while this instance's is the tuple origin the zone derived from the fetched address. It is asserted, not
+       corrected here: SECURITY.md makes the principal the trusted zone's to state, and an engine demoting itself
+       would disagree with the SOP answers `safeFetch` enforces for it.
+       Named residual. Not covered: a sandboxed cross-origin frame runs under its server's real origin, same origin
+       with its siblings from that host. Next diff builds: the zone mints a per-document opaque token when the
+       create notice announces this flag (extension/bridge.js's `_senderOrigin` shape, engine/trusted.mjs). How its
+       absence shows: this DCHECK fires on such a frame. */
     DCHECK(!(creation_flags & SANDBOX_ORIGIN) || !strcmp(origin, "null"),
            "a document was rooted with §7.1.5's SANDBOXED ORIGIN flag set and a TUPLE origin for a principal — "
            "§7.3.2.1's determine the origin returns a NEW OPAQUE ORIGIN for that flag, so this instance is "
@@ -810,26 +524,21 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     header_list_parse_field_lines(&response_headers, headers);
     navigation_params_from_response(&np, &response_headers, creation_flags,
                                     secure_context_url_potentially_trustworthy(top_level_url));
-    /* THE LIST IS NOT FREED HERE ANY MORE: §7.4.5 reads this response TWICE — once for the navigation params
-       above, and once for the COMPUTED TYPE that decides which kind of Document its bytes load as — and the
-       second read is at the parse below. Freeing between them is what made this host parse every response as
-       HTML: by the time there were bytes to build a tree from, the only thing that could say what they were
-       had already been released. */
+    /* The list is not freed here: §7.4.5 reads this response twice, for the navigation params above and for the
+       computed type that decides which kind of Document its bytes load as, at the parse below. */
 
     g_rt = JS_NewRuntime();
     CHECK(g_rt != NULL, "the runtime allocation failed: a dropped engine loses the whole frontier");
     JS_SetMaxStackSize(g_rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the 8MB wasm stack */
     g_ctx = JS_NewContext(g_rt);
     CHECK(g_ctx != NULL, "the context allocation failed");
-    /* DOMException is a WEB IDL interface the DOM specs throw BY NAME — NotFoundError, NamespaceError,
-       InvalidCharacterError — and the fork already implements the whole intrinsic. Not installing it left the
-       components with nothing to throw, so each spec-mandated failure became a DCHECK saying "the spec throws
-       here and this engine cannot": a documented gap standing in for a capability that existed. */
+    /* DOMException is a Web IDL interface the DOM specs throw by name (NotFoundError, NamespaceError,
+       InvalidCharacterError), and the fork implements the whole intrinsic. */
     CHECK(JS_AddIntrinsicDOMException(g_ctx) == 0, "the DOMException intrinsic failed to install");
 
     concolic_init(g_ctx);
-    /* NOT A DEFAULT. An instance that does not know which document it is cannot be reached by a peer, and a
-       silent 1 here would collide with every other instance that guessed the same. */
+    /* Not a default: an instance that does not know which document it is cannot be reached by a peer, and a
+       guessed name would collide with every other instance that guessed the same. */
     DCHECK(doc_id != NULL && *doc_id, "the host started this engine without a document name — an agent is named by its root "
                      "peer instance names this document's flows by that id when it materializes their COW "
                      "segments, so an unnamed document cannot take part in cross-document time travel");
@@ -837,75 +546,58 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     endpoint_init();
     solve_init(g_ctx);
 
-    /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
-       and again in test_forced.c, and the pair had drifted. */
+    /* The two hook sets the solver owns, each declared by its own component and shared with test_forced.c. */
     cow_install_time_travel_hooks(engine_gen_fork);
     concolic_install_hooks();
-    concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
+    concolic_install_source_overlay();   /* a solver host: attacker-controlled values are symbolic sources */
 
     g_dom = engine_parse_document(html, html_len, &response_headers, &root_kind, &root_encoding);
     header_list_free(&response_headers);
 
-    /* Identity and script inventory from the DOM's OWN executable scripts: a concatenation of them cannot
+    /* Identity and script inventory from the DOM's own executable scripts: a concatenation of them cannot
        represent per-<script> scope and would shift with an inline script the page did not ship. */
     g_bundle_id = document_bundle_id(g_dom);
     g_scripts   = document_exec_scripts(g_dom);
 
-    /* The web-platform surface, installed on the BASELINE — before any flow runs, so these globals are
-       pre-flow state and never land in a delta. Each is a real component under browser/; what is not built
-       yet is absent, and the page's own throw on reading it names the next one to write. */
+    /* The web-platform surface, installed on the baseline before any flow runs, so these globals are pre-flow
+       state and never land in a delta. What is not built is absent, and the page's own throw names it. */
     engine_agent_init(g_ctx, origin, top_level_url, np.requests_oac, np.opener.value);
-    /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD: a same-origin document is a second REALM in this heap
-       (HTML's similar-origin window agent), and what the platform surface of a document of THIS build is, is
-       this file's answer and nobody else's. */
+    /* §7.4 calls back here for a same-origin child: a same-origin document is a second realm in this heap (HTML's
+       similar-origin window agent), and what a document's platform surface is in this build is this file's
+       answer. */
     navigable_set_realm_builder(engine_child_realm);
-    /* THE ROOT NAVIGABLE IS THIS HOST'S, so its §7.2.3 proxy is minted here — one per navigable, made by
-       whoever owns the navigable, which for the root is the host that named it. */
+    /* The root navigable is this host's, so its §7.2.3 proxy is minted here, by whoever owns the navigable. */
     {
-        /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME. The document was navigated to by the real
-           browser, and a cross-origin opener may have set `name` before navigating — which is exactly how
-           window.name became an attacker source. The read is concolic until something states it. */
-        /* WHICH CSP LIST THIS DOCUMENT IS CREATED WITH, AND CSP §2.2's SELF-ORIGIN OF IT — ONE answer from
-           §7.1.7's own determine-navigation-params-policy-container (core/frame/policy_container.h), because
-           WHOSE origin `'self'` names follows entirely from WHICH of the two containers this Document is
-           created with, and because the other program entry creates a Document from the same two facts: a
-           rule spelled at both is two rules. `origin` is §2.2.2's answer ("response's URL's origin"); the
-           inherited pair is §7.1.7's clone of the creator's container, relayed off the `navigable.create`
-           notice by the trusted zone. The self-origin is stated as its own argument rather than taken from
-           `origin` beside it because the two are different facts — a Document's principal, and the origin its
-           policy resolves `'self'` against — which is precisely what an inherited container makes disagree.
-           IT IS COMPUTED BEFORE THE MINT because §7.1.4.2's step 2 reads its embedder policy: the check runs
-           where the navigable is rooted, and a check made after the Document exists is one that could not
-           block it. */
+        /* NULL: this host does not know the navigable's name. A cross-origin opener may have set `name` before
+           navigating, which is how window.name is an attacker source, so the read is concolic until stated. */
+        /* Which CSP list this document is created with, and CSP §2.2's self-origin of it: one answer from
+           §7.1.7's determine-navigation-params-policy-container (core/frame/policy_container.h), shared with the
+           other program entry. `origin` is §2.2.2's answer ("response's URL's origin"); the inherited pair is the
+           clone of the creator's container relayed off the `navigable.create` notice. The self-origin is its own
+           argument because a principal and the origin `'self'` resolves against are different facts, which an
+           inherited container makes disagree. It is computed before the mint because §7.1.4.2's step 2 reads its
+           embedder policy, and a check after the Document exists could not block it. */
         SerializedPolicyContainer inherited =
             qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
                                     inherited_coep_report_only_endpoint);
-        /* §7.5.1's OPENER POLICY ROW for the root Document — §7.1.3's policy obtained from the response
-           this instance was started with. It is the navigable's because §7.1.3.2 and §7.3.2.1 both read it off
-           a browsing context's active document (core/frame/window_proxy.h). */
-        /* AND §7.3.1.3's PARENT, WHICH DECIDES WHETHER THIS ROOT IS A TOP-LEVEL TRAVERSABLE AT ALL — stated by
-           the zone that routed the create, never inferred from the fact that this entry is the one that roots
-           an instance. navigable_root runs §7.1.4.2 over it. */
+        /* §7.5.1's opener policy row for the root Document: §7.1.3's policy obtained from this instance's
+           response, the navigable's because §7.1.3.2 and §7.3.2.1 read it off a browsing context's active
+           document (core/frame/window_proxy.h). §7.3.1.3's parent, stated by the zone that routed the create,
+           decides whether this root is a top-level traversable; navigable_root runs §7.1.4.2 over it. */
         JSValue root_proxy = navigable_root(g_ctx, world_local_doc(), NULL, np.opener.value,
                                             parent_navigable, inherited, &np.embedder, creation_flags);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        /* AND §7.3.1.3's OTHER LINK, BEFORE THE DOCUMENT BELOW IS INSTALLED: Permissions Policy §9.5 runs once
-           per Document a navigable is given, and for a navigable rooted in a peer's frame tree it can only be
-           answered from what the creating instance already computed. Stated here rather than folded into the
-           rooting above for §7.3.1.3's own reason — the section creates a navigable and links it afterwards. */
+        /* §7.3.1.3's other link, before the document below is installed: Permissions Policy §9.5 runs once per
+           Document a navigable is given, and for a navigable rooted in a peer's frame tree only the creating
+           instance can answer it. §7.3.1.3 creates a navigable and links it afterwards. */
         navigable_root_container(g_ctx, root_proxy, container_policy);
-        /* AND §3.1.3's ANCESTOR ORIGINS FOR THAT NAVIGABLE'S DOCUMENT, before the install below and for the
-           same sentence: §7.3.2.1 runs those steps once per Document a navigable is given and reads this
-           there. A THIRD statement rather than a field of either above it — see core/frame/navigable.h. */
+        /* §3.1.3's ancestor origins for that navigable's document, before the install, since §7.3.2.1 reads it
+           there (see core/frame/navigable.h). */
         navigable_root_ancestor_origins(g_ctx, root_proxy, ancestor_origins);
-        /* §7.5.1's Document, from the navigation params decided above and not from anything read back off the
-           response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
-           CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
-           file's remaining job is to say WHICH navigable and WHICH realm, which is a host fact. */
-        /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
-           response step 4, computed where the response is read (core/frame/navigation_params.c) and handed to
-           the container constructor here, which is the ONLY thing `np.embedder` is for. */
+        /* §7.5.1's Document, from the navigation params decided above: §7.4.5's final sandboxing flag set, §7.1.7
+           step 3's CSP list and §7.1.7's create-a-policy-container-from-a-fetch-response step 4 embedder item are
+           `np`'s (core/frame/navigation_params.c); this file says which navigable and which realm. */
         SerializedPolicyContainer response =
             serialized_policy_container(np.csp, origin, serialized_embedder_policy_of(&np.embedder),
                                         np.integrity_policy);
@@ -916,100 +608,43 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                              serialized_response_permissions_policy(np.permissions_policy,
                                                                     np.permissions_policy_report_only),
                              np.sandbox_flags,
-                             /* §7.4's ABOUT BASE URL: NULL. This host's root document is created FROM A
-                                RESPONSE the trusted zone fetched, which is the one arm §2.4.3 "Document base
-                                URLs" answers with the document's own address rather than an inherited base. */
+                             /* §7.4's about base URL: NULL. This root document is created from a response, the
+                                arm §2.4.3 "Document base URLs" answers with the document's own address. */
                              world_local_doc(), root_proxy, /*about_base_url*/ NULL,
                              /*is_iframe_srcdoc*/ false);
-        /* AND HTML §13.2.3.2 "Determining the character encoding"'s ANSWER ONTO THE DOCUMENT IT IS ABOUT —
-           here, for core/frame/navigable.c's reason and in the same place as it: the Document record is the
-           realm builder's product, so this is the first moment there is anything to write it on, and the
-           bytes the parse consumed were already decoded with it. Without this line DOM §4.5 "Interface
-           Document"'s default stands and `document.characterSet` answers UTF-8 for every response. */
+        /* HTML §13.2.3.2 "Determining the character encoding"'s answer onto the Document, as
+           core/frame/navigable.c does: the Document record is the realm builder's product, so this is the first
+           moment there is anything to write it on. Without it DOM §4.5 "Interface Document"'s UTF-8 default
+           stands for every response. */
         document_set_encoding(g_ctx, root_encoding);
         JS_FreeValue(g_ctx, root_proxy);
     }
-    /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
-       per-wrapper or per-flow mint, and that is what the pool asserts against. */
+    /* The surface is installed, so every member the platform has is declared; a declaration from here on is a
+       per-wrapper or per-flow mint, which the pool asserts against. */
     idl_args_seal();
 
-    /* THE RESPONSE IS GONE NOW, and that is the point at which it stops being reachable at all. Its decisions
-       are on the Document and on the agent's cluster; nothing the bundle runs can ask for a header again. */
+    /* The response is no longer reachable: its decisions are on the Document and the agent's cluster, and nothing
+       the bundle runs can ask for a header again. */
     navigation_params_free(&np);
     free(origin);
     return 0;
 }
 
-/* A SECOND DOCUMENT OF THIS AGENT CLUSTER, JOINED TO THE INSTANCE THAT IS ALREADY RUNNING IT.
- *
- * `qjs_init` ROOTS an agent — the runtime, the class registrations, the origin, the world registry, the
- * frontier — and those exist ONCE. An instance is an ORIGIN-KEYED AGENT CLUSTER, `(browsing-context group,
- * origin)`, so SEVERAL documents are one instance's, and every document of this cluster that this agent did
- * not itself create arrives HERE: a same-origin frame the engine never modelled, a second cross-origin child
- * of a peer's page at this origin, a navigation replacing the group's top. Until this entry existed the
- * trusted zone's only alternative was a SECOND WASM instance for one agent cluster — a second heap for one
- * similar-origin window agent, which HTML puts in one heap and then RELIES on (§4.5's adopt moves a live node
- * across, `frame.contentWindow.onunload = fn` hands a live closure across) — so it asserted at each such
- * arrival instead, and the assert is what this replaces.
- *
- * THE PARAMETERS ARE THE OPERATION'S, NOT THE TARGET'S, which is why they are `qjs_init`'s five and why not
- * one of them is re-derived from the agent being joined. §scheduler's rule (§7.4 step 14 is the worked
- * example): a join that read the address off the instance would join the document that instance was ROOTED
- * at, a second time. What the TARGET decides is what is genuinely a fact about the target — its PRINCIPAL,
- * its heap, its frontier and its IDENTITY.
- *
- * IDENTITY IS THE AGENT'S. `qjs_bundle_id` is not recomputed here and this entry does not touch it: the
- * bundle id is the FRONTIER KEY, the key under which a whole cluster's parked residue was stored and will be
- * stored again, and there is one frontier per instance because there is one scheduler per instance. A joined
- * document contributing its own key would either split one cluster's residue across two rows or overwrite the
- * root's with a frame's. `doc_id` names the DOCUMENT (the world registry's name, which is what a peer routes
- * on); the bundle id names the AGENT.
- *
- * ONE INSTANCE PER (browsing-context group, ORIGIN) IS ASSERTED FATALLY. SECURITY.md makes the instance the
- * PRINCIPAL — "a fetch is governed by a single, correct origin because there is exactly one origin in the
- * instance that issued it" — so a document whose origin is not this agent's is not a fidelity gap to fill in
- * later, it is two principals behind one `pageOrigin`, and every same-origin decision this instance makes
- * afterwards is decided for the wrong one. That is a production invariant, so it is a `CHECK` and not a
- * `DCHECK`. It fails CLOSED on an opaque origin on either side, because §7.1.1's opaque origin is same origin
- * with nothing — including another opaque one — which is the same rule SECURITY.md states for the
- * credentialed-read principal.
- *
- * THE DOCUMENT IS BUILT AT THE BASELINE, exactly as the root's is and for the same reason: it is a document
- * the BROWSER holds, so it exists in every timeline this agent has rather than in the one that happened to
- * create it. Its SCRIPTS are the other half and they are not baseline at all — they are the programs of a
- * flow, minted for this document on the ONE frontier (engine_join_document). That split is the same one
- * `qjs_init` + `qjs_begin` already are.
- *
- * `html` IS THE RESPONSE'S BYTES and `html_len` THEIR LENGTH, `url` ITS ADDRESS, `doc_id` ITS NAME, `headers`
- * ITS RESPONSE HEADER LIST and `top_level_url` HTML §8.1.3.1's TOP-LEVEL CREATION URL — each exactly what the
- * same-named argument of `qjs_init` is, stated by the same zone for the same reason, and read here ONCE into
- * the decisions §7.5.1 creates a Document from. The length is that entry's for that entry's reason: a document
- * may contain a 0x00 and the tokenizer has a rule for it per state, none of which is reachable if the bytes
- * stop there.
- *
- * `inherited_csp` AND `inherited_csp_self_origin` ARE qjs_init's, FOR THE SAME REASON AND WITH MORE FORCE: a
- * document reaching THIS entry is by definition one this agent did not root, which for a child navigable means
- * one a peer's `navigable.create` announced — the case HTML §7.1.7's clone exists for. The same two-sided
- * assert applies, and it applies through §7.1.7's own algorithm (core/frame/policy_container.h) so this entry,
- * the root's, and the WPT runner's cannot come to answer it differently. The four `inherited_coep*` arguments
- * are that same container's §7.1.4 item, for the reason qjs_init states: §7.1.7's clone moves every item of a
- * container, so an item that stops at a seam is an inheritance silently deleted.
- *
- * `parent_navigable` IS qjs_init's TOO, AND IT IS NOT ALWAYS `u` HERE. A document reaching this entry is one
- * this agent did not root, and the shape that makes it a CHILD navigable is ordinary: a same-origin document
- * nested through a CROSS-ORIGIN one (a page embedding a third-party frame that embeds the page's own origin
- * back) is a document of THIS cluster whose §7.3.1.3 parent lives in a peer instance. Its navigable is a child
- * navigable, and this entry is where that is stated or lost.
- *
- * `container_policy` IS qjs_init's, and it is here for the sentence directly above: a navigable whose parent
- * is in a peer instance has its CONTAINER element there too, so Permissions Policy §9.5's answer for this
- * document's navigable is a fact only the creating instance could compute.
- *
- * `ancestor_origins` IS qjs_init's, and it is here for that same sentence read one algorithm along: a navigable
- * whose parent is in a peer instance has its ANCESTORS there too, so §3.1.3's steps — which read the parent
- * Document's own recorded list, its ORIGIN RECORD and the container element — can only run in that instance.
- * The shape this entry exists for makes it sharper still: a same-origin document nested through a CROSS-ORIGIN
- * one joins THIS cluster while every one of its ancestors sits in another. */
+/* A second document of this agent cluster, joined to the instance already running it. `qjs_init` roots the agent
+ * (runtime, class registrations, origin, world registry, frontier) once; every other document of this
+ * `(browsing-context group, origin)` cluster that this agent did not create arrives here: a same-origin frame the
+ * engine never modelled, a second cross-origin child of a peer's page at this origin, a navigation replacing the
+ * group's top. HTML puts a similar-origin window agent in one heap and relies on it (§4.5's adopt moves a live
+ * node across; `frame.contentWindow.onunload = fn` hands a live closure across).
+ * The parameters are the operation's, each meaning what `qjs_init`'s same-named argument means, read once into the
+ * decisions §7.5.1 creates a Document from; re-deriving one from the target would join the root document a second
+ * time. The target decides its principal, heap, frontier and identity: `qjs_bundle_id` is the agent's frontier
+ * key, untouched here, while `doc_id` names the document a peer routes on.
+ * One instance per (browsing-context group, origin) is a CHECK: SECURITY.md makes the instance the principal, so a
+ * foreign-origin document would be two principals behind one `pageOrigin`. It fails closed on an opaque origin on
+ * either side (§7.1.1). The document is built at the baseline, as the root's is; its scripts are flows on the one
+ * frontier (engine_join_document). A same-origin document nested through a cross-origin one is a child navigable
+ * whose parent, container and ancestors live in a peer, which is why those arguments are carried here too. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
@@ -1019,12 +654,11 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *parent_navigable, const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags)
 {
-    /* §7.1.5's SET FOR THE NAVIGABLE THIS DOCUMENT IS ROOTED IN — the same statement qjs_init takes and for
-       the same reason, and this entry is where the joined document's is stated or lost. */
+    /* §7.1.5's set for this document's navigable, stated as in qjs_init. */
     SandboxFlags creation_flags = 0;
     HeaderList response_headers;
-    /* §7.5.1's TYPE AND CONTENT TYPE for the Document this entry installs, decided by the same §7.4.5
-       dispatch the parse below runs and carried to the install rather than restated there. */
+    /* §7.5.1's type and content type for the Document this entry installs, decided by the parse's §7.4.5 dispatch
+       and carried to the install. */
     DocumentKind      joined_kind;
     int               joined_encoding;
     NavigationParams np;
@@ -1033,12 +667,9 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     DocScripts scripts;
     uint32_t doc;
 
-    /* A JOIN NEEDS AN AGENT TO JOIN, and a FRONTIER to put this document's scripts on. The first is qjs_init's
-       and the second is qjs_begin's, and they are two statements because a host holding the instance between
-       those two calls is a real state (it reads the bundle id there and looks up the prior session). A
-       document joined into that window would be parsed, given a realm, and never execute a line — which is
-       indistinguishable from a document that had no scripts, and is exactly the failure every seeding assert
-       in this engine exists to prevent. */
+    /* A join needs an agent to join (qjs_init) and a frontier for this document's scripts (qjs_begin). A host may
+       hold the instance between the two (it reads the bundle id there); a document joined then would never run a
+       line and would read as one with no scripts. */
     DCHECK(g_dom != NULL,
            "qjs_join ran on an instance qjs_init never rooted — a join ADDS a document to a LIVE agent, so "
            "there is no runtime to build its realm in, no origin to check it against and no heap for its tree");
@@ -1047,15 +678,14 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "ONE frontier, and there is no session for them to be members of yet");
     CHECK(html != NULL, "a document joined this agent with no bytes at all — a join ADDS a Document, and there "
                         "is no tree to build from nothing");
-    /* THE SAME TWO-SIDED READ `qjs_init` MAKES, at the same boundary and for the same reason. */
+    /* The same two-sided read `qjs_init` makes. */
     DCHECK(html[html_len] == '\0',
            "a joined document's bytes carry no guard byte at their stated length — the ABI placement writes "
            "one past the sequence so that a length and a C read cannot disagree silently");
 
-    /* THE PRINCIPAL, BEFORE ANYTHING IS BUILT OUT OF THE BYTES. §7.1.1's same origin, asked of the AGENT's own
-       record against this document's address, which is the one comparison that decides whether this document
-       belongs in this heap at all. It is asked FIRST because everything below it — the parse into the agent's
-       arenas, the realm, the flow — is work that cannot be undone once a wrong-origin document has done it. */
+    /* The principal, before anything is built from the bytes: §7.1.1's same origin of the agent's record against
+       this document's address, asked first because the parse into the agent's arenas, the realm and the flow
+       cannot be undone once done. */
     {
         UrlRecord rec;
 
@@ -1079,19 +709,12 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "name, and every flow of this document mints its worlds under it, so an unnamed document can take "
            "no part in cross-document time travel");
 
-    /* §7.4.2.1 "Supporting concepts"'s TARGET SNAPSHOT PARAMS' SANDBOXING FLAGS FOR THE JOINED NAVIGABLE,
-       WHICH THE ZONE STATES — the struct's own member, not §7.4.2.3.4's like-named row taken from it. A ZERO
-       STOOD HERE under an argument that is HALF right, and the half it got right is worth keeping as an
-       assert rather than as a reason not to carry the value: a Document carrying §7.1.5's SANDBOXED ORIGIN
-       flag is forced into a fresh OPAQUE origin, which is same origin with NOTHING, so it could not have
-       passed the principal CHECK above — that one flag really cannot be present here. The rest of §7.1.5's
-       set can: `<iframe sandbox="allow-same-origin allow-scripts" src="https://cdn/…">` in a page at another
-       origin leaves fourteen flags set, puts the child in the cdn's cluster, and is exactly the document this
-       entry exists to join. Zero deleted its whole sandbox. The set now crosses on the create notice like the
-       parent, the container answer and the ancestor list beside it.
-       PARSED, THEN ASSERTED — never parsed inside the assert, for the reason qjs_inherited_container states:
-       a DCHECK condition is compiled out in release, so a parse performed in one does not happen in the build
-       that ships and every joined document would take the empty set whatever the record said. */
+    /* §7.4.2.1 "Supporting concepts"'s target snapshot params' sandboxing flags for the joined navigable, which the
+       zone states. §7.1.5's sandboxed origin flag cannot be present (it forces an opaque origin, which the
+       principal CHECK above refuses), and that is asserted; the rest of the set can be:
+       `<iframe sandbox="allow-same-origin allow-scripts" src="https://cdn/…">` in a page at another origin leaves
+       fourteen flags set and puts the child in the cdn's cluster. Parsed, then asserted, as in
+       qjs_inherited_container. */
     {
         bool ok = sandbox_flags_of_serialized(creation_sandbox_flags, &creation_flags);
 
@@ -1115,12 +738,11 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     header_list_parse_field_lines(&response_headers, headers);
     navigation_params_from_response(&np, &response_headers, creation_flags,
                                     secure_context_url_potentially_trustworthy(top_level_url));
-    /* HELD PAST THE PARSE, for the reason qjs_init states: §7.4.5 reads this one response for its navigation
-       params AND for the computed type the parse dispatches on. */
+    /* Held past the parse, for qjs_init's reason: §7.4.5 reads this response for its navigation params and for
+       the computed type the parse dispatches on. */
 
-    /* THIS AGENT HOLDS IT — said before the realm is built, because §7.2.3's mint below asserts it and
-       because "this agent holds `doc`" is what makes every same-origin read through this document answer in
-       this turn instead of suspending on a peer that does not exist. */
+    /* This agent holds it, said before the realm is built: §7.2.3's mint below asserts it, and it makes every
+       same-origin read through this document answer in this turn rather than suspend on a nonexistent peer. */
     doc = world_doc_intern(doc_id);
     DCHECK(!world_doc_hosted(doc),
            "the document this join names is one this agent ALREADY holds — a document is joined once, and "
@@ -1132,39 +754,28 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     header_list_free(&response_headers);
     cctx = engine_realm_new(g_rt, top_level_url);
     {
-        /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME — the same statement qjs_init makes about the
-           root's, and true here for a second reason as well. The navigable was created by whoever embeds this
-           document, which is a peer instance or the browser itself; the `navigable.create` notice a peer emits
-           carries no name field, so `window.name` is unknown external input and reads concolic until something
-           states it. That is what `window_proxy_new_self` spells with a NULL, and what the §7.4 mint beside it
-           cannot spell at all (it answers "" for a name it was not given, because §7.4 always knows one). */
-        /* THE PRINCIPAL IS THE AGENT'S OWN RECORD, serialized — not a second derivation from `url`; the CHECK
-           above is what makes it the right answer rather than a substitution that happens to match.
-           CSP §2.2's SELF-ORIGIN IS A DIFFERENT FACT AND IS RESOLVED WITH THE LIST IT BELONGS TO. This line
-           passed the agent's record for both, which is §2.2.2's answer and is right exactly when the list came
-           off this document's own response — and a document that reaches THIS entry is one another instance
-           announced, so an inherited container is the case the entry exists for rather than an exotic one.
-           BEFORE THE MINT, for qjs_init's reason: §7.1.4.2 step 2 reads this container's embedder policy. */
+        /* NULL: this host does not know the navigable's name. Whoever embeds this document (a peer or the browser)
+           created the navigable, and a peer's `navigable.create` notice carries no name, so `window.name` reads
+           concolic until stated; `window_proxy_new_self` spells that with a NULL, which §7.4's mint cannot.
+           The principal is the agent's own record, which the CHECK above made the right answer. CSP §2.2's
+           self-origin is resolved with the list it belongs to, since a document reaching this entry is one another
+           instance announced, so an inherited container is the ordinary case. It is computed before the mint, for
+           qjs_init's reason (§7.1.4.2 step 2 reads its embedder policy). */
         SerializedPolicyContainer inherited =
             qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
                                     inherited_coep_report_only_endpoint);
-        /* §7.5.1's OPENER POLICY ROW for the joined Document, from ITS response's header list — read by
-           the same component over the same shape, because this is the same algorithm over a second response.
-           AND §7.3.1.3's PARENT, which for a joined document is as real a possibility as for a rooted one — a
-           same-origin document nested through a cross-origin one belongs to this cluster and to another
+        /* §7.5.1's opener policy row for the joined Document, from its own response's header list, and §7.3.1.3's
+           parent: a same-origin document nested through a cross-origin one belongs to this cluster and to another
            instance's frame tree at once. */
         JSValue proxy = navigable_root(cctx, doc, NULL, np.opener.value, parent_navigable, inherited,
                                        &np.embedder, creation_flags);
 
         CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
-        /* §7.3.1.3's CONTAINER, for qjs_init's reason and with the same force its parent has here: a
-           same-origin document nested through a cross-origin one has both of its §7.3.1.3 links in a peer
-           instance, so this is where the container's answer is stated or lost. */
+        /* §7.3.1.3's container, for qjs_init's reason: a document nested through a cross-origin one has both of
+           its §7.3.1.3 links in a peer instance. */
         navigable_root_container(cctx, proxy, container_policy);
-        /* AND §3.1.3's ANCESTOR ORIGINS FOR THAT SAME NAVIGABLE'S DOCUMENT, on the sentence above: a document
-           joining this cluster through a CROSS-ORIGIN parent has every one of its ancestors in that peer, so
-           its list is composed there and read back here. */
+        /* §3.1.3's ancestor origins for that navigable's document, composed in the peer that holds them. */
         navigable_root_ancestor_origins(cctx, proxy, ancestor_origins);
         SerializedPolicyContainer response =
             serialized_policy_container(np.csp, origin_serialized(origin_agent()),
@@ -1176,12 +787,10 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                              serialized_response_permissions_policy(np.permissions_policy,
                                                                     np.permissions_policy_report_only),
                              np.sandbox_flags, doc, proxy,
-                             /* A JOINED document is a second RESPONSE of this cluster — see the root's own
-                                install for why §7.4's about base URL is null for one. */
+                             /* a joined document is a second response of this cluster; see the root's install
+                                for why §7.4's about base URL is null */
                              /*about_base_url*/ NULL, /*is_iframe_srcdoc*/ false);
-        /* §13.2.3.2's ANSWER ONTO THIS DOCUMENT, for the reason `qjs_init` states at its own install: a
-           second document of this cluster is a second response, decoded with its own encoding, and reading
-           the root's would be one document reporting another's. */
+        /* §13.2.3.2's answer onto this document, decoded with its own encoding, for qjs_init's reason. */
         document_set_encoding(cctx, joined_encoding);
         JS_FreeValue(cctx, proxy);
     }
@@ -1201,12 +810,9 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     g_joined_dom[g_joined_n] = dom;
     g_joined_n++;
 
-    /* AND THE DOCUMENT RUNS ITS OWN SCRIPTS. A Document this agent built out of a response and never ran the
-       scripts of is not a document that has been analysed at all — measured on real Chrome, where a
-       same-origin child that got a realm, a tree and a WindowProxy and no seeding contributed ZERO endpoints
-       while the cross-origin spelling of the same page reported them. The inventory is the DOM's own
-       `<script>` scan, and it is FREED here rather than borrowed for the session: engine_join_document copies
-       every body it queues and resolves every `src` it parks on. */
+    /* The document runs its own scripts: a Document given a realm, a tree and a WindowProxy but never seeded
+       contributes no endpoints. The inventory is the DOM's own `<script>` scan, freed here, because
+       engine_join_document copies every body it queues and resolves every `src` it parks on. */
     scripts = document_exec_scripts(dom);
     engine_join_document(cctx, doc, scripts.bodies, scripts.srcs, scripts.types, scripts.sched, scripts.els,
                          scripts.n);
@@ -1216,44 +822,20 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     return 0;
 }
 
-/* THE DOCUMENT A NAVIGATION REPLACED — the other half of `qjs_join`, and the two are ONE navigation.
- *
- * ONLY THE TRUSTED ZONE CAN STATE THIS, which is why it is an entry rather than something the engine notices.
- * A navigation the REAL BROWSER performed leaves no trace at all inside this heap: the outgoing document's
- * scripts are still queued, its flows are still parked, its Window still answers every read. The browser's own
- * document id and `sender.tab.url` are the provenance, exactly as they are for the address, the origin and the
- * response's header field lines (SECURITY.md) — the zone states what the browser did, and the engine decides
- * what it means.
- *
- * IT IS HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION, and
- * the section is load-bearing rather than decorative. §7.3.1.6 "Navigable destruction" — the number this
- * engine's own abort message used to name for this operation — destroys a NAVIGABLE: a container removed, a
- * traversable closed. A navigation destroys none; the navigable is exactly what survives, and what changes is
- * which Document is ACTIVE in it. Both reach §7.5.10 "Destroying documents" one step down, through §7.5.9
- * "Unloading documents"' "if oldDocument's salvageable state is false, then destroy oldDocument", which is why
- * one machine serves both entries (core/frame/document_lifecycle.h).
- *
- * THE ORDER IS `qjs_join` THEN THIS, AND IT IS THE STANDARD'S OWN: §7.4.6.1 unloads `displayedDocument` given
- * `targetEntry's document`, so the incoming Document exists before the outgoing one is unloaded. That order is
- * CHECKABLE here rather than merely stated, which is the second reason the incoming name crosses: a zone that
- * called the two the other way round names a document this agent does not yet hold, and the assert that says
- * so is one line from the entry rather than in whatever ran next.
- *
- * NOTHING IS FREED HERE, AND A `JS_FreeContext` ON THIS LINE WOULD BE A USE-AFTER-FREE. The replaced document's
- * realm is released by the COLLECTOR through quickjs's realm-teardown hook once nothing holds it, and a flow
- * parked inside it holds it by counted reference (core/frame/navigable.c). Its Lexbor tree is this host's
- * until `qjs_teardown`, which is the only moment at which every realm that could still name it is gone.
- *
- * THE INCOMING DOCUMENT'S NAME DOES NOT CROSS, AND ITS ABSENCE IS §7.5.9 "Unloading documents" READ RATHER
- * THAN A FIELD DROPPED. Step 6 of unload-a-document-and-its-descendants queues the operation on the OUTGOING
- * document's own relevant global object, so the queue home is a fact about the document named HERE; the
- * optional `newDocument` feeds only the document unload timing info, which this user agent does not carry, and
- * step 3 is the standard's own answer for an absent one. This entry took the name and spent it on a realm —
- * which is exactly what a CROSS-ORIGIN navigation cannot supply, since an instance is an origin-keyed agent
- * cluster and that Document loads into a PEER. A name nothing reads is a fact crossing a trust boundary with
- * no consumer, so it stops crossing; the ORDER of the two halves is checked by the zone that performs them,
- * over the table only it holds (bridge.js), and the day §7.5.9's timing info is built the argument comes back
- * with the steps that read it. */
+/* The document a navigation replaced: the other half of `qjs_join`, one navigation. Only the trusted zone can state
+ * it: a navigation the real browser performed leaves no trace in this heap (the outgoing document's scripts are
+ * queued, its flows parked, its Window answering), and the browser's document id and `sender.tab.url` are the
+ * provenance (SECURITY.md). It is HTML §7.4.6.1 "Updating the traversable"'s deactivate a document for a
+ * cross-document navigation, not §7.3.1.6 "Navigable destruction": the navigable survives and only its active
+ * Document changes. Both reach §7.5.10 "Destroying documents" through §7.5.9 "Unloading documents"' "if
+ * oldDocument's salvageable state is false, then destroy oldDocument", so one machine serves both
+ * (core/frame/document_lifecycle.h). The order is `qjs_join` then this, as §7.4.6.1 unloads `displayedDocument`
+ * given `targetEntry's document`; the zone checks the order over the table it holds (bridge.js).
+ * Nothing is freed here: the replaced realm is released by the collector through quickjs's realm-teardown hook
+ * once nothing holds it (a parked flow holds it by counted reference, core/frame/navigable.c), and its tree is
+ * this host's until `qjs_teardown`. The incoming document's name does not cross: §7.5.9 step 6 queues on the
+ * outgoing document's global, and `newDocument` feeds only unload timing info, which this user agent does not
+ * carry (step 3 answers its absence). */
 QJS_EXPORT void qjs_unload(const char *doc_id)
 {
     uint32_t doc;
@@ -1274,40 +856,24 @@ QJS_EXPORT void qjs_unload(const char *doc_id)
     engine_unload_document(doc);
 }
 
-/* The frontier KEY's document half. Pure scan, so the host may ask the instant qjs_init returns. */
+/* The frontier key's document half. Pure scan, so the host may ask the instant qjs_init returns. */
 QJS_EXPORT unsigned qjs_bundle_id(void)
 {
     DCHECK(g_dom != NULL, "qjs_bundle_id was asked before the document was parsed");
     return g_bundle_id;
 }
 
-/* THERE IS NO STALL HOOK HERE ANY MORE, and the one that stood here is why: it answered
-   `*engine_pending_fetches() != 0` and never engine_host_requests(), so this host told the scheduler its frontier
-   was EXHAUSTED whenever every member was suspended inside a cross-instance read with no fetch outstanding.
-   The scheduler then seeded candidates over those flows and closed the session on top of them. Both C drivers
-   asked both registers; the SHIPPED one asked half, which is §Testing's own sentence about which entry point
-   rots. The question is the engine's, over the engine's registers (engine.h's engine_host_owes), and no host
-   restates it. */
+/* The stall question is the engine's, over the engine's registers (engine.h's engine_host_owes); no host restates
+   it, so every driver asks both the pending-fetch and host-request registers. */
 
-/* A PEER HOLDS A REFERENCE INTO THIS INSTANCE'S DOCUMENT, so its timelines may not RUN OUT — solver/engine.h's
- * engine_set_referenced, which until now had no entry in this ABI at all. The consequence was not a missing
- * feature but a WRONG one, and it was silent at both ends: a cross-origin child provisioned by the trusted zone
- * ran its scripts, its frontier drained, its session closed — and the first `otherW.length` its creator read
- * arrived at a document with no timeline to answer in. The engine names it from the far side (engine_perform's
- * count assert, engine_route's drained-instance assert), which is the right place for the crash and the wrong
- * place for the fix: the fact is not one the engine can see. An instance exists because SOME OTHER AGENT
- * created its navigable, and the only party that knows that is the one that provisioned it — the trusted zone,
- * which holds the routing table SECURITY.md gives it and nothing else.
- *
- * BEFORE THE FRONTIER IS SEEDED, and asserted rather than merely documented. `engine_set_referenced` decides
- * whether the LAST timeline finishes, so a host that stated it after the frontier had already drained would be
- * stating it about a session that had already made the decision — and the statement would read as taken while
- * the document it was about was gone. wpt_runner.c's child host places it on the same line for the same reason.
- *
- * IT IS NOT A SESSION FACT. A parked instance resumes into the same provisioning: the peer that held a proxy
- * for this document holds one still, because the name it routes on is stable across a park BY REQUIREMENT
- * (solver/world.h). So this survives qjs_teardown, and the resumed session inherits the statement rather than
- * waiting to be told again by a zone that has no reason to repeat itself. */
+/* A peer holds a reference into this instance's document, so its timelines may not run out (solver/engine.h's
+ * engine_set_referenced). Only the party that provisioned the instance knows another agent created its navigable,
+ * so the trusted zone states it; without it a cross-origin child's frontier drains and its creator's first
+ * `otherW.length` arrives at a document with no timeline (engine_perform's count assert and engine_route's
+ * drained-instance assert name that from the far side). It is stated before the frontier is seeded, since it
+ * decides whether the last timeline finishes; wpt_runner.c's child host places it the same way. It is not a
+ * session fact: a parked instance resumes into the same provisioning (the routing name is stable across a park,
+ * solver/world.h), so it survives qjs_teardown. */
 QJS_EXPORT void qjs_set_referenced(int referenced)
 {
     DCHECK(g_ctx != NULL, "qjs_set_referenced ran before qjs_init built the context — the statement is about "
@@ -1324,35 +890,26 @@ QJS_EXPORT void qjs_set_referenced(int referenced)
     engine_set_referenced(referenced);
 }
 
-/* PHASE 2 — seed the frontier. */
+/* Phase 2: seed the frontier. */
 QJS_EXPORT void qjs_begin(const char *recipes)
 {
     DCHECK(g_ctx != NULL, "qjs_begin ran before qjs_init built the context");
     DCHECK(!g_begun, "qjs_begin ran twice — the frontier is seeded once and stepped thereafter");
-    /* THE PARKED RESIDUE SEEDS THE FRONTIER, INSTEAD OF THE BOOT FLOW — solver/cold.h. What the host stored is
-       a set of RECIPES: each names the path one suspended flow had taken, as arms over shared frozen segments,
-       and each resumes by REPLAYING that path while it re-runs this document from its first script. The flow's
-       delta, its DOM writes, its suspended frames, its constraint, its chunks and the replies it was owed are
-       all regenerated by that replay — which is also how §Time-travel-resume gets what it asks for, a flow that
-       carries its own path forward while its example VALUES track today's server. */
+    /* The parked residue seeds the frontier instead of the boot flow (solver/cold.h). Each stored recipe names the
+       path one suspended flow had taken, as arms over shared frozen segments, and resumes by replaying that path
+       while re-running this document from its first script; the delta, DOM writes, frames, constraint, chunks
+       and owed replies are regenerated by the replay, while example values track today's server. */
     engine_sched_begin(g_ctx, g_scripts.bodies, g_scripts.srcs, g_scripts.types, g_scripts.sched, g_scripts.els,
                        g_scripts.n, /*forking*/1, recipes);
     g_begun = 1;
 }
 
-/* One cooperative quantum of the ONE dispatch loop, and it answers the scheduler's THREE codes because they
- * are three different things to do next. ENGINE_STEP_YIELD leaves every flow where it was and the frontier
- * RUNNABLE — the thread is asked for, not a payment, so a host with nothing else to do steps straight back in.
- * ENGINE_STEP_DONE means the frontier is empty and the session's hooks are uninstalled. ENGINE_STEP_STALLED
- * means every member is parked on something only this host can supply: the session is live, every snapshot is
- * intact, and stepping again before paying converts nothing into work.
- * THIS ENTRY USED TO FOLD THE STALL INTO THE YIELD, "the bridge speaks two values", and the fold is what a
- * host cannot undo: a yield asks to be OUTRANKED and a stall asks to be PAID (solver/engine.c says so at the
- * one guard that keeps the two verdicts apart), so a host handed one value for both has to guess which. Every
- * driver that guessed "call me again" spun: engine/route.mjs's pump has exactly two terminators, emitted
- * output and DONE, so against a peer stalled on a reply this zone deliberately never answers it stepped
- * 10.8 million times with zero switches, zero jobs and no emission, and drained on the very next step once the
- * owed reply was paid. A folded value is a fact the producer stated and no consumer can read. */
+/* One cooperative quantum of the one dispatch loop, answering the scheduler's three codes, which are three
+ * different things to do next. ENGINE_STEP_YIELD leaves every flow where it was and the frontier runnable: the
+ * thread is asked for, so a host with nothing else to do steps straight back in. ENGINE_STEP_DONE means the frontier
+ * is empty and the session's hooks are uninstalled. ENGINE_STEP_STALLED means every member is parked on something
+ * only this host can supply: a yield asks to be outranked and a stall asks to be paid, and stepping again before
+ * paying converts nothing into work (a driver that treats a stall as a yield spins). */
 QJS_EXPORT int qjs_step(void)
 {
     int r;
@@ -1361,68 +918,42 @@ QJS_EXPORT int qjs_step(void)
     if (g_done)
         return ENGINE_STEP_DONE;   /* the session is over; stepping it again is not a question to ask twice */
     r = engine_sched_step();
-    /* THE OTHER HALF OF THE SLICE INVARIANT, and it belongs HERE because this is the only entry in this ABI
-       that opens one. preempt_hook asserts that the engine may only EXECUTE inside a slice; this asserts that
-       the slice is CLOSED before the thread goes back to the host — and together they are what makes every
-       other entry below (provide, route, perform, answer, result, teardown) host-time BY CONSTRUCTION rather
-       than by inspection: a slice cannot survive this line, so anything one of them reaches that consults the
-       scheduler's policy crashes at the consultation instead of being answered against a slice belonging to
-       nothing. Asserted on every exit including the STALL, which is the one the reply entries are called on.
-       engine_sched_step brackets exactly one slice around exactly one call, so a hit here means something
-       opened a slice OUTSIDE that bracket. */
+    /* The other half of the slice invariant: preempt_hook asserts the engine executes only inside a slice, and
+       this asserts the slice is closed before the thread returns to the host, so every entry below (provide,
+       route, perform, answer, result, teardown) is host time by construction. engine_sched_step brackets exactly
+       one slice around one call, so a hit means something opened a slice outside it. */
     DCHECK(!quantum_slice_open(),
            "qjs_step is returning to the host with the cooperative quantum's slice still OPEN — the host now "
            "pumps its port, streams findings and delivers replies on time the scheduler believes a flow is "
            "holding, and the CPU edge is still armed over it");
-    /* AND THE FLOW STAMP IS DOWN, which is the assert that would have caught the defect it now guards on the
-       day it was written. Every entry below this one runs HERE, on the host's own time, and each of them
-       creates objects: qjs_provide parses a reply record and dups it onto every parked flow's pending
-       register, qjs_host_answer parses an answer, qjs_route and qjs_perform build a delivery. With the stamp
-       still up those objects carry the running flow's generation, so `JS_ObjFlowGen(obj) > d->fork_gen` skips
-       them in every delta forked before — a later write by any flow that shares them is captured nowhere and
-       outlives that flow's unapply. The engine cannot see that from the inside (nothing crashes; the refcount
-       keeps the object alive and the value is simply wrong), so it is asserted at the boundary where the
-       ownership changes hands. */
+    /* The flow stamp is down. Every entry below runs on the host's time and creates objects (qjs_provide parses a
+       reply and dups it onto parked flows' pending registers; qjs_host_answer parses an answer; qjs_route and
+       qjs_perform build a delivery). With the stamp up they would carry the yielded flow's generation, and
+       `JS_ObjFlowGen(obj) > d->fork_gen` would skip them in every delta, so a later write by a sharing flow would
+       be captured nowhere. Nothing inside the engine can see that, so it is asserted at the boundary. */
     DCHECK(JS_FlowGen() == 0,
            "qjs_step is returning to the host with the flow stamp still up — every object the host now creates "
            "would be stamped as belonging to the flow that just yielded, and a write to one of them by any "
            "OTHER flow that shares it is skipped by that flow's delta and survives its rewind");
-    /* …AND SO IS THE CAPTURE ROUTE, which is the OTHER half of that one fact and the half the paragraph above
-       did not have. Putting the stamp down is what makes the host's objects BASELINE — and a baseline object is
-       the SHARED arm of the capture test, so with the route still pointed at the flow that just yielded, every
-       property the four entries below write on a record they have just built is recorded as a CREATION in that
-       flow's head. The next context switch away from it runs the unapply, which DELETES a creation: the reply
-       record reaches the flow it was fetched for as `{}` — no urlList, no status, no headers, no body — with
-       its refcount intact and nothing at all to say what happened to it. The two asserts are opposite failures
-       of the same boundary, so they stand together and neither is enough alone. */
+    /* The capture route is down too, the other half of the same fact: a baseline object is the shared arm of the
+       capture test, so with the route still on the yielded flow, every property an entry below writes on a record
+       it built is recorded as a creation in that flow's head, and its next context switch deletes them (a reply
+       would reach its flow as `{}`). The two asserts are opposite failures of one boundary. */
     DCHECK(cow_current() == NULL,
            "qjs_step is returning to the host with the last flow's CAPTURE ROUTE still up — every field the "
            "host writes on a record it builds is recorded as a creation in that flow's COW head, and its next "
            "context switch deletes them, so the reply arrives at its delivery stripped to an empty object");
-    /* THREE VALUES, AND THIS ENTRY IS WHERE THAT IS TRUE. The scheduler has three codes and this ABI now
-       carries all three, so the membership check is what stops a FOURTH from arriving at a host whose branches
-       are written against this one — the shape the bridge's own third branch had (a NEED_FETCH that no version
-       of the scheduler has ever returned), which is what a host does with a value it was never given: it writes
-       a plausible one and the path behind it is never taken. */
+    /* Three values, and this entry is where that holds: the membership check stops a fourth from reaching a host
+       whose branches are written against these three. */
     DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD || r == ENGINE_STEP_STALLED,
            "the scheduler answered a step with a code this ABI does not carry — the host branches on DONE, "
            "YIELD and STALLED, so a fourth value reaches it as whichever branch happens to be the fallback");
-    /* A STALL IS A BILL, SO IT HAS TO NAME WHAT IS OWED. The code alone says "pay me"; the only things a host
-       of THIS ABI can pay are the two registers it can read, so a stall that leaves both of them empty is a
-       host told to act with nothing to act on — the frontier then waits for the rest of the session on a
-       payment nobody can identify, which reads from outside exactly like a document that is merely slow.
-       AND THERE ARE TWO STALL CAUSES, WHICH IS WHY THE HOST'S OWN STATEMENT IS PART OF THE CONDITION.
-       engine_sched_step stalls for engine_host_owes (both registers' union, and its own dev walk asserts every
-       outstanding entry is tellable through one of them) and for engine_set_referenced — a document a peer
-       holds a reference into, whose last timeline reports host-owed instead of finishing and which owes NO
-       register entry at all. The second is not a bill and must never be paid: what it waits for is a QUESTION
-       from another instance, which arrives through qjs_perform or qjs_route and which no register of this one
-       can name. A host that read it as a bill would find nothing owed and conclude it was being refused.
-       SO THE THIRD DISJUNCT IS `g_referenced` AND NOT A THIRD REGISTER, and that is the whole distinction: the
-       host is entitled to tell the two apart because it MADE the statement (qjs_set_referenced) — it is not
-       inferring a cause from an absence, which is exactly what an empty bill looks like from outside. An
-       UNREFERENCED instance stalling with both registers empty is still the failure this assert has always
-       named, and it is still named here. */
+    /* A stall is a bill, so it names what is owed: the two registers this ABI's host can read. There are two stall
+       causes. engine_sched_step stalls for engine_host_owes (both registers' union; its dev walk asserts every
+       outstanding entry is tellable through one) and for engine_set_referenced, a document a peer references,
+       whose last timeline waits for a question arriving through qjs_perform or qjs_route and owes no register
+       entry. The host tells them apart because it made that statement (qjs_set_referenced), so the third disjunct
+       is `g_referenced`. An unreferenced instance stalling with both registers empty is the failure named. */
     DCHECK(r != ENGINE_STEP_STALLED || g_referenced ||
            *engine_pending_fetches() != '\0' || *engine_host_requests() != '\0',
            "the scheduler asked this host to PAY and named nothing owed — a stall reaches the host as a bill "
@@ -1434,69 +965,32 @@ QJS_EXPORT int qjs_step(void)
     return r;
 }
 
-/* The ONE result document, serialized directly from the C findings — the host does one JSON.parse of it.
-   The composition is THIS ENTRY'S to own from the moment it exists: the previous answer is released before a
-   new one is asked for, and the last one goes at teardown with everything else this file allocated. */
+/* The one result document, serialized directly from the C findings; the host does one JSON.parse of it. This entry
+   owns the composition: the previous answer is released before a new one is asked for, and the last at teardown. */
 QJS_EXPORT const char *qjs_result(void)
 {
     DCHECK(g_begun, "qjs_result was asked of an engine that never ran");
-    free(g_result);   /* the previous answer — the host has either read it or not, and either way it asked again */
+    free(g_result);   /* the previous answer: the host has read it or not, and either way it asked again */
     g_result = result_json(g_ctx);
-    /* AT THE ORIGIN, WHERE THE COMPOSITION FAILED. The bridge asserts on the far side that the document is a
-       non-empty string, which is one boundary too late and dev-only: a null crosses this ABI as the EMPTY
-       STRING (the binding converts the address it is given, and address zero converts to ""), so the failure
-       arrives there wearing the shape of an engine that ran and found nothing. result_json answers nothing only
-       when the composition could not be ALLOCATED, which is CLAUDE.md's always-fatal case exactly — this page's
-       whole finding set dropped at the one line that reports it. */
+    /* At the origin, where the composition failed: a null crosses this ABI as the empty string (the binding
+       converts address zero to ""), which would read as an engine that ran and found nothing. result_json answers
+       nothing only when the composition could not be allocated, which is always fatal. */
     CHECK(g_result != NULL, "the result document could not be composed — every endpoint and every verified sink "
                             "this page produced is discarded with it");
     return g_result;
 }
 
-/* WHOSE WORLD THE HEAP IS STANDING IN RIGHT NOW — the one question a picture of this engine has to answer
- * about itself, composed at the instant the render is taken and by nothing else.
- *
- * `flow_running()` IS THE ANSWER AND IT IS NOT "WHICH FLOW IS EXECUTING", which is the reading that makes it
- * look like the wrong register to ask. solver/engine.c has exactly THREE writers of that stamp and every one
- * of them is paired with the delta operation on the adjacent line: `flow_switch_in` runs `cow_apply` and then
- * sets it, `flow_switch_out` runs `cow_unapply` and then clears it, `flow_finish` does the same. The DOM twin
- * travels in the same pair (`dom_apply`/`dom_unapply`), and those two structures are the WHOLE of what a paint
- * reads — core/paint/document_paint.c takes the Lexbor tree and the viewport out of the realm, and the walk
- * under it enters no interpreter at all. So this register names precisely the timeline the next
- * `document_paint` will see, by construction rather than by coincidence.
- *
- * AND IT IS THE ONE MARK DELIBERATELY LEFT UP ACROSS THIS ABI'S OWN BOUNDARY, which is what makes it askable
- * HERE at all. `qjs_step` puts three marks down on every exit and asserts each — the cooperative slice, the
- * flow generation, the capture route — and `g_running` is not among them BY DESIGN:
- * core/loader/document_load.c states the reason in its own words, that a yielded flow's COW delta is still
- * APPLIED to the heap and "putting the stamp down would be a claim about that heap which is not true". A
- * host between two steps is therefore standing in a real world, and the register that says which is the only
- * one that has not been cleared for tidiness. (The corollary, recorded because the opposite mistake has been
- * made here before: this may NOT be cross-checked against `cow_current()`. That one IS taken down between
- * slices, so an assert that the two agree would be false exactly when the engine is working.)
- *
- * NULL IS THE BASELINE AND THE BASELINE IS A WORLD, NOT AN ABSENCE. A session that drains its frontier closes
- * it, and `engine_session_close` switches its last flow out — so a run that finishes is standing on the
- * document as no flow has written it, which is a perfectly good thing to have a picture of and is what most
- * `--paint-dir` images have always been. Answering "" or NULL for it would make a REAL state read as a
- * missing field, and a consumer would fill it; so it is stated in a word. The word carries NO COLON, which is
- * not a style choice: solver/world.h's grammar is `doc:session:serial` and `world_parse` refuses a field
- * without a serial by name, so a reader that mistakes this for a name crashes instead of interning a document
- * called `baseline`.
- * WHAT IT DOES NOT ANSWER IS WHY. "The frontier drained" and "no flow has run yet" are both this, and they
- * are a question about the SESSION rather than about the image — the host holds the step code that separates
- * them and this entry would be guessing at it. One question, one word.
- *
- * ALLOCATED ON BOTH ARMS, because an ownership that differs by arm is one a caller has to remember, and the
- * free is at `qjs_paint`'s own line and at the teardown.
- *
- * THE STAMP IS HANDED IN RATHER THAN READ HERE, AND EVERYTHING ABOVE ABOUT WHICH REGISTER IT IS AND WHY IT IS
- * THE ONE MARK LEFT STANDING IS UNCHANGED — it is read one line earlier, in `qjs_paint`, and nowhere else.
- * The reason is that TWO registers are now written off that one read: which world, and whether that world's
- * path stands on a contradiction. A second `flow_running()` for the second of them would make the pair two
- * facts about worlds nothing forces to be one world. Nothing can switch a flow between two adjacent lines of
- * that entry, so the two reads would agree today — by adjacency, which is the convention one read replaces
- * with construction. The MEMBERSHIP claim travels with the read for the same reason and is stated there. */
+/* Whose world the heap is standing in now, composed at the instant the render is taken. `flow_running()` names the
+ * timeline the next `document_paint` will see: solver/engine.c's three writers of that stamp pair it with the delta
+ * operation (`flow_switch_in` after `cow_apply`, `flow_switch_out` after `cow_unapply`, `flow_finish`), the DOM
+ * twin travels in the same pair, and core/paint/document_paint.c reads only the Lexbor tree and the viewport.
+ * It is the one mark `qjs_step` leaves up across this ABI (core/loader/document_load.c: a yielded flow's delta is
+ * still applied), so it cannot be cross-checked against `cow_current()`, which is taken down between slices.
+ * NULL is the baseline, which is a world: a drained session switches its last flow out, so the run stands on the
+ * document as no flow wrote it. It is stated as the word `baseline`, which has no colon, so `world_parse` refuses
+ * it by name (solver/world.h's grammar is `doc:session:serial`). It does not say why (drained or not yet run);
+ * the host holds the step code. Allocated on both arms; freed at `qjs_paint` and at teardown. The stamp is read
+ * once in `qjs_paint` and handed in, because two registers are written off it. */
 static char *paint_world_name(Flow *f)
 {
     char *s;
@@ -1511,180 +1005,41 @@ static char *paint_world_name(Flow *f)
     return world_name(f->world);
 }
 
-/* …AND WHAT THAT WORLD'S APPEARANCE IS WORTH, WHICH IS A SECOND QUESTION ASKED OF THE SAME STAMP AND NOT A
- * SECOND READ OF IT. solver/flow.h's `path_forced` is the fact: has this path ever taken an arm its own
- * concrete example CONTRADICTS. A picture of a path that has is a picture of a page no session reaches — which
- * is the whole point of being able to take it — and a reader holding it beside a browser's rendering must not
- * be left to infer that from a file name.
- *
- * IT DOES NOT ROUTE TO `engine_prov_of_running_path`, WHICH IS THE CANONICAL SPELLING OF THIS BIT AND IS THE
- * WRONG ONE HERE. The reason is recorded because routing to an established speller is what this codebase asks
- * for, so a reader who re-derives that rule will propose it again: that entry answers PROV_DERIVED for a
- * flow-less act DELIBERATELY, and solver/engine.h states why — a provenance may be wrong only in the
- * UNDER-claiming direction, because over-claiming carries a reply to a request no client makes into the
- * observed pool. The safe direction for a PICTURE is the opposite one, and the arm where they differ is
- * exactly the flow-less one. §Boot's COW baseline is PRE-boot, so a baseline image is a document in which not
- * one line of the page's own code has run; answering it in the same word as a real flow that took no
- * contradicted arm would tell a reader that such a document is a candidate for the appearance a browser
- * produces. One FACT, two PREDICATES over it, which is CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS' own
- * remedy rather than a second copy of the rule.
- *
- * THE ANSWER IS A WORD AND NOT AN `int`, AND THAT IS THE RESIDUAL BELOW MADE STRUCTURAL. A boolean here is
- * read as "is this the browser's picture", the caller writes `if (!qjs_paint_forced())`, and that question is
- * not recorded anywhere in this engine. `unforced` is a word a reader has to look up; `0` is a word a reader
- * believes they already know. A word also leaves room for the fourth state the residual names without
- * changing this entry's type under every caller that already switches on it.
- *
- * NAMED RESIDUAL — WHAT IS NOT COVERED: `unforced` does not separate a path that took only arms its own
- * concrete examples AGREED with from one that took a branch over a value carrying NO example. §Solver-half
- * makes genuinely external input and server-injected absent state example-free BY DESIGN — that is what makes
- * them symbolic — so solver/decide.c's `decide_real_arm` answers REAL_ARM_UNOBSERVED over such a value,
- * `decide_note_forced_arm` returns before marking anything, and BOTH siblings of that fork answer `unforced`
- * here. That is correct about the FACT and it is not the question a reference comparison asks.
- * WHAT THE NEXT DIFF BUILDS: solver/flow.h names the mechanism at `path_pinned`'s own residual — an arm of
- * `decide_real_arm`'s answer that separates "the example contradicts this" from "there is no example" —
- * recorded on the Flow beside `path_forced`, monotone and fork-carried for that field's reasons, and a fourth
- * word here for it. It is not derivable from anything recorded today: `flow_path_forced` and
- * `flow_path_pinned` are the Flow's two path-state accessors and the second is STRICTLY NESTED inside the
- * first, so neither can be asked.
- * HOW ITS ABSENCE WOULD SHOW: a reader holding two images of one document whose grade lines both read
- * `unforced` cannot say whether one of them is the appearance a browser would have produced and the other is
- * not, or whether the document has no single appearance at all — so a comparison against a reference
- * rendering reports agreement for whichever image happens to match and disagreement for the other, with
- * nothing in either file separating "this engine is wrong" from "this question has no answer here".
- *
- * NO ALLOCATION AND NO OWNERSHIP, unlike the name above: every arm answers one of this file's own constants,
- * which is also why the value reaching a `#` comment line needs no newline check the way a world's name does. */
+/* What that world's appearance is worth, a second question asked of the same stamp: solver/flow.h's
+ * `path_forced`, whether the path took an arm its own concrete example contradicts, in which case the picture is
+ * of a page no session reaches. It does not route to `engine_prov_of_running_path`, which answers PROV_DERIVED for
+ * a flow-less act because a provenance may only under-claim (solver/engine.h); a baseline image is a document in
+ * which no page code has run, so for a picture the flow-less arm answers `baseline`. The answer is a word, so a
+ * caller cannot read it as "is this the browser's picture", and a fourth state fits without a type change.
+ * Named residual. Not covered: `unforced` does not separate a path whose examples agreed from one that branched over
+ * an example-free value (external input, absent server state), where decide_real_arm answers REAL_ARM_UNOBSERVED
+ * and both siblings answer `unforced`. Next diff builds: the mechanism solver/flow.h names at `path_pinned`'s
+ * residual, an arm separating "the example contradicts this" from "there is no example", recorded beside
+ * `path_forced` and answered here as a fourth word; `flow_path_pinned` is nested inside `flow_path_forced`, so
+ * neither answers it today. How its absence would show: two images of one document both graded `unforced`, so a
+ * reference comparison cannot tell "this engine is wrong" from "this question has no answer here".
+ * No allocation: every arm answers one of this file's constants, so the `#` comment line needs no newline check. */
 static const char *paint_forced_word(Flow *f)
 {
     if (f == NULL) return "baseline";
     return flow_path_forced(f) ? "forced" : "unforced";
 }
 
-/* AN IMAGE OF THIS INSTANCE'S DOCUMENT — CSS 2.1 §E.2 "Painting order"'s ink composited onto a surface the
-   size CSS 2.1 §2.3.1 "The canvas" establishes for it, answered as the address of the non-premultiplied
-   RGBA8 run core/graphics/raster_surface.h states the layout of: four bytes per pixel, R G B A, row-major.
-   The assembly is core/paint/document_paint.h's and none of it is composed here — a second read of the
-   viewport at this entry would be a second answer to the question the painter already asked.
-
-   IT PERFORMS THE RENDER; IT IS NOT A READ OF ONE. A host asking twice renders twice and gets two images,
-   which is the only honest answer for a document whose flows keep running between the two calls. What it is
-   NOT is per-flow: this is an output register like `g_result` above, so the image is of whichever world is
-   current when the call arrives, and a host that wants one arm's picture rather than another's is asking a
-   question §State-isolation's COW delta answers and this entry does not.
-
-   THE REACH THAT USED TO BE A RESIDUAL HERE IS BUILT, AND IT IS `qjs_request_paint_every_world` BELOW —
-   @PERWORLD. THIS SENTENCE NAMED `qjs_request_paint`, WHICH THIS TREE NO LONGER HOLDS, and the correction is
-   recorded rather than made silently because the name was wrong in the direction that costs a reading: that
-   entry photographed the members alive AT THE ASK, was deleted for having no caller, and its record is at its
-   own line below. The two asks are a FRONTIER and a RUN rather than two spellings of one — so a reader who
-   greps the dead name gets NOTHING, and a reader who settles for the entry they can see has taken a different
-   population by luck rather than by this sentence. RETIREMENT: this note goes when a backticked ABI name in
-   this file is checked against build.mjs's `QJS_ABI` the way that list is already checked against
-   `QJS_EXPORT`, so a prose reference cannot outlive the entry it names. The
-   residual said, correctly, that a host reaches this engine only BETWEEN two steps, so the only worlds this
-   entry could render were the ones the scheduler happened to leave switched in at a yield; that it could be
-   asked for neither a NAMED world nor all of them; and that an `if (__FLAGS.admin)` sibling's appearance —
-   the picture this engine exists to be able to take and a browser cannot — was reachable through it only by
-   luck. Every clause of that was true and the last one is what has changed: a host now MARKS the timelines it
-   wants, and the scheduler hands the thread back with each marked member standing, so the world this entry
-   renders is one somebody asked for. WHAT IS STILL EXACTLY AS DESCRIBED is everything above the residual: this
-   is an output register and not a per-flow one, it renders whichever world is CURRENT, and it can still be
-   asked for no world by name. The ask changed which world is current; it did not make this entry selective.
-   The end-of-run case is unchanged and is not an edge: a session that answers DONE has already closed,
-   `engine_session_close` switches its last flow out, and the frontier it drained holds no member to be
-   standing in — so the running-flow stamp this entry reads is NULL, `paint_world_name` below answers the
-   word `baseline` for it and `paint_forced_word` answers `baseline` too, correctly, which is now the LAST
-   image of a run rather than its only one. (That sentence used to put the READ inside `paint_world_name`,
-   and it was true until a second fact had to be written off the same stamp; the read is in this entry now,
-   once, and both helpers are handed its answer.)
-
-   AND THE NEXT-DIFF CLAUSE NAMED THE WRONG MECHANISM, RECORDED HERE BECAUSE THIS IS WHERE IT WAS WRITTEN AND
-   BECAUSE IT WAS DISPATCHED AS A BRIEF BEFORE ANYBODY RE-DERIVED IT. In its own wording, with no quotation
-   marks around it because a run of prose in this tree's voice is not a spec quotation and the citation
-   auditor's channel cannot tell the two apart: an ASK recorded per live flow and discharged by the SCHEDULER
-   with that flow switched in, which is the only party that may perform that switch — a host-installed HOOK of
-   `engine_set_park_hook`'s shape, called at the OPPOSITE moment, that moment being where `flow_emit_dump` is
-   reached on the completion arm of a step. The ASK half was right and is what landed. The HOOK half was wrong twice over. A hook would have the SCHEDULER call into this file to render,
-   which puts a painter behind a solver seam and leaves an image sitting in `g_paint` that the engine then has
-   to arrange for somebody to drain before the next one overwrites it — a register problem the clause went on
-   to spend a paragraph on and which does not exist at all once the host does its own rendering. And the moment
-   it named is the completion arm of a STEP, which is reached only by a member that COMPLETES A PROGRAM, so a
-   member that yields on its quantum mid-script would never discharge its mark. What is actually needed is a
-   YIELD: the scheduler returns the thread at a moment its own pick has already put the marked member in front,
-   and the host calls this entry exactly as it always could. Nothing crosses the seam but the turn.
-   THE CLAUSE'S OWN STANDING REASON SURVIVES AND IS WHY THE YIELD IS CORRECT: the scheduler is the only party
-   that may perform the switch, because `flow_switch_in` writes the record of what a member was ranked on when
-   it took the thread (the record preempt_hook's assertion reads), so a switch performed for a picture would
-   forge a ranking for a pick the WFQ never made. The yield performs no switch — it is taken where the pick
-   already stands.
-
-   AND THE REGISTER HOLDS ONE IMAGE, NOT N, WHICH IS A DECISION AND NOT A DETAIL — AND THE ASK MADE IT FREE
-   RATHER THAN OVERTURNING IT. The paragraph below is unchanged because its arithmetic is unchanged; what has
-   changed is that there is no longer anything for a second image to be held FOR. The solver renders nothing
-   and holds nothing, so `at most one image may be un-drained` is true by construction: each mark costs one
-   return to the host, and the host that asked is the party that renders and the party that writes. A reader
-   arriving from the register argument and expecting a queue will not find one, and that is the answer rather
-   than an omission. The obvious shape — an
-   indexed register the host walks after the run — is the per-flow materialization CLAUDE.md's
-   capability-materialized-per-flow rule forbids, and the arithmetic is the argument rather than the taste:
-   `document_paint` sizes its surface from `viewport_canvas_region` times the device pixel ratio, so ONE image
-   is `4 * w * h` bytes over a top-level content area whose width is the one `core/frame/viewport.c` states,
-   and a real page's frontier is members in the thousands. The derivation, for whoever prices it rather than
-   believing this: `4 *
-   qjs_paint_width() * qjs_paint_height()` against the frontier's member count on the same document — both are
-   already published, so it is a reading and not an experiment. AND THIS PARAGRAPH'S LAST SENTENCE USED TO
-   READ `So the scheduler renders into THIS register and returns to the host, which drains it before the next
-   flow renders`, WHICH IS THE MECHANISM THE HEADLINE ABOVE WITHDREW, LEFT STANDING BY THE EDIT THAT WITHDREW
-   IT — the headline says the solver renders nothing and holds nothing, and solver/engine.h's own contract
-   says it in its own words at `engine_request_paint_every_world`: that entry does not produce a picture and
-   does not call anybody who does. An argument is a headline plus its tail, and an insertion made at the
-   headline re-attaches the tail to whatever was inserted.
-   IT IS CORRECTED RATHER THAN DELETED BECAUSE IT IS THE READING A HOST AUTHOR RE-DERIVES, AND IT IS THE ONE
-   THAT COSTS A DIFF: a consumer told this register is already written asks `qjs_paint_bytes` WITHOUT asking
-   `qjs_paint` first, which is exactly the order `g_painted` exists to refuse — an abort in dev, and in
-   release a length of zero that reads identically to the length of an empty image. WHAT HOLDS IS THAT THE
-   SCHEDULER RETURNS THE THREAD WITH A MARKED MEMBER STANDING AND THE HOST RENDERS; nothing is decided not to
-   be painted, which is what CLAUDE.md's no-bounds rule asks of a per-world render, and nothing is held.
-
-   HOW THE ASK'S ABSENCE WOULD SHOW, WHICH IS THE ONE CLAUSE OF THE RETIRED RESIDUAL THAT IS STILL AN
-   INSTRUMENT RATHER THAN A HISTORY: every image a run produces names the SAME world, and that name is the
-   single word `baseline` — so a directory of them is N reads of one timeline however many flows the run
-   explored, and `qjs_paint_world` says so on every one. Observe it on the `#` world line of the files
-   `abi_paint` writes, which is where that word already reaches a reader, and on their NAMES, which now carry
-   the world the picture is of. A directory holding one file is the ask not having been made or not having
-   been discharged; a directory holding one file per world is it working.
-
-   THE PAIR IS ORDERED, AND `qjs_paint_bytes` ENFORCES THE ORDER RATHER THAN DOCUMENTING IT. This entry is
-   the one that produces, so it is the one that must run first; the flag it sets is what makes a length asked
-   before any render an ABORT instead of a zero that reads exactly like the length of an empty image.
-
-   THE ADDRESS IS VALID UNTIL THE NEXT `qjs_paint` OR `qjs_teardown`, WHICHEVER COMES FIRST, AND THE HOST
-   NEVER FREES IT. A pointer does not come back across this boundary, so the obligation is discharged here or
-   by nobody — the previous image is released on the line below before a new one is rendered. A host that held
-   the address across a second call would be reading whatever the second render allocated, and one that freed
-   it would free this file's allocation out from under the next reader.
-
-   NULL IS AN ANSWER AND IT IS NOT AN ERROR. It is what a document with no image looks like, and
-   `raster_surface_bytes` is two-sided about the pair — an absent run and an extent of zero are one fact — so
-   a host reads the two entries together and needs no third to tell it whether there is a picture. WHICH of
-   the two reasons produced it (no rendered region at all, or a region of no size) is a fact about the
-   VIEWPORT rather than about the image, and this paragraph used to end with a clause that is now retired:
-   `the zone that provisioned this document is where that is known`.
-   THAT CLAUSE IS CORRECT ABOUT THE SPEC AND FALSE ABOUT THIS TREE, which
-   is the stale-`DFAIL` shape arriving in a comment: it reads as authoritative and sends the next reader to
-   ask a party that has never been told. It is rewritten rather than deleted because a reader re-deriving it
-   from the standard — where a viewport IS the embedder's to choose — will write it again.
-   THE STRUCTURAL FACT IS IN THE DECLARATION ABOVE AND NEEDS NO MEASUREMENT: `qjs_init` takes the facts a
-   document ARRIVAL carries, and a viewport is not one of them, so no provisioning party ever states one and
-   none can be read back. The derivation for the zones themselves is a grep rather than a figure — ask
-   `extension/mojom.js` and `engine/trusted.mjs` for `width`, `height`, `viewport` or `devicePixelRatio` —
-   because a count here would go stale the day one of them gains a viewport, and in the direction that argues
-   for building what already exists.
-   WHERE IT IS KNOWN IS HERE. core/frame/viewport.h answers CSS 2.1 §2.3.1 "The canvas"'s region out of the
-   REALM this document is presented in, which is state no party outside this process holds — which is why
-   `count` is asserted rather than discarded, and why the shape is an ENTRY below rather than a number a host
-   could have been holding all along. */
+/* An image of this instance's document: CSS 2.1 §E.2 "Painting order"'s ink composited onto a surface the size CSS
+   2.1 §2.3.1 "The canvas" establishes, returned as the address of core/graphics/raster_surface.h's
+   non-premultiplied RGBA8 run (four bytes per pixel, R G B A, row-major), assembled by core/paint/document_paint.h.
+   It performs the render: asking twice renders twice. It is an output register, not per flow: it renders whichever
+   world is current, and cannot be asked for a world by name. `qjs_request_paint_every_world` (below) marks
+   timelines, and the scheduler yields the thread with each marked member standing, so a host renders each by
+   calling this; the scheduler performs no switch for a picture (`flow_switch_in` records what a member was ranked
+   on). The register holds one image: the host that asked renders and writes it before the next, and an image per
+   member would be the per-flow materialization the rules forbid (`4 * qjs_paint_width() * qjs_paint_height()`
+   bytes against thousands of members). At the end of a run the stamp is NULL and both words read `baseline`.
+   The pair is ordered: `qjs_paint_bytes` aborts if asked before a render. The address is valid until the next
+   `qjs_paint` or `qjs_teardown`, and the host never frees it. NULL is an answer, a document with no image
+   (raster_surface_bytes treats an absent run and a zero extent as one fact). Whether that is no rendered region or
+   one of no size is a fact about the viewport, which core/frame/viewport.h answers from this realm; no
+   provisioning party states a viewport (`qjs_init` takes none), so `count` is asserted rather than discarded. */
 QJS_EXPORT const uint8_t *qjs_paint(void)
 {
     bool region;
@@ -1693,32 +1048,23 @@ QJS_EXPORT const uint8_t *qjs_paint(void)
     DCHECK(g_ctx != NULL && g_dom != NULL,
            "an image was asked of an instance that was never initialised — there is no document to render and "
            "no realm holding the viewport whose region would size it");
-    /* THE PREVIOUS IMAGE, RELEASED BEFORE A NEW ONE IS ASKED FOR — `qjs_result`'s own line and for its own
-       reason. A zero-area surface frees nothing, so this is also correct on the first call, where the register
-       is the zeroed static every arm below leaves valid. */
+    /* The previous image, released before a new one, as in `qjs_result`. A zero-area surface frees nothing, so this
+       is correct on the first call too. */
     raster_surface_free(&g_paint);
-    /* …AND THE PREVIOUS IMAGE'S WORLD WITH IT, because the two are one artifact and a register that outlived
-       its pixels would name the timeline of a picture nobody is holding any more. */
+    /* The previous image's world with it: the two are one artifact. */
     free(g_paint_world);
-    /* THE RUNNING-FLOW STAMP, READ ONCE, BECAUSE TWO FACTS ABOUT THIS RENDER ARE WRITTEN OFF IT AND THEY HAVE
-       TO BE FACTS ABOUT ONE WORLD. `paint_world_name` holds the whole argument for why this register is the
-       one to ask and why it is the one mark `qjs_step` leaves standing across this ABI; what is here is that
-       it is asked ONCE.
-       AND THE MEMBERSHIP CLAIM COMES WITH THE READ RATHER THAN WITH EITHER READER, because it is one statement
-       about one value and stating it in both would be two spellers of one invariant. The three writers of the
-       stamp pair it with the delta, and this is the other end: a flow that has LEFT the frontier had its
-       world's death announced (solver/world.h's world_flow_gone), so an image attributed to a departed flow
-       would be attributed to a timeline every peer has been told is gone. flow_release runs strictly after
-       flow_finish's `flow_set_running(NULL)`, so this cannot fire without one of those three sites having
-       come apart. */
+    /* The running-flow stamp, read once, because two facts about this render are written off it and must be about
+       one world (`paint_world_name` says why this register). The membership claim is stated with the read: a flow
+       that has left the frontier had its world's death announced (solver/world.h's world_flow_gone), and
+       flow_release runs after flow_finish's `flow_set_running(NULL)`, so this fires only if one of the stamp's
+       three writers came apart. */
     f = flow_running();
     DCHECK(f == NULL || flow_is_member(f),
            "the running-flow stamp names a flow the frontier no longer holds — the image about to be rendered "
            "would be attributed to a timeline whose death has already been announced to every peer");
     g_paint_world = paint_world_name(f);
-    /* …AND WHAT THAT TIMELINE'S APPEARANCE IS WORTH, on the adjacent line and for `g_paint_world`'s reason:
-       the two are one artifact, and a picture that says whose timeline it is of without saying whether that
-       timeline stands on a contradiction is one a reader will take for the page. */
+    /* What that timeline's appearance is worth, on the adjacent line from the same read, since the two are one
+       artifact. */
     g_paint_forced = paint_forced_word(f);
     region = document_paint(g_ctx, g_dom, &g_paint, &g_paint_count);
     g_painted = 1;
@@ -1732,16 +1078,10 @@ QJS_EXPORT const uint8_t *qjs_paint(void)
     return g_paint.px;
 }
 
-/* HOW LONG THE RUN `qjs_paint` LAST ANSWERED IS, which is the half no consumer can recover for itself.
-   core/graphics/raster_surface.h states the whole argument and it is the reason these are two entries:
-   "Non-premultiplied RGBA8 contains 0x00 by construction — every fully transparent pixel is four of them, and
-   every black channel is one — so a byte run of pixels has no spelling as a C string and its extent can be
-   carried only as a number beside it. A consumer that recovers a length with `strlen` ends at the first
-   transparent pixel."
-   IT ASSERTS THAT A PAINT HAPPENED, BECAUSE ZERO IS ALREADY TAKEN. An instance nobody asked to render and one
-   whose document has no image both hold a zero-area surface, so a length answered before any `qjs_paint`
-   would report "there is no picture" for "nobody has looked" — the absent-and-zero pair, at the one entry
-   whose whole job is to state an extent. */
+/* The length of the run `qjs_paint` last answered. As core/graphics/raster_surface.h says, "Non-premultiplied
+   RGBA8 contains 0x00 by construction — every fully transparent pixel is four of them, and every black channel is
+   one — so a byte run of pixels has no spelling as a C string and its extent can be carried only as a number beside
+   it." It asserts that a paint happened, because zero is already the answer for a document with no image. */
 QJS_EXPORT unsigned qjs_paint_bytes(void)
 {
     size_t n;
@@ -1751,40 +1091,22 @@ QJS_EXPORT unsigned qjs_paint_bytes(void)
            "produces and this states how much it produced — and a host that asks this first is reading a "
            "register no render has written, whose zero is indistinguishable from a document with no picture");
     n = raster_surface_bytes(&g_paint);
-    /* THE ONE NARROWING, AND IT IS A `CHECK` BECAUSE THE FAILURE IS A READ PAST THE BUFFER. This ABI states
-       every length as an `unsigned` (`html_len`, `body_len`), so an extent that does not fit would be
-       TRUNCATED and the host would copy a prefix while believing it had the image — or, with a truncation
-       that wraps to something larger than the allocation, read past it. It CANNOT FAIL where `size_t` is 32
-       bits, which is the wasm host: there `raster_surface_init`'s own overflow refusal is the binding
-       constraint and this is arithmetic that has already been decided. It is kept for the host where `size_t`
-       is 64 bits, which is every native driver of these same bodies. */
+    /* The one narrowing, a CHECK because truncation would make the host copy a prefix or read past the buffer.
+       Every length crosses this ABI as `unsigned` (`html_len`, `body_len`). It cannot fail where `size_t` is 32
+       bits (the wasm host, where `raster_surface_init`'s overflow refusal binds); it is for native drivers. */
     CHECKF(n <= (size_t)UINT_MAX,
            "a rendered image is %zu bytes, which this ABI states lengths too narrow to carry — a host would "
            "copy a prefix of the picture and believe it had the whole of it", n);
     return (unsigned)n;
 }
 
-/* THE SHAPE OF THAT RUN — the two numbers the extent beside it does not determine and no consumer can recover.
-   core/graphics/raster_surface.h argues the extent into existence because "a byte run of pixels has no
-   spelling as a C string and its extent can be carried only as a number beside it"; this is that argument one
-   axis further on, and it is arithmetic rather than a style preference. An extent of `4 * width * height` has
-   many factorisations — 3686400 bytes is 1280 x 720 and is equally 720 x 1280 and 960 x 960 — so a host that
-   holds the pointer and the length holds a BAG OF PIXELS and not an image. Every container an image can be
-   written into states its dimensions in its own header, so a host with no way to ask for them cannot write one
-   at all, which is what `engine/host/test_forced.c`'s `--paint-dir` arm is the first caller to need.
-   THEY ARE TWO ENTRIES AND NOT ONE PACKED ANSWER, which is this ABI's own rule at the pair above: "A pointer
-   and a count are answers of two different KINDS, and two of those taken from one call are free to be read
-   into the variable named for the other — separate entries make that mistake a different CALL instead." A
-   width and a height are answers of one kind on two AXES, which is the same mistake with a transposed image
-   instead of a wrong-sized one, and the same remedy answers it.
-   THEY ARE THE SURFACE'S OWN AND NOT THE REGION'S. core/paint/document_paint.h sizes `out` from
-   CSS 2.1 §2.3.1 "The canvas"'s region through core/paint/display_list_raster.h's device-pixel rounding, so
-   re-deriving
-   them here from a viewport would be the second read of that question that same header refuses by name. What
-   is read is the surface the painter actually initialised.
-   ZERO IS AN ANSWER: a document CSS 2.1 §2.3.1 establishes no rendered region for holds a zero-area surface,
-   which is the same state `qjs_paint_bytes` answers zero for and the same state a NULL from `qjs_paint` names.
-   The three agree because they are three readings of one surface. */
+/* The shape of that run, which the extent does not determine: `4 * width * height` has many factorisations (3686400
+   bytes is 1280 x 720, 720 x 1280 or 960 x 960), and every image container states its dimensions in its header
+   (`engine/host/test_forced.c`'s `--paint-dir` writes one). Two entries, not one packed answer, so a transposed
+   read is a different call, as qjs_abi.h argues for the pointer and the count. They are the surface's own, the
+   one core/paint/document_paint.h initialised through core/paint/display_list_raster.h's device-pixel rounding,
+   not re-derived from a viewport. Zero is an answer: a document CSS 2.1 §2.3.1 "The canvas" establishes no region
+   for has a zero-area surface, which `qjs_paint_bytes` and a NULL from `qjs_paint` describe too. */
 QJS_EXPORT unsigned qjs_paint_width(void)
 {
     DCHECK(g_painted,
@@ -1810,27 +1132,16 @@ QJS_EXPORT unsigned qjs_paint_height(void)
     return (unsigned)g_paint.height;
 }
 
-/* WHY THE INK IS THERE, WHICH IS THE PART A BITMAP CANNOT BE ASKED. These three are core/paint/
-   document_paint.h's `DocumentPaintCount` made readable, and that header is the argument for all three at
-   once: a surface with no ink on it means the walk reached no box, or reached boxes that painted nothing, or
-   was STOPPED, and "a caller handed only the bitmap cannot separate them". Until these existed this ABI handed
-   a caller only the bitmap — the defect the component it calls names in its own DCHECK.
-   WHAT EACH ONE SEPARATES, IN THAT HEADER'S OWN WORDS.
-     · `offers` is core/paint/box_paint.h's — the steps CSS 2.1 §E.2 "Painting order"'s walk OFFERED. ZERO is
-       a walk that never happened, which is the arm a root generating no box takes; "core/paint/paint_order.c
-       offers CSS 2.1 §E.2's step 1 for every root it walks, so a walk that happened reports at least one".
-     · `marks` is what was laid. Zero OFFERS with zero marks is an empty document; NON-ZERO offers with zero
-       marks is a walk that ran and every box of which painted nothing, and those are different findings.
-     · `complete` is THE WALK'S OWN ANSWER AND NOT THIS ENTRY'S RETURN. False is "a painter that met an
-       operand it could not compute and stopped, which leaves a PARTIAL picture — every mark it had already
-       laid is in the image". A host that writes such an image out without asking publishes a fragment of a
-       page as the page, which is the plausible-wrong-datum defect with a PERSON as the consumer.
-   `spans` AND `pixels` ARE DELIBERATELY NOT HERE, and that is a decision rather than an omission.
-   core/paint/display_list_raster.h's two are the RASTERIZER's work counters: `pixels` in particular "is
-   counted once per mark that covers it, so a document whose marks overlap reports more pixels than the
-   surface holds". An entry answering it would be read as an area — the image's own extent already is one —
-   and a number that reads as the thing beside it is the confusion separate entries exist to prevent. The
-   fixture reads both directly, where their arithmetic is the subject. */
+/* Why the ink is there, which a bitmap cannot be asked: core/paint/document_paint.h's `DocumentPaintCount` made
+   readable (no ink means the walk reached no box, reached boxes that painted nothing, or was stopped).
+     · `offers` is core/paint/box_paint.h's count of steps CSS 2.1 §E.2 "Painting order"'s walk offered; zero is a
+       walk that never happened, since paint_order.c offers step 1 for every root it walks.
+     · `marks` is what was laid: zero offers with zero marks is an empty document; offers with zero marks is a
+       walk every box of which painted nothing.
+     · `complete` false is a painter that met an operand it could not compute and stopped, leaving a partial
+       picture that a host must not publish as the page.
+   core/paint/display_list_raster.h's `spans` and `pixels` are rasterizer work counters, not exposed: `pixels`
+   counts overlap once per mark, so it would be misread as an area. The fixture reads both directly. */
 QJS_EXPORT unsigned qjs_paint_offers(void)
 {
     DCHECK(g_painted,
@@ -1846,12 +1157,9 @@ QJS_EXPORT unsigned qjs_paint_marks(void)
            "how much ink the last render laid was asked before one was rendered — zero is a real answer for a "
            "document every box of which painted nothing, so a register no render has written reports that "
            "finding for a page nobody painted");
-    /* THIS ENGINE'S OWN ARITHMETIC, WHICH IS WHY IT IS A `DCHECK` AND NOT THE `CHECK` THE EXTENT CARRIES. A
-       mark is a `DisplayMark` in an allocated list, so `UINT_MAX` of them is tens of gigabytes and the
-       allocation behind them is an always-fatal `CHECK` long before this cast could narrow anything — the
-       failure this guards is therefore a count that went wrong rather than a page that drew too much, and
-       that is a should-never-happen. The extent's own narrowing is a `CHECK` because ITS failure is a host
-       reading past a buffer, which is a different kind of wrong. */
+    /* A DCHECK, unlike the extent's CHECK: `UINT_MAX` marks would be tens of gigabytes of `DisplayMark`s, whose
+       allocation CHECK fails first, so this guards a count gone wrong; the extent's failure is a host reading past
+       a buffer. */
     DCHECKF(g_paint_count.marks <= (size_t)UINT_MAX,
             "the last render laid %zu marks, which this ABI states counts too narrow to carry — the list "
             "holding that many would have failed its own allocation first, so this is a count that lost its "
@@ -1868,17 +1176,11 @@ QJS_EXPORT int qjs_paint_complete(void)
     return g_paint_count.complete ? 1 : 0;
 }
 
-/* AND THE THREE ABOVE BROKEN APART — core/paint/box_paint.h's two populations and the document's own size,
-   which is where a reader stops having to guess what a walk of N offers and no marks MEANT.
-   THE PARTITION AND THE TALLY ARE TWO ENTRIES BECAUSE THEY ARE TWO POPULATIONS, and qjs_abi.h holds the
-   argument: the outcomes sum to the offer count and the reasons do not sum to anything. One indexed register
-   over both would make reading a reason as a share of the offers an INDEX mistake instead of a CALL
-   mistake, which is the difference between a wrong number nobody sees and a compile error.
-   THE INDEX CRASHES RATHER THAN CLAMPING. Both enums are closed lists this engine writes, so an index outside
-   one is this engine's own memory and never a host asking an awkward question — a clamp would answer the last
-   bucket's count under a name the caller chose, which is the plausible-datum shape with a number in it. It is
-   a DCHECK and not a CHECK because the operand is an ABI argument this process's own host composes from an
-   enum it includes, and the release arm reads a bucket that is in range by construction. */
+/* The three above broken apart: core/paint/box_paint.h's two populations and the document's size. The partition
+   (outcomes, which sum to the offers) and the tally (reasons, which sum to nothing) are two entries, so reading a
+   reason as a share of the offers is a call mistake rather than an index mistake (qjs_abi.h). The index is
+   asserted, not clamped: both enums are closed lists this engine writes and every host includes, and a clamp would
+   answer another bucket under the caller's name. The release arm reads an in-range bucket. */
 QJS_EXPORT unsigned qjs_paint_offer_outcome(unsigned outcome)
 {
     DCHECK(g_painted,
@@ -1912,11 +1214,9 @@ QJS_EXPORT unsigned qjs_paint_elements(void)
            "the size of the tree the last render walked was asked before one was rendered — this is the "
            "DENOMINATOR the offer count is read against, so an unwritten register answers zero and makes "
            "every walk look like a walk over an empty document");
-    /* AND IT IS AT LEAST ONE WHENEVER THE WALK RAN, WHICH IS NOT THE SAME CLAIM AS THE COUNTER'S OWN. The
-       count is taken over the ROOT's shadow-including inclusive descendants and the root is one of them, so a
-       zero beside a non-zero offer count is a walk that offered steps for a tree holding no element — the two
-       readings of one moment having been taken of two different trees. Zero with zero offers is the arm where
-       CSS 2.1 §2.3.1 "The canvas" establishes no region and neither was ever taken. */
+    /* At least one whenever the walk ran: the count is over the root's shadow-including inclusive descendants, so
+       zero elements beside non-zero offers is two readings taken of two trees. Zero with zero offers is the arm
+       where CSS 2.1 §2.3.1 establishes no region. */
     DCHECKF(g_paint_count.elements >= 1u || g_paint_count.census.offers == 0u,
             "CSS 2.1 §E.2 \"Painting order\"'s walk made %u offer(s) over a tree this host counts %u "
             "element(s) in. Both are readings of the SAME subtree at the SAME instant — the walk's own and "
@@ -1925,18 +1225,10 @@ QJS_EXPORT unsigned qjs_paint_elements(void)
     return g_paint_count.elements;
 }
 
-/* WHICH WORLD THAT PICTURE IS OF — solver/world.h's `doc:session:serial` for a flow's timeline, or the single
-   word `baseline` for the document as no flow has written it. The whole argument is at `paint_world_name`
-   above: which register answers it, why that register is the one mark `qjs_step` leaves standing, and why
-   the baseline is a world stated in a word rather than an absence a consumer fills in.
-   IT ASSERTS THAT A RENDER HAPPENED FOR ITS FIVE NEIGHBOURS' REASON AND ONE OF ITS OWN. `g_painted` is what
-   separates "nobody has looked" from every real answer, and here the real answers include a state with no
-   flow in it — so an unwritten register would be a NULL that reads exactly like the baseline arm to a
-   consumer testing for absence, which is the pair this flag exists to keep apart.
-   IT IS THE ANSWER FOR THE RENDER `qjs_paint` LAST PERFORMED, never for this instance now. The two differ the
-   moment a host steps: §scheduler's yield leaves the flow it was holding switched in and the next pick may
-   switch in another, so a live read would name a timeline that is not in the bytes the host is holding. The
-   register is written on the line that renders, which is what makes this a fact about the image. */
+/* Which world that picture is of: solver/world.h's `doc:session:serial`, or `baseline` for the document as no flow
+   wrote it (see `paint_world_name`). It asserts a render happened, as its neighbours do, and because a NULL would
+   read like the baseline arm to a consumer testing for absence. It answers for the render `qjs_paint` last
+   performed, never for this instance now, since a step may switch in another flow. */
 QJS_EXPORT const char *qjs_paint_world(void)
 {
     DCHECK(g_painted,
@@ -1950,20 +1242,10 @@ QJS_EXPORT const char *qjs_paint_world(void)
     return g_paint_world;
 }
 
-/* AND WHETHER THE PATH THAT LAID THAT PICTURE'S INK EVER TOOK AN ARM ITS OWN CONCRETE EXAMPLE CONTRADICTS —
-   `forced`, `unforced`, or the single word `baseline` for the document as no flow has written it. The whole
-   argument is at `paint_forced_word` above: which fact this is, why it is NOT routed through the canonical
-   provenance speller, why the answer is a word rather than a boolean, and — as a NAMED RESIDUAL — exactly
-   what `unforced` does not say.
-   IT ASSERTS THAT A RENDER HAPPENED FOR `qjs_paint_world`'s TWO REASONS, BOTH OF WHICH HOLD HERE VERBATIM:
-   `g_painted` is what separates "nobody has looked" from every real answer, and the real answers here include
-   one with no flow in it, so an unwritten register would be a NULL that reads exactly like the baseline arm
-   to a consumer testing for absence.
-   IT IS THE ANSWER FOR THE RENDER `qjs_paint` LAST PERFORMED, never for this instance now, and it comes out
-   of the SAME read of the running-flow stamp that named the world — so the two can never be a grade of one
-   timeline beside the name of another.
-   THE POINTER IS A CONSTANT OF THIS FILE AND THE HOST NEVER FREES IT, which is true of every `const char *`
-   this ABI answers and true here for a simpler reason than at its neighbours: nothing was allocated. */
+/* Whether the path that laid that picture's ink took an arm its own concrete example contradicts: `forced`,
+   `unforced`, or `baseline` (see `paint_forced_word`, including its named residual). It asserts a render happened
+   for `qjs_paint_world`'s reasons, and comes from the same read of the running-flow stamp that named the world. The
+   pointer is a constant of this file, and the host never frees it. */
 QJS_EXPORT const char *qjs_paint_forced(void)
 {
     DCHECK(g_painted,
@@ -1981,32 +1263,17 @@ QJS_EXPORT const char *qjs_paint_forced(void)
 QJS_EXPORT void qjs_teardown(void)
 {
     DCHECK(g_dom != NULL, "qjs_teardown ran on an instance that was never initialised");
-    /* A flow waiting on a reply is not a finished one: it holds a snapshot, a COW delta and a parked
-       continuation. flow_finish asserts that a flow may not finish with a continuation parked; tearing the
-       instance down goes around that assert and frees the whole frontier, so the same rule is stated where it
-       would otherwise be evaded. The host owes what qjs_pending told it. */
-    /* …UNLESS THE FRONTIER WAS PAGED OUT, which is the one way tearing down over an owed reply is not a drop.
-       A parked flow's recipe replays the code that ISSUED the request, so the request is re-made in the
-       session that resumes it and answered with today's reply — which is exactly what §Time-travel-resume
-       means by a resumed flow re-deriving its values from current sources. The assert is about the flow being
-       LOST, so it asks whether it was written down, not whether it was answered.
-       AND "STEP TO DONE" IN THE TWO MESSAGES BELOW IS NO LONGER A THIRD OPTION BESIDE PARKING — IT IS ONE OF
-       THE TWO EXITS THAT TAKE IT. A DONE that closes over live members now writes them down first
-       (engine_sched_slice's close), so `engine_frontier_paged` is true on that path for the reason it names
-       rather than by the register happening to be empty. The wording stays because a host still has three
-       things it can DO; what changed is that the third is not a way of avoiding the second.
-       NAMED RESIDUAL — THE PREDICATE HERE ASKS THE HOST QUESTION AND MEANS THE FLOW ONE, WHICH IS THE MIRROR
-       OF THE TWO CORRECTIONS IN solver/pending.h AND NOT ANOTHER INSTANCE OF THEM. Those two asked "is this
-       flow still waiting" where they meant "can the host still be asked", and their failure was a FALSE ABORT.
-       This asks what the JOIN lists — and `engine_pending_fetches` deliberately skips a REFUSED entry — where
-       what it means is "is any flow still parked holding a snapshot". Its failure is therefore the opposite
-       and quieter one: a frontier parked entirely on refusals renders the join empty, so the assert PASSES and
-       has nothing to say about the flows it was written to protect. NOT COVERED: a teardown taken over live
-       members by a host that neither parked nor stepped to DONE, when every one of those members is parked on
-       a refusal. WHAT THE NEXT DIFF BUILDS: this pair asked over the FRONTIER — a flow that still holds a
-       snapshot — rather than over the two registers, which is a question solver/engine.h can answer and
-       main.c cannot compose out of the two lists it reads. HOW ITS ABSENCE WOULD SHOW: a `_park` document
-       naming fewer flows than the census reported live at the last step, with both asserts silent. */
+    /* A flow waiting on a reply holds a snapshot, a COW delta and a parked continuation. flow_finish asserts a flow
+       may not finish with a continuation parked, and teardown would evade that, so the rule is stated here:
+       the host owes what qjs_pending told it, unless the frontier was paged out, since a parked recipe replays the
+       code that issued the request and re-makes it in the resuming session. A DONE that closes over live members
+       writes them down first (engine_sched_slice's close), so stepping to DONE is one of the two exits that park.
+       Named residual: the predicate asks the host question and means the flow one. Not covered: a teardown by a
+       host that neither parked nor stepped to DONE, when every live member is parked on a refusal, since
+       `engine_pending_fetches` skips refused entries and the assert passes. Next diff builds: the pair asked over
+       the frontier (a flow still holding a snapshot), which solver/engine.h can answer. How its absence would
+       show: a `_park` document naming fewer flows than the census reported live at the last step, with both
+       asserts silent. */
     DCHECK(engine_frontier_paged() || *engine_pending_fetches() == '\0',
            "qjs_teardown with replies still owed — every flow parked on one is dropped with its continuation. "
            "Provide them, step to DONE, or park the frontier, before ending the session");
@@ -2015,230 +1282,50 @@ QJS_EXPORT void qjs_teardown(void)
            "with its snapshot intact, and tearing down drops it exactly where the pending assert above says "
            "not to. Answer them, step to DONE, or park the frontier, before ending the session");
     doc_scripts_free(&g_scripts);
-    /* THE ORDER AND THE MEMBERSHIP OF THIS LIST ARE THE OTHER ENTRY'S, VERIFIED, and this one had drifted from
-       it — which nothing could see, because the gate that walks gc_obj_list runs the OTHER entry's main().
-       Four frees were missing here (§8.1.3.3's about-to-be-notified rejected promises list and its slot key,
-       the solver's solve and
-       endpoint tables, the flow registry) and so was the collection, so the shipped engine aborted at teardown
-       on `list_empty(&rt->gc_obj_list)` and every finding it had produced was discarded as a crashed
-       instance's. MEASURED on the live harness: a page analysed to "No findings" for that reason alone. */
-    /* THE FRONTIER FIRST, BECAUSE A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER — solver/engine.h states
-       the whole of it. Every flow's heap-frame chain holds the step machines of the browser algorithms it is
-       stopped inside, and tearing one down runs that component's own `fini`; with the platform released first
-       those `fini`s read a class id, a private Symbol or a step id that has already been given back. */
+    /* The order and membership of this list match test_forced.c's main(), whose gate walks gc_obj_list. */
+    /* The frontier first: a suspended flow's heap-frame chain holds the step machines of browser algorithms it is
+       stopped inside, and tearing one down runs that component's `fini`, which reads agent state the platform's
+       release gives back (solver/engine.h). */
     solver_frontier_free(g_ctx);
-    /* THE PLATFORM'S OWN LIST, UNDONE — every component's agent-lifetime release, in one call, so the next one
-       to hold agent state is not a fourth copy of a list that has already drifted once. */
+    /* The platform's own release column, in reverse declaration order (core/platform.h), which covers every
+       component's agent-lifetime state; see core/platform.c for the order of each group. */
     platform_agent_free();
-    /* rendering, timer, message_port and event_target are ROWS on core/platform.h's release column now,
-       run by the platform_agent_free above. Each of them CLAIMED a slot in another component — §8.1.7's
-       timer step and §8.1.7.3's in-parallel half on the ONE frontier, HTML §8.1.7.2's handler-set hook and
-       §2.9's tree walk and activation behaviour in the events layer — and not one of those claims was ever
-       given back. Two of these three hosts also ran event_target_free BEFORE message_port_free, which is
-       the order of that pair exactly backwards; reverse declaration order is what decides it now. */
-    /* CSSOM VIEW §4's viewport and §12's VisualViewport are ROWS on that column now too, and this pair is
-       where the drift was visible without any host being MISSING a line: all three wrote
-       `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the component
-       whose every member is a derivation over it. Reverse declaration order decides it now. */
-    /* AND HTML §7.4.6.3 Revealing the document WITH CSSOM View §4.2 The MediaQueryList Interface, which used
-       to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
-       platform_agent_free above — and this is the group where every host was wrong IDENTICALLY, which is the
-       one shape a hand-written list cannot show you. Written here, §4.2 was released AFTER the `viewport` and
-       `visual_viewport` rows that platform_agent_free had already run, and §4.2's whole answer is a predicate
-       over the viewport — so the dependent component went second, exactly as the pair above did before it
-       moved. Reverse declaration order gives media_query_list, visual_viewport, viewport, page_reveal: this
-       pair inverted, with two rows BETWEEN them, which no adjacency here can express. See core/platform.c's
-       entry — and the live leak it names, a MediaQuerySet per MediaQueryList that neither of JS_FreeRuntime's
-       censuses can see. */
-    /* AND HTML §8.1.7 Event loops's OWN RECORD WITH HTML §8.12 Animation frames's map keys, which used to be
-       the two lines here. Both are ROWS on core/platform.h's release column now, run by the platform_agent_free
-       above. All three hosts wrote them identically and identically LATE: §8.1.7's record was released after
-       the `timer` row that column had already run, and every entry in §8.7's map of active timers is due at a
-       moment on that clock — the dependent component going first, exactly as the pair above it did. Reverse
-       declaration order gives timer, then event_loop. See core/platform.c's entry. */
-    /* §8.1.3.3's about-to-be-notified rejected promises list is NOT freed here any more — it is a row on
-       core/platform.h's release column,
-       run by the platform_agent_free above. It was a line in this list and in nobody else's, and the host that
-       did not have it aborted every file it ran on the runtime's leak walk. Every other line below is still a
-       hand-copied teardown, which is the same defect waiting: they belong on that column too. */
-    /* DOM §3.1/§3.2's AbortController and AbortSignal WITH the Observable standard's §2, which used to be
-       the two lines here. Both are ROWS on core/platform.h's release column now, run by the
-       platform_agent_free above — and this is a pair every host had INVERTED. Written here as
-       `abort_free(); observable_free();`, the DEPENDED-ON component went first: §2.2's SubscribeOptions
-       declares `AbortSignal signal`, so observable.c reads abort_signal_class() for the brand its declaration
-       states, and §2.1's subscription controller is an AbortSignal every Subscriber holds. Reverse
-       declaration order gives observable, then `fetch`, then abort — the dependent first. It is the same
-       inversion this column already corrected for `viewport`/`visual_viewport` and for `timer`/`event_loop`,
-       both of which every host also had the wrong way round. Out here neither component could declare its
-       agent state to core/agent_state.h at all, since a row with agent state and no release is what
-       platform_check_agent_state fires on, so between them FOUR CLASS IDS — two of which are read as BRANDS
-       by observable_is and subscriber_is — and three per-realm value slot identifiers, six slots between
-       them, were carried past their own release. See core/platform.c's entry. */
-    document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
-    /* AND THE HOST'S REFERENCE TO EVERY JOINED REALM, GIVEN BACK HERE rather than by a `document_free` of its
-       own. A joined document's per-realm record is released by quickjs's realm-teardown hook — the one
-       core/frame/navigable.c installs for EVERY realm of this agent, its first one included — so what this
-       line owes is the REFERENCE `qjs_join` kept, and the record follows whenever the realm's own graph is
-       collected (the JS_RunGC below, or JS_FreeRuntime). It cannot be the other order: releasing the record of
-       a realm the host still holds a reference to would leave a live realm whose Document is gone. The line
-       above is different for the reason its own note gives — `g_ctx` is the realm this host is standing in and
-       frees by hand at the end of this function, so nothing would reach the hook for it in time. */
+    document_free(g_ctx);   /* the Document and the window it fires `load` at, both held across the lifecycle */
+    /* This host's reference to every joined realm, given back here. A joined document's per-realm record is
+       released by quickjs's realm-teardown hook, which core/frame/navigable.c installs for every realm of this
+       agent, when the realm's graph is collected (the JS_RunGC below, or JS_FreeRuntime); releasing the record
+       first would leave a live realm whose Document is gone. `g_ctx` is the realm this host stands in and frees
+       by hand at the end, so its record is released by the line above. */
     {
         int i;
         for (i = 0; i < g_joined_n; i++) JS_FreeContext(g_joined_ctx[i]);
     }
-    /* THE WHOLE DOM GROUP — element_free's forty-two-component cascade, the <iframe> element and GEOMETRY
-       INTERFACES §3/§4 — is NOT freed here any more: all four are ROWS on core/platform.h's release column, run
-       by the platform_agent_free above, and reverse declaration order gives them the same sequence they had
-       here. `document_free` stays, and stays FIRST, because it releases a REALM's record rather than the
-       agent's: it reads `doc_of(ctx)` and clears this context's own opaque, which is the one thing that column
-       cannot express. THE COMPONENT'S OTHER HALF IS ON IT — `document_agent_free`, which gives back §4.5's
-       class, its member declarations, its ten sub-components and its §13.2.7 lifecycle claim — and the two are
-       deliberately NOT ordered against each other: a child navigable's document_free is reached from quickjs's
-       realm-teardown hook, so it runs at JS_RunGC or JS_FreeRuntime whatever this line does. That is safe
-       because the per-realm half reads no static of core/dom/document.c, which asserts as much at its own
-       release. Every remaining line here is still a hand-copied teardown. */
-    realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
-    /* HTML §8.1.4.6 Runtime script errors AND DOM §2.2's Event with the thirteen subclasses
-       core/events/event.c declares beside it, which used to be the two lines here. Both are ROWS on
-       core/platform.h's release column now, run by the platform_agent_free above. All three hosts had both and
-       none of them had them in the same place: this list and test_forced.c's ran
-       `realm_intrinsics_free(); report_exception_free(); event_free();` while wpt_runner.c ran
-       `report_exception_free(); event_free(); realm_intrinsics_free();` — nothing missing, three answers. And
-       out here NEITHER component's state could be declared to core/agent_state.h at all, because a row with
-       agent state and no release is what platform_check_agent_state fires on: the Event family's fourteen
-       class ids were carried past their own release, and §8.1.4.6's four slots — step 6's private Symbol, the
-       latch, §8.1.4.4 step 8's step-machine registration and step 7.3's console edge — were given back by a
-       line this list could not see and asserted by nothing. See core/platform.c's entries. */
-    /* FETCH §5.1 "Headers class", §5.5 "Response class" and §5.4 "Request class" are ROWS on
-       core/platform.h's release column now, run by the platform_agent_free above, and reverse declaration
-       order releases them headers-then-response-then-request, which is the sequence all three hosts already
-       had them in. Out here NONE of the three could declare its state to core/agent_state.h at all — a row
-       with agent state and no release is what platform_check_agent_state fires on, and a release run AFTER
-       platform_agent_free is a release agent_state_check_released has already finished asking about. What
-       they held meanwhile: THREE CLASS IDS, §5.5's per-realm %JSON.stringify% slot, §5.3's two body handles,
-       §5.1's six member declarations and its pair-iterator handle, and §5.5's clone machine — every class id
-       a number JS_NewClassID handed out of a runtime that is gone, read by §5.1's finalizer and §5.4's and
-       §5.5's finalizer-and-mark pairs, which run later still. See core/platform.c's entries. */
-    /* URL §6.1 AND §6.2 are NOT freed here any more — `url` and `url_search_params` are ROWS on
-       core/platform.h's release column, run by the platform_agent_free above. These two lines were in all
-       three host teardowns and ran AFTER that call had already run the whole column, which is the drift the
-       column exists to end. Out here neither file could declare its agent state to core/agent_state.h at all
-       — a row with agent state and no release is what platform_check_agent_state fires on — so TWO CLASS IDS
-       were carried past their own release, each read by a finalizer and a gc_mark that run later still. See
-       core/platform.c's entry. */
-    /* THE WHOLE STREAMS GROUP — §4's ReadableStream with core/streams/pipe.c and
-       core/streams/readable_byte_stream.c under it, §5's WritableStream, §6's TransformStream and §7's two
-       queuing strategies — is NOT freed here any more: all four are ROWS on core/platform.h's release column,
-       run by the platform_agent_free above, and reverse declaration order gives them the same sequence they
-       had here. All three hosts wrote these four lines and none of them agreed on where:
-       this list and test_forced.c's had the four together, while wpt_runner.c ran transform and writable, then
-       SIX other releases — the frontier's own agent half among them — and then queuing and readable.
-       Out here NONE of the four could declare its state to
-       core/agent_state.h at all — a row with agent state and no release is what platform_check_agent_state
-       fires on — so between them FIFTEEN CLASS IDS and THIRTY-THREE per-realm value slots were carried
-       past their own release, each one a number JS_NewClassID handed out of a runtime that is gone and
-       each one doubling as its component's declaration latch. See core/platform.c's entry. */
-    /* FILE API §3, §4 AND §5 are NOT freed here any more — `blob` is a ROW on core/platform.h's release
-       column, run by the platform_agent_free above. This line was in all three host teardowns and ran AFTER
-       that call had already run the whole column, which is the drift the column exists to end. blob_free
-       reaches file_list_free, so §5 goes with §3 and §4 and the three are one row on both columns. Out here
-       neither file could declare its agent state to core/agent_state.h at all — a row with agent state and
-       no release is what platform_check_agent_state fires on — so THREE CLASS IDS were carried past their
-       own release, one of them the brand every BlobPart and BodyInit position reads. See core/platform.c's
-       entry. */
-    /* THE ONE VIRTUAL FILESYSTEM and its two standards, §9.4.4's and §9.5's delivery callees, §9.5's bus
-       and XMLHttpRequest are NOT freed here any more — all eight are ROWS on core/platform.h's release
-       column, run by the platform_agent_free above. This list had them and test_forced.c did not, and
-       that host is the one every gate in this tree links: its runs ended on JS_FreeRuntime's leak walk
-       with the two File System roots, §3.2.2's map and both delivery callees held from outside the heap,
-       and the ROOT REALM behind them uncollectable. Every remaining line here is still a hand-copied
-       teardown, which is the same defect waiting. */
-    /* ENCODING §7.2, §7.4, §7.5 AND §7.6 are NOT freed here any more — `encoding` and `text_stream` are
-       ROWS on core/platform.h's release column, run by the platform_agent_free above. These two lines were in
-       all three host teardowns and ran AFTER that call had already run the whole column, and the WPT runner
-       ran them a hundred lines below where the other two did. Out here neither file could declare its agent
-       state to core/agent_state.h at all — a row with agent state and no release is what
-       platform_check_agent_state fires on — so FOUR CLASS IDS and ONE PER-REALM VALUE SLOT were carried past
-       their own release, read by two finalizers and a shared gc_mark that run later still. Reverse
-       declaration order releases `text_stream` before `encoding`, the dependent first, which is the order
-       these lines already had. See core/platform.c's entry. */
-    /* XHR §4 "Interface FormData" is NOT freed here any more — `form_data` is a ROW on core/platform.h's
-       release column, run by the platform_agent_free above. This line was in all three host teardowns and ran
-       AFTER that call had already run the whole column, and the three did not agree on where it went: this
-       host and one other ran it beside encoding and text_stream, the third ran it up beside the two URL rows.
-       Out here the file could declare no agent state to core/agent_state.h at all — a row with agent state
-       and no release is what platform_check_agent_state fires on — so §4's CLASS ID was carried past its own
-       release, read by a finalizer and a gc_mark that run later still. See core/platform.c's entry. */
+    /* `document_free` above releases a realm's record rather than the agent's (it reads `doc_of(ctx)` and clears
+       this context's opaque), which the platform column cannot express; `document_agent_free` on the column gives
+       back §4.5's class, declarations, ten sub-components and §13.2.7 lifecycle claim. The two are not ordered
+       against each other, since a child navigable's document_free runs from quickjs's realm-teardown hook; the
+       per-realm half reads no static of core/dom/document.c, which asserts it at its release. */
+    realm_intrinsics_free();   /* the declarations are the agent's; each realm's prototypes went with it */
     navigable_free(g_ctx);
-    /* navigator (and Permissions §6 + §3.2's store with it), storage_manager and screen are ROWS on
-       core/platform.h's release column now, run by the platform_agent_free above. §3.2's store is two live
-       Arrays reached only through navigator_free, and the host that had no such line — the WPT runner —
-       leaked both in every file it ran. A teardown each host writes out by hand is a teardown some host is
-       missing a row of, and nothing reports it but the runtime's own leak walk, after the fact. */
-    /* §7.2.4's Location comes with them, and it is the one whose POSITION was load-bearing: it holds two
-       CLAIMS in solver/concolic.c's source registry — `location.hash` and `location.search` with their
-       percent-encode sets — and concolic_free asserts that registry is empty at the solver's release. That
-       ordering rested on three hand-written lists agreeing; on the column, reverse declaration order decides
-       it and platform_agent_free runs before solver_agent_free by construction. */
-    /* AND HTML §7.4.1's state machine WITH §7.2.5's History over it, which used to be the two lines here. They
-       are ROWS on that column now, and they are the pair that shows what a hand-written list costs even when
-       no host is missing it: all three hosts had both, and the WPT runner ran them up beside the viewport pair
-       while these two ran them here, a whole teardown later. Within the pair every host had it backwards —
-       §7.2.5 is a VIEW over §7.4.1's record and reads it in every member, so the view is released first, which
-       is what reverse declaration order gives. */
-    /* AND HTML §7.2.6 The navigation API WITH §7.2.6.5 The NavigationHistoryEntry interface under it, which
-       used to be the two lines here. Both are ROWS on core/platform.h's release column now, run by the
-       platform_agent_free above. This is the group all three hosts had RIGHT — adjacent, and the walker
-       before the interface it walks — which is what makes it the group that shows the order was never the
-       only thing at stake: both rows' release columns were empty while both files declared no agent state,
-       and both were carrying their CLASS ID past the release. See core/platform.c's entry. */
-    /* HTML §7.2.2's Window, with §7.2.2.5's BarProp under it, is a ROW on core/platform.h's release column now,
-       run by the platform_agent_free above — and it is the group that shows what a hand-written list costs when
-       every host HAS the line: all three had it and put it in three different places, this one and
-       test_forced.c here, the WPT runner a whole teardown later, past solver_agent_free and past document_free.
-       The row's release column was empty while both files declared no agent state, which is the pair of
-       silences that list reads as agreement: `g_bar_class` was reset by nothing at all, and §7.2.2's six pool
-       entries carried no initialiser, so their pre-init value was 0 — the first member the platform declares.
-       See core/platform.c's entry. */
-    /* AND THE CROSS-AGENT SEAM — §7.2.3's WindowProxy, the reference surface over it, §7.2.4's cross-origin
-       Location and the peer's operation performer — which used to be the three lines here. All four are ROWS
-       on core/platform.h's release column now, run by the platform_agent_free above, and this group is what a
-       hand-written list costs when every host has every line: all three wrote `remote_object_free;
-       window_proxy_free; remote_location_free;`, which releases the BASE whose §7.2.3 prototype every
-       reference chains to and whose `location` member answers with the third object BEFORE both components
-       built over it. Reverse declaration order inverts that and no author has to agree with any other. */
-    /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
-       these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
+    /* The solver's own release list, one call in solver/engine.h, as the platform's is. */
     solver_agent_free(g_ctx);
-    /* AFTER THE FRONTIER, because a flow parked inside an IDL member reads this pool at its teardown — this
-       line was above navigable_free, where the pool was already gone by the time flow_registry_free released
-       the residue. idl_args_free asserts the ordering. */
+    /* After the frontier, because a flow parked inside an IDL member reads this pool at its teardown;
+       idl_args_free asserts the ordering. */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
-    /* THE WORLD REGISTRY IS NOT NAMED HERE, AND WAS NOT BEING FREED A SECOND TIME BY ACCIDENT EITHER — it was,
-       and the redundancy is what made a hand-written list read as correct. flow_registry_free has released it
-       since the world namespace came up with the frontier, and says so at its own first line; this call was a
-       second one, harmless only because world_registry_free nulls everything it frees. It is the duplicate
-       node_free in element_free again: a line whose safety rests on a callee happening to be idempotent, and
-       which made an audit of the three teardowns report test_forced.c as MISSING the release when test_forced.c
-       was the only host that had it right. */
-    /* THE COLLECTION IS PART OF THE TEARDOWN, not an optimisation: a run leaves flow-local garbage that is
-       unreachable but not yet collected, and gc_obj_list counts it exactly as it counts a real leak. */
+    /* The world registry is released by flow_registry_free inside solver_agent_free, so it is not named here. */
+    /* The collection is part of the teardown: a run leaves unreachable flow-local garbage, and gc_obj_list counts
+       it as it counts a real leak. */
     if (g_rt) JS_RunGC(g_rt);
     if (g_ctx) { JS_FreeContext(g_ctx); g_ctx = NULL; }
     if (g_rt)  { JS_FreeRuntime(g_rt);  g_rt  = NULL; }
-    /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
-       this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
-       outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
-       unfinished machine by the step it rests at. The IDL pool's BLOCKS are the same obligation: each holds
-       the definition the runtime borrowed. */
+    /* After JS_FreeRuntime, because the order is part of the meaning: JS_RegisterStepDef borrows a step definition
+       that must outlive the runtime (its [stepleak] report reads `def->steps` to name each unfinished machine), and
+       each IDL pool block holds a definition the runtime borrowed. */
     idl_args_pool_free();
     idl_async_iter_free();
-    /* EVERY DOCUMENT OF THIS AGENT, AND THE JOINED ONES FIRST — not for their own sake but for the ARENAS'.
-       core/dom/node_heap.h puts every node's storage on the AGENT's heap, and the arenas are destroyed with
-       the LAST document that gives up its claim, so the order among them decides nothing except which one
-       carries that out. It matters that they are ALL here: a joined tree left undestroyed is not a leak of one
-       document, it is the agent's whole node heap held by a claim nobody gives back. */
+    /* Every document of this agent, the joined ones first, for the arenas' sake: core/dom/node_heap.h puts node
+       storage on the agent's heap, destroyed with the last document that gives up its claim, so a joined tree left
+       undestroyed would hold the agent's whole node heap. */
     {
         int i;
         for (i = 0; i < g_joined_n; i++) dom_document_destroy(g_joined_dom[i]);
@@ -2248,27 +1335,19 @@ QJS_EXPORT void qjs_teardown(void)
     g_joined_n = g_joined_cap = 0;
     dom_document_destroy(g_dom);
     g_dom = NULL;
-    /* THE LAST ANSWER, whose bytes are this file's and not the runtime's — freed here for the same reason the
-       joined arrays above are, and it belongs after them because it is the only allocation of this host that
-       outlives the context it was composed from. The host has already read it: qjs_result is asked BEFORE
-       teardown precisely because the document is built out of the realm this entry frees. */
+    /* The last answer, this file's allocation, freed after the arrays above because it is the one host allocation
+       that outlives the context it was composed from; the host reads qjs_result before teardown. */
     free(g_result);
     g_result = NULL;
-    /* AND THE LAST IMAGE, WHOSE BYTES ARE THIS FILE'S FOR THE SAME REASON AND ON THE SAME TERMS. It is not in
-       the runtime's heap, so `JS_FreeRuntime`'s gc_obj_list walk cannot see it and only this line can; and it
-       is released AFTER the realm above rather than with it, because a surface is raw bytes that outlive
-       every JS object the paint read to compose them. `g_painted` goes with it: a resumed session that
-       painted nothing must not answer a length out of a register the previous one filled. */
+    /* The last image, this file's for the same reason: outside the runtime's heap, so only this line releases it,
+       after the realm because the surface outlives the objects the paint read. `g_painted` goes with it, so a
+       resumed session that painted nothing does not answer a length from the previous one's register. */
     raster_surface_free(&g_paint);
-    /* …AND THE NAME OF THE WORLD IT WAS TAKEN IN, which is the same allocation on the same terms: this file's,
-       invisible to the gc walk, and released with the pixels it describes rather than after them, because a
-       name that outlived its image would be the only thing left of a picture nobody can read. */
+    /* The name of the world it was taken in, released with the pixels it describes. */
     free(g_paint_world);
     g_paint_world = NULL;
-    /* …AND THE STATEMENT OF WHAT THAT IMAGE'S PATH STOOD ON, WHICH IS A CLEAR AND NOT A RELEASE: the words
-       are this file's own constants and there is nothing here to free. It is cleared because the entry that
-       reads it asserts it is non-NULL, so a register that survived a teardown would answer about the previous
-       session's last render for a resumed one that has painted nothing. */
+    /* The grade of that image's path is a constant, so it is cleared rather than freed; the entry reading it
+       asserts non-NULL, so a surviving register would answer about the previous session's render. */
     g_paint_forced = NULL;
     g_painted = 0;
     g_begun = 0;
@@ -2276,64 +1355,37 @@ QJS_EXPORT void qjs_teardown(void)
 }
 
 /* ---- The capabilities this entry cannot reach yet -----------------------------------------------------
- * Each aborts at its own entry naming what to build. Answering "" or 0 instead would have the host believe an
- * engine that reports no pending fetches while a flow is parked on one that never arrives — the protocol would
- * run to completion over the hole and the result would look finished. */
+ * Each aborts at its own entry naming what to build. Answering "" or 0 would have the host believe an engine that
+ * reports no pending fetches while a flow is parked on one that never arrives. */
 
-/* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>
-   PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` lines, and the method and the mode are there because they are part
-   of the request's IDENTITY (solver/engine.h). This list was addresses alone and the reply edge matched on
-   one, so a page issuing a GET and a POST to one address had both promises settled with whichever the zone
-   fetched first. The zone must issue each line with the method and mode it names and hand all three of
-   (method, mode, url) back to qjs_provide.
-   THIS SENTENCE NAMED FIVE OF THE SEVEN, AND THE GRAMMAR HAS ONLY EVER GROWN. Each field that arrived rewrote
-   the CHECKs that SPLIT the line — engine_pending_split is the authority and names every grammar it
-   supersedes — and left the prose that INTRODUCES it, so the short copy was the one standing where a host
-   author reads the shape while two correct statements of it sat below in this same file. A host that splits
-   short lands `pinned` in the address and the flow parked on the real URL waits on a reply keyed on nothing.
-   HOW MANY COPIES THERE ARE IS A COMMAND AND NOT A NUMBER, because the run WRAPS and is concatenated in three
-   languages: a count that does not strip quotes, backticks and `+` before matching is a FLOOR, and two such
-   counts AGREEING means they shared that blind spot rather than that either was right.
-   RETIREMENT: this record goes when the field list is stated in one place this comment and that splitter both
-   derive from, so no copy of it can be short and none has to be counted.
-   AND THE DESTINATION IS WHY THIS ENTRY NO LONGER HAS A SECOND LIST BESIDE IT. `qjs_chunks` answered the CORB
-   class out of the module loader's own register of specifiers, so it classified dynamic `import()` and nothing
-   else: a document's own `<script src>` reached the chokepoint with no class at all and a cross-origin HTML or
-   JSON body served for it was ingested as data and then compiled. Fetch §2.2.5 Requests makes the destination
-   part of the request; it is on this line beside the method, and the register it stood in for is deleted. */
+/* What the trusted zone still owes the frontier, as `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>
+   PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` lines; engine_pending_split is the authority on the grammar. The method
+   and the mode are part of the request's identity (solver/engine.h), so a GET and a POST to one address are two
+   requests; the zone issues each line with the method and mode it names and hands (method, mode, url) back to
+   qjs_provide. The destination is Fetch §2.2.5 Requests' and travels on this line, so the chokepoint classifies a
+   document's own `<script src>` as well as a dynamic `import()`. */
 QJS_EXPORT const char *qjs_pending(void)
 {
     DCHECK(g_begun, "qjs_pending was asked of an engine that never ran");
     return engine_pending_fetches();
 }
 
-/* THE REPLY'S METADATA CROSSES AS TEXT AND CARRIES ITS TYPE — JSON, exactly as qjs_host_answer's does and for
-   the same reason. It used to cross as the BODY'S BYTES and nothing else, so everything the trusted zone had
-   actually seen was thrown away at this line and re-invented on the other side: the engine's drain built a
-   reply with status 200, status message "OK", no headers, and no URL LIST — which is what `response.url` and
-   `response.redirected` are, so every reply in the extension reported no redirect however many the fetch had
-   followed. The record is `{status, statusText, headers: [[name, value], …], urlList: [url, …]}`, which is the
-   SAME record fetch_reply_new builds for the hosts that fetch in C; JSON `null` is a NETWORK ERROR, and the
-   delivery machine already rejects with the TypeError §5.6 names.
-   …AND THE BODY CROSSES AS BYTES, BESIDE IT, BECAUSE JSON CANNOT SAY A BYTE SEQUENCE. §2.2.4 Bodies makes a
-   body's source one, and the only way to put one in JSON is to run an algorithm over it first — which is the
-   defect: `safe-fetch.js` ran Fetch §5.3 Body mixin's `text()`, whose steps are "to return the result of
-   running consume body with this and UTF-8 decode" — §5.2 stood here and is "BodyInit unions", which EXTRACTS
-   a body rather than consuming one, so the number read as checked while naming the opposite direction. A script
-   served `charset=windows-1252` therefore reached HTML §8.1.4.2's classic decode already mangled and the label
-   that algorithm exists to honour decided nothing. The trusted zone owns SOP/CORS/PNA/CORB and owns no decodes; the
-   bytes are copied into this instance's own linear memory and read here without a transform in between. A
-   NETWORK ERROR carries none (`body == NULL`, `body_len == 0`), which is a different statement from a 204's
-   empty one.
-   ONE delivery for every parked request. A fetch's reply, the DOCUMENT's own external script and a lazy CHUNK's
-   source all settle a park the flow registered before it suspended, and one engine_provide fills every entry
-   naming that REQUEST whatever its kind — so there is ONE record and the kinds read the fields they need. */
+/* The reply's metadata crosses as JSON text, as qjs_host_answer's does: `{status, statusText, headers: [[name,
+   value], …], urlList: [url, …]}`, the same record fetch_reply_new builds for hosts that fetch in C, so
+   `response.url` and `response.redirected` reflect the fetch's redirects. JSON `null` is a network error, which the
+   delivery machine rejects with the TypeError §5.6 names. The body crosses beside it as bytes, because §2.2.4
+   Bodies makes a body's source a byte sequence and JSON cannot carry one without running an algorithm over it: a
+   script served `charset=windows-1252` must reach HTML §8.1.4.2's classic decode undecoded. The trusted zone owns
+   SOP/CORS/PNA/CORB and no decodes; the bytes are copied into this instance's linear memory and read without a
+   transform. A network error carries none (`body == NULL`, `body_len == 0`), distinct from a 204's empty body.
+   One delivery for every parked request: a fetch's reply, the document's external script and a lazy chunk's source
+   all settle a park registered before suspending, and one engine_provide fills every entry naming that request. */
 QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *url, const char *reply,
                             const char *body, unsigned body_len)
 {
     DCHECK(g_begun, "a reply was provided to an engine that never ran");
-    /* THE REQUEST THIS ANSWERS IS (method, mode, url), IN THE ORDER THE JOIN EMITTED IT. A zone still calling
-       this with the pair alone lands its URL in `mode`, and engine_provide's mode mapping is fatal on it. */
+    /* The request this answers is (method, mode, url), in the order the join emitted it; a zone calling with the
+       pair alone lands its URL in `mode`, which engine_provide's mode mapping refuses. */
     DCHECK(method != NULL && mode != NULL,
            "a reply was provided with no METHOD or no MODE — qjs_pending answers "
            "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and "
@@ -2349,16 +1401,14 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *ur
         int n;
         if (JS_IsException(v)) {
             JS_FreeValue(g_ctx, JS_GetException(g_ctx));
-            /* ABORTS in dev, which is the point: a host sending anything but its reply record through this
-               edge is the bug. In release there is no reply to deliver, and "no reply" is a NETWORK ERROR
-               rather than an empty 200 — the delivery machine rejects with §5.6's TypeError. */
+            /* Aborts in dev: a host sending anything but its reply record is the bug. In release there is no reply,
+               and no reply is a network error, which the delivery machine rejects with §5.6's TypeError. */
             DFAIL("the host provided a reply that is not JSON — the trusted zone stringifies its reply record, "
                   "and a bare body sent through this edge is a host still delivering only bytes");
             v = JS_NULL;
         }
-        /* §2.2.4 Bodies' BODY ONTO §2.2.6 Responses' RESPONSE, in the component that owns both halves of it
-           (core/fetch/fetch.h). A network error is the one arm with nothing to write: it has no response at
-           all, so a body arriving with one is a host answering a failure and a payload in one breath. */
+        /* §2.2.4 Bodies' body onto §2.2.6 Responses' response, in core/fetch/fetch.h, which owns both. A network
+           error has no response, so a body beside one is a host answering a failure and a payload at once. */
         if (JS_IsObject(v))
             fetch_reply_set_body(g_ctx, v, (const uint8_t *)body, (size_t)body_len);
         else
@@ -2370,19 +1420,14 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *ur
                    "error rather than where one is defined)");
         n = engine_provide(g_ctx, method, mode, url, v);
         JS_FreeValue(g_ctx, v);
-        /* NOBODY IS PARKED ON IT, AND THERE ARE NOW TWO WAYS THAT HAPPENS. The one this asserts against is the
-           host naming a URL no flow ever asked for — its pending/provide pairing off by one, so the flow that
-           IS parked waits forever. The other is a SALE: the engine hit the RAM floor and paged the flow that
-           was waiting on this reply out to the cold tier (engine_take_paged_owed), which is the cheapest member
-           there is to page precisely because its recipe re-issues the request next session and gets today's
-           answer. A sale is consumed here, one per reply it made unnecessary, so the assert stays exact for the
-           case it exists for instead of aborting on the mechanism working. */
-        /* THE CONDITION RUNS IN EVERY BUILD AND THE MESSAGE IS BUILT IN NONE BUT DEV — the take CONSUMES a
-           sale, so it is not a DCHECK's side-effect-free condition and cannot live inside one. */
+        /* Nobody is parked on it, which happens two ways. The assert is for a host naming a request no flow asked
+           for (its pending/provide pairing off, leaving the parked flow waiting forever). The other is a sale: at
+           the RAM floor the engine paged the waiting flow out (engine_take_paged_owed), since its recipe re-issues
+           the request next session; one sale is consumed per reply it made unnecessary. The take consumes a sale,
+           so the condition runs in every build and only the message is dev-only. */
         if (n == 0 && !engine_take_paged_owed()) {
-            /* NAMING BOTH HALVES, because the pairing that can be off is now the PAIR's: a zone that fetched
-               the right address with the wrong verb produces exactly this, and a message naming the URL alone
-               would send the reader to look for a URL that is in fact on the list. */
+            /* Naming both halves: a zone that fetched the right address with the wrong verb produces this, and a
+               message naming the URL alone would send the reader to a URL that is on the list. */
             DFAILF("a reply was provided for a request no flow is parked on and none was paged out — the "
                    "host's pending/provide pairing is off, and resolving nothing leaves the flow that IS "
                    "parked waiting forever. request=%s %s %s", method, mode, url);
@@ -2390,12 +1435,9 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *ur
     }
 }
 
-/* THE ZONE REFUSING TO ASK, WHICH IS AN ANSWER AND IS NOT A REPLY — see solver/engine.h's engine_decline for
-   the whole of the rule, and extension/lib/safe-fetch.js for the axis it is graded on.
-   THE PAIRING ASSERT IS engine_decline's OWN and is not restated here, which is the difference between this
-   entry and qjs_provide one function up: that one owns the paged-sale credit because it holds the reply value
-   across the call, and this one carries nothing the engine cannot see. Restating the test would be two answers
-   to one question about one refusal, and the second would be the one nobody kept in step. */
+/* The zone refusing to ask, which is an answer, not a reply (solver/engine.h's engine_decline; safe-fetch.js
+   grades the axis). The pairing assert is engine_decline's; qjs_provide keeps its own only because it holds the
+   reply value across the paged-sale credit. */
 QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *url, const char *reason)
 {
     DCHECK(g_begun, "a request was refused to an engine that never ran");
@@ -2410,48 +1452,35 @@ QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *ur
     engine_decline(g_ctx, method, mode, url, reason);
 }
 
-/* WHAT ONLY THE TRUSTED ZONE CAN ANSWER, as `id<TAB>op` lines. A cross-document operation — creating a
-   navigable, reading through a WindowProxy — is answered by the instance holding that document, and only the
-   offscreen knows which instance that is. The asking flow is SUSPENDED until qjs_host_answer lands, so this
-   list is pulled every step alongside qjs_pending, and an unanswered request parks that flow indefinitely
-   while every sibling keeps running. */
+/* What only the trusted zone can answer, as `id<TAB>op` lines: a cross-document operation (creating a navigable,
+   reading through a WindowProxy) is answered by the instance holding that document, which only the offscreen
+   knows. The asking flow is suspended until qjs_host_answer lands, so this is pulled every step beside
+   qjs_pending, and an unanswered request parks that flow while its siblings run. */
 QJS_EXPORT const char *qjs_host_requests(void)
 {
     DCHECK(g_begun, "qjs_host_requests was asked of an engine that never ran");
     return engine_host_requests();
 }
 
-/* WHAT THE ENGINE TELLS THE TRUSTED ZONE, one-way, as `op` lines — DRAINED by the read. A document created
-   here (§4.8.5 "The iframe element"'s child navigable, §7.2.2.1 "Opening and closing windows"'s popup — §7.4
-   stood on the second and is "Navigation and session history", which navigates one rather than opening it) is
-   announced rather than negotiated: the name is minted in this
-   instance, so there is nothing to ask and nothing to wait for, and the host's job is to provision an instance
-   under that name and route to it. Pulled every step beside qjs_host_requests; a notice the host drops is a
-   document nothing runs, and every read through it parks its flow forever. */
+/* What the engine tells the trusted zone, one-way, as `op` lines, drained by the read. A document created here
+   (§4.8.5 "The iframe element"'s child navigable, §7.2.2.1 "Opening and closing windows"'s popup) is announced
+   rather than negotiated: its name is minted in this instance, and the host provisions an instance under it and
+   routes to it. Pulled every step beside qjs_host_requests; a dropped notice is a document nothing runs, and every
+   read through it parks its flow. */
 QJS_EXPORT const char *qjs_host_notices(void)
 {
     DCHECK(g_begun, "qjs_host_notices was asked of an engine that never ran");
     return engine_host_notices();
 }
 
-/* THE ANSWER CROSSES AS TEXT AND CARRIES ITS TYPE — JSON, so `null` is not the string "null", `0` is not the
-   string "0", and an answer with STRUCTURE can exist at all. It used to cross as a bare string, which could
-   express exactly one of the shapes the seam already needs: §7.4 step 14's load is answered with `{body, csp}`
-   because a policy is a property of THE RESPONSE, and a cross-origin `otherW.length` is a NUMBER that a page
-   distinguishes from "0". That is the same sentence SECURITY.md states for the cross-instance encoder, applied
-   to the seam one layer down. Redefining it costs nothing: the bridge has never answered a request, so this
-   entry had no caller to break.
-   AND AN ANSWER IS A COMPLETION, NOT A VALUE — `completion` is 0 for a normal one and 1 for a THROW whose
-   value is the JSON. The offscreen relays a cross-agent operation performed by ANOTHER WASM INSTANCE, and that
-   instance answers BY RUNNING A PROGRAM: an IDL accessor, a page's setter, a page's own function. With no
-   parameter for it the only completion this entry could express was a normal one, so a peer's throw would
-   arrive at the asking flow as `undefined` and the page's `try`/`catch` around the operation would never run —
-   the identical hole the cross-instance grammar had one layer up. It is a PARAMETER and not a second entry
-   point beside this one, so a zone answering a request has to say which completion it is answering with. */
-/* `body`/`body_len` are the SAME byte side-channel qjs_provide takes, and for the same reason: two of the
-   requests this entry answers carry a fetched BODY — XHR §3.5.6's fetch, and §7.4 step 14's `{body, csp}` — and
-   a body is a byte sequence that JSON cannot carry. A host with no body for this answer passes (NULL, 0), which
-   is what every other request kind is: an answer that is a NUMBER or a document NAME has no bytes beside it. */
+/* The answer crosses as JSON text so it carries its type (`null` is not "null", `0` is not "0") and can have
+   structure: §7.4 step 14's load is answered with `{body, csp}`, since a policy is a property of the response, and
+   a cross-origin `otherW.length` is a number, as SECURITY.md states for the cross-instance encoder. An answer is a
+   completion, not a value: `completion` is 0 for normal and 1 for a throw whose value is the JSON, because a peer
+   answers by running a program (an IDL accessor, a page's setter or function) and a page's `try`/`catch` around
+   the operation must see its throw. It is a parameter, so a zone must say which completion it answers with.
+   `body`/`body_len` are qjs_provide's byte side-channel: XHR §3.5.6's fetch and §7.4 step 14's `{body, csp}` carry
+   fetched bodies. An answer that is a number or a document name passes (NULL, 0). */
 QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion,
                                 const char *body, unsigned body_len)
 {
@@ -2464,15 +1493,13 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned complet
            "byte sequence, so an answer with no body at all passes both as nothing");
     {
         JSValue v = json ? JS_ParseJSON(g_ctx, json, strlen(json), "<host-answer>") : JS_UNDEFINED;
-        /* A MALFORMED ANSWER IS THE HOST'S BUG, not the page's. Delivering the exception instead would surface
-           in the asking flow as if the DOCUMENT had thrown, which is a lie about whose code was wrong. */
+        /* A malformed answer is the host's bug; delivering the exception would surface as the document throwing. */
         DCHECK(!JS_IsException(v), "the host answered a synchronous request with text that is not JSON — the "
                                    "answer crosses as JSON so that it carries its type, and a bare string is "
                                    "not one (it is the JSON text `\"...\"`)");
-        /* THE BODY, IF THIS ANSWER HAS ONE. `body == NULL` is the positive statement "this answer carries no
-           bytes" and not a hole — an answer that is a number, a name or a completion has none — so the write
-           happens exactly where the host said there were bytes, and `fetch_reply_set_body` asserts the JSON
-           did not also carry a decoded one. */
+        /* The body, if this answer has one. `body == NULL` says the answer carries no bytes (a number, a name, a
+           completion), so the write happens where the host said there were bytes, and `fetch_reply_set_body`
+           asserts the JSON did not also carry a decoded one. */
         if (body && JS_IsObject(v))
             fetch_reply_set_body(g_ctx, v, (const uint8_t *)body, (size_t)body_len);
         else
@@ -2480,29 +1507,21 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned complet
                    "the host answered with BYTES beside something that is not a record — an answer's body is a "
                    "field of the answer, so bytes arriving next to a number, a string or a `null` name a "
                    "record the host did not build");
-        /* Routed to ONE call site by id — never broadcast the way a fetched body is, because the answer was
-           computed under the ASKING FLOW's world. A zero return means that flow is gone, which is not an
-           error: nobody is waiting on the answer. */
-        /* NO TIMELINE NAMED, and that is a positive statement rather than a gap: this zone computed the value
-           itself, so there is exactly one of it and no flow of anybody's produced it. */
+        /* Routed to one call site by id, never broadcast as a fetched body is, because the answer was computed
+           under the asking flow's world; a zero return means that flow is gone and nobody waits. No timeline is
+           named: this zone computed the value itself, so there is one of it. */
         engine_host_answer(g_ctx, (uint32_t)req, NULL, v, (int)completion, ENGINE_ANSWER_HOST);
         JS_FreeValue(g_ctx, v);
     }
 }
 
-/* THE TRUSTED ZONE REFUSING TO PERFORM A SYNCHRONOUS REQUEST — the entry `qjs_provide`'s sibling `qjs_decline`
- * is for an address, and this one is for a RENDEZVOUS, because a synchronous request has no address to be keyed
- * by. The id is the one the engine put on its own `qjs_host_requests` line, so the zone answers the question it
- * was actually asked.
- * IT IS NOT A `completion` ON THE ENTRY ABOVE, by that entry's own test: it makes the completion a PARAMETER
- * because a return and a throw are two completions of ONE call and ECMA-262 6.2.4 has exactly those. A refusal
- * is not a completion of the operation — the operation did not happen — and widening that enum would deliver a
- * refusal to `engine_host_take` as a value the asking machine consumes.
- * `reason` IS THE ZONE'S OWN WORDS, in the same vocabulary a blocked scheme and a blocked private-network load
- * arrive in, because only the party that applied the rule knows which rule it was and whether a per-origin
- * widening would make the request fire. It is the only account anybody gets of a request nobody made.
- * A ZERO RETURN IS NOT AN ERROR and is the same reading `qjs_host_answer` gives for the same miss on the same
- * population: the asking flow can be gone by the time the zone decides, and nobody is then waiting. */
+/* The trusted zone refusing to perform a synchronous request: `qjs_decline` refuses an address, this a rendezvous,
+ * keyed by the id the engine put on its `qjs_host_requests` line. It is not a `completion` on qjs_host_answer:
+ * ECMA-262 6.2.4's return and throw are completions of a call, and a refusal is the call not happening, so widening
+ * that enum would hand `engine_host_take` a value the asking machine consumes. `reason` is the zone's own words, in
+ * the vocabulary of a blocked scheme or private-network load, since only the rule's applier knows whether a
+ * per-origin widening would let the request fire. A zero return is the asking flow having gone, as for
+ * `qjs_host_answer`. */
 QJS_EXPORT int qjs_host_decline(unsigned req, const char *reason)
 {
     DCHECK(g_begun, "a request was refused to an engine that never ran");
@@ -2512,14 +1531,11 @@ QJS_EXPORT int qjs_host_decline(unsigned req, const char *reason)
     return engine_host_decline(g_ctx, (uint32_t)req, reason);
 }
 
-/* THE RETURN PATH FOR A NOTICE — the entry that was missing, and its absence is why the shipped extension could
-   send a cross-document message and never deliver one. `record` is the notice VERBATIM as the emitting instance
-   wrote it (`qjs_host_notices`), routed here by the offscreen because this instance holds the document the
-   record names; `sender_origin` is that instance's serialized origin, which ONLY the trusted zone may state —
-   SECURITY.md keys authorization on what the trusted zone knows for exactly this reason, and an origin the
-   untrusted engine supplied for a foreign message would defeat every `event.origin` check in every bundle.
-   The delivery becomes a FLOW on the one frontier, so it is ordered, preemptible and parkable like all the
-   others; nothing runs inside this call. */
+/* The return path for a notice. `record` is the notice verbatim as the emitting instance wrote it
+   (`qjs_host_notices`), routed here because this instance holds the document it names; `sender_origin` is that
+   instance's serialized origin, which only the trusted zone may state (SECURITY.md), since an engine-supplied
+   origin would defeat every `event.origin` check. The delivery becomes a flow on the one frontier, ordered,
+   preemptible and parkable; nothing runs inside this call. */
 QJS_EXPORT void qjs_route(const char *record, const char *sender_origin)
 {
     DCHECK(g_begun, "a record was routed to an engine whose frontier was never seeded — there is no scheduler to "
@@ -2527,13 +1543,10 @@ QJS_EXPORT void qjs_route(const char *record, const char *sender_origin)
     engine_route(g_ctx, record, sender_origin);
 }
 
-/* THE THIRD RECORD ON THAT LINE, AND THE ONLY ONE THAT SEEDS NOTHING: a peer saying one of ITS worlds is gone,
- * so the COW segment this instance materialized for that world can go with it. It carries no target document
- * and no sender origin, and both absences are the design rather than an omission — the sending engine does not
- * track which peers a flow reached (releasing a world with no segment here is a no-op, so tracking it would be
- * state kept only to avoid one), which is why the trusted zone BROADCASTS this to every instance but the
- * sender; and nothing here runs page code, so there is no `event.origin` for a stamp to be the truth of.
- * `world` is the name VERBATIM as the emitting instance wrote it, in world_serialize's own field grammar. */
+/* The third record on that line, which seeds nothing: a peer saying one of its worlds is gone, so the COW segment
+ * this instance materialized for it can go. It carries no target document (the sender does not track which peers a
+ * flow reached, and releasing a world with no segment is a no-op, so the zone broadcasts it to every instance but
+ * the sender) and no sender origin (no page code runs). `world` is world_serialize's grammar, verbatim. */
 QJS_EXPORT void qjs_world_gone(const char *world)
 {
     DCHECK(g_begun, "a world's death was announced to an engine whose frontier was never seeded — a foreign "
@@ -2541,24 +1554,14 @@ QJS_EXPORT void qjs_world_gone(const char *world)
     engine_world_gone(g_ctx, world);
 }
 
-/* AND THE ONE THAT IS ASKED. `qjs_route` hands this instance a one-way delivery and returns void;
- * `qjs_host_answer` is the trusted zone answering a request it computed ITSELF. Neither of them is a peer
- * PERFORMING an operation, which is the whole of the cross-instance seam's other direction — and its absence is
- * why the shipped engine could EMIT `windowproxy.get` and never be on the receiving end of one.
- *
- * `record` is the operation VERBATIM as the asking instance wrote it (the text after the id on that instance's
- * `qjs_host_requests` line), routed here because this instance holds the document it names. `token` is the
- * ZONE's rendezvous and is opaque to both engines: it says which instance and which request the answer belongs
- * to, which the asking flow's own id cannot, since two peers may hold the same number.
- *
- * NOTHING RUNS INSIDE THIS CALL and there is no answer to read when it returns. A peer answers BY RUNNING A
- * PROGRAM — an IDL getter, a page's setter, a page's function — so the operation becomes a program of every
- * live timeline of the named document, on the ONE frontier, preemptible and parkable at any depth. Each
- * completion leaves through `qjs_host_notices` as `remoteop.answer<TAB><token><TAB><world><TAB><completion>`,
- * and there are as many of them as that document has timelines: its state IS its flows, so `otherW.length` has
- * an answer per timeline and every one of them is true. `<world>` is the flow that computed that one, which is
- * what makes N true answers distinguishable from one answer relayed N times — a zone that routes them all to
- * one slot keeps whichever arrived last, and the page then reads two contradictory values for one question. */
+/* The cross-instance seam's other direction: a peer asking this instance to perform an operation. `qjs_route` is a
+ * one-way delivery and `qjs_host_answer` an answer the zone computed itself. `record` is the operation verbatim as
+ * the asking instance wrote it (the text after the id on its `qjs_host_requests` line); `token` is the zone's
+ * rendezvous, opaque to both engines, since two peers may hold the same request id.
+ * Nothing runs inside this call: a peer answers by running a program, so the operation becomes a program of every
+ * live timeline of the named document on the one frontier. Each completion leaves through `qjs_host_notices` as
+ * `remoteop.answer<TAB><token><TAB><world><TAB><completion>`, one per timeline, since that document's state is its
+ * flows; `<world>` distinguishes N true answers from one answer relayed N times. */
 QJS_EXPORT void qjs_perform(const char *token, const char *record)
 {
     DCHECK(g_begun, "a cross-agent operation was asked of an engine whose frontier was never seeded — there is "
@@ -2566,22 +1569,12 @@ QJS_EXPORT void qjs_perform(const char *token, const char *record)
     engine_perform(g_ctx, token, record);
 }
 
-/* THE PEER'S COMPLETION, COMING BACK — and it crosses in remote_object.c's grammar rather than as JSON, which
- * is why it is a second entry beside qjs_host_answer and not a third argument on it. The two carry different
- * kinds of thing and neither grammar can express the other's: an answer the ZONE computed is a data record
- * (§7.4 step 14's load is `{body, csp}`, which the object-by-NAME grammar cannot say), and an answer a PEER
- * computed may be an OBJECT, which crosses as a name into that peer's namespace and which JSON would have to
- * either serialize — returning something that is not the thing — or drop. The decode happens HERE, inside the
- * asking instance, because a name only means something to an engine: the trusted zone routes the text and
- * never reads it.
- * `req` is this instance's own request id, which the zone recovers from the token it minted.
- *
- * `world` IS WHICH OF THE ANSWERING DOCUMENT'S TIMELINES PRODUCED THIS COMPLETION, relayed verbatim off the
- * `remoteop.answer` notice that carried it. It is a parameter and not a detail because a peer's document state
- * IS its flows: one question has N true answers, and this entry is the only place that can tell a SECOND
- * TIMELINE (a fork the asking flow owes) from ONE timeline's answer delivered TWICE (a relay defect). With the
- * answers anonymous it could tell neither, and a page reading `w.closed` twice in one expression was answered
- * out of two contradictory timelines of one document with nothing anywhere able to name the disagreement. */
+/* The peer's completion coming back, in remote_object.c's grammar rather than JSON, so it is a second entry beside
+ * qjs_host_answer: a zone's answer is a data record (`{body, csp}`), and a peer's may be an object, which crosses
+ * as a name into the peer's namespace. The decode happens here, inside the asking instance; the zone routes the
+ * text unread. `req` is this instance's request id, recovered by the zone from its token. `world` is which of the
+ * answering document's timelines produced this completion, relayed off the `remoteop.answer` notice, so this entry
+ * can tell a second timeline (a fork the asking flow owes) from one timeline's answer delivered twice. */
 QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const char *completion)
 {
     int type = ENGINE_COMPLETION_NORMAL;
@@ -2596,9 +1589,8 @@ QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const ch
            "flow that ran the program on every answer it emits, so an empty one is a relay that dropped the "
            "field, and this instance can then no longer tell the peer's other timelines from a duplicate");
     v = remote_completion_decode(g_ctx, completion, &type);
-    /* Routed to ONE call site by id, exactly as qjs_host_answer's is: the operation was performed under the
-       ASKING FLOW's world, so this answer belongs to that flow and to no other. A zero return means that flow
-       is gone, which is not an error — nobody is waiting on the answer. */
+    /* Routed to one call site by id, as qjs_host_answer's is: the operation ran under the asking flow's world. A
+       zero return means that flow is gone. */
     engine_host_answer(g_ctx, (uint32_t)req, world, v, type, ENGINE_ANSWER_PEER);
     JS_FreeValue(g_ctx, v);
 }
@@ -2609,12 +1601,9 @@ QJS_EXPORT double qjs_top_weight(void)
     return engine_top_weight();
 }
 
-/* THE VALUE YIELD FLOOR — the runner-up engine's weight, so the running flow yields the moment it is
-   outranked ACROSS documents. It was the one entry in this ABI with no contract on it at all, which is how an
-   edge stops being an edge: every other entry states what it may be handed and aborts when it is handed
-   something else, and this one accepted anything a host could put in a double. A NaN is the case that matters
-   and it is silent by construction — every comparison against it is false, so the top flow simply never
-   yields and the host's Level-1 interleave stops happening with nothing to say so. */
+/* The value yield floor: the runner-up engine's weight, so the running flow yields the moment it is outranked
+   across documents. A NaN would make every comparison false, so the top flow would never yield and the host's
+   Level-1 interleave would stop silently. */
 QJS_EXPORT void qjs_set_yield_floor(double floor)
 {
     DCHECK(g_begun, "a yield floor was set on an engine whose frontier was never seeded — there is no flow to "
@@ -2624,13 +1613,11 @@ QJS_EXPORT void qjs_set_yield_floor(double floor)
     engine_set_yield_floor(floor);
 }
 
-/* RAM PRESSURE, FROM THE ONE ZONE THAT CAN SEE IT. The host holds every live document's engine and the summed
-   working set; this instance sees only itself, so the DECISION is the host's and the TIMING is the engine's —
-   the park is taken at the next step boundary with no flow switched in, which is the only moment every flow's
-   state is a snapshot rather than half of it living in the scheduler. The step that takes it answers DONE and
-   the residue leaves in the result document's `_park`, for the host to write to IndexedDB and hand back to
-   qjs_begin in a later session. Asking is not parking: the engine keeps running until it reaches that
-   boundary, and nothing about the frontier changes in between. */
+/* RAM pressure, from the one zone that can see it: the host holds every live engine and the summed working set,
+   so the decision is the host's and the timing the engine's. The park is taken at the next step boundary with no
+   flow switched in, when every flow's state is a snapshot; that step answers DONE and the residue leaves in the
+   result document's `_park`, for the host to store in IndexedDB and hand to a later qjs_begin. Asking is not
+   parking: the engine runs until that boundary. */
 QJS_EXPORT void qjs_request_park(void)
 {
     DCHECK(g_begun, "a park was requested of an engine whose frontier was never seeded — there is nothing to "
@@ -2638,27 +1625,14 @@ QJS_EXPORT void qjs_request_park(void)
     engine_request_park();
 }
 
-/* A HOST INSTRUMENT'S PROGRAM, ASKED OF EVERY LIVE TIMELINE — the seam a driver outside this engine uses to
-   obtain a JS VALUE computed in the analysed document's realm, with this engine's unknowns standing on their
-   concrete examples. solver/engine.h states the whole contract at engine_request_dump; what belongs here is
-   what is true of this ENTRY.
-   ASKING IS NOT RUNNING, exactly as it is not for the park above, and here that is a hard constraint rather
-   than a convenience: this entry is called between two steps, where qjs_step has just asserted that the slice
-   is closed, the flow stamp is down and the capture route is NULL. The interpreter may not be entered on that
-   time at all — solver/engine.c's preempt_hook aborts by name when the scheduler's policy is consulted with
-   no slice open — so an entry that evaluated the program here would die at the first loop back-edge it
-   reached, and the bytes it was handed would name the cause of nothing. The ask is recorded and the SCHEDULER
-   evaluates it, which is also what makes the answer a fact about a TIMELINE rather than about whichever
-   document state happened to be applied when the host called.
-   `program` CROSSES AS A NUL-TERMINATED STRING AND NOT AS A (POINTER, LENGTH) PAIR, which every other entry
-   here that carries bytes does take. The pair exists for bytes whose LENGTH is not their terminator — a
-   document that may legally hold a 0x00 (qjs_init), a reply body (qjs_provide, qjs_host_answer). This is the
-   TRUSTED ZONE'S OWN INSTRUMENT TEXT, composed by the driver that is asking, so a length beside it would be a
-   second statement of one fact, free to disagree with the terminator the binding already writes.
-   A PRODUCTION HOST DOES NOT CALL THIS. The program is evaluated in the analysed document's realm and can
-   write there like any other script; the zone that hands it over is trusted, so nothing crosses a privilege
-   boundary — but a zone analysing a page for findings has no reason to add a program to it, and one that did
-   would be reporting on a document it had changed. */
+/* A host instrument's program, asked of every live timeline: how a driver obtains a JS value computed in the
+   analysed document's realm with this engine's unknowns on their concrete examples (solver/engine.h's
+   engine_request_dump states the contract). Asking is not running: this is called between steps, with the slice
+   closed, and preempt_hook aborts if the scheduler's policy is consulted outside a slice, so the scheduler
+   evaluates the ask, which also makes each answer a fact about a timeline. `program` is a NUL-terminated string,
+   unlike byte-carrying entries, because it is the zone's own text and a length would restate the terminator. A
+   production host does not call this: the program runs in the analysed realm and can write there, so a zone
+   reporting findings would be reporting on a document it changed. */
 QJS_EXPORT void qjs_request_dump(const char *program)
 {
     DCHECK(g_begun, "a dump was asked of an engine whose frontier was never seeded — there is no timeline to "
@@ -2671,36 +1645,13 @@ QJS_EXPORT void qjs_request_dump(const char *program)
     engine_request_dump(program);
 }
 
-/* AN IMAGE OF EVERY LIVE TIMELINE, ASKED, USED TO STAND HERE AND IS DELETED — @PERWORLD. `qjs_request_paint`
-   marked the members alive AT THE ASK and nothing forked after it, which made it a photograph of a FRONTIER;
-   the entry below photographs a RUN. Both were exported for one commit, on the argument that they were
-   different questions rather than two strengths of one, and that argument described a host that does not
-   exist: after the driver was redirected the frontier-only entry had ZERO callers in this tree and zero in the
-   extension, which is a capability nothing exercises and therefore untested code wearing an ABI export.
-   §Testing already names what happens to one of those — the shipped ABI entry rotted the last time a
-   translation unit was in the program and in nobody's build, and an entry nobody calls is the same defect one
-   level up.
-   WHAT WOULD JUSTIFY REBUILDING IT, so the next reader builds it deliberately instead of re-deriving it by
-   accident: the mode below is ONE-WAY BY DESIGN (flow.h's `flow_paint_every_world` says why — a mode that
-   could be turned off would let a run write a world-named image for some arms and not others, so a directory
-   that reads as a document's complete set of worlds would be a sample of them). So a host that wants ONE
-   snapshot of the worlds standing right now, without committing every later world to a picture, genuinely
-   cannot say that any more. When such a host exists, that ask comes back — and it comes back with that host,
-   never ahead of it. */
 
-/* …AND THE SAME ASK STANDING, SO IT COVERS THE WORLDS THIS RUN HAS NOT MINTED YET — @PERWORLD. Everything the
-   entry above says about this one is true unchanged: it renders nothing, answers nothing, chooses no flow and
-   switches nothing in. The difference is the POPULATION, and solver/engine.h states it.
-   WHY A HOST WOULD REACH FOR THIS ONE: the entry above is a photograph of a FRONTIER, and the question a
-   screenshot of forced execution actually asks is about a RUN — one picture per timeline the document
-   explored, including the timelines that do not exist yet when the host is able to speak. A host can only ask
-   between two steps, so every arm this engine forks, runs and finishes INSIDE one step is invisible to any
-   number of re-asks; that is not a cadence a host could choose more finely, it is the one population an
-   asking host cannot address at all. MEASURED, on a document that forks once: two flows, thirteen internal
-   switches, and ONE return to the host.
-   AND IT IS THE HOST'S TIME IT SPENDS. One extra return per timeline that ever ends, and the host renders on
-   each; a host that does not want a picture of every world calls the entry above, and one that wants none
-   calls neither. Nothing in a run that asks for no picture reaches any of this. */
+/* Paint every world this run mints (solver/engine.h states the population). It renders nothing, answers nothing,
+   chooses no flow and switches nothing in. A host asks only between steps, so the arms this engine forks, runs and
+   finishes inside one step are unreachable to any number of asks at the boundary; this standing mode returns the
+   thread once per timeline that ends, and the host renders on each. The mode is one-way (flow.h's
+   `flow_paint_every_world` says why: a set of world-named images must be a document's complete set of worlds). A
+   run that asks for no picture reaches none of this. */
 QJS_EXPORT void qjs_request_paint_every_world(void)
 {
     DCHECK(g_begun, "an image of every world this run mints was asked of an engine whose frontier was never "
@@ -2710,86 +1661,37 @@ QJS_EXPORT void qjs_request_paint_every_world(void)
     engine_request_paint_every_world();
 }
 
-/* …AND THE ANSWERS, DRAINED. One record per timeline that ran the program, `<world><TAB><json>`, newline
-   separated, "" when there are none. The pointer is this file's to own for the same reason qjs_result's is:
-   the previous answer is released before a new one is asked for.
-   IT IS NOT `qjs_result` AND MUST NOT BECOME PART OF ONE. The result document is the PRODUCT'S findings —
-   §What-the-tool-produces' endpoint surface and its verified sinks — and an instrument's artifact folded into
-   it is a measurement wearing a finding's clothes, which is the masquerade testing/render_diff.js refuses in
-   its own first paragraph. Two registers, two kinds of thing, and a host that wants both asks twice. */
+/* The answers, drained: one `<world><TAB><json>` record per timeline that ran the program, newline separated, ""
+   when there are none. This file owns the pointer, as for qjs_result. It is not part of `qjs_result`: the result
+   document is the product's findings, and an instrument's artifact folded into it would be a measurement posing as
+   a finding (testing/render_diff.js refuses the same). */
 QJS_EXPORT const char *qjs_dumps(void)
 {
     DCHECK(g_begun, "the dump register was read from an engine that never ran");
     return engine_take_dumps();
 }
 
-/* STREAM what is known so far. The host reads findings off the print sink, so this writes the same one result
-   document qjs_result returns, on the same @RESULT line the smoke entry uses — a long analysis reports as it
-   goes instead of only at the end. It READS: no flow is touched, nothing is drained, and the frontier the next
-   step resumes is the one this was called on.
-
-   THAT SENTENCE IS TRUE, AND IT WAS READ AS A STRONGER ONE — SO THE STRONGER ONE IS STATED AND REFUSED HERE
-   RATHER THAN LEFT TO BE RE-DERIVED. Nothing above says the DOCUMENT is a pure function of the frontier, and
-   it is not. Composing one WEIGHS the frontier: solver/flow.c's flow_wfq_census walks every member calling
-   flow_weight, then calls flow_best, which walks them again — and this engine COUNTS what it spends asking
-   its own order. So two documents composed at ONE boundary, with no step between them, differ by construction
-   in exactly four rows of `_wfq`, every one a LIFETIME COUNT of scan work and none of them a fact about any
-   member:
-
-     scanCensusRuns     +1        flow_scan_runs(FLOW_SCAN_CENSUS)     — one census walk performed
-     scanCensusWeights  +members  flow_scan_weights(FLOW_SCAN_CENSUS)  — that walk's own flow_weight calls
-     scanOtherRuns      +1        flow_scan_runs(FLOW_SCAN_OTHER)      — the flow_best inside that census
-     scanOtherWeights   +members  flow_scan_weights(FLOW_SCAN_OTHER)   — and that flow_best's own walk
-
-   THE `+1`s AND THE MOVED SET ARE MEASURED; THE `+members` IS ASSERTED IN THE ENGINE AND NOT EXTRAPOLATED
-   FROM THEM. Twenty-four runs — four corpus documents under `stream` and `eagerstream`, three runs each, on
-   the artifact stamped at engine 7a7cd512 — moved that set and no other field of the document, every time, at
-   a one-member frontier where each `+members` is `+1`. What makes it `+members` in general is flow.c's own
-   DCHECK at the end of flow_wfq_census, which holds `g_scan_weights[FLOW_SCAN_OTHER]`'s delta across the
-   flow_best equal to `g_flows_n`, beside a census walk whose comment states it skips nothing.
-
-   IT IS NOT A LOOPHOLE, AND THE ARGUMENT IS solver/flow.h's OWN AT FLOW_SCANS: an instrument whose cost is
-   unmeasured is a defect one level up, and the price of a census has to be a COUNT because this host's
-   quantum is wall-denominated and a duration would be a fact about the machine rather than about what the
-   engine did. An entry that composed a document WITHOUT raising these would be under-reporting its own cost
-   by precisely the quantity the rows exist to price — `scanCensusWeights / scanCensusRuns` is the mean
-   frontier a sample paid for, and `scanCensusWeights` against `scanNextWeights` is the share of all
-   frontier-weighing that went to REPORTING rather than to running, which is the only thing that settles
-   whether this entry is heavy enough to change the run it samples. Nor is the fix to READ the counters before
-   the walk, and that is written down so nobody builds it: call two would still see call one's raise, so the
-   two documents would still differ and the published figure would merely be one sample stale.
-
-   AND `scanOther*` IS THE HALF A READER MUST NOT TAKE AS THE HOST'S. That entry is SHARED — flow.c gives it
-   to flow_best and to the pager's eviction tail, and engine.c's own top-weight read runs under it — so a host
-   that STREAMS inflates it by one whole frontier per call, for the whole of every analysis, and this entry is
-   the only production caller on that cadence. `scanOtherWeights` off a streamed run is therefore not a
-   reading of what the host's reads and the pager cost. flow_wfq_census brackets its own contribution to
-   assert the doubling, but nothing subtracts it afterwards and no row here carries it separately.
-
-   WHAT THIS EXEMPTS IS FOUR ROWS AND NOTHING ELSE, WHICH IS THE POINT OF NAMING THEM. Every other row of
-   `_wfq` — the reward band, the seven notch quotients, `picksLifetime`, the never-picked and job and delivery
-   pairs — and every other field of the document are composed out of state this entry does not touch. A
-   difference in ANY of those across two calls at one boundary is exactly the side effect the first paragraph
-   denies: a latch consumed, a list drained or a counter reset while rendering, on the path every real
-   analysis takes every PARTIAL_MS. A checker of this contract exempts these four BY NAME and holds the rest
-   to equality; exempting `_wfq` whole would blind it to that, and nothing else in this tree asks. */
+/* Stream what is known so far: the same result document qjs_result returns, on the @RESULT line the smoke entry
+   uses, so a long analysis reports as it goes. It touches no flow and drains nothing. The document is not a pure
+   function of the frontier: composing it weighs the frontier (flow_wfq_census walks every member with flow_weight,
+   then flow_best walks them again), and solver/flow.h's FLOW_SCANS counts that work, so two documents composed at
+   one boundary differ in exactly four lifetime counts of `_wfq`: scanCensusRuns +1, scanCensusWeights +members,
+   scanOtherRuns +1, scanOtherWeights +members (flow_wfq_census asserts the flow_best delta equals `g_flows_n`).
+   Raising them is the cost of reporting, which `scanCensusWeights` against `scanNextWeights` prices; reading the
+   counters before the walk would only make the figure one sample stale. `scanOther*` is shared with flow_best's
+   other callers and the pager, so a streaming host inflates it by one frontier per call and nothing subtracts that.
+   Every other `_wfq` row and every other field is composed from state this entry does not touch, so a checker of
+   this contract exempts these four rows by name and holds the rest to equality. */
 QJS_EXPORT void qjs_emit_partial(void)
 {
     char *js;
     DCHECK(g_begun, "qjs_emit_partial was asked of an engine that never ran");
-    /* THE DOCUMENT IS THIS LINE'S TO FREE, AND DROPPING IT WAS A LEAK THE HOST READ BACK AS ITS OWN
-       MEASUREMENT. It is composed fresh per call, the host calls this on a fixed cadence for the whole of a
-       long analysis, and the document GROWS with the finding set — so what leaked was the running total of
-       every snapshot an engine had ever emitted, largest in the engine that had run longest and found most.
-       No leak report names it (these are malloc'd bytes, not runtime objects), and the host cannot see it as a
-       leak either: every ABI reply carries HEAPU8.length as `workingSetBytes`, the pool sums those into the
-       working-set floor it admits new engines and pages parked frontiers against, so the most productive
-       instance reported itself as the fattest and was paged out first — for memory holding nothing at all. */
+    /* The document is this line's to free: it is composed per call on the host's cadence and grows with the
+       finding set, and a leaked copy would count in HEAPU8.length, which every reply reports as
+       `workingSetBytes`, so the pool would page out the most productive instance first. */
     js = result_json(g_ctx);
-    /* Same allocation failure, same always-fatal case as qjs_result's, and it is asserted here rather than
-       left to the printf: `%s` over a null pointer is undefined, and where it prints at all it prints a line
-       the host's JSON.parse rejects — the snapshot merge would discard the findings this call exists to
-       stream, at the moment the engine could still have reported them. */
+    /* The same always-fatal allocation failure as qjs_result's, asserted rather than left to the printf: `%s` over
+       a null pointer is undefined, and the host's JSON.parse would reject the line. */
     CHECK(js != NULL, "a partial result document could not be composed — the findings this engine has "
                       "accumulated so far are dropped, and the merge that would have surfaced them is skipped");
     printf("@RESULT %s\n", js);
