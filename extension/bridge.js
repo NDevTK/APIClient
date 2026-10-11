@@ -1897,14 +1897,16 @@ function seedSpeaker(msg) {
 /* HTML §7.4.5's request facts {destination, referrerPolicy} of each child navigable an instance created, by
    creating document name and address, from the engine's `navigable.request` notices (core/frame/navigable.c's
    create), with the address after redirects added once this zone has loaded a cross-origin child. Each creator's
-   record is {facts, waiters, closed}: `closed` once the instance that held the creator has left the pool, after
-   which no notice for it can arrive. Records live as long as the offscreen session. */
+   record is {facts, waiters, names, nameWaiters, closed, instance}: `closed` once the instance that held the
+   creator has left the pool, after which no notice for it can arrive, and `instance` the instance holding a
+   same-origin realm the pool names nowhere. Records live as long as the offscreen session. */
 const _childRequests = new Map();
 
 function childRequestsOf(creator) {
   let c = _childRequests.get(creator);
   if (c === undefined) {
-    c = { facts: new Map(), waiters: new Map(), names: new Map(), nameWaiters: new Map(), closed: false };
+    c = { facts: new Map(), waiters: new Map(), names: new Map(), nameWaiters: new Map(), closed: false,
+          instance: null };
     _childRequests.set(creator, c);
   }
   return c;
@@ -1950,7 +1952,7 @@ async function seedChildName(creator, url) {
   const c = childRequestsOf(creator);
   const address = new URL(url).href;
   if (c.names.has(address)) return c.names.get(address);
-  if (c.closed || hostHolderOf(creator) === null) return null;
+  if (!childRequestsLive(creator)) return null;
   return await new Promise((resolve) => {
     if (!c.nameWaiters.has(address)) c.nameWaiters.set(address, []);
     c.nameWaiters.get(address).push(resolve);
@@ -1960,12 +1962,14 @@ async function seedChildName(creator, url) {
 /* The engine's name of the browser's document `documentId` among `frames` (webNavigation.getAllFrames' answer):
    its own documentId where an instance installed its seed, otherwise the name its parent's instance created it
    under (the `navigable.request` notice's child), found by the parent's name and the frame's address. Null for
-   a top-level document no instance installed.
+   a top-level document no instance installed. A document's entry is opened here when its own AST_ANALYZE has
+   not arrived yet, so a descendant's seed waits for that dispatch to install or settle it.
    Named residual. Not covered: a child whose navigable's initial `about:blank` was read before its load, whose
    loaded document the engine names afresh (navigable.c's load mints from the navigable's name). The next diff
    announces that name on the load. Its absence shows as a seed nested in such a frame waiting for its parent's
    instance to leave the pool. */
 async function documentNameOf(frames, documentId) {
+  documentPolicyOpen(documentId);
   if ((await documentReferrerPolicy(documentId)) !== null) return documentId;
   const f = frames.find((x) => x.documentId === documentId);
   if (f === undefined || f.parentFrameId === -1 || !URL.canParse(f.url)) return null;
@@ -1973,15 +1977,25 @@ async function documentNameOf(frames, documentId) {
   return parent === null ? null : await seedChildName(parent, f.url);
 }
 
-/* The instance `eng` has left the pool: every document it held creates no more children, so their waiting seeds
-   are answered null. */
+/* Whether document `name` can still create a child: its instance, named in the pool or, for a same-origin realm,
+   the one that announced it, is still in the pool and has not been closed. */
+function childRequestsLive(name) {
+  const c = childRequestsOf(name);
+  if (c.closed) return false;
+  return hostHolderOf(name) !== null || (c.instance !== null && _pool.indexOf(c.instance) >= 0);
+}
+
+/* The instance `eng` has left the pool: every document it held, its same-origin realms included, creates no more
+   children, so their waiting seeds are answered null. */
 function childRequestsClose(eng) {
   /* A loading seat holds no document yet. */
   if (eng.docId === null) {
     DCHECK(eng.state === "loading", "an instance with no document name left the pool in state " + eng.state);
     return;
   }
-  for (const name of [eng.docId].concat(eng.joinedDocIds)) {
+  const realms = [];
+  for (const [name, r] of _childRequests) if (r.instance === eng) realms.push(name);
+  for (const name of [eng.docId].concat(eng.joinedDocIds, realms)) {
     const c = childRequestsOf(name);
     c.closed = true;
     for (const w of c.waiters.values()) for (const resolve of w) resolve(null);
@@ -1998,7 +2012,7 @@ async function seedChildRequest(parentDocumentId, url) {
   const c = childRequestsOf(parentDocumentId);
   const address = new URL(url).href;
   if (c.facts.has(address)) return c.facts.get(address);
-  if (c.closed || hostHolderOf(parentDocumentId) === null) return null;
+  if (!childRequestsLive(parentDocumentId)) return null;
   return await new Promise((resolve) => {
     if (!c.waiters.has(address)) c.waiters.set(address, []);
     c.waiters.get(address).push(resolve);
@@ -3751,6 +3765,9 @@ async function hostNotice(eng, line) {
     childRequestRecord(f[R.creator], new URL(f[R.address]).href,
                        { destination: f[R.destination], referrerPolicy: f[R.referrerPolicy] });
     childNameRecord(f[R.creator], new URL(f[R.address]).href, f[R.child]);
+    /* A same-origin child is a realm in this instance (navigable.c's child_in_this_agent), named nowhere in the
+       pool, so this instance is the one that can still create its children. */
+    if (originOf(f[R.address]) === eng.origin) childRequestsOf(f[R.child]).instance = eng;
     return;
   }
   if (f[0] === "navigable.create") {
