@@ -1,8 +1,8 @@
 /* Route seeding: an address the page's own code declares as one of its pages becomes a document on the frontier.
  * The observation site is HTML §7.4.4 "Non-fragment synchronous \"navigations\""'s URL and history update steps,
  * which pushState and replaceState (§7.2.5 "The History interface") and every other caller run; it fires when a
- * document's address changes without a fetch, never on a URL argument alone (step 4 defaults it to the current
- * address). It is a one-way notice, not a pending kind, because the seeding flow is owed nothing and §7.4.4 loads
+ * document's address changes without a fetch, never on a URL argument alone (§7.2.5's shared history
+ * push/replace state steps, step 4, default it to the document's URL). It is a one-way notice, not a pending kind, because the seeding flow is owed nothing and §7.4.4 loads
  * nothing.
  * Record: `document.seed<TAB><address><TAB><provenance><TAB><driven><TAB><pinned><TAB><issuer>`. The address is
  * absolute and serialized (no re-resolution downstream) and asserted to hold no TAB, which the C0 control
