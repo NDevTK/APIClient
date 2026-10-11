@@ -307,17 +307,103 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
     return concolic_source_wrap_joint(len.realm, m.shapes, m.srcs, n, computed);
 }
 
+static char *ve_spell_atom(unsigned atom, const char *const *keys);
+
+/* A monomial's spelling over `keys`, the per-realm source key of each fact (NULL for a fact not in the length's
+   set): its facts as `key^e` joined by `*`, and, around them, the atom it holds as that atom's definition.
+   Owned. */
+static char *ve_spell_mono(const CssPxMonomial *mono, const char *const *keys)
+{
+    char *facts = NULL, *atom, *out;
+    const char *fields[2];
+    size_t len = 0;
+    FILE *f = open_memstream(&facts, &len);
+    bool any = false;
+    int e;
+
+    CHECK(f, "viewport: OOM spelling a monomial");
+    for (e = 0; e < CSS_ENV_FACT_COUNT; e++) {
+        if (!mono->e[e]) continue;
+        DCHECKF(keys[e] != NULL, "a monomial names fact %d, which is not in the length's set", e);
+        fprintf(f, "%s%s^%u", any ? "*" : "", keys[e], mono->e[e]);
+        any = true;
+    }
+    CHECK(fclose(f) == 0 && facts, "viewport: OOM spelling a monomial");
+    if (!mono->atom) {
+        DCHECK(any, "a monomial of a length's form names neither a fact nor an atom");
+        return facts;
+    }
+    atom = ve_spell_atom(mono->atom, keys);
+    fields[0] = atom;
+    fields[1] = facts;
+    out = concolic_ident_compose("atom", fields, 2);
+    free(atom);
+    free(facts);
+    return out;
+}
+
+/* `c + Σ k·m` spelled over `keys`: the constant, then each monomial and its coefficient. Owned. */
+static char *ve_spell_poly(const char *tag, double c, const CssPxMonomial *m, int n, const char *const *keys)
+{
+    char **monos = calloc((size_t)n + 1, sizeof *monos);
+    char (*coeff)[32] = calloc((size_t)n + 1, sizeof *coeff);
+    const char **fields = calloc(2 * (size_t)n + 1, sizeof *fields);
+    char *out;
+    int j, nf = 0;
+
+    CHECK(monos && coeff && fields, "viewport: OOM spelling a length's form");
+    snprintf(coeff[n], sizeof coeff[n], "%.17g", c);
+    fields[nf++] = coeff[n];
+    for (j = 0; j < n; j++) {
+        monos[j] = ve_spell_mono(&m[j], keys);
+        snprintf(coeff[j], sizeof coeff[j], "%.17g", m[j].k);
+        fields[nf++] = monos[j];
+        fields[nf++] = coeff[j];
+    }
+    out = concolic_ident_compose(tag, fields, nf);
+    for (j = 0; j < n; j++) free(monos[j]);
+    free(monos);
+    free(coeff);
+    free(fields);
+    return out;
+}
+
+/* An atom spelled by its definition (core/css/css_length.h's css_px_atom_definition): its operation over its
+   operands, each a determined number or a form spelled over `keys`. A definition is the function's, so the
+   spelling is one every session shares, where the atom's number is this process's. Owned. */
+static char *ve_spell_atom(unsigned atom, const char *const *keys)
+{
+    const CssPxAtomArg *args;
+    int nargs, a;
+    const char *op = css_px_atom_definition(atom, &nargs, &args);
+    char **sp = calloc((size_t)nargs + 1, sizeof *sp);
+    char *out;
+
+    CHECK(sp, "viewport: OOM spelling an atom");
+    for (a = 0; a < nargs; a++) {
+        if (args[a].determined) {
+            sp[a] = malloc(32);
+            CHECK(sp[a], "viewport: OOM spelling an atom");
+            snprintf(sp[a], 32, "%.17g", args[a].px);
+        } else {
+            sp[a] = ve_spell_poly("form", args[a].c, args[a].m, args[a].n, keys);
+        }
+    }
+    out = concolic_ident_compose(op, (const char *const *)sp, nargs);
+    for (a = 0; a < nargs; a++) free(sp[a]);
+    free(sp);
+    return out;
+}
+
 /* See viewport.h. The term is named by the form's monomials over the facts' per-realm keys and by the
-   fractional constant: `round(P + r)` is one function of the facts for one (P, r). */
+   fractional constant: `round(P + r)` is one function of the facts for one (P, r). An atom in P is named by its
+   definition, so the term is one another session spells the same way. */
 JSValue viewport_env_derived_long(CssPx len, JSValue computed)
 {
-    enum { MONO_MAX = CSS_ENV_FACT_COUNT * (VIEWPORT_SRC_MAX + 8) };
     ViewportEnvMembers m;
-    const char *fields[2 * CSS_PX_FORM_MAX + 1];
-    char coeff[CSS_PX_FORM_MAX + 1][32];
-    char mono[CSS_PX_FORM_MAX][MONO_MAX];
+    const char *keys[CSS_ENV_FACT_COUNT] = { NULL };
     double at, n_int, r, ex = 0.0;
-    int n, i, j, nf = 0;
+    int n, i;
     char *term;
     JSValue out;
 
@@ -330,9 +416,6 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
             "a length of %.17g CSS px carries a form that evaluates to %.17g at its own facts — its number "
             "was replaced past css_px_atom, or its form was composed from a different operation than its "
             "example", len.px, at);
-    /* An atom's name is this process's, so a form still holding one names a term no other session can. */
-    for (i = 0; i < len.form.n; i++)
-        if (len.form.m[i].atom) return viewport_env_derived(len, computed);
     JS_ToFloat64(len.realm, &ex, computed);
     /* No fact moves the length: it is `round(c)` in every world, which is the example. */
     if (len.form.n == 0) {
@@ -342,27 +425,8 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
     }
     n_int = floor(len.form.c);
     r = len.form.c - n_int;
-    snprintf(coeff[CSS_PX_FORM_MAX], sizeof coeff[CSS_PX_FORM_MAX], "%.17g", r);
-    fields[nf++] = coeff[CSS_PX_FORM_MAX];
-    for (j = 0; j < len.form.n; j++) {
-        size_t at_b = 0;
-
-        mono[j][0] = '\0';
-        for (i = 0; i < n; i++) {
-            unsigned e = len.form.m[j].e[m.fact[i]];
-            int w;
-
-            if (!e) continue;
-            w = snprintf(mono[j] + at_b, sizeof mono[j] - at_b, "%s%s^%u", at_b ? "*" : "", m.srcs[i], e);
-            DCHECK(w > 0 && (size_t)w < sizeof mono[j] - at_b, "a monomial's spelling outgrew its buffer");
-            at_b += (size_t)w;
-        }
-        DCHECK(at_b > 0, "a monomial of a length's form names no fact in the length's set");
-        snprintf(coeff[j], sizeof coeff[j], "%.17g", len.form.m[j].k);
-        fields[nf++] = mono[j];
-        fields[nf++] = coeff[j];
-    }
-    term = concolic_ident_compose("cssom-long-round", fields, nf);
+    for (i = 0; i < n; i++) keys[m.fact[i]] = m.srcs[i];
+    term = ve_spell_poly("cssom-long-round", r, len.form.m, len.form.n, keys);
     out = concolic_source_wrap_joint_affine(len.realm, m.shapes, m.srcs, n, term, n_int, computed);
     free(term);
     return out;

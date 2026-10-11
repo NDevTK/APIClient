@@ -513,6 +513,14 @@ static const char HTML_PLATFORM[] =
     "soP.appendChild(soC); document.body.appendChild(soP);"
     "fetch('/api/snapoffset?v=' + (soC.offsetLeft === 10 ? 'is10' : 'wrong'));"
     "fetch('/api/snapdelta?l=' + soC.offsetLeft + '&w=' + soC.offsetWidth);"
+    /* Two boxes with one snapped border on each side: each offsetWidth is its width plus two of the same snapped
+       width, a function of the device pixel ratio named by its definition at the `long` boundary, so the two
+       differ by the constant 100 in every world. */
+    "var swA = document.createElement('p'), swB = document.createElement('p');"
+    "swA.style.setProperty('width', '400px'); swB.style.setProperty('width', '300px');"
+    "[swA, swB].forEach(function (e) { e.style.setProperty('border-left', '1px solid');"
+    " e.style.setProperty('border-right', '1px solid'); document.body.appendChild(e); });"
+    "fetch('/api/snapwidth?v=' + (swA.offsetWidth - swB.offsetWidth === 100 ? 'is100' : 'wrong'));"
     /* css-values-4 §10.2 "Comparison Functions": `min(50vw + 300px, 50vw + 400px)` is 50vw + 300px in every
        world, so the two widths differ by the constant 300 at every viewport. Both are non-negative in every
        world, so the used width's clamp at zero is decided too; `calc(50vw - 300px)` is not, being clamped to 0

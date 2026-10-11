@@ -134,12 +134,15 @@ static int css_px_mono_cmp(const void *x, const void *y)
 /* THE ATOM'S NAME IS ITS DEFINITION: the operation and the forms of its operands, which are normal forms (sorted
    and merged), so two derivations of one function compose one key and one name wherever they run, and two
    different functions never share one. A fact enters a key as its index and never as its value, so the name is
-   of the function and not of this realm's number. Interned for the process; the number is not spelled across
-   sessions (core/frame/viewport.c's boundary). */
+   of the function and not of this realm's number. Interned for the process; the number is this process's, and
+   the definition it was interned with (css_px_atom_definition) is what a spelling another session shares names. */
 typedef struct { char *key; unsigned id; } CssPxAtomSlot;
 static CssPxAtomSlot *g_css_px_atoms;
 static size_t g_css_px_atoms_cap;
 static unsigned g_css_px_atoms_n;
+/* Each atom's definition, indexed by its name minus one, owned for the process. */
+typedef struct { char *op; int nargs; CssPxAtomArg *args; } CssPxAtomDef;
+static CssPxAtomDef *g_css_px_atom_defs;
 
 static size_t css_px_atom_hash(const char *k)
 {
@@ -149,9 +152,13 @@ static size_t css_px_atom_hash(const char *k)
     return h;
 }
 
-/* The name `key` (owned, consumed) is interned under. */
-static unsigned css_px_atom_intern(char *key)
+/* The name `key` (owned, consumed) is interned under; a new name records `op` over `args` (borrowed, copied) as
+   its definition. */
+static unsigned css_px_atom_intern(char *key, const char *op, const CssPxAtomArg *args, int nargs)
 {
+    CssPxAtomDef *d;
+    int a;
+
     size_t i;
 
     if (2 * (g_css_px_atoms_n + 1) > g_css_px_atoms_cap) {
@@ -177,7 +184,34 @@ static unsigned css_px_atom_intern(char *key)
     DCHECK(g_css_px_atoms_n != UINT_MAX, "the atom table ran out of names");
     g_css_px_atoms[i].key = key;
     g_css_px_atoms[i].id = ++g_css_px_atoms_n;
+    g_css_px_atom_defs = realloc(g_css_px_atom_defs, (size_t)g_css_px_atoms_n * sizeof *g_css_px_atom_defs);
+    CHECK(g_css_px_atom_defs, "css_length: OOM recording an atom's definition");
+    d = &g_css_px_atom_defs[g_css_px_atoms_n - 1];
+    d->op = strdup(op);
+    d->nargs = nargs;
+    d->args = calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *d->args);
+    CHECK(d->op && d->args, "css_length: OOM recording an atom's definition");
+    for (a = 0; a < nargs; a++) {
+        CssPxMonomial *m = NULL;
+
+        d->args[a] = args[a];
+        if (!args[a].determined && args[a].n > 0) {
+            m = malloc((size_t)args[a].n * sizeof *m);
+            CHECK(m, "css_length: OOM recording an atom's definition");
+            memcpy(m, args[a].m, (size_t)args[a].n * sizeof *m);
+        }
+        d->args[a].m = m;
+    }
     return g_css_px_atoms[i].id;
+}
+
+const char *css_px_atom_definition(unsigned atom, int *nargs, const CssPxAtomArg **args)
+{
+    DCHECKF(atom >= 1 && atom <= g_css_px_atoms_n, "atom %u was asked for its definition and no atom has that name",
+            atom);
+    *nargs = g_css_px_atom_defs[atom - 1].nargs;
+    *args = g_css_px_atom_defs[atom - 1].args;
+    return g_css_px_atom_defs[atom - 1].op;
 }
 
 /* One polynomial into a key: the constant and every monomial's atom, exponents and coefficient, doubles in `%a`
@@ -194,9 +228,9 @@ static void css_px_key_poly(FILE *f, double c, const CssPxMonomial *m, int n)
     }
 }
 
-/* `out`'s form becomes the atom named `key` (owned, consumed). A non-finite example has no form and stays
-   opaque. */
-static void css_px_form_atom_named(CssPx *out, char *key)
+/* `out`'s form becomes the atom named `key` (owned, consumed), defined as `op` over `args`. A non-finite example
+   has no form and stays opaque. */
+static void css_px_form_atom_named(CssPx *out, char *key, const char *op, const CssPxAtomArg *args, int nargs)
 {
     DCHECK(out->env != CSS_ENV_NONE, "an atom was minted for a length derived from no fact");
     out->form.known = false;
@@ -208,7 +242,7 @@ static void css_px_form_atom_named(CssPx *out, char *key)
     out->form.n = 1;
     out->form.c = 0.0;
     memset(&out->form.m[0], 0, sizeof out->form.m[0]);
-    out->form.m[0].atom = css_px_atom_intern(key);
+    out->form.m[0].atom = css_px_atom_intern(key, op, args, nargs);
     out->form.m[0].k = 1.0;
     out->form.m[0].aval = out->px;
 }
@@ -221,6 +255,7 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
     char *key = NULL;
     size_t len = 0;
     FILE *f;
+    CssPxAtomArg *def;
     int i;
 
     for (i = 0; i < nargs; i++)
@@ -228,6 +263,17 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
             out->form.known = false;
             return;
         }
+    def = calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *def);
+    CHECK(def, "css_length: OOM naming an atom");
+    for (i = 0; i < nargs; i++) {
+        def[i].determined = args[i].env == CSS_ENV_NONE;
+        def[i].px = args[i].px;
+        if (!def[i].determined) {
+            def[i].c = args[i].form.c;
+            def[i].n = args[i].form.n;
+            def[i].m = args[i].form.m;
+        }
+    }
     f = open_memstream(&key, &len);
     CHECK(f, "css_length: OOM naming an atom");
     fprintf(f, "%s(", op);
@@ -238,7 +284,8 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
     }
     fputc(')', f);
     CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
-    css_px_form_atom_named(out, key);
+    css_px_form_atom_named(out, key, op, def, nargs);
+    free(def);
 }
 
 CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px)
@@ -290,11 +337,13 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
         FILE *f = open_memstream(&key, &len);
 
         CHECK(f, "css_length: OOM naming an atom");
+        CssPxAtomArg def = { false, 0.0, p->c, n, p->m };
+
         fputs("poly(", f);
         css_px_key_poly(f, p->c, p->m, n);
         fputc(')', f);
         CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
-        css_px_form_atom_named(out, key);
+        css_px_form_atom_named(out, key, "poly", &def, 1);
         return;
     }
     out->form.known = true;
