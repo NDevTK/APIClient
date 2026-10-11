@@ -481,8 +481,11 @@ static const char HTML_PLATFORM[] =
        The block axis is the other half: §8.3 says "vertical margins will not have any effect on non-replaced
        inline elements", so 300px of `margin-bottom` moves `scrollHeight` by zero, and a fold that reached for
        a margin box on both axes passes the first claim and fails this one. */
+    /* Each container declares `display: block` over this document's `div { display: none }`: CSSOM VIEW §6
+       answers zero for scrollWidth of an element with no associated box, and both differences would be 0. */
     "var saInline = function(p, v){"
-    "  var d = document.createElement('div'); d.style.setProperty('width', '50px');"
+    "  var d = document.createElement('div'); d.style.setProperty('display', 'block');"
+    "  d.style.setProperty('width', '50px');"
     "  var s = document.createElement('span'); s.style.setProperty(p, v);"
     "  s.appendChild(document.createTextNode('x'));"
     "  d.appendChild(s); document.body.appendChild(d); return d;"
@@ -611,12 +614,15 @@ static const char HTML_PLATFORM[] =
        'max-height')." So `max-height: 50%` inside an `auto`-height parent does NOTHING — the box keeps its
        200px — while the same declaration inside a 400px parent clamps a 200px box up to its 300px floor. The
        pair is one test because a basis invented for the first case would silently change the first number. */
-    "var ha = document.createElement('div'); document.body.appendChild(ha);"
-    "var hax = document.createElement('div'); ha.appendChild(hax);"
+    /* Every div here declares `display: block` over this document's `div { display: none }`: CSSOM §9
+       "Resolved Values" answers height's computed value, not its used value, where display is none. */
+    "var hblk = function(el){ el.style.setProperty('display', 'block'); return el; };"
+    "var ha = hblk(document.createElement('div')); document.body.appendChild(ha);"
+    "var hax = hblk(document.createElement('div')); ha.appendChild(hax);"
     "hax.style.setProperty('height', '200px'); hax.style.setProperty('max-height', '50%');"
-    "var hd = document.createElement('div'); document.body.appendChild(hd);"
+    "var hd = hblk(document.createElement('div')); document.body.appendChild(hd);"
     "hd.style.setProperty('height', '400px');"
-    "var hdx = document.createElement('div'); hd.appendChild(hdx);"
+    "var hdx = hblk(document.createElement('div')); hd.appendChild(hdx);"
     "hdx.style.setProperty('height', '200px'); hdx.style.setProperty('min-height', '75%');"
     "fetch('/api/clamppcth?v=' + (getComputedStyle(hax).height === '200px' &&"
     " getComputedStyle(hdx).height === '300px' ? 'isindefinite' : 'wrong'));"
@@ -625,8 +631,8 @@ static const char HTML_PLATFORM[] =
        content and a 120px floor, so its border box is 120; the outer box's `auto` height is that stack. A
        child that reported its walk's 0 unclamped would make the OUTER height wrong too, with nothing
        downstream to say so. */
-    "var hw = document.createElement('div'); document.body.appendChild(hw);"
-    "var hwi = document.createElement('div'); hw.appendChild(hwi);"
+    "var hw = hblk(document.createElement('div')); document.body.appendChild(hw);"
+    "var hwi = hblk(document.createElement('div')); hw.appendChild(hwi);"
     "hwi.style.setProperty('min-height', '120px');"
     "fetch('/api/clampwalk?v=' + (getComputedStyle(hwi).height === '120px' &&"
     " getComputedStyle(hw).height === '120px' ? 'iswalk' : 'wrong'));"
@@ -1451,12 +1457,15 @@ static const char HTML_PLATFORM[] =
     /* A TYPED DICTIONARY MEMBER, converted through the page's own code. `extends` is a DOMString member of
        ElementDefinitionOptions, so Web IDL READS it (an accessor here, which a Proxy would make of any object)
        and then runs ToString on what it got — two suspension points inside one member, and the page's toString
-       holds a loop, so the resume must come back to the CONVERSION and not re-run the read. The definition is
-       then refused as a customized built-in, which is what proves the converted value arrived. */
-    "var ceext = 'wrong';"
-    "try { customElements.define('x-ext', class {}, { get extends(){ return { toString: function(){"
-    " var n = 0; for (var i = 0; i < 120; i++) n += i; return n === 7140 ? 'button' : 'bad'; } }; } }); }"
-    " catch (e) { ceext = 'isext'; }"
+       holds a loop, so the resume must come back to the CONVERSION and not re-run the read. HTML §4.13.4 The
+       CustomElementRegistry interface's define steps accept `button` (not a valid custom element name, and its
+       element interface is not HTMLUnknownElement) and refuse `bad` with a "NotSupportedError", so the
+       definition succeeding is what proves the converted value arrived. */
+    "var ceext = 'wrong'; var ceX = class {};"
+    "try { customElements.define('x-ext', ceX, { get extends(){ return { toString: function(){"
+    " var n = 0; for (var i = 0; i < 120; i++) n += i; return n === 7140 ? 'button' : 'bad'; } }; } });"
+    " ceext = customElements.get('x-ext') === ceX ? 'isext' : 'wrong'; }"
+    " catch (e) { ceext = 'threw-' + e.name; }"
     "fetch('/api/ceext?v=' + ceext);"
     "var acc = 0; for (var i = 0; i < 15; i++) { acc = acc + i; }"   /* a real LOOP (back-edges) so the quantum fires: a flow yields MID-LOOP and the scheduler interleaves parked sibling flows, exercising the COW+decide+pins swap */
     "function* gen(n){ var s=0; for(var i=0;i<n;i++){ s=s+i; } yield s; yield s*2; }"   /* GENERATOR body with a LOOP: .next() runs the body on the tramp chain, the loop preempts the base flow */
