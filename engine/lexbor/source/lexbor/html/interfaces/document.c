@@ -127,8 +127,7 @@ lxb_html_document_create(void)
 void
 lxb_html_document_clean(lxb_html_document_t *document)
 {
-    document->body = NULL;
-    document->head = NULL;
+    document->parser_head_pointer = NULL;
     document->iframe_srcdoc = NULL;
     document->ready_state = LXB_HTML_DOCUMENT_READY_STATE_UNDEF;
 
@@ -355,7 +354,7 @@ lxb_html_document_title_set(lxb_html_document_t *document,
     /* TODO: If the document element is an SVG svg element */
 
     /* If the document element is in the HTML namespace */
-    if (document->head == NULL) {
+    if (lxb_html_document_head_element(document) == NULL) {
         return LXB_STATUS_OK;
     }
 
@@ -370,7 +369,7 @@ lxb_html_document_title_set(lxb_html_document_t *document,
             return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
         }
 
-        lxb_dom_node_insert_child(lxb_dom_interface_node(document->head),
+        lxb_dom_node_insert_child(lxb_dom_interface_node(lxb_html_document_head_element(document)),
                                   lxb_dom_interface_node(el_title));
     }
 
@@ -421,6 +420,39 @@ lxb_html_document_import_node(lxb_html_document_t *doc, lxb_dom_node_t *node,
 /*
  * No inline functions for ABI.
  */
+static lxb_dom_node_t *
+lxb_html_document_html_child(lxb_html_document_t *document, lxb_tag_id_t a, lxb_tag_id_t b)
+{
+    lxb_dom_node_t *html, *node;
+
+    html = lxb_dom_interface_node(lxb_dom_document_element(&document->dom_document));
+    if (html == NULL || html->local_name != LXB_TAG_HTML || html->ns != LXB_NS_HTML) {
+        return NULL;
+    }
+
+    for (node = html->first_child; node != NULL; node = node->next) {
+        if (node->type == LXB_DOM_NODE_TYPE_ELEMENT && node->ns == LXB_NS_HTML
+            && (node->local_name == a || node->local_name == b))
+        {
+            return node;
+        }
+    }
+
+    return NULL;
+}
+
+lxb_html_head_element_t *
+lxb_html_document_head_element(lxb_html_document_t *document)
+{
+    return lxb_html_interface_head(lxb_html_document_html_child(document, LXB_TAG_HEAD, LXB_TAG_HEAD));
+}
+
+lxb_html_body_element_t *
+lxb_html_document_body_element(lxb_html_document_t *document)
+{
+    return lxb_html_interface_body(lxb_html_document_html_child(document, LXB_TAG_BODY, LXB_TAG_FRAMESET));
+}
+
 lxb_html_head_element_t *
 lxb_html_document_head_element_noi(lxb_html_document_t *document)
 {

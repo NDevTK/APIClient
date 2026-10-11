@@ -57,7 +57,6 @@ lxb_dom_document_interface_clone(lxb_dom_document_t *document,
         return NULL;
     }
 
-    new->doctype = doc->doctype;
     new->compat_mode = doc->compat_mode;
     new->type = doc->type;
     new->user = doc->user;
@@ -209,7 +208,6 @@ lxb_dom_document_clean(lxb_dom_document_t *document)
 
     document->node.first_child = NULL;
     document->node.last_child = NULL;
-    document->doctype = NULL;
 
     return LXB_STATUS_OK;
 }
@@ -251,13 +249,6 @@ lxb_dom_document_mutation_erase(lxb_dom_document_t *document)
 {
     document->mutation = &lxb_dom_document_mutation_cbs;
     document->attr_mutation = &lxb_dom_document_attr_mutation_cbs;
-}
-
-void
-lxb_dom_document_attach_doctype(lxb_dom_document_t *document,
-                                lxb_dom_document_type_t *doctype)
-{
-    document->doctype = doctype;
 }
 
 lxb_dom_element_t *

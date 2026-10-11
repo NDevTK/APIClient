@@ -67,7 +67,6 @@ struct lxb_dom_document {
     lxb_dom_document_cmode_t                  compat_mode;
     lxb_dom_document_dtype_t                  type;
 
-    lxb_dom_document_type_t                   *doctype;
 
     lxb_dom_interface_create_f                create_interface;
     lxb_dom_interface_clone_f                 clone_interface;
@@ -153,10 +152,6 @@ lxb_dom_document_mutation_init(lxb_dom_document_t *document);
 
 LXB_API void
 lxb_dom_document_mutation_erase(lxb_dom_document_t *document);
-
-LXB_API void
-lxb_dom_document_attach_doctype(lxb_dom_document_t *document,
-                                lxb_dom_document_type_t *doctype);
 
 LXB_API lxb_dom_element_t *
 lxb_dom_document_create_element(lxb_dom_document_t *document,
@@ -249,6 +244,22 @@ lxb_dom_document_element(lxb_dom_document_t *document)
     for (node = document->node.first_child; node != NULL; node = node->next) {
         if (node->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             return (lxb_dom_element_t *) node;
+        }
+    }
+
+    return NULL;
+}
+
+/* DOM §4.5 "Interface Document": "The doctype getter steps are to return the child of this that is a doctype;
+   otherwise null." Read from the tree, for the reason lxb_dom_document_element is. */
+lxb_inline lxb_dom_document_type_t *
+lxb_dom_document_doctype(lxb_dom_document_t *document)
+{
+    lxb_dom_node_t *node;
+
+    for (node = document->node.first_child; node != NULL; node = node->next) {
+        if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) {
+            return (lxb_dom_document_type_t *) node;
         }
     }
 

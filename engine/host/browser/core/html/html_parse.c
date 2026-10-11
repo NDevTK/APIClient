@@ -207,7 +207,7 @@ static void html_parse_release_token(lxb_html_tokenizer_t *tkz, lxb_html_token_t
            "document being built — `lxb_html_parse_chunk_prepare` and `lxb_html_parse_fragment_chunk_begin` "
            "are the two entries that set it and both name `doc->text`, so a third entry reached this parse and "
            "the free below would hand the bytes to the wrong allocator");
-    dt = tree->document->dom_document.doctype;
+    dt = lxb_dom_document_doctype(&tree->document->dom_document);
 
     for (attr = token->attr_first; attr != NULL; attr = attr->next) {
         /* NO VALUE, NO ALLOCATION — or one the DOM has taken, which html_parse_attr_appended records the same

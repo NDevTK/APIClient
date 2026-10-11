@@ -44,8 +44,10 @@ struct lxb_html_document {
 
     void                                        *iframe_srcdoc;
 
-    lxb_html_head_element_t                     *head;
-    lxb_html_body_element_t                     *body;
+    /* HTML §13.2.4.4 "The element pointers"' head element pointer: tree-builder state, set by the "before
+       head" insertion mode and read by the parser alone. It is not `document.head`, which
+       lxb_html_document_head_element reads from the tree. */
+    lxb_html_head_element_t                     *parser_head_pointer;
 
     lxb_html_document_done_cb_f                 done;
     lxb_html_document_ready_state_t             ready_state;
@@ -125,17 +127,16 @@ lxb_html_document_import_node(lxb_html_document_t *doc, lxb_dom_node_t *node,
 /*
  * Inline functions
  */
-lxb_inline lxb_html_head_element_t *
-lxb_html_document_head_element(lxb_html_document_t *document)
-{
-    return document->head;
-}
+/* HTML §3.1.7 "DOM tree accessors": "The head element of a document is the first head element that is a child
+   of the html element, if there is one, or null otherwise", and "The body element of a document is the first of
+   the html element's children that is either a body element or a frameset element, or null if there is no such
+   element". The html element is "its document element, if it's an html element, and null otherwise". Both
+   are read from the tree as it is now. */
+LXB_API lxb_html_head_element_t *
+lxb_html_document_head_element(lxb_html_document_t *document);
 
-lxb_inline lxb_html_body_element_t *
-lxb_html_document_body_element(lxb_html_document_t *document)
-{
-    return document->body;
-}
+LXB_API lxb_html_body_element_t *
+lxb_html_document_body_element(lxb_html_document_t *document);
 
 lxb_inline lxb_dom_document_t *
 lxb_html_document_original_ref(lxb_html_document_t *document)

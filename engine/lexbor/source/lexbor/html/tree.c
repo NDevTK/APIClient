@@ -1177,7 +1177,7 @@ lxb_html_tree_reset_insertion_mode_appropriately(lxb_html_tree_t *tree)
                 return;
 
             case LXB_TAG_HTML: {
-                if (tree->document->head == NULL) {
+                if (tree->document->parser_head_pointer == NULL) {
                     tree->mode = lxb_html_tree_insertion_mode_before_head;
                     return;
                 }

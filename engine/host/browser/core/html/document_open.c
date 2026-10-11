@@ -305,22 +305,17 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
        its site, because a crash that outlives the absence it names is the failure mode this project rates
        worst. */
     document_replace_selection(ctx, doc_obj);
-    /* …AND THE THREE POINTERS LEXBOR CACHES INTO THE TREE THAT JUST WENT, which are part of the same step and
-       not bookkeeping after it: the doctype, and the parser's `head` and `body`. Each now names a node that is
-       no longer in the tree, and §13.2.6.4.7 'The "in body" insertion mode' re-attributes a written `<body>`
-       token's attributes onto `document->body`, so the next write's attributes would land on the REMOVED
-       body. The re-parse refills them, so this is the window between step 11 and the first token. The
-       document element is not among them: lexbor reads it from the tree. Through the POD latch for the reason
-       step 15 is: they are fields of the shared Lexbor document. */
-    cow_capture_host_state(ctx, doc_obj, &dom->doctype, sizeof dom->doctype);
-    lxb_dom_document_attach_doctype(dom, NULL);
+    /* …AND THE PARSER'S HEAD ELEMENT POINTER (HTML §13.2.4.4 "The element pointers"), which names a node that
+       has just left the tree and which the new parser starts without: §13.2.4.1 "The insertion mode"'s
+       "reset the insertion mode appropriately" reads it. It is the one tree-builder pointer lexbor keeps on
+       the document; the doctype, the document element, `head` and `body` are read from the tree. Through the POD latch for the reason
+       step 15 is: it is a field of the shared Lexbor document. */
     {
         lxb_html_document_t *html_doc = lxb_html_interface_document(dom);
 
-        cow_capture_host_state(ctx, doc_obj, &html_doc->head, sizeof html_doc->head);
-        cow_capture_host_state(ctx, doc_obj, &html_doc->body, sizeof html_doc->body);
-        html_doc->head = NULL;
-        html_doc->body = NULL;
+        cow_capture_host_state(ctx, doc_obj, &html_doc->parser_head_pointer,
+                               sizeof html_doc->parser_head_pointer);
+        html_doc->parser_head_pointer = NULL;
     }
 
     /* STEP 12 — "If document is fully active: let newURL be a copy of entryDocument's URL; if entryDocument is

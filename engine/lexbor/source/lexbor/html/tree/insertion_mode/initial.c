@@ -219,8 +219,6 @@ lxb_html_tree_insertion_mode_initial_doctype(lxb_html_tree_t *tree,
     lxb_html_tree_dom()->insert_child(tree, &tree->document->dom_document.node,
                                       lxb_dom_interface_node(doc_type));
 
-    lxb_dom_document_attach_doctype(&tree->document->dom_document, doc_type);
-
     return true;
 }
 

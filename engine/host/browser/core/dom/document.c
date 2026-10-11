@@ -3181,30 +3181,6 @@ static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
 }
 
 
-/* §3.1.1's TREE ENTRY POINTS, COMPUTED FROM THE RECEIVER'S TREE — documentElement, body, head and doctype.
- *
- * They were four DATA PROPERTIES latched onto the `document` object at install, and that is wrong twice. It is
- * wrong in TIME: each is defined as a lookup in the tree AS IT IS, so a page that replaces `<body>` (which
- * `document.body = el` and a `replaceChild` both do) went on being handed the node the parse produced. And it
- * is wrong in SUBJECT: a value stored on one object cannot answer for a second document, so
- * `implementation.createHTMLDocument("").body` was undefined — the whole reason this had to be looked at.
- * magic 0 = documentElement, 1 = body, 2 = head, 3 = doctype. */
-static lxb_dom_node_t *doc_child_named(lxb_dom_node_t *parent, const char *a, const char *b)
-{
-    lxb_dom_node_t *n;
-
-    for (n = parent ? parent->first_child : NULL; n; n = n->next) {
-        size_t qn = 0;
-        const lxb_char_t *q;
-        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
-        if (!q) continue;
-        if ((qn == strlen(a) && !memcmp(q, a, qn)) || (b && qn == strlen(b) && !memcmp(q, b, qn)))
-            return n;
-    }
-    return NULL;
-}
-
 /* DOM §4.2.1 "Document tree"'s document element, through lexbor's one reading of the tree. NULL is a real
    answer: a document §4.5's createDocument built with no qualified name has none, and a page may remove it. */
 lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc)
@@ -3220,7 +3196,9 @@ lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc)
    question this file already answers — which is what made `document.body` a latched data property once. */
 lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc)
 {
-    return doc_child_named(document_document_element_of(doc), "body", "frameset");
+    if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
+        return NULL;
+    return lxb_dom_interface_node(lxb_html_document_body_element(lxb_html_interface_document((lxb_dom_node_t *)doc)));
 }
 
 /* HTML §7.4.6.4 "Scrolling to a fragment"'s TARGET ELEMENT — see document.h for why NULL here is the standard's
@@ -3261,9 +3239,13 @@ JSValueConst document_window_of(const lxb_dom_node_t *n)
     return d->win_obj;
 }
 
+/* The tree entry points, each read from the receiver's tree as it is now through lexbor's one reading of it
+   (DOM §4.5 "Interface Document", HTML §3.1.7 "DOM tree accessors"). Every Document in this engine is an
+   lxb_html_document_t (node.c asserts it), so the HTML accessors apply to all of them.
+   magic 0 = documentElement, 1 = body, 2 = head, 3 = doctype. */
 static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_node_t *doc = node_of(this_val), *root, *n;
+    lxb_dom_node_t *doc = node_of(this_val), *root;
 
     /* WEB IDL §3.7.6 Attributes' brand check — a TypeError, not an assert; see doc_receiver. */
     if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
@@ -3278,13 +3260,11 @@ static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
         return node_wrap(ctx, document_body_of(doc));
     case 2:
         /* §3.1.7: "the first head element that is a child of the html element". */
-        return node_wrap(ctx, doc_child_named(root, "head", NULL));
+        return node_wrap(ctx, lxb_dom_interface_node(lxb_html_document_head_element(lxb_html_interface_document(doc))));
     default:
         DCHECK(magic == 3, "a Document tree accessor was declared with a magic this table does not name");
         /* DOM §4.5's doctype: "the child of this that is a doctype; otherwise null". */
-        for (n = doc->first_child; n; n = n->next)
-            if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) return node_wrap(ctx, n);
-        return JS_NULL;
+        return node_wrap(ctx, lxb_dom_interface_node(lxb_dom_document_doctype(lxb_dom_interface_document(doc))));
     }
 }
 
@@ -3550,7 +3530,7 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
         goto done;
     }
     if (de && de->ns == LXB_NS_HTML) {
-        lxb_dom_node_t *head = doc_child_named(de, "head", NULL);
+        lxb_dom_node_t *head = lxb_dom_interface_node(lxb_html_document_head_element(lxb_html_interface_document(doc)));
         el = doc_first_in_tree(doc, LXB_NS_HTML, "title");
         /* "If the title element is null AND the head element is null, then return" — a `<frameset>` document
            is exactly that, and a title it is given is dropped rather than given a head to live in. */

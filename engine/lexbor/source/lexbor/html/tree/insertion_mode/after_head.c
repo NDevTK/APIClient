@@ -104,7 +104,7 @@ lxb_html_tree_insertion_mode_after_head_open(lxb_html_tree_t *tree,
         case LXB_TAG_TITLE: {
             lxb_dom_node_t *head_node;
 
-            head_node = lxb_dom_interface_node(tree->document->head);
+            head_node = lxb_dom_interface_node(tree->document->parser_head_pointer);
             if (head_node == NULL) {
                 tree->status = LXB_STATUS_ERROR;
 
@@ -215,8 +215,6 @@ lxb_html_tree_insertion_mode_after_head_create_body(lxb_html_tree_t *tree,
     if (element == NULL) {
         return NULL;
     }
-
-    tree->document->body = lxb_html_interface_body(element);
 
     return element;
 }

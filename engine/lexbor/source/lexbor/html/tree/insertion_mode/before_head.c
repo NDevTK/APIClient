@@ -138,7 +138,7 @@ lxb_html_tree_insertion_mode_before_head_head(lxb_html_tree_t *tree,
         return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
     }
 
-    tree->document->head = lxb_html_interface_head(element);
+    tree->document->parser_head_pointer = lxb_html_interface_head(element);
 
     return LXB_STATUS_OK;
 }
