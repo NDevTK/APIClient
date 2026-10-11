@@ -347,10 +347,10 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     else if (hi <= 0.0) win = want_hi ? &b : &a;
     /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
        atom so that every place this one result is carried to can still subtract it.
-       Named residual. Not covered: the other opaque results (a quotient by a derived length, a product with an
-       atom, a form too wide) still leave no form. Next diff: each mints an atom through css_px_form_atom. How
-       its absence shows: two lengths downstream of one such result that differ by a constant and still cross
-       the `long` boundary as two forks. */
+       Named residual. Not covered: the other opaque results (a product with an atom, a form too wide) still
+       leave no form. Next diff: each mints an atom through css_px_form_atom. How its absence shows: two
+       lengths downstream of one such result that differ by a constant and still cross the `long` boundary as
+       two forks. */
     if (win == NULL) {
         DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
         css_px_form_atom(&out);
@@ -407,7 +407,8 @@ CssPx css_px_mul(CssPx a, CssPx b)
     return out;
 }
 
-/* A quotient by a DETERMINED operand is a scaling and keeps the form; one by a derived length is opaque. */
+/* A quotient by a DETERMINED operand is a scaling and keeps the form; one by a derived length is a reciprocal,
+   which no polynomial states, so it is one atom. */
 CssPx css_px_div(CssPx a, CssPx b)
 {
     CssPx out;
@@ -418,8 +419,8 @@ CssPx css_px_div(CssPx a, CssPx b)
            "non-zero' and answers 1 or 0 otherwise — so a zero arriving means the caller skipped its own "
            "branch rather than that this operation needs one");
     out = css_px_combine(a, b, a.px / b.px);
-    if (b.env == CSS_ENV_NONE && a.env != CSS_ENV_NONE && a.form.known)
-        css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
+    if (b.env != CSS_ENV_NONE) css_px_form_atom(&out);
+    else if (a.env != CSS_ENV_NONE && a.form.known) css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
     return out;
 }
 
