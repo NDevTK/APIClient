@@ -40,12 +40,11 @@
  * rests mid-node rather than only a deep one. */
 /* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's auto-height entry
  * is still driven where core/layout/used_value.c sizes a box for a caller inside the walk outside a line (an
- * absolutely positioned box's containing-block height, an `inline-block` whose `min-height` or `max-height`
- * is a content keyword, intrinsic_block_size.c), so those compute what they deferred inside the same
- * activation. Next: the containing-block height an
- * absolutely positioned box's solve reads, asked by the out-of-flow origin before the solve. How its absence
- * shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming a unit whose heavy node is an absolutely
- * positioned box inside an `auto`-height positioned ancestor. */
+ * absolutely positioned box whose positioned ancestor is a table or a flex or grid item, an `inline-block`
+ * whose `min-height` or `max-height` is a content keyword, and intrinsic_block_size.c's flex item sizes), so
+ * those compute what they deferred inside the same activation. Next: intrinsic_block_size.c's block size as an
+ * ask, propagated through the flex line's item sizes. How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS
+ * bracket's CPU assert naming a unit whose heavy node is a flex item. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the

@@ -3370,6 +3370,28 @@ bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, b
     return uv_len_is_auto(lb) && uv_len_is_auto(la);
 }
 
+bool used_value_abs_cb_content_height_read(lxb_dom_element_t *el, lxb_dom_element_t **ancestor)
+{
+    UvCb cb;
+    UvBox box;
+    char nbuf[160];
+
+    DCHECKF(el != NULL && ancestor != NULL && uv_box_kind(el) == UV_BOX_ABS,
+            "%s: CSS 2.1 §10.6.4's containing-block height is read only by an absolutely positioned box's solve",
+            box_subject(el, nbuf, sizeof nbuf));
+    cb = uv_cb(el);
+    if (cb.box != UV_CB_POSITIONED_PADDING) return false;
+    *ancestor = cb.element;
+    box = uv_box_kind(cb.element);
+    /* An absolutely positioned ancestor's height is its own solve's, which reads the walk under the same test
+       its own solve asserts; a block container in flow, floated or inline-block reads it where its `height`
+       behaves as auto. Every other box kind sizes its block axis by its own algorithm. */
+    if (box == UV_BOX_ABS) return uv_abs_reads_auto_height(cb.element, css_computed_length(cb.element, "height"));
+    if (box != UV_BOX_BLOCK_FLOW && box != UV_BOX_FLOAT && box != UV_BOX_INLINE_BLOCK) return false;
+    return block_flow_display_is_block_container(css_computed_display(cb.element)) &&
+           used_value_height_behaves_as_auto(cb.element);
+}
+
 bool used_value_abs_auto_height_read(lxb_dom_element_t *el)
 {
     char nbuf[160];

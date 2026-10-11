@@ -297,6 +297,11 @@ bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, b
    `auto`. The solve asserts each read against the same test over its own length. */
 bool used_value_abs_auto_height_read(lxb_dom_element_t *el);
 
+/* Whether the same solve's block axis reads the content-based height of `el`'s containing block's element:
+   §10.1's fourth case (the padding box of the positioned ancestor, stored at `*ancestor`) whose height is
+   core/layout/block_flow.h's §10.6.3 walk. False for every other containing block and box kind. */
+bool used_value_abs_cb_content_height_read(lxb_dom_element_t *el, lxb_dom_element_t **ancestor);
+
 /* CSS 2.2 §9.4.3 "Relative positioning"' used translation on one axis: the signed distance a relatively
    positioned box is shifted by after normal flow places it, the used `left` horizontally and `top` vertically
    ("'Left' moves the boxes to the right", "'Top' moves the boxes down"). §9.4.3 states a pair, "the used
