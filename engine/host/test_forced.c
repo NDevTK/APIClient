@@ -500,6 +500,11 @@ static void fixture_route_peer_post(JSContext *ctx);
    the page asks `/api/xdready` or `/api/xdmready`, after its handlers are listening, and the exploring
    session's hook routes each document's posts once. */
 static int  g_xd_ready, g_xd_routed, g_xdm_ready, g_xdm_routed;
+/* The sources each routed post mints, written when it is routed and read by the rows; empty before. */
+#define TF_DELIVERY_SRC_CAP 64
+static char g_xd_dsrc[TF_DELIVERY_SRC_CAP], g_xd_osrc[TF_DELIVERY_SRC_CAP];
+static char g_xdm1_dsrc[TF_DELIVERY_SRC_CAP], g_xdm1_osrc[TF_DELIVERY_SRC_CAP];
+static char g_xdm2_dsrc[TF_DELIVERY_SRC_CAP], g_xdm2_osrc[TF_DELIVERY_SRC_CAP];
 static void fixture_route_gadget_post(JSContext *ctx);
 
 /* ─── THE ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON: A PAIR, AND A THIRD AT ANOTHER DOOR ───
@@ -10403,14 +10408,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&xd_pin_b, &xd_pin_b_why, param_value_is(js, "/api/xdgate", "v", "xdB"),
              "NOT REACHED: the `https://b.example` arm never ran, so the negative row beside it is unarmed");
     const char *xd_sender_why = NULL; int xd_sender = 1;
-    fold_row(&xd_sender, &xd_sender_why, s_field(js, "innerHTML", MESSAGE_DATA_SRC, "\"search\":\"parked\""),
-             "the pinned arm ran and the markup sink behind it has no parked search: a finding behind an exact "
-             "origin check was dropped rather than parked on a sender");
-    fold_row(&xd_sender, &xd_sender_why,
-             s_field(js, "innerHTML", MESSAGE_DATA_SRC,
-                     "\"senderDemand\":[{\"principal\":\"" MESSAGE_ORIGIN_SRC "\",\"equals\":\"https://a.example\""),
-             "the parked search does not name `https://a.example` as the sender it waits on, so a gadget search "
-             "has no origin to look for");
+    {
+        char need[160];
+
+        snprintf(need, sizeof need, "\"senderDemand\":[{\"principal\":\"%s\",\"equals\":\"https://a.example\"",
+                 g_xd_osrc);
+        fold_row(&xd_sender, &xd_sender_why,
+                 *g_xd_dsrc && s_field(js, "innerHTML", g_xd_dsrc, "\"search\":\"parked\""),
+                 "the pinned arm ran and the markup sink behind it has no parked search under this delivery's "
+                 "data source: a finding behind an exact origin check was dropped rather than parked on a sender");
+        fold_row(&xd_sender, &xd_sender_why, *g_xd_dsrc && s_field(js, "innerHTML", g_xd_dsrc, need),
+                 "the parked search does not name `https://a.example` as the sender it waits on, through this "
+                 "delivery's origin source, so a gadget search has no origin to look for");
+    }
     const char *xd_nosink_why = NULL; int xd_nosink = 1;
     fold_row(&xd_nosink, &xd_nosink_why, !strstr(js, "\"equals\":\"https://b.example\""),
              "a sender demand names `https://b.example`, whose handler reaches no sink: a pin is recorded as a "
@@ -10418,19 +10428,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* Two deliveries, one handler: the first's pinned arm opens the state the second's sink is behind, and the
        second delivery's bytes must arrive at that sink as attacker input of their own. */
     const char *xdm_set_why = NULL; int xdm_set = 1;
-    fold_row(&xdm_set, &xdm_set_why, param_value_is(js, "/api/xdmgate", "v", "xdmSet"),
+    fold_row(&xdm_set, &xdm_set_why, param_value_is(js, "/api/xdmset", "v", "xdmSet"),
              "NOT REACHED: the first delivery's `e.data === 'xdmstep'` arm never ran, so the routed posts were "
              "not delivered or arrived concrete");
     const char *xdm_second_why = NULL; int xdm_second = 1;
-    fold_row(&xdm_second, &xdm_second_why, param_value_is(js, "/api/xdmgate", "v", "xdmSecond"),
+    fold_row(&xdm_second, &xdm_second_why, param_value_is(js, "/api/xdmsecond", "v", "xdmSecond"),
              "NOT REACHED: no timeline that set `_xdmOk` received the second delivery");
     const char *xdm_sink_why = NULL; int xdm_sink = 1;
-    fold_row(&xdm_sink, &xdm_sink_why,
-             strstr(js, "{\"sink\":\"innerHTML\",\"source\":\"" MESSAGE_DATA_SRC) != NULL,
-             "the second delivery reached the markup sink and no @S record names a message's data there: its "
-             "`e.data` read back the first delivery's pinned bytes, so one message's pin decided another's input");
+    {
+        size_t span;
+        fold_row(&xdm_sink, &xdm_sink_why, *g_xdm2_dsrc && s_record(js, "innerHTML", g_xdm2_dsrc, &span) != NULL,
+                 "the second delivery reached the markup sink and no @S record names its data source there: its "
+                 "`e.data` read back the first delivery's pinned bytes, so one message's pin decided another's "
+                 "input");
+    }
     const char *xdm_own_why = NULL; int xdm_own = 1;
-    fold_row(&xdm_own, &xdm_own_why, !param_value_is(js, "/api/xdmgate", "d", "xdmstep"),
+    fold_row(&xdm_own, &xdm_own_why, !param_value_is(js, "/api/xdmsecond", "d", "xdmstep"),
              "the second delivery's `e.data` read as `xdmstep`, the value the FIRST delivery's equality pinned: "
              "two messages shared one source identity, so one message's pin decided another's input");
     const char *bc_msg_ran_why = NULL; int bc_msg_ran = 1;
@@ -15120,8 +15133,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "xd-pin-b", xd_pin_b, "/api/xdgate", SESS_EXPLORE, xd_pin_b_why },
         { "xd-sender", xd_sender, "_xdSinkEl.innerHTML", SESS_EXPLORE, xd_sender_why, .gate = "xd-pin-a" },
         { "xd-nosink", xd_nosink, "_xdSinkEl", SESS_EXPLORE, xd_nosink_why, .reach = "xd-pin-b" },
-        { "xdm-set", xdm_set, "/api/xdmgate", SESS_EXPLORE, xdm_set_why },
-        { "xdm-second", xdm_second, "/api/xdmgate", SESS_EXPLORE, xdm_second_why, .gate = "xdm-set" },
+        { "xdm-set", xdm_set, "/api/xdmset", SESS_EXPLORE, xdm_set_why },
+        { "xdm-second", xdm_second, "/api/xdmsecond", SESS_EXPLORE, xdm_second_why, .gate = "xdm-set" },
         { "xdm-sink", xdm_sink, "_xdmSinkEl.innerHTML", SESS_EXPLORE, xdm_sink_why, .gate = "xdm-second" },
         { "xdm-own", xdm_own, "_xdmSinkEl", SESS_EXPLORE, xdm_own_why, .reach = "xdm-second" },
         { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
@@ -16551,7 +16564,7 @@ static int fixture_park_requested(void) { return g_park_requested; }
  * wraps the stamped serialization concolic rather than concretising it — which is the arm §Attacker-sources
  * is about, and the arm a same-origin stand-in would never reach. */
 static void fixture_post_from_peer(JSContext *ctx, const char *peer_doc, const char *message,
-                                   const char *origin) {
+                                   const char *origin, char *data_src, char *origin_src) {
     WorldId peer = { world_doc_intern(peer_doc), 1, 0 };
     const char *const *carried;
     const char *vector = NULL;
@@ -16610,6 +16623,9 @@ static void fixture_post_from_peer(JSContext *ctx, const char *peer_doc, const c
         snprintf(rec, rec_cap, "windowproxy.post\t%s\t%s\t%s\t*\t%s",
                  world_doc_name(world_local_doc()), vector, marks, b64);
     }
+    /* The sources this delivery mints, named by the receiving component's own function so a row reads the
+       name the engine emits. */
+    if (data_src) window_message_delivery_sources(rec, data_src, origin_src, TF_DELIVERY_SRC_CAP);
     /* THE ORIGIN TRAVELS BESIDE THE RECORD AND NEVER INSIDE IT (SECURITY.md): only the trusted zone may stamp
        one, and this function is standing in for that zone. */
     engine_route(ctx, rec, origin);
@@ -16621,7 +16637,7 @@ static void fixture_post_from_peer(JSContext *ctx, const char *peer_doc, const c
 static void fixture_route_peer_post(JSContext *ctx) {
     if (g_post_routed || g_sess != SESS_PARK) return;
     g_post_routed = 1;
-    fixture_post_from_peer(ctx, "mpeer", "tf-peer-post", "https://peer.example");
+    fixture_post_from_peer(ctx, "mpeer", "tf-peer-post", "https://peer.example", NULL, NULL);
 }
 
 /* The peer is cross-origin and is not the origin either handler gates on, so the stamped origin is the
@@ -16629,13 +16645,13 @@ static void fixture_route_peer_post(JSContext *ctx) {
 static void fixture_route_gadget_post(JSContext *ctx) {
     if (g_xd_ready && !g_xd_routed) {
         g_xd_routed = 1;
-        fixture_post_from_peer(ctx, "xpeer", "<b>xdpost</b>", "https://peer.example");
+        fixture_post_from_peer(ctx, "xpeer", "<b>xdpost</b>", "https://peer.example", g_xd_dsrc, g_xd_osrc);
     }
     /* Two records in one consultation, so every timeline appends them in post order (engine_route). */
     if (g_xdm_ready && !g_xdm_routed) {
         g_xdm_routed = 1;
-        fixture_post_from_peer(ctx, "xmpeer", "xdmone", "https://peer.example");
-        fixture_post_from_peer(ctx, "xmpeer", "<b>xdmtwo</b>", "https://peer.example");
+        fixture_post_from_peer(ctx, "xmpeer", "xdmone", "https://peer.example", g_xdm1_dsrc, g_xdm1_osrc);
+        fixture_post_from_peer(ctx, "xmpeer", "<b>xdmtwo</b>", "https://peer.example", g_xdm2_dsrc, g_xdm2_osrc);
     }
 }
 
@@ -26698,21 +26714,24 @@ static void flex_contents_splice_selftest(JSContext *ctx)
 
 /* The one pin a message selftest step made: exactly one principal carrying exactly one pin, whose origin, kind,
    algorithm and compared identity are the step's. */
+typedef struct { const char *principal; const ConcolicPrincipalPin *pin; } MessagePinTake;
 static void message_pin_take(void *user, const char *src, const ConcolicPrincipalPin *pin, int n)
 {
-    const ConcolicPrincipalPin **out = user;
+    MessagePinTake *out = user;
 
-    CHECK(!strcmp(src, MESSAGE_ORIGIN_SRC) && n == 1 && *out == NULL,
-          "a message selftest step filed its pin under a principal other than `message.origin`, or filed more "
-          "than one");
-    *out = pin;
+    CHECK(!strcmp(src, out->principal) && n == 1 && out->pin == NULL,
+          "a message selftest step filed its pin under a principal other than its delivery's origin source, or "
+          "filed more than one");
+    out->pin = pin;
 }
 
-static void message_principal_pin_is(const char *subject, int loose, const char *why)
+static void message_principal_pin_is(const char *principal, const char *subject, int loose, const char *why)
 {
-    const ConcolicPrincipalPin *pin = NULL;
+    MessagePinTake take = { principal, NULL };
+    const ConcolicPrincipalPin *pin;
 
-    CHECK(concolic_principal_pins(message_pin_take, &pin) == 1 && pin != NULL, why);
+    CHECK(concolic_principal_pins(message_pin_take, &take) == 1 && take.pin != NULL, why);
+    pin = take.pin;
     CHECK(!strcmp(pin->tok, "https://trusted.test") && pin->kind == (signed char)CONCOLIC_LIT_STRING &&
               pin->loose == loose && pin->subject && !strcmp(pin->subject, subject),
           why);
@@ -26720,19 +26739,39 @@ static void message_principal_pin_is(const char *subject, int loose, const char 
 
 static void message_source_selftest(void)
 {
+    static const char REC1[] = "windowproxy.post\ttfdoc\ttfworld\t*\tAAAA";
+    static const char REC2[] = "windowproxy.post\ttfdoc\ttfworld\t*\tAAAB";
     const char *kind = NULL, *enc;
     char prefix = 1;
+    char dsrc[64], osrc[64], d2[64], o2[64], dsrc_again[64], osrc_again[64], derived[96];
+
+    /* Each delivery is its own pair of sources, named by its record: the same record names the same pair, so
+       every timeline and a cold resume agree, and a different record names a different pair, so one message's
+       pin cannot decide another's value. */
+    window_message_delivery_sources(REC1, dsrc, osrc, sizeof dsrc);
+    window_message_delivery_sources(REC1, dsrc_again, osrc_again, sizeof dsrc_again);
+    window_message_delivery_sources(REC2, d2, o2, sizeof d2);
+    CHECK(!strcmp(dsrc, dsrc_again) && !strcmp(osrc, osrc_again),
+          "one routed record named two different source pairs — the timelines admitting it and a cold resume "
+          "rebuilding it would hold one message under several names");
+    CHECK(strcmp(dsrc, d2) && strcmp(osrc, o2) && strcmp(dsrc, osrc),
+          "two routed records, or a delivery's data and origin, share a source name — a pin on one decides the "
+          "other");
+    CHECK(!strncmp(dsrc, MESSAGE_DATA_SRC ":", strlen(MESSAGE_DATA_SRC) + 1) &&
+              !strncmp(osrc, MESSAGE_ORIGIN_SRC ":", strlen(MESSAGE_ORIGIN_SRC) + 1),
+          "a delivery's source names do not carry this component's stems");
+    snprintf(derived, sizeof derived, "String({%s})", osrc);
 
     /* THE DECLARATION, BOTH HALVES. A mechanism and an address component that disagree is a reproduction
        nobody can build from, and `cross-document-message` is the one mechanism whose payload rides no address
        at all: the attacker holds a second document open beside the victim rather than writing its URL. */
-    CHECK(concolic_source_delivery(MESSAGE_ORIGIN_SRC, &kind, &prefix) && kind
+    CHECK(concolic_source_delivery(osrc, &kind, &prefix) && kind
           && !strcmp(kind, "cross-document-message") && prefix == 0,
           "§9.3.3's `message.origin` does not declare the cross-document-message delivery — every @S finding "
           "rooted there would report as an exploit no navigation reaches, which is the silence §S(d)'s "
           "reproduction envelope reserves for a source no component carries");
     kind = NULL; prefix = 1;
-    CHECK(concolic_source_delivery(MESSAGE_DATA_SRC, &kind, &prefix) && kind
+    CHECK(concolic_source_delivery(dsrc, &kind, &prefix) && kind
           && !strcmp(kind, "cross-document-message") && prefix == 0,
           "§9.3.3's `message.data` does not declare the cross-document-message delivery — the two members a "
           "handler reads are one mechanism, and a `data` finding that could not state it would be the exact "
@@ -26742,7 +26781,7 @@ static void message_source_selftest(void)
        that declared a delivery which transforms nothing. §9.3.3 step 7's StructuredSerializeWithTransfer and
        step 8.4's StructuredDeserializeWithTransfer round-trip a string unchanged, which is why a postMessage
        breakout reproduces where the same candidate through a fragment dies on `<`. */
-    enc = concolic_source_encodes(MESSAGE_DATA_SRC);
+    enc = concolic_source_encodes(dsrc);
     CHECK(enc != NULL && *enc == 0,
           "§9.3.3's structured clone was declared to percent-encode the attacker's bytes, or to declare "
           "nothing at all — the first is false of steps 7 and 8.4 and the second is the shape a report reads "
@@ -26761,9 +26800,8 @@ static void message_source_selftest(void)
           "value the attacker WRITES is solved, and parking it on a sender drops a real PoC");
     /* …and a pin rooted at the principal is one, in the spelling every bundle writes, carrying the origin the
        sender must have. */
-    concolic_pin_store(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
-                       JS_CONCOLIC_EQ_STRICT);
-    message_principal_pin_is(MESSAGE_ORIGIN_SRC, 0,
+    concolic_pin_store(osrc, osrc, CONCOLIC_LIT_STRING, "https://trusted.test", JS_CONCOLIC_EQ_STRICT);
+    message_principal_pin_is(osrc, osrc, 0,
                              "an exact equality against `event.origin` did not record the pinned origin as the "
                              "sender a delivery must present");
     concolic_clear_pins();
@@ -26773,17 +26811,15 @@ static void message_source_selftest(void)
     /* …and a loose equality is the same demand. `if (e.origin == TRUSTED)` is a spelling real handlers write;
        two Strings go through §7.2.13 IsLooselyEqual ( x, y ) step 1 to §7.2.14, so the sender it demands is
        the one `===` demands. concolic_pin refuses the loose value and must not refuse this pin. */
-    concolic_pin_store(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
-                       JS_CONCOLIC_EQ_LOOSE);
-    message_principal_pin_is(MESSAGE_ORIGIN_SRC, 1,
+    concolic_pin_store(osrc, osrc, CONCOLIC_LIT_STRING, "https://trusted.test", JS_CONCOLIC_EQ_LOOSE);
+    message_principal_pin_is(osrc, osrc, 1,
                              "a LOOSE equality against `event.origin` did not record the pinned origin — §7.2.13 "
                              "step 1 sends two Strings to §7.2.14, so a delivery from any other origin cannot fire");
     concolic_clear_pins();
     /* The derived spelling is the same demand. `String(e.origin) === X` pins the derived identity and not the
        source, so the pin is filed under the root and names the derived identity as its subject. */
-    concolic_pin_store("String(" MESSAGE_ORIGIN_SHAPE ")", MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING,
-                       "https://trusted.test", JS_CONCOLIC_EQ_STRICT);
-    message_principal_pin_is("String(" MESSAGE_ORIGIN_SHAPE ")", 0,
+    concolic_pin_store(derived, osrc, CONCOLIC_LIT_STRING, "https://trusted.test", JS_CONCOLIC_EQ_STRICT);
+    message_principal_pin_is(osrc, derived, 0,
                              "an equality against a DERIVATION of `event.origin` did not record a pin on the "
                              "principal — the demand is about whose bytes these are, which no derivation changes");
     concolic_clear_pins();

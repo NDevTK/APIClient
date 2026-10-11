@@ -11,25 +11,22 @@
 #include "quickjs.h"
 
 /* THIS COMPONENT'S NAME, spelled once and used for both things a name is used for here: the slots it declares
-   to core/agent_state.h and the two rows it claims in solver/concolic.c's source registry. The registry's
+   to core/agent_state.h and the rows it claims in solver/concolic.c's source registry. The registry's
    give-back is keyed by it, so a declaration and a release naming two different owners is the one way that can
    go wrong — and a literal typed out five times is how it would. */
 #define WM_COMPONENT "window_message"
 
-/* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS, SPELLED ONCE. A source is TWO strings that must agree — the
-   PROVENANCE `message.data` that concolic_declare_source registers and every @S record names, and the DISPLAY
-   SHAPE `{message.data}` the @H surface prints a value as — and the shape is COMPOSED from the provenance here
-   so the pair cannot drift; solver/concolic.c asserts that composition at the mint for every declared source.
-   A consumer of either half uses these and never a literal of its own, which is the rule the deleted
-   `{hash}|{search}|{pm}|{reply}` taxonomy broke: the offscreen matched a `{pm}` shape that no component has
-   ever emitted, so live verify could build a PoC for none of these findings.
-   THEY ARE `message.*` AND NOT `postMessage.*` BECAUSE THE RECEIVER IS WHO READS THEM. What a page's handler
-   holds is a §9.1 MessageEvent, and `event.data` / `event.origin` are the two members it branches on; naming
-   them for the SENDER's method would name the one side of this that the victim's code never sees. */
+/* The stems of this component's attacker sources, spelled once. Each routed delivery is two sources of its own,
+   `<stem>:<16 hex digits>`, because two messages are two attacker inputs and a pin on one must not decide the
+   other; a source's display shape is its name in braces, which solver/concolic.c asserts at the mint. A
+   consumer uses these stems and never a literal of its own. They are `message.*` and not `postMessage.*`
+   because the receiver reads them: a handler holds a §9.1 MessageEvent and branches on `event.data` and
+   `event.origin`.
+   window_message_delivery_sources names the pair for `record` (a routed record's whole text) into
+   `data_src`/`origin_src` and declares both rows, the origin as a principal, on first sight. */
 #define MESSAGE_DATA_SRC     "message.data"
-#define MESSAGE_DATA_SHAPE   "{" MESSAGE_DATA_SRC "}"
 #define MESSAGE_ORIGIN_SRC   "message.origin"
-#define MESSAGE_ORIGIN_SHAPE "{" MESSAGE_ORIGIN_SRC "}"
+void window_message_delivery_sources(const char *record, char *data_src, char *origin_src, size_t cap);
 
 /* Installs `postMessage` on the global and mints this navigable's one WindowProxy. `origin` is this document's
    serialized origin — the value every message this window sends carries as `event.origin`, and the one a
@@ -52,12 +49,14 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
    js_window_post agree rather than differ: the local branch enqueues the delivery task in this instance, and
    the remote branch emits a transport notice whose task is enqueued HERE, in the instance that holds
    targetWindow — which is the event loop step 8 names. Neither branch fires the event at the call. */
-void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const char *sender_origin,
-                                   const char *target_origin, const uint8_t *bytes, size_t len);
+void window_message_deliver_remote(JSContext *ctx, const char *record, const char *sender_doc,
+                                   const char *sender_origin, const char *target_origin, const uint8_t *bytes,
+                                   size_t len);
 /* THE WIRE HALF of the above: take apart the part of a routed `windowproxy.post` record that belongs to this
    file (`<targetOrigin>\t<base64>`) and deliver it. The transport's own fields — which instance, whose world —
    are the router's and are already consumed by the time this is called. One reader, beside the writer. */
-void window_message_route(JSContext *ctx, const char *tail, const char *sender_doc, const char *sender_origin);
+void window_message_route(JSContext *ctx, const char *record, const char *tail, const char *sender_doc,
+                          const char *sender_origin);
 void window_message_free(JSRuntime *rt);
 
 

@@ -2721,7 +2721,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
         int jobs0 = flow_job_pending(f);
         flow_job_external_begin();
         if (!strcmp(dup, "windowproxy.post"))
-            window_message_route(rctx, tail, world_doc_name(w.doc), origin);
+            window_message_route(rctx, record, tail, world_doc_name(w.doc), origin);
         else
             DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
                   "receiving half is the unbuilt one; build it rather than dropping the delivery");

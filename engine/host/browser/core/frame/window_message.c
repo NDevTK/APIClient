@@ -97,7 +97,11 @@ static int     g_deliver_stepid = -1;   /* §9.3.3's queued delivery task, as a 
    the two are separate fields, and the short of it is that the routing refusal below names a MessagePort and
    an ArrayBuffer as what to build, which is the wrong diagnosis for a concolic. It is APPENDED, because this
    enum is the only speller of these positions and PQ_N is derived from it. */
-enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_ROUTED, PQ_SYMBOLS, PQ_N };
+/* PQ_DATA_SRC is the attacker-source name this delivery's `data` is minted under, or null for a message whose
+   sender is this agent. window_message_deliver_remote decides it where the stamp is in hand, so the task reads
+   that decision rather than re-deriving it from the origin it carries. */
+enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_ROUTED, PQ_SYMBOLS, PQ_DATA_SRC,
+       PQ_N };
 
 /* READ, NEVER DEFAULTED. A `JS_ToBool` over whatever came back would turn "the producer stopped writing this"
    into the perfectly plausible answer `false`, and the census would then quietly describe none of the routed
@@ -284,8 +288,26 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
            THE ARRIVED VALUE IS THE EXAMPLE, so §Attacker-sources' one-value rule holds here as everywhere: the
            handler's `if (e.data.type === "resize")` forks BOTH arms — which is what reaches the gated code —
            while the arm the real message took keeps the bytes that peer actually sent. */
-        if (concolic_is(sender_origin) && !JS_IsException(data))
-            data = concolic_source_wrap(tctx, MESSAGE_DATA_SHAPE, MESSAGE_DATA_SRC, data);
+        {
+            JSValue dsrc = JS_GetPropertyUint32(ctx, entry, PQ_DATA_SRC);
+
+            DCHECK(JS_IsNull(dsrc) || JS_IsString(dsrc),
+                   "a queued window message carries a data-source slot that is neither a source name nor null — "
+                   "both halves of this file write it where they build the entry");
+            if (JS_IsString(dsrc) && !JS_IsException(data)) {
+                const char *name = JS_ToCString(ctx, dsrc);
+                char *shape;
+
+                CHECK(name != NULL, "window message: OOM reading a delivery's data-source name");
+                shape = malloc(strlen(name) + 3);
+                CHECK(shape != NULL, "window message: OOM composing a delivery's data-source shape");
+                sprintf(shape, "{%s}", name);
+                data = concolic_source_wrap(tctx, shape, name, data);
+                free(shape);
+                JS_FreeCString(ctx, name);
+            }
+            JS_FreeValue(ctx, dsrc);
+        }
         /* §9.1's `lastEventId`, which §9.3.3's window post message steps do not set — steps 8.2 and 8.3 name
            `data`, `origin` and `source`, so the member keeps the empty string its IDL gives it. Minted once,
            before the branch, because it is the same fact on both arms; stated at the call rather than
@@ -491,8 +513,42 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
  * — and installs the SENDING world's segment, which is the same answer for a document whose state is baseline.
  * What both owe is the same one thing: the world installed must be one in which the receiving document's
  * listeners exist, and neither this function nor any local check can decide that. */
-void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const char *sender_origin,
-                                   const char *target_origin, const uint8_t *bytes, size_t len)
+/* The attacker sources one routed delivery mints (see window_message.h): `message.data:<id>` and
+   `message.origin:<id>`, where <id> is FNV-1a 64 over the routed record's text, so every timeline admitting the
+   record, a cold resume rebuilding it and a later session all name the same delivery the same way, and two
+   deliveries never share a pin. Declared on first sight and given back with this component's claims.
+   The encode set is empty: §9.3.3 step 7 hands the message to StructuredSerializeWithTransfer and step 8.4
+   takes it back through StructuredDeserializeWithTransfer, neither of which transforms a string. The origin is
+   a principal and the data is not: the attacker writes `data` and merely owns `origin` (§9.3.2.1 "Authors",
+   §9.3.2.2 "User agents"), so a pin on the origin demands a sender (concolic_declare_source_principal).
+   Named residual. Not covered: two records with identical text (one sender timeline posting the same bytes
+   twice) share a name. Next diff builds: the per-record id engine.c's routed-record ledger names as its own
+   residual, carried with the record, hashed here in place of the text. Absence shows as: a handler's second
+   identical message reading the first one's pinned value. */
+void window_message_delivery_sources(const char *record, char *data_src, char *origin_src, size_t cap)
+{
+    uint64_t h = 1469598103934665603ull;
+    const unsigned char *p;
+    int nd, no;
+
+    DCHECK(record != NULL && *record && data_src != NULL && origin_src != NULL,
+           "a routed delivery's sources were named from no record or into no room");
+    for (p = (const unsigned char *)record; *p; p++) { h ^= *p; h *= 1099511628211ull; }
+    nd = snprintf(data_src, cap, MESSAGE_DATA_SRC ":%016llx", (unsigned long long)h);
+    no = snprintf(origin_src, cap, MESSAGE_ORIGIN_SRC ":%016llx", (unsigned long long)h);
+    CHECK(nd > 0 && (size_t)nd < cap && no > 0 && (size_t)no < cap,
+          "window message: a delivery's source names did not fit their room");
+    if (!concolic_source_declared_by(WM_COMPONENT, data_src))
+        concolic_declare_source(WM_COMPONENT, data_src, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
+    if (!concolic_source_declared_by(WM_COMPONENT, origin_src)) {
+        concolic_declare_source(WM_COMPONENT, origin_src, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
+        concolic_declare_source_principal(WM_COMPONENT, origin_src);
+    }
+}
+
+void window_message_deliver_remote(JSContext *ctx, const char *record, const char *sender_doc,
+                                   const char *sender_origin, const char *target_origin, const uint8_t *bytes,
+                                   size_t len)
 {
     JSValue entry, buf, target, source;
 
@@ -561,9 +617,15 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
      * bytes. */
     if (origin_is_serialized_tuple(origin_agent(), sender_origin)) {
         JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, sender_origin));
+        JS_SetPropertyUint32(ctx, entry, PQ_DATA_SRC, JS_NULL);
     } else {
-        JSValue org = concolic_source_wrap(ctx, MESSAGE_ORIGIN_SHAPE, MESSAGE_ORIGIN_SRC,
-                                           JS_NewString(ctx, sender_origin));
+        char dsrc[64], osrc[64], oshape[68];
+        JSValue org;
+
+        window_message_delivery_sources(record, dsrc, osrc, sizeof dsrc);
+        snprintf(oshape, sizeof oshape, "{%s}", osrc);
+        org = concolic_source_wrap(ctx, oshape, osrc, JS_NewString(ctx, sender_origin));
+        JS_SetPropertyUint32(ctx, entry, PQ_DATA_SRC, JS_NewString(ctx, dsrc));
         /* A CONFORMANCE HOST HAS NO SOURCE OVERLAY and gets the string back unchanged (solver/concolic.h), so
            this line is not a fork in behaviour — it is the same delivery with the solver's half added where
            the solver is installed. What it must never be is UNDEFINED: that would be the one field every
@@ -590,7 +652,8 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
    this is where they are taken apart. A host that split them itself was the second half of the format, written
    where nothing can check it against the writer, and both hosts that had one had written a different one.
    `tail` is `<targetOrigin>\t<base64>`. */
-void window_message_route(JSContext *ctx, const char *tail, const char *sender_doc, const char *sender_origin)
+void window_message_route(JSContext *ctx, const char *record, const char *tail, const char *sender_doc,
+                          const char *sender_origin)
 {
     const char *b64;
     char *want;
@@ -612,7 +675,7 @@ void window_message_route(JSContext *ctx, const char *tail, const char *sender_d
     blen = JS_Base64Decode(bytes, cap, b64, b64n, &err);
     CHECK(err == 0, "a routed message did not survive the text channel it crossed — the bytes the peer sent and "
                     "the bytes this instance decoded are not the same message");
-    window_message_deliver_remote(ctx, sender_doc, sender_origin, want, bytes, blen);
+    window_message_deliver_remote(ctx, record, sender_doc, sender_origin, want, bytes, blen);
     free(bytes);
     free(want);
 }
@@ -835,6 +898,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
        the message and returns), and the peer's own window_message_deliver_remote sets the slot true where it
        rebuilds the entry from the wire. */
     JS_SetPropertyUint32(ctx, entry, PQ_ROUTED, JS_FALSE);
+    JS_SetPropertyUint32(ctx, entry, PQ_DATA_SRC, JS_NULL);   /* this agent's own post: the app's value */
     structured_with_transfer_free(ctx, &swt);
 
     /* THE RESOLVED TARGET, not this window. A task in THIS instance can only deliver to a navigable this
@@ -914,22 +978,7 @@ void window_message_init(JSContext *ctx)
        declaration would have overwritten the callee below with nothing left holding the first — the exact leak
        the paragraph under this one records, arriving by the other door. */
     DCHECK(g_id_post < 0, "window_message_init ran twice — §9.3.3's declaration is made once per AGENT");
-    /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS. A source's browser delivery is a fact about the COMPONENT
-       and not about a document, so it is declared here with the member and not in the per-realm install — the
-       same placement core/frame/location.c states for its own two, and the reason a second same-origin
-       document does not re-declare.
-       THE ENCODE SET IS EMPTY, AND THAT IS A MEASURED FACT RATHER THAN AN UNFILLED COLUMN. §9.3.3 step 7 hands
-       the message to StructuredSerializeWithTransfer and step 8.4 takes it back through
-       StructuredDeserializeWithTransfer; neither transforms a string, so the bytes the attacker writes are the
-       bytes the handler reads. That is the whole reason a postMessage breakout reproduces where the same
-       candidate through `location.hash` dies on the fragment set encoding `<`.
-       AND THE ORIGIN IS A PRINCIPAL, WHICH THE DATA IS NOT — the difference §9.3.2.1 "Authors" tells a page to
-       rely on and §9.3.2.2 "User agents" says the API's integrity rests on. The attacker WRITES `data` and
-       merely OWNS `origin`, so an equality gate on the first is solved and one on the second demands a sender
-       at the pinned origin (solver/concolic.h, concolic_declare_source_principal). */
-    concolic_declare_source(WM_COMPONENT, MESSAGE_DATA_SRC, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
-    concolic_declare_source(WM_COMPONENT, MESSAGE_ORIGIN_SRC, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
-    concolic_declare_source_principal(WM_COMPONENT, MESSAGE_ORIGIN_SRC);
+    /* This component's attacker sources are declared per routed delivery (window_message_delivery_sources). */
     g_deliver_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_window_deliver_def);
     DCHECK(g_deliver_stepid >= 0, "§9.3.3's delivery machine could not be declared against this runtime");
     g_deliver_fn = JS_NewCFunction2(ctx, NULL, "", 2, JS_CFUNC_step, g_deliver_stepid);
@@ -971,10 +1020,9 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
    which is also what puts it on core/platform.h's release column instead of in each host's own teardown. */
 void window_message_free(JSRuntime *rt)
 {
-    /* THE TWO SOURCE CLAIMS, GIVEN BACK. They are rows in solver/concolic.c's registry whose STORAGE is that
-       component's array and whose CLAIM is this one's, so this release removes exactly this component's rows
-       and concolic_free asserts, at the solver's own release, that nothing is left — which is what makes that
-       assert a statement about the claimants rather than a wipe that covers for one. */
+    /* THE SOURCE CLAIMS, GIVEN BACK, two per routed delivery. They are rows in solver/concolic.c's registry
+       whose storage is that component's array and whose claim is this one's, so this release removes exactly
+       this component's rows and concolic_free asserts, at the solver's own release, that nothing is left. */
     concolic_undeclare_sources(WM_COMPONENT);
     JS_FreeValueRT(rt, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;
