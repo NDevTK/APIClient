@@ -78,7 +78,12 @@ const facts = topLevelFactFields(url, 'none');
 /* THE DOCUMENT NAME IS THIS FILE'S OWN CONSTANT AND NOT THE ADDRESS. `abi_main` refuses an empty one and
    `abi_paint` composes the image's FILE NAME out of it, so a name derived from a URL would put a caller's
    address into a path. One instance, one name. */
-const rec = ['document', url, 'one_document', b64(headers), bytes.toString('base64'), ...facts, '0'].join('\t');
+/* The last two fields are test_forced.c's `abi_main` tail: the peer reference (`0`, no other agent holds a
+   WindowProxy for this document) and the arrival word, solver/engine.h's `<provenance>,<drive mark>,<witness
+   mark>` that `engine_arrival_of_token` CHECKs. A document a person names on the command line is the seed
+   trusted.mjs opens as OBSERVED_DOC: observed, not driven, not pinned. */
+const rec = ['document', url, 'one_document', b64(headers), bytes.toString('base64'), ...facts, '0',
+             'observed,undriven,unpinned'].join('\t');
 
 const paint = outDir !== '-';
 if (paint) mkdirSync(outDir, { recursive: true });
