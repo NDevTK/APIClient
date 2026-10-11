@@ -1376,8 +1376,9 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    Send-panel record (safeFetchStatedShape), whose Origin and Referer replace the identity's on every rule of
    the send. A request with no identity runs `send` as this extension, uncredentialed.
    Named residual. Not covered: a credentialed send's reply Set-Cookie, which the identity's own request would
-   store in its jar and this send stores nowhere. Next diff stores it there through a route that reads this
-   extension's own reply headers; webRequest reports none of the offscreen document's requests. Its absence
+   store in its jar and this send stores nowhere. Next diff stores it there through webRequest's
+   onHeadersReceived, which reports the offscreen document's replies under a permission this extension does
+   not hold. Its absence
    shows as a server that rotates a token on a tool-sent credentialed request leaving the person's next own
    request presenting the retired value. */
 async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
@@ -1815,12 +1816,12 @@ async function safeFetch(url, opts) {
         "the reply would be CORS-checked as two different requesters");
   /* Named residual, a platform limit. Not covered: a redirect hop of a send that speaks as an identity, which
      Fetch §4.5 "HTTP-redirect fetch" and HTML §7.4.5 send with the request's destination, mode and referrer
-     policy, and a Referer and Cookie recomputed for the new URL. In MV3 this document cannot read a redirect's
-     Location or headers (`redirect: "manual"` answers an opaqueredirect with none) and webRequest reports none
-     of its requests, so a speak-as rule cannot name the hop and it goes out as this extension, uncredentialed.
-     The route that closes it is the debugger permission, which this extension does not take (SECURITY.md). Its
-     absence shows as a redirected document loaded logged out, its hop sent `Sec-Fetch-Mode: cors` with no
-     Referer. */
+     policy, and a Referer and Cookie recomputed for the new URL. This document cannot read a redirect's
+     Location or headers (`redirect: "manual"` answers an opaqueredirect with none), so a speak-as rule cannot
+     name the hop and it goes out as this extension, uncredentialed. Next diff follows each hop in the zone: a
+     per-send declarativeNetRequest block on the 3xx and webRequest's Location, under a permission this
+     extension does not hold (SECURITY.md). Its absence shows as a redirected document loaded logged out, its
+     hop sent `Sec-Fetch-Mode: cors` with no Referer. */
   var init = { method: _method, credentials: "omit", redirect: "follow" };
   /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
      for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
@@ -1897,14 +1898,21 @@ async function safeFetch(url, opts) {
   /* Network: SSRF via redirect. The initial check cannot see a 3xx into the intranet, so the landed host is
      re-judged before the body is read, and a request that landed on a host less public than its page never
      feeds internal data into the analysis. Local Network Access and CORS both refuse this in a browser. Without
-     a redirect `_finalUrl` is `parsed` and this re-asks the same question. */
+     a redirect `_finalUrl` is `parsed` and this re-asks the same question. The record keeps the requested URL
+     alone: Fetch §2.2.6 gives a network error the empty URL list, its consumers read the request's URL off
+     this one, and the landed private address, which a network error never exposes, stays out of it. */
   var _landedSpace = _ipAddressSpace(_finalUrl.hostname);
   if (_lessPublicThan(_landedSpace, _pageSpace))
     return _refused("network", "blocked-local-network-redirect:" + _landedSpace + "-from-" + _pageSpace,
                     [parsed.href], {});
-  /* The deny list again, on the landed URL. The redirect has already been followed, so this cannot unsend
-     anything; it refuses to ingest. Following a redirect the server chose is the server's behaviour, and the
-     act this list guards is initiating the request, which the pre-request check decided. */
+  /* The deny list again, on the landed URL. The redirect has already been followed, so this refuses to
+     ingest. The floor held before the hop: a credentialed send's Cookie is set by a speak-as rule naming its
+     exact URL and this fetch omits credentials, so the hop went out without the session, which the list
+     permits before the wire too.
+     Named residual: a hop onto a URL another in-flight speak-as send names carries that send's Cookie. Next
+     diff follows each hop in the zone (see the speak-as hop residual above), so every gate runs before the hop
+     is sent. Its absence shows as a hop arriving with an identity's Cookie at a URL no request of that
+     identity named. */
   if (credentialed && provenance !== "observed") {
     /* Decline even though the request went out: the server answered, and a network error would say it did
        not. Refusing to ingest is a decline on either side of the wire. */
