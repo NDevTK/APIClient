@@ -312,6 +312,50 @@ static void witness_free(Witness *w) {
 
 /* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same
    statement and is freed, anything else is one more. `*w` is empty afterwards either way. */
+/* One record's `witness` value (endpoint.h): an array with one element per distinct sighting witness, `null`
+   for a sighting no flow stood at, else the array of its entries. */
+static void witness_json(JsonBuf *b, const Endpoint *e) {
+    DCHECK(e->nwit >= 1, "an @H record carries no sighting witness — every mint and merge files one");
+    json_buf_raw(b, "[");
+    for (int i = 0; i < e->nwit; i++) {
+        const Witness *w = &e->wit[i];
+        if (i) json_buf_raw(b, ",");
+        if (!w->asked) {
+            DCHECK(w->n == 0, "a witness no flow stood at carries entries");
+            json_buf_raw(b, "null");
+            continue;
+        }
+        json_buf_raw(b, "[");
+        for (int j = 0; j < w->n; j++) {
+            const WitEntry *x = &w->e[j];
+            if (j) json_buf_raw(b, ",");
+            json_buf_raw(b, "{");
+            switch (x->what) {
+            case WIT_PIN:
+                json_buf_key(b, "source"); json_buf_str(b, x->subject);
+                json_buf_raw(b, ","); json_buf_key(b, "value"); json_buf_str(b, x->value);
+                json_buf_raw(b, ","); json_buf_key(b, "kind"); json_buf_str(b, concolic_lit_report_name(x->kind));
+                break;
+            case WIT_BRANCH:
+                json_buf_key(b, "decision"); json_buf_str(b, x->subject);
+                json_buf_raw(b, ","); json_buf_key(b, "taken"); json_buf_raw(b, x->taken ? "true" : "false");
+                break;
+            case WIT_OUTCOME: {
+                char num[16];
+                int wrote = snprintf(num, sizeof num, "%d", x->taken);
+                CHECK(wrote > 0 && (size_t)wrote < sizeof num, "endpoint: a completion index did not fit");
+                json_buf_key(b, "decision"); json_buf_str(b, x->subject);
+                json_buf_raw(b, ","); json_buf_key(b, "completion"); json_buf_raw(b, num);
+                break;
+            }
+            }
+            json_buf_raw(b, "}");
+        }
+        json_buf_raw(b, "]");
+    }
+    json_buf_raw(b, "]");
+}
+
 static void endpoint_witness_add(Endpoint *e, Witness *w) {
     for (int i = 0; i < e->nwit; i++)
         if (witness_same(&e->wit[i], w)) { witness_free(w); w->asked = 0; return; }
@@ -2783,6 +2827,8 @@ char *endpoint_json_array(void) {
            every build. */
         json_buf_raw(&b, ","); json_buf_key(&b, "witnessClass");
         json_buf_str(&b, endpoint_witness_class_token(e->witness_class));
+        json_buf_raw(&b, ","); json_buf_key(&b, "witness");
+        witness_json(&b, e);
         /* And the operand the address class was derived from, which none of the four columns above publishes:
          * `addressClass` says the run held an unknown somebody outside this engine supplied, and only this says
          * which component carried the bytes in, so it is the per-row observation a reader checks the whose

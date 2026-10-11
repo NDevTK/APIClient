@@ -370,9 +370,9 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    array and not a document because result.h composes the document. Record keys:
      `method`; `url` (the path shape); `bodyMime` with one of `bodyBase64`, `bodyShape` or
        `bodyExampleBase64` (see EndpointBodyKind); `provenance` (`observed`|`derived`|`forced`); `door`;
-       `mintedAt` (`pre-program`|`post-program`); `addressClass`; `razorClass`; `witnessClass`; `addressRoot`
-       (null for a `concrete` address, false when the value has no root, else the root's name); `params`;
-       and `headers` (an object, present only when some header was seen).
+       `mintedAt` (`pre-program`|`post-program`); `addressClass`; `razorClass`; `witnessClass`; `witness`
+       (below); `addressRoot` (null for a `concrete` address, false when the value has no root, else the
+       root's name); `params`; and `headers` (an object, present only when some header was seen).
    Every class key is always present, since its words are exhaustive. `provenance` is the record's, its grade
    being part of the identity: `derived` is the headline claim (the app's code computes a request no session
    sent), `observed` a real load of the document, and `forced` an address that exists only because a gate was
@@ -380,7 +380,22 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    `url`: extension/lib/learn.js mints `{path_*}` holes from live traffic into addresses it reads `concrete`
    for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
    composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
-/* Each param: `name`; `location` (`path`|`query`|`body`, which is what the reviewer replays it with);
+/* `witness` is what the flows that reached this record assumed: an array with one element per distinct
+   sighting witness, never a union of two (a union would state a combination no flow assumed), and never
+   empty. An element is `null` for a sighting no flow stood at (`witnessClass` `unasked`), else an array,
+   possibly empty, of the minting flow's assumptions at the act, sorted by kind and then text:
+     `{source, value, kind}` per pin in its constraint, the source path, the operand the page's own `===`
+       determined it to be (its ToString) and that operand's type, as in `looselyEquals`;
+     `{decision, taken}` per branch whose taken arm contradicted the flow's own example and pinned nothing,
+       the condition's display shape and its ToBoolean on that path;
+     `{decision, completion}` per native operation whose real completion was contradicted, spelled
+       `op(operand)`, with the index of the completion the operation's machine declared and the flow took.
+   A decision states the arm taken and never a value satisfying it; @H invents none.
+   Named residual. Not covered: a forced arm whose predicate has no identity this engine can spell, a
+   declined request's failure arm and a modelled close request mark the path forced and file no decision.
+   Next diff: a decision row for each, keyed by the act's own name. How its absence shows: a `forced` row
+   whose every witness element is an empty array. */
+/* Each param:`name`; `location` (`path`|`query`|`body`, which is what the reviewer replays it with);
    `valueClass`; `validValues`; and the optional domain keys below. `valueClass` is `unknown` when some
    observed path minted the param from a value the code did not compute, else `concrete` (the address's two
    older words; a param value has no pinned-and-held population for a third). It is always present and merges
