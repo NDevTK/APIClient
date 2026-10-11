@@ -301,17 +301,15 @@ static void acct_unref(FlowAcct *a) {
     while (a && --a->refcount <= 0) {
         FlowAcct *up = a->up;
         DCHECK(a->owner == NULL,
-               "a fork-tree node was freed while the flow it accounts for is still in the frontier — that "
-               "flow holds a reference of its own, so a zero here means the reference was dropped twice and "
-               "that flow's next departure charges through freed memory");
+               "a fork-tree node was freed while the flow it accounts for is still in the frontier — that flow holds "
+               "a reference of its own, so the reference was dropped twice");
         /* A branch bucket's totals outlive the bucket, folded here so the census's burn identity stays exact: a
            node with `branch == self` reaching zero means nothing in its subtree is live. This is also where
            `branch` is shown not to dangle: every live member's `branch` names a node on its own ancestry path,
            which acct_compress_dead keeps, so a bucket freed here has no live member naming it. */
         DCHECK(a->branch != NULL,
-               "a fork-tree node reached its free with no branch bucket — flow_new is the only mint and it "
-               "points every node at one, so this node was built somewhere else and the thread time charged "
-               "through it has been accounted to nobody");
+               "a fork-tree node reached its free with no branch bucket — flow_new, the only mint, points every node "
+               "at one, so this node was built somewhere else");
         if (a->branch == a) g_branch_retired_us += a->sub_us;
         free(a);
         g_acct_live--;
@@ -484,13 +482,11 @@ static int acct_vt_leads(void) {
 static void frontier_vt_serve(const Flow *f) {
     double v;
     DCHECK(f != NULL && f->family != NULL,
-           "the frontier's clock was asked to follow a flow that owns no account — a departed flow cannot be "
-           "the item in service, and taking its coordinate would drop the clock to zero and bury every member "
-           "that has never been served underneath the whole frontier");
+           "the frontier's clock was asked to follow a flow that owns no account — a departed flow cannot be the "
+           "item in service");
     DCHECK(f->family->placed,
-           "the frontier's clock was asked to follow an account that is still reading the clock — the two "
-           "would define each other, so this is a dispatch that installed a flow without stamping its account "
-           "first (see flow_set_running, which does both in one operation and in that order)");
+           "the frontier's clock was asked to follow an account that still reads the clock — the dispatch must stamp "
+           "the account before installing the flow, as flow_set_running does");
     /* The reward, not the queue weight: the queue weight carries the server's own aging, grown by the whole
        family's thread time, so a coordinate sampled from it would charge every newcomer for the leader's debt, and a
        member given nothing owes nothing. The coordinate a newcomer arrives at is what the frontier has earned. */
@@ -512,10 +508,9 @@ static void frontier_vt_serve(const Flow *f) {
        arrive underneath a member they are entitled to tie, silently, for the rest of the session. It catches a
        fourth writer of a reward. O(members) and dev-only, as flow_is_min_weight, and paid once per emission rather
        than per pick. */
-    DCHECK(acct_vt_leads(), "an account stands at a reward ABOVE the frontier's clock — the clock is the "
-           "coordinate every newcomer and every unplaced account is ranked at, so a leader the clock does not "
-           "know about means arrivals are entering BELOW a member they are entitled to tie, permanently and "
-           "with no row saying so. A reward was written by a site that did not serve the clock");
+    DCHECK(acct_vt_leads(), "an account stands at a reward above the frontier's clock — the clock must be the "
+                            "maximum coordinate any account stands at, so a site wrote a reward without serving the "
+                            "clock");
     /* And moving the clock is a rank change, raised at the writer: this value is a term of every unplaced account's
        weight, and the preempt hook's rival cache is correct only if every such move arrives through the frontier
        generation (engine.c: "the eligible set the hook ranks against is the same one the pick used"). Raised on
@@ -539,16 +534,14 @@ static double acct_family_val(const Flow *f) {
        discards a ledger rather than one where it is empty. */
     if (!f->family) return 0.0;                                     /* departed: its node is gone, so is its rank */
     DCHECK(f->family->placed || f->family->earned == 0.0,
-           "an account that has never held the thread has been credited with an emission — only the running "
-           "flow is credited and a dispatch is what places an account, so either a detector credited a flow "
-           "that is not in service or an account was placed and then un-placed, and this account's reward is "
-           "now the frontier's clock plus a ledger the clock knows nothing about");
+           "an account that has never held the thread was credited an emission — only the running flow is credited "
+           "and a dispatch places its account, so a detector credited a flow not in service or an account was "
+           "un-placed");
     return (f->family->placed ? f->family->base : frontier_vt()) + f->family->earned;
 }
 
 double flow_reward(const Flow *f) {
-    DCHECK(f != NULL, "the WFQ's reward term was asked of no flow — a reward belongs to a fork family and a "
-                      "flow is how one is reached, so there is no family here for this to be the reward of");
+    DCHECK(f != NULL, "the WFQ's reward term was asked of no flow");
     return acct_family_val(f);
 }
 
@@ -563,9 +556,8 @@ double flow_reward(const Flow *f) {
    the tag. */
 void flow_restore_reward(Flow *f, double val) {
     DCHECK(f != NULL && f->acct != NULL && f->family == f->acct && f->acct->up == NULL,
-           "a rebuilt flow's parked reward was written through a fork family it does not own — a resume founds "
-           "its own account, so a joined tag here re-places every live arm of another family at a reward that "
-           "belongs to one parked recipe");
+           "a rebuilt flow's parked reward was written through a fork family it does not own — a rebuilt flow founds "
+           "its own account, and writing through a joined tag would re-place every arm of another family");
     DCHECK(val == val && val >= 0.0 && val < 1e300,
            "a parked reward came back as something the WFQ cannot order by — a NaN compares false in both "
            "directions, so the resumed frontier's order would fall back on registry position");
@@ -762,10 +754,8 @@ void  flow_set_running(Flow *f) {
         f->family->base   = frontier_vt();
         f->family->placed = 1;
         DCHECK(flow_queue_weight(f) == w,
-               "freezing the frontier's clock into an account's tag moved the flow's queue coordinate — an "
-               "unplaced account's reward IS that clock, so the stamp must be exact; a dispatch has just "
-               "re-ranked the member the WFQ picked, and the comparison that picked it was about a weight this "
-               "flow no longer carries");
+               "freezing the frontier's clock into an account's tag moved the flow's queue coordinate — an unplaced "
+               "account's reward is that clock, so the stamp must leave the weight the pick compared unchanged");
     }
     g_running = f;
     /* The clock is not moved here. Serving the clock at a dispatch sets it to the winner's own queue coordinate,
@@ -808,9 +798,8 @@ void flow_credit_emit(double v) {
     /* One emission is one point, the unit the aging term's exchange rate is stated in. A credit of zero or less
        would reset a flow's aging without changing its rank, the one way a monopolizer could refresh its lead
        without producing anything, so the sign is asserted where the reward enters. */
-    DCHECK(v > 0.0, "a flow was credited a non-positive emission — the WFQ's reward term counts NEW @H/@S "
-                    "findings at one point each, and a zero credit resets the aging that outranks a monopolizer "
-                    "while adding nothing to weigh it against");
+    DCHECK(v > 0.0, "a flow was credited a non-positive emission — the reward term counts new @H/@S findings at one "
+                    "point each, and a zero credit would reset the aging without adding reward");
     /* The offer, counted before the one test that can refuse it, so the two arms below partition the total. */
     g_credit_calls++;
     /* And the arm with nobody to pay. Not an error, so no assert: a detector reached on host time (the root
@@ -822,9 +811,8 @@ void flow_credit_emit(double v) {
        many times as the bundle branches against a debit charged once. A running flow is a member and owns its
        account, so a NULL family here is a flow credited after it left. */
     DCHECK(g_running->family != NULL,
-           "the flow holding the thread belongs to no fork family, so there is nothing for this emission to be "
-           "credited to — a departed flow was left running, and the reward this finding is worth is about to "
-           "be dropped on the floor while the detector reports it as recorded");
+           "the flow holding the thread belongs to no fork family — a departed flow was left running, and this "
+           "emission has no account to be credited to");
     DCHECK(g_running->family->placed,
            "the flow holding the thread belongs to an account that has never been dispatched — a dispatch is "
            "what places an account and this credit is being made from inside one, so the two writers of that "
@@ -925,27 +913,22 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
     double frac;
 
     DCHECK(f != NULL,
-           "an @S candidate's runway position was recorded against no flow — the fraction is a reading of ONE "
-           "flow's progress along ITS OWN recorded path, so a caller with no flow measured somebody else's");
+           "an @S candidate's runway position was recorded against no flow — the fraction is one flow's progress "
+           "along its own recorded path");
     DCHECK(f->cand_payload != NULL,
-           "a runway position was recorded for a flow carrying no payload — the runway is the approach to a "
-           "candidate's own source read, so a flow with no payload has no source read to be approaching and "
-           "would rank above every exploration flow on a measurement of nothing. The population is the caller's "
-           "to state, not this function's to sniff: decide.c asks the question only of a candidate");
+           "a runway position was recorded for a flow carrying no payload — the runway approaches a candidate's own "
+           "source read, and decide.c asks it only of a candidate");
     DCHECK(total > 0 && consumed >= 0 && consumed <= total,
-           "an @S candidate's runway position is not a position on its own path — `consumed` is the arms this "
-           "run has REPLAYED and `total` the recorded path they are a prefix of, so a value outside [0,total] "
-           "is a numerator taken from one flow and a denominator from another, and the fraction it makes enters "
-           "the weight beside an optimism term whose entire range is 1.0");
+           "an @S candidate's runway position is outside [0, total] — `consumed` is the arms this run replayed and "
+           "`total` the recorded path they are a prefix of, so the two came from different flows");
     /* Past the delivery this rung is pinned and may not be written, the ladder's own rule: the source read is
        behind this flow, and a live fraction would rank a delivered candidate whose recorded path runs on past its
        source read below an undelivered one that consumed all of its own. Asserted rather than skipped, because
        reaching here in that state means dec_replay still consumes arms for a flow whose delivery is recorded. */
     if (f->cand_rung >= FLOW_RUNG_DELIVERED) {
         DCHECK(f->cand_replay == 1.0,
-               "a delivered @S candidate's runway rung is not pinned — flow_observe_rung pins it at the "
-               "delivery because past the source read the runway is not the question, so an unpinned value "
-               "here is that pin having been missed and the ladder's bottom two bands now overlap");
+               "a delivered @S candidate's runway fraction is not pinned at 1.0 — flow_observe_rung pins it at the "
+               "delivery, so the pin was missed and the ladder's bottom two bands overlap");
         return;
     }
     /* The triple describes one sample, asserted on the way in. Below the delivery the fraction is exactly the
@@ -954,10 +937,8 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
        past the delivery the fraction is a policy and the pair the last observation, which may differ (see the
        field). */
     DCHECK((f->cand_replay_of == 0) == (f->cand_replay == 0.0),
-           "an @S candidate's runway fraction and the pair it was computed from disagree about whether any "
-           "reading has ever been taken — `of == 0` is this flow's word for 'never observed' and so is a zero "
-           "fraction, so one of the two was written without the other and the report would state that a replay "
-           "consumed nothing about a flow the comparator is already ranking as having moved");
+           "an @S candidate's runway fraction and its arm pair disagree about whether a reading was ever taken — `of "
+           "== 0` and a zero fraction both mean never observed, so one was written without the other");
     DCHECK(f->cand_replay_of == 0 ||
            f->cand_replay == (double)f->cand_replay_arms / (double)f->cand_replay_of,
            "an @S candidate's runway fraction is not the division of the pair stored beside it — the three are "
@@ -980,16 +961,14 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
 
 void flow_observe_survival(Flow *f, double frac) {
     DCHECK(f != NULL,
-           "an @S candidate's surviving fraction was recorded against no flow — the distance is a fact about "
-           "ONE flow's own payload, so a caller with no flow measured somebody else's bytes");
+           "an @S candidate's surviving fraction was recorded against no flow — the distance is a fact about one "
+           "flow's own payload");
     DCHECK(frac >= 0.0 && frac <= 1.0,
-           "an @S candidate's surviving fraction is not a fraction — it is the surviving run over the payload's "
-           "own length, so a value outside [0,1] is a run measured against a denominator that is not this "
-           "candidate's, and it enters the weight beside an optimism term whose entire range is 1.0");
+           "an @S candidate's surviving fraction is outside [0, 1] — it is the surviving run over the payload's own "
+           "length, so it was measured against another denominator");
     DCHECK(f->cand_payload != NULL,
-           "a surviving fraction was recorded for a flow carrying no payload — the fraction's denominator IS "
-           "the payload, so a flow with none has nothing this number could be a fraction of and would rank "
-           "above every exploration flow on a measurement of nothing");
+           "a surviving fraction was recorded for a flow carrying no payload — the fraction's denominator is the "
+           "payload");
     /* And the rung below this one, the ladder's order asserted from its own side. A payload says the substitution
        was installed, not that it happened, and the run about to be recorded is a run of the payload's bytes in a
        string, which the page's own text matches just as readily because a breakout is punctuation. solve.c's three
@@ -998,10 +977,8 @@ void flow_observe_survival(Flow *f, double frac) {
        flow_distance's `cand_surv + cand_rung` sound: the fraction is arithmetically below the delivery and
        chronologically above it, and this asserts that a nonzero fraction at rung 0 cannot exist. */
     DCHECK(f->cand_rung >= FLOW_RUNG_DELIVERED,
-           "an @S survival fraction is being recorded for a flow that has not been observed to DELIVER its "
-           "payload — the run about to be measured is the page's own bytes coinciding with the candidate's, "
-           "so the flow's fitness, the search's ratchet and the report's surviving-byte count would every one "
-           "of them be a reading of text the attacker never supplied");
+           "an @S survival fraction is being recorded for a flow not observed to deliver its payload — the run "
+           "measured would be the page's own bytes coinciding with the candidate's");
     if (frac <= f->cand_surv) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
     f->cand_surv = frac;
     frontier_rank_changed();
@@ -1023,21 +1000,17 @@ void flow_observe_survival(Flow *f, double frac) {
  * another look at a fixed answer, never an un-delivery. */
 void flow_observe_rung(Flow *f, int rung) {
     DCHECK(f != NULL,
-           "an @S candidate's rung was recorded against no flow — a rung is a fact about ONE flow's own bytes "
-           "standing at ONE sink, so a caller with no flow observed somebody else's");
+           "an @S candidate's rung was recorded against no flow — a rung is a fact about one flow's own bytes at one "
+           "sink");
     DCHECK(rung == FLOW_RUNG_DELIVERED || rung == FLOW_RUNG_ARRIVED || rung == FLOW_RUNG_ESCAPED,
-           "an @S rung outside the ladder was recorded — the comparator's denominator is FLOW_RUNGS_N and the "
-           "rungs are its numerator, so a value outside them puts the fitness term outside [0,1] and lets a "
-           "candidate outrank a flow that has emitted a finding");
+           "an @S rung outside the ladder was recorded — the rungs are the numerator over FLOW_RUNGS_N, so this "
+           "would put the fitness term outside [0, 1]");
     DCHECK(f->cand_payload != NULL,
-           "a rung was recorded for a flow carrying no payload — a rung is a statement about where THIS flow's "
-           "injected bytes stood, so a flow that injected none has nothing to have stood anywhere and would "
-           "rank above every exploration flow on an observation of nothing");
+           "a rung was recorded for a flow carrying no payload — a rung says where this flow's injected bytes stood");
     DCHECK(rung <= f->cand_rung + 1,
-           "an @S candidate skipped a rung — its bytes were recorded as having ESCAPED a context they were "
-           "never recorded as ARRIVING in, so either the two observations are being made about different "
-           "strings, or the arrival was refused for a payload this search has contradicted and the escape is "
-           "about to hand that same payload the whole ladder anyway");
+           "an @S candidate skipped a rung — its bytes were recorded escaping a context they were never recorded "
+           "arriving in, so the two observations are about different strings or the arrival was refused for this "
+           "payload");
     if (rung <= f->cand_rung) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
     f->cand_rung = rung;
     /* And the runway beneath it is complete, by definition rather than observation: a flow cannot hold a rung
@@ -1071,9 +1044,8 @@ void flow_mark_forced_arm(void) {
        mark with nothing running would leave the path's later requests declaring themselves derived. The standing
        list of callers is flow.h's, beside `path_forced`. */
     DCHECK(g_running != NULL,
-           "an arm contradicting its own example was recorded with no flow running — the contradiction is a "
-           "fact about ONE path, so there is no flow here to be standing on it and the requests built past "
-           "that arm would declare themselves DERIVED");
+           "an arm contradicting its own example was recorded with no flow running — the contradiction is a fact "
+           "about one flow's path");
     g_running->path_forced = 1;
 }
 
@@ -1090,17 +1062,15 @@ int flow_path_forced(const Flow *f) {
    branch seam, reaches it only having just marked the same path forced. */
 void flow_mark_pinned_value(void) {
     DCHECK(g_running != NULL,
-           "a determined witness was recorded with no flow running — the determination is a fact about ONE "
-           "path, so there is no flow here to be standing on it, and the addresses built from that witness "
-           "would be fetched as though their bytes came from the document");
+           "a determined witness was recorded with no flow running — the determination is a fact about one flow's "
+           "path");
     /* The nesting, asserted at the write and not only at the park. flow.h states this bit is strictly inside
        `path_forced`, and the park's composition asserts the pair, but a mark on an unmarked path would fire that
        assert far from the seam that caused it, naming a park rather than the decision. */
     DCHECK(g_running->path_forced == 1,
-           "a flow recorded that it DETERMINED a value on a contradicted arm while its path stands on no "
-           "contradicted arm at all — this bit is strictly nested inside `path_forced` and its one caller is "
-           "reached only where decide.c has just marked the path, so an unmarked path here is a second "
-           "speller of 'did this arm contradict its example' that disagrees with the first");
+           "a flow recorded a determined value on a contradicted arm while its path is not marked forced — "
+           "`path_pinned` is nested inside `path_forced`, and its one caller is reached only after decide.c marks "
+           "the path");
     g_running->path_pinned = 1;
 }
 
@@ -1110,9 +1080,8 @@ int flow_path_pinned(const Flow *f) {
            "a flow's determined-witness mark is neither set nor clear — it is written in exactly one place, "
            "as a constant, so any other value is memory this field does not own");
     DCHECK(!f->path_pinned || f->path_forced,
-           "a flow claims to have determined a value on a contradicted arm while claiming to stand on none — "
-           "the nesting flow.h declares is what makes reading this a NARROWING of the forced set rather than "
-           "a reach outside it, so a consumer given this pair would fire a request the path bit refuses");
+           "a flow's path is marked pinned and not forced — flow.h declares the pinned set nested inside the forced "
+           "set");
     return f->path_pinned;
 }
 
@@ -1125,20 +1094,17 @@ int flow_path_pinned(const Flow *f) {
    aging. */
 void flow_age_running(int64_t us) {
     DCHECK(g_running != NULL,
-           "thread time was charged with no flow running — the scheduler charges the flow it just stepped, so "
-           "this is time nobody is billed for and a flow that never ages");
+           "thread time was charged with no flow running — the scheduler charges the flow it just stepped");
     /* The scheduler's clock is monotonic, asserted where its reading arrives. A negative charge raises the flow's
        weight, so a flow burning the thread would climb to the top and stay; only a non-monotonic or wrapping clock
        at the call site produces one. */
-    DCHECK(us >= 0, "a NEGATIVE thread-time charge reached the WFQ — the aging clock ran backwards, which does "
-                    "not slow a monopolizer down, it promotes it");
+    DCHECK(us >= 0, "a negative thread-time charge reached the WFQ — the aging clock must be monotonic, and a "
+                    "negative charge would raise the flow's weight");
     /* The account both halves land on, asserted before either reads it: the own half is read over the account's
        silence window (FlowAcct's `emit_gen`), so the first statement dereferences the family pointer. */
     DCHECK(g_running->family != NULL && g_running->family->up == NULL,
-           "the running flow's family tag is not the ROOT of a fork tree — an arm whose tag points at its own "
-           "node has FOUNDED a family instead of joining its parent's, which is precisely the reset by "
-           "splitting the whole of this accounting exists to forbid: it would carry its parent's reward with "
-           "none of its parent's aging and outrank the entire backlog for free");
+           "the running flow's family tag is not the root of a fork tree — an arm joins its parent's family, so a "
+           "tag naming its own node is an arm that founded a family and shed its parent's aging");
     /* The window this charge belongs to, normalised before it is added to. `Flow.cpu` is a reading only while
        `cpu_gen` matches the account's generation (flow_own_silence); past an emission it holds a previous window's
        arithmetic every reader already answers zero for, and adding to it would charge this flow for time burned
@@ -1240,10 +1206,9 @@ static int flow_between_units(const Flow *f) {
    checkable: a fire means the seed was not the running flow and the residual's population argument is wrong. */
 static int flow_holds_park(const Flow *f) {
     DCHECK(f != g_running,
-           "a member's parked continuations were asked for while it holds the thread — its queue is in the "
-           "RUNTIME for the duration of its turn, not on Flow::parked, so this would answer NO PARK for a "
-           "flow that has several. Build the runtime handle at the pick (engine.c asks JS_HasParkedFlow of "
-           "the runtime) rather than reading a field that is empty by construction here");
+           "a member's parked continuations were asked for while it holds the thread — its queue is in the runtime "
+           "for its turn, not on Flow::parked; build the runtime handle at the pick (engine.c asks JS_HasParkedFlow "
+           "of the runtime)");
     return f->parked != NULL;
 }
 
@@ -1254,12 +1219,10 @@ static int flow_holds_park(const Flow *f) {
    asserted to be the running one (the finish path can have cleared `g_running`); what is asserted is the property
    that makes the count a trial count. */
 void flow_credit_visit(Flow *f) {
-    DCHECK(f != NULL, "a completed unit of work was credited to no flow — the optimism term's whole quantity is "
-                      "per flow, so a charge with no owner is a turn nobody is recorded as having had");
+    DCHECK(f != NULL, "a completed unit of work was credited to no flow");
     DCHECK(f->frame == NULL,
-           "a flow was credited a completed unit of work while it is still INSIDE a program — a preempt is the "
-           "middle of a trial, not the end of one, and counting it makes this term a second clock beside the "
-           "aging: the flow is then outranked by its own arms after one quantum and no program ever finishes");
+           "a flow was credited a completed unit of work while still inside a program — a preempt is the middle of a "
+           "trial, and crediting it would make the optimism term a second clock");
     /* And an owed microtask checkpoint is the same sentence, and is where the unit ends. HTML §8.1.4.4 "Calling
        scripts", clean up after running script step 3: "If the JavaScript execution context stack is now empty,
        perform a microtask checkpoint": the checkpoint is a step of cleaning up after the script, in the same turn,
@@ -1275,20 +1238,17 @@ void flow_credit_visit(Flow *f) {
        thread with the flow on a tie and any strictly better flow still takes it. A checkpoint that never ends is
        governed by the aging term, not by a cap. */
     DCHECK(!flow_job_microtask(f),
-           "a flow was credited a completed unit of work while it still owes a MICROTASK CHECKPOINT — HTML "
-           "§8.1.4.4 \"Calling scripts\" step 3 of clean up after running script performs the checkpoint as "
-           "part of the turn that just ended, so the unit is not over and this credit DEMOTES the flow at the "
-           "one instant its queued reactions became eligible to run: it must then out-rank the whole frontier "
-           "a second time to run its own checkpoint, which on a forking page never happens");
+           "a flow was credited a completed unit of work while it still owes a microtask checkpoint — HTML §8.1.4.4 "
+           "\"Calling scripts\" step 3 of clean up after running script runs the checkpoint in the turn that is "
+           "ending, so the unit is not over");
     /* And the two above are read through the predicate a second consumer shares, so the boundary cannot gain a
        clause in one place without the other. The two specific asserts stay because each names its cause; this one
        pins that they are the whole of flow_between_units' boundary, which the starvation counter relies on. An
        identity under the code as it stands, so it fires only on an edit that breaks it. */
     DCHECK(flow_between_units(f),
-           "a completed unit of work was credited to a flow that flow_between_units says is INSIDE one, while "
-           "the two asserts directly above passed — the unit boundary has gained a clause in one of the two "
-           "places that state it and not in the other, so the census row that counts a re-dispatch as having "
-           "had nothing to continue is judging a different boundary than the optimism term is credited at");
+           "a completed unit of work was credited to a flow flow_between_units says is inside one, while the two "
+           "asserts above passed — the unit boundary gained a clause in one of the two places that state it and not "
+           "the other");
     f->visits++;
     /* And the order is told, because this credit lowers the optimism term and so is a rank change. Every writer
        that moves a member's rank raises the generation; engine.c's rescan hook rests on the claim that a
@@ -1398,8 +1358,7 @@ int flow_stack_empty(const Flow *f) {
  * monopolizer wearing N names, so it enters, is charged and is credited as one thing. See FlowAcct. */
 void flow_fork_inherit(Flow *sib, const Flow *parent) {
     DCHECK(sib != NULL && parent != NULL && sib != parent,
-           "a fork's accounting was inherited from nobody, or from itself — this is the one line that decides "
-           "where a newborn arm enters the queue, so it cannot be asked about one flow");
+           "a fork's accounting was inherited from nobody, or from itself");
     /* Nothing may have been credited or charged first, because the inheritance assigns both terms: a sibling run or
        credited before receiving its account ran at a rank nobody chose, and the assignment would erase the result. */
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
@@ -1408,19 +1367,14 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
            sib->path_pinned == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
-           "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
-           "account — it was ranked, and possibly run, at a weight that belongs to no flow, and this "
-           "assignment throws that away. `path_forced` is in the same list for the same reason one field over: "
-           "a sibling that had already recorded a contradicted arm would have recorded it on a path it had not "
-           "yet been given. `picks` is in it for the OPPOSITE reason and that is why it is worth stating: it is "
-           "the one field here the assignments below deliberately do NOT carry — a dispatch is a fact about "
-           "this member and never about its parent's path — so its zero is not a precondition for an "
-           "inheritance but the claim that no dispatch has happened that the census would have to explain");
+           "a forked sibling was credited, charged, dispatched or decided before inheriting its parent's account — "
+           "the inheritance assigns every one of these fields, and `picks` must still be zero because no dispatch "
+           "may precede it");
     /* And it may not already stand under a flow in the fork tree: flow_new mints a root node, so a non-NULL `up` is
        a second inheritance, leaking the first parent's node and charging every arm it sheds to the wrong chain. */
     DCHECK(sib->acct != NULL && sib->acct->up == NULL,
-           "a forked sibling already stood under a flow in the fork tree — it is being given a second parent, "
-           "so the service it sheds when it departs is charged to a chain it was never part of");
+           "a forked sibling already stands under a flow in the fork tree — flow_new mints a root, so this is a "
+           "second inheritance onto one sibling");
     /* The reward is not copied here; the family join below carries it, one pointer read by every arm, which is why
        the equality at the end holds over a term this function never names. `Flow.val` is what one member emitted,
        never inherited and unranked, so the precondition requires it to be zero rather than assigning it. */
@@ -1487,10 +1441,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
         FlowAcct *br = parent->acct->up ? parent->acct->branch : sib->acct;
         DCHECK(br != NULL && sib->acct->branch == sib->acct && sib->acct->sub_born == 1 &&
                sib->acct->sub_gone == 0,
-               "a forked sibling reached its inheritance without the branch bucket flow_new opens for every "
-               "node, or already carrying membership in one — the transfer below is a departure and an "
-               "arrival of ONE member, so a sibling arriving with any other count publishes a bucket total "
-               "that no flow corresponds to and the census's membership identity fails on a healthy frontier");
+               "a forked sibling reached its inheritance without the branch bucket flow_new opens, or already "
+               "holding membership in one — the transfer below moves exactly one member");
         /* The root arm's neutrality, asserted where it is decided. Where the arm keeps its own bucket the two sides
            share no denominator, so flow_branch_bonus is equal across them only while both buckets stand at the
            `sub_born == 1` flow_new wrote. The arm's is one by the precondition above; the parent's is one only
@@ -1569,8 +1521,8 @@ void flow_release(JSContext *ctx, Flow *f) {
        rather than unapplied, the DOM head's created nodes are destroyed as detached, and the decision and pin state
        is read out of blobs rather than decide.c's live globals. All three are false for the running flow. */
     DCHECK(f != g_running,
-           "the RUNNING flow was released — its heap delta, its document writes and its decision state are all "
-           "live rather than parked, so this frees one copy of each while the scheduler still holds the other");
+           "the running flow was released — its heap delta, document writes and decision state are live rather than "
+           "parked");
     /* A paged flow is not a dropped one. Five things a released flow can still carry are work items on the one
        frontier: a parked continuation, the suspended frame (its whole heap-frame chain), replies the host still owes
        it, queued jobs and a peer's routed deliveries. Dropping a work item is forbidden
@@ -1584,9 +1536,9 @@ void flow_release(JSContext *ctx, Flow *f) {
        abort names the flows a run threw away at the moment it threw them. */
     DCHECK(f->paged || (f->parked == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
-           "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions, "
-           "replies the host still owed it, or a peer's routed message — and it was never written to the cold "
-           "tier, so nothing replays it and every one of those is a work item the ONE frontier just dropped");
+           "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
+           "owed to it, or a routed message) without being written to the cold tier — nothing replays it, so the "
+           "frontier just dropped those work items");
     /* And the parked continuations are released here, because the flow owns them: every park takes a reference that
        only the resume gives back. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn), so this calls
        one function over the set. `paged` does not excuse it: the assert above is about a dropped work item, while
@@ -1709,18 +1661,15 @@ void flow_registry_free(JSContext *ctx) {
         JSRuntime *rt = JS_GetRuntime(ctx);
 #if APICLIENT_DEV
         DCHECKF(JS_TrampFrameCount(rt) == 0,
-                "the frontier is gone and %d heap CALL FRAME(S) are still live — a suspended chain that no "
-                "flow owns is unreachable memory, and every frame of it holds its locals, its closed cells "
-                "and its callee. %d flow(s) were released; the last SUSPENDED one whose release freed no "
-                "frame was #%d (frame=%d park=%d paged=%d started=%d). A -1 there means every suspended flow "
-                "did drop its chain, so these frames were never owned by one and the leak is upstream of the "
-                "frontier",
+                "the frontier is gone and %d heap call frame(s) are still live — every frame belongs to some flow's "
+                "suspended chain. %d flow(s) were released; the last suspended one whose release freed no frame was "
+                "#%d (frame=%d park=%d paged=%d started=%d), and -1 means every suspended flow dropped its chain",
                 JS_TrampFrameCount(rt), rel_i, culprit, culprit_frame, culprit_park, culprit_paged,
                 culprit_started);
 #endif
         DCHECK(JS_StepMachineCount(rt) == 0,
-               "the frontier is gone and STEP MACHINES are still live — a continuation-holding builtin's state "
-               "outlived the flow that was suspended inside it, along with every argument it captured");
+               "the frontier is gone and step machines are still live — a continuation-holding builtin's state "
+               "outlived the flow suspended inside it");
     }
     /* And not one node of the fork tree: every reference on a node is its own flow's or a live descendant's, and
        both are gone. This makes acct_compress_dead's re-pointing checkable (a node it re-pointed and failed to
@@ -1728,9 +1677,8 @@ void flow_registry_free(JSContext *ctx) {
        by a `family` tag nobody dropped: a departing flow clears its own (acct_depart), so a survivor names the exit
        that did not. */
     DCHECK(g_acct_live == 0,
-           "a FORK-TREE node outlived the frontier — its only references are a released flow's own and a live "
-           "descendant's, so one still live is a reference nobody dropped and the whole ancestry it names is "
-           "unreachable memory");
+           "a fork-tree node outlived the frontier — its only references are its flow's and live descendants', all "
+           "released by here");
     /* And not one frozen segment. A segment of the heap or document chain is referenced only by the deltas forked
        below it and the segments above it, the world registry's foreign segments and the frontier's flows, both
        released above, so the count must be zero, as decide_free asserts for the third chain on the same primitive.
@@ -1740,14 +1688,12 @@ void flow_registry_free(JSContext *ctx) {
         long segs = 0, entries = 0;
         cow_chain_stats(&segs, &entries);
         DCHECK(segs == 0,
-               "a frozen HEAP segment outlived the frontier — every reference on the chain belongs to a delta "
-               "the flows and the world registry have just released, so one still live is a delta nobody "
-               "released and the whole history it names is unreachable memory");
+               "a frozen heap segment outlived the frontier — every reference on the chain belongs to a delta the "
+               "flows and the world registry have released");
         dom_cow_chain_stats(&segs, &entries);
         DCHECK(segs == 0,
-               "a frozen DOCUMENT segment outlived the frontier — beyond the memory, it holds the nodes the "
-               "flows below it created, so nothing will ever destroy them or take them out of the identity map "
-               "that names them");
+               "a frozen document segment outlived the frontier — every reference belongs to a released delta, and "
+               "the segment still holds nodes the flows created");
     }
     /* And the decision state the frontier stands on, released here and not by each host. Every flow's parked vector
        is a reference on a shared frozen chain, and the running flow holds one more in decide.c's globals; the blobs
@@ -1766,9 +1712,8 @@ void flow_registry_free(JSContext *ctx) {
         long segs = 0, entries = 0, bytes = 0;
         concolic_chain_stats(&segs, &entries, &bytes);
         DCHECK(segs == 0,
-               "a frozen CONSTRAINT segment outlived the frontier — every reference on that chain is a parked "
-               "flow's blob or the running flow's globals, and both are gone by here, so one still live is a "
-               "blob nobody released and the whole narrowing it names is unreachable memory");
+               "a frozen constraint segment outlived the frontier — every reference on that chain is a parked flow's "
+               "blob or the running flow's globals, both released by here");
     }
     /* And the park document written out of this frontier, the frontier's own residue, released here for the same
        reason: the host has read it out of the result document before any teardown runs. */
@@ -1949,10 +1894,8 @@ static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 &&
            f->family == f->acct && f->family->fam_us == 0 && f->family->emit_gen == 0 &&
            f->family->base == 0.0 && f->family->earned == 0.0 && !f->family->placed,
-           "a from-baseline flow was charged, credited or DISPATCHED before it arrived — the arrival is the "
-           "absence of every one of these, so a caller that wrote one first has ranked this flow at a virtual "
-           "time nobody chose, and `placed` is in the list because a stamped account stops reading the clock "
-           "at all and would stand for ever at a coordinate written before it existed on the frontier");
+           "a from-baseline flow was charged, credited or dispatched before it arrived — the arrival requires every "
+           "one of these fields at zero, and an unplaced account");
     /* The placement is the absence of a stamp, so there is nothing to write and nothing to skip when the frontier is
        idle: `frontier_vt()` answers SFQ's v(0) = 0 for a session that has dispatched nothing and holds the last
        serving coordinate between two slices. */
@@ -1972,10 +1915,8 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        the reward is frontier_vt() by construction (acct_family_val's unplaced arm) and the newcomer's aging notch
        is an integer division of zero, so both sides are the same float read twice. */
     DCHECK(flow_queue_weight(f) == frontier_vt(),
-           "a flow arriving from the baseline did not enter at the frontier's virtual time — it was placed "
-           "above the clock (a page promoting the documents and candidate sessions it creates over the whole "
-           "backlog) or below it (a newcomer the ordering can never reach, which is what starved every @S "
-           "candidate session behind a boot family whose account the whole frontier stood on)");
+           "a flow arriving from the baseline did not enter at the frontier's virtual time — the arrival rule places "
+           "every from-baseline account exactly at the clock");
     /* And both halves of the aging are one reading, of nothing, which is what a member never offered the thread
        owes. Asserted at this transition like every other that can move either half. */
     DCHECK_AGING_ONE_WINDOW(f, "a newcomer entered at the frontier's virtual time");
@@ -2021,9 +1962,8 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
     /* The sequence is established before the flow is ever picked: a member picked with an empty sequence would
        report itself finished, the one answer that is never retried. */
     DCHECK(g_seed_hook != NULL,
-           "a flow was added to the frontier with nothing to seed its program sequence — the session installs "
-           "that hook when it opens, so this flow was created outside a session and would run no program at "
-           "all and then report itself finished");
+           "a flow was added to the frontier with nothing to seed its program sequence — the session installs that "
+           "hook when it opens, so this flow was created outside a session");
     g_seed_hook(f);
     return f;
 }
@@ -2061,8 +2001,8 @@ void flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const char *
 
     DCHECK(record != NULL && *record, "a routed delivery was queued with no record");
     DCHECK(sender_origin != NULL && *sender_origin,
-           "a routed delivery was queued with no SENDER ORIGIN — only the trusted zone may stamp one, and it "
-           "is the field every `event.origin` check in every bundle is written against");
+           "a routed delivery was queued with no sender origin — only the trusted zone stamps one, and every "
+           "`event.origin` check reads it");
     e = JS_NewArray(ctx);
     CHECK(!JS_IsException(e), "flow: OOM allocating a routed delivery — a dropped record is a message a peer "
                               "sent and this document never received, which the page cannot tell from having "
@@ -2181,24 +2121,21 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
            "a receiving timeline recorded a commitment to no world — the record decides which of a sender's "
            "arms this timeline may still hear from, and an empty one constrains nothing at all");
     DCHECK(taken == 0 || taken == 1,
-           "a delivery-world commitment carried something other than RECEIVED or FORECLOSED — the two are the "
-           "whole vocabulary, and a third value would be read as one of them by whichever test asked first");
+           "a delivery-world commitment carried something other than received (1) or foreclosed (0)");
     /* Through flow.h's membership test rather than a list of names here: a second copy of the enum's set is the copy
        that drifts when a member is added. */
     DCHECK(flow_commit_arm_is_member(arm),
-           "a delivery-world commitment named a minting mechanism this engine has no member for — the "
-           "vocabulary is flow.h's FlowCommitArm and a producer states one of its members or states nothing "
-           "true, so an unknown value here is either a producer that was never given a member or a park "
-           "document written by something that is not this engine");
+           "a delivery-world commitment named a minting mechanism outside flow.h's FlowCommitArm — a producer states "
+           "one of its members, so this is a producer never given a member or a park document this engine did not "
+           "write");
     /* And a foreclosed row's other side is its parent, by what the row means: "this flow is the arm minted where its
        parent took `vector`", so a foreclosed row naming no other side contradicts itself. Asked here rather than at
        the one live producer because the cold tier replays rows off a document, which can hand over a pair no live
        code makes. */
     DCHECK(taken != 0 || arm != FLOW_COMMIT_ARM_NONE,
-           "a receiving timeline FORECLOSED a sender subtree while naming no flow on the other side of that "
-           "branch — a FORECLOSED row means this flow is the arm minted where its PARENT took that world, so "
-           "the other side is the flow this one was forked from and cannot be absent. A row like this refuses "
-           "every record at or under its subtree and defers them to nobody");
+           "a receiving timeline foreclosed a sender subtree while naming no flow on the other side of the branch — "
+           "a foreclosed row says this flow is the arm minted where its parent took that world, so the other side "
+           "cannot be absent");
     /* And the received rows stay pairwise consistent, the one claim this list makes that no row makes, asked at the
        append where a producer hands one over. Two received worlds that contradict are two sending timelines neither
        of which is the other continued, so no timeline of that document is in both (solver/engine.c's
@@ -2239,39 +2176,10 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
                 held_arm = (JS_VALUE_GET_TAG(av) == JS_TAG_INT) ? JS_VALUE_GET_INT(av) : -1;
                 JS_FreeValue(ctx, av);
                 DCHECKF(rel != WORLD_REL_CONTRADICT,
-                        "a receiving timeline committed to TWO sending worlds that CONTRADICT — neither is "
-                        "the other continued, so no timeline of the sending document is in both and this "
-                        "flow's state now rests on a pair of peer timelines that never coexisted. PUSHED "
-                        "FROM %s:%d. Arriving <%s>; already held <%s>, whose row states its own minting "
-                        "mechanism as flow.h's FlowCommitArm %d (a -1 there is a row that carried no "
-                        "integer in that field, which is a defect at whichever push wrote it and not this "
-                        "pair). This row RECORDS a fabrication rather than causing one, so the repair is "
-                        "the PRODUCER'S — and WHICH repair is what the address above decides, never this "
-                        "line. solver/engine.c's answer_commit_taken: the cross-product an UNADDRESSED "
-                        "cross-instance operation builds, engine_perform attaching one question to every "
-                        "timeline the peer has. THE ADDRESSEE THAT CLOSES IT IS BUILT — remote_op.h's third "
-                        "transport field, filled by engine_flow_addressee and consulted by engine_perform's "
-                        "attach loop — so a row from there is no longer that gap and is one of two NARROWER "
-                        "things, which is a repair rather than a queue. EITHER the asking flow addressed "
-                        "NOBODY, which is a positive answer with three readings of its own: it had taken no "
-                        "answer from that peer (correct, and then the pair above is two FIRST answers and "
-                        "the arm for the second is flow_answer_fork's); or the record named a same-origin "
-                        "CHILD of the peer agent, which no row matches because a world carries the minting "
-                        "instance's ROOT document (engine.h's residual on engine_flow_addressee, whose next "
-                        "diff is the row carrying the document it was answered FOR); or two rows for one "
-                        "document were INDEPENDENT and the walk refused to guess, which is a park's "
-                        "generation bump and is engine_perform's own residual. OR the peer answered from a "
-                        "world INDEPENDENT of the addressee and the pin correctly refused nothing — the "
-                        "same park case, arriving at the receiver. READ THE ARRIVING VECTOR'S GENERATION "
-                        "AGAINST THE HELD ONE'S FIRST: equal generations is the first reading and means the "
-                        "record went out unaddressed, and unequal is the park residual and means it went "
-                        "out addressed and inert. solver/engine.c's deliver_commit_taken: "
-                        "UNREACHABLE by construction, since deliver_admits refuses a contradicting record "
-                        "and RETURNS before that push — so a row from there is a hole in THAT gate and is "
-                        "a different and worse finding than this one. solver/cold.c's park replay: the "
-                        "park DOCUMENT holds a pair no live push would have written, so it is a residue "
-                        "from a build older than this check and the frontier re-derives rather than the "
-                        "engine repairing it. Never widen this row to admit the pair",
+                        "a receiving timeline committed to two sending worlds that contradict, pushed from %s:%d "
+                        "(arriving <%s>, held <%s> with FlowCommitArm %d, -1 meaning no integer was stored) — the "
+                        "received rows must be pairwise consistent, so the repair is the pushing producer's and this "
+                        "check is never widened to admit the pair",
                         file, line, vector, held, held_arm);
                 JS_FreeCString(ctx, held);
             }
@@ -2358,9 +2266,8 @@ enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HANDLE, JOB_SEQ, JOB_
 static int g_job_external;
 
 void flow_job_external_begin(void) {
-    DCHECK(!g_job_external, "a second routed record was being turned into local work while the first was still "
-                            "in flight — a delivery is made from flow_step with no frame, so two cannot "
-                            "overlap, and a nested bracket would mark the wrong jobs external");
+    DCHECK(!g_job_external, "a second routed record was turned into local work while the first was in flight — "
+                            "deliveries are made from flow_step with no frame, so the brackets cannot nest");
     g_job_external = 1;
 }
 
@@ -2462,8 +2369,7 @@ void flow_job_kinds(const Flow *f, int *task_out, int *micro_out) {
     int n = flow_job_pending(f), i, t = 0, m = 0;
 
     DCHECK(task_out != NULL && micro_out != NULL,
-           "a job-kind split was asked for with nowhere to put one of its two halves — the pair is the whole "
-           "reading, and a caller holding one of them has a count with nothing to check it against");
+           "a job-kind split was asked for with nowhere to put one of its two halves");
     for (i = 0; i < n; i++) {
         JSValue e = job_entry(f, i);
         int task = job_field_int(e, JOB_TASK);
@@ -2679,8 +2585,8 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
     int n = flow_job_pending(f), keep = 0, found = 0, i;
 
     DCHECK(handle != JS_TASK_HANDLE_NONE,
-           "a queued job was asked for by the never-issued handle — a record that never went through the "
-           "runtime's enqueue carries exactly that, so this would match work no tracker ever named");
+           "a queued job was asked for by the never-issued handle — records that never went through the runtime's "
+           "enqueue carry exactly that handle");
     if (n == 0) return 0;
     cow_engine_write_begin();
     for (i = 0; i < n; i++) {
@@ -2697,11 +2603,9 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
                runtime's enqueue, so it carries JS_TASK_HANDLE_NONE and no tracker's handle names it; the handle
                field is all that separates the two, hence the assert. */
             DCHECK(!job_field_int(e, JOB_EXTERNAL),
-                   "a tracker's removal-by-handle named the §9.3.3 task a ROUTED cross-document delivery "
-                   "became — that is a live document's message being deleted by an element's coalescing task "
-                   "tracker, and nothing re-causes it because nothing in the replayed program caused it. A "
-                   "delivery carries JS_TASK_HANDLE_NONE precisely so no handle can name it, so this is two "
-                   "records wearing one name");
+                   "a tracker's removal by handle named the task a routed cross-document delivery became — "
+                   "deliveries carry JS_TASK_HANDLE_NONE so no handle can name them, so two records share one "
+                   "handle");
             found++;
             JS_FreeValue(ctx, e);
             continue;
@@ -2711,9 +2615,8 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
     JS_SetPropertyStr(ctx, f->jobs, "length", JS_NewInt32(ctx, keep));
     cow_engine_write_end();
     DCHECK(found <= 1,
-           "one handle named two jobs on ONE flow's queue — handles come from a single monotone runtime "
-           "counter and are never reused, and a fork gives an arm its own Array naming each record once, so "
-           "this is two entries wearing one name and the tracker's removal just took the wrong task");
+           "one handle named two jobs on one flow's queue — handles come from one monotone runtime counter and a "
+           "fork names each record once per arm, so two entries share one handle");
     return found;
 }
 
@@ -2978,8 +2881,7 @@ static double flow_queue_weight(const Flow *f) {
    not the ladder (a resumed candidate re-earns every rung by replaying to its source read), so a renumbering is not
    a format change unless a rung crosses the tier. */
 double flow_distance(const Flow *f) {
-    DCHECK(f != NULL, "the fitness term was asked of no flow — it is a reading OF an item, so there is no item "
-                      "here for it to be a reading of");
+    DCHECK(f != NULL, "the fitness term was asked of no flow");
     /* The pair invariant ("a flow with no payload stands at exactly 0") is asserted at engine.c's fork rather than
        here: it is transiently false by construction, because an arm of a candidate takes its parent's account
        (flow_fork_inherit) before its parent's substitution, and the rank-neutrality equality between those points
@@ -3006,20 +2908,15 @@ double flow_distance(const Flow *f) {
    rival snapshot); this compares at one instant against the integer it was derived from. */
 static double acct_branch_offset(const FlowAcct *br) {
     DCHECK(br != NULL,
-           "a branch bucket's own contribution to the order was asked for with no bucket to ask — flow_new "
-           "opens one for every node and the fork moves membership rather than clearing it, so a null here is "
-           "an arm whose whole share of the order's fifth term is attributed to nobody");
+           "a branch bucket's contribution to the order was asked of no bucket — flow_new opens one for every node "
+           "and the fork moves membership rather than clearing it");
     DCHECK(br->sub_born >= 1,
-           "a branch bucket reports that it has never minted anybody while its contribution to the order is "
-           "being read — `sub_born` is a LIFETIME count written to 1 at flow_new and raised at the fork, so a "
-           "value below one is a retraction of a counter that may never fall, and the offset beside it was "
-           "derived by dividing by exactly this");
+           "a branch bucket reports a lifetime mint count below one — `sub_born` is written to 1 at flow_new and "
+           "only raised after");
     DCHECK(br->sub_offset == 1.0 / (double)br->sub_born,
-           "a branch bucket's stored offset is no longer `1.0 / sub_born` — the two are written adjacently by "
-           "flow_new and by flow_fork_inherit's join and are read together here, so a difference is a third "
-           "writer of `sub_born` that left the offset standing, or a host evaluating doubles wider than "
-           "binary64 and rounding at the store. Either way every live member of this bucket is about to be "
-           "weighed on a denominator the order no longer holds, and ONE fork re-ranks a whole arm at once");
+           "a branch bucket's stored offset is not `1.0 / sub_born` — flow_new and flow_fork_inherit's join write "
+           "the two together, so a third writer of `sub_born` left the offset standing, or this host evaluates "
+           "doubles wider than binary64");
     return br->sub_offset;
 }
 
@@ -3075,8 +2972,7 @@ static double flow_branch_bonus(const Flow *f) {
 
     DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
            "a member was weighed with no branch bucket — flow_new opens one for every node and the fork moves "
-           "membership rather than clearing it, so a null here is a member the branch census cannot reach "
-           "either and its share of every per-branch reading is attributed to nobody");
+           "membership rather than clearing it");
     br = f->acct->branch;
     live = br->sub_born - br->sub_gone;
     DCHECK(live >= 1,
@@ -3097,13 +2993,11 @@ static double flow_branch_bonus(const Flow *f) {
    statement of them. */
 long flow_branch_born(const Flow *f) {
     DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
-           "a member's branch bucket was asked for with no bucket to ask — flow_new opens one for every node "
-           "and the fork moves membership rather than clearing it, so a null here is a member whose share of "
-           "the order's fifth term is attributed to nobody and whose weight cannot be reconciled");
+           "a member's branch bucket was asked for with no bucket — flow_new opens one for every node and the fork "
+           "moves membership rather than clearing it");
     DCHECK(f->acct->branch->sub_born >= 1,
-           "a member's own branch bucket reports that it has never minted anybody while that member is "
-           "standing in it — `sub_born` is a LIFETIME count written to 1 at flow_new and raised at the fork, "
-           "so a value below one is a retraction of a counter that may never fall");
+           "a member's own branch bucket reports a lifetime mint count below one while the member stands in it — "
+           "`sub_born` is written to 1 at flow_new and only raised after");
     return f->acct->branch->sub_born;
 }
 
@@ -3173,12 +3067,9 @@ static double flow_member_key(const Flow *f) {
        `sizeof` and neither side is evaluated. */
     DCHECK(k == -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
                 + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f),
-           "the member half of the WFQ's weight is no longer its per-member half plus its bucket term — the "
-           "two spellings associate identically by construction, so a difference is a summand that reached "
-           "one of them and not the other, or a host evaluating doubles wider than binary64 and rounding at "
-           "the return from flow_index_key. Every claim that a candidate set may be taken from the per-member "
-           "key with the bucket applied as a query-time offset rests on this being EXACT rather than close, "
-           "and an index built on a key that is merely close reorders two members this order ties");
+           "the member half of the WFQ's weight is not its per-member key plus its bucket term — the two spellings "
+           "associate identically, so a summand reached one and not the other, or this host evaluates doubles wider "
+           "than binary64");
     /* And the same equality as a holder of the published integer would take it, the one route across this file's
        boundary: the left side reaches the bucket term through `FlowAcct.sub_offset`, the double the order reads,
        and the right rebuilds it from `flow_branch_born`, the integer solver/flow.h publishes because `FlowAcct` is
@@ -3189,13 +3080,9 @@ static double flow_member_key(const Flow *f) {
        where the integer an index would carry meets the double the order reads. Another evaluation per call in a
        dev build; nothing in release. */
     DCHECK(k == flow_index_key(f) + 1.0 / (double)flow_branch_born(f),
-           "the member half of the WFQ's weight is no longer its per-member key plus `1/sub_born` over its "
-           "branch bucket — the left side takes that term from the bucket's stored offset and the right side "
-           "rebuilds it from the integer flow_branch_born publishes, and the two are written adjacently by "
-           "flow_new and by the fork's join, so a difference is one of those statements having come apart or a "
-           "host evaluating doubles wider than binary64. This is the exact equality every proposal for an ask "
-           "that does not walk this frontier rests on: a candidate set keyed on the per-member half, with one "
-           "offset applied per BUCKET at query time, reproduces this number or it has changed the answer");
+           "the member half of the WFQ's weight is not its per-member key plus `1/sub_born` rebuilt from "
+           "flow_branch_born — flow_new and the fork's join write the offset with `sub_born`, so the two came apart "
+           "or this host evaluates doubles wider than binary64");
     return k;
 }
 
@@ -3280,11 +3167,9 @@ static double flow_nonreward(const Flow *f) {
        aging is the queue coordinate it shares with what it was placed beside. */
     double n = flow_queue_nonreward(f) + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f);
     DCHECK(n <= FLOW_NONREWARD_MAX,
-           "a term of the WFQ's order other than the REWARD lifted a flow further than one emission and a full "
-           "fitness reading can — so the ordering is no longer made of one unranged ledger plus terms that each "
-           "span at most a finding, and §scheduler's 'a never-run flow is never starved' is a claim about a "
-           "quantity nobody bounded. Bound the term in flow_queue_nonreward or flow_distance, or state its "
-           "range in FLOW_NONREWARD_MAX beside the three that are already stated there");
+           "a term of the WFQ's order other than the reward exceeds FLOW_NONREWARD_MAX — every non-reward term must "
+           "span at most a finding; bound the term in flow_queue_nonreward or flow_distance, or state its range in "
+           "FLOW_NONREWARD_MAX");
     /* And the one state in which flow_member_key must reproduce this exactly: with the family's aging at zero and no
        carry, flow_queue_nonreward is `-(double)flow_service_notch(f) * FLOW_AGE_QUANTUM` and the three terms after
        it are the same calls in the same order, so a difference is a summand that reached one and not the other.
@@ -3299,11 +3184,9 @@ static double flow_nonreward(const Flow *f) {
        flow_weight's member half is a subexpression of it rather than a re-association, so the equality holds for
        every family notch. */
     DCHECK(!(flow_family_notch(f) == 0 && flow_silence_carry(f) == 0) || flow_member_key(f) == n,
-           "the member half of the WFQ's weight is no longer what flow_weight computes — with this family's "
-           "aging at zero and no carry the two are the same expression on the same operands, so a difference "
-           "is a summand that reached one of them and not the other. Every claim that a non-running member's "
-           "rank cannot move between two frontier generations is derived from that pair agreeing, and the "
-           "assertion in flow_best's walk would now be asking it of less than the order is made of");
+           "the member half of the WFQ's weight differs from flow_nonreward with the family's aging at zero and no "
+           "carry — there the two are the same expression on the same operands, so a summand reached one and not the "
+           "other");
     return n;
 }
 
@@ -3367,10 +3250,8 @@ void flow_set_host_owed(Flow *f) {
        frontier that is wholly blocked would be re-admitted before the sweep reached its end, and the stall would be
        unreachable while the engine swapped deltas without finishing anything. */
     DCHECK(!flow_host_owed(f),
-           "a flow reported host-owed AGAIN with no host event in between — a marked flow is out of the pick, "
-           "so it can only have been stepped because its mark was cleared by something that cannot have "
-           "answered it. The frontier can then never be fully marked, the STALL is unreachable, and the "
-           "scheduler re-asks members it has already asked for as long as the run lasts");
+           "a flow reported host-owed again with no host event in between — a marked flow is out of the pick, so its "
+           "mark was cleared by something that cannot have answered it");
     f->owed_gen = g_owed_gen;
     /* And the ranking changed: the value yield fires "the moment a parked flow outranks", and the WFQ's answer is
        the best eligible flow, so the eligible set is a term of that answer. A mark takes a member out of the pick
@@ -3416,9 +3297,8 @@ void flow_clear_host_owed_all(void) {
 void flow_set_paint_owed(Flow *f) {
     /* The mark is laid on two roads (this entry's call sites) and a NULL means a different thing on each, so the
        message names both. */
-    DCHECK(f != NULL, "an image was asked of no flow at all — either paint_mark_standing_members, which "
-                      "walks the frontier's own members, has read past its end, or flow_new has reached "
-                      "the mint with no flow to mark, which its own allocation CHECK makes impossible");
+    DCHECK(f != NULL, "an image was asked of no flow — paint_mark_standing_members walks the frontier's own members "
+                      "and flow_new marks the flow it just allocated");
     f->paint_owed = 1;
 }
 
@@ -3431,9 +3311,8 @@ void flow_clear_paint_owed(Flow *f) {
        rendered before flow_finish unapplies it, and the slice-end yield, which hands the host that member
        standing. A mark is spent by whichever comes first, so there is at most one image per ask. */
     DCHECK(f->paint_owed,
-           "an image ask was discharged on a member that owed none — every discharge tests the mark and clears "
-           "the one it tested, so this is a discharge reached by a route that never took the ask, and every "
-           "later pick of this member hands the thread back for a picture no host asked for");
+           "an image ask was discharged on a member that owed none — every discharge tests the mark it clears, so "
+           "this route never took the ask");
     f->paint_owed = 0;
 }
 
@@ -3476,15 +3355,12 @@ static int64_t key_checks_total(void) {
 #endif
 long flow_scan_runs(FlowScan s) {
     DCHECK((unsigned)s < (unsigned)FLOW_SCAN_N,
-           "an order-scan count was asked for an entry that is not in solver/flow.h's list — the index would "
-           "read past the array, and the caller is about to publish whatever it found as a cost of this run");
+           "an order-scan count was asked for an entry not in solver/flow.h's FLOW_SCANS list");
     return g_scan_runs[s];
 }
 int64_t flow_scan_weights(FlowScan s) {
     DCHECK((unsigned)s < (unsigned)FLOW_SCAN_N,
-           "an order-scan weight count was asked for an entry that is not in solver/flow.h's list — the index "
-           "would read past the array, and the caller is about to publish whatever it found as a cost of this "
-           "run");
+           "an order-scan weight count was asked for an entry not in solver/flow.h's FLOW_SCANS list");
     return g_scan_weights[s];
 }
 
@@ -3515,9 +3391,8 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        CHECK rather than a DCHECK, for solver/cold.c's reason at its histogram: the increment is a write in every
        build, so a dev-only guard would vanish exactly where the store happens. */
     CHECK((unsigned)why < (unsigned)FLOW_SCAN_N,
-          "engine: the order was asked through a scan entry that is not in solver/flow.h's list — the value is "
-          "only ever written from that enum at a flow_pick call site, so this is a cast or an uninitialised "
-          "read, and the counters below would be written outside their array in every build");
+          "engine: the order was asked through a scan entry not in solver/flow.h's list — the value is written only "
+          "from that enum at a flow_pick call site, so this is a cast or an uninitialised read");
     g_scan_runs[why]++;
     /* The best member carrying the full bonus and no aging: its weight is its reward + 1.0, at least 1.0, which is
        the property the assertions below need. The test is that premise, every non-reward term of flow_weight at
@@ -3543,8 +3418,8 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        maximum is known only when the scan ends. */
     const Flow *never = NULL;
     double never_w = 0.0;
-    DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
-                             "keeps the THREAD, and the flow the pager gives up is not a question about that");
+    DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — a seed names who keeps the "
+                             "thread, which is not a question the pager asks");
     /* Is the seed still standing: answered by the scan below rather than a second walk, which is why the
        eligibility block sits after the loop. This function visits every member and compares each against `seed`,
        by address against members the registry holds (flow_is_member's comparison), so a dangling seed matches
@@ -3646,33 +3521,11 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
             (*kind)++;
             DCHECKF(kind != &g_key_checks.armed
                         || (mk == m->key_last && mp == m->phase_last && ik == m->ikey_last),
-                    "a member that is not holding the thread changed its own half of the WFQ's weight with "
-                    "the frontier generation standing still — flow_silence_phase's decomposition says only "
-                    "the family's common half and the carry bit may move between two generations, and every "
-                    "index, heap or cached maximum anybody builds over this frontier is derived from that. "
-                    "Either a writer of the optimism, the fitness distance, the branch bucket or this "
-                    "member's own silence has stopped raising the generation, or a weighing has been "
-                    "introduced between one of those writes and its bump — flow_fork_inherit's `sub_born++`, "
-                    "together with the `sub_offset` written on that same statement, is correct only by "
-                    "adjacency and is the ONE writer here that is. acct_depart's `sub_gone++` is not among "
-                    "them and this message used to say it was: the branch term divides by the LIFETIME mint "
-                    "count, which no departure moves, so a departure re-ranks nobody and a fire here is never "
-                    "about one. THE PHASE IS THE "
-                    "SECOND OPERAND AND CAN FAIL WHERE THE KEY CANNOT: the key reads `own_silence / "
-                    "FLOW_SERVICE_US` and the phase reads `own_silence %% FLOW_SERVICE_US`, so a write "
-                    "smaller than one quantum moves the phase and leaves the key standing — and the phase is "
-                    "what an index over this frontier BUCKETS on, so that write re-buckets a member with "
-                    "nothing else in this engine able to say so. AND THE THIRD OPERAND IS THE HALF "
-                    "WITHOUT THE BUCKET TERM, WHICH THE FIRST TWO CANNOT COVER BETWEEN THEM: the member "
-                    "half is `flow_index_key + flow_branch_bonus`, so a fork's `sub_born++` moving the "
-                    "bucket term DOWN while this member's own optimism, distance or service notch moves it "
-                    "UP by the same amount leaves the sum standing and re-keys the member — and the key an "
-                    "index is built on is the half, never the sum (flow_index_key's own banner: \"what an "
-                    "index may be KEYED on is flow_index_key, the bucket term EXCLUDED\"). A fire on the "
-                    "third operand alone is that compensation; a fire on the first and third together is an "
-                    "ordinary member-half move and the bucket term is not involved. At generation %u the "
-                    "member half was %.17g and is now %.17g; the phase was %lld and is now %lld; the index "
-                    "key was %.17g and is now %.17g",
+                    "a non-running member changed its own half of the WFQ's weight at generation %u with no "
+                    "generation bump — only the family's common half and the carry bit may move between generations, "
+                    "so a writer of the optimism, distance, branch bucket or own silence skipped its bump, or a "
+                    "weighing landed between flow_fork_inherit's `sub_born++` and its bump (member half %.17g -> "
+                    "%.17g, phase %lld -> %lld, index key %.17g -> %.17g)",
                     g_gen, m->key_last, mk, (long long)m->phase_last, (long long)mp,
                     m->ikey_last, ik);
             m->key_last = mk; m->key_gen = g_gen; m->key_stamped = 1; m->phase_last = mp;
@@ -3700,17 +3553,11 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
             double mg = flow_index_margin(g_flows[i]);
             double dv = s - w; if (dv < 0.0) dv = -dv;
             DCHECKF(dv <= mg,
-                    "the index surrogate stands further from the comparator than the bound derived from the "
-                    "two expressions permits — flow_index_margin counts the roundings of each spelling and "
-                    "scales the sum of the terms' magnitudes by them, so a fire is that derivation being "
-                    "WRONG rather than the order being wrong: either a summand has been added to flow_weight "
-                    "(which is one more rounding in both spellings and a wider range the margin's "
-                    "FLOW_NONREWARD_MAX half does not know about), or a term's range is no longer what that "
-                    "macro's summands say, or this host evaluates doubles wider than binary64 at more return "
-                    "boundaries than the derivation's clause (b) allows. Every candidate set taken from this "
-                    "key rests on this inequality and on nothing else, so this is the line to repair before "
-                    "any of it. surrogate=%.17g weight=%.17g |difference|=%.17g margin=%.17g, over "
-                    "val=%.17g notch=%lld optimism=%.17g distance=%.17g branch=%.17g",
+                    "the index surrogate stands further from the comparator than flow_index_margin's derived bound "
+                    "allows — a summand was added to flow_weight, a term's range left FLOW_NONREWARD_MAX, or this "
+                    "host rounds at more returns than clause (b) allows. surrogate=%.17g weight=%.17g "
+                    "|difference|=%.17g margin=%.17g, over val=%.17g notch=%lld optimism=%.17g distance=%.17g "
+                    "branch=%.17g",
                     s, w, dv, mg, acct_family_val(g_flows[i]),
                     (long long)flow_silence_notch(g_flows[i]), flow_optimism(g_flows[i]),
                     flow_distance(g_flows[i]), flow_branch_bonus(g_flows[i]));
@@ -3812,13 +3659,9 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            two walks' counts, this compares the extremum against a named member, so it also catches a fold that
            visited `best` and failed to admit it. */
         DCHECKF(worst ? sur_w <= sur_of_best : sur_w >= sur_of_best,
-                "the surrogate's own extremum is not extremal over a population that contains the member the "
-                "comparator returned — both folds admit `best` on the same gate and with the same direction "
-                "bit, so this is an identity, and a fire is `best` having been weighed by the comparator's "
-                "fold and dropped by the surrogate's. It also breaks what the PARTITION below rests on: with "
-                "this false the surrogate's TIE and STRICT arms stop being the only two, and the two rows that "
-                "count them are a partition of a total they no longer cover. sur_w=%.17g but the surrogate reads "
-                "the comparator's own member at %.17g, over %d member(s) in direction worst=%d",
+                "the surrogate's extremum is not extremal over a population containing the comparator's pick — both "
+                "folds admit `best` on the same gate and direction bit, so the surrogate's fold dropped it. "
+                "sur_w=%.17g, surrogate of the comparator's pick %.17g, over %d member(s), worst=%d",
                 sur_w, sur_of_best, g_flows_n, (int)worst);
         /* And the candidate set that answers both modes, walked so that its cost is a census row: every member
            within the derived margin of the surrogate's extremum, re-compared through flow_weight. flow_weight, the
@@ -3890,20 +3733,11 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                     "weighed %lld member(s) and the band walk tested %ld",
                     (long long)(g_scan_weights[why] - sw_before), band_of);
             DCHECKF(cand == best,
-                    "a candidate set carrying the derived margin did not contain the member this comparator "
-                    "returned, or contained it and did not return it — and those are the only two ways this "
-                    "can fire. The first is the derivation at flow_index_margin being WRONG, and the fold "
-                    "above asserts the inequality it rests on for every member, so a fire here with that one "
-                    "silent means the band's EDGE is wrong rather than the margin: `2*Mmax` is the sum of "
-                    "two members' margins and `sur_mmax` must be the maximum over the WHOLE folded "
-                    "population, the seed included. The second is the TIE-BREAK: this walk visits the "
-                    "registry in the scan's order with the scan's strictness and folds the seed afterwards "
-                    "non-strictly, so a member of equal weight winning here and losing there is one of those "
-                    "three having come apart. It is NOT the surrogate disagreeing with the comparator — that "
-                    "is the TIE/STRICT partition below, which is a different claim and is COUNTED rather than "
-                    "aborted on. The band held %ld of %ld member(s) "
-                    "tested, edge=%.17g from sur_w=%.17g and 2*margin=%.17g; the band returned a member at "
-                    "registry slot %d weighing %.17g and the scan returned slot %d weighing %.17g",
+                    "the candidate set carrying the derived margin did not return the comparator's member — either "
+                    "the band's edge is wrong (`2*sur_mmax` over the whole folded population, seed included) or the "
+                    "band walk's order, strictness or seed fold differs from the scan's. The band held %ld of %ld "
+                    "member(s) tested, edge=%.17g from sur_w=%.17g and 2*margin=%.17g; the band returned slot %d "
+                    "weighing %.17g and the scan slot %d weighing %.17g",
                     band, band_of, edge, sur_w, 2.0 * sur_mmax,
                     cand ? cand->reg_i : -1, cand ? cand_w : 0.0, best->reg_i, bw);
         }
@@ -3926,13 +3760,9 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
             else                      g_index_checks.differed_strict++;
             DCHECKF(g_index_checks.differed_tie + g_index_checks.differed_strict
                         == g_index_checks.index_differed,
-                    "the surrogate's two fire modes no longer partition the scans in which it named a "
-                    "different member — the total is raised where the two members are compared and the arms "
-                    "are raised where the mode is read, over what must be one condition, so a difference is "
-                    "that condition having come apart in one of the two places and the share published "
-                    "against the total is a fraction of a different population. It is NOT the surrogate "
-                    "disagreeing with the comparator and it is not the band walk: those are the rows "
-                    "themselves and the abort above. tie=%ld strict=%ld differed=%ld",
+                    "the surrogate's tie and strict counts do not sum to the scans in which it named another member "
+                    "— the total and the arms are raised over one condition at two sites, so the two sites came "
+                    "apart. tie=%ld strict=%ld differed=%ld",
                     g_index_checks.differed_tie, g_index_checks.differed_strict,
                     g_index_checks.index_differed);
         }
@@ -3945,10 +3775,9 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        1, a reward allowed to grow with the CPU it is weighed against), each the shape a fix for thrash takes. */
     DCHECK(worst || !best || !unrun ||
            flow_own_silence(best) + acct_family_us(best) < flow_silence_us_to_sink(best),  /* derivation there */
-           "the WFQ re-picked a flow that has burned more thread time since its last emit — its own plus its "
-           "fork chain's — than its entire accumulated reward is worth, while a never-run flow was waiting — "
-           "the aging term is no longer commensurate with the reward it is subtracted from, so a monopolizer "
-           "cannot sink");
+           "the WFQ re-picked a flow whose own and family silence exceed what its reward is worth while a never-run "
+           "flow waited — the aging term is no longer commensurate with the reward (flow_silence_us_to_sink derives "
+           "the bound)");
     /* And the other half of the pair: "a UCB optimism bonus ∝ 1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED".
        The bound above says a silent monopolizer sinks, not that the waiting flow is lifted, and the two can break
        separately. Also an identity derived from flow_weight: an untouched member weighs `val + 1.0` or more, and
@@ -3957,9 +3786,8 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        running flow's service), given a range other than 1.0, or made to depend on anything the aging already
        prices; each lets "never starved" stop meaning anything while every other assertion passes. */
     DCHECK(worst || !best || !unrun || flow_weight(best) >= 1.0,
-           "the WFQ picked a flow worth less than an untouched member of its own frontier — a never-run flow "
-           "carries the whole optimism bonus and no aging, so nothing may be picked ahead of it below that "
-           "floor; the optimism term is no longer the one §scheduler prices a never-starved flow against");
+           "the WFQ picked a flow worth less than an untouched member of its frontier — a never-run flow carries the "
+           "full optimism bonus and no aging, so the pick's maximum must be at least 1.0");
     /* The pairwise distance (`w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`) is asked of one item at
        flow_nonreward, which needs no reference member. Its consequence remains: the inequality is tight in the
        reward and slack in everything else, so a frontier whose untouched members are unreachable has an
@@ -4134,13 +3962,9 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
            which compares two sums any compensating pair satisfies, this fires on a live member standing in a bucket
            whose count says nobody does. */
         DCHECK(br->up == NULL && br->owner == NULL,
-               "the census took a branch bucket with no live member that is not a departed family root — the "
-               "member door only ever reaches a bucket it is itself counted in, so a NON-ROOT bucket here is a "
-               "join that raised `sub_born` for one bucket while leaving `branch` naming another, or a "
-               "departure that raised `sub_gone` twice, and a root still OWNING its flow here is a root that "
-               "has been forked into. Either way a live member is standing in a bucket whose own count says "
-               "nobody is, so `branches` minus the live-bearing buckets is no longer the departed roots and "
-               "every per-branch extremum is about to be published over a population nobody can name");
+               "the census took an empty branch bucket that is not a departed family root — the member door reaches "
+               "only buckets with a live member, so a join raised `sub_born` on the wrong bucket, a departure raised "
+               "`sub_gone` twice, or a root was forked into");
         out->br_empty_us += br->sub_us;
     }
     if (out->branches == 1 || br->sub_us > out->br_us_max) out->br_us_max = br->sub_us;
@@ -4313,10 +4137,8 @@ void flow_wfq_census(WfqCensus *out) {
            its own half (decide_blob_cursor against its blob, decide_live_stats and decide_cursor against the live
            vector), and neither sees the pair this loop composes from two calls. */
         DCHECK(cur >= 0 && cur <= dec,
-               "the WFQ census composed a replay position outside the recorded path it is a position on — the "
-               "length and the cursor were taken from one member by two calls, so this is those two calls "
-               "having come to be about different flows, and every fraction built from the pair would exceed "
-               "one or go negative");
+               "the WFQ census composed a replay position outside the path it is a position on — the length and the "
+               "cursor must come from the same member's decision state");
 
         /* The reward rows read the term the order is made of, the family's. Reached per member, so a family with N
            arms contributes its reward N times to these extrema, which is right for a spread (the range the pick sees
@@ -4401,13 +4223,9 @@ void flow_wfq_census(WfqCensus *out) {
         {
             const int unframed = (f->frame == NULL);
             DCHECK(!flow_stack_empty(f) || unframed,
-                   "a member whose JavaScript execution context stack is EMPTY was not counted as holding no "
-                   "frame — flow_stack_empty's first line is `if (f->frame) return 0;`, so every member it "
-                   "admits is inside `mem_unframed`, and the two ready-row asserts at the end of this scan "
-                   "state that containment as holding BY CONSTRUCTION. It does not hold: this row's predicate "
-                   "and that function's first conjunct are two spellings and one of them has moved. "
-                   "`memUnframed` is published as the upper bound `jobsReady` and `delivReady` are read "
-                   "against, so from here it is a bound over a population neither ready arm is inside");
+                   "a member whose JavaScript execution context stack is empty was not counted as unframed — "
+                   "flow_stack_empty refuses a live frame first, so this row's predicate must contain its "
+                   "population");
             if (unframed) out->mem_unframed++;
         }
         /* The job backlog split by what it waits on, in the order the engine asks: flow_pick refuses a host-owed
@@ -4514,10 +4332,8 @@ void flow_wfq_census(WfqCensus *out) {
                    distinct family per census; the node's own mark makes it idempotent against the member door below,
                    which reaches the same node while the root flow stands. */
                 DCHECK(f->family->branch == f->family,
-                       "a family ROOT is not a branch bucket of its own — flow_new points a fresh node's "
-                       "`branch` at itself and only a fork ever moves it, so this root has been through an "
-                       "inheritance it cannot have had, and the thread time its own flow burned is about to "
-                       "be attributed to somebody else's subtree");
+                       "a family root is not its own branch bucket — flow_new points a node's `branch` at itself and "
+                       "only a fork moves it, and a root is never a forked arm");
                 branch_take(out, f->family);
             }
             if (fam > out->svc_fam_max) out->svc_fam_max = fam;
@@ -4538,8 +4354,7 @@ void flow_wfq_census(WfqCensus *out) {
             FlowAcct *br;
             DCHECK(f->acct != NULL,
                    "a live member of the frontier has no fork-tree node — the node is minted at flow_new and "
-                   "released only at the departure that also removes the flow, so this member is standing in "
-                   "the registry after its account was torn down and every burn charged through it is lost");
+                   "released only by the departure that removes the flow");
             br = f->acct->branch;
             DCHECK(br != NULL,
                    "a live member's fork-tree node names no branch bucket — flow_new points every node at "
@@ -4573,10 +4388,8 @@ void flow_wfq_census(WfqCensus *out) {
                    construction: a fan cannot outnumber the bucket holding it. The root arm is asserted where the
                    fork decides it, and root-parented members are excluded from the fan by the gate below. */
                 DCHECK(up == NULL || up->up == NULL || f->acct->branch == up->branch,
-                       "a live member's branch bucket is not the one its fork parent carries — a fork off a "
-                       "non-root joins its parent's bucket and nothing else ever re-points `branch`, so this "
-                       "member is counted in a subtree it was not forked into and the fan below is about to "
-                       "be published as a share of a bucket it is not drawn from");
+                       "a live member's branch bucket is not its fork parent's — a fork off a non-root joins the "
+                       "parent's bucket and nothing else re-points `branch`");
                 if (up && up->up) {
                     if (up->fan_gen != g_wfq_census_gen) { up->fan_gen = g_wfq_census_gen; up->fan_n = 0; }
                     up->fan_n++;
@@ -4617,35 +4430,25 @@ void flow_wfq_census(WfqCensus *out) {
        separates a lost credit from a fabricated one. Over the published fields (`out->`), so the dev build and the
        document check the same three integers. */
     DCHECKF(out->picks_live + out->picks_departed == out->picks_lifetime,
-            "solver/flow.c: the frontier's live members hold %lld dispatches and departed members took %lld, "
-            "against %lld the scheduler has ever made — every dispatch is credited to exactly one member at "
-            "flow_credit_pick, a member arrives holding none and no fork carries one, and flow_remove moves "
-            "the departing member's share into the second of these, so these two are a PARTITION of the third "
-            "and a difference is a dispatch credited to a member that left without going through flow_remove "
-            "or a `Flow.picks` with a second writer. Every reading of `(picksLifetime - picksLive)` as what "
-            "the departed members held is then a quotient over the wrong population",
+            "solver/flow.c: live members hold %lld dispatches and departed members took %lld, against %lld made — "
+            "flow_credit_pick credits each dispatch to one member and flow_remove moves a departing member's share, "
+            "so the two must partition the total",
             (long long)out->picks_live, (long long)out->picks_departed, (long long)out->picks_lifetime);
     DCHECK(out->picks_live <= out->picks_lifetime,
-           "the frontier's live members hold MORE dispatches between them than the scheduler has ever made — "
-           "flow_credit_pick raises both in one statement and is the only writer of either, so a member's "
-           "`picks` has been written from somewhere else and every reading derived from these rows is about "
-           "dispatches that did not happen");
+           "the frontier's live members hold more dispatches than the scheduler has made — flow_credit_pick raises "
+           "both and is the only writer of either");
     /* And the same for the unframed subset: raised in one statement block of flow_credit_pick (an `if` beside a
        `++`), so the inequality fails only on an edit giving one of them a second writer, which would make every
        reading of the pair about two dispatch paths. */
     DCHECK(out->unframed_picks_lifetime <= out->picks_lifetime,
-           "the scheduler has dispatched an UNFRAMED member more often than it has dispatched at all: "
-           "flow_credit_pick raises both in one statement block, the second conditionally on the first, so "
-           "one of them now has a writer elsewhere and the row that separates `memUnframed`'s two readings "
-           "is a fraction over the wrong denominator");
+           "the scheduler dispatched an unframed member more often than it dispatched at all — flow_credit_pick "
+           "raises the unframed count inside the block that raises the total");
     /* And the inner one: the ready count is raised inside the outer `if`, so this fails only on an edit that lifts
        it out, which would make `readyPicksLifetime` a count over a population `unframedPicksLifetime` is not drawn
        from. */
     DCHECK(out->ready_picks_lifetime <= out->unframed_picks_lifetime,
-           "the scheduler has dispatched a READY JOB HOLDER more often than it has dispatched an UNFRAMED "
-           "member at all: the ready count is raised inside the unframed count's own `if` in flow_credit_pick, "
-           "so it has acquired a second writer and the row that turns `unframedPicksLifetime` from a bound "
-           "into a measurement of the job backlog is a fraction over the wrong denominator");
+           "the scheduler dispatched a ready job holder more often than an unframed member — the ready count is "
+           "raised inside the unframed count's `if` in flow_credit_pick");
     /* The most crowded live bucket's own three numbers, from the node the walk retained (flow.h says which three
        states they separate and why three extrema cannot). This is the second reading of that bucket's membership
        pair; branch_take folded the first into a running maximum, and the identity below compares them. Once per
@@ -4697,9 +4500,7 @@ void flow_wfq_census(WfqCensus *out) {
            `picks_max`). The cast narrows the uint64 field (wide so a wrap cannot alias a stale window mark) and is
            asserted, since a row gone negative would read as a leader change. */
         DCHECK(top->family != NULL && top->family->emit_gen <= (uint64_t)INT64_MAX,
-               "the leading account's forgiveness count does not fit the row that reports it — the census would "
-               "publish a NEGATIVE count, which its own reading takes for a change of leader, so a wrapped "
-               "generation would be reported as a healthy front");
+               "the leading account's forgiveness count does not fit the signed row that reports it");
         /* Guarded like its neighbours, so this is not a release-mode dereference of `top->family` guarded only by
            the DCHECK above: every other front row reaches the account through an accessor that answers 0 for a
            departed node (acct_family_val, acct_family_us, flow_own_silence), and a departed front reports the same
@@ -4713,12 +4514,9 @@ void flow_wfq_census(WfqCensus *out) {
            account that earned nothing, or earnings that never forgave their window. */
         DCHECK(top->family == NULL ||
                ((out->top_forgiven > 0) == (top->family->earned > 0.0)),
-               "the leading account's EARNED ledger and its forgiveness count disagree about whether it has "
-               "ever emitted — flow_credit_emit raises both in one statement and is the only writer of either, "
-               "so one of them has a second writer and every reading of the front's aging is about an account "
-               "whose window was opened or closed by something that emitted nothing. This is asked of `earned` "
-               "and not of the reward: an account PLACED at the frontier's virtual time holds a reward it did "
-               "not emit, and that is an arrival rather than a defect");
+               "the leading account's `earned` ledger and its forgiveness count disagree about whether it has "
+               "emitted — flow_credit_emit raises both and is the only writer of either (an arrival's placed reward "
+               "is not `earned`)");
     }
 
     /* The front is one of the members this scan walked, so its silence lies inside the extrema the walk collected.
@@ -4729,9 +4527,8 @@ void flow_wfq_census(WfqCensus *out) {
            "collected — flow_best returns a member of the frontier this scan just enumerated, so the leader "
            "cannot be outside its extrema unless the two are reading different populations");
     DCHECK(!top || (out->top_svc_fam >= out->svc_fam_min && out->top_svc_fam <= out->svc_fam_max),
-           "the WFQ census reports the front of the order's FAMILY standing outside the family-silence range "
-           "its own walk collected — the leader's account is one of the accounts this scan reached through its "
-           "members, so a reading outside the extrema means the walk and flow_best disagree about the frontier");
+           "the front of the order's family silence lies outside the range the census walk collected — the leader's "
+           "account is one this scan reached through its members");
 
     /* How far the job backlog stands behind the front (flow.h), taken here because it is a difference against a top
        the scan cannot know, and left at 0 when nothing waits on rank; `jobs_ready` beside it tells the two apart. */
@@ -4775,18 +4572,14 @@ void flow_wfq_census(WfqCensus *out) {
        sample at one frontier; the second is charged to the shared OTHER entry (the host's read and the pager's tail
        run under it), which is why `other_before` brackets the call. */
     DCHECK(g_scan_weights[FLOW_SCAN_OTHER] - other_before == (long)g_flows_n,
-           "the WFQ census and the flow_best inside it disagree about how many members there are to weigh — a "
-           "sample is supposed to cost exactly two weighings of the frontier, so one of the two walks has "
-           "acquired a filter, and the rows this census fills no longer cover the same population the order "
-           "does");
+           "the census and the flow_best inside it weighed different numbers of members — a sample weighs the "
+           "frontier exactly twice, so one of the walks acquired a filter");
     /* And non-negative by the same construction: `w_top` is flow_best's maximum over every member, and a
        never-dispatched member is one, read through the same flow_weight in the same scan. The row answers whether a
        starved member is outranked or merely unchosen, which a wrong sign inverts. */
     DCHECK(out->never_picked_gap >= 0.0,
-           "the WFQ census reports a never-dispatched member standing ABOVE the front of its own queue — "
-           "flow_best's maximum is taken over the same members this scan walks, so a negative deficit means "
-           "the pick and the census are no longer reading one comparator, and the starvation row would be "
-           "reporting a property of the instrument rather than of the ordering");
+           "the census reports a never-dispatched member above the front of the queue — flow_best's maximum is over "
+           "the members this scan walks, so the two are not reading one comparator");
     /* And the width counts within the gap's population: both are collected in the one branch that tests
        `picks == 0`, so a width above the count is a member the population never admitted. */
     DCHECK(out->never_picked_at_top <= out->never_picked,
@@ -4799,53 +4592,42 @@ void flow_wfq_census(WfqCensus *out) {
        front" fires here. Conditioned on a non-empty population, since both rows are zero when nothing is starved. */
     DCHECK(out->never_picked == 0 ||
            ((out->never_picked_at_top > 0) == (out->never_picked_gap == 0.0)),
-           "the WFQ census's starvation rows disagree about whether the tail touches the front of the order — "
-           "the width is non-zero exactly when the best starved member's weight IS the top, and those are two "
-           "spellings of one comparison, so a reader taking the count, the gap and the width together would be "
-           "reading a plateau the gap says is not there");
+           "the census's starvation width and gap disagree about whether the starved tail touches the front — the "
+           "width is non-zero exactly when the best starved weight is the top");
 
     /* And non-negative by construction, an assertion and not a clamp: `w_top` is flow_best's maximum over every
        member, and a ready job holder is one of them read through the same flow_weight. It fires on an edit (a filter
        hiding a member from flow_best's maximum, or a second reading of the weight), either of which would make
        `job_w_gap` a number about the instrument. */
     DCHECK(out->job_w_gap >= 0.0,
-           "the WFQ census reports a job backlog standing ABOVE the front of its own queue — flow_best's "
-           "maximum is taken over the same members this scan walks, so a negative deficit means the pick and "
-           "the census are no longer reading one comparator, and every conclusion drawn from this row about "
-           "whether queued jobs are outranked or unreachable is a statement about the instrument");
+           "the census reports a job backlog above the front of the queue — flow_best's maximum is over the members "
+           "this scan walks, so the two are not reading one comparator");
     /* And the count and the gap are about one population: `job_w_gap` is written only under `have_job_holder`, which
        only the ready arm raises (solver/result.c's job-row banner pairs them). It catches a maximum widened to a
        framed or host-owed holder. One-sided: a non-zero count with a zero gap says the backlog's best claim stands
        at the front, the row's point. */
     DCHECK(out->jobs_ready > 0 || out->job_w_gap == 0.0,
-           "the WFQ census states how far the job backlog stands behind the front of the order while counting "
-           "no job that waits on rank at all — the gap is written only for a holder the ready arm admitted, so "
-           "a distance with no population under it means the two rows have stopped being about one set and "
-           "`jobsReady: 0` no longer makes `jobWGap: 0`");
+           "the census states a job backlog's gap while counting no rank-ready job — the gap is written only for a "
+           "holder the ready arm admitted");
     /* And the two kinds of ready job sum to the ready count, all three in one hand. The total accumulates the queue's
        `length` and the halves a walk of its records, so this can fail on an edit that moves one accumulation site or
        a reset that stopped covering one half. engine/build.mjs asserts it again, since this is compiled out of a
        release build its reader still runs over. */
     DCHECK(out->jobs_ready_task + out->jobs_ready_micro == out->jobs_ready,
-           "the WFQ census splits the rank-ready job backlog into two kinds that do not add up to it — the "
-           "total is the queue's length and the halves are a walk of the queue's own records, so a split that "
-           "does not close means the two are no longer one sample, and neither half then says which arm of "
-           "flow_step is holding the backlog");
+           "the census's two kinds of rank-ready job do not sum to the ready count — the total is the queue's length "
+           "and the halves a walk of its records, so the two are not one sample");
     /* And the reply backlog's gap is non-negative by the same construction. */
     DCHECK(out->deliv_w_gap >= 0.0,
-           "the WFQ census reports a reply backlog standing ABOVE the front of its own queue — flow_best's "
-           "maximum is taken over the same members this scan walks, so a negative deficit means the pick and "
-           "the census are no longer reading one comparator, and every conclusion drawn from this row about "
-           "whether undelivered replies are outranked or unreachable is a statement about the instrument");
+           "the census reports a reply backlog above the front of the queue — flow_best's maximum is over the "
+           "members this scan walks, so the two are not reading one comparator");
     /* And its count and the three fields written with it (the gap and the visit counts at its ends) are about one
        population: all three are written in the one branch `have_deliv_holder` guards, which only the ready arm
        raises, so any of them set with `deliv_ready` at zero is that branch with a second writer. */
     /* And the document-progress gap is non-negative, for `never_picked_gap`'s reason: the member it is from is one of
        the members flow_best maximises over. */
     DCHECK(out->cur_deep_w_gap >= 0.0,
-           "a WFQ census read a NEGATIVE gap to the deepest member of the document's program table — `w_top` "
-           "is the maximum over every member and the member this gap is from is one of them, so the front of "
-           "the order cannot be behind it; this is flow_best and the census walk reading two frontiers");
+           "the census reports a negative gap to the deepest member of the program table — `w_top` is the maximum "
+           "over every member, including that one");
     /* And its population cannot exceed the frontier: both come out of one walk over `g_flows_n`, so this fails on a
        `continue` added above the collection or a second source of members. */
     DCHECK(out->cur_deep_live <= out->members,
@@ -4856,9 +4638,8 @@ void flow_wfq_census(WfqCensus *out) {
        not asserted: a frontier wholly at row 0 reports `cur_deep` 0 with `cur_deep_live` the whole frontier, a fresh
        document. */
     DCHECK(out->cur_deep_live > 0 || (out->cur_deep == 0 && out->cur_deep_w_gap == 0.0),
-           "a WFQ census stated a deepest program row or a distance to it with NO member standing there — the "
-           "cursor, its population and the gap are written in one branch, so any of them speaking alone is "
-           "that branch having come apart and the row is a distance to nobody");
+           "the census states a deepest program row or its gap with no member standing there — the cursor, its "
+           "population and the gap are written in one branch");
     DCHECK(out->deliv_ready > 0 ||
            (out->deliv_w_gap == 0.0 && out->deliv_w_gap_vis == 0 && out->w_top_vis == 0),
            "the WFQ census states a reply backlog's distance from the front of the order, or the visit counts "
@@ -4913,10 +4694,8 @@ void flow_wfq_census(WfqCensus *out) {
        the published document. Each has one writer (flow_new's append, flow_remove's swap-remove), so a second writer
        (a frontier trim, an eviction, a host reaching into `g_flows`) fires here. */
     DCHECK(g_arrivals - g_departures == (int64_t)out->members,
-           "the frontier's arrival and departure counts do not add up to the members standing in it — one of "
-           "the two has acquired a second writer, or a member joined or left `g_flows` without going through "
-           "flow_new or flow_remove, and `arrivals / picksLifetime` is about to be published as the rate at "
-           "which THIS frontier grows when it is a rate about some other population");
+           "the frontier's arrivals minus departures do not equal its members — flow_new and flow_remove are each "
+           "count's only writer, so a member joined or left `g_flows` another way");
     /* The two spellings of "unframed" are a containment, not an identity: the ready arm is reached through
        flow_stack_empty, whose first line is `if (f->frame) return 0;`, so every member it admits is inside
        `mem_unframed` (`f->frame == NULL`) by construction. What this still catches is a ready count with nothing
@@ -4927,19 +4706,14 @@ void flow_wfq_census(WfqCensus *out) {
            "once per member on the same walk that sets `members`, so a figure outside [0, members] means the "
            "two are no longer one sample and the pair that separates `jobsReady`'s two zeroes is not a pair");
     DCHECK(out->jobs_ready == 0 || out->mem_unframed > 0,
-           "this census reports jobs waiting on RANK ALONE while reporting that every member holds a frame — "
-           "the ready arm is reached only through flow_stack_empty, whose first line refuses a live frame, so "
-           "every member it admits is inside `mem_unframed` by construction and the two cannot disagree "
-           "unless `mem_unframed` has been re-spelled. If it has, `jobsReady: 0` can no longer be told from "
-           "`mem_unframed: 0`, which is the one reading this row was added for");
+           "the census reports rank-ready jobs while every member holds a frame — the ready arm is reached only "
+           "through flow_stack_empty, which refuses a live frame, so `mem_unframed` was re-spelled");
     /* And the same containment for the reply backlog, which needs its own assert: a frontier holding a deliverable
        reply and no queued job (`jobsReady: 0`, `delivReady > 0`) is ordinary, and in it the job assert cannot fire
        whatever `mem_unframed` has become. */
     DCHECK(out->deliv_ready == 0 || out->mem_unframed > 0,
-           "this census reports replies waiting on RANK ALONE while reporting that every member holds a "
-           "frame — the ready arm is reached only through flow_stack_empty, whose first line refuses a live "
-           "frame, so every member it admits is inside `mem_unframed` by construction and the two cannot "
-           "disagree unless `mem_unframed` has been re-spelled");
+           "the census reports rank-ready replies while every member holds a frame — the ready arm is reached only "
+           "through flow_stack_empty, which refuses a live frame, so `mem_unframed` was re-spelled");
     /* And the two identities that define the branch rows, exact because each event has one writer. Membership:
        every live member belongs to exactly one bucket (`branch` is set at flow_new and moved once, at the fork, as a
        matched departure and arrival), and the walk opens each bucket once, so the live counts partition the frontier;
@@ -4955,29 +4729,19 @@ void flow_wfq_census(WfqCensus *out) {
        because the four sites were enumerated by reading writers, and an enumeration cannot state its own
        completeness. Both sides are published. */
     DCHECK(out->epoch_away_live == out->epoch_away_walk,
-           "the frontier's maintained away-from-base count disagrees with a direct reading of it — `away_n` "
-           "is raised at a charge that takes the running member off its family's base, at a fork whose "
-           "newborn inherits a burn, and lowered at a departure, and zeroed for a whole family at "
-           "flow_credit_emit's bump with the emitter alone put back. A difference is a FIFTH site moving a "
-           "member across that base without maintaining the count: a writer of `Flow.cpu`, of `Flow.cpu_gen` "
-           "or of `Flow.family` that this enumeration does not name, or one of the four raising the count on "
-           "the wrong family — acct_depart in particular must read BEFORE it clears either pointer, because "
-           "flow_own_silence answers zero for a member whose family is gone. `epochRebuildLifetime` is a sum "
-           "of exactly this quantity taken at every emission, so it is wrong by however much this is");
+           "the maintained away-from-base count disagrees with a direct walk — a writer of `Flow.cpu`, "
+           "`Flow.cpu_gen` or `Flow.family` outside the four maintained sites moves members across the base, or one "
+           "of the four counts the wrong family (acct_depart must read before clearing either pointer)");
     DCHECK(out->br_live_sum == (long)out->members,
-           "the frontier's branch buckets do not partition its members — a live member belongs to exactly one "
-           "bucket and each bucket is opened once per census, so a sum below `members` is a member counted in "
-           "no bucket and a sum above it is one counted in two. Every per-branch row is about to be published "
-           "as a share of a frontier it is not a partition of");
+           "the frontier's branch buckets do not partition its members — each live member belongs to one bucket and "
+           "each bucket is opened once per census");
     /* And a frontier with members standing has a thinnest bucket somebody stands in: every live member's bucket is
        taken by the member door with a live count of at least one, so this keeps wfq_accounted_spread's branch guard
        from deleting the branch term on a live frontier. The partition identity above cannot say it, since it is
        satisfied by any set of buckets whose live counts sum correctly, empty ones included. */
     DCHECK(out->members == 0 || out->br_live_min > 0,
-           "the census reports members standing and no branch bucket holding one — every live member is "
-           "minted into a bucket and reaches it through `branch`, so a zero here is the live extrema ranging "
-           "over a bucket NOBODY stands in, and wfq_accounted_spread is about to score the branch term's "
-           "whole range as 0.0 while the order spans it");
+           "the census reports members standing and no live branch bucket — every live member stands in a bucket "
+           "with a live count of at least one");
     /* And the mint pair against the live pair it is folded beside, which makes `1/br_born_min - 1/br_born_max` a
        range over one population: `sub_born = live + sub_gone` with `sub_gone >= 0`, so over one set of buckets each
        end of the mint pair dominates its opposite number. The two pairs are written by two statements in
@@ -4993,10 +4757,8 @@ void flow_wfq_census(WfqCensus *out) {
        only while one statement moves both. Writing the rows at the maximum's assignment would compare a statement
        with itself. */
     DCHECK(out->br_crowd_live == out->br_live_max,
-           "the branch bucket the census retained as the frontier's fattest does not hold the live maximum "
-           "the same walk folded — the pointer and the maximum are moved by one statement, so a disagreement "
-           "means one of them is now moved by another, and the crowd's mint count and receipt are about to be "
-           "published as the fattest arm's when they are some other bucket's");
+           "the bucket retained as the most crowded does not hold the live maximum — the pointer and the maximum are "
+           "moved by one statement in branch_take");
     /* And that bucket inside the population the other extrema ranged over, a different break: the crowd going
        through the same folds as the mint and burn extrema. A bucket reached by one door and not the others would
        make every coincidence reading ("is the crowd also the hungriest arm, the one that took most arms") compare
@@ -5006,11 +4768,8 @@ void flow_wfq_census(WfqCensus *out) {
        second `born` field: live (`sub_born - sub_gone`) plus shed (`sub_gone`) reaches `sub_born` by a path the
        fold never took, and it is the one check on `br_minter_gone`, which no extremum bounds. */
     DCHECK(out->br_minter_live + out->br_minter_gone == out->br_born_max,
-           "the branch bucket the census retained as the frontier's biggest MINTER does not hold the mint "
-           "maximum the same walk folded — its live count plus what it has shed IS its lifetime mint count, "
-           "so a disagreement means the pointer and the maximum are no longer moved by one statement, and the "
-           "shed count and receipt of the arm that has taken most arms are about to be published as some "
-           "other bucket's");
+           "the bucket retained as the biggest minter does not hold the mint maximum — live plus shed is the "
+           "lifetime mint count, and the pointer and the maximum are moved by one statement in branch_take");
     /* And that bucket inside the populations the other rows ranged over, as the crowd's pair: the live extremum and
        the held-burn accumulator, so `br_minter_us / br_held_us`, the reading the triple exists for, is a fraction
        of a denominator its numerator is drawn from. One-sided: a maximum and a sum bound sets the minter is in. */
@@ -5030,17 +4789,11 @@ void flow_wfq_census(WfqCensus *out) {
        below, every charged microsecond lands in one of three published places (a bucket somebody stands in, a taken
        empty bucket, a bucket whose subtree departed), checkable on a release document. */
     DCHECK(out->br_held_us + out->br_empty_us == out->br_us_sum,
-           "the thread time held by live branch buckets and by empty ones does not add up to the thread time "
-           "attributed to buckets at all — the two are raised in the two arms of one condition in "
-           "branch_take, so a break is an arm that stopped firing or a guard that no longer decides both, and "
-           "the crowd's share of the thread is about to be published against a denominator drawn from a "
-           "different set of buckets than its numerator");
+           "the thread time of live and empty branch buckets does not sum to the time attributed to buckets — "
+           "branch_take raises the two in the two arms of one condition");
     DCHECK(out->br_us_sum + out->br_retired_us == out->charged_us,
-           "the thread time attributed to branch buckets does not add up to the thread time the scheduler has "
-           "charged — every microsecond lands on exactly one bucket and a bucket's total is folded into the "
-           "retired term when it is freed, so a break is a charge that reached the aging and not the bucket, "
-           "or a bucket freed without its fold, and `brUsLifeMax / chargedUsLife` is about to be published as "
-           "a fraction of a denominator the numerator is not drawn from");
+           "the thread time attributed to branch buckets plus the retired term does not equal the time charged — "
+           "every microsecond lands on one bucket, and a freed bucket's total is folded into the retired term");
     /* And the fan against the bucket holding it, which makes `br_fan_max / br_fan_sum` a reading inside the buckets:
        every member the fan counts sits under a non-root parent, a fork off a non-root joins its parent's bucket, so
        one fan's members are live members of one bucket. The two sides have different writers (the member walk; the
@@ -5048,19 +4801,16 @@ void flow_wfq_census(WfqCensus *out) {
        re-pointed by anything but the fork separates them. An identity `br_fan_sum + <root-parented> == members` is
        not written: both terms would be raised once per trip of this loop, a loop counter compared with itself. */
     DCHECK(out->br_fan_max <= out->br_live_max,
-           "a fork's live children outnumber the whole branch bucket they were forked into — a fork off a "
-           "non-root joins its parent's bucket, so every member counted in a fan is a live member of one "
-           "bucket and this says the two are counting different frontiers: either a departure left a bucket's "
-           "`sub_gone` unraised, or a member's `branch` was moved by something that is not the fork");
+           "a fork's live children outnumber the branch bucket they were forked into — a fork off a non-root joins "
+           "its parent's bucket, so a departure left `sub_gone` unraised or something other than the fork moved "
+           "`branch`");
     /* And the depth against the fan it belongs to: `br_fan_depth` 0 is how a reader is told there is no fan, and a
        real fan never stands at 0, since its node has a parent (the door tests `up->up`) and flow_fork_inherit wrote
        `depth = parent->depth + 1`. The two fields have two writers, and the compression moves `up` while leaving
        `depth`, so they can disagree. */
     DCHECK(out->br_fan_max == 0 || out->br_fan_depth > 0,
-           "the census reports a fork below the top level standing at fork-tree depth 0 — depth 0 is a family "
-           "ROOT and a root is excluded from the fan by the same predicate that decides a branch bucket, so "
-           "either `up` names a node no fork attached or `depth` was never written beside it, and "
-           "`brFanDepth: 0` is about to be published as the statement that this frontier has no deep fork");
+           "the census reports a deep fork at fork-tree depth 0 — a fan's node has a parent and flow_fork_inherit "
+           "wrote its depth, so `up` names a node no fork attached or `depth` was not written");
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
@@ -5100,9 +4850,8 @@ Flow *flow_worst(const Flow *exclude) {
        size estimate, an age, a cheapest-to-rebuild score), and a flow_weight that is not a pure function of the
        flow, which the scan above, asking each weight once, could never notice. */
     DCHECK(!tail || flow_is_min_weight(tail, exclude),
-           "the flow the pager chose to page out is not the lowest-weight member of the frontier — the tail and "
-           "the head are two readings of ONE comparator, so a tail that is not the minimum means a second "
-           "ranking has appeared and the engine is evicting work the WFQ had not finished with");
+           "the flow the pager chose to page out is not the lowest-weight member of the frontier — the tail and the "
+           "head are two readings of one comparator");
     return tail;
 }
 
@@ -5113,17 +4862,15 @@ void flow_remove(JSContext *ctx, Flow *f) {
        flow's delta, DOM head, queued jobs and suspended frame with nothing naming the owner, so a field added to Flow
        gets a line in flow_release and a line here, and the skipped release crashes at the removal. */
     DCHECK(f->delta == NULL && f->dom == NULL && f->dom_base == NULL,
-           "a flow was removed with its COW state still attached — the heap delta and the DOM head must be "
-           "UNAPPLIED from the live heap and document before they can be freed, which is why flow_finish owns "
-           "that and this does not: removing it here drops both");
+           "a flow was removed with its COW state still attached — flow_finish unapplies the heap delta and the DOM "
+           "head before they can be freed");
     DCHECK(f->frame == NULL && f->parked == NULL,
            "a flow was removed holding a live frame or parked continuations — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
     DCHECK(JS_IsUndefined(f->jobs) && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q) &&
            JS_IsUndefined(f->deliver_q),
-           "a flow was removed still holding queued jobs, pending host replies, unstarted cross-agent "
-           "operations or routed cross-document messages — each is a work item on the one frontier, and the "
-           "WFQ may never drop one");
+           "a flow was removed still holding queued jobs, pending host replies, unstarted cross-agent operations or "
+           "routed messages — each is a work item, and the frontier may never drop one");
     /* And the one field beside them that is not work, asserted separately so its message is true (a commitment is
        nobody's work item), with the same structural half: a JSValue field added to Flow gets a line here. */
     DCHECK(JS_IsUndefined(f->deliver_world_q),
@@ -5145,10 +4892,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
     {
         int slot = f->reg_i;
         CHECK(slot >= 0 && slot < g_flows_n && g_flows[slot] == f,
-              "engine: a flow was removed from the frontier at a registry slot that does not hold it — this "
-              "is a double remove, a dangling Flow*, or a member whose slot was not re-keyed by the swap "
-              "that moved it. Proceeding would swap-remove whichever member IS at that slot, dropping a work "
-              "item the WFQ may never drop");
+              "engine: a flow was removed at a registry slot that does not hold it — a double remove, a dangling "
+              "Flow*, or a slot the swap did not re-key; swap-removing there would drop another member");
         JS_FreeValue(ctx, f->fn);
         /* A routed record's queue is released in flow_release beside the operation queue, and its emptiness is
            asserted above: freeing it here would make a dropped work item invisible. */
@@ -5260,9 +5005,8 @@ int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
     DCHECK(doc != 0, "the unstarted-program count was asked about the NONE document — a handle is this "
                      "instance's index into its own name table and zero names nothing");
     DCHECK(f->script_i >= f->last_compiled,
-           "a flow's cursor is BEHIND the last program it compiled — the compile site advances `last_compiled` "
-           "to `script_i` and never past it, so the two have come apart and every index derived from them "
-           "names a row other than the one it is about");
+           "a flow's cursor is behind the last program it compiled — the compile site advances `last_compiled` to "
+           "`script_i` and never past it");
     for (int k = 0; k < f->dyn_n; k++)
         if (prog_row_removed_by_destroy(f, k, doc)) n++;
     return n;
@@ -5307,11 +5051,8 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
        stops holding it. */
     DCHECK(lowest > f->last_compiled && lowest >= f->script_i,
            "§7.5.10 step 5's removal is about to take a row at or below this flow's cursor — `script_i` and "
-           "`last_compiled` are ABSOLUTE positions this walk deliberately does not repair, and they are only "
-           "safe because every removed row sits above BOTH. A row taken below either one leaves the cursor "
-           "naming a different program than the one it stood at, with every index still in range and nothing "
-           "anywhere to say so. If the criterion is meant to reach these rows, the cursor pair has to be "
-           "brought down with them here, exactly as `imm_at`/`imm_next` are below");
+           "`last_compiled` are absolute positions this walk does not repair; to reach those rows, bring the cursor "
+           "pair down here as `imm_at`/`imm_next` are");
 
     /* The entries that name a row, first: engine_pending_docscript records the row's name on the register
        (PEND_SCRIPT_ROW) and flow_deliver_one_reply finds the row by it, the one structure outside this column that
@@ -5336,10 +5077,8 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
         if (!docscript) continue;
         slot = flow_dyn_row_by_id(f, rowid);
         DCHECK(slot >= 0,
-               "an external document script's park names a row this flow does not hold — a name is minted at "
-               "the row's creation, copied by a fork and carried by this compaction, and only a removal HERE "
-               "retires one, so an entry that resolves to nothing outlived its row without this walk taking "
-               "it: the park and the column have come apart");
+               "an external document script's park names a row this flow does not hold — row names are carried by "
+               "forks and compactions and retired only by this walk, so the park outlived its row");
         if (prog_row_removed_by_destroy(f, slot, doc)) { pending_remove(&f->pending, k); continue; }
     }
 
@@ -5367,10 +5106,9 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
                row leaves the peer waiting for the session. The token is still freed below, since in release the
                only alternative is a leak. */
             DCHECK(f->dyn_token[k] == NULL,
-                   "§7.5.10 step 5 removed a destroyed Document's program that still OWED A CROSS-AGENT "
-                   "ANSWER — a peer instance is parked on this row's rendezvous token and the destruction "
-                   "would leave it suspended for the rest of the session. The destruction has to ANSWER it "
-                   "first, with the completion a destroyed document gives, before the row may go");
+                   "§7.5.10 step 5 removed a destroyed Document's program that still owes a cross-agent answer — a "
+                   "peer is parked on this row's rendezvous token; answer it with a destroyed document's completion "
+                   "before removing the row");
             dyn_body_unref(f->dyn[k]);
             free(f->dyn_token[k]);
             free(f->dyn_url[k]);
@@ -5396,16 +5134,14 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
         w++;
     }
     DCHECK(w == f->dyn_n - removed,
-           "§7.5.10 step 5's compaction kept a different number of rows than the count said it would take — "
-           "the count and the walk ask one predicate over one column, so a disagreement means the sequence "
-           "was written between them and the ten columns no longer describe one queue");
+           "§7.5.10 step 5's compaction kept a different number of rows than the count said it would take — the "
+           "count and the walk ask one predicate over one column");
     f->dyn_n = w;
     /* `script_i` and `last_compiled` are untouched; the proof is the `lowest` assert above, where the columns still
        hold the positions the claim is about. */
     DCHECK(flow_programs_unstarted_for_document(f, doc) == 0,
-           "§7.5.10 step 5 removed a destroyed Document's queued programs and the document still has some — "
-           "the compaction is over the same predicate the count is, so a survivor means a row moved ACROSS the "
-           "cursor and became unstarted, which nothing in this walk can do");
+           "§7.5.10 step 5 left unstarted programs of the destroyed Document — the compaction uses the count's "
+           "predicate, and no row can cross the cursor in this walk");
     return removed;
 }
 
