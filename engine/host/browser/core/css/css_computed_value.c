@@ -2002,6 +2002,13 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        owns that residual. */
     case CSS_PROPERTY_ALIGN_ITEMS:
     case CSS_PROPERTY_ALIGN_SELF:
+    /* css-flexbox-1 §8.4 "Packing Flex Lines: the align-content property", `Computed value: specified
+       keyword`, over the same one-ident grammar; §9.4's step 9 reads `stretch` off a multi-line container.
+       css-align-3 §5.2's `place-content` sets it too (core/css/css_shorthand.c). */
+    case CSS_PROPERTY_ALIGN_CONTENT:
+    /* css-display-3 §3 "Display Order: the order property", `Computed value: specified integer`, an
+       `<integer>` carried as text; core/layout/flex_line.c parses it for order-modified document order. */
+    case CSS_PROPERTY_ORDER:
     /* css-ui-4 §6.2 "Exclusion from Hit-testing: the pointer-events property", `Computed value: specified
        keyword` over `auto | none`. `none` excludes the element itself and not its subtree, since a descendant
        may declare `auto`, so a hit test asks it of every box and never prunes a subtree on one answer. */

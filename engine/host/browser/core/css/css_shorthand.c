@@ -308,6 +308,21 @@ static const char *const JUSTIFY_SELF_KEYWORDS[] = {
     "self-start", "self-end", "flex-start", "flex-end", "left", "right"
 };
 
+/* css-align-3 §5.2 "Content-Distribution Shorthand: the place-content property"' components, `<'align-content'>
+   <'justify-content'>?`, stated by reference, so each is this engine's longhand grammar: lexbor registers both
+   and parses css-flexbox-1 §8.4's `align-content` and §8.2's `justify-content` keyword sets, read off
+   `lxb_css_property_state_align_content` and `_justify_content`.
+   Named residual. Not covered: css-align-3's wider `align-content`/`justify-content` values (`normal`,
+   `space-evenly`, `start`, `end`, baselines, `safe`/`unsafe`), and so a copied `stretch`, which this engine's
+   `justify-content` refuses. Next: css-align-3's `Value:` lines in lexbor's two parsers, read here from them.
+   Absence shows as `place-content: stretch` or `place-content: space-evenly` dropped as invalid. */
+static const char *const ALIGN_CONTENT_KEYWORDS[] = {
+    "flex-start", "flex-end", "center", "space-between", "space-around", "stretch"
+};
+static const char *const JUSTIFY_CONTENT_KEYWORDS[] = {
+    "flex-start", "flex-end", "center", "space-between", "space-around"
+};
+
 /* css-backgrounds-3 §3.2's `<line-style>`, entire and in the spec's own order, and §3.3's three `<line-width>`
    keywords. THESE GRAMMARS HAVE TO BE HERE, unlike `<margin-width>`: lexbor's property registry carries no
    `border-width` and no `border-style` (it has `border`, the four `border-<side>` shorthands and the four
@@ -1394,15 +1409,26 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        value — its `<self-position>` carries `flex-start`, `flex-end` and `center`, its `<baseline-position>`
        carries `baseline`, and `stretch` is on its own `Value:` line — so the test passes for all five today
        and is asked anyway: it is the one line that would catch a widening of one list and not the other. */
-    if (strcmp(shorthand, "place-items") == 0 || strcmp(shorthand, "place-self") == 0) {
-        bool items = strcmp(shorthand, "place-items") == 0;
-        const char *const *first = items ? ALIGN_ITEMS_KEYWORDS : ALIGN_SELF_KEYWORDS;
-        const char *const *second = items ? JUSTIFY_ITEMS_KEYWORDS : JUSTIFY_SELF_KEYWORDS;
-        unsigned nf = items ? CSS_SH_N(ALIGN_ITEMS_KEYWORDS) : CSS_SH_N(ALIGN_SELF_KEYWORDS);
-        unsigned ns = items ? CSS_SH_N(JUSTIFY_ITEMS_KEYWORDS) : CSS_SH_N(JUSTIFY_SELF_KEYWORDS);
+    /* css-align-3 §5.2's `place-content` states the same rule — "The second value is assigned to
+       justify-content; if omitted, it is copied from the first value, unless that value is a
+       <baseline-position> in which case it is defaulted to start" — and this engine's `align-content` has no
+       `<baseline-position>`, so the exception has no member here. */
+    if (strcmp(shorthand, "place-items") == 0 || strcmp(shorthand, "place-self") == 0 ||
+        strcmp(shorthand, "place-content") == 0) {
+        bool items = strcmp(shorthand, "place-items") == 0, content = strcmp(shorthand, "place-content") == 0;
+        const char *const *first =
+            content ? ALIGN_CONTENT_KEYWORDS : items ? ALIGN_ITEMS_KEYWORDS : ALIGN_SELF_KEYWORDS;
+        const char *const *second =
+            content ? JUSTIFY_CONTENT_KEYWORDS : items ? JUSTIFY_ITEMS_KEYWORDS : JUSTIFY_SELF_KEYWORDS;
+        unsigned nf = content ? CSS_SH_N(ALIGN_CONTENT_KEYWORDS)
+                    : items   ? CSS_SH_N(ALIGN_ITEMS_KEYWORDS) : CSS_SH_N(ALIGN_SELF_KEYWORDS);
+        unsigned ns = content ? CSS_SH_N(JUSTIFY_CONTENT_KEYWORDS)
+                    : items   ? CSS_SH_N(JUSTIFY_ITEMS_KEYWORDS) : CSS_SH_N(JUSTIFY_SELF_KEYWORDS);
+        const char *align = content ? "align-content" : items ? "align-items" : "align-self";
+        const char *justify = content ? "justify-content" : items ? "justify-items" : "justify-self";
 
-        if (strcmp(longhand, items ? "align-items" : "align-self") == 0) axis = 0;
-        else if (strcmp(longhand, items ? "justify-items" : "justify-self") == 0) axis = 1;
+        if (strcmp(longhand, align) == 0) axis = 0;
+        else if (strcmp(longhand, justify) == 0) axis = 1;
         else return NULL;
         /* CSS Cascade §7.3's keywords are the ENTIRE value for every property in CSS and set BOTH longhands
            to themselves, so they precede CSS Cascade §7.3's own grammar, in which neither is a term. */
@@ -1696,6 +1722,7 @@ static const char *const LH_OVERFLOW[] = { "overflow-x", "overflow-y" };
 static const char *const LH_FLEX_FLOW[] = { "flex-direction", "flex-wrap" };
 /* css-align-3 §7.3's and css-align-3 §6.3's longhand pairs, each in the shorthand's own `Value:` order, which is the
    order the expansion writes and the serialization reads positionally. */
+static const char *const LH_PLACE_CONTENT[] = { "align-content", "justify-content" };
 static const char *const LH_PLACE_ITEMS[] = { "align-items", "justify-items" };
 static const char *const LH_PLACE_SELF[] = { "align-self", "justify-self" };
 static const char *const FLEX_FLOW_INITIAL[] = { "row", "nowrap" };
@@ -1796,6 +1823,7 @@ static const CssShorthandRow SHORTHANDS[] = {
        directions at once. `flex-start` is deliberately the second component because it is a member of BOTH
        lists — the round trip then tests the PER-POSITION lookup without depending on a value only one of the
        two carries, which is the half a shared list would have passed anyway. */
+    { "place-content", LH_PLACE_CONTENT,  2, CSS_SH_TWO_AXIS,  "center flex-start", NULL, NULL },
     { "place-items",   LH_PLACE_ITEMS,    2, CSS_SH_TWO_AXIS,  "center flex-start", NULL, NULL },
     { "place-self",    LH_PLACE_SELF,     2, CSS_SH_TWO_AXIS,  "center flex-start", NULL, NULL },
     /* css-text-4 §7.1. The fixture is the case §7.1's own sentence is about — a value "other than justify-all
@@ -2995,6 +3023,9 @@ bool css_shorthand_complete_for(const char *longhand)
         "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
         "caption-side", "table-layout", "border-collapse", "border-spacing",
         "align-items", "align-self", "justify-items", "justify-self",
+        /* css-align-3 §5.2's `place-content`, in the table above, is the only shorthand over these two, and
+           none sets css-display-3 §3's `order`. */
+        "align-content", "justify-content", "order",
         "top", "right", "bottom", "left",
         "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
         "list-style-position", "list-style-image", "list-style-type",

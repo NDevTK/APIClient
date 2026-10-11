@@ -90,6 +90,8 @@ typedef enum {
     X(FLEX_SHRINK,         "flex-shrink",         LXB_CSS_PROPERTY_FLEX_SHRINK,    TEXT)              \
     X(ALIGN_ITEMS,         "align-items",         LXB_CSS_PROPERTY_ALIGN_ITEMS,    TEXT)              \
     X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     TEXT)              \
+    X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  TEXT)              \
+    X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT)              \
     X(VISIBILITY,          "visibility",          LXB_CSS_PROPERTY_VISIBILITY,     TEXT)              \
     X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT)              \
     X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
