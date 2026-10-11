@@ -38,14 +38,14 @@
  * and the next activation computes them before it retries the node. A resting drive also defers once it has
  * opened rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies in one activation, so a node whose derivation is wide
  * rests mid-node rather than only a deep one. */
-/* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's auto-height and
- * last-baseline entries are still driven where core/layout/used_value.c sizes a box for a caller inside the walk
- * (an `inline-block` on a line, an absolutely positioned box's containing-block height, intrinsic_block_size.c)
- * and where line_box.c measures an `inline-block`'s baseline, so those compute what they deferred inside the
- * same activation. Next: line_box.c's atomic inline measurement asks that height and baseline and propagates
- * "not yet" through the line-box asks. How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU
- * assert naming a unit whose heavy node is an `inline-block`, a line containing one, or an absolutely
- * positioned box. */
+/* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's auto-height entry
+ * is still driven where core/layout/used_value.c sizes a box for a caller inside the walk outside a line (an
+ * absolutely positioned box's containing-block height, an `inline-block` whose `min-height` or `max-height`
+ * is a content keyword, intrinsic_block_size.c), so those compute what they deferred inside the same
+ * activation. Next: the containing-block height an
+ * absolutely positioned box's solve reads, asked by the out-of-flow origin before the solve. How its absence
+ * shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming a unit whose heavy node is an absolutely
+ * positioned box inside an `auto`-height positioned ancestor. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the

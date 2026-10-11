@@ -280,6 +280,12 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
 /* The same fragments without a drive of their own: false ("not yet") when the establishing context's §9.4.1
    walk deferred a contribution, with nothing stored; true with the array at `*out` and its count at `*count`.
    `line_box_inline_fragments` is this ask inside a drive (core/layout/layout_job.h). */
+/* The walks the fill of `style`'s run reads for its atomic inline-level boxes (CSS 2.2 §10.8 step 1's margin box
+   of an `inline-block` and its §10.8.1 baseline), asked without a drive before the line boxes are measured:
+   false ("not yet") when one was deferred, with the question suspended on the current job. The fill itself
+   is held by the job's line box record, so asking costs no second fill. */
+bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail);
+
 bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                    LineBoxFragment **out, size_t *count);
 

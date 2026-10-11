@@ -290,12 +290,14 @@ static bool sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending_
    of its lines the content grows from and `el`'s decides which end of the SCROLLING AREA is the ending one:
    a `rtl` block inside a `ltr` scroller overflows toward the LOWER coordinate, which is `el`'s BEGINNING edge.
    §2's two rows are then one expression rather than a case per combination. */
-static CssPx sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, CssPx origin,
-                          bool vertical, bool ending_at_hi, CssPx best)
+static bool sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, CssPx origin,
+                         bool vertical, bool ending_at_hi, CssPx *best)
 {
     char sbuf[160], fbuf[160], ebuf[160];
     CssPx lo, hi;
 
+    /* The span reads every line's extent, which reads the atomic inlines' heights and baselines. */
+    if (!line_box_atomics_ask(style, run, line_box_available_width_derived())) return false;
     line_box_content_span(style, run, vertical, &lo, &hi);
     /* THE ESTABLISHING BOX AND THE RUN'S TWO DELIMITERS ARE THE SUBJECT, AND THE TWO COORDINATES ARE THE FACT.
        Which of this function's two callers reached it is already in a frame list — they are distinct functions
@@ -312,8 +314,8 @@ static CssPx sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, CssPx orig
            run.after == NULL ? "the start of the content" : box_subject_node(run.after, fbuf, sizeof fbuf),
            run.end == NULL ? "the end of the content" : box_subject_node(run.end, ebuf, sizeof ebuf),
            vertical ? "block" : "inline", lo.px, hi.px);
-    if (ending_at_hi) return css_px_max(best, css_px_add(origin, hi));
-    return css_px_min(best, css_px_add(origin, lo));
+    *best = ending_at_hi ? css_px_max(*best, css_px_add(origin, hi)) : css_px_min(*best, css_px_add(origin, lo));
+    return true;
 }
 
 static bool sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx *best)
@@ -329,8 +331,7 @@ static bool sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool 
         whole.after = NULL;
         whole.end = NULL;
         if (!sa_content_origin(b, vertical, &origin)) return false;
-        *best = sa_fold_span(b, whole, origin, vertical, ending_at_hi, *best);
-        return true;
+        return sa_fold_span(b, whole, origin, vertical, ending_at_hi, best);
     }
 }
 
@@ -366,7 +367,10 @@ static bool sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, boo
     for (i = 0; i < n; i++) {
         CssPx origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
 
-        best = sa_fold_span(b, v[i].run, origin, vertical, ending_at_hi, best);
+        if (!sa_fold_span(b, v[i].run, origin, vertical, ending_at_hi, &best)) {
+            free(v);
+            return false;
+        }
         if (!vertical) continue;
         if (ending_at_hi) best = css_px_max(best, css_px_add(origin, v[i].height));
         else              best = css_px_min(best, origin);

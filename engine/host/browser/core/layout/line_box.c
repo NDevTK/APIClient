@@ -312,6 +312,20 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
     return out;
 }
 
+/* The walks `lb_atomic_extent` reads for `el`, asked without a drive: an `inline-block`'s content-based height
+   where its `height` behaves as auto (css-sizing-3 §3.2.1) and, where §10.8.1 gives it a baseline, its last
+   line box's. A replaced element reads neither. False ("not yet") when one was deferred. */
+static bool lb_atomic_ask(lxb_dom_element_t *el)
+{
+    CssPx unused;
+    bool has;
+
+    if (replaced_element_of(el).replaced) return true;
+    if (used_value_height_behaves_as_auto(el) && !block_flow_auto_height_ask(el, &unused)) return false;
+    if (lb_inline_block_overflow_excepts_baseline(el)) return true;
+    return block_flow_last_line_box_baseline_ask(el, &unused, &has);
+}
+
 static void lb_take(LbExtent *line, LbExtent box)
 {
     line->above = css_px_max(line->above, box.above);
@@ -1251,6 +1265,22 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvai
     return out;
 }
 
+bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
+{
+    LbFill local, *f = lb_layout(style, run, avail, &local);
+    size_t i, items = f->n == 0 ? 0 : f->lines[f->n - 1].to;
+    bool ready = true;
+
+    /* With the facts already held, every extent is computed and there is nothing left to ask. The item count
+       is the partition's, which `text_run_measure_fill` closes at the end of the collection. */
+    if (f->facts == NULL)
+        for (i = 0; i < items && ready; i++)
+            if (text_run_measure_item_is_atomic(&f->m, i))
+                ready = lb_atomic_ask(text_run_measure_item_style(&f->m, i));
+    lb_layout_end(f, &local);
+    return ready;
+}
+
 CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                               bool *any_line_box, CssPx *first_baseline, CssPx *last_baseline)
 {
@@ -2143,6 +2173,11 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
        block-level box are filled separately for the same reason. The stack is seeded at each box's own top
        content edge, keeping coordinates in line_box.h's frame (offsets from the container's content box) while
        lines are measured inside their box; the seed is zero for the unmixed shape. */
+    for (b = 0; b < ctx.n; b++)
+        if (!line_box_atomics_ask(style, ctx.box[b].run, line_box_available_width_derived())) {
+            free(ctx.box);
+            return false;
+        }
     for (b = 0; b < ctx.n; b++) {
         size_t lo_item, hi_item;
         bool has_open, has_close, present;

@@ -433,6 +433,10 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el);
    an absent one. */
 bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline);
 
+/* The same baseline asked without a drive of its own: false ("not yet") when the walk deferred a question,
+   with nothing written; true with `*baseline` and `*has` (the return value above) written. */
+bool block_flow_last_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseline, bool *has);
+
 /* CSS 2.1 §17.5.3 "Table height algorithms"' CELL BASELINE, as far as §9.4.1's stack answers it: the offset
    from `el`'s TOP CONTENT EDGE to the baseline of the FIRST in-flow line box under it, and whether there is
    one at all. Same frame, same two answers and the same walk as the entry above — only the END of the stack it

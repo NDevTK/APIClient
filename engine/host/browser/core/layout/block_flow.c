@@ -1640,6 +1640,8 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
             /* THE BOX HAS AN ELEMENT AND ITS OWN CONTENT BOX IS THE CONTAINING BLOCK OF ITS LINES, so
                §9.4.2's width is `el`'s and is left to be derived — which also keeps it unread for a run with
                no break position in it, the skip line_box.h states as load-bearing. */
+            if (!line_box_atomics_ask(el, whole, line_box_available_width_derived()))
+                return false;   /* "not yet": an atomic inline's height or baseline was deferred */
             h = line_box_content_height(el, whole, line_box_available_width_derived(),
                                         &any_line_box, &first_baseline, &last_baseline);
         }
@@ -1725,6 +1727,8 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
                 *st->found = true;
             }
             if (!block_flow_run_generates_box(el, anon_run)) continue;
+            if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived()))
+                return false;   /* "not yet": an atomic inline's height or baseline was deferred */
             b = bf_anon_box(el, anon_run, pass);
         } else if (brk != NULL) {
             ce = lxb_dom_interface_element(brk);
@@ -2396,7 +2400,7 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
     return h;
 }
 
-bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
+bool block_flow_last_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseline, bool *has)
 {
     CssPx unused = css_px(0.0);
     bool found = false;
@@ -2423,12 +2427,25 @@ bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
            "stated over exactly that box, and core/layout/line_box.c has classified the box type — and taken "
            "out the REPLACED `inline-block`, which has no baseline at all — before asking, so the two lists "
            "have come apart");
-    b = bf_layout_driven(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_LAST);
+    DCHECK(has != NULL, "the last-line-box baseline ask was given nowhere to say whether a line box exists");
+    if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_LAST, &b)) return false;
     DCHECK(!found, "the baseline walk reported placing a box it was not looking for");
     /* `bf_layout` measures both of its distances from this box's TOP CONTENT EDGE, which is the frame this
        entry's contract states, so there is no conversion here and none is hidden in the caller either. */
     *baseline = b.baseline;
-    return b.has_line_box;
+    *has = b.has_line_box;
+    return true;
+}
+
+bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
+{
+    LayoutJobDrive d;
+    bool has = false;
+
+    layout_job_drive_begin(&d);
+    while (!block_flow_last_line_box_baseline_ask(el, baseline, &has)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    return has;
 }
 
 bool block_flow_first_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseline, bool *has)
