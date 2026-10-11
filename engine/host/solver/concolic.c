@@ -58,9 +58,9 @@ typedef struct {
        (pred_carry_through_not) but not this, so a value that got here by any other route reads 0. */
     signed char src_self;
     /* Whether `src` is this value's own injection identity rather than one inherited from an operand: a source
-       read and a member read (both `src_self`) and a call result, whose `src` is its own shape. An arithmetic,
-       concatenation, coercion or builtin derivation carries its first unknown operand's `src` and reads 0. An
-       equality's determination is filed under `src` only for a subject that owns it (concolic_pin). */
+       read (`src_self`), and any value whose `src` is its own shape (a member read, a call result, a `typeof`),
+       written at concolic_alloc. An arithmetic, concatenation, coercion or builtin derivation carries its first
+       unknown operand's `src` and reads 0. An equality pins under `src` only for a subject that owns it. */
     signed char src_own;
     char *root;         /* delivery provenance: where the bytes entered. A derivation unions its operands'
                            (one member = unchanged); a set, walked by root_member. NULL exactly when `src` is */
@@ -1685,15 +1685,6 @@ static void pin_src_names_self(JSValueConst v) {
        so the flag stays 0. */
     if (!c->src) return;
     c->src_self = 1;
-    c->src_own = 1;
-}
-
-/* Mark that `v`'s `src` is its own injection identity without naming it for a pin read (`src_own` without
-   `src_self`): a call result, whose `src` is its own shape. */
-static void src_own_stamp(JSValueConst v) {
-    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-
-    if (!c || !c->src) return;   /* a candidate re-fire delivered a plain value, or no provenance */
     c->src_own = 1;
 }
 
@@ -3460,7 +3451,6 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
        so a candidate substitutes at the call), and not new bytes: whatever carried the callee's bytes in
        carried these. */
     r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, JS_UNDEFINED);
-    src_own_stamp(r);
     /* …and the predicate the page just wrote, if this result can name one. `if (path.startsWith("/api"))`
        gates `path` as `path === "/api"` does, but determines no value, so it pins nothing and carries no bound.
        (A `!`-spelled gate reaches no branch here; concolic.h's residual beside concolic_strpred names why.)
@@ -4910,6 +4900,10 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     CHECK(c->shape, "concolic: OOM copying a display shape");
     c->src = src ? strdup(src) : NULL;
     CHECK(!src || c->src, "concolic: OOM copying a source's provenance");
+    /* A value whose injection identity is its own display shape names itself by it: a member read, a call
+       result, a `typeof`. A source read names itself under a src that is not its shape (pin_src_names_self);
+       a derivation that inherited an operand's src does not. */
+    c->src_own = (signed char)(src != NULL && !strcmp(src, c->shape));
     c->root = root ? strdup(root) : NULL;
     CHECK(!root || c->root, "concolic: OOM copying a value's delivery root");
     c->root_whose = root_whose;   /* one fact with the root above — see the field and the assert */
