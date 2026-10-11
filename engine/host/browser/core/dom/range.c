@@ -1798,8 +1798,7 @@ static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
 /* CSSOM View §9 "Extensions to the Range Interface"'s getBoundingClientRect(), which is its OWN four steps
    and not CSSOM View §6 "Extensions to the Element Interface"'s get-the-bounding-box — the standard writes
    them out again for the Range, so they are written out again here. Steps 3 and 4 reduce a list of one to that
-   one rectangle under either, for the reason ev_bounding_rect states in element_view.c, and the choice between
-   them for a longer list is the same unwritten comparison over a possibly-concolic number. */
+   one rectangle under either: the smallest rectangle enclosing one rectangle is that rectangle. */
 static JSValue range_bounding_rect(JSContext *ctx, const RangeBounds *b)
 {
     JSValue list = range_client_rects(ctx, b), len;
@@ -1826,10 +1825,9 @@ static JSValue range_bounding_rect(JSContext *ctx, const RangeBounds *b)
     DFAIL("CSSOM VIEW §9's getBoundingClientRect() steps 3 and 4 must CHOOSE for a list of more than one "
           "rectangle — the first one when every rectangle has a zero width or height, the smallest enclosing "
           "rectangle otherwise — and both are COMPARISONS over numbers a border area derived from the initial "
-          "containing block carries a viewport domain on. core/dom/element_view.c's own reduction names the "
-          "primitive to write them over (Geometry Interfaces §3's NaN-safe edges, which already state the rule "
-          "for an unknown operand: yield the concolic, run the derivation on the examples, never fork). WRITE "
-          "BOTH there and reach them from here, so the two members share one reduction rather than two");
+          "containing block carries a viewport domain on. core/dom/element_view.c's `ev_bounding_box_of` is "
+          "that reduction over client rectangles in css_length.h's vocabulary; build this list in that "
+          "vocabulary and reach it from here, so the two members share one reduction rather than two");
     return dom_rect_new(ctx, 0.0, 0.0, 0.0, 0.0);
 }
 

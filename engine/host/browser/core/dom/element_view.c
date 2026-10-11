@@ -1118,89 +1118,39 @@ static void ev_map_through_transforms(lxb_dom_element_t *el, CssPx *x, CssPx *y,
     *h = css_px_sub(max_y, min_y);
 }
 
-/* §6's step 3 FOR ONE BOX FRAGMENT — "a DOMRect describing its border area". A border area is CSS 2 §8.1's
-   border box, so it is that box's two EXTENTS (core/layout/used_value.h) at its POSITION
-   (core/layout/flow_position.h), and the two are asked in that order because the extent is the position's own
-   operand: §9.4.1 stacks a box below its preceding siblings' heights, so a component that cannot measure a box
-   cannot place the next one either, and the crash the extent raises is the earlier subproblem.
-   THE THREE STEPS ARE ASSEMBLE, MAP, CONVERT, and they are written apart because they are three different
-   spaces. The two assembly arms below both answer in the INITIAL CONTAINING BLOCK's space; the map is §6's own
-   first constraint over css-transforms-1 §2's current transformation matrix, in that same space; and the
-   subtraction at the end is CSSOM VIEW §4's, which is what makes a client rectangle move as a page scrolls.
-   THE SUBTRACTION USED TO BE DUPLICATED INTO BOTH ARMS and is now performed once, which is not a tidy-up: it is
-   what puts the map on the correct side of it. */
-static void ev_border_area_px(const EvTarget *t, CssPx out[4])
+/* §6's step 3 for one box fragment — "a DOMRect describing its border area": CSS 2 §8.1's border box, its two
+   extents (core/layout/used_value.h) at its position (core/layout/flow_position.h), in the initial containing
+   block's space. An inline box's border area is not an extent at a position (CSS 2 §10.3.1 and §10.6.1 say
+   `width` and `height` do not apply), so its fragments come from `flow_inline_fragment_rects` instead. */
+static void ev_border_area_px(lxb_dom_element_t *el, CssPx out[4])
 {
-    lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
-    CssPx w, h, x, y;
+    ElementViewFragments kind = element_view_fragment_kind(el);
+    /* A table element's border area is its TABLE box's (`ev_table_fragments`), which is not at the element's
+       origin when a caption is stacked above it. */
+    FlowPoint o = kind == ELEMENT_VIEW_FRAGMENTS_TABLE ? flow_table_box_origin(el) : flow_border_box_origin(el);
 
-    /* THE ASSEMBLY, in the initial containing block's space. AN INLINE BOX'S BORDER AREA IS NOT AN EXTENT AT A
-       POSITION and cannot be assembled the way the block arm below assembles one: CSS 2 §10.3.1 "Inline,
-       non-replaced elements" says the `width` property "does not apply", and §10.6.1 says the same of `height`
-       while making the box's own content area a function of its font — so `used_value_border_edge_px` has no
-       answer for either axis. Both numbers come out of the FRAGMENT instead (core/layout/flow_position.h),
-       which is the same list `getClientRects` enumerates. */
-    if (element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
-        FlowRect *frags = NULL;
-        size_t n = flow_inline_fragment_rects(el, &frags);
-        FlowRect first = frags[0];
+    DCHECK(kind != ELEMENT_VIEW_FRAGMENTS_LINE_BOXES,
+           "a border area was assembled as an extent at a position for an inline box, whose rectangles are its "
+           "line fragments (`flow_inline_fragment_rects`)");
+    out[0] = o.x;
+    out[1] = o.y;
+    out[2] = used_value_border_edge_px(el, false);
+    out[3] = used_value_border_edge_px(el, true);
+}
 
-        free(frags);
-        if (n > 1)
-            DFAIL("CSSOM VIEW §6's get-the-bounding-box was asked in css_length.h's vocabulary for an inline "
-                  "box that CSS 2 §9.4.2 \"Inline formatting contexts\" split across SEVERAL line boxes — "
-                  "\"when an inline box exceeds the width of a line box, it is split into several boxes and "
-                  "these boxes are distributed across several line boxes\" — so §6's steps 3 and 4 must CHOOSE "
-                  "between them, and this entry has one rectangle to answer with. The choice is the same one "
-                  "`ev_bounding_rect` above crashes for and it is the SAME BUILD: step 3 returns the first "
-                  "rectangle when every one has a zero width or height, step 4 otherwise returns the smallest "
-                  "rectangle enclosing those that do not — both COMPARISONS over rectangles whose numbers are "
-                  "concolics derived from the initial containing block, so neither may be a C branch on the "
-                  "example (that deletes the arm a responsive bundle explores) and both go through Geometry "
-                  "Interfaces §3's NaN-safe derived edges. BUILD it ONCE, over CssPx, and let both entries "
-                  "call it — this entry and that one are two vocabularies for one algorithm and a second copy "
-                  "of the choice would be two answers");
-        x = first.x;
-        y = first.y;
-        w = first.width;
-        h = first.height;
-    } else {
-        /* A table element's border area is its TABLE box's (`ev_table_fragments`), which is not at the
-           element's origin when a caption is stacked above it. */
-        FlowPoint o = element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_TABLE ? flow_table_box_origin(el)
-                                                                                     : flow_border_box_origin(el);
+/* One rectangle of `el`'s from the initial containing block's space to client coordinates: §6's step 3's first
+   constraint, css-transforms-1 §2's current transformation matrix, maps it ("starting from the viewport
+   coordinate system", so before the conversion: a rotation does not commute with it), then CSSOM View §4's
+   scroll position is subtracted. Applied to an element nothing transforms, the matrix is the identity. */
+static void ev_client_rect_px(const EvTarget *t, lxb_dom_element_t *el, const CssPx in[4], CssPx out[4])
+{
+    CssPx x = in[0], y = in[1], w = in[2], h = in[3];
 
-        w = used_value_border_edge_px(el, false);
-        h = used_value_border_edge_px(el, true);
-        x = o.x;
-        y = o.y;
-    }
-    /* STEP 3'S FIRST CONSTRAINT. It is satisfied and not skipped for an element nothing transforms:
-       css-transforms-1 §2 makes the current transformation matrix the identity for such a chain, and mapping a
-       rectangle through the identity is the rectangle. What is left of the constraint for a chain that IS
-       transformed is that component's own subproblem and it crashes there, by name, naming
-       css-transforms-1 §4 "The transform-origin Property" as the value it has no way to compute. */
     ev_map_through_transforms(el, &x, &y, &w, &h);
-    /* THE CLIENT CONVERSION — CSSOM VIEW §4 "Extensions to the Window Interface"'s scroll position subtracted
-       from a document coordinate, which element_view.h states and which is performed once for both arms. */
     out[0] = css_px_sub(x, css_px(viewport_window_scroll(t->dctx, false)));
     out[1] = css_px_sub(y, css_px(viewport_window_scroll(t->dctx, true)));
     out[2] = w;
     out[3] = h;
-}
-
-/* THE SAME RECTANGLE, MINTED. The four numbers stop here in css_length.h's vocabulary and cross to the page
-   through viewport.h's one seam, which is why the derivation above answers a `CssPx[4]` and this answers a
-   DOMRect: a caller that has to COMPARE two rectangles (Intersection Observer §3.2.10 steps 9 to 12) must do it
-   on the examples, in C, with the environment facts still attached, and a caller that has to hand one to the
-   page must mint it. Two callers, one derivation, no second answer. */
-static JSValue ev_border_area(const EvTarget *t)
-{
-    CssPx b[4];
-
-    ev_border_area_px(t, b);
-    return dom_rect_new_values(t->rctx, ev_client_px(t->rctx, b[0]), ev_client_px(t->rctx, b[1]),
-                               ev_client_px(t->rctx, b[2]), ev_client_px(t->rctx, b[3]));
 }
 
 /* §6's step 2's own question — "if the element HAS AN ASSOCIATED SVG LAYOUT BOX". The OUTERMOST `svg` element
@@ -1311,100 +1261,106 @@ static size_t ev_table_fragments(lxb_dom_element_t *el, lxb_dom_element_t ***out
     return ncaps + 1;
 }
 
-/* §6's getClientRects() STEPS, AS THE INTERNAL ALGORITHM. CSSOM VIEW §2 "Terminology" is explicit that a
-   member "said to call another method or attribute" invokes the algorithm and not the page-visible member, and
-   getBoundingClientRect's step 1 is exactly such a call — so a page that overwrites
-   `Element.prototype.getClientRects` cannot change what `getBoundingClientRect()` measures, and neither can it
-   change what §9's Range members measure.
-   STEP 1 IS THE ONE THIS ENGINE ANSWERS FOR REAL, and it is a DERIVATION and not a stand-in: an element with
-   no associated box generates no fragments in ANY user agent, so the empty list is the whole domain of the
-   answer rather than one point picked out of it. element_view.h's one predicate is what decides it, so this
-   branch covers a disconnected element, an element of a document nothing is presenting (a DOMParser parse, a
-   `<template>`'s contents, the document of a destroyed navigable) and anything whose computed `display` is
-   `none` — which is most of what a lazy-loading bundle measures before it inserts anything. */
-static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
+/* §6's getClientRects() steps 1 to 3, in css_length.h's vocabulary: stores a newly allocated array of client
+   rectangles (x, y, width, height) at `*out`, which the caller frees, and answers its count. It is the internal
+   algorithm (CSSOM View §2: a member "said to call another method" invokes the algorithm), so a page that
+   overwrites `Element.prototype.getClientRects` cannot change what `getBoundingClientRect()` measures.
+   Step 1 is a derivation: an element with no associated box (disconnected, in a document nothing presents, or
+   `display: none`) generates no fragments in any user agent. Step 3's third constraint ("replace each anonymous
+   block box with its child box(es)") never fires, because an element's own principal box is never anonymous. */
+static size_t ev_client_rects_px(const EvTarget *t, CssPx (**out)[4])
 {
     lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
     ElementViewFragments kind;
-    JSValue rects;
+    CssPx (*r)[4];
+    CssPx b[4];
+    size_t n, i;
 
-    (void)ctx;   /* every object below is minted in the ELEMENT's relevant realm, never the caller's */
+    *out = NULL;
     /* step 1 */
-    if (!t->has_box) return dom_rect_list_new(t->rctx, JS_NewArray(t->rctx));
+    if (!t->has_box) return 0;
     /* step 2 */
     if (ev_has_svg_layout_box(t->node))
-        DFAIL("CSSOM VIEW §6's getClientRects() step 2: an element with an associated SVG LAYOUT BOX answers "
-              "with a single DOMRect describing 'the bounding box of the element AS DEFINED BY THE SVG "
-              "SPECIFICATION' — SVG 2's own object bounding box over the element's geometry, which is a "
-              "different computation from CSS 2 §8.1's border box and not a special case of it (a `<path>` has "
-              "no margins and no borders; its bounds are its own segments). This engine lays out no SVG at all. "
-              "BUILD SVG 2's bounding box beside the CSS one, in its own component, since none of §10's used "
-              "values applies to it");
-    /* Step 3's THIRD constraint — "replace each anonymous block box with its child box(es) and repeat" — never
-       fires for a list this engine produces, because an ELEMENT's own principal box is never anonymous: CSS 2
-       §9.2.1.1 generates one only around block-level children of an inline-containing block container, and it
-       belongs to no element. The list below is therefore already in the constraint's final form. */
-    rects = JS_NewArray(t->rctx);
-    CHECK(!JS_IsException(rects), "the client-rect list could not be allocated");
+        DFAIL("CSSOM VIEW §6's getClientRects() step 2: an element with an associated SVG layout box answers "
+              "with a single DOMRect describing \"the bounding box of the element as defined by the SVG "
+              "specification\", SVG 2's object bounding box, which this engine does not lay out. Build it beside "
+              "the CSS border box, in its own component");
     kind = element_view_fragment_kind(el);
-    /* STEP 3'S COUNT — "one for each BOX FRAGMENT", "IN CONTENT ORDER". For an inline box that is one per line
-       box it spans, which is the whole reason this member answers a list; `flow_inline_fragment_rects` reports
-       them in the order the fill assigned the items, which IS content order because CSS 2 §9.4.2 distributes
-       the run in document order and stacks the lines downward. */
+    /* Step 3's count, "one for each box fragment", "in content order". An inline box has one per line box it
+       spans, which `flow_inline_fragment_rects` reports in fill order: CSS 2 §9.4.2 distributes the run in
+       document order and stacks the lines downward. */
     if (kind == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
         FlowRect *frags = NULL;
-        size_t n = flow_inline_fragment_rects(el, &frags), i;
 
+        n = flow_inline_fragment_rects(el, &frags);
+        DCHECK(n > 0, "an inline box with a box reported no line fragment; flow_position.h answers its origin "
+                      "from the first");
+        r = malloc(n * sizeof *r);
+        CHECK(r != NULL, "§6's getClientRects() step 3 could not allocate its rectangle list");
         for (i = 0; i < n; i++) {
-            CssPx x = css_px_sub(frags[i].x, css_px(viewport_window_scroll(t->dctx, false)));
-            CssPx y = css_px_sub(frags[i].y, css_px(viewport_window_scroll(t->dctx, true)));
-
-            JS_SetPropertyUint32(t->rctx, rects, (uint32_t)i,
-                                 dom_rect_new_values(t->rctx, ev_client_px(t->rctx, x),
-                                                     ev_client_px(t->rctx, y),
-                                                     ev_client_px(t->rctx, frags[i].width),
-                                                     ev_client_px(t->rctx, frags[i].height)));
+            b[0] = frags[i].x;
+            b[1] = frags[i].y;
+            b[2] = frags[i].width;
+            b[3] = frags[i].height;
+            ev_client_rect_px(t, el, b, r[i]);
         }
         free(frags);
-        return dom_rect_list_new(t->rctx, rects);
+        *out = r;
+        return n;
     }
-    /* STEP 3'S SECOND CONSTRAINT, ASSEMBLED — one rectangle per box `ev_table_fragments` names, through the one
-       border-area derivation. The TABLE BOX's rectangle is this element's own, which is why the arm below and
-       the tail are the same call on different targets rather than two assemblies: CSS 2.1 §17.4's
-       declaration split (`ev_table_fragments`) makes the table element's border and padding the table box's,
-       so a table with no caption answers with exactly the rectangle the single-fragment tail would have
-       produced — the list grew a member, the measurement did not change. A CAPTION'S rectangle is an ordinary
-       block box's. */
+    /* Step 3's second constraint: the table box and the caption boxes `ev_table_fragments` names, each through
+       the one border-area derivation. */
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE) {
         lxb_dom_element_t **frags = NULL;
-        size_t n = ev_table_fragments(el, &frags), i;
 
+        n = ev_table_fragments(el, &frags);
+        r = malloc(n * sizeof *r);
+        CHECK(r != NULL, "§6's getClientRects() step 3 could not allocate its rectangle list");
         for (i = 0; i < n; i++) {
             EvTarget ft;
 
             ev_target_of_element(frags[i], &ft);
             DCHECK(ft.rctx == t->rctx,
-                   "§6's getClientRects() step 3 reached a fragment box whose element's relevant realm is not "
-                   "the invoked element's — Web IDL mints a `[NewObject]` in the relevant realm of `this`, and "
-                   "CSS 2.1 §17.4's caption boxes are children of the table ELEMENT and therefore of its node "
-                   "document, so the two realms are one and a disagreement here is a caption taken from "
-                   "another tree");
+                   "§6's getClientRects() step 3 reached a caption box whose element's relevant realm is not the "
+                   "table element's; CSS 2.1 §17.4's caption boxes are the table element's children, so this is "
+                   "a caption taken from another tree");
             DCHECK(ft.has_box,
-                   "§6's getClientRects() step 3 reached a fragment box whose element generates NO box — "
-                   "core/layout/table_box.h skips a child whose computed `display` is `none` before it is "
-                   "classified at all, so every caption it reports has a box and this is that component and "
-                   "core/dom/element_view.h's box predicate disagreeing");
-            JS_SetPropertyUint32(t->rctx, rects, (uint32_t)i, ev_border_area(&ft));
+                   "§6's getClientRects() step 3 reached a caption that generates no box: core/layout/table_box.h "
+                   "skips a `display: none` child before classifying it, so it and core/dom/element_view.h's box "
+                   "predicate disagree");
+            ev_border_area_px(frags[i], b);
+            ev_client_rect_px(t, frags[i], b, r[i]);
         }
         free(frags);
-        return dom_rect_list_new(t->rctx, rects);
+        *out = r;
+        return n;
     }
     DCHECK(kind == ELEMENT_VIEW_FRAGMENTS_ONE,
-           "§6's getClientRects() step 3 reached a fragment kind with no arm — the enumeration is this "
-           "codebase's own (core/dom/element_view.h) and every member of it names a different COUNT, so a new "
-           "one silently taking the single-fragment tail below would answer one rectangle for a box the "
-           "enumeration was widened precisely because it has more");
-    JS_SetPropertyUint32(t->rctx, rects, 0, ev_border_area(t));
+           "§6's getClientRects() step 3 reached a fragment kind with no arm; each member of core/dom/"
+           "element_view.h's enumeration names a different count");
+    r = malloc(sizeof *r);
+    CHECK(r != NULL, "§6's getClientRects() step 3 could not allocate its rectangle list");
+    ev_border_area_px(el, b);
+    ev_client_rect_px(t, el, b, r[0]);
+    *out = r;
+    return 1;
+}
+
+static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
+{
+    CssPx (*r)[4] = NULL;
+    size_t n = ev_client_rects_px(t, &r), i;
+    JSValue rects;
+
+    (void)ctx;   /* every object below is minted in the ELEMENT's relevant realm, never the caller's */
+    rects = JS_NewArray(t->rctx);
+    CHECK(!JS_IsException(rects), "the client-rect list could not be allocated");
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(t->rctx, rects, (uint32_t)i,
+                             dom_rect_new_values(t->rctx, ev_client_px(t->rctx, r[i][0]),
+                                                 ev_client_px(t->rctx, r[i][1]), ev_client_px(t->rctx, r[i][2]),
+                                                 ev_client_px(t->rctx, r[i][3])));
+    free(r);
     return dom_rect_list_new(t->rctx, rects);
 }
 
@@ -1417,127 +1373,94 @@ JSValue element_view_client_rects(lxb_dom_element_t *el)
     return ev_client_rects(t.rctx, &t);
 }
 
-/* §6's GET THE BOUNDING BOX, ANSWERED IN css_length.h's VOCABULARY — the entry a caller takes when the
-   rectangle is an OPERAND rather than a result. See element_view.h.
-   IT IS THE SAME FOUR STEPS `ev_bounding_rect` performs and it takes the same two roads, which is the only way
-   this can be a second ENTRY without being a second ANSWER: step 1's list is empty exactly when the element has
-   no associated box, so step 2's "a DOMRect object whose x, y, width and height members are zero" is reached by the
-   one predicate element_view.h states and not by counting a list that was built to be counted; and a list of
-   one is what steps 3 and 4 both answer with, which is the derivation `ev_bounding_rect` writes out.
-   THIS PARAGRAPH USED TO CLAIM THAT `ev_bounding_rect`'s MULTI-FRAGMENT CRASH IS NOT REACHABLE HERE, on the
-   ground that `the two gates below fire first, for the only two ways §6 says a list of more than one arises,`
-   `so a caller of this entry meets the earlier subproblem by its own name rather than the later one by a`
-   `count.` It is REWRITTEN RATHER THAN DELETED because its preference is right and a reader will re-derive it:
-   a crash that names the earliest unbuilt operand sends its reader to the component that owns it, and a crash
-   that names a COUNT sends them to arithmetic they cannot perform yet. What made it true was a gate refusing
-   every `table`, and §6's step 3 is now assembled for one — so the two ways a list of more than one arises no
-   longer agree about where this entry stops. AN INLINE BOX STILL REFUSES BY ITS OWN NAME, inside
-   `ev_border_area_px`, where the fragments are in hand. A `table` refuses BY A COUNT below, and the count is
-   the honest answer rather than a regression: the earlier subproblem for a captioned table is that caption's
-   own POSITION, which lives one component over and which this entry has no rectangle to ask for — so the
-   crash NAMES it instead of computing and discarding a rectangle to reach it. */
+void element_view_enclosing_box_px(const CssPx (*r)[4], size_t n, CssPx out[4])
+{
+    CssPx l = css_px(0.0), tp = css_px(0.0), rt = css_px(0.0), bt = css_px(0.0);
+    size_t i;
+
+    DCHECK(r != NULL && n > 0, "the smallest rectangle enclosing a list was asked of an empty list");
+    for (i = 0; i < n; i++) {
+        CssPx x0 = r[i][0], y0 = r[i][1], x1 = css_px_add(r[i][0], r[i][2]), y1 = css_px_add(r[i][1], r[i][3]);
+        CssPx il = css_px_min(x0, x1), it = css_px_min(y0, y1), ir = css_px_max(x0, x1), ib = css_px_max(y0, y1);
+
+        l = i == 0 ? il : css_px_min(l, il);
+        tp = i == 0 ? it : css_px_min(tp, it);
+        rt = i == 0 ? ir : css_px_max(rt, ir);
+        bt = i == 0 ? ib : css_px_max(bt, ib);
+    }
+    out[0] = l;
+    out[1] = tp;
+    out[2] = css_px_sub(rt, l);
+    out[3] = css_px_sub(bt, tp);
+}
+
+/* §6's get the bounding box, steps 3 and 4, over a list of `n` > 0 client rectangles: "If all rectangles in
+   list have zero width or height, return the first rectangle in list. Otherwise, return a DOMRect object
+   describing the smallest rectangle that includes all of the rectangles in list of which the height or width
+   is not zero." The tests run on the examples, as `css_px_min`/`css_px_max` do; every rectangle's extents are
+   folded into all four results (`a - a` keeps `a`'s facts at a zero example), because which step answers and
+   which rectangles step 4 encloses are functions of all of them. */
+static void ev_bounding_box_of(const CssPx (*r)[4], size_t n, CssPx out[4])
+{
+    CssPx facts = css_px(0.0);
+    CssPx (*kept)[4];
+    bool step3 = true;
+    size_t i, k, m = 0;
+
+    DCHECK(n > 0, "get the bounding box's steps 3 and 4 were asked over an empty list; step 2 answers it");
+    kept = malloc(n * sizeof *kept);
+    CHECK(kept != NULL, "§6's get the bounding box could not allocate its rectangle list");
+    for (i = 0; i < n; i++) {
+        facts = css_px_add(facts, css_px_add(css_px_sub(r[i][2], r[i][2]), css_px_sub(r[i][3], r[i][3])));
+        if (r[i][2].px != 0.0 && r[i][3].px != 0.0) step3 = false;
+        if (r[i][2].px == 0.0 && r[i][3].px == 0.0) continue;
+        for (k = 0; k < 4; k++) kept[m][k] = r[i][k];
+        m++;
+    }
+    if (step3) {
+        for (k = 0; k < 4; k++) out[k] = css_px_add(r[0][k], facts);
+    } else {
+        DCHECK(m > 0, "step 4 was taken with no rectangle of a non-zero width and height kept");
+        element_view_enclosing_box_px((const CssPx (*)[4])kept, m, out);
+        for (k = 0; k < 4; k++) out[k] = css_px_add(out[k], facts);
+    }
+    free(kept);
+}
+
+/* §6's get the bounding box in css_length.h's vocabulary, for a caller that compares rectangles in C (see
+   element_view.h). Step 2's zeros are the spec's own number for every user agent, so they stay concrete. */
 void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
 {
     EvTarget t;
+    CssPx (*r)[4] = NULL;
+    size_t n;
 
     DCHECK(el != NULL, "§6's get-the-bounding-box was invoked as an internal algorithm with no element");
     ev_target_of_element(el, &t);
-    if (!t.has_box) {                       /* steps 1 and 2 */
+    n = ev_client_rects_px(&t, &r);   /* step 1 */
+    if (n == 0)                        /* step 2 */
         out[0] = out[1] = out[2] = out[3] = css_px(0.0);
-        return;
-    }
-    if (ev_has_svg_layout_box(t.node))      /* step 2 of getClientRects, which step 1 called */
-        DFAIL("CSSOM VIEW §6's getClientRects() step 2: an element with an associated SVG LAYOUT BOX answers "
-              "with a single DOMRect describing 'the bounding box of the element AS DEFINED BY THE SVG "
-              "SPECIFICATION', which is SVG 2's own object bounding box and not a special case of CSS 2 §8.1's "
-              "border box. This engine lays out no SVG at all. BUILD SVG 2's bounding box beside the CSS one, "
-              "in its own component");
-    /* §6's STEP 3'S SECOND CONSTRAINT, AS A COUNT — which is all this entry can ask of it, because it answers
-       ONE rectangle and `ev_table_fragments` names a box per member. A `table` with no caption is one member
-       and leaves through the ordinary derivation below; a `table` with captions is more, and the choice
-       between steps 3 and 4 is the same unbuilt union `ev_bounding_rect` and `ev_border_area_px`'s inline arm
-       each name. The array is released before the crash for the reason core/layout/flow_position.c states of
-       its own pair: `DFAIL` is compiled out in release, so a `free` after one is a `free` the release build
-       falls through to, and a `free` inside the arm would be a leak in dev and a double free here. */
-    if (element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_TABLE) {
-        lxb_dom_element_t **frags = NULL;
-        size_t n = ev_table_fragments(el, &frags);
-
-        free(frags);
-        if (n > 1)
-            DFAILF("CSSOM VIEW §6's get-the-bounding-box was asked in css_length.h's vocabulary for an element "
-                   "whose computed `display` is `table` or `inline-table` and whose step 3 list has %zu "
-                   "members — the TABLE BOX and %zu CAPTION BOX(ES), which CSS 2.1 §17.4 \"Tables in the visual "
-                   "formatting model\" renders \"as normal block boxes inside the table wrapper box\". So §6's "
-                   "steps 3 and 4 must CHOOSE between them, and this entry has one rectangle to answer with. "
-                   "IT IS THE SAME BUILD `ev_bounding_rect` above and `ev_border_area_px`'s inline arm each "
-                   "crash for: step 3 returns the first rectangle when every one has a zero width or height, "
-                   "step 4 otherwise returns the smallest rectangle enclosing those that do not — both "
-                   "COMPARISONS over rectangles whose numbers are concolics derived from the initial "
-                   "containing block, so neither may be a C branch on the example (that deletes the arm a "
-                   "responsive bundle explores) and both go through Geometry Interfaces §3's NaN-safe derived "
-                   "edges. BUILD it ONCE, over CssPx, and let every entry call it. "
-                   "AND THE EARLIER SUBPROBLEM IS NOT THIS ONE, which is why a caller of `getClientRects` on "
-                   "this same element meets a DIFFERENT crash: a caption box's own POSITION is "
-                   "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack "
-                   "over the table WRAPPER box's child box list, which core/layout/flow_position.c refuses by "
-                   "name for a `table-caption` and core/layout/block_flow.c names in full. Build that first — "
-                   "a union over a rectangle nothing can place is a union over a number that does not exist",
-                   n, n - 1);
-    }
-    ev_border_area_px(&t, out);
+    else
+        ev_bounding_box_of((const CssPx (*)[4])r, n, out);
+    free(r);
 }
 
-/* §6's GET THE BOUNDING BOX steps. Step 1 is the call above; step 2 is the answer for an element that generates
-   no box, and it is the spec's OWN number — "a DOMRect object whose x, y, width and height members are zero" —
-   for every user agent, which is what makes it a computed value and not a zero standing in for one this engine
-   does not have. It stays CONCRETE for viewport.h's reason: a domain of one point has no arm to explore, and a
-   concolic there would model an ignorance this engine does not have. */
+/* §6's get the bounding box, minted. §6's `[NewObject]` holds because the rectangle is minted on every call. */
 static JSValue ev_bounding_rect(JSContext *ctx, const EvTarget *t)
 {
-    JSValue list = ev_client_rects(ctx, t), len;
-    uint32_t n = 0;
+    CssPx (*r)[4] = NULL;
+    CssPx b[4];
+    size_t n = ev_client_rects_px(t, &r);   /* step 1 */
 
-    DCHECK(JS_IsObject(list), "§6's get-the-bounding-box step 1 got no list back from getClientRects — that "
-                              "algorithm answers a DOMRectList on every path it has");
-    len = JS_GetPropertyStr(t->rctx, list, "length");
-    JS_ToUint32(t->rctx, &n, len);
-    JS_FreeValue(t->rctx, len);
-    /* step 2 */
-    if (n == 0) {
-        JS_FreeValue(t->rctx, list);
+    (void)ctx;
+    if (n == 0) {                            /* step 2 */
+        free(r);
         return dom_rect_new(t->rctx, 0.0, 0.0, 0.0, 0.0);
     }
-    /* STEPS 3 AND 4 AGREE FOR A ONE-FRAGMENT LIST, and that is a derivation rather than a shortcut past the
-       branch between them. Step 3 returns "the first rectangle in list" when every rectangle has a zero width
-       or height; step 4 otherwise returns "the smallest rectangle that includes all of the rectangles in list
-       of which the height or width is not zero" — and the smallest rectangle enclosing exactly one rectangle
-       IS that rectangle. So a list of one answers with its own single member under either step, with no
-       comparison performed, which is also what keeps this file's rule that nothing here branches in C on a
-       concolic: a border area derived from the initial containing block carries the viewport's domain, and
-       `width == 0` asked of one would be a C branch over unknown input. §6's `[NewObject]` is satisfied
-       because the list above is minted fresh on every call. */
-    if (n == 1) {
-        JSValue only = JS_GetPropertyUint32(t->rctx, list, 0);
-
-        DCHECK(dom_rect_is(only), "§6's get-the-bounding-box read a client-rect list whose one member is not a "
-                                  "DOMRect — getClientRects answers §4's list over rectangles and nothing else");
-        JS_FreeValue(t->rctx, list);
-        return only;
-    }
-    JS_FreeValue(t->rctx, list);
-    DFAIL("CSSOM VIEW §6's get-the-bounding-box steps 3 and 4 must CHOOSE for a list of more than one "
-          "rectangle: step 3 returns the first when every one of them has a zero width or a zero height, step 4 "
-          "otherwise returns the smallest rectangle enclosing those whose width and height are not zero. Both "
-          "the choice and the union are COMPARISONS over the rectangles' own numbers, and a border area derived "
-          "from the initial containing block is a concolic whose domain is the viewport's — so writing them "
-          "needs a decision this file has never had to make, and the answer is NOT a C branch on the example "
-          "(that would delete the arm a responsive bundle explores). The union in step 4 goes through Geometry "
-          "Interfaces §3's derived edges, whose own NaN-safe minimum already states the rule for an unknown "
-          "operand: yield the concolic with the real derivation run on the examples, never fork. WRITE BOTH "
-          "over that primitive when a multi-fragment list exists — an inline box across line boxes, or a "
-          "`table` and its caption, which are the two ways step 3 above says one arises");
-    return dom_rect_new(t->rctx, 0.0, 0.0, 0.0, 0.0);
+    ev_bounding_box_of((const CssPx (*)[4])r, n, b);
+    free(r);
+    return dom_rect_new_values(t->rctx, ev_client_px(t->rctx, b[0]), ev_client_px(t->rctx, b[1]),
+                               ev_client_px(t->rctx, b[2]), ev_client_px(t->rctx, b[3]));
 }
 
 static JSValue js_ev_client_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)

@@ -268,9 +268,16 @@ JSValue element_view_client_rects(lxb_dom_element_t *el);
  * unknown external input or throw the fact set away. So the rectangle stops here for an engine-internal caller
  * and is minted only where it becomes an entry's `boundingClientRect`.
  *
- * The FOUR NUMBERS are the same derivation `getBoundingClientRect` reports; see element_view.c for which of §6's
- * steps each road takes and which of them crash. `el` must be an element. */
+ * The FOUR NUMBERS are the same derivation `getBoundingClientRect` reports: one client-rect list in this
+ * vocabulary and one reduction of it (element_view.c). `el` must be an element. */
 void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4]);
+
+/* The smallest rectangle enclosing all `n` > 0 rectangles of `r` (each x, y, width, height), into `out` in the
+   same order. Each rectangle's edges are Geometry Interfaces §3's derived ones, the minimum and maximum of its
+   origin and origin plus extent, so a negative extent encloses correctly. The extremes are chosen on the
+   examples and carry both operands' facts (`css_px_min`/`css_px_max`). It is the union §6's get the bounding
+   box step 4 and §7's "axis-aligned bounding box of the border boxes of all fragments" both take. */
+void element_view_enclosing_box_px(const CssPx (*r)[4], size_t n, CssPx out[4]);
 
 /* §6's CONVERSION OF A REAL LENGTH TO THE `long` ITS IDL DECLARES — the rounding derived in element_view.c and
    the mint through viewport.h's one seam, in one function because CSSOM VIEW §7's `offsetTop`, `offsetLeft`,
