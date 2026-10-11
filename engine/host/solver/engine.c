@@ -3577,8 +3577,7 @@ const char *engine_pending_fetches(void) {
                            that does needs the register keyed on the destination). Every offset and verdict is
                            taken before the first write, and the writes run back to front (asker set,
                            credentials, drive mark, witness, provenance, initiator, destination), because a
-                           rewrite shifts everything after its field. The drive mark folds to `undriven` if any member's flow
-                           was not a drive: then the page itself makes this request. */
+                           rewrite shifts everything after its field. */
                         size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
                         size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
                         size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
@@ -3589,19 +3588,22 @@ const char *engine_pending_fetches(void) {
                            reply against every document it fills. */
                         size_t a_end = (size_t)(t11 - join);
                         int new_asker = !asker_set_has(t10 + 1, (size_t)(t11 - (t10 + 1)), asker, al);
-                        /* The (provenance, witness) pair folds as a pair, taking one member's whole, so it
-                           cannot state a pair no member held: folding each by its own extremum could give
-                           (observed, unpinned) from (observed, pinned) and (forced, unpinned) members.
-                           The order is lexicographic, provenance first, so the provenance still folds toward
-                           most observed, and the witness mark is read off the member that won. Taking the
-                           cleanest member is sound for the mark: it is an over-approximation recorded at the
-                           flow and cannot be read off the address (`pin_mint` returns a bare primitive), so a
-                           member that composed the same bytes with its mark clear refutes it for this address. */
+                        /* The (provenance, witness, drive) vector folds as one, taking one member's whole, so
+                           the line never states a vector no member held: folding each by its own extremum gave
+                           (derived, unpinned, undriven) from a (forced, pinned, undriven) member and a
+                           (derived, unpinned, driven) one, each refused alone. The order is lexicographic,
+                           provenance, then witness, then drive, so the provenance still folds toward most
+                           observed. Taking the cleanest member is sound for the marks: each is an
+                           over-approximation recorded at the flow, so a member that composed the same bytes with
+                           its marks clear refutes them for this address. */
                         /* Every reader below takes the computed offset, never a `tN + 1` of its own, so the
                            offsets and tab pointers are not two spellings of one position that could drift. */
                         int cur_prov = prov_of_token(join + p_at, p_len);
                         int cur_pinned = pinned_is_yes(join + n_at, n_len);
-                        int take_new = prov_v < cur_prov || (prov_v == cur_prov && !pinned_v);
+                        int cur_driven = driven_is_yes(join + v_at, v_len);
+                        int take_new = prov_v < cur_prov ||
+                                       (prov_v == cur_prov && (pinned_v < cur_pinned ||
+                                                               (pinned_v == cur_pinned && driven_v < cur_driven)));
                         int mo_prov = take_new ? prov_v : cur_prov;
                         int mo_pinned = take_new ? pinned_v : cur_pinned;
                         int mo_parser = ini_is_parser(join + i_at, i_len) || ini_is_parser(ini, il);
@@ -3611,12 +3613,11 @@ const char *engine_pending_fetches(void) {
                            for the rule and its residual). */
                         FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
                                                                     cred_of_token(c, cl));
-                        int mo_driven = driven_v && driven_is_yes(join + v_at, v_len);
+                        int mo_driven = take_new ? driven_v : cur_driven;
                         /* The egress policy judges the line as one request, so its (provenance, witness, drive)
                            vector must be one some member holds: a vector composed across members is an act no
                            member would have been permitted. */
-                        DCHECK((mo_prov == cur_prov && mo_pinned == cur_pinned &&
-                                mo_driven == driven_is_yes(join + v_at, v_len)) ||
+                        DCHECK((mo_prov == cur_prov && mo_pinned == cur_pinned && mo_driven == cur_driven) ||
                                (mo_prov == prov_v && mo_pinned == pinned_v && mo_driven == driven_v),
                                "a folded request line states a (provenance, witness, drive) vector neither the line "
                                "nor the member it folds holds — the zone judges the line as one request, so the "
