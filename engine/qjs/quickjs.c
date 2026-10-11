@@ -54253,12 +54253,6 @@ JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow) {
        shallow arm on a flow whose live point is in the chain and clone a base as if it were the whole flow. */
     DCHECK(sf->cur_sp != NULL || s->tramp_top != NULL, "JS_FlowClone: flow is not SUSPENDED (only a paused frame can be snapshot-forked)");
     if (s->tramp_top != NULL) return clone_deep_flow(ctx, s);   /* deep: base + tramp chain */
-    /* A base suspended with an EMPTY chain is suspended in its own bytecode, and a call root has none: its
-       "body" is the callee's frame, which is exactly what the chain holds. A fork here would be a fork before
-       anything ran. */
-    DCHECK(!sf->is_call_root,
-           "a call-root base was snapshot-forked with no tramp chain — its body has not been dispatched yet, so "
-           "there is nothing at that branch to clone");
 
     /* ONE FRAME CLONE, NOT TWO. This arm used to build the frame itself, field by field, and it had already
        DRIFTED from the one clone_deep_flow uses: it never assigned `this_val` at all (so the clone's frame
@@ -54269,10 +54263,20 @@ JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow) {
        obvious the moment there is only one implementation of "clone a suspended frame". The two paths differ
        in exactly one thing — where the LIVE point is — and that is the parameter and the line below. */
     ptrdiff_t live = sf->cur_sp - sf->arg_buf;
-    DCHECK(live >= 0 && live <= TRAMP_FRAME_SLOTS(sf->arg_count,
-               JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode),
-           "JS_FlowClone: the source frame's live region is outside its own frame slots — cur_sp has run past "
-           "the layout law's reserve, so the copy writes past the clone's allocation");
+    /* A call root with an empty chain has not been entered: it runs no bytecode of its own, so every
+       suspension inside it is on the chain. It still forks, because the answer and decline forks are taken
+       between a flow's steps, where the frame can be a call not yet started (a driven orphan, a reaction's
+       settle phase); both arms then make the call. Its live region is the pre-pushed [this, callee, args...]. */
+    if (sf->is_call_root)
+        DCHECK(live == 2 + sf->arg_count,
+               "a call-root base with no tramp chain does not hold exactly its pre-pushed operands — a call root "
+               "suspends only on its chain, so a different stack height is a base something entered and left "
+               "without unwinding");
+    else
+        DCHECK(live >= 0 && live <= TRAMP_FRAME_SLOTS(sf->arg_count,
+                   JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode),
+               "JS_FlowClone: the source frame's live region is outside its own frame slots — cur_sp has run "
+               "past the layout law's reserve, so the copy writes past the clone's allocation");
     JSAsyncFunctionState *c = flow_clone_state_alloc(ctx, s);
     if (!c) return NULL;
     if (clone_susp_frame(ctx, c, s, live) < 0) { flow_clone_state_free_shell(ctx, c); return NULL; }
