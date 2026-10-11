@@ -1861,17 +1861,18 @@ async function seedReferrerPolicy(documentId) {
 /* seedSpeaker: the seed of the live document `msg`, re-loading what the browser's navigation loaded. A
    sub-frame's navigation had its parent document as client, so the load speaks as that parent, found by the
    browser's own `parentDocumentId`. Its request is the one the parent's instance created that child with
-   (seedChildRequest): HTML §7.4.5's destination and the request referrer policy after Fetch §4.1 Main fetch,
-   which reads the container's `referrerpolicy` and the parent's container at the create. Where that instance
-   created no child at this address, the load states DOCUMENT_REQUEST_UNSTATED under the parent's container
-   policy (HTML §4.8.5's "navigate an iframe or frame" navigates using the element's node document). A
-   top-level navigation's initiator is not recorded, so the document speaks as itself with no referrer.
-   Named residual. Not covered: a top-level document's initiator; a child the parent's instance had not created
-   when the seed loads (a frame its scripts insert later, or one whose browser load redirected); a parent whose
-   instance has left the pool by then (finalized); and a parent whose seed no instance installed (itself a
-   sub-frame). The next diff waits on the parent instance's create
-   notice for the seed's address. Their absence shows as a seed load's Referer, Sec-Fetch-Site and
-   Sec-Fetch-Dest differing from the browser's navigation of that document. */
+   (seedChildRequest, which waits for that create): HTML §7.4.5's destination and the request referrer policy
+   after Fetch §4.1 Main fetch, which reads the container's `referrerpolicy` and the parent's container at the
+   create. Where that instance left the pool without creating a child at this address, the load states
+   DOCUMENT_REQUEST_UNSTATED under the parent's container policy (HTML §4.8.5's "navigate an iframe or frame"
+   navigates using the element's node document). A top-level navigation's initiator is not recorded, so the
+   document speaks as itself with no referrer.
+   Named residual. Not covered: a top-level document's initiator; a same-origin child whose browser load
+   redirected, which waits for its parent's instance to leave the pool (only a cross-origin child's load records
+   its final address); and a parent whose seed no instance installed (itself a sub-frame). The next diff puts the
+   creating document on the `document.fetch` record so its final address is recorded too. Their absence shows as
+   a seed load's Referer, Sec-Fetch-Site and Sec-Fetch-Dest differing from the browser's navigation of that
+   document, and as a redirected same-origin frame whose seed is not loaded while its parent's instance runs. */
 function seedSpeaker(msg) {
   return async () => {
     const frames = await swRpc("webNavigation.getAllFrames", { tabId: msg.groupId });
@@ -1892,21 +1893,59 @@ function seedSpeaker(msg) {
   };
 }
 
-/* The request facts {destination, referrerPolicy} the instance holding `parentDocumentId` created its child at
-   `url` with (`GetChildRequest`), or null when no instance holds it now or it created no child there. Asked
-   after the parent's install settled, so the parent's initial markup has created its frames. */
+/* HTML §7.4.5's request facts {destination, referrerPolicy} of each child navigable an instance created, by
+   creating document name and address, from the engine's `navigable.request` notices (core/frame/navigable.c's
+   create), with the address after redirects added once this zone has loaded a cross-origin child. Each creator's
+   record is {facts, waiters, closed}: `closed` once the instance that held the creator has left the pool, after
+   which no notice for it can arrive. Records live as long as the offscreen session. */
+const _childRequests = new Map();
+
+function childRequestsOf(creator) {
+  let c = _childRequests.get(creator);
+  if (c === undefined) { c = { facts: new Map(), waiters: new Map(), closed: false }; _childRequests.set(creator, c); }
+  return c;
+}
+
+/* Records `facts` for (creator, address); the first record of a pair stands. Answers any seed waiting on it. */
+function childRequestRecord(creator, address, facts) {
+  DCHECK(NAVIGATION_DESTINATIONS.indexOf(facts.destination) >= 0 &&
+         (facts.referrerPolicy === "" || REFERRER_POLICIES.indexOf(facts.referrerPolicy) >= 0),
+         "a child navigable's request facts " + JSON.stringify(facts) + " are not a Fetch §2.2.5 navigation " +
+         "destination and a Referrer Policy §3 policy — core/frame/navigable.c composes both");
+  const c = childRequestsOf(creator);
+  if (!c.facts.has(address)) c.facts.set(address, facts);
+  const w = c.waiters.get(address);
+  if (w !== undefined) { c.waiters.delete(address); for (const resolve of w) resolve(c.facts.get(address)); }
+}
+
+/* The instance `eng` has left the pool: every document it held creates no more children, so their waiting seeds
+   are answered null. */
+function childRequestsClose(eng) {
+  /* A loading seat holds no document yet. */
+  if (eng.docId === null) {
+    DCHECK(eng.state === "loading", "an instance with no document name left the pool in state " + eng.state);
+    return;
+  }
+  for (const name of [eng.docId].concat(eng.joinedDocIds)) {
+    const c = childRequestsOf(name);
+    c.closed = true;
+    for (const w of c.waiters.values()) for (const resolve of w) resolve(null);
+    c.waiters.clear();
+  }
+}
+
+/* The request facts the instance holding `parentDocumentId` created its child at `url` with, waiting for its
+   `navigable.request` notice while that instance can still create one; null once it has left the pool without
+   creating that child, or when no instance holds the parent. */
 async function seedChildRequest(parentDocumentId, url) {
-  const holder = hostHolderOf(parentDocumentId);
-  if (holder === null || holder.r === null) return null;
-  const r = (await holder.r.renderer.getChildRequest({ docId: parentDocumentId, url: new URL(url).href })).request;
-  if (r === "") return null;
-  const tab = r.indexOf("\t");
-  DCHECK(tab > 0 && NAVIGATION_DESTINATIONS.indexOf(r.slice(0, tab)) >= 0 &&
-         (r.slice(tab + 1) === "" || REFERRER_POLICIES.indexOf(r.slice(tab + 1)) >= 0),
-         "GetChildRequest answered " + JSON.stringify(r) + ", which is not `<destination><TAB><referrer " +
-         "policy>` — main.c's qjs_child_request writes a Fetch §2.2.5 navigation destination and a Referrer " +
-         "Policy §3 policy");
-  return { destination: r.slice(0, tab), referrerPolicy: r.slice(tab + 1) };
+  const c = childRequestsOf(parentDocumentId);
+  const address = new URL(url).href;
+  if (c.facts.has(address)) return c.facts.get(address);
+  if (c.closed || hostHolderOf(parentDocumentId) === null) return null;
+  return await new Promise((resolve) => {
+    if (!c.waiters.has(address)) c.waiters.set(address, []);
+    c.waiters.get(address).push(resolve);
+  });
 }
 
 /* Why a seed's load `loaded` is not this document, in the page-source vocabulary, or null when it is;
@@ -2401,6 +2440,7 @@ function engineBootFailed(eng, e) {
          "record and the surviving one will free a frame twice");
   if (i >= 0) _pool.splice(i, 1);
   eng.state = "failed";
+  childRequestsClose(eng);
   /* The frame goes with it. renderer-host.js reclaims its own frame (and frees the cluster in the registry)
      when the boot handshake fails, so `r` is null exactly when there is nothing to remove. */
   if (eng.r) eng.r.destroy();
@@ -3646,6 +3686,14 @@ const PINNED_NO = "unpinned";
    a forgeable event.origin defeats every origin check in every bundle. */
 async function hostNotice(eng, line) {
   const f = line.split("\t");
+  /* `navigable.request <creator> <destination> <referrer policy> <url>` — a child navigable's HTML §7.4.5 request
+     facts, which a sub-frame seed of that address speaks with (seedChildRequest). */
+  if (f[0] === "navigable.request") {
+    DCHECK(f.length === 5 && f[1] !== "" && URL.canParse(f[4]),
+           "a navigable.request notice is not `<creator> <destination> <referrer policy> <url>`: " + line);
+    childRequestRecord(f[1], new URL(f[4]).href, { destination: f[2], referrerPolicy: f[3] });
+    return;
+  }
   if (f[0] === "navigable.create") {
     /* The count covers every field the reader below indexes and moves when the record grows, because the
        field added last is the one a stale count would let arrive as `undefined`. */
@@ -3664,6 +3712,14 @@ async function hostNotice(eng, line) {
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
     const loaded = await eng.fetchedDocument(f[3], f[15], f[17], f[18], /*refusalArm*/"none",
                                              DOCUMENT_REQUEST_UNSTATED);
+    /* The address the child's load landed on is the one the browser's own sub-frame reports, so it answers with
+       the facts of the address the create named. */
+    {
+      const c = childRequestsOf(f[2]);
+      const named = new URL(f[3]).href;
+      if (c.facts.has(named) && URL.canParse(loaded.url))
+        childRequestRecord(f[2], new URL(loaded.url).href, c.facts.get(named));
+    }
     /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
        this zone followed), not the notice's f[4]: SECURITY.md makes routing and the origin stamped on a
        delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
@@ -5337,6 +5393,7 @@ const _hostOps = {
            "document would be reported as analysed and empty");
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
     const result = await engineFinalize(eng);
+    childRequestsClose(eng);
     /* A crashed run does not write the cross-session frontier: its recipes would claim flows resumable from a
        heap that aborted and its counters a finished run, and with no `_park` the write would delete the residue
        a previous session parked (frontierPut deletes an entry with empty recipes). Skipping it leaves that entry
@@ -5608,6 +5665,7 @@ async function hostClear() {
      answers and an ABI call outstanding from then until engineRoot finishes; engineCreate reads `_dropped` when
      its provisioning lands and removes the frame. */
   for (const eng of dropped) { eng._dropped = true; if (eng.state === "hot" && eng.r.outstandingCalls() === 0) eng.r.destroy(); }
+  for (const eng of dropped) childRequestsClose(eng);
   /* Every outstanding rendezvous belonged to a dropped instance; left behind, each would hold its asking
      engine's record for the life of the offscreen. */
   _remoteOps.clear();

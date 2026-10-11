@@ -1429,55 +1429,22 @@ static char *nav_request_referrer_policy(JSContext *ctx, const NavLoadState *s)
     return out;
 }
 
-/* The §7.4.5 request facts of each child navigable this agent created, by creating document and address, for
-   the trusted zone's own load of the same frame (main.c's qjs_child_request). A host record and not page state:
-   no flow reads it, so it does not time-travel. It is append-only and the first record of a (document, address)
-   pair stands, so a frame of the initial markup answers with the facts its install created it with. */
-typedef struct {
-    uint32_t creator;
-    char *addr, *destination, *referrer_policy;
-} ChildRequest;
-static ChildRequest *g_child_requests;
-static size_t g_child_requests_n, g_child_requests_cap;
-
-static void nav_record_child_request(uint32_t creator, const char *addr, JSValueConst container,
-                                     const char *request_policy, const char *item)
+/* `navigable.request<TAB><creator><TAB><destination><TAB><referrer policy><TAB><url>`: the §7.4.5 request facts
+   of a child navigable document `creator` created at `url`, its destination and its request referrer policy after
+   Fetch §4.1 Main fetch (possibly empty), announced to the trusted zone for its own load of the same frame. The
+   address is last because a URL holds no tab and a policy may be empty. */
+static void nav_announce_child_request(JSContext *ctx, const char *addr, JSValueConst container,
+                                       const char *request_policy, const char *item)
 {
-    ChildRequest *r;
-    size_t i;
+    char *dest = nav_container_destination(container);
+    char *policy = nav_main_fetch_referrer_policy(request_policy, item);
+    const char *const fields[] = { world_doc_name(document_doc(ctx)), dest, policy, addr };
+    char *op = engine_notice_build("navigable.request", fields, sizeof fields / sizeof fields[0]);
 
-    for (i = 0; i < g_child_requests_n; i++)
-        if (g_child_requests[i].creator == creator && !strcmp(g_child_requests[i].addr, addr)) return;
-    if (g_child_requests_n == g_child_requests_cap) {
-        size_t cap = g_child_requests_cap ? g_child_requests_cap * 2 : 8;
-        ChildRequest *grown = realloc(g_child_requests, cap * sizeof *grown);
-
-        CHECK(grown != NULL, "navigable: OOM growing the child request record");
-        g_child_requests = grown;
-        g_child_requests_cap = cap;
-    }
-    r = &g_child_requests[g_child_requests_n++];
-    r->creator = creator;
-    r->addr = strdup(addr);
-    CHECK(r->addr != NULL, "navigable: OOM recording a child navigable's address");
-    r->destination = nav_container_destination(container);
-    r->referrer_policy = nav_main_fetch_referrer_policy(request_policy, item);
-}
-
-bool navigable_child_request(uint32_t creator, const char *addr, const char **destination,
-                             const char **referrer_policy)
-{
-    size_t i;
-
-    DCHECK(addr != NULL && destination != NULL && referrer_policy != NULL,
-           "a child navigable's request facts were asked with no address or nowhere to answer");
-    for (i = 0; i < g_child_requests_n; i++) {
-        if (g_child_requests[i].creator != creator || strcmp(g_child_requests[i].addr, addr)) continue;
-        *destination = g_child_requests[i].destination;
-        *referrer_policy = g_child_requests[i].referrer_policy;
-        return true;
-    }
-    return false;
+    engine_host_notify(ctx, op);
+    free(op);
+    free(policy);
+    free(dest);
 }
 
 /* HTML §7.1.4.2 "Embedder policy checks"' STEPS 1 AND 2 — the half of check-a-navigation-response's-adherence-
@@ -3904,8 +3871,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        navigable_navigate below like every other destination. */
     /* The child's §7.4.5 request facts, for the zone's own load of the same frame. */
     if (is_child)
-        nav_record_child_request(document_doc(ctx), addr, container, referrer_policy,
-                                 creator_policy.referrer_policy);
+        nav_announce_child_request(ctx, addr, container, referrer_policy, creator_policy.referrer_policy);
     DCHECK(!destination_is_javascript,
            "§7.4's create was asked to make a navigable whose ADDRESS is a `javascript:` URL — §7.3.1.7 step 8 "
            "creates a navigable with no url at all and §7.2.2.1 step 15 navigates it, which is the algorithm "
@@ -5155,17 +5121,4 @@ void navigable_free(JSContext *ctx)
        call — test_forced.c's probes run above it for exactly that reason. */
     g_realms_made = g_realms_peak = 0;
     g_realm_builder = NULL;
-    /* The child request record is this agent's, for the census's reason. */
-    {
-        size_t i;
-
-        for (i = 0; i < g_child_requests_n; i++) {
-            free(g_child_requests[i].addr);
-            free(g_child_requests[i].destination);
-            free(g_child_requests[i].referrer_policy);
-        }
-        free(g_child_requests);
-        g_child_requests = NULL;
-        g_child_requests_n = g_child_requests_cap = 0;
-    }
 }

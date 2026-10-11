@@ -1485,6 +1485,14 @@ async function main() {
        lazy: the sending engine deliberately does not record which peers a flow reached, because releasing a
        world with no segment is a no-op and tracking it would be state kept only to avoid one. Only the zone
        knows what the other instances are, which is this record's whole reason to exist. */
+    /* `navigable.request <creator> <destination> <referrer policy> <url>` — a child navigable's request facts
+       (core/frame/navigable.c), which extension/bridge.js speaks a sub-frame seed with. This host loads no seed
+       and composes no Referer, so it reads the record for its grammar alone. */
+    if (f[0] === 'navigable.request') {
+      if (f.length !== 5 || !f[1] || !f[2] || !f[4])
+        throw new Error(`a navigable.request notice is not <creator> <destination> <referrer policy> <url>: ${record}`);
+      return;
+    }
     if (f[0] === 'world.gone') {
       if (f.length < 2 || !f[1]) throw new Error(`a world.gone notice carried no world name: ${record}`);
       for (const i of instances) if (i !== e && i.live) i.ready.push(`world-gone\t${f[1]}`);

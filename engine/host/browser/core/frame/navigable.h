@@ -452,11 +452,6 @@ typedef enum {
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
                        lxb_dom_node_t *source_element, WindowType *out_window_type, const char *referrer_policy);
 void navigable_free(JSContext *ctx);
-/* HTML §7.4.5's request destination and request referrer policy (after Fetch §4.1 Main fetch) of the child
-   navigable document `creator` created at `addr`, as its create computed them: true with both borrowed until
-   navigable_free, or false when this agent created no such child. */
-bool navigable_child_request(uint32_t creator, const char *addr, const char **destination,
-                             const char **referrer_policy);
 
 /* HOW MANY CHILD REALMS ARE LIVE — the working set child_document's OOM `CHECK` names, asked of the only
    component that knows it. LIVE, not built: a realm leaves this count when it is torn down, which is when its

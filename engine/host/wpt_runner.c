@@ -1796,6 +1796,16 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        refusal is explicit because a silently dropped notice is invisible at the emitting end (the DFAIL below).
        The grammar is still asserted: a malformed record is a writer that has changed, whatever this host does
        with it. */
+    /* `navigable.request <creator> <destination> <referrer policy> <url>`: a child navigable's request facts
+       (core/frame/navigable.c), which the trusted zone speaks a sub-frame seed with. A WPT run loads no seed, so
+       the record is read for its grammar alone. */
+    if (nf == 5 && !strcmp(f[0], "navigable.request")) {
+        DCHECK(*f[1] != '\0' && *f[2] != '\0' && *f[4] != '\0',
+               "a navigable.request notice named no creator, destination or address — core/frame/navigable.c "
+               "writes all three non-empty");
+        free(whole);
+        return;
+    }
     if (nf == 5 && !strcmp(f[0], ROUTE_SEED_NOTICE)) {
         DCHECK(*f[1] != '\0',
                "a route declaration named no address — solver/route_seed.c refuses an empty one at the "
