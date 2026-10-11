@@ -118,58 +118,50 @@
 #include "core/url/url_search_params.h"
 #include "core/xhr/xml_http_request.h"
 
-/* THE FACTS, BUNDLED — AND THIS FILE IS THE ONLY PLACE THAT CAN SPELL THEM. platform.h takes them as arguments
-   so that no host can hand over an incomplete value (see the paragraph there for why a hand-filled local was
-   the defect and why `= {0}` is not the fix). They are one value HERE because the ninety-odd component rows
-   below take one, and a row taking nine arguments would put a copy of the fact list on every one of them.
-   ONE CONSTRUCTION PER ENTRY, in the entry whose parameter list it copies and on the lines below that parameter
-   list — so a fact added to platform.h and not carried here is one function's diff and not three files'.
-   THAT USED TO READ "EXACTLY ONE CONSTRUCTION OF EACH", AND IT IS REWRITTEN RATHER THAN DELETED because the
-   reasoning behind it is right and a reader will re-derive it: what must not exist is a construction a HOST
-   fills, and what the count was really asserting is that no OTHER file can spell one. A `PlatformAgent` is now
-   built TWICE, by `platform_agent_init` and by `platform_worker_agent_init`, because §8.1.2.2 allocates a
-   window agent's cluster and a worker agent's by two different algorithms and the two entries hold two
-   different fact lists — which is the residual named at the second of them. Both are in THIS file, so the
-   property the sentence was protecting is unchanged; only the number was. */
+/* The facts, bundled; this file is the only place that can spell them. platform.h takes them as arguments so no
+   host can hand over an incomplete value (platform.h says why `= {0}` is not the fix). They are one value here because the component rows below take one, and a row taking
+   nine arguments would copy the fact list onto every row. Each is constructed in the entry whose parameter list it
+   copies, on the lines below that list, so a fact added to platform.h and not carried here is one function's diff.
+   A `PlatformAgent` is built twice, by `platform_agent_init` and `platform_worker_agent_init`, because §8.1.2.2
+   allocates a window agent's cluster and a worker agent's by two algorithms with two fact lists (the residual at
+   the second); both constructions are in this file, and no other file can spell one. */
 typedef struct {
-    const char       *origin;          /* the agent's PRINCIPAL */
-    const char       *top_level_url;   /* HTML §8.1.3.1's TOP-LEVEL CREATION URL of the first realm */
+    const char       *origin;          /* the agent's principal */
+    const char       *top_level_url;   /* HTML §8.1.3.1's top-level creation URL of the first realm */
     bool              requests_oac;    /* §7.5.1's `requestsOAC` */
-    OpenerPolicyValue opener_policy;   /* §7.1.3's OPENER POLICY VALUE of the rooting response */
+    OpenerPolicyValue opener_policy;   /* §7.1.3's opener policy value of the rooting response */
 } PlatformAgent;
 
 typedef struct {
     lxb_html_document_t      *dom;             /* the parsed tree this realm's `document` wraps */
-    const char               *url;             /* the document's ADDRESS */
-    const char               *origin;          /* the document's PRINCIPAL */
-    DocumentKind              kind;            /* DOM §4.5's TYPE and CONTENT TYPE, as §7.4.5's arm decided */
-    SerializedPolicyContainer policy;          /* HTML §7.1.7's POLICY CONTAINER it is created with */
+    const char               *url;             /* the document's address */
+    const char               *origin;          /* the document's principal */
+    DocumentKind              kind;            /* DOM §4.5's type and content type, as §7.4.5's arm decided */
+    SerializedPolicyContainer policy;          /* HTML §7.1.7's policy container it is created with */
     SerializedResponsePermissionsPolicy
                               permissions_policy;   /* Permissions Policy §9.1's two response header values */
-    SandboxFlags              sandbox_flags;   /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET */
+    SandboxFlags              sandbox_flags;   /* HTML §7.1.5's active sandboxing flag set */
     uint32_t                  doc_id;          /* the world registry's name for this document */
-    JSValueConst              nav_proxy;       /* §7.2.3's ONE WindowProxy for its navigable */
-    const char               *about_base_url;  /* HTML §7.4's ABOUT BASE URL, or NULL — see platform.h */
-    bool                      is_iframe_srcdoc; /* HTML §4.8.5's CLASS for this Document — see platform.h */
+    JSValueConst              nav_proxy;       /* §7.2.3's one WindowProxy for its navigable */
+    const char               *about_base_url;  /* HTML §7.4's about base URL, or NULL — see platform.h */
+    bool                      is_iframe_srcdoc; /* HTML §4.8.5's class for this Document — see platform.h */
 } PlatformDocument;
 
-/* ONE COMPONENT, BOTH HALVES. The thunks below exist because a component's declaration takes exactly the facts
-   that component needs and no more — which is right, and is why they cannot share one signature. A thunk is
-   the whole of the adaptation, so the table stays a list of components rather than a list of argument
-   shuffles, and a component whose facts change breaks its own thunk and nothing else. */
+/* One component, both halves. A component's declaration takes exactly the facts it needs, so the declarations
+   cannot share one signature; a thunk below is the whole of the adaptation, the table stays a list of components,
+   and a component whose facts change breaks its own thunk and nothing else. */
 typedef void PlatformDeclare(JSContext *ctx, const PlatformAgent *a);
 typedef void PlatformInstall(JSContext *ctx, JSValueConst g, const PlatformDocument *d);
-/* THE RELEASE TAKES THE RUNTIME, because that is what an AGENT is: a component on this column holds state for
-   the whole agent (that is the entry condition for being on it), and agent state is freed against the runtime
-   the declaration was made in — which platform.c already remembers, so no host has to pass anything. A row that
-   wanted a JSContext would be a per-realm component in the wrong column; those go with their realm. */
+/* The release takes the runtime, because a component on this column holds state for the whole agent, freed
+   against the runtime the declaration was made in (this file remembers it, so no host passes anything). A row that
+   wanted a JSContext would be a per-realm component, which goes with its realm. */
 typedef void PlatformRelease(JSRuntime *rt);
 
 typedef struct {
     const char      *name;      /* the component, as its file is named — every assert below says which */
-    PlatformDeclare *declare;   /* once per AGENT, or NULL for a component another one declares */
-    PlatformInstall *install;   /* once per REALM, or NULL for a component with no per-document members */
-    PlatformRelease *release;   /* once per AGENT at teardown, or NULL for a component that holds no agent state */
+    PlatformDeclare *declare;   /* once per agent, or NULL for a component another one declares */
+    PlatformInstall *install;   /* once per realm, or NULL for a component with no per-document members */
+    PlatformRelease *release;   /* once per agent at teardown, or NULL for a component that holds no agent state */
 } PlatformComponent;
 
 /* ---- the agent half ------------------------------------------------------------------------------------- */
@@ -282,10 +274,8 @@ static void d_cookie_store(JSContext *c, const PlatformAgent *a) { (void)a; cook
 static void d_simple_dialogs(JSContext *c, const PlatformAgent *a) { (void)a; simple_dialogs_init(c); }
 static void d_domparser(JSContext *c, const PlatformAgent *a) { (void)a; domparser_init(c); }
 static void d_xml_serializer(JSContext *c, const PlatformAgent *a) { (void)a; xml_serializer_init(c); }
-/* ECMAScript §16.2.1.10 HostLoadImportedModule is the RUNTIME's hook, which is what an agent is.
-   `import(specifier)` with none installed resolved to nothing at all — no module, no error, no record — and a
-   page that asks to load code and is answered silently is the one shape an unbuilt capability must not
-   have. */
+/* ECMAScript §16.2.1.10 HostLoadImportedModule is the runtime's hook, which is what an agent is. Without it
+   `import(specifier)` resolves to nothing, neither a module nor an error. */
 static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; module_loader_install(JS_GetRuntime(c)); }
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
@@ -306,30 +296,19 @@ static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
 static void r_cookie_store(JSRuntime *rt) { (void)rt; cookie_store_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
 /* §8.1.3.3's about-to-be-notified rejected promises list is a live Array a C static holds for the agent, so it is
-   agent state and belongs on this column. It was a line in each host's own teardown instead, the WPT runner's
-   copy did not have it, and the consequence was not a subtle one: EVERY file that gate ran ended on
-   JS_FreeRuntime's gc_obj_list walk with a leaked Array, so a test that had already passed was reported as an
-   abort. That is exactly the drift this column exists to end. */
+   agent state and belongs on this column. */
 static void r_unhandled_rejection(JSRuntime *rt) { unhandled_rejection_free(rt); }
-/* PERMISSIONS §3.2's STORE IS TWO LIVE ARRAYS, and it is reached only through navigator_free — Permissions is
-   declared from navigator_init, so it is released from there, which is right and is exactly why this row has to
-   exist. The WPT runner had no `navigator_free` line, so §3.2's store and the sources record beside it were
-   built for every file that gate ran and freed for none: two leaked GC objects per file, which is enough on its
-   own to end every run on JS_FreeRuntime's leak walk. It is the same defect as the row above, found by the same
-   reading, and the count could not show the first one being fixed while this one was still there — an abort is
-   per FILE, so removing one of several universal leaks moves it by nothing.
-   §6.4.4's UserActivation and Screen come with it: same column, same reason, and a component released from a
-   list one host writes out by hand is a component some other host leaks. */
+/* Permissions §3.2's store is two live Arrays, reached only through navigator_free, since Permissions is declared
+   from navigator_init. §6.4.4's UserActivation and Screen come with it: same column, same reason. */
 static void r_navigator(JSRuntime *rt) { (void)rt; navigator_free(); }
 static void r_screen(JSRuntime *rt) { (void)rt; screen_free(); }
 static void r_storage_manager(JSRuntime *rt) { (void)rt; storage_manager_free(); }
-/* INDEXED DATABASE §2.1's set of databases — one live record per storage key, holding every object store and
-   every record in them. It is the agent's for the reason its row states, so it is freed here. */
+/* Indexed Database §2.1's set of databases: one live record per storage key, holding every object store and
+   every record in them, agent state freed here. */
 static void r_idb_database(JSRuntime *rt) { idb_database_free(rt); }
-/* Each holds ONE runtime-lifetime value for the agent — the private Symbol its instances' internal slots
-   hang off — and the transaction additionally holds §2.7.2's live set and §2.7.1's cleanup set. A component
-   that mints a runtime-lifetime value owns it, and nothing else can free one: a per-realm value would go with
-   its context, and these belong to the agent. */
+/* Each holds one runtime-lifetime value for the agent, the private Symbol its instances' internal slots hang off,
+   and the transaction also holds §2.7.2's live set and §2.7.1's cleanup set. A component that mints a
+   runtime-lifetime value owns it and frees it here; per-realm values go with their contexts. */
 static void r_idb_transaction(JSRuntime *rt) { idb_transaction_free(rt); }
 static void r_idb_request(JSRuntime *rt) { idb_request_free(rt); }
 static void r_idb_connection(JSRuntime *rt) { idb_connection_free(rt); }
@@ -340,378 +319,166 @@ static void r_idb_index_populate(JSRuntime *rt) { idb_index_populate_free(rt); }
 static void r_idb_get_all(JSRuntime *rt) { idb_get_all_free(rt); }
 static void r_idb_vce(JSRuntime *rt) { idb_version_change_event_free(rt); }
 static void r_idb_open(JSRuntime *rt) { idb_open_free(rt); }
-/* THE ONE VIRTUAL FILESYSTEM AND THE STANDARDS OVER IT, and this is the row whose absence was measured rather
-   than argued. §2.1's two ROOT DIRECTORY ENTRIES are agent state by the file's own reasoning (storage is keyed
-   by origin and an instance is an origin-keyed agent cluster), and File System Access §3.2.2's recently-picked
-   map is one more. Every one of those five releases was written out by hand into main.c's teardown and again
-   into wpt_runner.c's, and test_forced.c — the entry every gate in this tree actually links — had NONE of
-   them. The runtime's leak walk named the result exactly: `{kind:"directory", name:""}` and
-   `{kind:"directory", name:"local"}` with a null prototype, and §3.2.2's empty map beside them, each held with
-   refcount 1 from OUTSIDE the heap. Behind those three roots the ROOT REALM could never be collected — 2614
-   Functions, 408 shapes and a JSContext at refcount 3108 — so three C statics nobody freed were reported as a
-   whole leaked browser with nothing naming the owner. That is the third column's entire purpose, twice over:
-   a host cannot express the omission, and there is no longer a hand-copied list for it to drift out of. */
+/* The one virtual filesystem and the standards over it. §2.1's two root directory entries are agent state
+   (storage is keyed by origin and an instance is an origin-keyed agent cluster), and File System Access §3.2.2's
+   recently-picked map is one more. Left unreleased, those roots hold the root realm alive from outside the heap,
+   so the leak walk reports a whole leaked browser with nothing naming the owner. */
 static void r_file_system(JSRuntime *rt) { file_system_free(rt); }
 static void r_fs_writable(JSRuntime *rt) { fs_writable_free(rt); }
 static void r_fs_handle(JSRuntime *rt) { (void)rt; fs_handle_free(); }
 static void r_fs_access(JSRuntime *rt) { (void)rt; file_system_access_free(); }
 static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
-/* WEB CRYPTOGRAPHY's two components hold class ids, per-realm slots, a step id and ONE INTERNED ATOM (the
-   Algorithm dictionary's `name`), all of which are the AGENT's. The atom is the reason this row exists rather
-   than being left to the realm teardown: an atom is a JSAtomStruct and not a GC object, so a release nobody
-   calls is invisible to JS_FreeRuntime's object walk and shows up only in its atom walk, by description.
-   §14's release is reached through §10's, because §10 declares it. */
+/* Web Cryptography's two components hold class ids, per-realm slots, a step id and one interned atom (the
+   Algorithm dictionary's `name`), all the agent's. An atom is a JSAtomStruct, not a GC object, so an unreleased one
+   shows only in JS_FreeRuntime's atom walk. §14's release is reached through §10's, because §10 declares it. */
 static void r_crypto(JSRuntime *rt) { (void)rt; crypto_free(); }
-/* STORAGE §4.3's TWO SHEDS ARE THE AGENT'S, and that is the same argument §2.1's set of databases
-   makes two rows down: storage is keyed by ORIGIN, §Security makes an instance an origin-keyed agent
-   cluster, so the shed a same-origin child navigable reaches is THIS one rather than a second. What a C
-   static holds for the agent is freed against the runtime here. §12.2.1's slot Symbol and §12.2.2's
-   per-Document holder Symbol are runtime-lifetime values of the same kind. */
+/* Storage §4.3's two sheds are the agent's: storage is keyed by origin and an instance is an origin-keyed agent
+   cluster, so a same-origin child navigable reaches this shed. §12.2.1's slot Symbol and §12.2.2's per-Document
+   holder Symbol are runtime-lifetime values of the same kind. */
 static void r_storage_shed(JSRuntime *rt) { storage_shed_free(rt); }
 static void r_storage(JSRuntime *rt) { storage_free(rt); }
 static void r_window_storage(JSRuntime *rt) { window_storage_free(rt); }
-/* THE TWO DELIVERY CALLEES AND §9.5's BUS, found by the same reading and leaked by the same host. Each of these
-   components mints ONE function object for the whole agent — the task callee a queued delivery runs through —
-   and §9.5's registry of open channels is a live Array beside it; the walk named both callees as
-   `Function { length: 2, name: "" }` and the registry as an empty Array. A component that mints a
-   runtime-lifetime value owns it, and this column is where it gives it back. */
+/* The two delivery callees and §9.5's bus. Each component mints one function object for the agent, the task callee
+   a queued delivery runs through, and §9.5's registry of open channels is a live Array beside it. */
 static void r_window_message(JSRuntime *rt) { window_message_free(rt); }
 static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
 /* XMLHttpRequest holds the agent's step definitions and, through §5's ProgressEvent, the private Symbol that
-   interface's own slots hang off. main.c freed it, wpt_runner.c and test_forced.c did not. */
+   interface's slots hang off. */
 static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
 /* File API §6.2 holds the agent's two step definitions and the four pool entries its read methods are. */
 static void r_file_reader(JSRuntime *rt) { file_reader_free(rt); }
-/* §7.2.6.10.3's NavigationDestination, AND IT IS THE ROW THE AUDIT FOUND RATHER THAN THE LEAK WALK. Its release
-   was written, exported from its header, and CALLED BY NOBODY — not by a host, not by another component — so
-   the private Symbol its internal slots hang off had been leaked by every run this engine had made up to that
-   commit. The walk could not report it: a private Symbol is a JSAtomStruct, which is not on gc_obj_list, so
-   `JS_FreeRuntime`'s object walk does not see it, and the atom walk beside it was behind ENABLE_DUMPS +
-   JS_DUMP_ATOM_LEAKS, a bit no host in this tree ever set. THAT SECOND HALF IS NO LONGER TRUE and the sentence
-   is not left standing: `JS_FreeRuntime`'s atom walk is unconditional now and carries a DCHECK that names the
-   surviving atom by kind and description, so a release this column forgets aborts at the report instead of
-   going unseen. What stays true is the first half — the audit found this row, not a detector — and the reason
-   is the general one: a component released by nobody is what a THIRD copy of a hand-written list produces, and
-   here there was no copy at all. */
+/* §7.2.6.10.3's NavigationDestination holds the private Symbol its internal slots hang off. A private Symbol is a
+   JSAtomStruct, not on gc_obj_list, so only JS_FreeRuntime's atom walk (which DCHECKs every surviving atom by kind
+   and description) sees a release this column forgets. */
 static void r_nav_destination(JSRuntime *rt) { navigation_destination_free(rt); }
-/* FETCH §5.1 "Headers class", §5.5 "Response class" AND §5.4 "Request class", AND THE THREE ARRIVE AS A GROUP
-   FOR THE REASON THE STREAMS GROUP DID. All three releases were hand-written lines in THREE host teardowns —
-   engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
-   platform_agent_free had already run this entire column, which is not merely a fourth copy of a list: it is
-   AFTER agent_state_check_released, so out there none of the three could declare a slot to core/agent_state.h
-   at all. A row with agent state and no release is what platform_check_agent_state fires on, and a release
-   that runs past the check is a release the check has already finished asking about.
-   WHAT THEY CARRIED WHILE THEY SAT OUT THERE. THREE CLASS IDS (§5.1's, §5.4's and §5.5's), §5.5's per-realm
-   %JSON.stringify% slot, §5.3's two Body-mixin handles, §5.1's six member declarations and its
-   `iterable<ByteString, ByteString>` pair handle, and §5.5's clone machine. A carried class id is not the
-   cautious half of a tie: a second agent's runtime restarts JS_NewClassID at JS_CLASS_INIT_COUNT, so the
-   number names a class in a runtime that is gone. AND THE CLASS IDS WERE READ AFTER THE RELEASE, WHICH IS THE
-   half core/agent_state.h's closing paragraph is about: §5.1's finalizer and §5.4's and §5.5's
-   finalizer-and-gc_mark pairs looked the record up by the id their own release had left set, and the collector
-   runs after this column either way. All five reach the record with JS_GetAnyOpaque now.
-   NONE OF THE THREE TAKES A JSContext ANY MORE, and none of them read the one it took: the prototypes, the
-   three interface objects and each realm's %JSON.stringify% are the REALMS' and go with their contexts, so
-   what is left is the AGENT's, which is this column's entry condition. The parameter was the last thing making
-   them look like per-realm components in the wrong column.
-   THEY ARE THEIR OWN ROWS AND NOT SUB-COMPONENTS OF `fetch`, which core/fetch/fetch.c's own release says in
-   its own words: fetch_free gives back §5.6's interned name and its three handles, and "freeing them from here
-   would make this component the owner of state it does not own". They sit ABOVE `fetch` so that each is
-   declared by its own row rather than by the latched call fetch_init still makes — the same shape
-   `readable_stream` has, which fetch_init also calls and which has had a row of its own all along. */
+/* Fetch §5.1 "Headers class", §5.5 "Response class" and §5.4 "Request class". Together they hold three class ids,
+   §5.5's per-realm %JSON.stringify% slot, §5.3's two Body-mixin handles, §5.1's six member declarations and its
+   `iterable<ByteString, ByteString>` pair handle, and §5.5's clone machine, all agent state declared to
+   core/agent_state.h, which is why they are rows: a carried class id would name a class in a runtime that is
+   gone. Their finalizers and gc_mark functions reach the record with JS_GetAnyOpaque, since they run after this
+   column. None takes a JSContext: the prototypes, interface objects and each realm's %JSON.stringify% go with
+   their contexts. They are their own rows, not sub-components of `fetch` (fetch_free gives back only §5.6's
+   interned name and its handles), and sit above `fetch` so each is declared by its own row rather than by
+   fetch_init's latched call, as `readable_stream` is. */
 static void r_headers(JSRuntime *rt) { (void)rt; headers_free(); }
 static void r_response(JSRuntime *rt) { (void)rt; response_free(); }
 static void r_request(JSRuntime *rt) { (void)rt; request_free(); }
-/* §5's four interned field names. fetch was one of the forty-three rows with a declare and an EMPTY third
-   column, and the atom walk named all four on 118 files of an area that touches fetch only incidentally. */
+/* §5's four interned field names. */
 static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
-/* FILE API §3, §4 AND §5, WHICH ARE ONE COMPONENT AND ARE NOW ONE ROW ON BOTH COLUMNS. blob_free was a
-   hand-written line in THREE host teardowns — engine/host/main.c, engine/host/wpt_runner.c and
-   engine/host/test_forced.c — running AFTER platform_agent_free had already run this entire column, which is
-   the drift this column exists to end. It reaches file_list_free, so §5's declaration (blob_init's last line
-   is file_list_init) and §5's release travel with §3's and §4's; core/file/file_list.c therefore declares its
-   class id under THIS row's name rather than its own file's, which is what a sub-component does.
-   WHAT IT COST TO BE OUT THERE was not a leak but a question nobody could ask: a row with agent state and an
-   EMPTY release column is what platform_check_agent_state fires on, so while blob_free sat in the hosts
-   neither file could declare anything at all — and between them THREE CLASS IDS, one of which every BlobPart
-   and BodyInit position brands against, were carried past their own release with core/agent_state.h never
-   told they existed.
-   IT TAKES THE RUNTIME NOW AND DID READ THE CONTEXT IT USED TO TAKE, unlike the streams group above: §8's
-   blob URL store is a JS_FreeValue and the two keys it is read by are JS_FreeAtoms, and §5's slot key is one
-   of each. All are AGENT-lifetime values, so each has an exact runtime-scoped spelling (JS_FreeValueRT,
-   JS_FreeAtomRT) and the parameter becomes the runtime this column already holds rather than going away. */
+/* File API §3, §4 and §5, one component and one row on both columns. blob_free reaches file_list_free, so §5's
+   declaration (blob_init's last line is file_list_init) and release travel with §3's and §4's, and
+   core/file/file_list.c declares its class id under this row's name. The three class ids include the brand every
+   BlobPart and BodyInit position checks. It takes the runtime: §8's blob URL store is a value and its two keys are
+   atoms, and §5's slot key is one of each, all agent-lifetime, freed with JS_FreeValueRT and JS_FreeAtomRT. */
 static void r_blob(JSRuntime *rt) { blob_free(rt); }
-/* URL §6.1 URL class AND §6.2 URLSearchParams class. Both releases were hand-written lines in THREE host
-   teardowns — engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
-   platform_agent_free had already run this entire column, which is the drift this column exists to end, and
-   the three did not even agree on what travelled with them: main.c and test_forced.c wrote `url_free();
-   usp_free();` and then form_data a whole group later, while wpt_runner.c wrote the three together.
-   WHAT IT COST TO BE OUT THERE was a question nobody could ask rather than a leak. A row with agent state and
-   an EMPTY release column is what platform_check_agent_state fires on, so while the two `_free`s sat in the
-   hosts NEITHER FILE COULD DECLARE ANYTHING AT ALL — and between them TWO CLASS IDS were carried past their
-   own release, each a number JS_NewClassID handed out of a runtime that is gone, one of them the brand Fetch
-   §5.2's BodyInit arm reads a URLSearchParams body through.
-   NEITHER TAKES A JSContext ANY MORE AND NEITHER READ THE ONE IT TOOK — url_free's first statement was
-   `(void)ctx;`. core/platform.h says the test is WHAT A RELEASE GIVES BACK and that the signature follows
-   from it: these give back class ids, runtime handles and pool indices, with no JSValue and no JSAtom
-   anywhere, so unlike `blob` above there is not even a JS_FreeValueRT to want the runtime for.
-   THE ORDER IS CHECKED IN BOTH DIRECTIONS. These are the third and fourth rows of the list, so reverse
-   declaration order runs them LAST but for `console` and `hr_time`, and every component that reads either —
-   Fetch's body extractor through usp_list_of, §6.1's own `searchParams` — has released long before. In the
-   other direction no release in this agent calls either component: derived by taking every caller of
-   url_record_of, usp_new, usp_reset and usp_list_of outside core/url/ and reading the function each one
-   stands in, which is a member body or a per-realm install in every case. */
+/* URL §6.1 "URL class" and §6.2 "URLSearchParams class": two class ids (one the brand Fetch §5.2's BodyInit arm
+   reads a URLSearchParams body through), runtime handles and pool indices, with no JSValue or JSAtom, so neither
+   takes the runtime. These are the third and fourth rows, so reverse declaration order runs them last but for
+   `console` and `hr_time`, after every component that reads either (Fetch's body extractor through usp_list_of,
+   §6.1's `searchParams`). No release in this agent calls either: every caller of url_record_of, usp_new,
+   usp_reset and usp_list_of outside core/url/ is a member body or a per-realm install. */
 static void r_url(JSRuntime *rt) { (void)rt; url_free(); }
 static void r_usp(JSRuntime *rt) { (void)rt; usp_free(); }
-/* XHR §4 "Interface FormData". form_data_free was a hand-written line in THREE host teardowns —
-   engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
-   platform_agent_free had already run this entire column, and this is the row where the three hosts most
-   visibly disagreed about WHERE: main.c and test_forced.c ran it after encoding and text_stream, a whole
-   group below the two URL rows, while wpt_runner.c ran it immediately after them and a hundred lines above
-   its own encoding pair. Nothing was missing in any of the three; there were three answers.
-   WHAT IT COST TO BE OUT THERE was a question nobody could ask. A row with agent state and an EMPTY release
-   column is what platform_check_agent_state fires on, so while form_data_free sat in the hosts this file
-   could declare nothing at all — and §4's CLASS ID was carried past its own release, which is the brand
-   Fetch §5.2's BodyInit arm, XHR §4's own body arm and NavigateEvent's `formData` all read through
-   form_data_is and form_data_class_id.
-   IT TAKES NOTHING NOW AND READ NOTHING BEFORE: §4's prototype and interface object are each realm's and go
-   with their contexts, so what is left is a class id, a runtime handle and two pool indices — no JSValue and
-   no JSAtom, hence not even a JS_FreeValueRT to want the runtime for, which is where this row differs from
-   `blob` two entries up.
-   THE ORDER IS CHECKED IN BOTH DIRECTIONS. This is the fifth row of the list, so reverse declaration order
-   runs it after every component that reads a FormData — core/fetch/body.c's extractor, core/html/html_form.c
-   and its FormDataEvent under `element`, core/events/navigate_event.c under `navigate_event_fire` — and
-   before only `url_search_params`, `url`, `console` and `hr_time`, none of which names this component. In the
-   other direction no release in this agent calls a form_data entry: derived by taking every caller of
-   form_data_is, form_data_class_id, form_data_new, form_data_clone, form_data_parse_multipart,
-   form_data_serialize_multipart, form_data_append_entry, form_data_append_all and the three entry accessors
-   outside core/html/form_data.c and reading the function each stands in — a member body or a per-realm
-   install in every case. */
+/* XHR §4 "Interface FormData": a class id (the brand Fetch §5.2's BodyInit arm, XHR §4's body arm and
+   NavigateEvent's `formData` read through form_data_is and form_data_class_id), a runtime handle and two pool
+   indices, with no JSValue or JSAtom, so it takes nothing; the prototype and interface object are each realm's.
+   As the fifth row it releases after every reader of a FormData (core/fetch/body.c's extractor,
+   core/html/html_form.c and its FormDataEvent under `element`, core/events/navigate_event.c under
+   `navigate_event_fire`) and before only `url_search_params`, `url`, `console` and `hr_time`, none of which names
+   it. No release in this agent calls a form_data entry: every caller outside core/html/form_data.c is a member
+   body or a per-realm install. */
 static void r_form_data(JSRuntime *rt) { (void)rt; form_data_free(); }
-/* ENCODING §7.2/§7.4 AND §7.5/§7.6. Both releases were hand-written lines in THREE host teardowns —
-   engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
-   platform_agent_free had already run this entire column, which is the drift this column exists to end, and
-   the WPT runner ran them a hundred lines below where the other two did, past its own realm_intrinsics_free.
-   WHAT IT COST TO BE OUT THERE was a question nobody could ask. A row with agent state and an EMPTY release
-   column is what platform_check_agent_state fires on, so while the two `_free`s sat in the hosts NEITHER FILE
-   COULD DECLARE ANYTHING AT ALL — and between them FOUR CLASS IDS and ONE PER-REALM VALUE SLOT (which is a
-   class id too: realm_value_declare is JS_NewClassID plus JS_NewClass) were carried past their own release,
-   read by a finalizer each and by §7.5/§7.6's shared gc_mark, all of which run later still.
-   NEITHER TAKES A JSContext ANY MORE AND NEITHER READ THE ONE IT TOOK: the four prototypes, the four
-   interface objects and each realm's copy of §7.5's decode operation are the REALMS' and go with their
-   contexts, so what is left is class ids, a realm-slot handle, runtime handles and step ids — no JSValue and
-   no JSAtom, hence not even a JS_FreeValueRT to want the runtime for, which is where these differ from
-   `blob` above.
-   THE ORDER BETWEEN THEM IS THE POINT AND REVERSE DECLARATION ORDER GIVES IT. §7.5's streams are built out of
-   §7.2's decoder — text_stream.c calls enc_decoder_new, enc_decoder_decode and enc_decoder_free — so
-   `text_stream` is declared BELOW `encoding` and therefore releases BEFORE it, the dependent first. In the
-   other direction no release in this agent calls either component: text_stream_decode_op's only two callers
-   outside this pair are core/fetch/body.c's and core/file/blob.c's step visits, and every encoding entry
-   reached from elsewhere (encoding_lookup, encoding_decode, encoding_name, enc_decoder_*) reads the generated
-   tables rather than any static this release resets. */
+/* Encoding §7.2/§7.4 and §7.5/§7.6: four class ids and one per-realm value slot (realm_value_declare is
+   JS_NewClassID plus JS_NewClass), read by a finalizer each and by §7.5/§7.6's shared gc_mark, with runtime
+   handles and step ids; no JSValue or JSAtom, so neither takes the runtime. §7.5's streams are built on §7.2's
+   decoder (text_stream.c calls enc_decoder_new, enc_decoder_decode and enc_decoder_free), so `text_stream` is
+   declared below `encoding` and releases first. No release in this agent calls either: text_stream_decode_op's
+   other callers are core/fetch/body.c's and core/file/blob.c's step visits, and every encoding entry reached from
+   elsewhere reads generated tables rather than a static this release resets. */
 static void r_encoding(JSRuntime *rt) { (void)rt; encoding_free(); }
 static void r_text_stream(JSRuntime *rt) { (void)rt; text_stream_free(); }
-/* DOM §3.1/§3.2 AND THE OBSERVABLE STANDARD, AND THE PAIR INVERTS — WHICH IS THE POINT RATHER THAN A SIDE
-   EFFECT. Both releases were hand-written lines in THREE host teardowns — engine/host/main.c,
-   engine/host/wpt_runner.c and engine/host/test_forced.c — running AFTER platform_agent_free had already run
-   this entire column, and all three wrote them in the SAME wrong order: `abort_free(); observable_free();`.
-   Observable DEPENDS ON abort. Its §2.2 SubscribeOptions declares `AbortSignal signal`, and a DECLARED
-   interface-typed member states the class it brands against — observable.c reads abort_signal_class() for it,
-   and the Observable standard §2.1 "The Subscriber interface"'s subscription controller is an
-   AbortSignal every Subscriber holds. Forward order on this list is
-   therefore `abort` then `observable`, which is why the two rows sit where they do; reverse declaration order
-   makes the RELEASE observable-then-abort, so the dependent gives up its state first. The hand-written lists
-   had the depended-on component going first, which is the same inversion this column already found in
-   `viewport`/`visual_viewport` and in `timer`/`event_loop`.
-   THE THREE HOSTS DID NOT AGREE ON THE REST OF THE POSITION EITHER: main.c and test_forced.c ran the pair
-   immediately before `document_free`, while wpt_runner.c ran it after six other hand-written releases and
-   before `navigable_free`, `solver_agent_free` and `document_free`. That is the drift core/platform.h's
-   release column exists to end, and it cannot be repaired one row at a time:
-   everything on this column runs before everything left out there, so lifting either of these alone would
-   have moved it over its own partner.
-   WHAT SITS BETWEEN THEM ON THIS LIST READS NEITHER, AND THE SET IS NOT FIXED. When this was written it was
-   `fetch` alone; §5.1's, §5.4's and §5.5's rows landed between the two in the same hour, so it is four
-   today and the next conversion may make it five. That is why the sentence to rely on is the GENERAL one:
-   NO release in this agent reads abort's or observable's statics at all — every `_free` in the eight files
-   that use abort's API was read, and fetch_free, headers_free, response_free and request_free each give back
-   only their own names, handles and recorded runtime. It is what makes the pair's new positions a question
-   about DECLARATION order rather than about a dependency between releases, and it is what makes a row landing
-   between them harmless.
-   NEITHER TAKES A JSContext ANY MORE, and unlike the groups converted above each of them genuinely READ the
-   one it used to take: abort_free for a JS_FreeValue of §3.2's slot-key Symbol, observable_free for a
-   JS_FreeAtom and a JS_FreeValue of §2's. Both are AGENT-lifetime values, so both reads have an exact
-   runtime-scoped spelling (JS_FreeValueRT, JS_FreeAtomRT) and the parameter becomes the runtime this column
-   already holds rather than going away. A row that wanted a JSContext would be a per-realm component in the
-   wrong column; a row that wanted a JS_FreeValue is on the right one and was spelling it per-realm. */
+/* DOM §3.1/§3.2 and the Observable standard. Observable depends on abort: §2.2 SubscribeOptions declares
+   `AbortSignal signal` (observable.c brands it through abort_signal_class()), and the Observable standard §2.1
+   "The Subscriber interface"'s subscription controller is an AbortSignal. So `abort` is declared first and
+   reverse declaration order releases observable, the dependent, first. No release in this agent reads abort's or
+   observable's statics (every `_free` in the files that use abort's API gives back only its own names, handles
+   and runtime), so rows landing between the two are harmless. Each takes the runtime because each frees an
+   agent-lifetime value: abort_free §3.2's slot-key Symbol, observable_free an atom and a value of §2's. */
 static void r_abort(JSRuntime *rt) { abort_free(rt); }
 static void r_observable(JSRuntime *rt) { observable_free(rt); }
-/* THE WHOLE STREAMS GROUP, AND IT MOVES AS A BLOCK FOR THE REASON THE DOM GROUP DOES. All four releases were
-   written by hand into THREE host teardowns — engine/host/main.c, engine/host/wpt_runner.c and
-   engine/host/test_forced.c — and run AFTER platform_agent_free had already run this entire column. Reverse
-   declaration order over these four rows is transform_stream, writable_stream, queuing_strategy,
-   readable_stream, which is EXACTLY the sequence all three hand-written lists already had them in, so nothing
-   about the group's internal order changes; taking one of them alone would have lifted it over the other
-   three, since everything on this column runs before everything left out there.
-   WHAT THEY HELD WHILE THEY SAT OUT THERE, which is the point rather than the tidiness. A row with agent state
-   and an empty release column is what platform_check_agent_state below fires on, so NONE of these four could
-   declare a slot to core/agent_state.h while its release was a line in a host — and between them they carried
-   FIFTEEN CLASS IDS and THIRTY-THREE PER-REALM VALUE SLOTS past their own release — nine slot identifiers,
-   most of them arrays — every one of them a number JS_NewClassID handed out of a runtime that is gone.
-   A carried class id is not the cautious half of a tie: it
-   doubles as each component's declaration latch, so the NEXT agent's `_init` returns before re-registering,
-   and every ReadableStream, WritableStream, TransformStream and queuing strategy that agent mints is branded
-   with an id the live runtime never issued, with every `JS_GetOpaque(v, id)` in the group answering about
-   whichever class did get that number.
-   THE CASCADE IS readable_stream's: core/streams/pipe.c and core/streams/readable_byte_stream.c have no row
-   here and never should, because readable_stream_init calls their inits and readable_stream_free calls their
-   releases — a row is a declare and a release THIS FILE calls. Both declare their own state under
-   `readable_stream` and both say so with agent_state_reached at the end of their own release, which is what
-   lets the undo at the end of readable_stream_free refuse to put back a slot the cascade never reached.
-   NONE OF THE FOUR TAKES A JSContext ANY MORE. Each used to and none of them read it: the prototypes and the
-   captured operations are the REALMS' and go with their contexts, so what was left was the agent's, which is
-   this column's entry condition. The parameter was the last thing making them look like per-realm components
-   in the wrong column. */
+/* The streams group: reverse declaration order runs transform_stream, writable_stream, queuing_strategy,
+   readable_stream. Together they hold fifteen class ids and thirty-three per-realm value slots, all declared to
+   core/agent_state.h; a carried class id doubles as each component's declaration latch, so the next agent's
+   `_init` would return early and brand its streams with ids the live runtime never issued. readable_stream
+   cascades: core/streams/pipe.c and core/streams/readable_byte_stream.c are initialised and released by
+   readable_stream_init and readable_stream_free, declare their state under `readable_stream`, and call
+   agent_state_reached at the end of their release so the undo refuses a slot the cascade never reached. None
+   takes a JSContext: prototypes and captured operations are the realms'. */
 static void r_readable_stream(JSRuntime *rt) { (void)rt; readable_stream_free(); }
 static void r_queuing_strategy(JSRuntime *rt) { (void)rt; queuing_strategy_free(); }
 static void r_writable_stream(JSRuntime *rt) { (void)rt; writable_stream_free(); }
 static void r_transform_stream(JSRuntime *rt) { (void)rt; transform_stream_free(); }
-/* THE DOM GROUP, WHOSE ROOT IS THE LARGEST CASCADE IN THIS BROWSER. element_free reaches forty-two further
-   releases — node.c's WRAPPER IDENTITY TABLE (a counted reference to every node wrapper ever minted, and a
-   wrapper holds its prototype, which holds the realm), custom_elements' registry backup and active-constructor
-   map, §4.3's pending mutation-record queue, the CSSOM group, the selector engine's lexbor arena, the CSS
-   parser, and the private Symbol every one of slot/shadow_root/element_internals/html_dialog/html_form hangs
-   its internal slots off. Every one of those is a C static held for the AGENT, which is the entry condition for
-   this column, and all of it was written by hand into three host teardowns instead — correct in all three
-   today, and one edit from not being, which is the whole of what happened to the eight components before it.
-   WHAT BLOCKED IT WAS A SIGNATURE AND NOTHING ELSE: the cascade freed against a JSContext, so it could not be
-   a row. It takes a JSRuntime now and reaches the same values through JS_FreeValueRT/JS_FreeAtomRT — the same
-   operation, since JS_FreeValue is JS_FreeValueRT(ctx->rt, v).
-   THE FOUR ROWS MOVE AS A BLOCK, and that is why html_iframe, dom_rect_list and dom_rect come with it rather
-   than after it. Reverse declaration order puts them in exactly the sequence the hand-written lists had them
-   in — iframe, element, dom_rect_list, dom_rect — so nothing about the group's internal order changes; taking
-   only the middle one would have reordered it against its own neighbours.
-   `document` IS here now, and the sentence that used to stand in its place was half a rule read as a whole
-   one. `document_free` really does read `doc_of(ctx)` and clear the realm's own opaque, and it really is a
-   per-realm release that this column cannot express — but that is one of TWO halves this component has, and the
-   other one had no home at all. `document_init` mints §4.5's class, declares fifteen pool entries and two
-   realm-value slots, and declares TEN sub-components; three of those (§4.7, §4.8, §4.2.2) were being released
-   from element_free's cascade, which is a release undoing another row's declaration, and the other seven were
-   released by nobody. It also CLAIMED §13.2.7's document-load lifecycle slot on the ONE frontier — out of the
-   per-DOCUMENT install, so every <iframe> re-claimed it and nothing ever gave it back.
-   THE HALVES RUN AT DIFFERENT PHASES AND NEITHER ORDER IS THIS COLUMN'S TO PICK: a child navigable's
-   document_free is reached from quickjs's realm-teardown hook, which fires inside JS_RunGC or JS_FreeRuntime —
-   both after this whole list. What makes that safe is stated and asserted at document_agent_free rather than
-   arranged here: the per-realm half reads NO static of that file, and §gc's realm-mark hook is deliberately NOT
-   given back, because the collection that runs after this list is exactly what tears those child realms down. */
-/* THE FOURTH THING A COMPONENT CAN HOLD FOR AN AGENT: A SLOT IN ANOTHER COMPONENT. These five were on no
- * column at all, and the reason was the same signature that kept the DOM group off it — each `_free` took a
- * JSContext, so it could not be a row, so it stayed a line in three hosts' hand-written teardowns. Not one of
- * them releases anything a REALM owns: every prototype they build is in that realm's class-proto slot and goes
- * with the context, and what is left over is class ids, step ids, interned atoms, private Symbols and — the
- * part no detector could see — CLAIMS, in both directions: a slot one of them holds for somebody else, or a
- * slot it took in somebody else.
- *
- * A CLAIM IS AGENT STATE WHOSE STORAGE IS IN THE OTHER COMPONENT, so it is released by the CLAIMANT and
- * asserted by the HOLDER. `timer` and `rendering` CLAIM: §8.1.7's timer step and §8.1.7.3's in-parallel half
- * are slots on the ONE frontier (solver/engine.c, released after the whole platform), and neither was ever
- * given back — the timer's was not even claimed once, it was re-claimed by every REALM, out of the
- * per-document install. `event_target` HOLDS four: §2.9's tree walk (core/dom/node.c), §2.9's activation
- * predicate and behaviour (core/html/hyperlink.c) and HTML §8.1.7.2's handler-set hook
- * (core/events/message_port.c), and not one of those three claimants released. `structured_clone` holds the
- * transferable registry, which is one row and a count nothing ever reset. Every one of them is the defect
- * core/agent_state.h found in Indexed Database §2.7.1's cleanup, and every one is invisible to both of
- * JS_FreeRuntime's censuses for the reason that file gives.
- *
- * REVERSE DECLARATION ORDER IS WHAT MAKES IT WORK, and it works because the claims run the same way as the
- * values: `element` (whose cascade reaches node.c and hyperlink.c) and `message_port` are both declared AFTER
- * `event_target`, so all three claims on that component are given back before it is released and its own
- * asserts are what say so. The hand-written lists had `event_target_free` BEFORE `message_port_free` in two of
- * the three hosts, which is that order exactly backwards. */
-/* HTML §7.2.4's Location, AND IT IS A CLAIMANT ROW RATHER THAN A HANDLE ROW. Its release was a line in each of
-   the three hosts' hand-written teardowns — the list this file exists to abolish, and the shape that cost the
-   WPT runner §3.2's permission store — while it held the brand for §7.2.4 (never given back at all, which is
-   core/agent_state.h's dom_rect defect) and TWO CLAIMS in solver/concolic.c's source registry: `location.hash`
-   and `location.search`, with the percent-encode set each component applies to an attacker's bytes.
-   THE CLAIMS ARE WHY THE POSITION MATTERS. concolic_free asserts that registry is empty, and the only thing
-   that used to place this release before that assert was three hosts happening to write the lines in that
-   order; on this column it is placed by reverse declaration order, and platform_agent_free runs before
+/* The DOM group, whose root is the largest cascade in this browser. element_free reaches dozens of releases:
+   node.c's wrapper identity table (a counted reference to every node wrapper, each holding its prototype and so
+   the realm), custom_elements' registry backup and active-constructor map, §4.3's pending mutation-record queue,
+   the CSSOM group, the selector engine's lexbor arena, the CSS parser, and the private Symbol slot, shadow_root,
+   element_internals, html_dialog and html_form hang their internal slots off, all agent state. The cascade frees
+   against a JSRuntime, through JS_FreeValueRT/JS_FreeAtomRT. The four rows (iframe, element, dom_rect_list,
+   dom_rect) move as a block in that release order.
+   `document` has two halves at different phases. document_init mints §4.5's class, declares pool entries,
+   realm-value slots and ten sub-components, and claims §13.2.7's document-load lifecycle slot on the frontier; its
+   agent half, document_agent_free, releases them. document_free reads `doc_of(ctx)` and is per-realm, reached
+   for a child navigable from quickjs's realm-teardown hook inside JS_RunGC or JS_FreeRuntime, after this list.
+   That is safe because the per-realm half reads no static of that file and §gc's realm-mark hook is not given
+   back here (both asserted at document_agent_free). */
+/* The fourth thing a component can hold for an agent: a slot in another component, a claim. A claim is agent state
+ * whose storage is in the other component, released by the claimant and asserted by the holder. `timer` and
+ * `rendering` claim §8.1.7's timer step and §8.1.7.3's in-parallel half on the one frontier (solver/engine.c,
+ * released after the whole platform). `event_target` holds four: §2.9's tree walk (core/dom/node.c), §2.9's
+ * activation predicate and behaviour (core/html/hyperlink.c) and HTML §8.1.7.2's handler-set hook
+ * (core/events/message_port.c). `structured_clone` holds the transferable registry. Claims are invisible to both of
+ * JS_FreeRuntime's censuses (core/agent_state.h says why). Reverse declaration order makes it work: `element`
+ * (whose cascade reaches node.c and hyperlink.c) and `message_port` are declared after `event_target`, so their
+ * claims are given back before it is released, and its own asserts check that. None of these releases anything a
+ * realm owns: prototypes go with their contexts, and what remains is class ids, step ids, interned atoms, private
+ * Symbols and claims. */
+/* HTML §7.2.4's Location, a claimant row: it holds §7.2.4's brand and two claims in solver/concolic.c's source
+   registry, `location.hash` and `location.search`, each with the percent-encode set its component applies to an
+   attacker's bytes. concolic_free asserts that registry empty, and platform_agent_free runs before
    solver_agent_free by construction. */
 static void r_location(JSRuntime *rt) { (void)rt; location_free(); }
-/* HTML §7.4.1's state machine and §7.2.5's History over it, OFF THE THREE HOSTS' HAND-WRITTEN LISTS and onto
-   this column — and this pair is the one that shows what those lists cost even when every one of them has the
-   line. All three hosts DID call both, and they called them in TWO DIFFERENT PLACES: the WPT runner released
-   them immediately after the viewport pair, main.c and test_forced.c a whole teardown later, past the realm
-   intrinsics and the whole streams group. The order WITHIN the pair was also wrong in all three — §7.2.5 is a
-   VIEW over §7.4.1's record and every one of its members reads it, so the view goes first, which is exactly
-   what reverse declaration order gives and what a hand-written `session_history_free(); history_free();` does
-   not. Neither component's release could be checked while they sat there either: a row with an empty release
-   column may declare no agent state (platform_check_agent_state below), so the nine slots these two hold
-   between them — two realm-value ids, §7.2.5's six member declarations and §7.4.3's step definition — were
-   given back by a line this file could not see and asserted by nothing at all. */
+/* HTML §7.4.1's state machine and §7.2.5's History over it. §7.2.5 is a view over §7.4.1's record and every one of
+   its members reads it, so the view releases first, as reverse declaration order gives. Between them they hold two
+   realm-value ids, §7.2.5's six member declarations and §7.4.3's step definition, declared to core/agent_state.h. */
 static void r_session_history(JSRuntime *rt) { (void)rt; session_history_free(); }
 static void r_history(JSRuntime *rt) { (void)rt; history_free(); }
-/* CSSOM VIEW §4's viewport and §12's VisualViewport over it, off those same three lists for the same reason.
-   The pair was written `viewport_free(); visual_viewport_free();` in all three hosts, which is again the
-   dependent component released SECOND — §12's members are derivations over §4's layout viewport — and again
-   reverse declaration order is what decides it here instead of three authors agreeing. */
+/* CSSOM View §4's viewport and §12's VisualViewport over it: §12's members derive from §4's layout viewport, so
+   reverse declaration order releases §12 first. */
 static void r_viewport(JSRuntime *rt) { (void)rt; viewport_free(); }
 static void r_visual_viewport(JSRuntime *rt) { (void)rt; visual_viewport_free(); }
-/* CSSOM VIEW §13.2 Scrolling's pending scroll events, released after the two above for the same reverse
-   declaration order: it holds no geometry of its own, but §3.1's perform a scroll fills it from the
-   viewport's position, so it is the dependent of the pair. */
+/* CSSOM View §13.2 "Scrolling"'s pending scroll events: no geometry of its own, but §3.1's perform a scroll fills
+   it from the viewport's position, so it is the dependent and releases after the pair above. */
 static void r_scroll_events(JSRuntime *rt) { (void)rt; scroll_events_free(); }
-/* DOM §2.2 Interface Event AND THE THIRTEEN SUBCLASSES core/events/event.c DECLARES BESIDE IT, which was the
-   last hand-copied `event_free(ctx);` in each of the three hosts' teardowns — written, like every other line
-   on those lists, AFTER platform_agent_free had already run this whole column. The three did not agree on
-   where: main.c and test_forced.c had `realm_intrinsics_free(); report_exception_free(ctx); event_free(ctx);`
-   and wpt_runner.c had `report_exception_free(ctx); event_free(ctx); realm_intrinsics_free();`. Nothing was
-   missing and the order was still three different answers.
-   AND THE ROW IS WHAT MAKES THE FAMILY'S STATE CHECKABLE AT ALL. platform_check_agent_state fires on a row
-   with agent state and no release, so while this release lived out there NONE of the sixty-six slots those
-   fourteen components hold could be declared, and nothing anywhere reported that fourteen CLASS IDS were
-   carried past their own release. None of the fourteen latches on the id (each latches on `g_ready`), so a
-   second agent really does re-run every one of these declarations, and JS_NewClassID is a no-op on a non-zero
-   slot: JS_NewClass is then handed a number the live runtime's `js_class_id_alloc` never allocated. Both arms
-   of that are wrong and neither is loud. Where a zeroing component has already drawn the same number from the
-   restarted counter, JS_NewClass1 returns -1 — and thirteen of these fourteen ignore that return, so the
-   class is never registered while `JS_SetClassProto(ctx, id, proto)` still writes, over the OTHER class's
-   per-realm prototype slot. Where it does not collide, the class registers at a SPARSE id past
-   `js_class_id_alloc`, which the allocator will hand out again to somebody else. */
+/* DOM §2.2 "Interface Event" and the thirteen subclasses core/events/event.c declares beside it, sixty-six slots
+   declared to core/agent_state.h. None of the fourteen latches on its class id (each latches on `g_ready`), so a
+   second agent re-runs every declaration, and a class id carried past its release would hand JS_NewClass a
+   number the live runtime never allocated: either a collision with another class (whose per-realm prototype
+   slot `JS_SetClassProto` then overwrites) or a sparse id the allocator hands out again. */
 static void r_event(JSRuntime *rt) { event_free(rt); }
 static void r_current_event(JSRuntime *rt) { current_event_free(rt); }
-/* HTML §8.1.4.6 Runtime script errors, the LAST hand-copied `report_exception_free(ctx);` in each of those same
-   three teardowns — the line immediately above the `event_free(ctx);` the note above describes, and the same
-   defect one row over. Its row's release column was empty, so its four slots (§8.1.4.6 step 6's private Symbol,
-   the declaration latch, §8.1.4.4 step 8's step-machine registration and step 7.3's console edge) could not be
-   declared to core/agent_state.h either, and the component's own file said so IN PROSE: "the only reason this
-   one is not declared there is that this component's row carries no release for that column to check". A
-   comment explaining why a component is exempt from a check is the check's own hole, written down.
-   ITS POSITION IS ALREADY DECIDED AND THE ROW ONLY OBEYS IT. `report_exception` is declared AFTER `event`, and
-   it DEPENDS on that row (extract_error_information mints HTML §8.1.4.6 Runtime script errors' ErrorEvent
-   through error_event_new, and
-   core/events/event.c's event_init is what declares that interface), so reverse declaration order releases it
-   BEFORE the `event` row that gives that family's state back — dependent first, which is what the
-   hand-written lists got right by accident and what this column decides.
-   THIS NAMED `error_event` AND `message_event` AS THE ROWS IT FOLLOWS, and that was already only half true
-   when it was written: both rows carried a NULL declare column, so neither declared anything for this one to
-   follow — the family's declaration was the `event` row's the whole time. They have since stopped being rows
-   at all, their per-document install having moved to their own realm intrinsics, so the sentence named two
-   rows a reader could not find while resting on an order it did not describe. Nothing in its release reads any other component's state at all: it frees one Symbol
-   against the runtime and returns three statics to their pre-init values. */
+/* HTML §8.1.4.6 "Runtime script errors": §8.1.4.6 step 6's private Symbol, the declaration latch, §8.1.4.4 step
+   8's step-machine registration and step 7.3's console edge, declared to core/agent_state.h. It depends on the
+   `event` row (extract_error_information mints §8.1.4.6's ErrorEvent through error_event_new, which event_init
+   declares), so it is declared after `event` and releases before it. Its release reads no other component's
+   state: it frees one Symbol against the runtime and resets three statics. */
 static void r_report_exception(JSRuntime *rt) { report_exception_free(rt); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
 static void r_worker_global_scope(JSRuntime *rt) { worker_global_scope_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
-/* HTML §8.1.7's OWN RECORD AND §8.12's MAP KEYS, the last two components that were still a hand-copied pair of
-   lines in each of three hosts' teardowns — `animation_frame_free(ctx); event_loop_free(ctx);`, written after
-   platform_agent_free had already run the whole column. Position is the argument for moving them, not tidiness:
-   written there, §8.1.7's record was released AFTER `timer`, whose every entry is due at a moment on that clock
-   and whose own release is on this column — the dependent component going first, which is the same inversion
-   this file's `viewport`/`visual_viewport` note records. Reverse declaration order gives timer then event_loop,
-   which is the order the standards are in.
-   AND THE RECORD IS A LIVE JS OBJECT, so the host that forgot the line would not have leaked it quietly: a
-   null-prototyped Object held by a C static is exactly what JS_FreeRuntime's gc_obj_list walk reports, and this
-   engine's JS_FreeRuntime asserts that list empty. */
+/* HTML §8.1.7's own record and §8.12's map keys. Every `timer` entry is due at a moment on §8.1.7's clock, so
+   reverse declaration order releases timer first, then event_loop. The record is a live null-prototyped Object a C
+   static holds, which JS_FreeRuntime's gc_obj_list walk (asserted empty here) would report if left. */
 static void r_event_loop(JSRuntime *rt) { event_loop_free(rt); }
 static void r_animation_frame(JSRuntime *rt) { animation_frame_free(rt); }
 static void r_idle_callback(JSRuntime *rt) { idle_callback_free(rt); }
@@ -729,45 +496,32 @@ static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
 static void r_path_2d(JSRuntime *rt) { (void)rt; path_2d_free(); }
 static void r_image_data(JSRuntime *rt) { (void)rt; image_data_free(); }
 static void r_canvas_ctx2d(JSRuntime *rt) { canvas_rendering_context_2d_free(rt); }
-/* THE FIVE ROWS THAT HAD NO RELEASE FUNCTION AT ALL, which is the arm the pairing below silently passes: a row
-   with an empty release column and a component that declared nothing agree, and they agree whether the
-   component holds nothing or holds everything and gives none of it back. All five held. Indexed Database §4.7's
-   IDBKeyRange carried a class and five pool entries, §4.8's IDBRecord a class, §4.3's IDBFactory a class, a
-   realm-value slot and five declarations, HTML §8.5.1's DOMParser a class, its latch and two entries; and
-   §16.2.1.10 HostLoadImportedModule's loader — the one that is not an int — carried a strdup'd specifier per
-   lazy chunk and the buffer they are joined into, which is a malloc'd leak neither of JS_FreeRuntime's
-   censuses can see and which a second agent would have REPORTED as its own document's imports. Each declares
-   its slots to core/agent_state.h now, so the release is CHECKED rather than merely present. */
+/* Rows whose releases a pairing check cannot tell from empty ones: a row with no release and a component that
+   declared nothing agree whether it holds nothing or everything. These hold Indexed Database §4.7's IDBKeyRange
+   (a class and five pool entries), §4.8's IDBRecord (a class), §4.3's IDBFactory (a class, a realm-value slot and
+   five declarations), HTML §8.5.1's DOMParser (a class, its latch and two entries), and §16.2.1.10
+   HostLoadImportedModule's loader, which holds a strdup'd specifier per lazy chunk and the buffer they are joined
+   into, malloc'd and invisible to both of JS_FreeRuntime's censuses. Each declares its slots to
+   core/agent_state.h, so the release is checked. */
 static void r_idb_key_range(JSRuntime *rt) { (void)rt; idb_key_range_free(); }
 static void r_idb_record(JSRuntime *rt) { (void)rt; idb_record_free(); }
 static void r_indexed_db(JSRuntime *rt) { (void)rt; indexed_db_free(); }
 static void r_domparser(JSRuntime *rt) { (void)rt; domparser_free(); }
 static void r_xml_serializer(JSRuntime *rt) { (void)rt; xml_serializer_free(); }
 static void r_module_loader(JSRuntime *rt) { module_loader_free(rt); }
-/* THE CROSS-AGENT SEAM, AS A GROUP OF FOUR, and the group is what makes it one entry rather than three. All
-   three hosts wrote `remote_object_free; window_proxy_free; remote_location_free;` by hand — and that is the
-   DEPENDENT-FIRST order twice over: §7.2.3's WindowProxy is the base whose per-realm prototype every reference
-   minted by `remote_object` chains to and whose `location` member is what answers with a `remote_location`
-   object, so it was being released before both components built over it. Reverse declaration order gives
-   remote_location, remote_op, remote_object, window_proxy, which is that sequence inverted, and no author has
-   to agree with any other about it.
-   WHAT BLOCKED THREE OF THE FOUR WAS A SIGNATURE AND NOTHING ELSE: each `_free` took a JSContext, so it could
-   not be a row. They take a JSRuntime now and reach the same values through JS_FreeValueRT/JS_FreeAtomRT —
-   the same operation, since JS_FreeValue is JS_FreeValueRT(ctx->rt, v) and JS_FreeAtom is
-   JS_FreeAtomRT(ctx->rt, a).
-   AND TWO OF THEM WERE CARRYING THEIR CLASS IDS, which core/agent_state.h settles: an id names a class in a
-   runtime that is gone. window_proxy additionally kept all FIVE of §7.2.3's pool entries, so a second agent in
-   one process would have installed that whole member surface out of indices into a pool it had not built —
-   a live-looking number with a wrong answer behind it, which neither of JS_FreeRuntime's censuses can report.
-   Both now give the ids back, and window_proxy's finalizer and gc_mark reach their record through
-   JS_GetAnyOpaque because of it (remote_location's already did). */
+/* The cross-agent seam, a group of four. §7.2.3's WindowProxy is the base whose per-realm prototype every reference
+   `remote_object` mints chains to, and whose `location` member answers with a `remote_location` object, so it
+   releases last: reverse declaration order gives remote_location, remote_op, remote_object, window_proxy. They
+   free through JS_FreeValueRT/JS_FreeAtomRT against the runtime. window_proxy and remote_location give back their
+   class ids, and window_proxy its five §7.2.3 pool entries, so a second agent cannot install members out of
+   another pool's indices; their finalizers and gc_mark functions reach the record through JS_GetAnyOpaque. */
 static void r_window_proxy(JSRuntime *rt) { window_proxy_free(rt); }
-/* HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's getters for this document's Window, captured before any of
-   its script runs — the document half of the row whose declare half is above. It is a per-DOCUMENT install and
-   not a per-realm intrinsic because the nine accessors it captures do not exist at intrinsic time: `location`
-   does (location.c declares one), and the other eight are installed by the `window` row of the column below,
-   which runs after every intrinsic. The row's POSITION in that column is therefore the whole contract, and
-   window_proxy.c's capture asserts it member by member rather than trusting this comment. */
+/* HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's getters for this document's Window, captured before any of its
+   script runs: the document half of the row whose declare half is above. A per-document install, not a per-realm
+   intrinsic, because the nine accessors it captures do not exist at intrinsic time: `location` does (location.c
+   declares one), and the other eight are installed by the `window` row of the column below, which runs after every
+   intrinsic. The row's position in that column is the contract, and window_proxy.c's capture asserts it member by
+   member. */
 static void i_window_proxy(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     (void)d;
@@ -775,98 +529,40 @@ static void i_window_proxy(JSContext *c, JSValueConst g, const PlatformDocument 
 }
 static void r_remote_object(JSRuntime *rt) { remote_object_free(rt); }
 static void r_remote_location(JSRuntime *rt) { remote_location_free(rt); }
-/* AND THE FOURTH OF THAT GROUP, WHOSE RELEASE COLUMN WAS EMPTY FOR A DIFFERENT REASON: its file already had a
-   `remote_op_free` and that name is a PER-OPERATION free of one parsed record, not an agent release. A
-   collision is not a release, and nothing here could tell the two apart — the row declared no agent state and
-   released none, which is the pair of silences this list reads as agreement. The agent half is
-   `remote_op_agent_free`, named as `document`'s two halves are. */
+/* The fourth of that group. Its agent half is `remote_op_agent_free`, named as `document`'s two halves are,
+   because `remote_op_free` frees one parsed record and is not an agent release. */
 static void r_remote_op(JSRuntime *rt) { (void)rt; remote_op_agent_free(); }
-/* HTML §7.2.2's Window WITH §7.2.2.5's BarProp UNDER IT, and this pair is the worst of the groups moved onto
-   this column so far — not because a host was missing the line, but because all three had it and NOWHERE NEAR
-   each other: main.c and test_forced.c ran `window_free` between §7.2.6.5's NavigationHistoryEntry and the
-   cross-agent seam, wpt_runner.c ran it a whole teardown later, after solver_agent_free and after
-   document_free. Three positions, three hosts, one component.
-   WHAT BLOCKED IT WAS THE SIGNATURE AND NOTHING ELSE — `window_free` took a JSContext and used it for nothing
-   but handing it on. It takes a JSRuntime now, which is what it always held: two class ids, a realm-value slot
-   id and six pool entries, every one a registration in the runtime.
-   AND THE ROW'S RELEASE COLUMN WAS EMPTY WHILE BOTH FILES DECLARED NOTHING, which is the arm the pairing below
-   passes in silence: a component that holds everything and gives none of it back produces the same report as
-   one that holds nothing. Both held. bar_prop.c's `g_bar_class` was reset by NOTHING — its release said in its
-   own words that there was "nothing to release here any more" — and window.c's SIX POOL ENTRIES were declared
-   with no initialiser at all, so their pre-init value was 0, which idl_method_id_all hands out as the FIRST
-   member the platform declares. A second agent would have installed §7.2.2's `close`, `blur`, `stop` and three
-   setters out of six indices into a pool it had not built, and minted every BarProp under a class id the live
-   runtime never issued. Both are declared to core/agent_state.h now, under the ONE name `window`, because a
-   sub-component names the row whose release reaches it. */
+/* HTML §7.2.2's Window with §7.2.2.5's BarProp under it: two class ids, a realm-value slot id and pool entries,
+   every one a registration in the runtime, declared to core/agent_state.h under the one name `window`, because a
+   sub-component names the row whose release reaches it. The pool entries start and reset at -1, since 0 is the
+   first member idl_method_id_all hands out, and bar_prop.c's class id is reset with them. */
 static void r_window(JSRuntime *rt) { window_free(rt); }
-/* HTML §7.2.6 The navigation API AND §7.2.6.5 The NavigationHistoryEntry interface, as a PAIR, and this group
-   is the one where the hand-written lists were RIGHT: all three hosts wrote `navigation_free(ctx);
-   navigation_history_entry_free(ctx);` adjacently and in that order, which is exactly what reverse declaration
-   order gives — `navigation_history_entry` is the row after `event_target` (its prototype chains to §2.7's and
-   its CLASS is what §7.2.7.1's `required NavigationHistoryEntry from` brands against), `navigation` is the row
-   after `history`, so the component that MINTS the wrappers and walks the list is released before the
-   interface it mints them of. Three authors agreeing is still three answers; this is one.
-   WHAT BLOCKED BOTH WAS THE SIGNATURE AND NOTHING ELSE — each took a JSContext and used it for nothing but
-   JS_FreeValue, which is JS_FreeValueRT(ctx->rt, v). They take a JSRuntime now, which is what they always
-   held: two class ids, a realm-value slot id and three pool entries.
-   AND BOTH ROWS' RELEASE COLUMNS WERE EMPTY WHILE BOTH FILES DECLARED NOTHING, which is the arm the pairing
-   below passes in silence. Both held, and both CARRIED THEIR CLASS ID — the defect core/agent_state.h settles,
-   arriving here without any of the extra shapes the earlier groups had: the pool entries were already `-1`
-   (both files gave them an initialiser, so entry 0 was never a pre-init value here) and neither class has a
-   finalizer or a gc_mark, so nothing had to move to JS_GetAnyOpaque. What each DID have was a BRAND folded
-   together with its own declaration — `g_nav_class != 0 &&`-shaped in navigation.c and, in
-   navigation_history_entry.c, FIVE comparison sites of which four asked no declaration question at all.
-   JS_GetClassID answers JS_INVALID_CLASS_ID, which quickjs.h defines as 0, for everything that is not an
-   object, so the instant the release zeroes the id those sites report every PRIMITIVE as an instance: the four
-   bare DCHECKs that assert "this IS one" go vacuously true, and because navigation.c's arm is spelled `!=` its
-   brand does not reject a live Navigation but ADMITS `undefined` and then reads a realm-value slot that is
-   back at −1. Each file answers the brand plainly now
-   and asserts the declaration off a recorded runtime, which is also what replaced navigation_history_entry.c's
-   `g_ready` — a flag that answered the same question with less in it. */
+/* HTML §7.2.6 "The navigation API" and §7.2.6.5 "The NavigationHistoryEntry interface". `navigation_history_entry`
+   is the row after `event_target` (its prototype chains to §2.7's, and its class is what §7.2.7.1's `required
+   NavigationHistoryEntry from` brands against) and `navigation` the row after `history`, so the component that
+   mints the wrappers and walks the list releases before the interface it mints. They hold two class ids, a
+   realm-value slot id and three pool entries, freed against the runtime. Each file answers its brand separately
+   from its declaration, which it asserts off a recorded runtime: JS_GetClassID answers JS_INVALID_CLASS_ID (0)
+   for every non-object, so a brand folded with a zeroed id would admit every primitive. */
 static void r_navigation(JSRuntime *rt) { navigation_free(rt); }
 static void r_nav_history_entry(JSRuntime *rt) { navigation_history_entry_free(rt); }
-/* HTML §7.4.6.3 Revealing the document (with §7.2.7.5 The PageRevealEvent interface it fires) AND CSSOM View
-   §4.2 The MediaQueryList Interface, and this is the group where the hand-written lists were WRONG — in a way
-   no host could see, because all three were wrong identically. All three wrote `page_reveal_free(ctx);
-   media_query_list_free(ctx);` adjacently and FIRST among what is left in their teardowns, which is to say
-   AFTER platform_agent_free had already run `viewport` and `visual_viewport`. §4.2's whole answer is a
-   predicate over the viewport — media_query_matches reads §4's per-realm environment — which is exactly why
-   `media_query_list` is DECLARED after `viewport`, so the hand-written line released the dependent component
-   second. Reverse declaration order gives media_query_list, visual_viewport, viewport, page_reveal: the hosts'
-   pair inverted, with the two viewport rows BETWEEN them, which is a sequence no hand-written adjacency can
-   express at all. Neither component reads the other, so nothing decides their relative position except the
-   rows they were each declared after — which is the point of the column.
-   WHAT BLOCKED BOTH WAS THE SIGNATURE AND NOTHING ELSE: each took a JSContext and used it for nothing but
-   JS_FreeValue and JS_FreeAtom, which are JS_FreeValueRT(ctx->rt, v) and JS_FreeAtomRT(ctx->rt, a).
-   AND BOTH ROWS' RELEASE COLUMNS WERE EMPTY WHILE BOTH FILES DECLARED NOTHING, the pair of silences the
-   pairing below passes in agreement. Between them they held thirteen slots and gave back ten; the three they
-   kept were CLASS IDS, and each file's `g_ready` stood where a recorded runtime belongs — a flag answers "init
-   ran" where the pointer answers "init ran, AND in which", which is what the release asserts. Both are deleted
-   rather than kept beside one.
-   ONE OF THE THREE WAS LIVE, and it is why this group was worth landing rather than the tidier one beside it:
-   media_query_list.c's mql_finalizer looked its record up with `JS_GetOpaque(val, g_mql_class)`, which is
-   core/agent_state.h's closing obligation exactly — the collector runs AFTER this column, `JS_GetOpaque(val,
-   0)` answers NULL for every object there is, and `if (!d) return;` turned that into silence. A MediaQuerySet,
-   its serialization and the record leak per live MediaQueryList, all three malloc'd, so they appear in NEITHER
-   of JS_FreeRuntime's censuses and no detector this tree has would ever have said so. That entry reaches its
-   record through JS_GetAnyOpaque now. page_reveal.c has no collector entry (`JSClassDef d = { "PageRevealEvent"
-   }` leaves finalizer and gc_mark null) and, unlike the two files above, NO brand site at all — its class id is
-   read only by JS_GetClassProto, JS_SetClassProto and the mint — so the vacuous-`==` inversion the last group
-   found does not arise in either file here. §4.2's brand is JS_GetOpaque2, which fails the OTHER way: it
-   answers NULL and THROWS, reporting every live MediaQueryList as something else. Each file asks the
-   declaration off a recorded runtime now, separately from any value.
-   Nor does the pre-init-0 defect: both files already gave every pool entry and every realm-value slot an
-   `= -1` initialiser, so entry 0 — the first member idl_method_id_all hands out — was never a pre-init value
-   here. */
+/* HTML §7.4.6.3 "Revealing the document" (with §7.2.7.5 "The PageRevealEvent interface") and CSSOM View §4.2 "The
+   MediaQueryList Interface". §4.2's answer is a predicate over the viewport (media_query_matches reads §4's
+   per-realm environment), so `media_query_list` is declared after `viewport`, and reverse declaration order gives
+   media_query_list, visual_viewport, viewport, page_reveal. Neither component reads the other. They hold thirteen
+   slots between them, including two class ids, all declared and released, each declaration asserted off a recorded
+   runtime separately from any value. mql_finalizer reaches its record with JS_GetAnyOpaque, because the collector
+   runs after this column and `JS_GetOpaque(val, 0)` answers NULL, which would leak each MediaQuerySet, its
+   serialization and the record. §4.2's brand is JS_GetOpaque2, which throws for a non-instance. page_reveal.c has
+   no collector entry and no brand site. Every pool entry and realm-value slot in both files starts at -1. */
 static void r_page_reveal(JSRuntime *rt) { page_reveal_free(rt); }
 static void r_media_query_list(JSRuntime *rt) { media_query_list_free(rt); }
 static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
-/* THE ADDRESS, NOT THE ORIGIN. `window.origin` is §4.7's serialization OF the address, so a host that handed
-   this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
-   already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
+/* The address, not the origin: `window.origin` is §4.7's serialization of the address, so a Window given an origin
+   would re-derive its own `origin` from a string that already is one. */
 static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->url); }
 static void i_current_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; current_event_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
@@ -889,372 +585,218 @@ static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 }
 static void i_xml_serializer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xml_serializer_install(c, g); }
 
-/* THE LIST. ORDER IS DEPENDENCY ORDER and it is ONE order for both halves, which is what keeps a component to
-   one row: a declaration that has to precede another's (EventTarget before Window, because Window.prototype
-   chains to EventTarget.prototype and core/realm.h builds the per-realm prototypes in declaration order) and
-   an install that has to follow it (§7.2.2's event handlers, which sit on the global once the chain is made)
-   would otherwise be two orders and therefore two lists. They are not: §8.1.8.2 "Event handlers on elements,
-   Document objects, and Window objects"'s handlers are Window's own mixins — `GlobalEventHandlers` and
-   `WindowEventHandlers`, declared in §8.1.8.2.1 "IDL definitions" and the two §7.2.2 `includes` above — and
-   window.c installs them, which is where the spec puts them anyway. (§8.1.7.2 stood here and is "Queuing
-   tasks", which has nothing to do with a handler; the term itself is §8.1.8.1 "Event handlers".)
-   §4.8.5 is why `document` is last: installing it runs the insertion steps for every <iframe> in the markup,
-   which CREATES a child navigable — so the browsing context, the WindowProxy class and §7.3.1.3 "Child
-   navigables"'s "create a new child navigable" must all already be here (§7.4 stood on that create and is
-   "Navigation and session history"). */
+/* The list, in dependency order, one order for both halves, which keeps a component to one row. A declaration that
+   precedes another's (EventTarget before Window: Window.prototype chains to EventTarget.prototype, and
+   core/realm.h builds the per-realm prototypes in declaration order) and an install that follows it would
+   otherwise be two lists. §8.1.8.2's handlers are Window's own mixins (`GlobalEventHandlers` and
+   `WindowEventHandlers`, §8.1.8.2.1 "IDL definitions"), and window.c installs them. §4.8.5 is why `document` is
+   last: installing it runs the insertion steps for every <iframe> in the markup, which creates a child navigable,
+   so the browsing context, the WindowProxy class and §7.3.1.3 "Child navigables"'s "create a new child navigable"
+   must already be here.
+   A row with no document half is an interface whose exposure set needs no Document: Web IDL §3.8 "Platform objects
+   implementing interfaces" defines the global property references given a realm (step 1, "every interface that is
+   exposed in realm"), so the component's own realm intrinsic places its interface objects beside the prototypes
+   it builds there, and a realm that reaches no platform_document_install still gets them. */
 static const PlatformComponent PLATFORM[] = {
-    /* HR-TIME §4's TIME ORIGIN IS THE FIRST FIELD A REALM GETS, and the position is the argument. §4 puts the
-       field on the ENVIRONMENT SETTINGS OBJECT and says it holds "a moment early in the initialization" of it;
-       core/realm.h creates that environment with the realm and stamps §8.1.3.1's top-level creation URL before
-       running this list at all, so the moment named here is the same one, and being first among the intrinsics
-       is what makes it impossible for a later install to stamp a timestamp out of a realm that has no origin
-       yet — which is what DOM §2.5 does for every Event that is ever minted.
-       IT DEPENDS ON NOTHING IN THIS LIST. Its install reads the event loop's virtual clock, and the loop's
-       record is built in the DECLARE pass, which runs to the end before the first realm's intrinsics begin —
-       so a row this early is not a row that reads a half-built agent. */
+    /* HR-TIME §4's time origin is the first field a realm gets. §4 puts it on the environment settings object, "a
+       moment early in the initialization" of it; core/realm.h creates that environment with the realm and stamps
+       §8.1.3.1's top-level creation URL before running this list, so being first among the intrinsics means no
+       later install (DOM §2.5 stamps every Event) reads a timestamp from a realm with no origin. It depends on no
+       row: its install reads the event loop's virtual clock, built in the declare pass, which finishes before the
+       first realm's intrinsics begin. */
     { "hr_time",             d_hr_time,             NULL,        r_hr_time },
-    /* CONSOLE §1, WHICH DEPENDS ON EXACTLY ONE ROW AND IS DEPENDED ON BY NONE. §1.4's timer table reads
-       HR-TIME §4's current high resolution time, so it follows `hr_time`; nothing else in this list
-       touches the console namespace, and every row after it may CALL one — which is the argument for
-       putting it second rather than late. The namespace object goes on the global through a realm
-       intrinsic, so a child navigable gets its own count map, group stack and timer table. */
+    /* Console §1. §1.4's timer table reads HR-TIME §4's current high resolution time, so it follows `hr_time`;
+       no other row touches the console namespace, and every later row may call it. The namespace goes on the
+       global through a realm intrinsic, so a child navigable gets its own count map, group stack and timer table. */
     { "console",             d_console,             NULL,        r_console },
-    /* NO DOCUMENT HALF. URL §6.1 URL class and §6.2 URLSearchParams class are both `[Exposed=*]`, and Web IDL
-       §3.8 Platform objects implementing interfaces is "To define the global property references on target,
-       given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is
-       exposed in realm" — a REALM, with no Document in the algorithm. Each component's own realm intrinsic
-       places its interface object beside the prototype it already built there, so a realm that reaches no
-       platform_document_install gets both. */
+    /* URL §6.1 "URL class" and §6.2 "URLSearchParams class", both `[Exposed=*]`: no document half. */
     { "url",                 d_url,                 NULL,        r_url },
     { "url_search_params",   d_usp,                 NULL,        r_usp },
-    /* NO DOCUMENT HALF. XHR §4 "Interface FormData" declares `[Exposed=(Window,Worker)]`, and Web IDL §3.8
-       Platform objects implementing interfaces is "To define the global property references on target, given
-       realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in
-       realm" — a REALM, with no Document in the algorithm — so form_data.c's own realm intrinsic places the
-       interface object beside the prototype it already built there.
-       THE ROW SITS BETWEEN TWO URL ROWS AND THE STANDARD IS THE XMLHttpRequest ONE. Its component is in
-       core/html/ because HTML §4.10.22.4 builds the entry list AS one, and the exposure set is `xhr.idl`'s;
-       neither the directory nor the neighbours decide the column, which is why this row outlived the
-       conversion that moved every other XHR placement. */
+    /* XHR §4 "Interface FormData", `[Exposed=(Window,Worker)]`: no document half. Its component is in core/html/
+       because HTML §4.10.22.4 builds the entry list as one; the exposure set is `xhr.idl`'s. */
     { "form_data",           d_form_data,           NULL,        r_form_data },
-    /* NO DOCUMENT HALF. The Streams Standard declares THIRTEEN interfaces and every one of them is
-       `[Exposed=*]` — §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5 "The
-       ReadableStreamBYOBReader class", §4.6 "The ReadableStreamDefaultController class", §4.7 "The
-       ReadableByteStreamController class", §4.8 "The ReadableStreamBYOBRequest class", §5.2 "The
-       WritableStream class", §5.3 "The WritableStreamDefaultWriter class", §5.4 "The
-       WritableStreamDefaultController class", §6.2 "The TransformStream class", §6.3 "The
-       TransformStreamDefaultController class", §7.2 "The ByteLengthQueuingStrategy class" and §7.3 "The
-       CountQueuingStrategy class" — and Web IDL §3.8 "Platform objects implementing interfaces" is "To define
-       the global property references on target, given realm realm" whose step 1 is "Let interfaces be a list
-       that contains every interface that is exposed in realm" — a REALM, with no Document in the algorithm.
-       Each component's own realm intrinsic now places its interface objects beside the prototypes it already
-       built there, so a realm that reaches no platform_document_install gets all thirteen.
-       THE COUNT IS THIRTEEN AND THE ROWS ARE FOUR, which is the thing to know before touching one of them:
-       §4.7's and §4.8's belong to core/streams/readable_byte_stream.c, which has NO ROW HERE AT ALL — its
-       prototypes come from a second realm intrinsic that `readable_stream`'s declare half registers, and its
-       two interface objects used to be placed by a call on the last line of the per-document install this
-       comment replaces. */
+    /* The Streams Standard's thirteen interfaces (§4.2, §4.4–§4.8, §5.2–§5.4, §6.2, §6.3, §7.2, §7.3), every one
+       `[Exposed=*]`: no document half. Thirteen interfaces, four rows: §4.7's and §4.8's belong to
+       core/streams/readable_byte_stream.c, which has no row; its prototypes and interface objects come from a
+       second realm intrinsic that `readable_stream`'s declare half registers. */
     { "readable_stream",     d_readable_stream,     NULL,        r_readable_stream },
     { "queuing_strategy",    d_queuing_strategy,    NULL,        r_queuing_strategy },
     { "writable_stream",     d_writable_stream,     NULL,        r_writable_stream },
     { "transform_stream",    d_transform_stream,    NULL,        r_transform_stream },
-    /* NO DOCUMENT HALF. File API §3 "The Blob Interface and Binary Data" declares Blob and File API §4 "The
-       File Interface" declares File, both `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform objects
-       implementing interfaces is "To define the global property references on target, given realm realm" whose
-       step 1 is "Let interfaces be a list that contains every interface that is exposed in realm" — a REALM,
-       with no Document in the algorithm. blob_install_protos now places both interface objects beside the two
-       prototypes it already built, so a realm that reaches no platform_document_install gets both. This row
-       also DECLARES File API §5 "The FileList Interface" (blob_init calls file_list_init), whose own realm intrinsic
-       had been placing its interface object that way all along — which is the shape the two above are now on
-       rather than a new one. */
+    /* File API §3 "The Blob Interface and Binary Data" and §4 "The File Interface", `[Exposed=(Window,Worker)]`:
+       no document half; blob_install_protos places both interface objects. This row also declares §5 "The
+       FileList Interface" (blob_init calls file_list_init), whose own realm intrinsic places its interface object. */
     { "blob",                d_blob,                NULL,        r_blob },
-    /* NO DOCUMENT HALF. Encoding §7.2 Interface TextDecoder, §7.4 Interface TextEncoder, §7.5 Interface
-       TextDecoderStream and §7.6 Interface TextEncoderStream all declare `[Exposed=*]`, and Web IDL §3.8
-       Platform objects implementing interfaces is "To define the global property references on target, given
-       realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in
-       realm" — a REALM, with no Document in the algorithm. Each component's own realm intrinsic places its two
-       interface objects beside the prototypes it already built there, so a realm that reaches no
-       platform_document_install gets all four. */
+    /* Encoding §7.2 TextDecoder, §7.4 TextEncoder, §7.5 TextDecoderStream and §7.6 TextEncoderStream, all
+       `[Exposed=*]`: no document half. */
     { "encoding",            d_encoding,            NULL,        r_encoding },
     { "text_stream",         d_text_stream,         NULL,        r_text_stream },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
     { "event_target",        d_event_target,        NULL,        r_event_target },
-    /* HTML §10.2.1.1 The WorkerGlobalScope common interface and §10.2.1.2 Dedicated workers and the
-       DedicatedWorkerGlobalScope interface — the objects a WORKER realm's global object is made of. It is
-       after `event_target` because its per-realm install calls event_target_derived_proto and core/realm.h
-       runs the intrinsics in DECLARATION order.
-       AND IT IS NOW FIXED FROM THE OTHER SIDE TOO, WHICH IS WHY IT MOVED. It used to sit far below, and the
-       reason recorded here was that placing it immediately after that row would spoil the argument
-       `performance` made for its own position by naming "the row above" — which was true, and that argument
-       has been rewritten at its own row instead, because the constraint it was weighed against did not exist
-       yet. Web IDL §3.7.3 "Interface prototype object" puts every member `WorkerGlobalScope` declares, and
-       every member its `includes WindowOrWorkerGlobalScope` brings, on the prototype THIS row builds — so
-       every component that owns one of those members for `Window` (`performance` below, `crypto` and
-       `indexed_db` further down) needs that object while its own realm intrinsic is running, and a row
-       standing after one of them has nothing to give it. worker_global_scope_proto asserts exactly that, so
-       the ordering is a checked fact and not a remembered one.
-       THE CONSTRAINT IS UNCHANGED AND THE ROUTE IS NOT, WHICH IS WHY THIS SENTENCE READ `asks this component
-       for that object` AND NO LONGER DOES. Those components asked this one directly and branched on whether
-       an object came back, which is a hand-picked list of realm kinds; they now install through
-       core/idl_args.c, which asks Web IDL §3.7.3's conditional of the generated band and calls the function
-       THIS row registers. The call still happens inside the asking component's own realm intrinsic, so the
-       ordering requirement survives the indirection exactly — which is the point worth keeping: a
-       registration moves WHO calls, never WHEN. It still reads no other component's state, which is what keeps the constraint one-sided.
-       ITS THIRD COLUMN IS EMPTY AND ALWAYS WILL BE. The third column is the PER-DOCUMENT install, and a
-       WorkerGlobalScope realm has no Document to be installed over — HTML §10.2.6.2 Script settings for
-       workers is what a worker environment states instead. That is the whole reason Web IDL §3.8 Platform
-       objects implementing interfaces had to be given a REALM before this component could exist.
-       AND IT HAS NO WITNESS ROW, deliberately. The witness loop runs inside the per-document install, so it
-       only ever stands in a WINDOW realm — where §3.3.7 [Exposed] step 1 makes both of these names UNOWED
-       and the row would assert nothing but their absence. A row that can never see the install it is named
-       for reads as coverage and checks nothing of it; engine/host/test_forced.c's exposure_selftest is the
-       oracle for this component, because it is the one place a second realm is actually built. */
+    /* HTML §10.2.1.1 "The WorkerGlobalScope common interface" and §10.2.1.2 "Dedicated workers and the
+       DedicatedWorkerGlobalScope interface": the objects a worker realm's global is made of. It follows
+       `event_target` because its per-realm install calls event_target_derived_proto. It precedes every component
+       that owns a `WorkerGlobalScope` or `WindowOrWorkerGlobalScope` member for `Window` (`performance`, `crypto`,
+       `indexed_db`): Web IDL §3.7.3 "Interface prototype object" puts those members on the prototype this row
+       builds, and they install through core/idl_args.c, which asks §3.7.3's conditional of the generated band and
+       calls the function this row registers, inside the asking component's own realm intrinsic.
+       worker_global_scope_proto asserts the order. It reads no other component's state.
+       Its document column is empty: a WorkerGlobalScope realm has no Document (HTML §10.2.6.2 "Script settings for
+       workers" states its environment instead). It has no witness row, because the witness loop runs only in a
+       Window realm, where §3.3.7 [Exposed] step 1 leaves both names unowed; test_forced.c's exposure_selftest,
+       which builds a second realm, is its oracle. */
     { "worker_global_scope", d_worker_global_scope, NULL,        r_worker_global_scope },
-    /* HR-TIME §7's Performance, whose position is fixed from BOTH sides. `interface Performance : EventTarget`,
-       so its per-realm install calls event_target_derived_proto and must follow `event_target`; and §7.1/§7.2
-       are the two operations of §4 that `hr_time` owns, which is the FIRST row of this list.
-       THAT CONSTRAINT WAS SPELLED "the row above" AND THE ROW ABOVE IS NO LONGER `event_target`, so it names
-       the row instead: an ordinal names a thing only while the set is fixed, and this list is one every
-       component adds to. The rewrite is the whole of what the insertion above cost.
-       AND "nothing else depends on it" IS RETIRED, which is the other half and is why the insertion is there.
-       §8.1's `performance` is declared by `WindowOrWorkerGlobalScope`, so Web IDL §2.3 "Interface mixins" makes
-       it a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one — and §3.7.3
-       "Interface prototype object" then places it on the global in the first and on
-       `WorkerGlobalScope.prototype` in the second. So this row must follow `worker_global_scope` as well,
-       which is now the row directly above it. The sentence is corrected rather than deleted because a reader
-       who re-derives independence from §7 alone will re-introduce it: the dependency is §8.1's, not §7's.
-       WHAT IS UNCHANGED is why the member is per realm at all — this component's own realm intrinsic builds
-       the Performance object, so a child navigable gets its own over its own time origin. */
+    /* HR-TIME §7's Performance. `interface Performance : EventTarget`, so its per-realm install calls
+       event_target_derived_proto and follows `event_target`; §7.1/§7.2 are operations of §4, which `hr_time`
+       owns. §8.1's `performance` is declared by `WindowOrWorkerGlobalScope`, so Web IDL §2.3 "Interface mixins"
+       and §3.7.3 place it on the global in a Window realm and on `WorkerGlobalScope.prototype` in a worker one,
+       and this row follows `worker_global_scope` too: the dependency is §8.1's, not §7's. The member is per realm
+       because this component's realm intrinsic builds the Performance object, so a child navigable gets its own
+       over its own time origin. */
     { "performance",         d_performance,         NULL,        r_performance },
-    /* PERFORMANCE TIMELINE §3's PerformanceEntry, and USER TIMING §2 over it. BOTH POSITIONS ARE FIXED FROM
-       BOTH SIDES. §3's own prototype chains to %Object.prototype% and it depends on no row above it, but
-       USER TIMING §2.2's `interface PerformanceMark : PerformanceEntry` chains to §3's — so `user_timing`
-       must follow `performance_entry`; and §2.1.1's mark() is a PARTIAL member installed onto HIGH
-       RESOLUTION TIME §7's prototype, so it must follow `performance` as well. core/realm.h states that the
-       realm-intrinsic order IS this declaration order, which is what makes both dependencies hold for a
-       child navigable's realm and not only for the first one built. */
+    /* Performance Timeline §3's PerformanceEntry, and User Timing §2 over it. §3's prototype chains to
+       %Object.prototype% and depends on no row above; User Timing §2.2's `interface PerformanceMark :
+       PerformanceEntry` chains to §3's, so `user_timing` follows `performance_entry`, and §2.1.1's mark() is a
+       partial member installed onto HR-TIME §7's prototype, so it follows `performance` too. core/realm.h runs
+       realm intrinsics in this declaration order, so both hold for a child navigable's realm. */
     { "performance_entry",   d_performance_entry,   NULL,        r_performance_entry },
-    /* PERFORMANCE TIMELINE §4's PerformanceObserver and §4.2.2's PerformanceObserverEntryList, BETWEEN the two
-       rows above them and fixed from both sides. It reads §3's record (PerfEntry's `entryType` and `name`) at
-       §5.1 step 3 and §5.5, so it follows `performance_entry`; and USER TIMING §2.1.1 step 2 calls §5.1 while
-       user_timing_init declares `mark` as a §4.5 supported entry type, so `user_timing` follows THIS. Its own
-       prototype chains to %Object.prototype% — §4 inherits nothing — so it adds no constraint of its own.
-
-       NO DOCUMENT HALF. Performance Timeline §4 and §4.2.2 both declare `[Exposed=(Window,Worker)]`, and Web
-       IDL §3.8 Platform objects implementing interfaces is "To define the global property references on
-       target, given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that
-       is exposed in realm" — a REALM, with no Document in the algorithm. §4.2.2's name was ALREADY placed by
-       this component's realm intrinsic and §4's was not, so one of the two names this row witnesses reached
-       every realm and the other reached only a Window with a Document over it; both go through the realm
-       intrinsic now. */
+    /* Performance Timeline §4's PerformanceObserver and §4.2.2's PerformanceObserverEntryList,
+       `[Exposed=(Window,Worker)]`: no document half. It reads §3's record (`entryType` and `name`) at §5.1 step 3
+       and §5.5, so it follows `performance_entry`; User Timing §2.1.1 step 2 calls §5.1 and user_timing_init
+       declares `mark` as a §4.5 supported entry type, so `user_timing` follows this. Its prototype chains to
+       %Object.prototype%, so it adds no constraint of its own. */
     { "performance_observer", d_performance_observer, NULL,      r_performance_observer },
     { "user_timing",         d_user_timing,         NULL,        r_user_timing },
-    /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
-       §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
-       which is where every Event subclass including that one is declared. */
+    /* HTML §7.2.6.5's NavigationHistoryEntry: its prototype chains to §2.7's, and its class is what §7.2.7.1's
+       `required NavigationHistoryEntry from` brands against, so it is declared before `event`, where every Event
+       subclass is declared. */
     { "navigation_history_entry", d_nav_history_entry, NULL, r_nav_history_entry },
-    /* HTML §7.2.6.10.3's NavigationDestination, whose CLASS is what §7.2.6.10.1's `required NavigationDestination
-       destination` brands against — so it is declared before `event`, which is where every Event subclass
-       including NavigateEvent is declared. It inherits nothing, so its own prototype needs no earlier row. */
+    /* HTML §7.2.6.10.3's NavigationDestination: its class is what §7.2.6.10.1's `required NavigationDestination
+       destination` brands against, so it is declared before `event`, where NavigateEvent is declared. It inherits
+       nothing. */
     { "navigation_destination", d_nav_destination,   NULL,     r_nav_destination },
     { "window",              d_window,              i_window,    r_window },
-    /* WEB CRYPTOGRAPHY §10's Crypto and §14's SubtleCrypto. ONE ROW for both, because §10 declares §14 as its
-       own dependency the way Permissions declares PermissionStatus — a host that had one and not the other
-       would answer `crypto.subtle` with an object from another realm or with nothing. Neither has a document
-       half: §3.7 gives every realm its own interface prototype, `crypto` and `crypto.subtle` are both
-       `[SameObject]` PER REALM, and a nested navigable's `crypto` is its own — so both install through
-       core/realm.h.
-       IT IS BEFORE `navigator`, AND THAT POSITION IS A CONSTRAINT RATHER THAN A GROUPING. Web Locks §3.1's
-       whole component is declared under `navigator`, and §3.2.2's clientId is drawn AT INSTALL from this
-       realm's §10.1 stream — one stream per realm being what core/crypto/crypto.h argues a forked search
-       needs — so `lock_manager_install_realm` READS the per-realm value `crypto_install_realm` WRITES.
-       core/realm.h runs the per-realm installs in DECLARATION order, so this row declaring later put the
-       reader ahead of the writer in EVERY realm including the agent's first: the slot answered NULL and
-       core/realm.c's read entry aborted during platform_agent_init, before any document existed, in every
-       stage that brings up an agent.
-       THIS ROW USED TO SIT AFTER `file_picker` — a THEMATIC placement, stating no constraint at all — and
-       that is recorded because a reader who groups this row by its standard rather than by what reads it will
-       move it back. Nothing between the two positions is a dependency in either direction: core/crypto's four
-       files include only headers under core/ and solver/, and no row above `navigator` reads a crypto
-       slot. Those two subtrees are written without a trailing wildcard deliberately: the sequence a
-       wildcard makes after a slash is what `-Wcomment` fires on inside a block comment, so the warning
-       is removed by construction rather than by a flag.
-       RETIREMENT: this record goes when core/realm.h can refuse a declaration order in which an install reads
-       a per-realm value whose writer is declared later, because the order is then true by construction. */
+    /* Web Cryptography §10's Crypto and §14's SubtleCrypto, one row because §10 declares §14 as its own dependency,
+       so `crypto.subtle` is never another realm's object or missing. No document half: §3.7 gives every realm its
+       own interface prototype, and `crypto` and `crypto.subtle` are `[SameObject]` per realm, so both install
+       through core/realm.h.
+       It precedes `navigator` as a dependency, not a grouping: Web Locks §3.1 is declared under `navigator`, and
+       §3.2.2's clientId is drawn at install from this realm's §10.1 stream, so `lock_manager_install_realm` reads
+       the per-realm value `crypto_install_realm` writes, and core/realm.h runs per-realm installs in declaration
+       order. core/realm.h does not refuse an order in which an install reads a later-declared writer's value, so
+       this position is the only thing that keeps the slot written before it is read. */
     { "crypto",              d_crypto,              NULL,        r_crypto },
     /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
-       (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
-       of the list left four standards uncollected by the gate that reports on them. */
+       (navigator.storage) and §6.4.4's UserActivation. */
     { "navigator",           d_navigator,           NULL,        r_navigator },
-    /* THE ONE VIRTUAL FILESYSTEM and the File System Standard over it. The MODEL goes first (its two roots are
-       built at this pre-boot baseline, so no flow's creation becomes every sibling's); §2.5's stream after §5's
-       WritableStream, whose prototype it chains to; §2.2-§2.4's handles after the stream, since
-       `createWritable()` mints one; §3's StorageManager after §8.10.1's Navigator, because `navigator.storage`
-       is a partial interface member of the object that component builds. */
+    /* The one virtual filesystem and the File System Standard over it. The model goes first (its two roots are
+       built at the pre-boot baseline, so no flow's creation becomes every sibling's); §2.5's stream after §5's
+       WritableStream, whose prototype it chains to; §2.2–§2.4's handles after the stream, since
+       `createWritable()` mints one; §3's StorageManager after §8.10.1's Navigator, because `navigator.storage` is
+       a partial interface member of the object that component builds. */
     { "file_system",         d_file_system,         NULL,        r_file_system },
     { "file_system_writable", d_fs_writable,        NULL,        r_fs_writable },
     { "file_system_handle",  d_fs_handle,           NULL,        r_fs_handle },
     { "storage_manager",     d_storage_manager,     NULL,        r_storage_manager },
-    /* FILE SYSTEM ACCESS, a DIFFERENT standard over that same model: §2.2's "file-system" powerful feature and
-       §2.3's two members, then §3's three pickers. Both rows come after `navigator` because Permissions §4's
-       registry — where the feature's row lives — is declared under it, and after `file_system_handle` because
-       §2.3's members install onto the prototype that component builds and core/realm.h runs the per-realm
-       installs in declaration order. */
+    /* File System Access, a different standard over the same model: §2.2's "file-system" powerful feature and
+       §2.3's two members, then §3's three pickers. Both rows follow `navigator`, because Permissions §4's registry,
+       where the feature's row lives, is declared under it, and `file_system_handle`, because §2.3's members
+       install onto the prototype that component builds. */
     { "file_system_access",  d_fs_access,           NULL,        r_fs_access },
     { "file_picker",         d_file_picker,         NULL,        r_file_picker },
-    /* WEB STORAGE — Storage §4's model, then HTML §12.2.1's interface over it, then §12.2.2's and
-       §12.2.3's two Window getters, in that order because each reads the one before it. The model is
-       first for a second reason its own file states: its shed, shelf, bucket and bottles are built HERE,
-       at the pre-boot COW baseline, so every flow shares one map object and each flow's writes to it are
-       captured — built lazily on the first read they would be created inside whichever flow asked first
-       and each arm of a fork would get a private localStorage. Neither of the last two rows has a
-       document half: §12.2.1's prototype and interface object are per-REALM (§3.7), and the two getters
-       go on each realm's own global, so both install through core/realm.h. */
+    /* Web Storage: Storage §4's model, then HTML §12.2.1's interface over it, then §12.2.2's and §12.2.3's two
+       Window getters, each reading the one before. The model's shed, shelf, bucket and bottles are built at the
+       pre-boot COW baseline, so every flow shares one map object and each flow's writes are captured; built
+       lazily, they would be created inside whichever flow read first, and each arm of a fork would get a private
+       localStorage. The last two rows have no document half: §12.2.1's prototype and interface object are per
+       realm (§3.7), and the getters go on each realm's own global. */
     { "storage_shed",        d_storage_shed,        NULL,        r_storage_shed },
     { "storage",             d_storage,             NULL,        r_storage },
     { "window_storage",      d_window_storage,      NULL,        r_window_storage },
-    /* HTML §2.6.5's DOMStringList, BEFORE the standard that is currently its only consumer — Indexed Database
-       §4.4, §4.5 and §4.10 each answer with one, and core/realm.h runs the per-realm installs in DECLARATION
-       order, so its prototype must be in a realm before any member below can build a list in it. It is an HTML
-       row and not an Indexed Database one because it is an HTML type; HTML §7.2.5's `ancestorOrigins` is the
-       next consumer and reaches the same component.
-       NO DOCUMENT HALF. §2.6.5 "The DOMStringList interface" declares `[Exposed=(Window,Worker)]`, and Web IDL
-       §3.8 Platform objects implementing interfaces is "To define the global property references on target,
-       given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is
-       exposed in realm" — a REALM, with no Document in the algorithm — so dom_string_list.c's own realm
-       intrinsic places the interface object beside the prototype it already built there. The three §2.6.4
-       collections one section above it are each `[Exposed=Window]` and keep their per-document column; the
-       exposure sets decide, not the section family. */
+    /* HTML §2.6.5 "The DOMStringList interface", `[Exposed=(Window,Worker)]`: no document half. It precedes its
+       consumers (Indexed Database §4.4, §4.5 and §4.10 each answer with one; HTML §7.2.5's `ancestorOrigins` is
+       another), so its prototype is in a realm before any member builds a list there. The three §2.6.4
+       collections above it are `[Exposed=Window]` and keep their per-document column. */
     { "dom_string_list",     d_dom_string_list,     NULL,        r_dom_string_list },
-    /* INDEXED DATABASE, in the standard's own dependency order and no further. §2.4's KEY is what §2.2's list
-       of records is sorted by, what §2.9's range is bounded by and what §2.10's cursor walks in, so it is the
-       first thing that standard can have; §4.7's IDBKeyRange is the interface over it, and §4.3's IDBFactory
-       is the door the rest of the standard will be reached through. Neither row has a document half: both
-       install per REALM (core/realm.h), because §3.7 gives every realm its own interface prototype and because
-       the one IDBFactory `indexedDB` answers with is `[SameObject]` per realm.
-       WHAT THE ROWS DO NOT BUILD is honestly absent and says so where a page reaches it: there is no
-       connection, no transaction and no request yet, so `indexedDB.open` is a TypeError naming the member
-       rather than a shape-only object that would report a store nothing wrote to.
-       §2.1's DATABASE is the third row and it is an AGENT row with a RELEASE, which the two above it are not:
-       §2.1 says "each storage key has an associated set of databases", §Security makes an instance an
-       origin-keyed agent cluster, and storage is keyed by origin — so the set is the agent's, a same-origin
-       child navigable reaches THAT one rather than a second, and what a C static holds for the agent is freed
-       against the runtime here (core/platform.h's third column) rather than in each host's own teardown. */
+    /* Indexed Database, in the standard's dependency order. §2.4's key orders §2.2's list of records, bounds
+       §2.9's range and orders §2.10's cursor walk; §4.7's IDBKeyRange is the interface over it, and §4.3's
+       IDBFactory is the door to the rest. Neither row has a document half: §3.7 gives every realm its own
+       interface prototype, and the IDBFactory `indexedDB` answers with is `[SameObject]` per realm.
+       §2.1's database set is an agent row with a release: "each storage key has an associated set of databases",
+       an instance is an origin-keyed agent cluster and storage is keyed by origin, so a same-origin child
+       navigable reaches the agent's set, freed against the runtime here (core/platform.h's third column). */
     { "idb_key_range",       d_idb_key_range,       NULL,        r_idb_key_range },
-    /* §2.12's RECORD SNAPSHOT with §4.8's IDBRecord over it, beside §2.9's key range because it is the same
-       kind of row: a value type of this standard, installing one interface per realm. THE SENTENCE THAT USED
-       TO STAND HERE SAID IT HELD NO AGENT-LIFETIME STATE, and it held a class — which is a fact about a
-       RUNTIME, so it is exactly agent-lifetime, and saying otherwise is how these three rows kept an empty
-       release column while the pairing that would have caught it read the two silences as agreement.
-       It is declared before every row that MINTS one — §6.2's and §6.3's retrieve-multiple arms, reached from
-       §4.5's and §4.6's members — because core/realm.h runs the per-realm installs in DECLARATION order and a
-       snapshot built in a realm with no IDBRecord.prototype crashes at the mint. */
+    /* §2.12's record snapshot with §4.8's IDBRecord over it: a value type installing one interface per realm,
+       holding a class, which is agent-lifetime state. It precedes every row that mints one (§6.2's and §6.3's
+       retrieve-multiple arms, reached from §4.5's and §4.6's members): a snapshot built in a realm with no
+       IDBRecord.prototype crashes at the mint. */
     { "idb_record",          d_idb_record,          NULL,        r_idb_record },
     { "indexed_db",          d_indexed_db,          NULL,        r_indexed_db },
     { "idb_database",        d_idb_database,        NULL,        r_idb_database },
-    /* §2.7's TRANSACTION and §2.8's REQUEST, in that order because a request is placed against a transaction
-       and §5.6 asserts its state before it makes one. Both are declared after §2.7's EventTarget above,
-       because each interface prototype CHAINS to that one and core/realm.h builds the per-realm prototypes in
-       declaration order — an interface declared first would chain to a prototype that did not exist yet.
-       Neither has a document half: both install per REALM, since §3.7 gives every realm its own interface
-       prototype and a C member answers in the realm that defined it. */
+    /* §2.7's transaction and §2.8's request, in that order because a request is placed against a transaction
+       and §5.6 asserts its state before it makes one. Both follow §2.7's EventTarget, since each interface
+       prototype chains to it. Neither has a document half: §3.7 gives every realm its own interface prototype
+       and a C member answers in the realm that defined it. */
     { "idb_transaction",     d_idb_transaction,     NULL,        r_idb_transaction },
     { "idb_request",         d_idb_request,         NULL,        r_idb_request },
-    /* §2.1.1's CONNECTION with §4.4's IDBDatabase over it, and §2.2.1's OBJECT STORE HANDLE with §4.5's
-       IDBObjectStore. Both are declared AFTER §2.7's EventTarget (IDBDatabase inherits it) and after the two
-       rows above, because core/realm.h runs the per-realm installs in DECLARATION order and each of these
-       interfaces is reached from the ones before it. Both hold one agent-lifetime value — the private Symbol
-       their internal slots hang off — which is what the release column is for. */
+    /* §2.1.1's connection with §4.4's IDBDatabase over it, and §2.2.1's object store handle with §4.5's
+       IDBObjectStore. Both follow §2.7's EventTarget (IDBDatabase inherits it) and the two rows above, which
+       reach them. Each holds one agent-lifetime value, the private Symbol its internal slots hang off. */
     { "idb_connection",      d_idb_connection,      NULL,        r_idb_connection },
     { "idb_object_store",    d_idb_object_store,    NULL,        r_idb_object_store },
-    /* §2.6.1's INDEX HANDLE with §4.6's IDBIndex, after §2.2.1's because §4.6's `objectStore` answers with one
-       and §4.5's `createIndex` returns one — and because core/realm.h runs the per-realm installs in
-       DECLARATION order. It holds one agent-lifetime value, the private Symbol its slots hang off. */
+    /* §2.6.1's index handle with §4.6's IDBIndex, after §2.2.1's because §4.6's `objectStore` answers with one
+       and §4.5's `createIndex` returns one. It holds one agent-lifetime value, the private Symbol its slots hang
+       off. */
     { "idb_index_handle",    d_idb_index_handle,    NULL,        r_idb_index_handle },
-    /* §2.10's CURSOR with §4.9's IDBCursor and IDBCursorWithValue over it, after §2.2.1's and §2.6.1's
-       handles because a cursor's SOURCE HANDLE is one of those two and §4.9's `source` answers with it — and
-       because core/realm.h runs the per-realm installs in DECLARATION order. It holds one agent-lifetime
-       value, the private Symbol §2.10's eleven fields hang off, plus §6.7's step machine. */
+    /* §2.10's cursor with §4.9's IDBCursor and IDBCursorWithValue over it, after §2.2.1's and §2.6.1's handles
+       because a cursor's source handle is one of those and §4.9's `source` answers with it. It holds the private
+       Symbol §2.10's eleven fields hang off and §6.7's step machine. */
     { "idb_cursor",          d_idb_cursor,          NULL,        r_idb_cursor },
-    /* §4.5's createIndex NOTE, as the request it says it is — "the index creation itself is processed as an
-       asynchronous request within the upgrade transaction". It holds no interface and installs into no realm:
-       what it declares is ONE step machine, which is agent-lifetime state and is what the release gives back.
-       It is placed after the two rows above because it is reached from §4.5's member and it places its request
-       through §5.6's, both of which are declared by then. */
+    /* §4.5's createIndex note, as the request it says it is: "the index creation itself is processed as an
+       asynchronous request within the upgrade transaction". No interface and no realm install: it declares one
+       step machine, agent-lifetime state the release gives back. It follows the rows above because §4.5's member
+       reaches it and it places its request through §5.6's. */
     { "idb_index_populate",  d_idb_index_populate,  NULL,        r_idb_index_populate },
-    /* §5.12's CREATING A REQUEST TO RETRIEVE MULTIPLE ITEMS, with §6.2's and §6.3's retrieve-multiple under
-       it. Like the row above it holds no interface and installs into no realm: what it declares is ONE step
-       machine, which is agent-lifetime state and is what the release gives back. It is placed after §2.2.1's
-       and §2.6.1's handles because §4.5's and §4.6's members are what reach it, and after §2.12's IDBRecord
-       row because its "record" arm mints one. */
+    /* §5.12's creating a request to retrieve multiple items, with §6.2's and §6.3's retrieve-multiple under it.
+       No interface and no realm install: it declares one step machine, which the release gives back. It follows
+       §2.2.1's and §2.6.1's handles, whose §4.5 and §4.6 members reach it, and §2.12's IDBRecord, which its
+       "record" arm mints. */
     { "idb_get_all",         d_idb_get_all,         NULL,        r_idb_get_all },
-    /* INPUT DEVICE CAPABILITIES §"The InputDeviceCapabilities interface", and it is HERE — one row
-       AHEAD of `event` — for the reason that decides every position in this list. §"Extensions to the
-       UIEvent interface and UIEventInit dictionary" makes it the TYPE of UIEventInit's
-       `sourceCapabilities`, and the row below declares UIEvent and its three subclasses, each of
-       which brands that member against this class AT ITS DECLARATION. A row after `event` would hand
-       all four a class id of zero. It depends on nothing itself: its prototype chains to
-       Object.prototype and its two attributes read its own slot record. */
+    /* Input Device Capabilities §"The InputDeviceCapabilities interface", one row ahead of `event`. §"Extensions
+       to the UIEvent interface and UIEventInit dictionary" makes it the type of UIEventInit's
+       `sourceCapabilities`, and `event` declares UIEvent and its three subclasses, each of which brands that
+       member against this class at its declaration, so a later row would hand all four a class id of zero. Its
+       prototype chains to Object.prototype and its two attributes read its own slot record. */
     { "input_device_capabilities", d_input_device_capabilities, NULL,
                                                           r_input_device_capabilities },
     { "event",               d_event,               NULL,        r_event },
-    /* DOM §2.3 Legacy extensions to the Window interface' `event`, and it is a row of its own rather than a
-       line in `window` because the member is DOM's and not HTML §7.2.2's — @webref/idl carries that one
-       `[Replaceable] readonly attribute (Event or undefined) event` line in `dom.idl` and in no other file.
-       AFTER `event` for the reason that decides every position in this list, and it is a weaker reason than
-       most: nothing in its install touches Event.prototype — the record it builds holds §2.3's initial
-       `undefined` — but the value it will later hold IS an Event, and a row that reads as independent of the
-       interface whose objects it stores would invite being moved somewhere the two could come apart.
-       ITS WRITER IS DOM §2.9's inner invoke (core/events/event_target.c steps 2.8.1, 2.8.2 and 2.13) and it
-       has no other, which is what makes this member landable at all: its one observable is written by an
-       algorithm this engine already runs, not by a subsystem it does not have. */
+    /* DOM §2.3 "Legacy extensions to the Window interface"'s `event`, a row of its own because the member is
+       DOM's, not HTML §7.2.2's (@webref/idl carries `[Replaceable] readonly attribute (Event or undefined) event`
+       in `dom.idl` only). It follows `event` because the value it holds is an Event, though its install builds
+       only §2.3's initial `undefined`. Its one writer is DOM §2.9's inner invoke (core/events/event_target.c steps
+       2.8.1, 2.8.2 and 2.13). */
     { "current_event",       d_current_event,       i_current_event, r_current_event },
-    /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
-       one reason that decides every position in this list: its prototype chains to Event.prototype, which the
-       row above builds, and core/realm.h runs the per-realm installs in declaration order. §5.1's own
-       machinery follows it, because that is what FIRES three of these events — and because §5.1 registers the
-       two rendezvous idb_connection and idb_transaction declare, so both must already exist. */
+    /* §4.2's IDBVersionChangeEvent, here rather than beside the other Indexed Database rows because its prototype
+       chains to Event.prototype, which the row above builds. §5.1's machinery follows it, because §5.1 fires three
+       of these events and registers the two rendezvous idb_connection and idb_transaction declare. */
     { "idb_version_change_event", d_idb_vce,        NULL,        r_idb_vce },
     { "idb_open",            d_idb_open,            NULL,        r_idb_open },
-    /* NO ROWS FOR `message_event` AND `error_event` AT ALL, WHICH IS WHAT THE THIRD COLUMN LEAVING MEANT HERE.
-       Both were declared by the `event` row above (event_init calls their inits) and existed on this list for
-       their PER-DOCUMENT install alone, so once HTML §9.1 The MessageEvent interface's and §8.1.4.6 Runtime
-       script errors' interface objects moved to those components' own realm intrinsics — Web IDL §3.8 Platform
-       objects implementing interfaces' `define the global property references` is "To define the global property
-       references on target, given realm realm" whose step 1 is "Let interfaces be a list that contains every
-       interface that is exposed in realm", a REALM with no Document in the algorithm — a row with every column
-       NULL was left, and platform_check_table aborts on exactly that: a row that builds neither half is a
-       component that is not in this browser and is deleted rather than listed. The two PLATFORM_WITNESS rows below moved with the install, to `event`, which
-       is the banner's own remedy for a name whose install changes component. */
+    /* `message_event` and `error_event` have no rows: the `event` row declares both (event_init calls their inits),
+       and their interface objects (HTML §9.1 "The MessageEvent interface", §8.1.4.6 "Runtime script errors") are
+       placed by their own realm intrinsics, so a row would have every column NULL, which platform_check_table
+       refuses. Their PLATFORM_WITNESS rows are under `event`. */
     { "report_exception",    d_report_exception,    NULL,        r_report_exception },
     { "message_port",        d_message_port,        NULL,        r_message_port },
-    /* NO DOCUMENT HALF. XHR §3 Interface XMLHttpRequest declares `XMLHttpRequestEventTarget`,
-       `XMLHttpRequestUpload` and `XMLHttpRequest` `[Exposed=(Window,DedicatedWorker,SharedWorker)]` and XHR §5
-       Interface ProgressEvent declares `ProgressEvent` `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform
-       objects implementing interfaces is "To define the global property references on target, given realm
-       realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm"
-       — a REALM, with no Document in the algorithm. This component's realm intrinsic places its three
-       interface objects beside the prototypes it already built there, and §5's rides progress_event.c's own
-       intrinsic rather than a tail call from the install that has gone, so a realm that reaches no
-       platform_document_install gets all four.
-       AND THE INSTALL READ NO DOCUMENT: its thunk discarded the `PlatformDocument` outright, because XHR's
-       per-document state — §3.5.1 The open() method's API base URL, §3.5.4 The withCredentials getter and
-       setter's credentials mode — is read from the RUNNING realm when a member is CALLED and never when the
-       interface object is minted. */
+    /* XHR §3 "Interface XMLHttpRequest" (`XMLHttpRequestEventTarget`, `XMLHttpRequestUpload` and `XMLHttpRequest`,
+       `[Exposed=(Window,DedicatedWorker,SharedWorker)]`) and §5 "Interface ProgressEvent"
+       (`[Exposed=(Window,Worker)]`): no document half. §5's interface object comes from progress_event.c's own
+       intrinsic. XHR's per-document state (§3.5.1's API base URL, §3.5.4's credentials mode) is read from the
+       running realm when a member is called, never when the interface object is minted. */
     { "xml_http_request",    d_xhr,                 NULL,        r_xhr },
-    /* FILE API §6 Reading Data, AFTER `xml_http_request` and not beside `blob`. Two rows decide it and
-       both are the standards' own: §6.4.1 Event Summary makes every event this component fires a
-       ProgressEvent, whose interface XHR §5 defines and whose class and per-realm prototype `xhr_init`
-       declares — so a row before it would build a FileReader whose events had no interface. It reads §3's
-       Blob (its byte sequence, its type and the source identity a File carries), which the `blob` row far
-       above has already declared. */
-    /* NO DOCUMENT HALF. File API §6.2 "The FileReader API" declares FileReader `[Exposed=(Window,Worker)]`,
-       and Web IDL §3.8 Platform objects implementing interfaces is given a REALM with no Document in the
-       algorithm, so file_reader_install_proto places the interface object beside the prototype it already
-       built. File API §6.5.1 "The FileReaderSync API" is `[Exposed=(DedicatedWorker,SharedWorker)]` and is
-       honestly
-       ABSENT — core/file/file_reader.c states that at its own banner, and this row does not acquire it by
-       reaching a worker realm. */
+    /* File API §6 "Reading Data", after `xml_http_request`: §6.4.1 "Event Summary" makes every event it fires a
+       ProgressEvent, whose class and per-realm prototype `xhr_init` declares, and it reads §3's Blob, which `blob`
+       declares. §6.2 "The FileReader API" is `[Exposed=(Window,Worker)]`: no document half. §6.5.1 "The
+       FileReaderSync API" is absent, as core/file/file_reader.c's banner states. */
     { "file_reader",         d_file_reader,         NULL,        r_file_reader },
     { "location",            d_location,            NULL,        r_location },
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
@@ -1262,397 +804,219 @@ static const PlatformComponent PLATFORM[] = {
     { "history",             d_history,             NULL,        r_history },
     /* HTML §7.2.6's navigation API, AFTER §7.4.1's state machine whose entries it is a view over. */
     { "navigation",          d_navigation,          NULL,        r_navigation },
-    /* HTML §7.2.6.10.4, which FIRES the navigate event at the Navigation the row above builds — its
-       declaration is the step definition of the commit handler job, which the runtime must know before
-       any navigation enqueues one. It installs no member of its own: the interfaces it builds objects of
-       are `navigation_destination` above and NavigateEvent under `event`. */
+    /* HTML §7.2.6.10.4, which fires the navigate event at the Navigation the row above builds. It declares the
+       commit handler job's step definition, which the runtime must know before any navigation enqueues one, and
+       installs no member: the interfaces it builds objects of are `navigation_destination` and NavigateEvent
+       under `event`. */
     { "navigate_event_fire", d_navigate_event_fire, NULL,        r_navigate_event_fire },
     { "screen",              d_screen,              NULL,        r_screen },
     { "navigable",           d_navigable,           i_navigable },
-    /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
-       last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
-       they are per-flow heap state, so the record has to exist before any flow can write one. */
+    /* HTML §8.1.7's event loop, before the task sources it orders: the virtual clock, §8.1.7.1's last render
+       opportunity time and the insertion order a source breaks ties by are the loop's per-flow heap state, so the
+       record exists before any flow can write one. */
     { "event_loop",          d_event_loop,          NULL,        r_event_loop },
     { "timer",               d_timer,               i_timer,     r_timer },
-    /* ITS INSTALL COLUMN IS AFTER `window` AND AFTER `location` BY CONSTRUCTION, and that ordering is what
-       §7.2.1.3.4's capture depends on: the nine cross-origin ACCESSOR members it takes the getters of are
-       installed by those two rows, and a capture running before either would take a hole for a member and
-       leave a peer answering it out of whatever the page later writes onto its global. Eight come from
-       `window`, whose install column is far above this one; the ninth is `location`, which location.c installs
-       as a REALM INTRINSIC and so is already there before this column begins at all. The capture's own DCHECK
-       names the member if either of those ever stops being true. */
+    /* Its install column follows `window` and `location`, which §7.2.1.3.4's capture depends on: the nine
+       cross-origin accessor members it takes the getters of are installed by those two rows, and a capture before
+       either would take a hole for a member and leave a peer answering it from whatever the page later writes onto
+       its global. Eight come from `window`; `location` is a realm intrinsic (location.c), present before this
+       column begins. The capture's DCHECK names the member if either stops being true. */
     { "window_proxy",        d_window_proxy,        i_window_proxy, r_window_proxy },
     { "remote_object",       d_remote_object,       NULL,        r_remote_object },
-    /* The PEER's half of the same seam: what this agent does when it is ASKED to perform one. Its per-realm
-       install captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could
-       run page code — which is none of them, and is why it sits beside the asking half rather than at the end. */
+    /* The peer's half of the same seam: what this agent does when asked to perform one. Its per-realm install
+       captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could run page
+       code; none here does, so it sits beside the asking half. */
     { "remote_op",           d_remote_op,           NULL,        r_remote_op },
-    /* HTML §7.2.4's CROSS-ORIGIN Location, AFTER window_proxy: §7.2.2's `location` member is what answers
-       with one, and this row builds the per-realm surface that member hands across an origin boundary. */
+    /* HTML §7.2.4's cross-origin Location, after window_proxy: §7.2.2's `location` member answers with one, and
+       this row builds the per-realm surface that member hands across an origin boundary. */
     { "remote_location",     d_remote_location,     NULL,        r_remote_location },
-    /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
+    /* After window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy prototype. */
     { "window_message",      d_window_message,      i_window_message, r_window_message },
-    /* NO DOCUMENT HALF. html.idl declares `[Exposed=(Window,Worker)] interface BroadcastChannel : EventTarget`,
-       and Web IDL §3.8 Platform objects implementing interfaces is "To define the global property references on
-       target, given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that
-       is exposed in realm" — a REALM, with no Document in the algorithm. HTML §9.5 Broadcasting to other
-       browsing contexts' interface object is placed by this component's own realm intrinsic beside the
-       prototype it already built there, so a realm that reaches no platform_document_install gets it. */
+    /* HTML §9.5 "Broadcasting to other browsing contexts": html.idl declares `[Exposed=(Window,Worker)] interface
+       BroadcastChannel : EventTarget`, so no document half. */
     { "broadcast_channel",   d_broadcast_channel,   NULL,        r_broadcast_channel },
-    /* HTML §2.7.10 "Structured cloning API"'s member has NO INSTALL COLUMN, which is Web IDL §3.7.3
-       "Interface prototype object" and not a component that installs nothing: it is declared on a mixin
-       `WorkerGlobalScope` includes as well as `Window`, so which object it lands on differs per REALM and this
-       column — whose own DCHECK below refuses any realm whose §3.3.8 [Global] names are not `Window` — could
-       only ever have served one of the two. The component registers a per-realm intrinsic instead, as the
-       `crypto`, `indexed_db` and `performance` rows above already do for their own §8.2 members. */
+    /* HTML §2.7.10 "Structured cloning API"'s member has no install column because of Web IDL §3.7.3 "Interface
+       prototype object": it is declared on a mixin both `WorkerGlobalScope` and `Window` include, so the object it
+       lands on differs per realm, and this column (whose DCHECK below refuses a realm whose §3.3.8 [Global] names
+       are not `Window`) could serve only one. The component registers a per-realm intrinsic, as `crypto`,
+       `indexed_db` and `performance` do for their §8.2 members. */
     { "structured_clone",    d_structured_clone,    NULL,        r_structured_clone },
-    /* NO DOCUMENT HALF. HTML §8.1.4.7 Unhandled promise rejections declares `PromiseRejectionEvent`
-       `[Exposed=*]`, so Web IDL §3.3.7 [Exposed] step 1 returns before it looks at the realm and EVERY realm
-       owes the name; Web IDL §3.8 Platform objects implementing interfaces is "To define the global property
-       references on target, given realm realm" whose step 1 is "Let interfaces be a list that contains every
-       interface that is exposed in realm" — a REALM, with no Document in the algorithm — so
-       unhandled_rejection.c's own realm intrinsic places the interface object beside the prototype and the two
-       rejection drivers it already built there. */
+    /* HTML §8.1.4.7 "Unhandled promise rejections" declares `PromiseRejectionEvent` `[Exposed=*]`, so Web IDL
+       §3.3.7 [Exposed] step 1 returns before it looks at the realm, and every realm owes the name: no document
+       half. unhandled_rejection.c's realm intrinsic also builds the two rejection drivers. */
     { "unhandled_rejection", d_unhandled_rejection, NULL,        r_unhandled_rejection },
-    /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
+    /* §8.12 "Animation frames"'s map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame, r_animation_frame },
-    /* COOPERATIVE SCHEDULING OF BACKGROUND TASKS §4 and §5, BESIDE the row above because they are the same
-       shape of thing — a Window's own list of registered callbacks, drained by a rung of the one event loop —
-       and because neither constrains the other: §4's three concepts and §4.3's prototype chain to nothing this
-       list builds, and §5's rung is registered on the scheduler rather than on a component. ONE ROW FOR TWO
-       INTERFACES: §4.3's IdleDeadline is declared and installed from this component's own `_init`/`_install`
-       (its only producer is §5.2 step 3.2), which is why both witness names below map here. */
+    /* Cooperative Scheduling of Background Tasks §4 and §5, beside the row above because it is the same shape (a
+       Window's list of registered callbacks drained by a rung of the event loop) and neither constrains the
+       other: §4's concepts and §4.3's prototype chain to nothing this list builds, and §5's rung is registered on
+       the scheduler. One row, two interfaces: §4.3's IdleDeadline is declared and installed from this component
+       (its only producer is §5.2 step 3.2), so both witness names map here. */
     { "idle_callback",       d_idle_callback,       i_idle_callback, r_idle_callback },
     { "page_reveal",         d_page_reveal,         i_page_reveal, r_page_reveal },
     { "viewport",            d_viewport,            NULL,        r_viewport },
     { "visual_viewport",     d_visual_viewport,     NULL,        r_visual_viewport },
-    /* CSSOM VIEW §13.2 Scrolling's pending scroll events, BEFORE the `rendering` row: update-the-rendering
-       step 9 is the DRAIN of the list this row declares, and step 4's unnecessary-rendering test asks this
-       component whether a document has one queued — so a row after `rendering` would hand that step a slot
-       that had not been declared. It is also after `event`, far above, because its step 2 fires one. */
+    /* CSSOM View §13.2 "Scrolling"'s pending scroll events, before `rendering`: update-the-rendering step 9 drains
+       the list this row declares, and step 4's unnecessary-rendering test asks whether a document has one queued.
+       It follows `event` because its step 2 fires one. */
     { "scroll_events",       d_scroll_events,       NULL,        r_scroll_events },
     { "media_query_list",    d_media_query_list,    i_media_query_list, r_media_query_list },
-    /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
+    /* After the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },
-    /* DOM §3.2 Interface AbortSignal, MOVED AHEAD OF `fetch` and not tidied there. Fetch §5.4's
-       RequestInit declares `AbortSignal? signal`, and a DECLARED interface type states the class it
-       brands against AT THE DECLARATION — which `fetch` makes, since fetch_init declares Request. A row
-       after `fetch` handed that declaration a class id of zero. It depends on nothing this list has not
-       already built: abort_init allocates a symbol and two classes, and its per-realm install chains
-       AbortSignal.prototype to EventTarget.prototype, whose row is far above both of these. */
-    /* NO DOCUMENT HALF. DOM §3.1 "Interface AbortController" and §3.2 "Interface AbortSignal" both declare
-       `[Exposed=*]`, and Web IDL §3.8 Platform objects implementing interfaces is "To define the global
-       property references on target, given realm realm" whose step 1 is "Let interfaces be a list that
-       contains every interface that is exposed in realm" — a REALM, with no Document in the algorithm. Both
-       interface objects are minted by abort_install_protos beside the two prototypes it already built, so a
-       realm that reaches no platform_document_install gets both names. §3.2's three STATICS moved with its
-       interface object: `abort`, `timeout` and `any` are members OF that object, and one minted without them
-       is an `AbortSignal` a page can feature-detect and not call. */
+    /* DOM §3.1 "Interface AbortController" and §3.2 "Interface AbortSignal", ahead of `request`: Fetch §5.4's
+       RequestInit declares `AbortSignal? signal`, and a declared interface type states the class it brands against
+       at the declaration, so a later row would hand it a class id of zero. abort_init allocates a symbol and two
+       classes, and its per-realm install chains AbortSignal.prototype to EventTarget.prototype. Both are
+       `[Exposed=*]`: no document half. abort_install_protos mints both interface objects with §3.2's three
+       statics, `abort`, `timeout` and `any`, which are members of that object. */
     { "abort",               d_abort,               NULL,        r_abort },
-    /* FETCH §5.4 "Request class", §5.5 "Response class" and §5.1 "Headers class", ABOVE `fetch` AND IN THE
-       ORDER THAT MAKES THE RELEASE READ HEADERS-RESPONSE-REQUEST. Reverse declaration order is what this
-       column gives the release, and that sequence is the one all three host teardowns already had these three
-       lines in, so nothing about their relative order changes — what changes is that they are on a column at
-       all. Each release was a hand-written line in engine/host/main.c, engine/host/test_forced.c and
-       engine/host/wpt_runner.c running AFTER platform_agent_free, which is after agent_state_check_released,
-       so none of the three could declare a slot of agent state to core/agent_state.h while it sat there. See
-       the three entries above r_fetch for what they carried.
-       `request` DEPENDS ON `abort` AND THAT IS WHY IT SITS BELOW IT: §5.4's RequestInit declares
-       `AbortSignal? signal`, and request_init states the class that member brands against AT THE DECLARATION,
-       reading abort_signal_class(). The row above this one is the one the comment there says was MOVED AHEAD
-       OF `fetch` for exactly that reason — the declaration it was moved ahead of is this one, which fetch_init
-       used to make on this component's behalf.
-       NO DOCUMENT HALF FOR ANY OF THE THREE. Fetch §5.1, §5.4 and §5.5 all declare `[Exposed=(Window,Worker)]`,
-       and Web IDL §3.8 Platform objects implementing interfaces is "To define the global property references
-       on target, given realm realm" whose step 1 is "Let interfaces be a list that contains every interface
-       that is exposed in realm" — a REALM, with no Document in the algorithm — so all three interface objects
-       are minted by each component's own per-realm intrinsic beside the prototype it already builds. The row
-       below keeps a third column for a MEMBER §3.8 does not define, which is `fetch` itself.
-       fetch_init STILL CALLS ALL THREE INITS AND THEY ARE NO-OPS HERE, which is not a leftover: §5.6 needs
-       §5.4's dictionary table and §5.3's stream reader, so the dependency is real and each init opens on its
-       own runtime latch. That is exactly the shape `readable_stream` has had all along — a row of its own,
-       and a latched call from fetch_init above it. */
+    /* Fetch §5.4 "Request class", §5.5 "Response class" and §5.1 "Headers class", above `fetch`, so the release
+       runs headers, response, request. `request` follows `abort`: request_init states the class §5.4's `signal`
+       brands against at the declaration, reading abort_signal_class(). All three are `[Exposed=(Window,Worker)]`:
+       no document half. fetch_init calls all three inits too, because §5.6 needs §5.4's dictionary table and
+       §5.3's stream reader; each init opens on its own runtime latch, so here they are no-ops, as with
+       `readable_stream`. */
     { "request",             d_request,             NULL,        r_request },
     { "response",            d_response,            NULL,        r_response },
     { "headers",             d_headers,             NULL,        r_headers },
-    /* THE DOCUMENT HALF SURVIVES HERE FOR ONE MEMBER AND NO INTERFACE OBJECT, which is why this row keeps a
-       third column where `blob` and `file_reader` above lost theirs. Fetch §5.1 "Headers class", §5.4 "Request
-       class" and §5.5 "Response class" all declare `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform
-       objects implementing interfaces is "To define the global property references on target, given realm
-       realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm"
-       — a REALM, with no Document in the algorithm — so each of the three is now minted by its own component's
-       per-realm intrinsic. What fetch_install still does is §5.6 "Fetch methods"' `fetch`, which §5.6 declares
-       on `partial interface mixin WindowOrWorkerGlobalScope`: a MEMBER, so Web IDL §3.7.7 Operations over a
-       [Global] object's own interface chain rather than a Web IDL §3.8 property reference, and
-       browser/idl_exposure.h answers for it out of IDL_MEMBER_EXPOSURE and not IDL_EXPOSURE. A worker realm is
-       owed it and does not get it — core/workers/worker_global_scope.c's item (7) records that by name, this
-       component's `fetch` included — and taking this column away with the three interface objects would remove
-       the member from EVERY realm, which the PLATFORM_WITNESS row `{ "fetch", "fetch" }` below is what
-       catches. */
+    /* The document half here installs one member and no interface object. §5.6 "Fetch methods" declares `fetch` on
+       `partial interface mixin WindowOrWorkerGlobalScope`: a member, placed by Web IDL §3.7.7 "Operations" over a
+       [Global] object's own interface chain rather than a §3.8 property reference, and browser/idl_exposure.h
+       answers for it from IDL_MEMBER_EXPOSURE, not IDL_EXPOSURE. A worker realm is owed it and does not get it
+       (core/workers/worker_global_scope.c's residual (7) names it). Removing this column would remove the member
+       from every realm, which the PLATFORM_WITNESS row `{ "fetch", "fetch" }` catches. */
     { "fetch",               d_fetch,               i_fetch,     r_fetch },
-    /* NO DOCUMENT HALF. Observable §2.1 "The Subscriber interface" and §2.2 "The Observable interface" both
-       declare `[Exposed=*]`, and Web IDL §3.8 Platform objects implementing interfaces is "To define the global
-       property references on target, given realm realm" whose step 1 is "Let interfaces be a list that contains
-       every interface that is exposed in realm" — a REALM, with no Document in the algorithm. Both interface
-       objects are minted by observable_install_protos beside the two prototypes it already built, so a realm
-       that reaches no platform_document_install gets both names. §2.3.1 "from()"'s static moved with §2.2's
-       interface object: `static Observable from(any value)` is a member OF that object, and one minted without
-       it is an `Observable` a page can feature-detect and not call.
-       THE COLUMN GOES ENTIRELY, unlike `fetch` above, whose row keeps a document half for a MEMBER §3.8 does
-       not define. This component's entry placed these two interface objects and nothing else, so there is
-       nothing left for a third column to do. */
+    /* Observable §2.1 "The Subscriber interface" and §2.2 "The Observable interface", both `[Exposed=*]`: no
+       document half. observable_install_protos mints both interface objects with §2.3.1 "from()"'s static, which
+       is a member of §2.2's interface object. */
     { "observable",          d_observable,          NULL,        r_observable },
-    /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's
-       — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
-       `getBoundingClientRect` is installed on Element.prototype by the row below, and it mints a DOMRect out of
-       the element's own realm, so both prototypes must already be in every realm the list has built.
-
-       ONE OF THE TWO HAS NO DOCUMENT HALF AND THE OTHER STILL DOES, AND THE EXPOSURE SETS ARE WHY. Web IDL
-       §3.8 Platform objects implementing interfaces is "To define the global property references on target,
-       given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is
-       exposed in realm" — a REALM, with no Document in the algorithm. Geometry Interfaces §3 "The DOMRect
-       interfaces" declares DOMRectReadOnly and DOMRect `[Exposed=(Window,Worker)]`, so a realm that reaches no
-       platform_document_install is owed both names and got neither; dom_rect.c's own realm intrinsic now
-       places them, and Geometry Interfaces §3's `LegacyWindowAlias=SVGRect` with them.
-       Geometry Interfaces §4 "The DOMRectList interface" declares DOMRectList `[Exposed=Window]`, so the ONLY
-       realms that owe the name are the ones a Document is installed over — its per-document column is not a
-       defect and moving it would be a change with nothing behind it. The two rows sit one line apart in one
-       directory under one banner, which is exactly the reading that would take both; the exposure sets are the
-       thing that decides, and browser/idl_exposure.h states each straight out of the corpus. */
+    /* Geometry Interfaces §3 and §4, before the component that returns one. A rectangle is four numbers, so only the
+       consumer decides the position: CSSOM View §6's `getBoundingClientRect`, installed on Element.prototype by the
+       row below, mints a DOMRect out of the element's own realm. §3 "The DOMRect interfaces" declares
+       DOMRectReadOnly and DOMRect `[Exposed=(Window,Worker)]`, so dom_rect.c's realm intrinsic places them, with
+       §3's `LegacyWindowAlias=SVGRect`. §4 "The DOMRectList interface" is `[Exposed=Window]`, so it keeps its
+       per-document column. browser/idl_exposure.h states each exposure set from the corpus. */
     { "dom_rect",            d_dom_rect,            NULL,        r_dom_rect },
     { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
-    /* HTML §4.12.5.1.7 "Path2D objects" and §4.12.5.1.6 "Building paths"'s CanvasPath mixin with it. NO
-       DOCUMENT HALF, and the exposure set is why: §4.12.5.1.7 declares `Path2D` `[Exposed=(Window,Worker)]`,
-       so a realm whose global object implements a worker scope owes the name and reaches no
-       platform_document_install — path_2d.c's own realm intrinsic places it, as dom_rect.c's does for the two
-       rows above and for the same sentence of Web IDL §3.8.
-       IT DEPENDS ON NOTHING AND SO ITS POSITION IS FREE. The order here is the dependency order, and
-       `Path2D` inherits from no interface — browser/idl_inheritance.h records it as IDL_PROTO_OBJECT, whose
-       prototype is Object.prototype — so there is no earlier prototype it must be built after. It sits beside
-       the geometry rows because that is what it is: a path is coordinates, and the two components answer the
-       same kind of question about a page with no device under either of them. */
+    /* HTML §4.12.5.1.7 "Path2D objects", with §4.12.5.1.6 "Building paths"'s CanvasPath mixin. §4.12.5.1.7
+       declares `Path2D` `[Exposed=(Window,Worker)]`: no document half. It inherits from no interface
+       (browser/idl_inheritance.h records IDL_PROTO_OBJECT), so its position is free; it sits beside the geometry
+       rows because a path is coordinates. */
     { "path_2d",             d_path_2d,             NULL,        r_path_2d },
-    /* HTML §8.11.1 "The ImageData interface", beside Path2D and for the same two reasons that put Path2D here.
-       NO DOCUMENT HALF: §8.11.1 declares `ImageData` `[Exposed=(Window,Worker)]`, so a worker realm owes the
-       name and reaches no platform_document_install, and image_data.c's own realm intrinsic places it.
-       IT DEPENDS ON NOTHING AND SO ITS POSITION IS FREE — browser/idl_inheritance.h records it as
-       IDL_PROTO_OBJECT, so there is no earlier prototype it must be built after. It sits with the canvas rows
-       because that is what it is: a bitmap a page builds and reads with no device under it, which is the same
-       kind of question a path is. */
+    /* HTML §8.11.1 "The ImageData interface", `[Exposed=(Window,Worker)]`: no document half. It inherits from no
+       interface (IDL_PROTO_OBJECT), so its position is free; it sits with the canvas rows. */
     { "image_data",          d_image_data,          NULL,        r_image_data },
-    /* HTML §4.12.5.1 "The 2D rendering context", AFTER `image_data` and not merely beside it: §4.12.5.1.16's
-       `getImageData` mints an ImageData through core/canvas/image_data.h's C face, and that mint reads the
-       class this row's predecessor declares. The `getContext` half is a member on HTMLCanvasElement and is
-       declared with the element interfaces, which is why this row installs a realm intrinsic and no document
-       column — the interface is `[Exposed=Window]` and its name is placed from the realm exactly as Path2D's
-       is. */
+    /* HTML §4.12.5.1 "The 2D rendering context", after `image_data`: §4.12.5.1.16's `getImageData` mints an
+       ImageData through core/canvas/image_data.h, which reads the class that row declares. `getContext` is a
+       member on HTMLCanvasElement, declared with the element interfaces, so this row installs only a realm
+       intrinsic; the interface is `[Exposed=Window]`, and its name is placed from the realm as Path2D's is. */
     { "canvas_ctx2d",        d_canvas_ctx2d,        NULL,        r_canvas_ctx2d },
     { "element",             d_element,             NULL,        r_element },
-    /* CSSOM §8.1 The CSS.escape() Method's `CSS` NAMESPACE and CSS Conditional Rules 3 §7.5 The CSS namespace,
-       and the supports() function's partial namespace on it, AFTER `element` — which is where the whole CSSOM
-       group is declared, and whose cssom_init creates THE AGENT'S ONE CSS PARSER that both of this row's
-       members reach through (§7.5's supports() runs a real declaration parse and a real `<supports-condition>`
-       evaluation; neither is a table of names this row could hold).
-       IT IS ITS OWN ROW AND NOT PART OF THAT GROUP, because what it installs is a GLOBAL rather than anything
-       hanging off an Element: §8.1's own closing paragraph treats the namespace as one several standards
-       extend, and the DOM group is not its owner. Being a row is also what gives it a witness below — `CSS` is
-       a name a page reads off the global, so an install that silently stopped happening is exactly what that
-       column catches. Its namespace object goes on the global through a realm intrinsic, so a child navigable
-       gets its own object with its own two function objects and therefore its own realm. */
-    /* CSS TYPED OM 1's VALUE OBJECTS — §2's CSSStyleValue, §4.3.1's CSSNumericValue and §4.3.3's CSSUnitValue,
-       BEFORE the row below, which is the one that hands them to a page. §4.3.5's sixty-three numeric factory
-       functions are members of the CSS NAMESPACE and so belong to `css_namespace`; every one of them returns
-       an object THIS row's class declares, so the two rows are ordered the way their dependency runs even
-       though nothing calls a factory before both have declared. It is its own row and not part of that one for
-       the reason that one is not part of the CSSOM group: what it installs is three globals of its own, which
-       browser/platform_names.h already lists as names the platform owns, so an install that silently stopped
-       happening would take `x instanceof CSSUnitValue` with it. Its prototypes go on through a realm intrinsic
-       like the namespace object's, so a child navigable gets its own three and therefore its own realm. */
-    /* §4.3.1's MEMBER DECLARATIONS, BEFORE the row that installs them. This component owns no realm state at
-       all — the interface prototype object its two members land on is the next row's, for the §3.7.3 Interface
-       prototype object reason that row states — so what it declares is two argument-pool entries, and the
-       ordering is the one thing about it that has to be right: `css_numeric_value_member_id` aborts on a read
-       of an id that has not been declared, which is what makes a reordering here a crash rather than a member
-       silently installed under a pool entry belonging to someone else. */
+    /* CSSOM §8.1 "The CSS.escape() Method"'s `CSS` namespace and CSS Conditional Rules 3 §7.5 "The CSS namespace"'s
+       partial namespace on it (`css_namespace`, below), after `element`, whose cssom_init creates the agent's one
+       CSS parser that both members reach (§7.5's supports() runs a real declaration parse and `<supports-condition>`
+       evaluation). It is its own row because it installs a global, which several standards extend, and so it has
+       a witness. The namespace goes on through a realm intrinsic, so a child navigable gets its own object. */
+    /* CSS Typed OM 1's value objects (§2's CSSStyleValue, §4.3.1's CSSNumericValue, §4.3.3's CSSUnitValue) are
+       the `css_unit_value` row, declared before `css_namespace`: §4.3.5's sixty-three numeric factories are
+       members of the CSS namespace and each returns an object of a class that row declares. It installs three
+       globals of its own, which browser/platform_names.h lists, through a realm intrinsic. */
+    /* §4.3.1's member declarations, before the row that installs them. It owns no realm state (the prototype its
+       two members land on is `css_unit_value`'s, per §3.7.3 "Interface prototype object") and declares two
+       argument-pool entries; `css_numeric_value_member_id` aborts on a read of an undeclared id, so a reordering
+       here crashes rather than installing a member under another component's pool entry. */
     { "css_numeric_value",   d_css_numeric_value,   NULL,        r_css_numeric_value },
-    /* §4.3.4's MATH VALUES, BEFORE the row that installs them, for the same reason the row above is: this
-       component owns no realm state either — its seven interface prototype objects and CSSNumericArray's are
-       built from `css_unit_value`'s realm intrinsic, which is where §3.7.3 Interface prototype object's chain
-       is created — so what it declares is eight class ids and six argument-pool entries, and an id read before
-       it was declared aborts rather than installing a constructor under a pool entry belonging to someone
-       else. It sits AFTER `css_numeric_value` because its constructors brand their `CSSNumberish` arm against
-       that component's predicate, and BEFORE `css_unit_value` because that row's install reads these ids. */
+    /* §4.3.4's math values, before the row that installs them: it owns no realm state (its seven interface
+       prototype objects and CSSNumericArray's are built from `css_unit_value`'s realm intrinsic) and declares
+       eight class ids and six argument-pool entries, and an undeclared read aborts. It follows `css_numeric_value`
+       because its constructors brand their `CSSNumberish` arm against that component's predicate. */
     { "css_math_value",      d_css_math_value,      NULL,        r_css_math_value },
-    /* §4.2's CSSKeywordValue, BEFORE the row that installs it, for the reason the two rows above are before
-       it: this component owns no realm state either — its interface prototype object is built from
-       `css_unit_value`'s realm intrinsic, where §3.7.3 Interface prototype object's chain is created — so what
-       it declares is one class id and two argument-pool entries, and an id read before it was declared aborts
-       rather than installing a constructor under a pool entry belonging to someone else. */
+    /* §4.2's CSSKeywordValue, before the row that installs it: it owns no realm state (its prototype is built from
+       `css_unit_value`'s realm intrinsic) and declares one class id and two argument-pool entries, and an
+       undeclared read aborts. */
     { "css_keyword_value",   d_css_keyword_value,   NULL,        r_css_keyword_value },
     { "css_unit_value",      d_css_unit_value,      NULL,        r_css_unit_value },
     { "css_namespace",       d_css_namespace,       NULL,        r_css_namespace },
-    /* INTERSECTION OBSERVER, AFTER `element` and after the two GEOMETRY rows. After element because its
-       declaration brands both `observe(Element target)` and §2.4's `(Element or Document)? root` against the
-       Node class, which element_init is what creates (through node_init); after DOMRect because every entry it
-       queues carries three of them, minted in the observed element's own realm. Its own prototype chains to
-       Object.prototype, so no earlier row is required for that half. */
+    /* Intersection Observer, after `element` and the geometry rows. Its declaration brands `observe(Element
+       target)` and §2.4's `(Element or Document)? root` against the Node class, which element_init creates
+       (through node_init), and every entry it queues carries three DOMRects minted in the observed element's realm.
+       Its prototype chains to Object.prototype. */
     { "intersection_observer", d_intersection_observer, i_intersection_observer, r_intersection_observer },
-    /* RESIZE OBSERVER, AFTER `element` for the row above's first reason and beside it for the rest. Its
-       declaration brands `observe(Element target)` and `unobserve(Element target)` against the Node class,
-       which element_init is what creates (through node_init), and it narrows both to `element_is` — so a row
-       before `element` would hand those two a class id of zero. Everything else this component touches it
-       touches at RUNTIME rather than at declaration: §3.4.4 step 6's contentRect is a DOMRectReadOnly minted
-       while a frame is being broadcast, and §3.4.6's ErrorEvent is minted while a loop error is delivered, so
-       neither `dom_rect` nor the `event` row that declares ErrorEvent constrains where this row sits — standing
-       beside `intersection_observer` satisfies the one constraint that is real. (This said `error_event`, which
-       was a row with a per-document install and no declare column, and is now not a row at all.)
-       ONE ROW FOR THREE INTERFACES. §2.3's ResizeObserverEntry and ResizeObserverSize are declared and
-       installed from this component's own `_init` and `_install`, which is why all three of the witness names
-       below map here: the three are one component's surface and an install that stopped happening would take
-       all three with it. Its per-realm half — ResizeObserver.prototype and §3.2.1's [[resizeObservers]] —
-       goes on through realm_declare_intrinsic, so this list has no per-realm line to remember. */
+    /* Resize Observer, after `element`: its declaration brands `observe(Element target)` and `unobserve(Element
+       target)` against the Node class and narrows both to `element_is`, so an earlier row would hand them a class
+       id of zero. §3.4.4 step 6's DOMRectReadOnly and §3.4.6's ErrorEvent are minted at run time, so neither
+       `dom_rect` nor `event` constrains this row. One row, three interfaces: §2.3's ResizeObserverEntry and
+       ResizeObserverSize are declared and installed from this component, so all three witness names map here.
+       ResizeObserver.prototype and §3.2.1's [[resizeObservers]] go on through realm_declare_intrinsic. */
     { "resize_observer",     d_resize_observer,     i_resize_observer, r_resize_observer },
-    /* CSS FONT LOADING §2's FontFace. It inherits nothing — §2 declares no base interface — so its prototype
-       is built over this realm's %Object.prototype% and this row is under no ordering constraint at all; it
-       sits beside the observer above because that is where a reader looks for a small self-contained
-       interface, and NOT because anything requires it. §3's FontFaceSet does carry one when it lands
-       (`interface FontFaceSet : EventTarget`), which is a fact about THAT row and is stated in
-       core/fonts/font_face.h's ORDER rather than anticipated here.
-       AND ITS INSTALL COLUMN IS NULL BECAUSE `[Exposed=(Window,Worker)]`, WHICH IS THE ONE PROPERTY THAT
-       DECIDES A COLUMN. This row carried an `i_font_face` that placed the interface object from the
-       per-document column, and that column is reached only by a realm a Document is installed over — so a
-       WorkerGlobalScope realm ran the per-realm intrinsic that builds `FontFace.prototype` and never got the
-       name. The placement is in the intrinsic now, beside the prototype, exactly as the `url` row's is and for
-       the same reason. THE RULE IS NOT `SMALL INTERFACES GO IN THE INTRINSIC`: it is that a name this column
-       places is a name only a Window realm can have, so an interface whose exposure set reaches a worker may
-       not be placed from here. `resize_observer`, `intersection_observer`, `media_query_list`, `dom_rect_list`,
-       `page_reveal`, `xml_serializer` and `document`'s XMLDocument are all `[Exposed=Window]`, which is why
-       their rows are right where they are and why this one was the only one that could be wrong. */
+    /* CSS Font Loading §2's FontFace. It declares no base interface, so its prototype is built over the realm's
+       %Object.prototype% and the row is under no ordering constraint; §3's FontFaceSet (`interface FontFaceSet :
+       EventTarget`) will carry one, stated in core/fonts/font_face.h. `[Exposed=(Window,Worker)]`: no document
+       half. A name the document column places is a name only a Window realm can have, so an interface whose
+       exposure set reaches a worker is placed from its realm intrinsic; `resize_observer`,
+       `intersection_observer`, `media_query_list`, `dom_rect_list`, `page_reveal`, `xml_serializer` and
+       `document`'s XMLDocument are `[Exposed=Window]`. */
     { "font_face",           d_font_face,           NULL,              r_font_face },
     { "html_iframe",         d_iframe,              NULL,        r_iframe },
-    /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
-       a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the
-       standard's own words and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime
-       and not to any JSContext — which means nothing frees it when a realm goes. */
+    /* RFC 6265 §5.3's cookie store, before the component whose §3.1.4 members read it. The store is the user
+       agent's and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime, not to any
+       JSContext, and is released here, since nothing frees it when a realm goes. */
     { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },
-    /* AFTER event_target, because core/realm.h runs the per-realm installs in DECLARATION order and
-       `interface CookieStore : EventTarget` creates its prototype OVER this realm's EventTarget.prototype. */
+    /* After event_target: `interface CookieStore : EventTarget` creates its prototype over the realm's
+       EventTarget.prototype. */
     { "cookie_store",        d_cookie_store,        NULL,        r_cookie_store },
     { "document",            d_document,            i_document,  r_document },
-    /* HTML §8.9.1's SIMPLE DIALOGS, AFTER `document` for the reason the row below is: its install needs
-       nothing (three methods on the global) but every one of its members opens on §8.9.1's "we cannot show
-       simple dialogs", whose only forced step reads the Document's ACTIVE SANDBOXING FLAG SET — so the
-       component that owns Documents is what these members are declared against, and this list's order is
-       where that is said. */
+    /* HTML §8.9.1's simple dialogs, after `document`: its install is three methods on the global, but every member
+       opens on §8.9.1's "we cannot show simple dialogs", whose forced step reads the Document's active sandboxing
+       flag set, so the members are declared against the component that owns Documents. */
     { "simple_dialogs",      d_simple_dialogs,      i_simple_dialogs, r_simple_dialogs },
-    /* HTML §8.5.1's DOMParser, AFTER `document` — not because its install needs one (it puts an interface
-       object on the global and nothing else) but because that is what this list's order MEANS: every member of
-       this interface builds a second Document through core/dom/document.h's `document_new`, so the component
-       that owns Documents is what it is declared against. Its own prototype chains to Object.prototype, so no
-       earlier row is required for that half. */
+    /* HTML §8.5.1's DOMParser, after `document`: every member builds a second Document through
+       core/dom/document.h's `document_new`, so it is declared against the component that owns Documents. Its
+       install puts an interface object on the global, and its prototype chains to Object.prototype. */
     { "domparser",           d_domparser,           NULL,        r_domparser },
-    /* HTML §8.5.8's XMLSerializer, AFTER `element` and beside §8.5.1's DOMParser. After element because its
-       declaration brands `serializeToString(Node root)` against the Node class, which element_init is what
-       creates (through node_init) — a row above that one would hand the declaration a class id of zero. It
-       reads nothing of any Document's: DOM Parsing and Serialization §5.2.1 "XML Serialization"'s
-       algorithm walks the tree it is handed, so unlike DOMParser it does not depend on the component that
-       MAKES documents. Its own prototype chains to Object.prototype, so no earlier row is required for that
-       half. */
+    /* HTML §8.5.8's XMLSerializer, after `element`: its declaration brands `serializeToString(Node root)` against
+       the Node class, which element_init creates (through node_init). DOM Parsing and Serialization §5.2.1 "XML
+       Serialization" walks the tree it is handed, so it does not depend on `document`. Its prototype chains to
+       Object.prototype. */
     { "xml_serializer",      d_xml_serializer,      i_xml_serializer, r_xml_serializer },
     { "module_loader",       d_module_loader,       NULL,        r_module_loader },
 };
 static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
 
-/* THE OTHER SIDE OF THE LIST. A list that is only ever RUN is unfalsifiable: every host goes through it, so
-   nothing disagrees with it and a component whose install quietly stops installing anything looks identical to
-   one that works. This is the disagreement — the NAME a component puts on a realm's global, asserted present
-   once the whole list has run.
+/* The other side of the list: the name each component puts on a realm's global, asserted once the whole list has
+ * run, since a list that is only run cannot disagree with anything. An absent name fires with the component that
+ * owed it, and a row whose component is renamed or removed fires from platform_check_table's row lookup. A name
+ * whose install moves to another component leaves a row naming a component that still exists, so both directions
+ * pass; edit the row at the move (the duplicate check below sees a move that adds a row).
  *
- * A name that is absent fires with the component that owed it, which is exactly the report the original defect
- * never produced (`navigator` was missing from the WPT gate's realm and the gate reported numbers for four
- * standards rooted there). And a row whose component is renamed or removed leaves a name nobody installs, which
- * fires from the other direction — so a witness cannot outlive its component the way a comment does.
- *
- * ITS COMPONENT, AND NOT ITS ATTRIBUTION — the sentence above is right about a RENAME and says more than it
- * can. What fires from the other direction is `platform_check_table`'s row lookup, which asks whether the
- * named component still EXISTS; a name whose install MOVES from one component to another leaves a row naming
- * a component that still exists, installing a name that is still on the global, so both directions pass and
- * the attribution is stale with nothing to say so. Where the move ADDS a row instead of editing the one it
- * moved from, the duplicate check below is what sees it. Where it adds nothing, nothing here does — the cost
- * is that a later absence is blamed on the wrong component, and the repair is to edit the row at the move.
- *
- * THE THIRD COLUMN IS WEB IDL §3.3.7 [Exposed]'s CONDITION, AND WITHOUT IT THIS LIST ASSERTED A FALSEHOOD.
- * A row used to say only "this name is on the global", which is true of a name whose IDL carries no exposure
- * condition and FALSE of one that does: §3.3.13 [SecureContext]'s own example is verbatim "In such a context,
- * there will be no \"HeartbeatSensor\" property on Window", so a `[SecureContext]` interface object is a name
- * the platform owes in a SECURE realm and owes NOWHERE ELSE. The list asserted it unconditionally, and the day
- * §14's interface object was correctly gated behind that attribute every realm reached over plain `http:`
- * aborted here — a correct spec fix falsifying the one site where the retired argument had been written down.
- * So the row states the condition its IDL states, and the probe is two-sided against it: exposed ⇒ present,
- * NOT exposed ⇒ ABSENT.
- *
- * THE ABSENT DIRECTION IS THE HALF THAT EARNS THE COLUMN. "Present when it should be" was already checked;
- * "absent when it must be" is what would have caught the gap from the other side — an interface object whose
- * IDL carries [SecureContext] and whose install forgot it answers `'SubtleCrypto' in window` true over plain
- * http, which is what a page branches on and what no other check in this engine asks.
- *
- * THE CONDITION IS STATED HERE AND NOT READ BACK FROM THE INSTALL, deliberately. This list is an ORACLE: its
- * whole value is that it says what the realm MUST look like without consulting what the realm DID, exactly as
- * the `component` column names an owner without consulting the PLATFORM list (platform_check_table is what
- * crosses those two). An expectation derived from the gate it is checking asserts nothing — a gate silently
- * removed would leave record and realm agreeing, and the absent direction could never fire.
- *
- * ZERO IS A STATEMENT AND NOT A HOLE. `IDL_EXPOSED` is 0 and means "this name's IDL carries no exposure
- * condition", which is what the overwhelming majority of these rows are and what a two-field initialiser
- * therefore says correctly. A row that omits the column is asserting the unconditional case, not leaving a
- * field unwritten — the same reading IdlDictMember::iface's zero has, and the reason it is safe is the same:
- * there is no producer that could have written something else here.
- *
- * The four Window members come from realm intrinsics rather than from an install in this file, and asserting
- * them HERE is deliberate: this is the point at which the realm is finished, and whether the intrinsic list
- * and this list agree is precisely the question. */
+ * The third column is Web IDL §3.3.7 [Exposed]'s condition, and the probe is two-sided against it: exposed means
+ * present, not exposed means absent. §3.3.13 [SecureContext]'s example ("there will be no \"HeartbeatSensor\"
+ * property on Window") is a name owed only in a secure realm. The condition is stated here, not read back from
+ * the install, because this list is an oracle: an expectation derived from the gate it checks asserts nothing.
+ * `IDL_EXPOSED` is 0 and means the IDL carries no condition, so a row that omits the column states the
+ * unconditional case. The four Window members come from realm intrinsics, and are asserted here because this is
+ * where the realm is finished. */
 static const struct { const char *name, *component; IdlExposure exposure; } PLATFORM_WITNESS[] = {
+    /* A name on browser/platform_names.h is one solver/absent.c declines to mint a concolic for, so a missing
+       install reads as a concrete `undefined`: a guard such as `if (window.performance)` is decided with no fork,
+       and a call one frame later throws for a reason that names nothing. These rows report such an install. */
     { "console",               "console" },
     { "window",                "window" },
-    /* HTML §7.2.2.5 Historical browser interface element APIs' INTERFACE OBJECT, and it is the row that would
-       have caught its absence. `BarProp`'s Web IDL §3.7.3 interface prototype object was built and tagged per
-       realm and its Web IDL §3.8 property reference existed NOWHERE IN THIS TREE, so
-       `Object.prototype.toString.call(window.locationbar)` answered "[object BarProp]" while `window.BarProp`
-       was absent — a state no walk over the global can see, because that walk judges the properties that ARE
-       there. THE ABSENT DIRECTION IS THE WHOLE OF WHAT THIS ROW EARNS, and it earns it for `XMLSerializer`'s
-       reason one interface further down: `BarProp` is on browser/platform_names.h, so solver/absent.c
-       recognises the missed read as a name a standard owns and DECLINES to mint a concolic for it — the read
-       decides to a concrete `undefined` with no fork and no throw, and `if (window.BarProp)` is then taken
-       one way for ever with nothing anywhere saying so.
-       IT NAMES `window` BECAUSE A SUB-COMPONENT NAMES THE ROW THAT REACHES IT: core/frame/bar_prop.c has no
-       row of its own, bar_prop_install is called from core/frame/window.c's window_install, and bar_prop_free
-       is reached from window_free — which is the same name its agent state is declared under. */
+    /* HTML §7.2.2.5 "Historical browser interface element APIs"'s interface object. Its §3.7.3 prototype is built
+       per realm, so `Object.prototype.toString.call(window.locationbar)` answers "[object BarProp]" whatever this
+       row sees; the absent direction is what it checks. It names `window` because a sub-component names the row
+       that reaches it: bar_prop_install is called from window_install and bar_prop_free from window_free. */
     { "BarProp",               "window" },
-    /* DOM §2.3's `event`. THE ABSENT DIRECTION IS WHAT THIS ROW EARNS, and for this member that direction is
-       silent twice over: `window.event` is not feature-detected by real code — the frozen corpus reaches it as
-       `n || window.event`, a FALLBACK — so an install that stopped running would restore the exact
-       `undefined` the member had before it existed, with no throw, no guard flipping and no walk over the
-       global able to see it. `event` is on browser/platform_names.h, so solver/absent.c would recognise the
-       missed read as a name a standard owns and DECLINE to mint a concolic for it: the read decides to a
-       concrete `undefined`, and the handler's very next property access throws for a reason that names
-       nothing. */
+    /* DOM §2.3's `event`. Real code reads it as a fallback (`n || window.event`), not a feature test, so a missing
+       install restores `undefined` with no throw and no guard flipping. */
     { "event",                 "current_event" },
     { "onload",                "event_target" },
     { "document",              "document" },
     { "navigator",             "navigator" },
-    /* WEB LOCKS API §3.2's AND §3.3's INTERFACE OBJECTS, the one pair on this list whose IDL carries an
-       exposure condition on the INTERFACE rather than on a member: both are
-       `[SecureContext, Exposed=(Window,Worker)]`, so over plain http the correct realm has NEITHER name — which
-       is what a bundle's `"locks" in navigator && isSecureContext` is written to discover, and why the column
-       is stated rather than left unconditional.
-       THEIR COMPONENT COLUMN IS `navigator` AND NOT A ROW OF THEIR OWN, for the reason the CryptoKey row above
-       gives: Web Locks API §3.1 declares an `interface mixin` that `Navigator includes`, so the component is
-       declared from navigator_init and released from navigator_free, and this column names the PLATFORM row
-       that owns that pair.
-       THE ABSENT DIRECTION IS WHAT EARNS THEM, as it does for the PerformanceMeasure row below: a realm whose
-       install did not run has no `LockManager`, and `navigator.locks` then answers a value with no prototype
-       whose `request` is a TypeError one frame later — a member answering undefined where a ReferenceError
-       would have named the site. */
+    /* Web Locks API §3.2's and §3.3's interface objects, `[SecureContext, Exposed=(Window,Worker)]`: over plain
+       http the realm has neither, which is what `"locks" in navigator && isSecureContext` discovers. Their component
+       is `navigator`, because §3.1 declares an `interface mixin` that `Navigator includes`, so it is declared from
+       navigator_init and released from navigator_free. */
     { "LockManager",           "navigator", IDL_SECURE_CONTEXT },
     { "Lock",                  "navigator", IDL_SECURE_CONTEXT },
     { "location",              "location" },
@@ -1665,70 +1029,48 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "open",                  "navigable" },
     { "fetch",                 "fetch" },
     { "setTimeout",            "timer" },
-    /* HR-TIME §7's interface object and §8.1's `performance` attribute, and this pair is the sharpest case on
-       the list for the reason Web Storage's two and §8.9.1's three are — with one turn of the screw more.
-       `performance` is on browser/platform_names.h, so solver/absent.c's read hook LEAVES A MISS ON IT ALONE:
-       a name the platform owns is a component this engine owes, and that file declines to mint a concolic for
-       one. `window.performance` therefore answers a CONCRETE `undefined` rather than unknown input, so
-       `if (window.performance && performance.now)` is DECIDED with no fork and every telemetry, budgeting and
-       lazy-hydration path a bundle puts behind that guard is code the forced execution cannot reach — in a
-       browser where the guard is always true. An install that silently stopped happening would restore not a
-       throw one frame away but a whole arm of the program that no run takes, with nothing to say so. */
+    /* HR-TIME §7's interface object and §8.1's `performance` attribute. A missing install decides
+       `if (window.performance && performance.now)` false, so every path a bundle puts behind that guard is
+       unreachable in a browser where the guard is always true. */
     { "Performance",           "performance" },
     { "performance",           "performance" },
-    /* §3.7.1's interface objects for the two interfaces above. Neither IDL carries an exposure condition, so
-       both rows assert the unconditional case — and the ABSENT direction is what earns them: a realm whose
-       install did not run has no `PerformanceMark`, which is precisely the state in which
-       `performance.mark(...)` is the TypeError this pair was built to stop a page meeting. */
+    /* §3.7.1's interface objects, unconditional; a realm without `PerformanceMark` is one where
+       `performance.mark(...)` throws a TypeError. */
     { "PerformanceEntry",      "performance_entry" },
-    /* PERFORMANCE TIMELINE §4 and §4.2.2's interface objects. `PerformanceObserver` is the one name on this
-       table a real bundle reads BEFORE it does anything else with the timeline — the guard is
-       `PerformanceObserver.supportedEntryTypes.includes(t)`, so an install that stopped happening is a
-       ReferenceError on the first line of the arm and not a member answering undefined one frame later. */
+    /* Performance Timeline §4 and §4.2.2's interface objects. A bundle reads
+       `PerformanceObserver.supportedEntryTypes.includes(t)` before anything else, so a missing install is a
+       ReferenceError on the arm's first line. */
     { "PerformanceObserver",   "performance_observer" },
     { "PerformanceObserverEntryList", "performance_observer" },
     { "PerformanceMark",       "user_timing" },
-    /* §2.3's interface object, beside §2.2's and owed by the same landing that put §2.3 on the global. It
-       was missing for a while, and WHY THAT WENT UNNOTICED is the part worth keeping: this list is an ORACLE
-       and not a total, so a name with no row is a missing WITNESS rather than an abort — an oracle with a
-       hole reports clean, on every run, for ever. The absent direction is what earns the row here as it does
-       above: a realm whose install did not run has no `PerformanceMeasure`, which is the state in which
-       `performance.measure(...)` is the TypeError this pair exists to stop a page meeting. Its IDL carries no
-       exposure condition this engine's two realm kinds can tell apart, so the row is unconditional like
-       §2.2's. */
+    /* §2.3's interface object, beside §2.2's. A name with no row here is a missing witness, not an abort, so the
+       list reports clean over it. A realm without `PerformanceMeasure` is one where `performance.measure(...)`
+       throws a TypeError. Its IDL carries no condition this engine's two realm kinds tell apart. */
     { "PerformanceMeasure",    "user_timing" },
     { "postMessage",           "window_message" },
     { "structuredClone",       "structured_clone" },
     { "requestAnimationFrame", "animation_frame" },
-    /* COOPERATIVE SCHEDULING OF BACKGROUND TASKS §4's two Window members, and the Web IDL §3.7.1 interface
-       object of the IdleDeadline that component's §4.3 declares. A real
-       bundle's guard is `window.requestIdleCallback ? window.requestIdleCallback(f) : setTimeout(f, 1)`, so an
-       install that stopped happening takes the setTimeout arm and is invisible; `IdleDeadline` is the name a
-       page reads to feature-detect the interface itself. */
+    /* Cooperative Scheduling of Background Tasks §4's two Window members and §4.3's IdleDeadline interface object.
+       A bundle's guard is `window.requestIdleCallback ? window.requestIdleCallback(f) : setTimeout(f, 1)`, so a
+       missing install takes the setTimeout arm unseen; `IdleDeadline` is what a page reads to detect the
+       interface. */
     { "requestIdleCallback",   "idle_callback" },
     { "cancelIdleCallback",    "idle_callback" },
     { "IdleDeadline",          "idle_callback" },
     { "matchMedia",            "media_query_list" },
-    /* CSSOM §8.1's namespace object. It is on browser/platform_names.h for the reason the three simple-dialog
-       members are, so an install that stopped happening would surface one frame away from the absence —
-       `CSS.escape` reads `undefined` and only the CALL throws. */
+    /* CSSOM §8.1's namespace object: a missing install makes `CSS.escape` read `undefined`, and only the call
+       throws. */
     { "CSS",                   "css_namespace" },
-    /* CSS Typed OM 1's three interface objects. They are on browser/platform_names.h for the same reason `CSS`
-       is, and the witness matters here in BOTH of the ways that column exists for: a page reads
-       `window.CSSUnitValue` to decide whether the Typed OM exists at all, and `x instanceof CSSUnitValue` is
-       how it tells one of §4.3.5's results from a number. */
+    /* CSS Typed OM 1's three interface objects: a page reads `window.CSSUnitValue` to decide whether the Typed OM
+       exists, and `x instanceof CSSUnitValue` to tell one of §4.3.5's results from a number. */
     { "CSSStyleValue",         "css_unit_value" },
     { "CSSNumericValue",       "css_unit_value" },
     { "CSSUnitValue",          "css_unit_value" },
-    /* §4.2's, whose interface object this realm's `css_unit_value` install puts on the global by calling
-       core/css/css_keyword_value.c — so the WITNESS is attributed to the row that owns the install, which is
-       the row whose failure would take it with it, exactly as §4.3.4's eight below are. */
+    /* §4.2's interface object, placed by the `css_unit_value` install through core/css/css_keyword_value.c, so the
+       witness names the row whose failure would take it. */
     { "CSSKeywordValue",       "css_unit_value" },
-    /* §4.3.4's eight, whose interface objects this realm's `css_unit_value` install puts on the global by
-       calling core/css/css_math_value.c — so the WITNESS is attributed to the row that owns the install, which
-       is the row whose failure would take them all with it. `x instanceof CSSMathSum` is how a page tells one
-       of §4.3.1's arithmetic results from a CSSUnitValue, which is the second of the two ways this column
-       matters. */
+    /* §4.3.4's eight, placed by the `css_unit_value` install through core/css/css_math_value.c. `x instanceof
+       CSSMathSum` is how a page tells one of §4.3.1's arithmetic results from a CSSUnitValue. */
     { "CSSMathValue",          "css_unit_value" },
     { "CSSMathSum",            "css_unit_value" },
     { "CSSMathProduct",        "css_unit_value" },
@@ -1737,12 +1079,8 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "CSSMathMin",            "css_unit_value" },
     { "CSSMathMax",            "css_unit_value" },
     { "CSSNumericArray",       "css_unit_value" },
-    /* HTML §8.9.1's three members, and the witness matters more than most for the reason Web Storage's two do:
-       all three are on browser/platform_names.h, so solver/absent.c's read hook leaves a miss on them ALONE —
-       a name the platform owns is a component this engine owes, and that file declines to mint a concolic for
-       one. An install that silently stopped happening therefore reports itself one frame away from the member
-       that is missing — `window.confirm` answers `undefined` and only the CALL throws — which is exactly the
-       distance this column exists to close. */
+    /* HTML §8.9.1's three members: a missing install makes `window.confirm` read `undefined`, and only the call
+       throws. */
     { "alert",                 "simple_dialogs" },
     { "confirm",               "simple_dialogs" },
     { "prompt",                "simple_dialogs" },
@@ -1758,9 +1096,8 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "CountQueuingStrategy",  "queuing_strategy" },
     { "InputDeviceCapabilities", "input_device_capabilities" },
     { "Event",                 "event" },
-    /* BOTH OWED BY THE `event` ROW. Their interface objects are placed by message_event_install_realm and
-       error_event_install_realm, which core/events/event.c's event_init declares — so `event` is the row that
-       owes these two names, and the components they used to name are no longer rows at all. */
+    /* Both owed by the `event` row: message_event_install_realm and error_event_install_realm place them, and
+       core/events/event.c's event_init declares both. */
     { "MessageEvent",          "event" },
     { "ErrorEvent",            "event" },
     { "MessageChannel",        "message_port" },
@@ -1776,56 +1113,33 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "ImageData",             "image_data" },
     { "IntersectionObserver",  "intersection_observer" },
     { "IntersectionObserverEntry", "intersection_observer" },
-    /* RESIZE OBSERVER's three names, all three mapping to the ONE component that declares and installs them.
-       This row matters more than most for the reason the component exists: `ResizeObserver` is on
-       browser/platform_names.h, so the absent-global seam declines to mint a concolic for it and a bundle's
-       `new ResizeObserver(...)` on a realm that never ran the install is a ReferenceError that kills the
-       script and every endpoint behind it — which is the exact defect this install ends, so an install that
-       silently stopped happening would restore it with nothing to say so. */
-    /* CSS FONT LOADING §2's one name. It matters for exactly the reason the three below it do and with a
-       measurement behind it: `FontFace` is on browser/platform_names.h, so the absent-global seam declines to
-       mint a concolic for it and leaves the read alone — and every occurrence of the name in a corpus of real
-       application bundles is an UNGUARDED `new FontFace(`, with no feature detection anywhere. So an install
-       that silently stopped happening would restore a ReferenceError on the line that touches it, killing the
-       script and every endpoint behind it, which is the exact defect this install ends. */
+    /* CSS Font Loading §2's FontFace and Resize Observer's three names, all mapped to the one component that
+       declares and installs them. Real bundles construct both unguarded (`new FontFace(`, `new ResizeObserver(`),
+       so a missing install is a ReferenceError that ends the script and every endpoint behind it. */
     { "FontFace",              "font_face" },
     { "ResizeObserver",        "resize_observer" },
     { "ResizeObserverEntry",   "resize_observer" },
     { "ResizeObserverSize",    "resize_observer" },
-    /* WEB STORAGE's three names. §12.2.1's interface object, and §12.2.2's and §12.2.3's two Window members —
-       and those two are the reason this row matters more than most: BOTH are on browser/platform_names.h, so
-       the absent-global seam declines to mint a concolic for either, and a `window.localStorage` that resolves
-       to nothing answers `undefined` rather than throwing. An install that silently stopped happening would
-       therefore restore EXACTLY the silent defect this component was built to end — a `&&` taking its else arm
-       with nothing to say so — which is what this probe now refuses. `storage_shed` has no witness because it
-       installs nothing: Storage §4's model is state, not surface. */
+    /* Web Storage: §12.2.1's interface object and §12.2.2's and §12.2.3's Window members. A missing
+       `window.localStorage` answers `undefined`, so a `&&` takes its else arm unseen. `storage_shed` has no
+       witness because Storage §4's model installs nothing. */
     { "Storage",               "storage" },
     { "localStorage",          "window_storage" },
     { "sessionStorage",        "window_storage" },
-    /* §12.2.4's interface object, whose component is `event` because core/events/event.c's subclass list is
-       where every Event subclass is declared — the same row NavigateEvent's witness names. A `storage` event
-       fired at a document that does not expose the interface would be an event whose `instanceof` a listener
-       cannot make sense of. */
+    /* §12.2.4's interface object. Its component is `event`, because core/events/event.c's subclass list declares
+       every Event subclass, as with NavigateEvent. */
     { "StorageEvent",          "event" },
-    /* WEB CRYPTOGRAPHY's three names — §10's interface object, §14's, and the Window member the mixin's
-       partial declares. `crypto` is on browser/platform_names.h, so the absent-global seam declines to mint a
-       concolic for it and a `window.crypto` that resolves to nothing answers `undefined` instead of throwing:
-       an install that silently stopped happening would restore exactly the silent defect these witnesses
-       exist to refuse. */
+    /* Web Cryptography's names: §10's interface object, §14's, and the Window member the mixin's partial declares.
+       A missing `window.crypto` answers `undefined` instead of throwing. */
     { "Crypto",                "crypto" },
-    /* `[SecureContext,Exposed=(Window,Worker)] interface SubtleCrypto` — the ONE row of this list whose IDL
-       carries an exposure condition. Its two neighbours carry none and that is the IDL's own asymmetry rather
-       than an oversight: Web Cryptography's `interface Crypto` is `[Exposed=(Window,Worker)]` with no
-       [SecureContext], and the Window member is `[SameObject] readonly attribute Crypto crypto` on the
-       WindowOrWorkerGlobalScope partial mixin, also unconditional — only `subtle`, `randomUUID` and this
-       interface object are gated. So over plain http a page still finds `Crypto`, still finds `crypto`, and
-       finds NEITHER `crypto.subtle` NOR `SubtleCrypto`, which is what a bundle's `crypto && crypto.subtle`
-       guard is written to discover. */
+    /* `[SecureContext,Exposed=(Window,Worker)] interface SubtleCrypto`. `interface Crypto` is
+       `[Exposed=(Window,Worker)]` with no [SecureContext], and the Window member is `[SameObject] readonly
+       attribute Crypto crypto` on the WindowOrWorkerGlobalScope partial mixin, also unconditional; only `subtle`,
+       `randomUUID` and this interface object are gated. Over plain http a page finds `Crypto` and `crypto` and
+       neither `crypto.subtle` nor `SubtleCrypto`, which is what `crypto && crypto.subtle` discovers. */
     { "SubtleCrypto",          "crypto", IDL_SECURE_CONTEXT },
-    /* §13's interface object, gated by the same attribute and witnessed for the same reason. Its component
-       column is `crypto` because that is the PLATFORM row this family is declared under — core/crypto's
-       subtle_crypto declares it and core/realm.h runs its per-realm install as an intrinsic — which is the
-       same answer the row above it gives, and `platform_check_table` is what holds that column honest. */
+    /* §13's interface object, gated by the same attribute. Its component is `crypto`, the row core/crypto's
+       subtle_crypto is declared under; core/realm.h runs its per-realm install as an intrinsic. */
     { "CryptoKey",             "crypto", IDL_SECURE_CONTEXT },
     { "crypto",                "crypto" },
     { "DOMStringList",         "dom_string_list" },
@@ -1838,58 +1152,33 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "IDBObjectStore",        "idb_object_store" },
     { "IDBIndex",              "idb_index_handle" },
     { "IDBVersionChangeEvent", "idb_version_change_event" },
-    /* THE OBSERVABLE STANDARD'S TWO, AND BOTH ARE HERE BECAUSE ONE FUNCTION PLACES BOTH. §2.1's and §2.2's
-       interface objects are two `idl_define_global_property_reference` calls three lines apart in one realm
-       intrinsic, so a change that carried one across and dropped the other leaves a component that still
-       installs `Observable` and no longer installs `Subscriber` — which is exactly the shape that has cost
-       this tree `ProgressEvent`, `ReadableByteStreamController` and `fetch` one interface object each. One row
-       per NAME is what makes that visible; a row per COMPONENT cannot see it.
-       WHAT THIS PAIR ASSERTS IS THE WINDOW ARM ALONE, and that is a fact about where this loop stands rather
-       than about the interfaces: it runs at the end of platform_document_install, which a worker realm never
-       reaches, so `[Exposed=*]` gets its worker arm asserted by test_forced.c's exposure_selftest and by
-       nothing here. */
+    /* The Observable standard's two. One realm intrinsic places both with two
+       `idl_define_global_property_reference` calls, so a row per name, not per component, sees one dropped. This
+       loop runs at the end of platform_document_install, which a worker realm never reaches, so it asserts the
+       Window arm of `[Exposed=*]`; test_forced.c's exposure_selftest asserts the worker arm. */
     { "Observable",            "observable" },
     { "Subscriber",            "observable" },
     { "DOMParser",             "domparser" },
-    /* HTML §8.5.8 "The XMLSerializer interface", beside §8.5.1 "The DOMParser interface" above, and owed for
-       exactly the reason `CSS` and `performance` are. `XMLSerializer` is on browser/platform_names.h, so
-       solver/absent.c DECLINES to mint a concolic for it — a name the platform owns is a component this
-       engine owes — and a `window.XMLSerializer` that resolves to nothing therefore answers a CONCRETE
-       `undefined` rather than unknown input. `if (window.XMLSerializer)` is then DECIDED with no fork, and
-       every serialization path a bundle puts behind that guard is code the forced execution cannot reach, in
-       a browser where the guard is always true. An install that silently stopped happening would not throw
-       one frame away; it would delete an arm of the program with nothing anywhere to say so.
-       ITS IDL CARRIES NO EXPOSURE CONDITION — `[Exposed=Window] interface XMLSerializer` — so this row asserts
-       the unconditional case, and the ABSENT direction is the half that earns it: a realm whose install did
-       not run has no `XMLSerializer`, which is precisely the state in which `new XMLSerializer()` is the
-       ReferenceError this row exists to stop a page meeting. */
+    /* HTML §8.5.8 "The XMLSerializer interface", `[Exposed=Window]`, unconditional. A missing install decides
+       `if (window.XMLSerializer)` with no fork, and `new XMLSerializer()` is a ReferenceError. */
     { "XMLSerializer",         "xml_serializer" },
-    /* FILE SYSTEM ACCESS §3's three factories, whose whole partial interface is `[SecureContext]`. They are
-       the other end of the column from every interface object above: a Window MEMBER rather than an interface
-       object, gated by the same attribute and therefore witnessed by the same two directions — and the reason
-       they are worth a row at all is that a bundle feature-detects them (`'showOpenFilePicker' in window`),
-       so an install that stopped gating would put three names on a plain-http global that a real browser
-       does not have there. Their component installs from core/realm.h's intrinsic list rather than from this
-       file's install column, which is the same route the four Window members above take. */
+    /* File System Access §3's three factories, whose partial interface is `[SecureContext]`: Window members rather
+       than interface objects, witnessed in both directions because a bundle feature-detects them
+       (`'showOpenFilePicker' in window`). Their component installs from core/realm.h's intrinsic list. */
     { "showOpenFilePicker",    "file_picker", IDL_SECURE_CONTEXT },
     { "showSaveFilePicker",    "file_picker", IDL_SECURE_CONTEXT },
     { "showDirectoryPicker",   "file_picker", IDL_SECURE_CONTEXT },
 };
 static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);
 
-/* THE AGENT IS ONE RUNTIME AND THE LIST RUNS ONCE IN IT. Every component's own `_init` already asserts it did
-   not run twice; this asserts the same thing about the list, so the report names the LIST rather than whichever
-   component happened to be first. */
+/* The agent is one runtime and the list runs once in it. Each component's `_init` asserts it did not run twice;
+   this asserts it of the list, so the report names the list rather than the first component. */
 static JSRuntime *g_declared_in;
 
-/* IS THIS NAME A ROW? THE ONE ANSWER TO A QUESTION THREE OTHER LISTS ASK, and it exists because a row's name
-   is written down in more than one place and every one of those places can be MISSPELLED. The witness table
-   above names a component per global; core/agent_state.h's registry names a component per declared slot,
-   twice over (a component naming its own row, and a SUB-component naming the row that releases it). None of
-   those spellings is checked by the compiler, so each of them is one keystroke from naming a component this
-   browser does not have — and in every case the damage is the same shape: the check that name was supposed to
-   reach is not weakened, it is never run, while some OTHER row reports a failure whose words describe a
-   different repair entirely. */
+/* Whether a name is a row: the one answer to a question the witness table (a component per global) and
+   core/agent_state.h's registry (a component per declared slot, and a sub-component naming the row that releases
+   it) both ask. The compiler checks none of those spellings, and a misspelled one leaves its check unrun while
+   another row reports a failure describing a different repair. */
 static int platform_has_row(const char *name)
 {
     int i;
@@ -1911,9 +1200,8 @@ static void platform_check_table(void)
         DCHECK(PLATFORM[i].declare != NULL || PLATFORM[i].install != NULL,
                "a platform component builds neither an agent half nor a document half — a row that builds "
                "nothing is a component that is not in this browser, and it must be deleted rather than listed");
-        /* A RELEASE WITHOUT A DECLARATION HAS NOTHING TO RELEASE. Agent state is made by the agent half, so a
-           row that frees without declaring is either freeing another component's state or freeing nothing, and
-           both are worse than either alone. */
+        /* A release without a declaration has nothing to release: agent state is made by the agent half, so a row
+           that frees without declaring frees another component's state or nothing. */
         DCHECK(PLATFORM[i].release == NULL || PLATFORM[i].declare != NULL,
                "a platform component releases agent state it never declared — the release column is the inverse "
                "of the DECLARE column, and a row with only the inverse is undoing somebody else's work");
@@ -1923,20 +1211,12 @@ static void platform_check_table(void)
                    "second pool entry, and everything already chained to the first would answer out of an "
                    "object the realm has thrown away");
     }
-    /* AND THE SECOND LIST IS A KEYED LIST TOO, WHICH IS THE PART THAT WAS TAKEN ON TRUST. Everything above
-       makes PLATFORM well-formed as a list keyed by COMPONENT — it has a name, it builds something, it is
-       listed once — and the witness table is keyed by GLOBAL NAME and got none of it. Its key reaches a reader
-       exactly as the other's does, as the `%s` of an abort telling somebody which name to go and install, and
-       it decides which row the probe loop answers a question out of. */
+    /* The witness table is keyed by global name, and its key is the `%s` of an abort naming what to install and
+       decides which row the probe loop answers from, so it gets the same well-formedness checks. */
     for (i = 0; i < PLATFORM_WITNESS_N; i++) {
-        /* THE ROW NAMES THE GLOBAL IT IS AN ORACLE ABOUT, and an empty one does not merely check nothing — it
-           FIRES. `idl_exposed_in_realm` answers TRUE for an identifier the corpus has no row for
-           (browser/idl_exposure.h: "A NAME WITH NO ROW IS EXPOSED", because absence of evidence must not remove
-           a property), so an unnamed row is OWED, `[[HasProperty]]` over the global answers false, and the
-           probe below aborts with a `@WHY` whose subject is the empty string. That is the one shape
-           §Offensive-programming rules out by name: a crash naming a remedy and no site, which is rediscovered
-           rather than fixed. It is caught HERE, at the table, because here the row still has a COMPONENT to be
-           named by — by the time the probe runs, the name is all it has. */
+        /* The row names the global it is an oracle about. `idl_exposed_in_realm` answers true for an identifier
+           the corpus has no row for (browser/idl_exposure.h), so an unnamed row is owed and absent, and the probe
+           would abort naming nothing. It is caught here, where the row still has a component to name. */
         DCHECKF(PLATFORM_WITNESS[i].name != NULL && *PLATFORM_WITNESS[i].name,
                 "a platform witness row names NO GLOBAL and says the component `%s` owes it — the probe at the "
                 "end of the per-document install would still run it (an identifier with no row in the corpus "
@@ -1949,15 +1229,9 @@ static void platform_check_table(void)
                 "component was renamed or removed and the name it used to install is now owed by nobody, "
                 "which is the state a stale exclusion rots into",
                 PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].component);
-        /* ONE NAME, ONE ANSWER. This table is an ORACLE and its key is the name, so two rows for one name are
-           two answers to one question — and the way it happens is not carelessness: an install MOVES from one
-           component to another and the row is ADDED rather than edited. Nothing else in this file can see that.
-           The banner above claims a witness cannot outlive its component, and it is right about a RENAME (the
-           check directly above fires) and wrong about a MOVE, because the stale row still names a component
-           that still exists and the name is still on the global — so both rows pass, and the day the install
-           does break, whichever row the probe reaches first decides which component the abort blames. Where the
-           two rows differ in their `exposure` column it is worse and not better: the probe then asserts both
-           `owed` and `not owed` of one name in one realm, so one of them fires on a correct program. */
+        /* One name, one answer. Two rows for one name happen when an install moves to another component and a row
+           is added rather than edited; both pass, and a later abort blames whichever row the probe reaches first.
+           If their `exposure` columns differ, the probe asserts both owed and not owed of one name in one realm. */
         for (k = 0; k < i; k++)
             DCHECKF(strcmp(PLATFORM_WITNESS[k].name, PLATFORM_WITNESS[i].name) != 0,
                     "the global `%s` has TWO witness rows, owed by `%s` and by `%s` — this list is an oracle "
@@ -1968,30 +1242,13 @@ static void platform_check_table(void)
     }
 }
 
-/* THE THIRD COLUMN'S OWN OTHER SIDE. The witness table above asserts what a component INSTALLS; this asserts
-   what a component HOLDS, and it is the same argument: a release column that is only ever RUN is unfalsifiable,
-   because a release that frees a value and keeps its handle looks exactly like one that works.
- *
- * TWO OF THE THREE DIRECTIONS ARE THE SAME MISTAKE SEEN FROM ITS TWO ENDS. A row with a release that declared
- * no agent state is a release nothing can check — and the four defects core/agent_state.h names were all found
- * by reading rather than by any detector, which is what "cannot be checked" costs. A row with NO release that
- * declared agent state is the other one, and it is the shape of every leak this file's comments record: a C
- * static held for the whole agent with an empty third column, reported eventually as an anonymous Function or
- * a directory entry with nothing naming its owner.
- *
- * THE THIRD IS THE ONE NEITHER OF THOSE CAN ASK, AND IT RUNS FIRST BECAUSE THE OTHER TWO ARE ONLY HONEST
- * AFTER IT. Both of them start from a ROW and ask the registry about the name on it, so both are structurally
- * blind to a declaration that names no row at all — and a component's name is written TWICE, once at each
- * `agent_state_*` call and once in the row above, with nothing but two authors' spelling between them. The
- * cost of a mismatch is not a check that got weaker. It is a check that is NOT RUN (nothing ever asks whether
- * anybody releases those slots) sitting behind a message that is WRONG (the row that does own them reports
- * "declared no agent state", which is character-for-character what a component that really declared nothing
- * produces). One answer, three states — the defect core/agent_state.h exists to refuse, arriving through the
- * NAME rather than through a value.
- * SO THE ORDER IS THE MECHANISM AND NOT A PREFERENCE: with the registry walk first, reaching the row loop at
- * all is a PROOF that every declaration in this agent names a row, and the row loop's two messages can say so
- * in their own words. Ambiguity is removed by making the ambiguous state unreachable before the ambiguous
- * sentence can be printed, never by adding an adjective to the sentence. */
+/* The release column's other side: the witness table asserts what a component installs, this asserts what it
+ * holds, since a release that frees a value and keeps its handle looks like one that works. Three directions: a
+ * row with a release that declared no agent state is a release nothing can check; a row with no release that
+ * declared agent state is a leak, reported by the runtime as an anonymous object with nothing naming its owner;
+ * and a declaration naming no row. The last runs first, because the other two start from a row and are blind to a
+ * name no row carries: a misspelled name leaves its slots unchecked while the owning row reports "declared no agent
+ * state". With the registry walk first, reaching the row loop proves every declaration names a row. */
 static void platform_check_agent_state(JSRuntime *rt, uint32_t minted_before, int declared_before)
 {
 #if APICLIENT_DEV
@@ -1999,15 +1256,9 @@ static void platform_check_agent_state(JSRuntime *rt, uint32_t minted_before, in
     int i, line;
     uint32_t minted, declared;
 
-    /* AND THE DECLARING SITE IS PART OF THIS ABORT RATHER THAN DECORATION ON IT. This DFAILF is written at ONE
-       line and 611 declarations can reach it, so what it stamps is this file for every one of them; the two
-       repairs it names are chosen by reading the DECLARING file, which the message could not carry until that
-       file travelled with the declaration (core/agent_state.h's macros capture it at the call).
-       IT IS NOT THE COMPONENT NAME UNDER ANOTHER SPELLING, which is the reason the address is worth a field:
-       for the repair this fires on most, the name is about to STOP being the file's. Measured in one session
-       — `canvas_rendering_context_2d` was a file naming itself where its row is `canvas_ctx2d`, so the name
-       led to the file by luck; `html_canvas_element` was a SUB-COMPONENT whose correct declaration names
-       `element`, so neither the name it wrote nor the name it owed is the file to edit. */
+    /* The declaring site goes in the abort, because this DFAILF stamps this file for every declaration and the
+       repair is chosen by reading the declaring file (core/agent_state.h's macros capture it at the call). It is
+       not the component name under another spelling: a sub-component declares under its releasing row's name. */
     for (i = 0; agent_state_slot(i, &component, &what, &file, &line); i++) {
         if (platform_has_row(component)) continue;
         DFAILF("%s:%d declared %d slot(s) of agent state under `%s` and THIS LIST HAS NO ROW OF THAT NAME; the "
@@ -2042,38 +1293,13 @@ static void platform_check_agent_state(JSRuntime *rt, uint32_t minted_before, in
                    "already reaches this one's, the declarations belong under THAT row's name, which is how "
                    "a sub-component is declared (core/agent_state.h)", PLATFORM[i].name, n);
     }
-    /* WHAT THIS COLUMN MINTED IS WHAT THIS COLUMN DECLARED — the conservation identity core/agent_state.h's
-     * realm-slot entry argued was derivable, asserted rather than left derivable.
-     *
-     * IT RUNS LAST AND THAT IS THE MECHANISM RATHER THAN A PREFERENCE. Both walks above name an exact repair
-     * at an exact line (a misspelled row, an unpaired release); this one names a NUMBER and a derivation. A
-     * misspelled declaration is still a declaration, so it counts here either way and this check cannot tell
-     * the two apart — running it first would abort before the two checks that can.
-     *
-     * IT IS A DIFFERENCE OVER A WINDOW AND NOT AN ABSOLUTE COUNT, and the residual it discharges asked for the
-     * absolute one. That framing was wrong about this tree and the correction is recorded rather than quietly
-     * applied, because a next-diff clause is read once, by somebody who has already decided to build it. An
-     * absolute `minted == declared` is an identity between the ALLOCATOR, which is the process's, and THIS
-     * REGISTRY, which is the browser's — and this process has non-browser mints: solver/concolic.c's
-     * `concolic_init` mints one, and wpt_runner.c's `wpt_agent_init` calls it BEFORE platform_agent_init in
-     * the same straight-line function. That mint cannot be
-     * closed by declaring, because a declaration naming no row on the list above aborts in the walk at the top
-     * of this function, so the absolute form would demand a repair another check in this same function
-     * forbids — a permanent red nothing can drain, which is furniture rather than a forcing function. The
-     * WINDOW states the subject exactly: of everything the declare column minted, was all of it declared. It
-     * excuses no mint and skips no component; it names the interval in which both sides are defined.
-     *
-     * BOTH SIDES ARE LIFETIME COUNTS OVER THAT WINDOW, which is what makes the difference arithmetic about
-     * anything at all. A class id cannot be given back, so JS_ClassIDsMinted only rises; a registry row is
-     * never removed by a release (agent_state_undo resets SLOTS), so agent_state_class_id_count only rises
-     * until agent_state_reset empties it with the agent. Neither is a gauge and neither is differenced across
-     * a boundary the other does not share.
-     *
-     * IT WILL NOT HOLD ON THE DAY IT IS WRITTEN AND THAT IS THE POINT. What it names is every class id this
-     * column minted through a static nobody declared, which a text sweep could COUNT and no run could refuse.
-     * The remedy is a declaration beside the mint, never a tolerance here: a `>=`, a skip list or a known-gap
-     * table would each be the legacy fallback §A-superseded-system-is-DELETED forbids, wearing an assert's
-     * clothes, and would hide the gap in exactly the direction that reads as progress. */
+    /* What this column minted is what it declared. It runs last because the walks above name an exact repair at
+     * an exact line while this names a number, and a misspelled declaration counts here either way. It is a
+     * difference over the declare column's window, not an absolute count: the allocator is the process's and the
+     * registry the browser's, and solver/concolic.c's `concolic_init` mints a class id no row may declare (one host
+     * calls it before platform_agent_init). Both sides are lifetime counts over the window: JS_ClassIDsMinted
+     * only rises, and agent_state_class_id_count only rises until agent_state_reset. The remedy for a firing is a
+     * declaration beside the mint, never a tolerance here. */
     minted   = JS_ClassIDsMinted(rt) - minted_before;
     declared = (uint32_t)(agent_state_class_id_count() - declared_before);
     DCHECKF(minted == declared,
@@ -2088,59 +1314,35 @@ static void platform_check_agent_state(JSRuntime *rt, uint32_t minted_before, in
             "same repair: a row declared ABOVE the line that assigns its slot, counted against an allocator it "
             "never asked. Derive the sites rather than reading a number here: `node engine/agentstate.mjs`",
             minted, declared);
-    /* NAMED RESIDUAL — THE IDENTITY NAMES A COUNT AND NOT AN ID.
-     *   NOT COVERED: two properties, and the second is the sharper one. A reader meeting this abort has a
-     *     NUMBER and a command, not the class id that was minted undeclared — so the address comes from a
-     *     TEXT sweep whose own banner says a mint written in a spelling it does not search is invisible to
-     *     it, which is the instrument this check exists to stop being the only one. And a SUM is satisfiable
-     *     by cancellation: a mint nobody declared and a row declared above the line that assigns its slot
-     *     move the two sides the same way, so one of each reads as agreement. agent_state_realm_slot_at's own
-     *     assert is what keeps that second state rare for a realm slot and there is no such assert on a class
-     *     slot, which agent_state.h says in its own words.
-     *   THE NEXT DIFF BUILDS: a PER-ID accounting over the same window rather than a per-count one. It needs
-     *     the registry answered by a slot's VALUE and not by a total — `agent_state_class_id_declared(id)`,
-     *     reading each SLOT_CLASS and SLOT_REALM row's slot — and then every id in
-     *     [JS_CLASS_INIT_COUNT + minted_before, JS_CLASS_INIT_COUNT + minted_after) that no row holds is an
-     *     abort naming that id. The class's NAME makes it an address rather than a number, and both entries
-     *     it needs are already public: `JS_EXTERN JSAtom JS_GetClassName(JSRuntime *, JSClassID)` and
-     *     `JS_EXTERN bool JS_IsRegisteredClass(JSRuntime *, JSClassID)` in engine/qjs/quickjs.h, grepped at
-     *     the revision this was written at — grep them again before building, because that is a claim about a
-     *     tree that moves. JS_GetClassName hands back a DUP'd atom and answers JS_ATOM_NULL for an id nobody
-     *     registered, which is itself a finding rather than a formatting problem, and rendering it needs a
-     *     JSContext this function does not take today.
-     *   HOW ITS ABSENCE WOULD SHOW: the gap this abort reports and the queue `node engine/agentstate.mjs`
-     *     prints disagree, with the run's number the larger — and nothing anywhere says which mints the
-     *     difference is made of, because the only instrument that can name a site is the one that cannot see
-     *     them. */
+    /* Named residual: the identity names a count, not an id.
+     *   Not covered: a reader meeting this abort gets a number and a command, and the address comes from a text
+     *     sweep that cannot see a mint in a spelling it does not search. A sum is also satisfiable by
+     *     cancellation (an undeclared mint plus a row declared above the line that assigns its slot); a realm
+     *     slot has agent_state_realm_slot_at's assert against that, a class slot has none.
+     *   Next diff builds: per-id accounting over the same window. `agent_state_class_id_declared(id)` reads each
+     *     SLOT_CLASS and SLOT_REALM row's slot, and every id in [JS_CLASS_INIT_COUNT + minted_before,
+     *     JS_CLASS_INIT_COUNT + minted_after) that no row holds aborts, named through JS_IsRegisteredClass and
+     *     JS_GetClassName (a dup'd atom, JS_ATOM_NULL for an unregistered id, and it needs a JSContext).
+     *   How its absence shows: this abort's gap and `node engine/agentstate.mjs`'s queue disagree, the run's
+     *     number larger, with nothing naming which mints make the difference. */
 #else
     (void)rt; (void)minted_before; (void)declared_before;
 #endif
 }
 
-/* THE PROLOGUE EVERY AGENT SHARES, WHATEVER §8.1.2.2 ALGORITHM ALLOCATED ITS CLUSTER — and it is a function
-   rather than a paragraph in each entry for the reason the banner at the top of this file gives about the two
-   columns: a sequence a second entry has to remember is the hand-copied list this file exists to abolish, ONE
-   LEVEL UP. Everything here is true of an agent AS SUCH and reads no fact that tells a window agent from a
-   worker one, which is the test for belonging here: the two entries below differ in the CLUSTER their agent
-   joins, in whether they have a browsing context group at all, and in the [Global] kind of their first realm —
-   and in nothing this function does. */
+/* The prologue every agent shares, whatever §8.1.2.2 algorithm allocated its cluster. Everything here is true of
+   an agent as such and reads no fact telling a window agent from a worker one: the two entries differ in the
+   cluster their agent joins, in whether they have a browsing context group, and in their first realm's [Global]
+   kind. */
 static void agent_prologue(JSContext *ctx, const char *origin)
 {
     DCHECK(ctx != NULL, "the platform was declared into no realm");
-    /* THE DECLARATION PASS BUILDS THE BROWSER'S BASELINE, so it runs at the BASELINE STAMP — and that is a
-       precondition of THIS call rather than of any one component, which is the whole reason it is asserted
-       here. Everything below allocates: every interface prototype, every interface object, every component's
-       agent-lifetime JS state. An object created while the flow stamp is up carries that generation, and
-       cow.c's capture test is `JS_ObjFlowGen(obj) > d->fork_gen` — the first flow's delta is calloc'd with
-       fork_gen 0 and the first slice opens at generation 1, so anything stamped above 0 is skipped by EVERY
-       delta and a later write to it by any flow is recorded nowhere. It is the same fact main.c asserts on the
-       way OUT of qjs_step, said on the way IN to the platform.
-       IT IS SILENT FOR MOST COMPONENTS AND SILENT-AND-WRONG FOR THE REST, which is why one component's own
-       assert is not enough: nothing writes a prototype, so a mis-stamped one never shows; a component whose
-       SHARED BASELINE STATE is a JS object (core/storage/storage_shed.c's sheds are the first) silently stops
-       being shared across a fork instead. A host that reaches here with the stamp up is a host that forked a
-       COW delta in its own time (solver/world.c's segment materialization is the way in) — the bump belongs
-       to the slice bracket that owns the stamp, and cow_delta_fork now makes it. */
+    /* The declaration pass builds the browser's baseline, so it runs at the baseline stamp. Every object allocated
+       below carries the current generation, and cow.c captures only `JS_ObjFlowGen(obj) > d->fork_gen`; the
+       first delta has fork_gen 0 and the first slice opens at 1, so an object stamped above 0 is skipped by every
+       delta. A prototype is never written, so most components would not show it, but shared baseline state held
+       in a JS object (core/storage/storage_shed.c's sheds) would stop being shared across a fork. main.c asserts
+       the same fact leaving qjs_step; the bump belongs to the slice bracket, and cow_delta_fork makes it. */
     DCHECK(JS_FlowGen() == 0,
            "the platform declaration pass began with the FLOW STAMP UP — every object this browser's baseline "
            "is made of would be stamped as belonging to a flow, and cow.c's `JS_ObjFlowGen(obj) > fork_gen` "
@@ -2149,41 +1351,17 @@ static void agent_prologue(JSContext *ctx, const char *origin)
     DCHECK(origin != NULL && *origin,
            "an agent was brought up with no PRINCIPAL — §9.5's named bus is keyed by it and §7.2.1 decides "
            "remoteness by it, so an agent without one cannot answer either question");
-    /* AT MOST ONE AGENT HAS DECLARED THIS PLATFORM, AND THAT IS A NARROWER CLAIM THAN THE ONE THAT STOOD HERE.
-       The condition was `g_declared_in == NULL || g_declared_in != JS_GetRuntime(ctx)` under a message reading
-       that a declaration is per JSRuntime. Both halves were wrong in the same direction, and the message is
-       why: the agent half of this list is declared into FILE-SCOPE STATICS — core/agent_state.h holds every
-       one of their addresses, and `git grep -l JS_SetRuntimeOpaque engine/host` answers nothing — so it is
-       held once per PROCESS, and `once per JSRuntime` was an INTENTION written in the present tense and then
-       read as a mechanism in place. The condition followed the message: it asked whether this runtime had
-       declared already, which is silent about the state that matters, a SECOND agent declaring while a first
-       is still live. That state PASSED the old disjunct, and what it reached was not a near miss —
-       `g_declared_in` is overwritten on the next line, so the FIRST agent's release column would later run
-       every `PLATFORM[i].release(g_declared_in)` against the SECOND agent's runtime. Eight releases record
-       their declaring runtime and DCHECK it; the floor for how many hand a runtime-scoped free the argument
-       the column gives them is `git grep -lE 'JS_(FreeAtomRT|FreeValueRT)\(rt' -- engine/host`, and the ones
-       that do neither subtract a reference from a runtime that never took it, silently. So the guard is asked
-       the question the code can actually answer — has ANY agent declared — which is also the only one whose
-       two arms this file can tell apart.
-
-       NOT COVERED: HTML §10.2.4 Processing model's run a worker, step 4 of its twelve top-level steps —
-       "Let agent be the result of obtaining a dedicated/shared worker agent given outside settings and is
-       shared" — whose own next sentence is "Run the rest of these steps in that agent". That agent is
-       CONCURRENT with its owner, since the same algorithm's onComplete list reaches "Entangle outside port
-       and inside port" and both ends of that pair are live — so it is not the sequential successor
-       core/agent_state.h's pre-init discipline is for. That discipline guarantees every declared slot is back
-       at its pre-init value AFTER a release, which is exactly the guarantee a concurrent second agent cannot
-       use: the first agent is still running, so its slots are still set.
-       WHAT THE NEXT DIFF BUILDS: agent-state slots reached through the runtime that declared them rather than
-       through a file-scope static, so that two live agents hold two sets. The registry that must exist
-       afterward is the one this engine already has the addresses in — core/agent_state.h's declarations are
-       the complete derived census of what is keyed per process today, which is why the work is enumerable
-       without anybody maintaining a list of it.
-       HOW ITS ABSENCE SHOWS: every host in this build brings up one agent, so this assert is evaluated once
-       per `platform_agent_init` and stays silent. The day a host brings up a second while the first is live,
-       it fires HERE, at the declaration, naming the platform — rather than in whichever component's release or
-       `_init` latch happens to notice first, which would report a defect of THIS file against the port
-       machinery or the fetch machinery, an unrelated subsystem failing on input it should never have seen. */
+    /* At most one agent has declared this platform. The agent half of this list is declared into file-scope
+       statics (core/agent_state.h holds their addresses), so it is held once per process; a second live agent
+       would overwrite g_declared_in, and the first agent's release column would run against the second's runtime.
+       Named residual.
+       Not covered: HTML §10.2.4 "Processing model"'s run a worker, step 4, obtains a worker agent that runs
+       concurrently with its owner (its onComplete steps entangle two live ports), so core/agent_state.h's
+       pre-init discipline, which restores slots after a release, cannot serve it.
+       Next diff builds: agent-state slots reached through the declaring runtime rather than a file-scope static,
+       so two live agents hold two sets; core/agent_state.h's declarations are the census of what is per process.
+       How its absence shows: a host that brings up a second agent while the first is live fires here, at the
+       declaration, rather than in an unrelated component's release or `_init` latch. */
     DCHECK(g_declared_in == NULL,
            "a second agent tried to declare the platform while one is already live. The agent half of this "
            "list lives in file-scope statics, so it is held once per PROCESS — this browser can host one "
@@ -2192,29 +1370,22 @@ static void agent_prologue(JSContext *ctx, const char *origin)
            "runtime before bringing up a second agent");
     platform_check_table();
     g_declared_in = JS_GetRuntime(ctx);
-    /* THE PRINCIPAL BECOMES A RECORD BEFORE ANY COMPONENT IS DECLARED, and it is not a row on the list because
-       it is not a surface: no class, no member, nothing installed into a realm. It is the agent's ORIGIN
-       (core/url/origin.h) — the value §7.2.1's filter, §7.3.2.1's inheritance and Storage's key are all decided
-       against — and it must exist before the first declaration that asserts it does. ONE adopt per agent is
-       also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
-       what every document of this agent then shares. */
+    /* The principal becomes a record before any component is declared. It is not a row, since it installs
+       nothing: it is the agent's origin (core/url/origin.h), against which §7.2.1's filter, §7.3.2.1's
+       inheritance and Storage's key are decided. One adopt per agent gives an opaque principal its identity: the
+       host states "null", and the nonce minted here is shared by every document of this agent. */
     origin_agent_adopt(origin);
 }
 
-/* THE DECLARATION COLUMN, AND THE IDENTITY THAT BRACKETS IT — likewise shared, and for a stronger reason than
-   the prologue: NOT ONE ROW OF THIS TABLE READS THE `PlatformAgent` IT IS HANDED. Every thunk above opens
-   `(void)a`, so what a component declares is a fact about the ENGINE and never about which kind of agent is
-   declaring it, and the derivation is one grep of this file for `a->`. A second entry with its own copy of this
-   loop would be a second answer to "what is this browser", which is the exact drift core/platform.h's banner
-   records three hosts having produced one level down. */
+/* The declaration column and the identity that brackets it. No thunk reads the `PlatformAgent` it is handed (each
+   opens `(void)a`), so what a component declares is a fact about the engine, not the agent kind, and both entries
+   share this one loop. */
 static void agent_declare_column(JSContext *ctx, const PlatformAgent *agent)
 {
     int i;
-    /* THE TWO ENDS OF THE MINT WINDOW — read immediately before the declare loop and again in
-       platform_check_agent_state immediately after it, because the identity those two bracket is about THIS
-       COLUMN and not about this process: solver/concolic.c mints a class id at its own bring-up, which one
-       host reaches before this call, and quickjs's predefined classes were never minted by anybody. Read here
-       rather than inside the check so that the interval is visible at the loop it is about. */
+    /* The two ends of the mint window, read around the loop here and in platform_check_agent_state, because the
+       identity is about this column: solver/concolic.c mints a class id at its own bring-up, and quickjs's
+       predefined classes were never minted. */
     uint32_t minted_before;
     int declared_before;
 
@@ -2226,25 +1397,14 @@ static void agent_declare_column(JSContext *ctx, const PlatformAgent *agent)
     platform_check_agent_state(g_declared_in, minted_before, declared_before);
 }
 
-/* §8.1.2.1 "Integration with the JavaScript agent formalism"'s CREATE AN AGENT step 3's [[CanBlock]], which
-   §8.1.2.2 hands it and which nothing in this browser had ever stated. That section reads "To create an agent,
-   given a boolean canBlock:" and then "Let agent be a new agent whose [[CanBlock]] is canBlock", and it says
-   what the bit decides: "Only shared and dedicated worker agents allow the use of JavaScript Atomics APIs to
-   potentially block." AN AGENT IS A JSRuntime HERE, so quickjs's own per-runtime entry is the right shape and
-   no host argument carries it; `Atomics.wait` reads it and throws a TypeError where it is false.
-   IT WAS RIGHT BY LUCK FOR ONE AGENT KIND AND WRONG FOR THE OTHER, which is why stating it is a landing rather
-   than a formality: `JS_NewRuntime` allocates its runtime through `js_calloc`, so the field read FALSE with
-   nobody having said so — correct for a window agent, and the answer a dedicated or a shared worker agent must
-   not give.
-   STATED WITH THE CLUSTER AND NOT WITH THE DECLARATION COLUMN, because §8.1.2.2 is what calls create-an-agent:
-   the cluster allocation and this bit are two steps of one algorithm, and each entry below runs its own pair.
-   §8.1.2.1's OTHER TWO MEMBERS ARE NOT MISSING FROM THIS FUNCTION. Its step 4 is "Set agent's event loop to a
-   new event loop", and the `event_loop` row on the table above is declared once per agent by the column, so an
-   agent's loop EXISTS by the time this returns — what HTML §10.2.4 "Processing model"'s onComplete step 15 still
-   owes is RUNNING it — HTML §10.2.4 again: ("Event loop: Run the responsible event loop specified by inside settings until it is
-   destroyed."), which is a different verb. [[Signifier]] is a new unique internal value whose only stated
-   reader is §8.1.2.1's own realm-to-agent mapping, and this engine reaches an agent through its JSRuntime
-   instead, so there is nothing a signifier would answer that the runtime pointer does not. */
+/* §8.1.2.1 "Integration with the JavaScript agent formalism"'s create an agent, step 3's [[CanBlock]], which
+   §8.1.2.2 hands it: "Only shared and dedicated worker agents allow the use of JavaScript Atomics APIs to
+   potentially block." An agent is a JSRuntime here, so quickjs's per-runtime entry carries it, and `Atomics.wait`
+   throws a TypeError where it is false. JS_NewRuntime's calloc leaves it false, which a worker agent must not
+   answer, so each entry states it with its cluster allocation, since §8.1.2.2 is what calls create an agent.
+   Step 4's event loop is the `event_loop` row, declared once per agent; running it is HTML §10.2.4 "Processing
+   model"'s onComplete step 15. [[Signifier]]'s only stated reader is §8.1.2.1's realm-to-agent mapping, which
+   this engine answers through the JSRuntime. */
 static void agent_create_can_block(bool can_block)
 {
     DCHECK(g_declared_in != NULL,
@@ -2257,13 +1417,9 @@ static void agent_create_can_block(bool can_block)
 void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
                          OpenerPolicyValue opener_policy)
 {
-    /* THE ONE CONSTRUCTION OF THIS VALUE FOR A WINDOW AGENT — every fact this call was handed, and nothing that
-       was not handed to it. A fact added to platform.h's parameter list and forgotten here is an
-       unused-parameter in a short function whose argument list is on the line above; a fact added to the STRUCT
-       without a parameter to fill it cannot be reached from any host at all.
-       IT SAID "IN THE PROGRAM" UNTIL `platform_worker_agent_init` BELOW EXISTED, and the retired wording is kept
-       because the property it was asserting survives: a construction lives in the entry whose parameter list it
-       copies, and no file but this one can spell one. */
+    /* The one construction of this value for a window agent: every fact this call was handed, and nothing else.
+       A fact added to platform.h's parameter list and forgotten here is an unused parameter; a struct field with
+       no parameter to fill it cannot be reached from any host. */
     const PlatformAgent a = {
         .origin        = origin,
         .top_level_url = top_level_url,
@@ -2271,102 +1427,57 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
         .opener_policy = opener_policy,
     };
     const PlatformAgent *agent = &a;
-    /* realm_install_intrinsics asserts this too, and asserting it HERE as well is the point: the first realm's
-       intrinsics are the LAST thing this function does, so a host that passed nothing would otherwise be told
-       so from inside a call it did not make, forty declarations after the mistake. */
+    /* realm_install_intrinsics asserts this too; asserting it here reports a host that passed nothing at the call
+       it made, not from inside the first realm's intrinsics forty declarations later. */
     DCHECK(agent->top_level_url != NULL && *agent->top_level_url,
            "an agent was brought up with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
            "the first realm is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that "
            "answer, so this agent's platform surface is undecided");
     agent_prologue(ctx, agent->origin);
-    /* §8.1.2.1's create-an-agent, given FALSE — a similar-origin window agent is neither of the two types
-       §8.1.2.1 permits to block, whose whole list is "Only shared and dedicated worker agents allow the use of
-       JavaScript Atomics APIs to potentially block." So a page's `Atomics.wait` on this agent's thread throws a
-       TypeError, which is what a browser does. */
+    /* §8.1.2.1's create an agent, given false: a similar-origin window agent is not one of the types that "allow
+       the use of JavaScript Atomics APIs to potentially block", so `Atomics.wait` on this agent throws a
+       TypeError. */
     agent_create_can_block(false);
-    /* AND THE BROWSING CONTEXT GROUP, BEFORE THE CLUSTER, BECAUSE §8.1.2.2 TAKES IT AS AN ARGUMENT. Its
-       signature is "obtain a similar-origin window agent, given an origin, a BROWSING CONTEXT GROUP and a
-       boolean requestsOAC", and its step 3 reads that group's cross-origin isolation mode — so a group created
-       after the cluster would be a group whose mode the allocation could not have seen. §7.3.2.3's group is
-       the other half of the `(browsing context group, origin)` key SECURITY.md makes this instance, and it
-       installs nothing, so like the cluster below it is not a row on the list. */
+    /* The browsing context group, before the cluster, because §8.1.2.2 takes it as an argument ("given an origin,
+       a browsing context group and a boolean requestsOAC") and its step 3 reads the group's cross-origin isolation
+       mode. §7.3.2.3's group is the other half of the `(browsing context group, origin)` key SECURITY.md makes
+       this instance; it installs nothing, so it is not a row. */
     browsing_context_group_create(agent->opener_policy);
-    /* AND THE AGENT'S CLUSTER, IN THE SAME BREATH AND FOR THE SAME REASON. §8.1.2.2's obtain-a-similar-origin-
-       window-agent is what ALLOCATES the agent this whole call is bringing up, and its key is derived from the
-       origin adopted on the line above — so it is not a row on the list either: it installs nothing, and it has
-       to exist before `originAgentCluster`, §7.1.1.2's `document.domain` setter or anything else can ask which
-       cluster this agent is in. Every host reaches it here, which is what stops one host answering a question
-       about a cluster that was never allocated. */
+    /* The agent's cluster: §8.1.2.2's obtain a similar-origin window agent allocates the agent this call brings
+       up, keyed by the origin adopted above. It installs nothing, so it is not a row, and it exists before
+       `originAgentCluster`, §7.1.1.2's `document.domain` setter or anything else asks which cluster this is. */
     agent_cluster_obtain_window_agent(origin_agent(), agent->requests_oac);
     agent_declare_column(ctx, agent);
-    /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
-       here, through the same one call a child navigable's realm makes — so the first document cannot get a
-       different set from the rest, which is the whole failure mode this file and core/realm.h exist to end. */
-    /* AND IT IS A WINDOW REALM, WHICH IS THIS ENTRY'S STATEMENT TO MAKE AND NOT THE HOST'S. Web IDL §3.3.7
-       [Exposed] step 1 asks which [Global] interface a realm's global object implements, and every realm THIS
-       entry brings up is one the install column below gives `document`, `location`, `history` and `navigator` —
-       HTML §7.2.2's Window, by construction rather than by a host's choice. A field on PlatformAgent would be a
-       fact a host could state WRONGLY about a surface it does not assemble; the component that assembles the
-       surface is the one that knows.
-       THE CONDITION THIS PARAGRAPH SET HAS FIRED, AND THE SENTENCE IT SET IT IN IS REWRITTEN RATHER THAN DELETED
-       because a reader who re-derives the argument above will re-propose the thing it forbids. It used to read: "The day
-       this engine grows a WorkerGlobalScope it is a second entry beside this one, with its own install column,
-       and not an argument that makes this one answer two questions." core/workers/worker_global_scope.c is a row
-       on the table above, so that day came, and `platform_worker_agent_init` below is the second entry — which
-       is why the statement here narrowed from THIS FILE'S to THIS ENTRY'S rather than becoming a parameter. What
-       the prescription got exactly right is the part a reader is most likely to undo: the alternative was one
-       entry taking the [Global] kind as an argument, and that entry would also have had to take, or ignore, a
-       browsing context group, a `requestsOAC` and a top-level creation URL that a worker agent has not got —
-       three fields whose absent value is bit-identical to a real one, which is the defect the banner at the top
-       of this file records a hand-filled local producing. */
-    /* AND `false` IS §8.1.3.5 STEP 1.2.1's OPERAND, WHICH A WINDOW ENVIRONMENT DOES NOT HAVE. The answer is
-       read from a WorkerGlobalScope's §10.2.1.1 owner set, a Window has none, and core/realm.c asserts that a
-       non-worker realm states exactly this value — so the argument is not a default here, it is the only
-       thing this realm is entitled to say. */
+    /* The agent's first realm, built through the same call a child navigable's realm makes, so the first document
+       cannot get a different set of per-realm intrinsics. It is a Window realm, and that is this entry's statement,
+       not the host's: every realm this entry brings up gets `document`, `location`, `history` and `navigator` from
+       the install column, so Web IDL §3.3.7 [Exposed] step 1's [Global] interface is HTML §7.2.2's Window by
+       construction. A worker agent is the second entry below, not a parameter here, since one entry taking the
+       [Global] kind would also take a browsing context group, a `requestsOAC` and a top-level creation URL a
+       worker has not got. `false` is §8.1.3.5 step 1.2.1's operand, read from a WorkerGlobalScope's §10.2.1.1
+       owner set, which a Window has not got; core/realm.c asserts a non-worker realm states exactly this. */
     realm_install_intrinsics(ctx, agent->top_level_url, "Window", false);
 }
 
-/* THE SECOND ENTRY THE NOTE INSIDE `platform_agent_init` NAMED, WHOSE TRIGGER HAS FIRED. That note reads "The
- * day this engine grows a WorkerGlobalScope it is a second entry beside this one, with its own install column,
- * and not an argument that makes this one answer two questions", and core/workers/worker_global_scope.c is a row
- * on the table above — so the condition is met and this is the entry it prescribed. Until it existed, a host
- * that wanted a worker agent had to hand-assemble one out of the WINDOW entry and then build a worker realm
- * beside the Window realm that entry had already made, which is the hand-copied host sequence this file and
- * core/realm.h exist to abolish. HTML §8.1.2.1 "Integration with the JavaScript agent formalism" rules that
- * shape out on its own: it types an agent BY ITS GLOBAL — "Dedicated worker agent — Contains a single
- * DedicatedWorkerGlobalScope" — so an agent holding a Window AND a worker global is no agent type it defines.
+/* The worker agent's entry. HTML §8.1.2.1 "Integration with the JavaScript agent formalism" types an agent by its
+ * global ("Dedicated worker agent — Contains a single DedicatedWorkerGlobalScope"), so a worker agent is never
+ * assembled from the window entry plus a second realm. It has no browsing context group (§7.3.2.3's creation is a
+ * step no worker algorithm runs), no `requests_oac` (§8.1.2.2's worker algorithm takes none, and §7.5.1 reads it
+ * off a navigation response) and no top-level creation URL (§10.2.6.2 "Script settings for workers": "top-level
+ * creation URL to null"). It has no install column: core/workers/worker_global_scope.c installs §10.2.1.1's
+ * surface through the realm-intrinsic column this entry ends in, and a worker agent has no Document.
  *
- * WHAT IT DOES NOT HAVE IS AS LOAD-BEARING AS WHAT IT DOES. There is no BROWSING CONTEXT GROUP: a group is a
- * §7.3.2 browsing-context concept and a worker has no browsing context, so §7.3.2.3's
- * create-a-new-browsing-context-group is a step no worker algorithm runs — and calling it here would hand the
- * cluster below a group whose cross-origin isolation mode this agent has no business being keyed by. There is no
- * `requests_oac`: §8.1.2.2's worker algorithm takes no requestsOAC, and §7.5.1 reads that header off a
- * NAVIGATION response, which a worker script fetch is not. And there is no TOP-LEVEL CREATION URL, which is
- * §10.2.6.2 "Script settings for workers" stating it outright rather than this file leaving a field out:
- * "creation URL to worker global scope's url, top-level creation URL to null".
- *
- * THE INSTALL COLUMN IS NOT HERE AND ITS ABSENCE IS NOT THIS ENTRY'S GAP. `platform_document_install` places
- * `document`, `location`, `history` and `navigator` — Window members — so a worker realm's per-realm surface is
- * §10.2.1.1 "The WorkerGlobalScope common interface"'s, which core/workers/worker_global_scope.c installs
- * through the realm-intrinsic column this entry ends in. A worker agent has no Document, so there is no second
- * call for a host to make and no column for it to forget.
- *
- * NAMED RESIDUAL — THE `PlatformAgent` THIS ENTRY CONSTRUCTS CARRIES THREE FIELDS A WORKER AGENT HAS NOT GOT.
- *   NOT COVERED: `top_level_url`, `requests_oac` and `opener_policy` are written below as the values
- *     §10.2.6.2 and §8.1.2.2 give a worker environment, and a struct field is not a place to say "this agent
- *     has none of this". That type is the WINDOW agent's fact bundle; a worker agent's is a different one.
- *   WHAT THE NEXT DIFF BUILDS: a per-kind fact bundle, on the day a declare row reads one at all. None does
- *     today, which is why this is a residual and not a defect — the three fields cross into a column whose
- *     every thunk opens `(void)a`.
- *   HOW ITS ABSENCE WOULD SHOW: a component's declaration starts reading an agent fact, and a reader of THIS
- *     entry then has to decide what a worker agent's answer to a window agent's question is — at which point
- *     one type is answering two questions. */
+ * Named residual: the `PlatformAgent` this entry constructs carries three fields a worker agent has not got.
+ *   Not covered: `top_level_url`, `requests_oac` and `opener_policy` are written as the values §10.2.6.2 and
+ *     §8.1.2.2 give a worker environment; the type is the window agent's fact bundle.
+ *   Next diff builds: a per-kind fact bundle, once a declare row reads one; every thunk opens `(void)a` today.
+ *   How its absence would show: a component's declaration reads an agent fact, and a reader of this entry has to
+ *     decide what a worker agent answers to a window agent's question. */
 void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *global_interface,
                                 bool is_top_level, bool can_block, bool owner_is_secure_context)
 {
-    /* THE ONE CONSTRUCTION OF THIS VALUE FOR A WORKER AGENT, on the lines below the parameter list it copies,
-       for the reason the window entry's own note above gives. The three fields this parameter list does NOT hold
-       are the residual above, stated here rather than left to an initialiser to supply. */
+    /* The one construction of this value for a worker agent, on the lines below the parameter list it copies. The
+       three fields that list does not hold are the residual above. */
     const PlatformAgent a = {
         .origin        = origin,
         .top_level_url = NULL,                        /* §10.2.6.2: "top-level creation URL to null" */
@@ -2380,22 +1491,17 @@ void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *
            "object implements — §8.1.2.1 types an agent by that global, so an agent without it is an agent of "
            "no type, and core/realm.h's one call cannot decide which members its realm may hold");
     agent_prologue(ctx, agent->origin);
-    /* §8.1.2.2's TWO STEPS IN ITS OWN ORDER: the cluster, then the agent that is added to it. `can_block` is
-       §8.1.2.2's third argument travelling to §8.1.2.1's create-an-agent untouched — TRUE from
-       obtain-a-dedicated/shared-worker-agent, FALSE from obtain-a-worklet-agent and from
-       obtain-a-service-worker-agent — which is why it is this entry's PARAMETER and not a value derived here
-       from `global_interface`: a service worker's global is a worker global and its canBlock is false, so the
-       [Global] kind does not decide it. */
+    /* §8.1.2.2's two steps in its order: the cluster, then the agent added to it. `can_block` is §8.1.2.2's third
+       argument passed to §8.1.2.1's create an agent: true from obtain a dedicated/shared worker agent, false from
+       obtain a worklet agent and obtain a service worker agent. A service worker's global is a worker global, so
+       the [Global] kind does not decide it, and it is a parameter. */
     agent_cluster_obtain_worker_agent(is_top_level);
     agent_create_can_block(can_block);
     agent_declare_column(ctx, agent);
-    /* AND THE AGENT'S FIRST REALM IS ITS ONLY ONE, through the same call the window entry ends in — so a worker
-       realm cannot be given a different set of per-realm intrinsics from a Window realm, which is what
-       core/realm.h exists for. The arguments are §10.2.6.2's and §8.1.3.5's, and realm_install_intrinsics
-       asserts the pair rather than trusting it: NULL for the top-level creation URL because a worker environment
-       has none, and the OWNER's secure-context answer because §8.1.3.5 "Secure contexts" step 1.2.1 reads it
-       from this global's §10.2.1.1 owner set — a fact about the agent that created this one, and therefore the
-       caller's to state rather than this file's to compute. */
+    /* The agent's first realm is its only one, through the same call the window entry ends in. The arguments are
+       §10.2.6.2's and §8.1.3.5's, and realm_install_intrinsics asserts the pair: NULL for the top-level creation
+       URL, and the owner's secure-context answer, which §8.1.3.5 "Secure contexts" step 1.2.1 reads from this
+       global's §10.2.1.1 owner set, a fact about the creating agent the caller states. */
     realm_install_intrinsics(ctx, NULL, global_interface, owner_is_secure_context);
 }
 
@@ -2406,44 +1512,32 @@ void platform_agent_free(void)
     DCHECK(g_declared_in != NULL,
            "the platform was released in an agent that never declared it — there is nothing here to undo, and a "
            "host that reaches teardown without having reached platform_agent_init did not build this browser");
-    /* NOT ONE STEP MACHINE IS STILL LIVE, AND THIS IS THE PRECONDITION OF THE WHOLE COLUMN RATHER THAN OF ANY
-       ONE ROW. A suspended builtin's state is a live ACTIVATION of the component that owns it — a §2.9
-       dispatch, a custom-element reaction, an IntersectionObserver delivery, HTML §8.1.4.6 Runtime script
-       errors' report — and tearing one down runs that component's own `fini`, which reads that component's
-       agent state. So a machine that outlives this line is torn down against a component this loop has already
-       given back, and the read it makes is of a class id, a private Symbol or a step id that no longer exists.
-       IT IS ASKED HERE AND NOT AT EACH ROW BECAUSE IT IS ONE QUESTION. Every row is exposed to it and only the
-       rows whose machines happen to touch a freed value would ever say so — §8.1.4.6 step 6.1's error-reporting
-       -mode flag hangs off a private Symbol this column frees, so its give-back aborted, and it aborted through
-       a message about the OTHER state that leaves that component undeclared. Every component without an assert
-       that sharp had the same defect and nothing to report it.
-       IT IS THE RUNTIME'S OWN CENSUS AND NOT A QUESTION FOR THE SOLVER, which is what lets the browser half ask
-       it at all: `rt->step_census_n` is a fact about this runtime, and the frontier is merely the thing that
-       owns every machine in it (solver/flow.c asserts this same count is zero the instant the frontier is
-       gone). A host reaching here with machines live has run its teardown in the order that used to be
-       written — the platform before the frontier — and the fix is a MOVE, which is what this names. */
+    /* No step machine is still live: a precondition of the whole column. A suspended builtin's state is a live
+       activation of the component that owns it (a §2.9 dispatch, a custom-element reaction, an
+       IntersectionObserver delivery, HTML §8.1.4.6's report), and tearing one down runs that component's `fini`,
+       which reads its agent state, so a machine outliving this line reads a class id, private Symbol or step id
+       this loop gave back. It is one question for every row, asked from the runtime's own census
+       (`rt->step_census_n`), which solver/flow.c asserts zero once the frontier is gone; the fix for a firing is
+       to release the frontier first. */
     DCHECK(JS_StepMachineCount(g_declared_in) == 0,
            "the platform's agent state is about to be released while STEP MACHINES are STILL LIVE — each is a "
            "browser algorithm some flow is suspended inside, and its teardown runs that component's own `fini` "
            "against state this column has already given back; release the frontier (solver_frontier_free) "
            "BEFORE this call, and this half's own agent state after it");
-    /* REVERSE DECLARATION ORDER, because the forward order is dependency order: a component declared after
-       another may hold a value that component minted, so it must give it up first. */
+    /* Reverse declaration order, because the forward order is dependency order: a component declared after another
+       may hold a value that component minted, so it gives it up first. */
     for (i = PLATFORM_N - 1; i >= 0; i--)
         if (PLATFORM[i].release)
             PLATFORM[i].release(g_declared_in);
-    /* THE ORIGINS GO LAST, AFTER EVERY COMPONENT THAT NAMES ONE. They are the agent's, not a realm's — a
-       WindowProxy holds one as a POD pointer inside the bytes its COW delta captures — so the whole table is
-       released here, once, when nothing is left that could read it. */
+    /* The origins go last, after every component that names one. They are the agent's, not a realm's (a
+       WindowProxy holds one as a POD pointer inside the bytes its COW delta captures). */
     agent_cluster_release();   /* the cluster names an origin, so it goes BEFORE the origins it named */
-    /* AND THE GROUP AFTER THE CLUSTER, which is the reverse of the creation order above: §8.1.2.2
-       allocated the cluster FROM the group's mode, so the group is what the cluster was derived from and
-       goes second. */
+    /* The group after the cluster, the reverse of creation: §8.1.2.2 allocated the cluster from the group's
+       mode. */
     browsing_context_group_release();
     origin_release();
-    /* EVERY DECLARED SLOT IS BACK WHERE A FRESH PROCESS WOULD HAVE FOUND IT, asserted here because here is the
-       last instant at which the question has an answer: after this the agent is gone and the next reader of a
-       stale handle is a SECOND agent's `_init`, which consults it precisely to decide that it need not run. */
+    /* Every declared slot is back where a fresh process would find it, asserted at the last instant the question
+       has an answer: the next reader of a stale handle is a second agent's `_init`, which reads it as a latch. */
     agent_state_check_released();
     agent_state_reset();
     g_declared_in = NULL;
@@ -2456,8 +1550,7 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
                                uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
                                bool is_iframe_srcdoc)
 {
-    /* THE ONE CONSTRUCTION OF THIS VALUE IN THE PROGRAM — see platform_agent_init above for why it is here and
-       not in the three hosts that used to write these assignments out by hand. */
+    /* The one construction of this value, on the lines below the parameter list it copies. */
     const PlatformDocument d = {
         .dom                = dom,
         .url                = url,
@@ -2483,32 +1576,13 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
            "against (§4.4 stood here and is Grouping content)");
     DCHECK(doc->origin != NULL && *doc->origin,
            "a document was installed with no PRINCIPAL — every same-origin check compares it");
-    /* AND THIS COLUMN'S REALM IS A WINDOW REALM — Web IDL §3.3.8 [Global], asked of the realm's OWN stated
-       global names rather than of which host called this.
-       IT WAS TRUE ONLY BY CONVENTION AND IS WRITTEN DOWN AT FIVE SITES AS IF IT WERE A GUARANTEE. Every one
-       of them reasons from it — `a realm that reaches no platform_document_install got neither name: a worker
-       realm always` — and §3.8's own placement loop at the end of this function says in its comment that it
-       `runs at the end of platform_document_install, which a worker realm never reaches`. Nothing checked it.
-       BOTH RUNS ABOVE ARE THIS TREE'S OWN PROSE AND ARE IN BACKTICKS FOR THAT REASON, not for emphasis: a
-       quoted run after a named standard is judged against THAT standard, and the second of these sits one
-       clause after a §3.8. Quoted, each was cleared only because the same sentence occurs unquoted in another
-       file — an exoneration that is evidence about THAT file and not about this one, and that a later edit
-       there withdraws silently. Backticked, they are outside the quotation channel by construction.
-       What made it true was that all three hosts that call this build the realm with "Window": a fact about
-       the CALLERS, which this function cannot see, so the invariant's subject was absent from every site that
-       relied on it. CLAUDE.md §Fix-the-ROOT: where something is true only by convention, the diff to prefer
-       is the assert that makes it true by construction.
-       WHAT THE COLUMN PLACES IS WHY IT MATTERS. §3.7.6/§3.7.7's [Global] arm puts a member on the realm's
-       GLOBAL OBJECT, and this column installs 161 of them DIRECTLY onto `global` without asking §3.7.3's
-       conditional (idl_global_member_target, which two components do ask) — so in a realm whose [Global]
-       interface did not declare them, every one would be a §3.8 violation whose only symptom is a descriptor
-       read. The assert is what says those 161 are Window's, and it is what lets an instrument reading these
-       sources say so too: engine/idlgen.mjs could not decide WHOSE global such an install lands on, because
-       the global is one `JS_GetGlobalObject` node for the whole program.
-       THE BAND AND NOT A REALM KIND. `realm_global_is_worker` would be the hand-picked list of realm kinds an
-       engine happens to build that core/indexeddb/indexed_db.c retired by name — a WORKLET realm is not a
-       worker and would pass it. idl_global_names_are_window reads browser/idl_exposure.h's generated
-       IDL_GLOBALS bit, which is the corpus's own §3.3.8 answer and moves with it. */
+    /* This column's realm is a Window realm: Web IDL §3.3.8 [Global], asked of the realm's own stated global names
+       rather than of which host called. The column installs members directly onto `global` without §3.7.3's
+       conditional (idl_global_member_target, which two components ask), which §3.7.6/§3.7.7's [Global] arm allows
+       only where the realm's [Global] interface declares them, and the placement loop at the end of this function
+       relies on a worker realm never reaching here. idl_global_names_are_window reads browser/idl_exposure.h's
+       generated IDL_GLOBALS bit, the corpus's own §3.3.8 answer; a hand-picked worker test would pass a worklet
+       realm. */
     DCHECK(idl_global_names_are_window(realm_global_names(ctx)),
            "core/platform.c's per-DOCUMENT column ran in a realm whose Web IDL §3.3.8 [Global] global names "
            "are not `Window`. This column installs a Document's surface, and most of it goes STRAIGHT onto "
@@ -2519,35 +1593,15 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
            "that is not a Window realm has no Document to install: build it with realm_install_intrinsics and "
            "its own component's per-realm install, and route any member this column shares with it through "
            "idl_global_member_target so the target is decided by the band rather than by which host called");
-    /* THE TWO FACTS ARE TWO ARGUMENTS, which is the whole of the fix for them: a host with one of them passed
-       whichever it had, and the address is the one that decides where `fetch("api/users")` goes.
-       AND THEY ARE NOW COMPARED, BY §7.3.2.1 "Creating browsing contexts"'s OWN STEP 5, WHICH IS NOT
-       THE COMPARISON THIS SITE USED TO SAY COULD NOT BE MADE. The reason recorded here was that "a document
-       AT the origin root legitimately has both the same" — which argues against comparing the ADDRESS to the
-       PRINCIPAL as strings, a comparison nobody would write. The one §7.3.2.1 "Creating browsing contexts"
-       defines is between the principal and the address's ORIGIN ("return url's origin"), it is well defined
-       for every Document, and it was the assertion the prose stood in for.
-       THREE STEPS LEGITIMATELY BREAK IT AND EACH IS EXCLUDED BY ITS OWN FACT RATHER THAN BY A TOLERANCE.
-       Steps 3 and 4 INHERIT (`about:srcdoc` always, `about:blank` when there is a source origin), so a
-       document whose address is one of those two carries its SOURCE's principal and the address says nothing
-       about it. Step 1 mints a fresh OPAQUE origin for a sandboxed document, and step 2 does the same for a
-       null URL; both serialize to `null`, which is §7.1.1's "no serialization it can be recreated from" and is
-       therefore unconstrained by any address. Everything else is step 5, where the principal IS the address's
-       origin — including `data:` and `file:`, whose origins are opaque on BOTH sides of this comparison and so
-       agree as `null`.
-       WHAT IT CATCHES IS A PRINCIPAL STATED BEFORE THE BYTES WERE FETCHED. A peer instance is provisioned from
-       the origin a `navigable.create` notice carried, which core/frame/navigable.c derives from the REQUEST
-       url; that instance runs platform_agent_init and adopts it BEFORE anything is fetched, and its root
-       Document then arrives as bytes the host fetched. If that fetch REDIRECTED off-origin, the peer holds a
-       principal its own response contradicts — and it is wrong ONCE and CONSISTENTLY, so origin_agent_adopt's
-       one-adopt-per-agent assert cannot see it and neither can any same-origin check inside that heap. §7.4.5
-       determines a navigation's origin from the RESPONSE's URL for exactly this reason; this is that sentence
-       asked of the one value every Document in this engine is installed with. */
-    /* GUARDED BECAUSE THE WORK IS THE CHECK. A DCHECK's condition is compiled out in release, and this one's
-       inputs are a URL PARSE and an origin SERIALIZATION — real allocation, per document — so leaving them
-       outside the guard would make a release build pay for an assertion it does not make. That is the reason
-       for the block rather than a side-effect-free condition: §7.3.2.1 step 5 cannot be asked without running
-       §4.4's parser, and a parse is not something a DCHECK may contain. */
+    /* The address and the principal are two arguments, compared by §7.3.2.1 "Creating browsing contexts" step 5:
+       the principal is the address's origin. Steps 3 and 4 inherit (`about:srcdoc` always, `about:blank` with a
+       source origin), and steps 1 and 2 mint an opaque origin serializing to `null`, so those are excluded by
+       their own facts; `data:` and `file:` are opaque on both sides and agree as `null`. What it catches is a
+       principal stated before the bytes were fetched: a peer instance is provisioned from the origin a
+       `navigable.create` notice carried, derived from the request URL, so an off-origin redirect leaves it a
+       principal its own document contradicts, consistently, where no same-origin check inside it can see.
+       §7.4.5 takes a navigation's origin from the response's URL for this reason. The block is guarded because
+       the check is a URL parse and an origin serialization, which a DCHECK condition may not contain. */
 #if APICLIENT_DEV
     {
         UrlRecord u;
@@ -2588,45 +1642,27 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
             PLATFORM[i].install(ctx, global, doc);
 
 #if APICLIENT_DEV
-    /* WEB IDL §3.8's DESCRIPTOR OVER THE GLOBAL THIS COLUMN HAS NOW FINISHED. core/realm.c owns the walk and
-       asks it where the per-realm intrinsic list ends, which is the end of a WORKER realm's construction and
-       NOT the end of a Window's: this column runs afterwards, so every §3.8 property reference it places was
-       outside the only audit of them there was. It is one function with two callers because a realm has two
-       possible ends, and it is asked BEFORE the witness loop below for the same reason that loop's own
-       ordering matters — this one names the IDENTIFIER that reached the global the wrong way, which is an
-       address, while the witness names a component that owes a name, and a global assembled through [[Set]]
-       is a defect in how the name got here rather than in whether it is here. */
+    /* Web IDL §3.8's descriptor walk over the global, now that this column has finished. core/realm.c also runs it
+       at the end of the per-realm intrinsics, which ends a worker realm's construction but not a Window's. It runs
+       before the witness loop because it names the identifier that reached the global the wrong way (an
+       address), where the witness names a component that owes a name. */
     realm_assert_global_property_references(ctx);
 
-    /* AND THE OTHER DIRECTION OF THE SAME ALGORITHM, WHICH ONLY THIS LINE MAY STATE. The walk above enumerates
-       properties that EXIST, so an interface object that was never placed at all is not a property and it has
-       nothing to judge — Web IDL §3.7.3 Interface prototype object's census is what sees that one, and
-       core/realm.h carries the argument. What this CALL SITE states, and what no derivation inside that
-       function could, is that THIS REALM IS FINISHED: `owed` ⇒ `asked` is not monotone the way the two halves
-       above are, and at the end of realm_install_intrinsics a Window realm legitimately holds interface
-       prototype objects whose property reference this column has not placed yet. So the owed half is a
-       SEPARATE entry, called only where both columns have run, and realm_install_intrinsics deliberately does
-       not call it. A realm that reaches no document install is not audited by it at all — see core/realm.h. */
+    /* The other direction of the same algorithm, which only this call site may state: the walk above sees only
+       properties that exist, and §3.7.3's census of interface prototype objects sees one never placed. It is a
+       separate entry, called only where both columns have run, because at the end of realm_install_intrinsics a
+       Window realm legitimately holds prototypes whose property reference this column has not placed yet. A realm
+       that reaches no document install is not audited by it (core/realm.h). */
     realm_assert_interface_objects_asked(ctx);
 
     for (i = 0; i < PLATFORM_WITNESS_N; i++) {
         JSAtom a = JS_NewAtom(ctx, PLATFORM_WITNESS[i].name);
-        /* WHAT THIS REALM OWES, decided by Web IDL §3.3.7 [Exposed]'s own "is exposed in realm" and by nothing
-           written here. core/idl_args.h states why an oracle may ask that predicate where an install may not:
-           spelling step 2 out at this line — `exposure == IDL_EXPOSED || secure_context_is(ctx)` — would be a
-           second copy of the algorithm, and the copy that drifts is the one nobody runs against reality. */
-        /* BOTH CONDITIONS, BECAUSE AN ORACLE THAT STATES HALF OF ONE IS WRONG ABOUT EVERY REALM THE OTHER
-           HALF DECIDES. §3.3.7's "is exposed in realm" is four steps: step 1 is the EXPOSURE SET against this
-           realm's global names, step 2 is [SecureContext], and the row's `exposure` column states only the
-           second. Asking the first as well is what makes this list an oracle over a realm rather than over a
-           WINDOW — a `[Exposed=Window]` interface object is a name this table would otherwise DEMAND of a
-           realm the standard says it is absent from, which is the same falsehood the [SecureContext] column
-           was added to end, one step up the same algorithm.
-           IT IS ASKED BY NAME AND ANSWERS `true` FOR THE MEMBERS ON THIS LIST, deliberately and not by
-           accident: `fetch`, `onload`, `document` and `setTimeout` are Window MEMBERS, and the generated table
-           is keyed by the identifiers §3.8 defines on a global, so a member has no row and takes the sound
-           silent direction. The rows it does decide are the interface objects — `Performance`,
-           `PerformanceObserver`, `NavigateEvent` — which is exactly the population §3.8 puts there. */
+        /* What this realm owes, decided by Web IDL §3.3.7 [Exposed]'s "is exposed in realm" rather than a copy of
+           it here (core/idl_args.h says why an oracle may ask that predicate). Both conditions are asked: step 1's
+           exposure set against the realm's global names and step 2's [SecureContext], which the row's `exposure`
+           column states, so an `[Exposed=Window]` name is not demanded of a realm the standard excludes it from.
+           Members such as `fetch`, `onload`, `document` and `setTimeout` have no row in the generated table, which
+           is keyed by the identifiers §3.8 defines on a global, so they take the owed direction. */
         bool owed = idl_exposed(ctx, PLATFORM_WITNESS[i].exposure) &&
                     idl_exposed_in_realm(ctx, PLATFORM_WITNESS[i].name);
         int has;
@@ -2634,22 +1670,17 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
         has = JS_HasProperty(ctx, global, a);
         JS_FreeAtom(ctx, a);
         CHECK(has >= 0, "a platform witness probe threw — [[HasProperty]] over the global runs no page code");
-        /* The message is the NAME the component owed: a `@WHY` reading `navigator` is a reader standing at the
-           realm that has none, which is the whole report the three copies of this list never produced.
-           AND IT SAYS WHICH SIDE FAILED, because the two are opposite repairs and the bare name cannot tell
-           them apart. An absent name that is owed is a component whose install stopped happening — OR a name
-           whose IDL carries an exposure condition this row does not state, which is how a correct
-           [SecureContext] gate first showed up here: as this assert, naming an interface, over a realm that
-           was right to lack it. */
+        /* The message is the name the component owed, and says which side failed, since the repairs differ: an
+           owed name that is absent is an install that stopped, or an IDL exposure condition the row does not
+           state. */
         DCHECKF(!owed || has == 1,
                 "the platform owes this realm the global `%s` and it is not there — `%s` did not install it, "
                 "or its IDL carries a Web IDL §3.3.7 [Exposed] condition (§3.3.13 [SecureContext] is the one "
                 "this engine models) that this witness row does not state. If the component gates the install, "
                 "the row states the same condition and this probe then requires the name to be ABSENT here",
                 PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].component);
-        /* §3.3.13's own example, verbatim: "In such a context, there will be no \"HeartbeatSensor\" property
-           on Window." A page reads that as `'X' in window` answering false, and it can tell that apart from a
-           property that exists and answers undefined — which is the branch this direction protects. */
+        /* §3.3.13's example: "In such a context, there will be no \"HeartbeatSensor\" property on Window." A page
+           reads that as `'X' in window` answering false, distinct from a property that answers undefined. */
         DCHECKF(owed || has == 0,
                 "the global `%s` is on a realm whose Web IDL §3.3.7 [Exposed] condition excludes it — §3.3.13 "
                 "[SecureContext] REMOVES the construct rather than making it throw, so `'%s' in window` must "
