@@ -1123,12 +1123,10 @@ static const char *HTML_MIN =
     TF_CANVAS_INK
     "</body></html>";
 
-/* THE CROSS-SESSION ROUND TRIP'S DOCUMENT — the third, and it exists because neither of the other two can be
- * parked. cold_park refuses a frontier that holds a segment of a FOREIGN world, naming the cross-instance park
- * that is not built; both documents above open child navigables (§7.4 `open()`, the cross-origin popup, the
- * iframe loads), so a whole-frontier park of either aborts there. That crash is CORRECT and stays exactly where
- * it is — what it means is that the residue this fixture can honestly write today is one from a document with
- * no peer in it, and that is what this document is.
+/* THE CROSS-SESSION ROUND TRIP'S DOCUMENT — the third, a document with no peer in it. Both documents above open
+ * child navigables (§7.4 `open()`, the cross-origin popup, the iframe loads), and a residue holding a peer's
+ * segments crosses them as 'w' records (solver/cold.h); that park is exercised against a real second instance by
+ * engine/route.mjs. This one keeps the single-instance round trip about the recipe grammar alone.
  *
  * WHAT IT HAS TO CARRY IS THE RECIPE GRAMMAR — one statement per record kind — because a residue made of one
  * kind proves nothing about the arms that read the others, and until this document existed the only residue any

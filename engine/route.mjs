@@ -31,11 +31,6 @@
    engine's synchronous cross-instance read surface, and until this fixture wrote them the request record
    `windowproxy.get` had never been emitted by the production entry at all — the sender's half was written,
    reviewed, and unexercised in exactly the way the world registry was.
-   THE COUNTS ABOVE WERE BOTH WRONG AND THE DRIVE ITSELF IS WHAT REFUTED THEM: this paragraph said a fixed
-   TWELVE (the standard's Window arm is thirteen, and its own list below names thirteen) and said `w.length`
-   was the WHOLE of that surface, while every run of this file crosses `closed` far more often than `length`.
-   A claim about THIS TREE inside a comment is checked by the instrument standing next to it, and here the
-   instrument was this driver's own output.
 
    IT IS PLACED LAST AND ITS RESULT IS POSTED, so the read is a load-bearing part of the measurement rather
    than a statement whose value is discarded: the fourth and fifth records cannot be emitted until the read is
@@ -43,8 +38,8 @@
    from the string "0", the sentence SECURITY.md states about this seam.
 
    AND THE PEER NOW ANSWERS IT, which is what this zone does with a `windowproxy.get` below: it hands the
-   record to the instance that HOLDS the document (`qjs_perform`), pumps that instance until the program its
-   answer is — an IDL getter, run as a flow on its own frontier — completes, and relays the COMPLETION back to
+   record to the instance that HOLDS the document (`qjs_perform`), which answers by running a program — an IDL
+   getter, as a flow on its own frontier — and relays each COMPLETION, as it is emitted, back to
    the asking instance (`qjs_host_answer_remote`) in remote_object.c's grammar rather than as JSON, because a
    member whose value is an OBJECT crosses as a NAME and JSON cannot express one. This zone reads neither: it
    routes text, and only an engine knows what a name means.
@@ -63,13 +58,15 @@
    with both instances resident for the whole run, so "a flow suspends at a cross-instance read" was tested and
    "…and is then PAGED OUT while the read is outstanding" was not — which is not a corner: Level-1 eviction
    gives up ONE document's engine for a document worth more, so the peer OUTLIVING the asker's park is the
-   ordinary case rather than the exotic one. Phase 4 withholds one read, parks `a` on it, tears `a` down, and
-   resumes it from its own residue while `b` stays exactly where it was. What that measures is stated as
+   ordinary case rather than the exotic one. Phase 3 relays one read its first answer and holds the rest, so a
+   standby waits at it; phase 4 parks `a`, tears it down, and resumes it from its own residue while `b` stays
+   exactly where it was. What that measures is stated as
    assertions at the bottom, and each of them is about a thing nothing else in the tree can observe:
      - the completion the peer computed for the PRE-PARK read has nowhere to land (the asking instance is gone
        and the resumed one never asked that question), so it is an ORPHAN this zone must still be holding;
      - the resumed flow RE-ISSUES the read — which is the cold tier's own claim about the replies a host owes
        (solver/cold.h), and the only thing that makes a park at a cross-instance read lossless;
+     - a resumed standby still refuses the peer timelines its family took before the park;
      - and the world name it re-issues under must be one the peer has never seen. A WorldId's serial counts
        from 1 in every session under a document name that is stable BY REQUIREMENT, so the name carries a third
        coordinate: the session's GENERATION, minted into every world and carried across the tier by the residue
@@ -92,14 +89,10 @@ const boot = factory.default ?? factory;
 /* THE READ IS LAST AND BOTH ARMS MAKE IT, so two DIFFERENT worlds ask the same question of one peer — which is
    the case a single-timeline peer cannot answer with one number, and the reason the entry that performs it has
    to install the asking world's segment rather than read a property from C.
-   AND ONE READ COMES FIRST, BEFORE THE FORK, WHICH IS WHAT MAKES THE ANCESTRY FORK REACHABLE AT ALL. The
-   comment below used to say the root world's segment is the one "record 1 created" — but record 1 is a POST,
-   and this driver holds every post until phase 2 while it performs every READ inline in phase 1. So the peer
-   met the two CHILD worlds first and materialized both from its baseline, correctly and with no ancestor to
-   fork, and `forkedFromAncestor` was 0 — the exact number the check at the bottom exists to catch, sitting at
-   zero underneath a driver that aborted before it got there. A read in the ROOT world, taken before the branch,
-   is what puts that segment at the peer first; the two arms then name it as their nearest ancestor and
-   world_segment forks it. The fixture has to CREATE the precondition its own assertion is about. */
+   AND ONE READ COMES FIRST, BEFORE THE FORK, WHICH IS WHAT MAKES THE ANCESTRY FORK REACHABLE AT ALL. A read
+   and a post in the ROOT world, taken before the branch, put that world's segment at the peer before either
+   child world arrives; the two arms then name it as their nearest ancestor and world_segment forks it. The
+   fixture has to CREATE the precondition its own `forkedFromAncestor` check is about. */
 const HTML_A = `<!doctype html><script>
   var w = window.open("https://b.test/child", "child");
   w.postMessage({hello:"root", n: w.length}, "*");
@@ -286,10 +279,6 @@ const routedTo = new Map();
    witnesses is that the receiving page's own code RAN; how many times it ran is the engine's to state (the
    four ends of §9.3.3 step 8's task, read off `qjs_result` at the bottom of this file). */
 const got = [];
-/* ROUNDS THAT ENDED WITHOUT A NEW MEMBER OF IT, which is a fact about this ZONE's wait and not about any
-   record's fate. Kept so the two can be printed together at the bottom: read apart, this number looks like a
-   count of lost messages and is not comparable to one — see the line that increments it. */
-let noNewGot = 0;
 /* EVERY CROSS-AGENT OPERATION THIS ZONE WAS ASKED TO PERFORM, keyed by the asking engine's request id, and
    whether it was ever answered. Keyed rather than counted because `qjs_host_requests` deliberately does NOT
    dedupe — an unanswered request is re-reported on every single step, so a count would be a step count, and
@@ -325,7 +314,7 @@ const answersFor = (token) => {
    THE ARGUMENT THAT MADE THE TAG UNNECESSARY IS RETIRED AND IS WRITTEN DOWN RATHER THAN DELETED, because it
    re-derives from the fixture in one reading and the next person to re-derive it would take the tag back out.
    It was: `a`'s only `/closed` sits in the `.then` of `/resume`, `/resume` is answered in phase 3, and reads
-   are WITHHELD from that point on — so no `/closed` could exist before the park and every entry was the
+   were withheld from that point on — so no `/closed` could exist before the park and every entry was the
    resumed session's by construction. Its middle premise is what went: a drive of a function the bundle
    shipped and never called reaches that `.then` body with the reply still owed (solver/engine.c's
    engine_orphan_seed, §What-the-tool-produces' headline surface), so the callback runs in phase 1, reads
@@ -345,15 +334,17 @@ const closedBy = (tag) => closedReports.filter((r) => r.asker === tag);
    cannot run early. It cannot be one: a flow that has run out of the work the page ARRANGED for it drives a
    function the bundle shipped and never called, and this `.then` callback is one until the reply lands, so the
    body runs in phase 1 with `/resume` still owed. That is the mechanism working, and this fixture's ordering
-   survives it because what phase 3 actually needs is a read taken while `withholdReads` is set — which the
+   survives it because what phase 3 actually needs is a read taken while `holdAfterFirst` is set — which the
    answered `/resume` still produces, on the flow that was genuinely awaiting it. An early drive adds a real
    read of a real peer; it does not remove the one phase 4 parks on. */
 let resumeOwed = true;
-/* WHILE THIS IS SET, A CROSS-AGENT READ IS ASKED OF THE PEER AND ITS COMPLETION IS NOT RELAYED — the asking
-   flow stays suspended at the read with its snapshot intact, which is the state phase 4 parks it in. The peer
-   is still ASKED, deliberately: the question is what becomes of a peer's IN-FLIGHT turn when the instance that
-   asked pages out, and a read that was never put to the peer would not have one. */
-let withholdReads = false;
+/* …and whether `a` has been seen owing it, the output phase 1 ends on. */
+let resumeSeen = false;
+/* WHILE THIS IS SET, A CROSS-AGENT READ ASKED IS RELAYED ITS FIRST ANSWER AND NO OTHER, and not its exhaustion.
+   The asking flow takes that one timeline's answer and leaves a standby at the read holding the timelines its
+   family took (solver/engine.c's flow_answer_standby), which is the state phase 4 parks; the held answers are
+   the peer's in-flight turn, orphaned when the asker pages out. */
+let holdAfterFirst = false;
 /* EVERY WORLD DEATH THAT CROSSED. A segment a peer materialized is a foreign flow's state living in its heap,
    and until this record existed nothing ever removed one — so an instance that had answered anything held every
    sender's timeline for the rest of its process and could not park at all (its own cold_park refuses it). This
@@ -383,10 +374,7 @@ const fail = (why) => { console.error('[route] FAILED: ' + why); process.exit(1)
    `_jobsRun` frozen at 10 — and DONE on the very next step once the reply it was owed was supplied. */
 const STEP_DONE = 0, STEP_YIELD = 2, STEP_STALLED = 3;
 
-/* ONE STEP of `e`, then everything the host owes it. Answers the engine's own code and how much this zone PAID
-   into that engine in the same round, because the two together are what the pump's terminators are made of: a
-   stall the payment MOVED is not a stall the driver may stop at (the frontier has work again — the same test
-   engine_run makes with `r == ENGINE_STEP_STALLED && filled == 0`, and wpt_runner.c with `did`). */
+/* ONE STEP of `e`, then everything the host owes it. Answers the engine's own code. */
 async function service(e) {
   const r = e.M.ccall('qjs_step', 'number', [], []);
   /* THE CODE IS CHECKED FOR MEMBERSHIP AND NEVER DEFAULTED. A value outside the three is an ABI that moved
@@ -395,38 +383,10 @@ async function service(e) {
     fail(`qjs_step answered ${r}, which is none of DONE(0)/YIELD(2)/STALLED(3) — the ABI carries three codes ` +
          'and this zone branches on all three, so a fourth is a contract that moved under this driver');
   /* THE NOTICES ARE DRAINED FIRST, BECAUSE ONE OF THEM PROVISIONS THE INSTANCE A REQUEST IN THE SAME ROUND
-     NAMES. The three host-facing registers are all filled by the ONE `qjs_step` above and the ABI orders none
-     of them against the others, so which this zone reads first is a decision this zone makes — and it is not a
-     free one. `navigable.create` is what puts a document into `engines`; `holderOf` below answers null for a
-     `windowproxy.get` naming a document whose create notice is still sitting unread. That read is then held as
-     unroutable, `paid` stays 0, and a round in which the engine is STALLED **on that very read** is handed to
-     `pumpUntil` as "a bill this zone will not pay" — which ends the phase, one round before the round that
-     would have paid it.
-     MEASURED, AND IT MADE THIS DRIVE BIMODAL ON ONE BUILD — which is what makes it a defect in the instrument
-     rather than a rough edge. `a`'s boot flow reaches `window.open` and the `w.length` beside it, and whether
-     those land in ONE `qjs_step` or two is decided by the cooperative quantum, which this host measures on the
-     WALL CLOCK (there is no CPU clock in a single-threaded wasm instance — see the `@QUANTUM` banner). So a
-     loaded machine decides which register fills first. Reading requests first, THREE runs of ONE frozen build
-     answered: 5 routed posts / 12 reads / a 7-byte residue with `@RESUMED 1`; then 31 posts / 144 reads / a
-     42-byte residue with `@RESUMED 2`; then 5 again. Six times the drive's depth, from one binary, with
-     nothing in the log to say which mode a run was in — an unroutable read was silent, and `a emitted 0 posts`
-     reads as an engine that did nothing rather than as this zone stopping one round early. A bisect run over
-     that column attributed the two modes to two REVISIONS. That is §Testing's artifact-of-HOW defect arriving
-     through a driver instead of through a clock, and it is the reason the ordering below is not a preference.
-     Draining notices first, four runs answered identically: 32 records routed into 46 deliveries, phase 1
-     always stalling on the `/resume` it is supposed to stall on. What still moves run to run is the number of
-     peer TIMELINES a question is answered by, which is a property of how much both documents forked and is the
-     kind of number this file already refuses to assert on.
-     NOTHING IS LOST BY DRAINING FIRST, and that is what makes this an ordering fix rather than a trade. A
-     notice is one-way and this zone either acts on it or fails; a request is re-reported every step, so no
-     order can drop one. What the order decides is only whether THIS round can discharge what it was asked, and
-     a round that can, must — otherwise the pump's terminator is reporting this zone's own reading order as the
-     engine's inability to proceed. */
+     NAMES. The ABI orders the three registers one `qjs_step` fills against none of the others, and
+     `navigable.create` is what puts a document into `engines`: read after the request register, a
+     `windowproxy.get` naming that document would find no holder for a round. */
   await drainNotices(e);
-  /* WHAT THIS ZONE PUT INTO `e` THIS ROUND — replies delivered, operations answered, completions relayed back,
-     records handed over. Counted rather than assumed, because "the engine is owed something" and "this zone
-     supplied it" are two facts and the pump's stall terminator is precisely their disagreement. */
-  let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const t = line.split('\t');
     if (t.length !== 12 || t.some((x, i) => i !== 1 && i !== 8 && x === ''))
@@ -464,7 +424,7 @@ async function service(e) {
     if (driven !== 'driven' && driven !== 'undriven')
       fail(`a pending line states the drive mark \`${driven}\`, which is neither token solver/engine.h declares`);
     if (u.includes('/hold')) continue;
-    if (u.includes('/resume') && resumeOwed) continue;
+    if (u.includes('/resume') && resumeOwed) { if (e === engines[0]) resumeSeen = true; continue; }
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }
     if (u.includes('/closed')) { closedReports.push({ asker: e.tag, url: u });
                                  console.log(`  [${e.tag}] READ BACK: ${u}`); }
@@ -484,7 +444,6 @@ async function service(e) {
        SEQUENCE, and the only ways to put one in JSON are to encode it or to DECODE it — and a decode run by
        the zone that FETCHED is exactly what left HTML §8.1.4.2's classic-script decode nothing to decode. */
     e.provide(method, mode, referrerPolicy, referrer, u, reply, '{}');
-    paid++;
   }
   /* ONE OP IS ANSWERED, exactly as the offscreen answers exactly one: a `document.fetch` is a network fetch this
      zone can genuinely perform. Every other request is left UNANSWERED — the asking flow stays parked with its
@@ -531,62 +490,15 @@ async function service(e) {
         continue;
       }
       unheldReads.delete(key);
-      reads.set(key, { asker: e.tag, op, world: op.split('\t')[2], answered: false, withheld: withholdReads,
-                       /* WHICH PEER TIMELINES ANSWERED IT — the list this driver could not previously write,
-                          because the answers were anonymous and it kept one. */
-                       by: [] });
+      reads.set(key, { asker: e.tag, engine: e, id, op, world: op.split('\t')[2], holdAfterFirst,
+                       /* WHICH PEER TIMELINES WERE RELAYED AND WHETHER A FLOW TOOK EACH (relayAnswer). A held
+                          answer stays only on `answers`. */
+                       by: [], taken: [], exhaustedRelayed: false });
       console.log(`  [${e.tag}] cross-agent read asked: ${op}`);
       /* THE PEER IS ASKED, AND NOTHING IS ANSWERED INSIDE THAT CALL. It answers by RUNNING A PROGRAM — the IDL
          getter HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper ( O, P ) reaches the member through, as a flow
-         on its own frontier, so the completion arrives on a
-         later step of that instance and comes out through its notices like every other emission. Pumping it
-         here is this zone's job precisely because the answer is not a return value. */
+         on its own frontier — once per timeline, on later rounds, through its notices (relayAnswer). */
       holder.M.ccall('qjs_perform', 'void', ['number','number'], [holder.cs(key), holder.cs(op)]);
-      /* A RECORD HANDED TO AN INSTANCE IS A PAYMENT TO THAT INSTANCE, and only where it IS this one: the peer
-         is pumped on its own below, with its own count. A self-read (an agent asked about a document it holds)
-         goes down this same branch, which is why the test is on identity rather than on the shape of the op. */
-      if (holder === e) paid++;
-      /* WITHHELD: the peer has been asked and its answer is left where it lands. The asking flow stays parked
-         on the read — which is the correct behaviour for an unanswered request and is exactly the state a
-         Level-1 eviction finds a flow in. */
-      if (withholdReads) { console.log(`  [${e.tag}] WITHHELD — the asking flow stays suspended at the read`); continue; }
-      /* THE PEER'S TURN RUNS TO ITS OWN END, AND THAT IS THE FIX RATHER THAN A LONGER WAIT. This waited for the
-         FIRST answer (`() => answers.has(key)`) and then relayed and moved on — which stops the peer's turn in
-         the middle of a question every one of its timelines is still answering, and leaves the rest to arrive
-         on some later pump with no asker expecting them. A document's state IS its flows, so "the answer" is
-         not a thing that exists: what exists is one answer per timeline, and the peer's own statement that it
-         has said all of them is its frontier draining or STALLING on a bill this zone will not pay. Those are
-         the same two terminators pumpUntil already documents; the predicate is `false` because there is no
-         single emission to wait for. */
-      const turn = await pumpUntil(holder, () => false);
-      if (!answers.has(key)) { console.log(`  NOT ANSWERED (${turn}): ${key}`); continue; }
-      /* EVERY ONE OF THEM, RELAYED VERBATIM AND IN ARRIVAL ORDER. The completion is in the engines' own grammar
-         and this zone does not read it: a value that is an OBJECT is a NAME in the answering agent's namespace,
-         which means nothing out here. The WORLD it crosses beside is in world_serialize's grammar and this zone
-         does not read that either — it routes text; only an engine knows what a name means. The asking engine
-         takes the first onto the register and records each further one as another timeline to fork an arm over
-         (engine_host_answer), and it CRASHES on a repeat of one world, so relaying all of them is what the seam
-         was built for rather than something this zone is getting away with. */
-      const all = answers.get(key);
-      /* WHETHER A FLOW TOOK EACH ONE, as the entry reports it: a holder's commitment record may refuse the
-         answering timeline, which is the observation the resumed standby's check below reads. */
-      const taken = [];
-      for (const a of all) {
-        taken.push(e.M.ccall('qjs_host_answer_remote', 'number', ['number','number','number','number'],
-                             [id, e.cs(a.world), e.cs(a.marks), e.cs(a.completion)]));
-        paid++;
-      }
-      answers.delete(key);
-      if (exhaustedTokens.has(key)) {
-        e.M.ccall('qjs_host_answers_exhausted', 'void', ['number'], [id]);
-        exhaustedTokens.delete(key);
-        paid++;
-      }
-      reads.get(key).answered = true;
-      reads.get(key).by = all.map((a) => a.world);
-      reads.get(key).taken = taken;
-      console.log(`  [${e.tag}] answered by ${all.length} peer timeline(s), ${taken.filter((t) => t === 0).length} ` +
-                  `refused: ${all.map((a) => a.world).join(' ')}`);
       continue;
     }
     console.log(`  [${e.docId}] request: ${op.slice(0, 90)}`);
@@ -623,49 +535,44 @@ async function service(e) {
            `<TAB><initiator><TAB><url>\`: ${op} — core/frame/navigable.c writes all eight fields on every ` +
            'path, the policy possibly empty');
     e.answer(id, { url: fetchArgs.slice(initTab + 1), headers: "" }, HTML_B);
-    paid++;
   }
-  return { step: r, paid };
+  return { step: r };
 }
 
-/* PUMP UNTIL THE THING HAPPENS OR THE PEER SAYS IT IS DONE — and NOT for a count of steps. Four loops here
-   carried `i < 400` (one `i < 4000`), which is a STEP CAP: §NO BOUNDS forbids one, and the exemption the
-   harness backstop enjoys does not reach it. That exemption is for a harness refusing to wait forever for a
-   PROCESS it launched, reported through a different signal; this is a driver deciding how much of a flow's
-   own execution it is willing to watch, silently, and then reporting `NOT ANSWERED` — a truncation wearing a
-   measurement's clothes. A peer whose answer legitimately needs one more step than the count was a FALSE
-   NEGATIVE, and the number 400 was never derived from anything.
-   Both real terminators were already here and neither needed a counter: the emitted output arriving, and the
-   peer's own statement that its frontier drained (ENGINE_STEP_DONE).
-   §@S's rule that only EMITTED OUTPUT proves a flow is done is the same rule.
-   THE THIRD TERMINATOR IS THE PEER'S OTHER STATEMENT, AND ITS ABSENCE WAS THE HANG. A frontier can also be
-   neither draining nor progressing: every member parked on something only the host can supply
-   (ENGINE_STEP_STALLED). That is a positive statement — "I am owed X" — and it was invisible here because the
-   ABI folded it into the yield, so a peer this zone deliberately never pays (`/hold`, which is what keeps `b`'s
-   boot flow alive to receive) answered "call me again" for ever and this loop believed it. It is not a step
-   cap and it truncates nothing: the flows keep their snapshots, the session stays live, and the very next
-   payment resumes them — measured, DONE one step after the owed reply was supplied.
-   THE STALL IS ONLY A TERMINATOR WHERE THE PAYMENT DID NOT MOVE IT, which is the same test engine_run makes
-   (`r == ENGINE_STEP_STALLED && filled == 0`, engine.h: "0 at a stall ends the run, which is the honest answer
-   to 'nobody can supply this'"). A stall this zone answered is a frontier with work again, and the loop
-   carries on — so what stops the pump is never a round count, it is the two answers about one question
-   agreeing that nothing more is coming.
-   The three exits are the peer's own statements and this zone's, kept apart: DONE is the frontier drained,
-   STALLED is a bill this zone will not pay, EMITTED is the thing the caller was waiting for. A peer that does
-   none of the three is a HANG, and a hang is the harness's `RUN_BACKSTOP_MS` to report through its own signal —
-   which is exactly where a driver's patience belongs, and the shape the browser-process gate's phase 4 chose
-   independently ("termination is an emitted output, not a step cap ... deliberately no third exit"). */
-const PUMP_EMITTED = 'emitted', PUMP_DRAINED = 'drained', PUMP_STALLED = 'stalled';
-async function pumpUntil(target, done) {
-  for (;;) {
-    /* THE PREDICATE IS ASKED FIRST AND AGAIN AFTER EVERY ROUND, so a round that BOTH emitted the thing and
-       ended the session answers EMITTED. The caller asked about the output, not about the frontier. */
-    if (done()) return PUMP_EMITTED;
-    const { step, paid } = await service(target);
-    if (done()) return PUMP_EMITTED;
-    if (step === STEP_DONE) return PUMP_DRAINED;
-    if (step === STEP_STALLED && paid === 0) return PUMP_STALLED;
+/* THE DRIVE ADVANCES IN ROUNDS, AND EACH PHASE ENDS ON THE OUTPUT IT IS WAITING FOR. A round steps every live
+   instance once, routes every post emitted so far, and yields to the event loop. Only emitted output proves a
+   phase done: no step count, and no wait for an instance to drain or stall, which is a bound in disguise here —
+   `b` owes a `/hold` this zone never answers and forks on what it is sent, so it reaches neither. A phase whose
+   output never comes is a hang, for the harness backstop to report through its own signal. */
+async function round() {
+  for (const e of engines) {
+    if (e.gone || e.done) continue;
+    const { step } = await service(e);
+    if (step === STEP_DONE) e.done = true;
   }
+  routePending();
+  await new Promise((r) => setImmediate(r));
+}
+async function runUntil(done) { while (!done()) await round(); }
+
+/* A PEER'S COMPLETION, RELAYED VERBATIM TO THE ASKING INSTANCE IN THE ROUND IT IS EMITTED. The asking engine takes
+   the first onto the register and forks an arm per further timeline (engine_host_answer), and `taken` is its own
+   statement of whether a flow took each one. An answer to a read asked under `holdAfterFirst` past its first,
+   and any answer whose asker was parked, is held: the second is an orphan. */
+function relayAnswer(token, a) {
+  const r = reads.get(token);
+  if (!r || r.engine.gone || (r.holdAfterFirst && r.by.length)) return;
+  r.taken.push(r.engine.M.ccall('qjs_host_answer_remote', 'number', ['number','number','number','number'],
+                                [r.id, r.engine.cs(a.world), r.engine.cs(a.marks), r.engine.cs(a.completion)]));
+  r.by.push(a.world);
+  a.relayed = true;
+}
+/* The peer's word that no timeline will answer again, relayed after the answers it follows and held with them. */
+function relayExhausted(token) {
+  const r = reads.get(token);
+  if (!r || r.engine.gone || r.holdAfterFirst || r.exhaustedRelayed) return;
+  r.engine.M.ccall('qjs_host_answers_exhausted', 'void', ['number'], [r.id]);
+  r.exhaustedRelayed = true;
 }
 
 /* THE ONE-WAY NOTICES, DRAINED — factored out of the step because the PARK takes its last one outside a step.
@@ -767,7 +674,9 @@ async function drainNotices(e) {
              `${f[2]}. A document answers a question once per live flow and spends the token off the row as it ` +
              `does, so a repeat is an emission this instance made twice and the arm forked over it would be a ` +
              `second flow exploring a peer timeline that is already an arm`);
-      list.push({ world: f[2], marks: f[3], completion: f.slice(4).join('\t') });
+      const entry = { world: f[2], marks: f[3], completion: f.slice(4).join('\t'), relayed: false };
+      list.push(entry);
+      relayAnswer(f[1], entry);
     }
     /* AN OPERATION HANDED BACK, because the instance holding it PARKED while still holding it. The record and
        the token do NOT have one lifetime and that is the whole reason this arm exists: the record is text
@@ -792,6 +701,7 @@ async function drainNotices(e) {
       if (!reads.get(f[1])) fail(`an exhausted token names no read this zone asked: ${f[1]}`);
       if (exhaustedTokens.has(f[1])) fail(`one token was exhausted twice: ${f[1]}`);
       exhaustedTokens.add(f[1]);
+      relayExhausted(f[1]);
     }
     else if (f[0] === 'remoteop.retracted') {
       if (f.length < 2 || !f[1]) fail(`a remoteop.retracted notice carried no token: ${n}`);
@@ -867,248 +777,90 @@ async function drainNotices(e) {
    own address. */
 engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', undefined, 'observed,undriven,unpinned', '', '', ''));
 
-/* PHASE 1 — run `a` out, collecting its posts. Nothing is routed yet, so `b` holds no record and each one below
-   can be delivered on its own; two records on one flow is a merge of possibly-contradictory senders, which the
-   engine crashes on rather than performing.
-   "RUN OUT" IS THE ENGINE'S OWN STATEMENT AND NOT A COUNT. This line was `for (let i = 0; i < 2000; i++)`,
-   which is the step cap pumpUntil's own comment says §NO BOUNDS forbids, surviving in the phases because the
-   pump had no third exit to offer them. It has one now: there is no output to wait for here, so the only
-   terminators are `a`'s two — its frontier drained, or it stalled on the `/resume` this zone deliberately
-   withholds until phase 3. */
-const phase1 = await pumpUntil(engines[0], () => false);
-if (phase1 === PUMP_DRAINED)
-  fail("`a`'s frontier reported DONE in phase 1 while every one of its arms is parked on the `/resume` this " +
-       'zone has not answered — a frontier with a flow suspended on an owed reply is STALLED (engine.h), so ' +
-       'DONE here is those flows dropped with their continuations and phase 3 has nothing to resume');
-/* AND A STALL IS NAMED RATHER THAN ACCEPTED. This phase's contract is that `a` runs until it is owed the
-   `/resume` this zone withholds until phase 3, and a stall on anything else is this phase failing to reach the
-   state phase 3 measures — carried forward as a SMALLER NUMBER instead of as a failure, which is the shape
-   this file's own `fail` comment forbids ("a phase that cannot reach the state the next one measures has to
-   stop there rather than carry a half-built precondition into an assertion about something else").
-   ONE SHAPE OF STALL IS UNAMBIGUOUSLY THIS ZONE'S FAULT AND IS CHECKED FOR: a stall taken in a round where the
-   zone is HOLDING a cross-agent operation it could not route. The engine said "every member is parked on
-   something only the host can supply" and the host was, at that instant, holding one of those very things. It
-   cannot fire while the notices are drained first — the create that provisions the answering instance is acted
-   on before the request naming it is read — so a fire here is that ordering having been undone, or a genuinely
-   later create, and both are worth stopping on rather than folding into a post count. */
-if (phase1 === PUMP_STALLED && unheldReads.size)
-  fail(`\`a\` STALLED in phase 1 while this zone was holding ${unheldReads.size} cross-agent read(s) it could ` +
-       `not route: ${[...unheldReads.values()].join(' ; ')}. A stall is the engine saying "a bill this zone ` +
-       'will not pay", and this is a bill this zone had not managed to PRESENT — the instance that answers a ' +
-       'cross-agent read is provisioned by a `navigable.create` notice, so a round that reads the request ' +
-       "register before the notice register reports its own reading order as the engine's inability to proceed");
-/* WHAT `a` ENDED THIS PHASE OWED, PRINTED WHATEVER THE OUTCOME. A phase whose result is a COUNT of what the
-   engine emitted says nothing about why it stopped emitting, and the two stalls this phase can take — on the
-   withheld `/resume`, which is the intended one, and on anything else, which is not — produce the same number.
-   Both registers are pure listings (engine_pending_fetches and engine_host_requests rebuild their join from
-   the live flows), so reading them here settles nothing and consumes nothing. */
-console.log(`phase 1: \`a\` ${phase1}, owed ` +
-            `${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'} / ` +
-            `${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'}`);
-console.log(`a emitted ${posts.length} posts, worlds: ${posts.map((p) => p.world).join('  ')}`);
-
-/* PHASE 2 — one at a time, each delivered before the next is routed. Written as a routine because phase 4
-   routes the posts a RESUMED sender emits through the identical path: one record, then pump the target until
-   its listener has seen it. */
+/* EVERY POST IS ROUTED THE ROUND IT IS EMITTED, as the offscreen routes one: the receiving engine attaches it
+   to every live timeline (engine_route) and each timeline delivers or refuses it at its own step, so nothing
+   here waits for a listener. */
 let routedUpTo = 0;
-async function routePending() {
+function routePending() {
   for (; routedUpTo < posts.length; routedUpTo++) {
     const p = posts[routedUpTo];
     const target = holderOf(p.doc);
     if (!target) { routeFailures.push(`post ${p.world} -> ${p.doc}`); continue; }
-    console.log(`routing world ${p.world} -> [${target.tag}] as origin ${p.origin}`);
     if (!routedTo.has(p.doc)) routedTo.set(p.doc, 0);
     routedTo.set(p.doc, routedTo.get(p.doc) + 1);
     target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(p.record), target.cs(p.origin)]);
-    const before = got.length;
-    /* THE STALL IS WHAT ENDS THIS WAIT WHEN THE RECORD DOES NOT ARRIVE, and it names the difference from a
-       drain: `b` is owed a `/hold` this zone never answers (that is what keeps its boot flow alive to receive
-       at all), so a `b` with no runnable member says STALLED for ever and never DONE. Without the third exit
-       this line was the hang — the whole drive stopped at the FIFTH post on every build. */
-    const why = await pumpUntil(target, () => got.length !== before);
-    /* AND IT SAYS WHAT IT SAW, WHICH IS NOT WHETHER THE RECORD WAS DELIVERED. This line read `NOT DELIVERED`
-       and it was a claim this loop is not entitled to make: `got` is a DEDUPED SET keyed on the (method, URL)
-       pair — its own declaration says so, in as many words, "which is NOT a count of listener invocations and
-       was read as one" — and every timeline of one document runs the same listener over data that renders as
-       the same shape, so the SECOND delivery of an identical record adds no member and this terminator waits
-       out the target's stall. The wait is still right, because a stalled target has no runnable member left;
-       the LABEL was wrong. Measured over five runs of one artifact (82c1a924), byte-identical in every
-       delivery-side number: 434 rounds ended this way while the receiving engines' own `_routedDelivered`
-       summed to 305 of 477 records — so 262 of the lines this printed as a loss were records that had
-       arrived. That is the same defect as the phase-4 exit one function down (a cumulative deduped set read as
-       a per-record event), and the same cure: say what was observed and leave the count to the party that
-       holds it. */
-    if (why !== PUMP_EMITTED) { noNewGot++; console.log(`  NO NEW /got (${why}): ${p.world}`); }
   }
 }
-await routePending();
 
-/* PHASE 3 — `b` HAS NOW CLOSED ITSELF, so `a`'s parked read is released and asks the one question whose answer
-   lives entirely in the other instance's record. `a` is stepped rather than told anything: the reply to
-   `/resume` resumes the flow it parked, that flow reads `w.closed`, and the read suspends again on the peer
-   exactly as `w.length` did — the whole point being that a driver never states the answer, it only routes.
-   AND THE ANSWER IS WITHHELD, which is what leaves `a` in the one state phase 4 is about: a flow suspended AT
-   a cross-instance read, its snapshot intact, with the peer's turn already running. */
+/* PHASE 1 — `a` runs, with `b` beside it, until it is owed the `/resume` this zone withholds: the output phase 3
+   starts from. */
+await runUntil(() => resumeSeen);
+console.log(`phase 1: \`a\` owes /resume; it emitted ${posts.length} posts, worlds: ` +
+            posts.map((p) => p.world).join('  '));
+
+/* PHASE 3 — `/resume` is answered, so `a`'s parked flow reads `w.closed` (twice: `typeof w.closed`, then
+   `w.closed`), each read suspending on the peer. Under `holdAfterFirst` each read is relayed one timeline's
+   answer and holds the rest, so the flow takes that one, leaves a standby beside it, and goes on. The phase ends
+   on the output that says both happened: the flow's `/closed` report, and a read with an answer taken and
+   another held. */
 resumeOwed = false;
-withholdReads = true;
+holdAfterFirst = true;
 const preParkWorlds = new Set([...posts.map((p) => p.world), ...[...reads.values()].map((r) => r.world)]
                               .map((v) => v.split(',')[0]));
-const preParkReads = reads.size;
-console.log(`\nphase 3: /resume answered — a's parked flow reads w.closed, and the answer is WITHHELD`);
-/* THE READ BEING ASKED IS THE EMITTED OUTPUT THIS PHASE WAITS FOR — the other two exits are `a` saying it
-   cannot produce it, and each of them is a DIFFERENT defect, which is why they are reported apart. This loop
-   also carried `i < 2000`, and the count was doing the third exit's job badly: it turned "the engine says it
-   is blocked" into "I got bored", with no way to tell either from "the read was asked on step 1999". */
-const phase3 = await pumpUntil(engines[0], () => reads.size !== preParkReads);
-if (phase3 === PUMP_DRAINED)
-  fail("`a`'s frontier reported DONE while one of its flows was suspended at a cross-instance read — a blocked " +
-       'frontier is STALLED (engine.h), which is a bill, and DONE over a suspended flow is that flow dropped');
-if (phase3 === PUMP_STALLED)
-  fail("`a` STALLED before asking the withheld read, owed something this zone did not supply — the /resume " +
-       'reply was answered above, so whatever the frontier is parked on now is a register entry this driver ' +
-       `does not fill: ${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'}` +
-       ` / ${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'}`);
-if (reads.size === preParkReads)
-  fail('the withheld read was never asked, so phase 4 has nothing to park a flow ON — either the /resume reply ' +
-       'did not resume the flow that awaited it, or `w.closed` was answered without reaching the peer');
+const closedBeforeHold = closedBy(engines[0].tag).length;
+const heldOf = (token) => (answers.get(token) || []).filter((a) => !a.relayed).length;
+const heldRead = () => [...reads.entries()].find(([k, r]) => r.holdAfterFirst && r.taken[0] === 1 && heldOf(k));
+console.log('\nphase 3: /resume answered; each read is relayed its first answer and holds the rest');
+await runUntil(() => closedBy(engines[0].tag).length > closedBeforeHold && heldRead() !== undefined);
+console.log(`phase 3: \`a\` took ${heldRead()[0]}'s first answer and ${heldOf(heldRead()[0])} answer(s) are held`);
 
-/* PHASE 4 — THE PARK. `a` is paged out ON that suspended read, torn down, and resumed from its own residue
-   into a NEW instance, while `b` — which holds the answer, the export table and a segment for every world `a`
-   has sent it — is not touched. That asymmetry is the point: Level-1 eviction gives up ONE document's engine.
-   THE RESIDUE IS A REPLAY RECIPE (solver/cold.h), not a serialized continuation: it names the ARMS each
-   suspended flow took, and the flow's delta, its frames and the replies it was owed are regenerated by
-   re-running the document under them. So the read this flow is suspended at is not carried across — it is
-   RE-ISSUED, and everything below is about whether the question it re-asks is the same question. */
-/* THE PEER'S TURN RUNS TO ITS END FIRST, with the asker still suspended on it. That is what makes the
-   completion an ORPHAN rather than a question nobody started: `b` installs the asking world's segment, runs
-   the IDL getter as a flow on its own frontier and emits `remoteop.answer` — and by the time it does, the
-   instance that asked has been parked and torn down. */
-const peerTurn = await pumpUntil(engines[1], () => answers.size > 0);
-if (peerTurn !== PUMP_EMITTED)
-  fail(`the peer ${peerTurn === PUMP_DRAINED ? 'drained its frontier' : 'STALLED on work this zone will not ' +
-       'supply'} without producing a completion for the withheld read — the record was handed to it ` +
-       '(qjs_perform, above), so the program its answer is either never became a flow or never reached its ' +
-       'end, and phase 4 would then park a flow whose orphan nothing produced');
-
+/* PHASE 4 — THE PARK. `a` is paged out with its standbys at those reads, torn down, and resumed from its own
+   residue into a NEW instance, while `b` — which holds the answers, the export table and a segment for every
+   world `a` has sent it — is not touched. That asymmetry is the point: Level-1 eviction gives up ONE document's
+   engine. The residue is a replay recipe (solver/cold.h), so a read is re-issued, not carried; what a family took
+   crosses as its foreclosed commitment rows. */
 const parked = engines[0];
 const postsAtPark = posts.length;
 parked.M.ccall('qjs_request_park', 'void', [], []);
 const parkStep = parked.M.ccall('qjs_step', 'number', [], []);
 const residue = JSON.parse(parked.str('qjs_result'))._park.join(';');
 console.log(`\nphase 4: park step answered ${parkStep}, residue ${residue.length} bytes: ${residue}`);
-/* THE PARK'S OWN NOTICES, TAKEN BEFORE THE INSTANCE GOES. Every world this session ever sent is unusable from
-   the park onward — the resumed session mints in a disjoint generation — and `b`, which never left memory,
-   holds a segment for each of them. This is the last moment anything can say so. */
+/* THE PARK'S OWN NOTICES, TAKEN BEFORE THE INSTANCE GOES: every world this session sent is dead from here on,
+   and `b` holds a segment for each. */
 const deathsAtPark = worldDeaths.length;
 await drainNotices(parked);
 console.log(`phase 4: the park announced ${worldDeaths.length - deathsAtPark} world death(s) to the peer`);
 parked.M.ccall('qjs_teardown', 'void', [], []);
-/* THE ORPHANS ARE COUNTED BEFORE THE RESUMED INSTANCE CAN ADD ANY. A completion held here names a token of the
-   instance that has just gone: `b` computed it under the asking flow's world, and there is no longer a flow,
-   a register or an instance for it to land in. */
-const orphanCompletions = [...answers.keys()];
-withholdReads = false;
+parked.gone = true;
+/* THE ORPHANS: completions held for a read the parked instance asked. They name a token of an instance that is
+   gone, so there is no flow, register or instance for them to land in. */
+const orphanCompletions = [...reads.entries()].filter(([k, r]) => r.engine === parked && heldOf(k)).map(([k]) => k);
+holdAfterFirst = false;
 engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, 'observed,undriven,unpinned', '', '', '');
 const resumedTag = engines[0].tag;
 console.log(`phase 4: resumed as [${resumedTag}] from the residue; [${engines[1].tag}] never left memory`);
-/* THE RESUMED SESSION, PUMPED WITH ITS OWN ROUTING INTERLEAVED — which is why this is not a `pumpUntil`: the
-   posts the replayed flows emit have to be routed to `b` between rounds, and pumpUntil steps one engine. Its
-   TWO exits are pumpUntil's own two, spelled out because each is a different thing to say about the resume;
-   the third — the emitted output — is no longer one of them, for the reason the second paragraph gives.
-   THE SUCCESS EXIT WAS THE RESUMED SESSION'S OWN REPORT AND WAS FIRST THE WHOLE LIST, a stale read of shared
-   state rather than a terminator: an entry another session left behind is already there when this loop is
-   entered, so the loop broke on its FIRST test and the resumed instance was never stepped once. It presented
-   as the park having lost a flow — `[d1/s3] flows=15 switches=0` and every assertion below reading an engine
-   that had not run — which is a diagnosis pointing at the cold tier for a driver's own bookkeeping. This is
-   also the ONLY place that presence is asserted; the `if (!closedReports.length)` that used to stand after the
-   loop was unreachable in both shapes, since `fail` exits, so its sentence lives BELOW, where it fires.
-   AND NARROWING IT ENDED THE STALENESS AND LEFT A SECOND DEFECT STANDING: THE REPORT IS NOT ONE REPORT. `a`
-   reads `w.closed` once per ARM and each read is answered once per peer TIMELINE, so a healthy resume emits
-   SEVERAL `/closed` fetches — and `qjs_pending` is a listing rebuilt by every `qjs_step`, so two arms whose
-   fetches are pending in the SAME step are both recorded and two arms one step apart are not. Breaking on the
-   first one made `closedBy(resumedTag)` a SAMPLE whose size is decided by the cooperative quantum, which this
-   host measures on the wall clock, while the check at the bottom reads that list as a TOTAL and is on the
-   VALUE — and HTML §7.2.2.1 "Opening and closing windows" makes that value legitimately `true` in the peer's
-   timelines that ran close() and `false` in the ones that never received the message that runs it. So a run
-   whose `false` arm was pending one step ahead of its `true` arm FAILED, and the same run with those two
-   steps the other way round PASSED, on one binary at one revision. The check's own text said so in as many
-   words — `A count of 1 here is therefore the second reading and not this one` — while its predicate did not,
-   which is a DEFECT verdict returned for an observation that could not separate the defect from the
-   truncation. The quotation is BACKTICKED rather than quoted because it is a spelling being shown and this
-   paragraph names a standard: an unbackticked run after a citation is judged against that standard's text,
-   which is the manufactured fabrication finding the citation audit reported when it was written that way.
-   THE TERMINATOR IS THE RESUMED FRONTIER'S OWN TWO STATEMENTS — DONE, or a stall this zone will not pay —
-   which is what `pumpUntil` already documents, what the receiver drain below already uses, and what carries no
-   round count, because a cap here would be the bound §NO BOUNDS forbids standing in the one place that decides
-   whether a loss is real. The population the checks below read is then this session's whole output rather
-   than its first round's.
-   AND THE TWO FAILURES MOVE BELOW THE LOOP RATHER THAN OUT OF IT. Each says the session ended "without the
-   replayed flow ever reading `w.closed` back", which was true of DONE and of an unpaid stall while the loop
-   exited on the first report and is now the ORDINARY end of every run — so each is asked where its own
-   sentence is true, which is of an EMPTY list, and the value is left to the one reader that states it. */
-let resumeEnd = null;
-for (;;) {
-  const { step, paid } = await service(engines[0]);
-  if (step === STEP_DONE || (step === STEP_STALLED && paid === 0)) { resumeEnd = step; break; }
-  await routePending();
-}
-/* AND THE ENDING ROUND'S POSTS ARE ROUTED TOO, which the loop cannot do for itself because it breaks before
-   its own `routePending`. The checks at the bottom read `posts.length` as THE NUMBER OF RECORDS THIS ZONE
-   HANDED OVER — `delivered >= posts.length`, and the per-document shortfall beside it — so a record `a`
-   emitted on the step that ended its session and nobody routed is counted in that denominator and can never
-   appear in the numerator: a loss verdict about a record that was never offered to anybody. The receiver
-   drain below deliberately does not step the SENDER and says so; this is the other half of that sentence,
-   placed where the routing still happens. It is also the reason this is not a weakening of anything — an
-   unrouted record fails the pigeonhole either way, and routing it is what gives it a chance to be admitted. */
-await routePending();
-console.log(`phase 4: the resumed session ended ${resumeEnd === STEP_DONE ? 'DONE' : 'STALLED unpaid'} having ` +
-            `read \`w.closed\` back ${closedBy(resumedTag).length} time(s)`);
-if (!closedBy(resumedTag).length && resumeEnd === STEP_DONE)
-  fail('the RESUMED instance drained its frontier without the replayed flow ever reading `w.closed` back — ' +
-       'a recipe is a replay (solver/cold.h), so a session that finishes without re-issuing the read did ' +
-       'not replay to the point the parked flow was suspended at');
-if (!closedBy(resumedTag).length)
-  fail('the RESUMED instance STALLED owed something this zone did not supply, before `w.closed` came back: ' +
-       `${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'} / ` +
-       `${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'} — ` +
-       'the read is answered by relaying the peer\'s completion, so a stall here is that relay not happening');
-/* EVERY RECEIVER IS DRAINED BEFORE ANYTHING IS COUNTED, and that is not tidiness — it is what makes the
-   delivery count a COUNT rather than a sample. `_routedDelivered` and `_routedRefused` are raised where a
-   receiving timeline CONSUMES an attachment (solver/engine.c's flow_deliver), so a record attached to a flow
-   the scheduler has not picked since is neither, and the pair read at an arbitrary stopping point splits a
-   record's fate three ways while reporting two: delivered, refused by every timeline, and STILL QUEUED. The
-   check below is a pigeonhole over the first two and is simply invalid while the third is non-empty.
-   THE STOPPING POINT IS THE SENDER'S, WHICH SAYS NOTHING ABOUT THE RECEIVERS. The phase-4 loop above ends on
-   `a`'s own frontier draining or stalling on a bill this zone will not pay — a fact about the ASKER, and the
-   records it routed on its way there can still be attached to flows the receiving scheduler has not picked.
-   THAT SENTENCE USED TO READ `The phase-4 loop above breaks the instant the resumed sender reports
-   w.closed`, and it is rewritten rather than deleted because the ARGUMENT is unchanged and a reader who
-   re-derives it from the loop will re-derive it correctly: the loop's terminator moved from the sender's
-   first `/closed` report to the sender's frontier ending, which made that population a TOTAL and left this
-   one exactly as much a sample as it was — the asker ending says no more about the receivers than the
-   asker's first report did.
-   Draining here makes the third state empty by construction instead of by luck — measured at 22605dc4 and
-   332a0c50, every receiver answered STALLED on its FIRST step here and not one delivery count moved, which is
-   the good outcome and is exactly what may not be assumed. `pumpUntil` with a predicate that never holds is
-   the drain the file already owns: it returns on DONE or on a stall that this zone will not pay, and it
-   carries no round count, because a cap here would be the bound §NO BOUNDS forbids standing in the one place
-   that decides whether a loss is real.
-   THE SENDER IS NOT STEPPED. engines[0] is `a`; a step of it emits posts that nothing after this line routes,
-   which would inflate the routed count against a delivery count that could not move.
-   AND WHICH INSTANCES REACHED THIS STATE IS RECORDED, because one of the three census numbers may only be read
-   of an instance that did. `_routedZeroDelivery` is a GAUGE (solver/engine.h, and solver/result.c calls it out
-   as one of the two exceptions among its `_`-prefixed siblings): it RISES when a record arrives and FALLS when
-   some timeline admits it, so at a live receiver it counts a record still in flight and a record that is lost
-   as one number, and only a receiver drained to a stall makes it the second. engine.h's words are "a host that
-   reads it says that it drained"; this set is this driver SAYING it, per instance, rather than a claim about
-   the scope of a loop that a later edit could widen without noticing what it widened. The sender is not in it,
-   so its gauge is reported as a question this drive did not ask rather than as a loss. */
-const drainedForCensus = new Set();
-for (const e of engines.slice(1)) {
-  const why = await pumpUntil(e, () => false);
-  drainedForCensus.add(e.tag);
-  console.log(`drained [${e.tag}] before the census: ${why}`);
-}
+
+/* WHAT THE PARKED FAMILIES HAD TAKEN, AND WHETHER A RESUMED STANDBY STILL REFUSES IT. A foreclosed row
+   (`r<hex vector>,0,3`, flow.h's FLOW_COMMIT_ARM_ANSWER_TAKEN) names a peer timeline a family member took before
+   the park, and `b` never left its session, so its timelines still relate to the row. The witness is one resumed
+   request whose relayed answers include one at or under such a row that no flow took and one under none that a
+   flow took. A descendant names its ancestors only as far as they sent (world.h), so `takenBefore` can miss one;
+   the witness is existential and survives that. */
+const foreclosedHeads = residue.split(';').filter((r) => /^r[0-9a-f]+,0,3$/.test(r))
+  .map((r) => Buffer.from(r.slice(1, r.indexOf(',')), 'hex').toString().split(',')[0]);
+if (!foreclosedHeads.length)
+  fail('the park wrote no foreclosed ANSWER_TAKEN row while `a` held a standby at a read whose first answer it ' +
+       'took — flow_answer_standby writes that row on the standby, so the park did not carry it');
+const takenBefore = (vec) => vec.split(',').some((w) => foreclosedHeads.includes(w));
+const standbyWitness = () => [...reads.values()].filter((r) => r.asker === resumedTag &&
+  r.by.some((w, i) => takenBefore(w) && r.taken[i] === 0) && r.by.some((w, i) => !takenBefore(w) && r.taken[i] === 1));
+
+/* PHASE 5 — THE RESUMED SESSION, until it has emitted the two outputs this drive is about: a resumed request
+   that refused a timeline its family took and took one it had not, and a `w.closed` read back true. */
+await runUntil(() => standbyWitness().length > 0 && closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')));
+console.log(`\nphase 5: the residue foreclosed ${foreclosedHeads.length} taken timeline(s); ` +
+            `${standbyWitness().length} resumed request(s) refused one and took one no family member had taken: ` +
+            standbyWitness().map((r) => r.op).join(' ; '));
 
 const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].tag);
 /* EVERY WORLD NAME THE RESUMED SESSION PUT ON THE WIRE, against every name the session that ended had already
@@ -1116,531 +868,116 @@ const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].ta
 const reusedWorlds = [...new Set([...resumedReads.map((r) => r.world),
                                   ...posts.slice(postsAtPark).map((p) => p.world)]
                                  .map((v) => v.split(',')[0]))].filter((h) => preParkWorlds.has(h));
-/* WHAT THE PARKED FAMILIES HAD TAKEN, AND WHETHER A RESUMED STANDBY STILL REFUSES IT. A foreclosed row
-   (`r<hex vector>,0,3`, flow.h's FLOW_COMMIT_ARM_ANSWER_TAKEN) names a peer timeline a family member took
-   before the park; the rows cross the tier, and `b` never left its session, so its timelines still relate to
-   them. The witness is one resumed request whose answers include a timeline at or under such a row that no
-   flow took and a timeline under none that a flow did take. A descendant names its ancestors only as far as
-   they sent (world.h), so `takenBefore` can miss a descendant; the witness is existential and survives that. */
-const foreclosedHeads = residue.split(';').filter((r) => /^r[0-9a-f]+,0,3$/.test(r))
-  .map((r) => Buffer.from(r.slice(1, r.indexOf(',')), 'hex').toString().split(',')[0]);
-const takenBefore = (vec) => vec.split(',').some((w) => foreclosedHeads.includes(w));
-const standbyWitness = resumedReads.filter((r) => r.answered &&
-  r.by.some((w, i) => takenBefore(w) && r.taken[i] === 0) && r.by.some((w, i) => !takenBefore(w) && r.taken[i] === 1));
-console.log(`\nresumed standbys: the residue foreclosed ${foreclosedHeads.length} taken timeline(s); ` +
-            `${standbyWitness.length} resumed request(s) refused one and took one no family member had taken`);
-if (!foreclosedHeads.length)
-  fail('the park wrote no foreclosed ANSWER_TAKEN row, so no family that split over a peer read before the park ' +
-       'carried what it took across it — phase 1\'s reads are answered by several of `b`\'s timelines, so ' +
-       'flow_answer_fork and flow_answer_standby wrote rows that the park did not');
-if (!standbyWitness.length)
-  fail('no resumed request refused a peer timeline its parked family had taken while taking one it had not — a ' +
-       'resumed standby re-asks `b`, which never left its session, so either the foreclosed rows did not come ' +
-       'back with it (cold_resume\'s \'r\' arm) or engine_host_answer did not admit by them');
 
-console.log(`\nposts routed: ${posts.length}   messages the receiving page saw: ${got.length}` +
-            `   routing rounds that ended without a new one: ${noNewGot}`);
-/* THE TWO NUMBERS ABOVE ARE NOT COMPARABLE AND ARE PRINTED TOGETHER SO THAT IS VISIBLE. `got` is deduped by
-   (method, URL) and the round count is a property of this zone's wait; what a record's fate was is the
-   receiving ENGINE's to state, and it does below as `routedDelivered`/`routedRefused` per instance. A reader
-   who differences these two is measuring the dedup. */
+console.log(`\nposts routed: ${posts.length}   distinct /got requests the receiving page issued: ${got.length}`);
 for (const u of got) console.log('  ' + u);
-const readsAnswered = [...reads.values()].filter((r) => r.answered).length;
-console.log(`cross-agent reads asked: ${reads.size}   answered: ${readsAnswered}`);
+console.log(`cross-agent reads asked: ${reads.size}`);
 for (const r of reads.values())
-  console.log(`  [${r.asker}] ${r.withheld ? 'WITHHELD-AND-PARKED' : r.answered ? 'ANSWERED' : 'UNANSWERED'}` +
-              `${r.by.length ? ` by ${r.by.length} timeline(s)` : ''} ${r.op}`);
-/* THE SEAM'S OWN COUNTS, from the receiving instance, and HELD IS NOT MADE. This line printed one number under
-   a sentence describing the other: `_worldSegments` carried world.c's CUMULATIVE materialized count while the
-   words beside it said "how many foreign worlds hold a segment here", which is the live table. The two agree
-   exactly until world_release runs — the one event a segment count exists to make visible — so the print was
-   at its most wrong precisely where this driver is looking. Both cross now: `held` is the live table,
-   `made` is how many were ever materialized, and `forked` is how many of those were built by FORKING an
-   ancestor the ancestry named, which is the number this driver exists to move off zero. held far below made is
-   a seam that materialized and released; held == made is a live peer; held above made is impossible and
-   world.c DCHECKs it. */
-let forked = 0;
-/* AND WHAT THE RECEIVING HALF DID WITH THE RECORDS THIS ZONE ROUTED — the two numbers the check below is
-   about, read off the instances rather than counted here, because only an engine knows how many of its
-   TIMELINES a record was offered to and how many of them it belonged to. */
-let delivered = 0, refused = 0;
-/* AND THE SAME PAIR PER RECEIVING DOCUMENT, which is the granularity the loss question actually has. */
-const deliveredTo = new Map();
-/* …AND THE THIRD NUMBER PER RECEIVING INSTANCE, WHICH IS A DIFFERENT GRANULARITY AND NOT A STYLE CHOICE. The
-   pair above is summed per DOCUMENT because the pigeonhole it feeds compares a document's admissions against
-   the records this zone handed that document. `_routedZeroDelivery` is one instance's reading of its OWN
-   ledger (solver/engine.c's `g_routed_recs`, keyed by record text at the arrival), so two instances holding
-   one document name have two ledgers and a sum of their gauges is a number neither of them holds. Split by
-   whether the instance was drained, because that is what decides whether its gauge is a loss or a backlog —
-   they take opposite work and a single list would report them as one thing. */
-const zeroDeliveryRead = [], zeroDeliveryUndrained = [], zeroDeliveryAbsent = [];
-/* …AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED, which is the half this file used to INFER and could
-   not. §9.3.3 step 8's task has four ends and only one of them runs a listener; solver/engine.h declares them,
-   core/frame/window_message.c reports the end a task RUNS to, and solver/flow.c reports the one §7.5.10 step
-   5's removal walk reaches before it can run. */
+  console.log(`  [${r.asker}] ${r.by.length ? `relayed ${r.by.length} answer(s), ` +
+              `${r.taken.filter((t) => t === 0).length} refused` : 'no answer relayed'}` +
+              `${r.holdAfterFirst ? ', held after its first' : ''} ${r.op}`);
+/* THE SEAM'S OWN COUNTS, from each instance, none defaulted: a `|| 0` would print the number a healthy run
+   prints for a producer that stopped emitting the field. `held` is the live segment table, `made` how many were
+   ever materialized, `forked` how many were built by forking an ancestor the ancestry named. The four ends are
+   §9.3.3 step 8's task's (solver/engine.h). */
 const ENDS = ['_routedTasksFired', '_routedTasksTargetOrigin', '_routedTasksTargetGone', '_routedTasksThrew'];
 const ends = { _routedTasksFired: 0, _routedTasksTargetOrigin: 0, _routedTasksTargetGone: 0, _routedTasksThrew: 0 };
+let forked = 0, delivered = 0, refused = 0;
 for (const e of engines) {
   const r = JSON.parse(e.str('qjs_result'));
-  forked += r._worldSegmentsForked;
-  /* NEITHER IS DEFAULTED. A `|| 0` here would turn "this build stopped emitting the pair" into the number a
-     healthy run also produces, and the check below would then be satisfied by an engine that said nothing. */
-  if (typeof r._routedDelivered !== 'number' || typeof r._routedRefused !== 'number')
-    fail(`[${e.tag}] the result document carries no routed-delivery census — solver/result.c emits the pair ` +
-         'and solver/engine.c counts it at the two lines that ARE the two outcomes, so an absent field is a ' +
-         'producer that moved under this reader and every delivery assertion below would be reading a hole');
-  /* AND THE THIRD OF ENGINE.H'S THREE, WHICH IS THE ONLY ONE OF THEM ABOUT A RECORD. Both numbers above are
-     per (record, TIMELINE) attachment; `_routedZeroDelivery` is per RECORD, which is why engine.h says ALL
-     THREE OR NONE and why no arithmetic over the pair could ever have recovered it here.
-     IT IS ITS OWN GUARD AND NOT A THIRD DISJUNCT IN THE PAIR'S, and that is the whole reason this reads as
-     two lines rather than one. The pair's absence holes every delivery assertion after it, so its message is
-     about a producer that moved; THIS one's absence holes exactly one check, so a verdict that read the same
-     for both would sum "I found a lost message" with "I could not look for one", and those take opposite
-     work — CLAUDE.md's separate-verdicts rule, in the one reader written to end the guessing about deliveries.
-     IT IS STILL A RED AND NOT A PASS, AND IT IS THE LAST THING SAID RATHER THAN THE FIRST. A `|| 0` here
-     would answer the equality below with the number a healthy run also produces, which is the defaulted-field
-     defect exactly, and an artifact that cannot be asked the question is not a green gate — so the absence is
-     recorded on this line and VERDICTED at the end, where it costs nothing. `fail` EXITS: failing HERE, inside
-     the per-instance loop and therefore at the FIRST instance, ends the drive before the per-document
-     shortfall, the task-end conservation law and every check after them have run, so an old artifact would
-     report one unasked question INSTEAD of the answers it can still give. Measured while this reader was
-     being built, at the artifact at 332a0c50 (which predates the field): failing in this loop replaced a
-     shortfall verdict — 449 records routed to one document, 193 admitted, at least 256 admitted by no
-     timeline, reproduced to the digit in three consecutive runs — with a line saying only that a counter was
-     missing. */
-  if (typeof r._routedZeroDelivery !== 'number') zeroDeliveryAbsent.push(e.tag);
-  /* AND IT IS TAKEN ONLY WHERE IT MEANS A LOSS. An instance this drive never drained holds a number that is
-     part backlog by construction, so it is carried to the report as an unasked question and never compared. */
-  else if (drainedForCensus.has(e.tag))
-    zeroDeliveryRead.push({ tag: e.tag, doc: e.docId, zero: r._routedZeroDelivery });
-  else if (r._routedZeroDelivery)
-    zeroDeliveryUndrained.push(`[${e.tag}] ${e.docId}: ${r._routedZeroDelivery}`);
-  /* AND NOR IS ANY OF THE FOUR, for the same reason and one worse: a missing end reads as ZERO, and the check
-     below is that the four SUM to at least the deliveries — so a producer that stopped emitting one of them
-     would fail this driver with a message about a lost message. */
-  for (const k of ENDS) {
+  for (const k of ['_worldSegmentsForked', '_routedDelivered', '_routedRefused', '_routedZeroDelivery',
+                   '_orphansDriven', '_orphansAsked', ...ENDS])
     if (typeof r[k] !== 'number')
-      fail(`[${e.tag}] the result document carries no \`${k}\` — solver/result.c emits all four ends of ` +
-           '§9.3.3 step 8\'s task together (solver/engine.h says why one number could not say which), so an ' +
-           'absent one is a producer that moved under this reader');
-    ends[k] += r[k];
-  }
+      fail(`[${e.tag}] the result document carries no \`${k}\` — solver/result.c emits it unconditionally, so ` +
+           'an absent one is a producer that moved under this reader');
+  forked += r._worldSegmentsForked;
   delivered += r._routedDelivered;
   refused += r._routedRefused;
-  if (!deliveredTo.has(e.docId)) deliveredTo.set(e.docId, 0);
-  deliveredTo.set(e.docId, deliveredTo.get(e.docId) + r._routedDelivered);
-  /* AND WHETHER THE HEADLINE SURFACE RAN IN THIS INSTANCE, printed and asserted of NOTHING. This driver is the
-     only place in the tree where a drive of an uncalled function is visible beside the seam it perturbs — `b`'s
-     `message` listener is one until a record is routed, and its drive is what puts `{orphan….arg0}` in a `/got`
-     — so a reader comparing this against the smoke's own `_orphansAsked` has the two halves of the same
-     question in front of them. NOT A CHECK: solver/engine.h says `asked == 0` separates "this bundle ships no
-     uncalled code" from "no flow ever reached the end of its own work", and a driver that asserted a number
-     over that would be storing an expected copy of a scheduling result. NOT DEFAULTED either, for the reason
-     the pair above it is not: a `|| 0` would print the number a healthy run also prints for a producer that
-     had stopped emitting the field. */
-  for (const k of ['_orphansDriven', '_orphansAsked'])
-    if (typeof r[k] !== 'number')
-      fail(`[${e.tag}] the result document carries no \`${k}\` — solver/result.c emits the pair from ` +
-           'engine_orphan_census unconditionally, so an absent one is a producer that moved under this reader');
-  console.log(`[${e.tag}] orphans driven=${r._orphansDriven} asked=${r._orphansAsked}`);
+  for (const k of ENDS) ends[k] += r[k];
   console.log(`[${e.tag}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
               `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches} ` +
               `routedDelivered=${r._routedDelivered} routedRefused=${r._routedRefused} ` +
-              `routedZeroDelivery=${typeof r._routedZeroDelivery === 'number' ? r._routedZeroDelivery
-                                     : 'ABSENT — this artifact does not emit it, see the UNAUDITED line below'}` +
-              `${typeof r._routedZeroDelivery !== 'number' || drainedForCensus.has(e.tag) ? ''
-                 : ' (NOT DRAINED — a backlog, not read as a loss)'}`);
+              `routedZeroDelivery=${r._routedZeroDelivery} (a gauge, not a loss reading here) ` +
+              `orphans driven=${r._orphansDriven} asked=${r._orphansAsked}`);
   console.log(`[${e.tag}] §9.3.3 step 8 task ends: fired=${r._routedTasksFired} ` +
               `declinedByTargetOrigin=${r._routedTasksTargetOrigin} targetDestroyed=${r._routedTasksTargetGone} ` +
               `threw=${r._routedTasksThrew}`);
 }
+/* Named residual. Not covered: whether every routed record reached some timeline of its document.
+   `_routedZeroDelivery` is a gauge that reads a record still attached to an unstepped timeline like a lost one,
+   and a receiver that forks on what it is sent and owes a `/hold` never consumes every attachment, so no moment
+   of this drive makes it a loss reading. Next diff builds: the per-attachment ticket solver/engine.c's RoutedRec
+   residual names, so a record's last attachment consumed is an emission this drive can wait for. Absence shows
+   as: a peer's message admitted by no timeline passing this drive. */
 
-/* WHAT MAKES THIS A SMOKE TEST RATHER THAN A PRINTOUT. Four things have to have happened, and each of them is
-   a whole mechanism failing silently if it did not: a second instance was provisioned (the create notice was
-   acted on), every routed record was admitted by at least one TIMELINE of the receiving document and every
-   task those deliveries became reached one of §9.3.3 step 8's four ends (the inbound half — see the checks
-   below for why that is three statements, why the equality it replaced was a claim about the SCHEDULER, and
-   why the count it was made from could never have been a count of handler invocations), at least one
-   segment was materialized by FORKING an ancestor (the world vector's ancestry was READ and used), and the one
-   synchronous cross-instance READ this engine has was asked AND answered by the instance that holds the
-   document — which is the half that has never run. */
+/* WHAT MAKES THIS A SMOKE TEST RATHER THAN A PRINTOUT: a second instance was provisioned, a routed record became
+   a task that fired at the receiving Window and ran the page's own listener, a segment was materialized by
+   forking an ancestor, and the synchronous cross-instance read was asked of the instance holding the document.
+   Each is a whole mechanism failing silently if it did not happen. */
 if (engines.length < 2) fail('no second instance was provisioned — the navigable.create notice went unanswered');
 if (!posts.length) fail('the sender emitted no cross-instance post');
-/* A ROUTED RECORD IS NOT A HANDLER INVOCATION, AND THIS LINE ASSERTED THAT IT WAS.
- *
- * `got.length !== posts.length` compared the number of records THIS ZONE routed against the number of times the
- * receiving page's `message` handler ran, and the engine has never promised those are equal. solver/engine.c's
- * engine_route attaches every arriving record to EVERY live flow of the receiving document and says why in the
- * same breath — "THE MESSAGE ARRIVES IN EVERY TIMELINE OF THE RECEIVING DOCUMENT, and that is what makes it
- * arrive at all", because the page's listener was registered by a script and therefore lives in the COW delta
- * of the flow that ran it; a delivery seeded from the baseline arrives at a document where it was never
- * registered. So N timelines that admit a record produce N invocations, and the equality above is the claim
- * that the receiver has exactly ONE timeline.
- *
- * IT PASSED ONLY WHILE THE RECEIVER'S OTHER TIMELINES WERE STARVED, and that is measurable rather than
- * inferred: across the two builds where this went from OK to FAILED, the ONLY other difference in this whole
- * drive was the RECEIVING instance's switch count (97 against 108) — the sending instance's line was identical
- * to the digit, every read was asked and answered by the same timelines in the same order, and the two extra
- * invocations were two more of the deliveries the engine had already attached finally getting the thread. An
- * assertion whose truth is a function of how many turns the scheduler happened to give one instance is the
- * schedule-dependent answer §Testing's differential exists to catch, and solver/engine.c already names this
- * exact defect one layer down, about the superseded pairwise queue check: "a router that hands over one record
- * and pumps before handing over the next" got one answer and a router that handed over both first got another.
- * This file re-introduced it in its own assertion.
- *
- * WHAT IS ACTUALLY INVARIANT is stated instead, and it is two separate facts that fail for different reasons.
- *   - NO RECORD IS LOST: every routed record is admitted by at least one timeline, so the engine's own count of
- *     deliveries is at least the number of records this zone handed over. A zero-delivery record is a peer's
- *     message no timeline of this document ever receives, which the page cannot distinguish from one that was
- *     never sent.
- *   - EVERY DELIVERY REACHED AN END: the four ends of §9.3.3 step 8's task sum to at least the deliveries. A
- *     sum BELOW the deliveries is the one outcome that is a defect — a task that was queued and never ran, a
- *     work item the ONE frontier dropped — and it is the only one of the four the page cannot tell from a
- *     message that was never sent.
- * `refused` is printed with them because a low delivery count has two readings — the other timelines DECLINED
- * the record (they are on the other side of a sender branch) or they were never offered it — and those take
- * opposite actions.
- *
- * AND THE SECOND HALF USED TO BE MEASURED WITH `got.length`, WHICH CANNOT COUNT WHAT IT WAS COUNTING.
- *
- * `got.length !== delivered` read "the receiving page's listener ran N times" off the number of DISTINCT
- * `/got` lines this zone was shown in `qjs_pending`, and that register is a SET OF REQUESTS: solver/engine.c's
- * engine_pending_fetches dedups over the (method, URL) pair and says why in its own comment — several flows
- * park on one request and `engine_provide` fills every entry naming it, so listing it twice would make this
- * zone provide twice and the second call would find nothing left. N timelines of one document run the SAME
- * listener and therefore issue BYTE-IDENTICAL requests (here they are identical to the character, because the
- * data of a cross-origin message is concolic and every field renders as its shape), so the count collapses by
- * construction. It is the §Testing defect of measuring what a harness prints rather than what the shipped path
- * writes, and it was reported as four §9.3.3 tasks the scheduler had lost: measured at d13ab52b, 9 deliveries
- * against 5 `/got` lines, with `_jobsQueued` and `_jobsRun` both 14 and the receiving instance answering
- * STALLED with an empty frontier — every task had run. It also moved between runs of ONE build (5, 5, 7) with
- * `delivered` fixed at 9, because how many identical requests are outstanding SIMULTANEOUSLY is a property of
- * the schedule, which is the same schedule-dependence this file's own comment above says it had removed.
- *
- * The statement it was reaching for — one handler invocation per delivery, no more — lives where it can
- * actually be made: solver/engine.c asserts §9.3.3 step 8's ONE global task at the enqueue, and
- * core/frame/window_message.c records the task's end once per task. `got` is kept for what it does witness,
- * which is not a count at all: that the receiving page's own code RAN and issued the request its listener was
- * written to issue. */
-/* AND THE SUM OVER INSTANCES COULD NOT ASK IT, WHICH IS THE THIRD TIME THIS ASSERTION SLOT HAS HELD A CLAIM
- * ABOUT THE SCHEDULER. `delivered < posts.length` compared a total of deliveries across EVERY receiver against
- * a total of records this zone routed to all of them, and a record is admitted or lost by exactly ONE
- * receiving document — so a receiver that admits one record in twenty of its timelines contributes twenty to a
- * sum in which another receiver's twenty losses are invisible. The per-document form below is strictly
- * sharper and is the same pigeonhole made where it is valid.
- *
- * MEASURED, AND IT IS WHY THIS IS NOT A TIGHTENING OF A WORKING CHECK. The two sides of that aggregate are not
- * merely incomparable, they are UNCORRELATED. Across runs of the artifacts at 22605dc4 and 332a0c50 — one
- * program, one fixture, nothing changed but the machine's load — the sender's record count moved 84 -> 449
- * into one receiver (64 -> 429 distinct sending worlds) and that receiver's `_routedDelivered` was 193 BOTH
- * TIMES, to the digit, with its refusals scaling 5685 -> 33485. The aggregate went 154 routed / 445 delivered
- * (OK) and 519 routed / 445 delivered (FAILED) out of one binary. The receiver's admitted count is fixed by
- * its own timeline structure; the routed count is fixed by how far the RESUMED sender got through its replay
- * before the peer answered `w.closed`, which this host decides with a WALL-DENOMINATED quantum (§Testing: no
- * CPU clock here, `sliceMs 12`). 24 runs, 12 per artifact, on a quiet machine: 22605dc4 failed 12/12 and
- * 332a0c50 failed 10/12, with both passes in the fast mode (~26 s, ~150 posts) against the slow one (~38 s,
- * 519 posts). THE BUILD AT 22605dc4 REPORTED THIS STAGE `PASS`, and the same command on the same artifact
- * fails every time it is run alone, so this stage's OK has never been a fact about a revision.
- *
- * IT FIRES IN ONE DIRECTION ONLY, AND SAYING SO IS PART OF THE CHECK. Firing establishes a loss: the
- * receivers are drained above, so every attachment has been consumed, and more records than deliveries means
- * some record was admitted by no timeline at all. SILENCE ESTABLISHES NOTHING — one record admitted by N
- * timelines pays for N-1 records admitted by none — so an OK here is not a statement that no message was lost,
- * and a reader who takes it for one has read a coverage figure without its denominator.
- *
- * THAT COUNTER EXISTS NOW AND IS READ BELOW, so this paragraph says what the shortfall above is FOR rather
- * than what is missing — the sentence it replaces asked for exactly one thing and the request has been met.
- * The question is per RECORD ("was this record admitted by at least one timeline") and every number this
- * pigeonhole compares is per (record, timeline) attachment, so no arithmetic HERE recovers it: it is answered
- * where the fact lives instead. solver/engine.c keys a ledger by the record's own text at the arrival — before
- * the attach loop, deliberately, so a record whose attach aborts is still on it — raises that row's `admitted`
- * at the delivery, and `engine_routed_census` sums the arrivals of every row still holding zero. Read at a
- * receiver this drive DRAINED, that is an equality against zero which no multiplicity can pay for and no
- * schedule can move.
- *
- * THE SHORTFALL IS KEPT BECAUSE IT IS NOT THE SAME QUESTION, and neither of the two subsumes the other. This
- * one compares THIS ZONE's routed count against the receiver's admissions, so its subject is the transport:
- * it can speak about a record this driver handed over that the receiving instance's ledger has no row for.
- * The equality's subject is the receiver's own ledger, so it speaks about every record that ARRIVED and says
- * nothing about one that did not. Both fire in one direction only, and the OK line at the end says which of
- * the two it is reporting rather than merging them into a count of things that went right. */
-/* THE BLIND SPOTS FIRST, AND AS `console.log`, BECAUSE EVERY VERDICT BELOW THIS LINE CAN EXIT. A gate states
-   its findings and its blind spots as SEPARATE verdicts; printing an unasked question only when nothing else
-   fails would make it visible in exactly the runs nobody needs it in. Both of these say what was NOT asked
-   and neither claims anything was found. */
-if (zeroDeliveryAbsent.length)
-  console.log(`[route] UNAUDITED — ${zeroDeliveryAbsent.length} of ${engines.length} instance(s) emit no ` +
-              `\`_routedZeroDelivery\` (${zeroDeliveryAbsent.join(' ')}), so the per-record loss question was ` +
-              'NOT ASKED of them and nothing about them was found either way. The artifact this drive loaded ' +
-              'is older than this reader. The verdict for it is at the end, after the checks that can still ' +
-              'be made have been made');
-if (zeroDeliveryUndrained.length)
-  console.log(`[route] UNAUDITED — ${zeroDeliveryUndrained.length} instance(s) were NOT drained before this ` +
-              `census and hold a non-zero \`_routedZeroDelivery\`: ${zeroDeliveryUndrained.join(' ; ')}. The ` +
-              'gauge counts a record still in flight and a record no timeline will ever admit as one number ' +
-              '(solver/engine.h), so at an instance that can still step it is a BACKLOG and this drive did ' +
-              'not ask the loss question of it. Nothing about those instances was found either way. The ' +
-              'sender is the expected member here: stepping it would emit posts that nothing after that line ' +
-              'routes, so the drain above deliberately skips it');
-for (const [doc, n] of routedTo) {
-  /* NOT DEFAULTED, for the reason the census fields above are not: a document this zone routed to and that no
-     engine reported a delivery census for is a receiver that vanished between the routing and the count, and
-     reading that as zero would report it as the loss this check is about. */
-  if (!deliveredTo.has(doc))
-    fail(`${n} record(s) were routed to \`${doc}\` and no instance in the final census holds that document — ` +
-         'the holder was provisioned, took the records, and is not among the engines this drive is counting, ' +
-         'so its deliveries are unmeasured rather than absent');
-  const d = deliveredTo.get(doc);
-  if (d < n)
-    fail(`${n} record(s) were routed to \`${doc}\` and its timelines admitted ${d} of them — every receiver ` +
-         'was drained before this count, so the remaining attachments were consumed as refusals and at least ' +
-         `${n - d} record(s) were admitted by NO timeline of that document. That is a peer's message the page ` +
-         'never receives and cannot know it did not (refusals this document\'s timelines made: ' +
-         `${refused} across all receivers; routed in total: ${posts.length}, delivered in total: ` +
-         `${delivered}). The direction matters: this fires only on a shortfall, so it names a loss when it ` +
-         'speaks and proves nothing when it is silent — the equality below is the statement about every ' +
-         "record that ARRIVED, read off the receiver's own per-record ledger rather than recovered from this " +
-         'sum, and the two are checked separately because they have different subjects');
-}
-/* AND THE ONE THAT IS A LOSS. `zero` is a count of ARRIVALS of records that no timeline admitted, not a count
-   of such records, because a record routed twice arrived twice and both arrivals were lost — engine.c sums
-   `r->routed` over the rows whose `admitted` is 0, which is the number of messages the page never received.
-   ITS SILENCE IS A STATEMENT AND THE SHORTFALL'S IS NOT, which is the entire reason it was worth building
-   and is a claim about what a zero MEANS rather than about when this line fires — both fire only on a loss: a
-   multiplicity of timelines cannot pay for it (a record admitted by twelve timelines lowers its own row to
-   zero and no other row's) and a schedule cannot move it (the receiver is drained, so the gauge cannot fall
-   again) — so its ZERO is a positive statement about every record that arrived, and not a silence. */
-const zeroLost = zeroDeliveryRead.filter((x) => x.zero);
-if (zeroLost.length)
-  fail(`${zeroLost.reduce((n, x) => n + x.zero, 0)} routed record arrival(s) were admitted by NO TIMELINE of ` +
-       `the document they named, at ${zeroLost.length} of ${zeroDeliveryRead.length} drained instance(s): ` +
-       `${zeroLost.map((x) => `[${x.tag}] ${x.doc}: ${x.zero}`).join(' ; ')}. That is a peer's message the ` +
-       'page never receives and cannot tell from one that was never sent. Every receiver was pumped to a ' +
-       'stall before this line, so the gauge cannot fall again and this is a loss rather than a backlog — ' +
-       'AND THE ONE THING THAT WOULD MAKE THAT WRONG IS THE FIRST THING TO CHECK: a stall means every live ' +
-       'flow is host-owed (engine.c asserts exactly that at the stall), and a host-owed flow can still be ' +
-       'holding an unconsumed attachment, which only the frontier reaching DONE rules out. Read the ' +
-       'refusals beside it before reading the flows: solver/engine.c says each of these was refused at ' +
-       'deliver_admits by every timeline it was offered to, either because a RECEIVED world CONTRADICTS the ' +
-       'record and the arm that should take it was never minted, or because a FORECLOSED world covers it and ' +
-       'the parent refused it for a reason of its own — and which of the two is a property of the routed ' +
-       `world vectors alone, not of the schedule (delivered ${delivered}, refused ${refused}, routed by this ` +
-       `zone ${posts.length})`);
-const endsTotal = ENDS.reduce((n, k) => n + ends[k], 0);
-/* `<` AND NOT `!==`, AND THE SLACK IS A MECHANISM RATHER THAN TOLERANCE: a fork gives the arm its own Array
-   naming the parent's job RECORDS (solver/flow.c's flow_job_fork), so a timeline that branches between the
-   enqueue and the run delivers the message once in EACH arm — two timelines, two ends, one queued task. Only
-   the deficit is a defect, and solver/engine.c asserts the same inequality at the frontier's DONE; this is that
-   assertion read from the outside, where a build with DCHECKs compiled out is the only place it can be seen. */
-if (endsTotal < delivered)
-  fail(`${delivered} delivery(ies) became a §9.3.3 step 8 task and only ${endsTotal} of those tasks ever ` +
-       `reached an end (fired ${ends._routedTasksFired}, declined by targetOrigin ` +
-       `${ends._routedTasksTargetOrigin}, target destroyed ${ends._routedTasksTargetGone}, threw ` +
-       `${ends._routedTasksThrew}) — the missing ${delivered - endsTotal} were queued on a receiving ` +
-       'timeline and never run, which is a peer\'s message dropped by the scheduler rather than by any of the ' +
-       'spec\'s own ways of delivering nothing, and is the one of the four the page cannot tell from a ' +
-       `message that was never sent (records routed: ${posts.length}, declined by the receiving timeline: ${refused})`);
-/* AND AT LEAST ONE OF THEM REACHED A PAGE. This is deliberately NOT `fired >= posts.length`, and the reason is
-   a real ordering rather than caution: `b`'s own listener calls `window.close()`, §7.2.2.1 step 6.2 queues the
-   definitely-close, and a LATER record delivered into a timeline that has already run it is removed by §7.5.10
-   step 5 before its task can fire — a correct end, and one whose count is a function of which of `b`'s
-   timelines got the thread first. An assertion over it would be the schedule-dependent claim this file already
-   made once. Zero, on the other hand, is not schedule-dependent at all: it is the whole inbound half never
-   having happened. */
 if (!ends._routedTasksFired)
   fail(`${posts.length} record(s) were routed, ${delivered} became a task, and NOT ONE of those tasks fired an ` +
-       'event at the receiving Window — §9.3.3 step 8.7 is the only end at which a page learns anything, so ' +
-       'this is the inbound half of the seam not existing. The ends they did reach: declined by targetOrigin ' +
-       `${ends._routedTasksTargetOrigin}, target destroyed ${ends._routedTasksTargetGone}, threw ` +
-       `${ends._routedTasksThrew}`);
+       'event at the receiving Window — §9.3.3 step 8.7 is the only end at which a page learns anything. The ends ' +
+       `they did reach: declined by targetOrigin ${ends._routedTasksTargetOrigin}, target destroyed ` +
+       `${ends._routedTasksTargetGone}, threw ${ends._routedTasksThrew}`);
 if (!got.length)
-  fail('the receiving page never issued the request its `message` listener is written to issue — every ' +
-       'delivery reached an end and none of them ran the page\'s own code, so the event fired at a Window ' +
-       'whose listener is not the one the document registered');
+  fail('the receiving page never issued the request its `message` listener is written to issue, so the event ' +
+       'fired at a Window whose listener is not the one the document registered');
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
-                  'and never used, which is the state this driver exists to detect');
-/* ASKED IS THE FIRST HALF AND IT IS NOW TRUE. A zero here would mean `w.length` resolved WITHOUT reaching the
-   peer, which is a §7.2.2.2 fidelity bug and not a transport gap: HTML §7.2.2.2 Indexed access on the Window
-   object writes the getter as "return this's associated Document's document-tree child navigables's size", and
-   that Document is the OTHER one — so an answer produced in the asking instance counted this document's frames
-   and called them the other's. */
+                  'and never used');
+/* A zero here would mean `w.length` resolved without reaching the peer: HTML §7.2.2.2 Indexed access on the
+   Window object answers it from the PEER's active document's child navigables. */
 if (!reads.size)
   fail('`w.length` on a cross-origin WindowProxy asked the peer nothing — HTML §7.2.2.2 Indexed access on the ' +
-       "Window object answers it from the document-tree child navigables of the PEER's active document, so an " +
-       "answer that never left this instance counted the asking document's own frames");
-/* AND ANSWERED IS THE SECOND, AND IT IS THE HALF THAT CARRIES A VALUE BACK. Everything above this line is the
-   ASKING half — the world vector, its ancestry, the segment the peer materializes from it, the origin stamp. A
-   read that is asked and never answered leaves the asking flow parked with its snapshot intact, which is the
-   correct behaviour and an unfinished seam: the peer has to install the asking world's segment and answer BY
-   RUNNING A PROGRAM, on its own frontier, and hand back a COMPLETION rather than a value. */
-const withheldReads = [...reads.values()].filter((r) => r.withheld);
-if (readsAnswered !== reads.size - withheldReads.length)
-  fail(`${reads.size} cross-agent read(s) asked, ${withheldReads.length} withheld on purpose and ` +
-       `${readsAnswered} answered — the instance holding the ` +
-       'document did not produce a completion for one of them. Either no instance holds the document the ' +
-       'operation names (a `navigable.create` notice this zone dropped), or the performing instance never ' +
-       'reached the end of the program its answer is — which is a flow on its frontier and can be parked ' +
-       'behind anything else that frontier is doing');
+       "Window object answers it from the document-tree child navigables of the PEER's active document");
 if (routeFailures.length)
   fail(`${routeFailures.length} record(s) named a document no instance holds, so their askers are parked on a ` +
        `question nothing will ever answer: ${routeFailures.join(' ; ')}`);
 if (unheldReads.size)
-  fail(`${unheldReads.size} cross-agent read(s) named a document no instance held for the WHOLE drive, so ` +
-       `their askers are parked on a question nothing will ever answer: ${[...unheldReads.values()].join(' ; ')}`);
-/* AND THE LAST ONE IS THE ONE A WRONG ANSWER PASSES. Every check above fails by a NUMBER staying zero — a
-   record that did not cross, a segment that was not forked, a completion that never came — and none of them
-   would have moved if `w.closed` had been answered out of `a`'s own byte, because a local answer is instant and
-   plausible. So this check is on the VALUE: `b` closed itself, so §7.2.2.1's `closed` is true about that
-   traversable, and the only record in existence that says so is `b`'s. `typeof` rides along for the reason it
-   rides on the delivery — an answer that arrived as text and stayed text satisfies `v ? ...` and is not a
-   boolean. */
-/* HOW MANY OF THEM THERE ARE IS NOT A NUMBER THIS DRIVER MAY PIN, and pinning it was a confident false red.
-   This line demanded EXACTLY ONE, on the reasoning that "this driver arranged exactly one … a two is a flow
-   that came back beside one that had never left" — and there is no flow that never left (the parked session was
-   torn down, `qjs_teardown`), while there are at least two that came back: HTML_A branches on
-   `__FLAGS.admin`, which is server-injected absent state, so BOTH arms are real timelines of `a` and both run
-   the `.then` that reads the member. The expression reads it TWICE more (`typeof w.closed` and `w.closed` are
-   two [[Get]]s), and each read is answered once per timeline the PEER holds, over each of which the asking flow
-   forks an arm — so the count is a property of how much both documents forked, which is exactly the kind of
-   number §Testing says a gate may not store an expected copy of. What is checkable is the VALUE and the
-   PRESENCE, and both of those are what a wrong answer gets wrong. */
-/* THE TYPE, ON EVERY ONE OF THEM — EVERY SESSION'S, deliberately, and this is the one reader here that is not
-   scoped. A `closed` that came back as text is a fidelity bug about the MEMBER wherever it was read, so
-   narrowing this to the resumed session would stop asking it of the reads a drive took in phase 1. `typeof`
-   rides the report for the reason it rides the delivery — an answer that arrived as text and stayed text
-   satisfies `v ? …` and is not a boolean, and §7.2.2 The Window object declares `closed` as one. */
+  fail(`${unheldReads.size} cross-agent read(s) named a document no instance held when the drive ended: ` +
+       [...unheldReads.values()].join(' ; '));
+/* THE TYPE OF EVERY `w.closed` READ BACK, every session's: §7.2.2 The Window object declares `closed` a boolean,
+   and an answer that arrived as text satisfies `v ? …` and is not one. Phase 5 already waited for a resumed
+   `true`, which is the check a wrong answer passes: `b` closed itself, and only `b`'s record says so. */
 const notBool = closedReports.filter((r) => !r.url.includes('v=boolean:'));
 if (notBool.length)
   fail(`${notBool.length} of ${closedReports.length} reads of \`w.closed\` came back under a type §7.2.2 The ` +
        `Window object does not declare for it — it is a boolean: ${notBool.map((r) => r.url).join(' ; ')}`);
-/* AND THE ONE A WRONG ANSWER PASSES. Every check above fails by a NUMBER staying zero — a record that did not
-   cross, a segment that was not forked, a completion that never came — and none of them would have moved if
-   `w.closed` had been answered out of `a`'s own byte, because a local answer is instant and plausible. So this
-   check is on the VALUE: `b` ran `window.close()` in the timeline that received the third message, and the only
-   record in existence that says so is `b`'s.
-   AT LEAST ONE AND NOT ALL, because both answers are true of the document they were computed in. HTML §7.2.2.1
-   "Opening and closing windows" gives the getter as "return true if this's browsing context is null or its is
-   closing is true; otherwise false", and the same section's close() steps set "thisTraversable's is closing to
-   true" — in the agent that RUNS close(), which is `b`, and in the timelines of `b` that reached that line.
-   `b`'s other timelines never received the message that runs it and answer false as truly. A run in which
-   NONE of them says true is the defect this fixture exists for: `a` holds a WindowProxy for the same traversable
-   and its own copy of that record is never written, so `w.closed` was false for ever about a window that had
-   closed itself — a plausible value instead of a missing one, which is the only kind of cross-instance defect
-   that no counter can see. */
-/* AND IT IS THE RESUMED SESSION'S READS, which is a STRENGTHENING and not a scoping detail. The claim this
-   check makes is about a value that survives a park: the flow re-issued the read, the peer answered out of the
-   timeline that ran close(), and the answer came back true. Read over every session, a `true` taken in phase 1
-   — which a drive of an uncalled listener now produces, because `b`'s listener closes `b` on one arm of an
-   opaque comparison — satisfies it without the resumed session having answered anything, and the one
-   cross-instance defect no counter can see would be certified by a report from the session that parked. */
-if (!closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')))
-  fail(`no read of \`w.closed\` came back true in the RESUMED session, across ` +
-       `${closedBy(resumedTag).length}: ${closedBy(resumedTag).map((r) => r.url).join(' ; ')}. ` +
-       'The OTHER instance ran window.close(), and HTML §7.2.2.1 "Opening and closing windows" makes the ' +
-       "getter's answer the OR of a null browsing context and the top-level traversable's `is closing`, which " +
-       "close() sets in the agent that RUNS it — so an answer read out of this agent's own copy of that record " +
-       'is false about a window that has closed itself. THE LIST IS THIS SESSION\'S WHOLE OUTPUT and not its ' +
-       'first round\'s — the phase-4 loop runs the resumed frontier to DONE or to a stall this zone will not ' +
-       'pay — so `a` has made every read it is going to make and no `true` among them is the defect at any ' +
-       'count. THIS SENTENCE USED TO SAY THE OPPOSITE AND THE PREDICATE DID NOT AGREE WITH IT: the loop exited ' +
-       'on the first ROUND that reported any of them, `a` reads the member once per ARM and each read is ' +
-       'answered per peer TIMELINE, so the arms could land in different rounds and a count of 1 was whichever ' +
-       'arm happened to be pending first — the text said such a count was not the defect this check is named ' +
-       'for, and the check FAILED on it anyway.');
 
-/* ── THE PARK, WHICH IS THE PART OF THIS SEAM NOTHING HAD EVER EXERCISED ──────────────────────────────────
-   The checks above are all about two instances that were both resident for the whole run. These four are about
-   one of them LEAVING MEMORY while the other keeps its state, which is what Level-1 eviction does. */
+/* ── THE PARK: one of the two instances LEAVING MEMORY while the other keeps its state, which is what Level-1
+   eviction does. */
 if (parkStep !== 0)
   fail(`the park step answered ${parkStep} rather than DONE — engine_sched_step takes the park before its first ` +
-       'pick and closes the session, so anything else means the frontier was not written out and the residue ' +
-       'below is not the residue');
+       'pick and closes the session, so anything else means the frontier was not written out');
 if (!residue)
-  fail('the parked frontier wrote an EMPTY residue while a flow was suspended at a cross-instance read — an ' +
-       'empty park document is how a fully-explored document DELETES its cold entry (solver/cold.h), so a ' +
-       'suspended flow that produces one is a flow dropped under the name of a positive answer');
-/* THE PEER'S IN-FLIGHT TURN OUTLIVES THE INSTANCE THAT ASKED, and nothing on either side knows. `b` was asked
-   the withheld read, ran the program its answer is, and emitted a completion under a token whose asking
-   instance no longer exists — no flow, no register, no engine. This zone is holding it because this zone is
-   the only thing left that can; the engine's own delivery entry would take it (engine_host_answer walks the
-   registers of an instance whose session is closed and finds the entry still there, writes the value onto it,
-   and nothing will ever read it) or, once the instance is torn down, there is nowhere to deliver it at all. */
+  fail('the parked frontier wrote an EMPTY residue while a standby waited at a cross-instance read — an empty ' +
+       'park document is how a fully-explored document DELETES its cold entry (solver/cold.h)');
+/* THE PEER'S IN-FLIGHT TURN OUTLIVES THE INSTANCE THAT ASKED: the held completions name a token whose asking
+   instance no longer exists, and this zone is the only thing left holding them. */
 if (!orphanCompletions.length)
-  fail('the peer produced no completion for the read that was parked on — either the withheld read never ' +
-       'reached the peer, or the peer did not run the program its answer is, and in both cases phase 4 parked ' +
-       'a flow that was not actually suspended at a cross-instance read');
+  fail('no completion was held for a read the parked instance asked — phase 3 ended on one, so the park lost it');
 console.log(`orphaned peer completions after the park: ${orphanCompletions.length} — ${orphanCompletions.join(' ')}`);
-/* AND THE RESUMED FLOW RE-ISSUES THE READ, which is the cold tier's whole claim about the replies a host owes:
-   the residue names the ARMS the flow took, so re-running the document under them re-issues the request and it
-   is answered with TODAY's value (§Time-travel-resume). A resumed session that asked nothing would mean the
-   suspended flow's path did not replay to the point it was suspended at, which is a dropped flow wearing the
-   name of a successful park. */
+/* THE RESUMED FLOW RE-ISSUES ITS READS: a recipe is a replay (solver/cold.h), so the request is re-issued by the
+   code that issued it the first time and answered with today's value. */
 if (!resumedReads.length)
-  fail('the resumed instance asked the peer nothing — the flow that was parked AT a cross-instance read did ' +
-       'not replay to that read, so the park lost it. A recipe is a replay (solver/cold.h): the request is ' +
-       'not carried across, it is re-issued by the code that issued it the first time');
-/* THE ONE A WRONG NAME PASSES, AND IT LIVES OUT HERE BECAUSE NOTHING INSIDE EITHER ENGINE CAN SEE BOTH
-   SESSIONS. A WorldId is (document, GENERATION, serial): the document name is stable across a park by
-   requirement — the routing above depends on it — and the serial counts from 1 in every session, so without
-   the generation the resumed session would hand the peer the exact names the session that ended handed it and
-   the peer would answer each resumed flow out of a dead flow's timeline. The ancestry would match too, so no
-   assert in either engine could catch it. The generation rides the residue (solver/cold.h's 'g' record) and
-   world_session_resume mints above it, so a name from the ended session is now unresolvable rather than
-   wrongly resolvable. The LEAK that used to remain owed beside it is the record above: the park announces every
-   world this session sent, `b` releases the segment it held for each, and the counters below are where that is
-   visible — `held` falling below `made` is world_release running, and it could never happen before. */
+  fail('the resumed instance asked the peer nothing — the flow parked at a cross-instance read did not replay ' +
+       'to it, so the park lost it');
+/* A WorldId is (document, GENERATION, serial): the serial counts from 1 in every session and the document name
+   is stable, so without the generation the resumed session would hand the peer names a dead flow's timeline
+   still holds a segment under. Nothing inside either engine sees both sessions; this driver does. */
 if (reusedWorlds.length)
   fail(`the resumed session put ${reusedWorlds.length} world name(s) on the wire that the session that ended ` +
-       `had already sent: ${reusedWorlds.join(' ')}. A WorldId's serial counts from 1 in every session while ` +
-       'the document name is stable by requirement, so the peer — which never left memory — already holds a ' +
-       'segment keyed on each of them, and answers the resumed flow under the timeline of a flow that no ' +
-       'longer exists. Two timelines wearing one name, across sessions. Build the session component of a world ' +
-       'name — the residue is what crosses the tier and can carry it');
-/* A SEAM THAT MATERIALIZED AND NEVER RELEASED IS THE STATE THIS RECORD WAS BUILT FOR, so a run in which no
-   world ever died is a run in which the reclamation did not happen — which reads identically to the tree before
-   it existed, and is exactly the shape "a mechanism nobody can see run is one that has never run" names. */
+       `had already sent: ${reusedWorlds.join(' ')}`);
 if (!worldDeaths.length)
-  fail('no world death crossed this seam. `a` ran its flows out and then PARKED its whole frontier, so both ' +
-       'announcements were due (a flow leaving the frontier, and a session whose generation is now dead) — ' +
-       'and with neither, every segment `b` materialized is a foreign flow\'s state it holds for the rest of ' +
-       'its process, and `b` can never park while it does (solver/cold.c refuses it)');
+  fail('no world death crossed this seam: `a` parked its whole frontier, so every world it sent was due a ' +
+       'death, and `b` holds each segment for the rest of its process without one');
 console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.join(' ')}`);
-/* AND THE BLIND SPOT'S OWN VERDICT, LAST, BECAUSE IT IS THE ONE THAT SILENCES EVERYTHING AFTER IT. Every
-   check above has now spoken, so this exits having cost nothing, and it exits rather than passing for the
-   reason the reader's own comment gives: an artifact that cannot be asked the question is not a green gate,
-   and a `|| 0` in its place would have answered the equality with the number a healthy run also produces.
-   THE SECOND DISJUNCT IS THE ASSERT THAT COULD NOT FIRE. A run in which the equality was asked of NO instance
-   passes it vacuously — the check above reads `zeroLost` off an empty list — and a check whose two sides cannot
-   disagree is not a weak check, it is a non-check reporting as a passing one. It is stated here as what it is
-   rather than left to be read out of an OK line quoting a denominator of zero. */
-if (zeroDeliveryAbsent.length || zeroDeliveryRead.length === 0)
-  fail('UNAUDITED, NOT A FINDING — the per-record delivery equality was NOT ASKED and NOTHING was found by ' +
-       `it. ${zeroDeliveryAbsent.length ? `${zeroDeliveryAbsent.length} of ${engines.length} instance(s) ` +
-       `carry no \`_routedZeroDelivery\` (${zeroDeliveryAbsent.join(' ')}): solver/result.c emits it beside ` +
-       '`_routedDelivered`/`_routedRefused` and solver/engine.h says all three or none, so the artifact this ' +
-       'drive loaded (extension/lib/qjs/qjs.mjs, read off disk) predates that emission or its producer moved ' +
-       'under this reader — rebuild and re-run' : 'no instance reached the drained state the gauge may be ' +
-       'read in, so the equality stood over an empty list and would have passed whatever the receivers held'}` +
-       '. Every check that COULD be made was made first and its verdict is above this line: what is missing ' +
-       'here is the one statement about every record that arrived, not a statement that a record was lost');
-/* AND THE OK SAYS WHAT IT DID NOT ESTABLISH. The delivery check above is one-sided: it names a loss when it
-   fires and is silent when a receiver's timeline multiplicity has paid for one, so a line that read "N routed
-   into M deliveries" and stopped invited exactly the reading the block above spends a paragraph refusing. The
-   per-document shortfall is printed as the number it is — zero on this run — beside the per-record equality
-   that IS a statement about every record that arrived, and beside the count of instances that equality could
-   not be asked of, because a check that was not made is not a check that passed. */
 console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
-            `across the receiver's timelines (${refused} declined by the receiving timeline) with one listener run ` +
-            'each; no receiving document admitted fewer records than it was handed, which on its own does NOT ' +
-            'establish that every record was admitted (a record admitted by several timelines pays for one ' +
-            `admitted by none) — and, which that sum cannot say, every record that ARRIVED at each of the ` +
-            `${zeroDeliveryRead.length} DRAINED instance(s) was admitted by at least one of its timelines ` +
-            `(\`_routedZeroDelivery\` == 0 at every one of them)` +
-            `${zeroDeliveryUndrained.length ? `, with ${zeroDeliveryUndrained.length} UNDRAINED instance(s) ` +
-              'holding a non-zero gauge that is a backlog and was NOT asked the loss question' : ''}` +
-            ', ancestry-forked segments: ' + forked +
-            `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedBy(resumedTag)[0].url}` +
-            `, parked and resumed across ${residue.length} bytes of residue`);
+            `(${refused} declined by a receiving timeline), ancestry-forked segments: ${forked}, cross-agent ` +
+            `reads asked: ${reads.size}, a resumed standby refused ${standbyWitness().length} taken timeline's ` +
+            `request answer(s), w.closed read back true after the park, parked and resumed across ` +
+            `${residue.length} bytes of residue`);
 
 /* ── VARIANT A: PARK THE ANSWERING INSTANCE, AS A PROBE AND NOT A GATE ──────────────────────────────────────
  * `node engine/route.mjs park-probe`. Opt-in, and deliberately NOT part of the drive above, for the reason the
