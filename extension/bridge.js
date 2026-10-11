@@ -2414,8 +2414,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      Methods). A method this zone cannot issue is refused before the call and never downgraded: safeFetch is
      GET only (SECURITY.md), so answering a POST's key with a GET's reply would be a response the server never
      gave. On this seam the refusal is spelled `null`, because core/fetch builds any object into a Response,
-     so a status-0 record would resolve `fetch()` with a status no server returns. fetchedXhr spells its
-     refusal as a status-0 record, which xml_http_request.c's xhr_take_reply treats as a network error. */
+     so a status-0 record would resolve `fetch()` with a status no server returns. fetchedXhr spells a network
+     refusal as an answer with no body, which xml_http_request.c's xhr_take_reply leaves as §3's network error,
+     and a decline as `{declined}`, which goes to `hostDecline`. */
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, credentials, mode) => {
@@ -2638,19 +2639,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "the engine's xhr.send record names no method — xhr_request_op writes one on every record, and a " +
            "request whose method is unknown cannot be refused OR issued");
     /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with `fetched` and
-       engine/trusted.mjs. This seam can answer it only with the page's `error` event, which no browser would
-       produce for a POST, so it aborts in dev; the release arm below answers the network error. */
+       engine/trusted.mjs. It is a decline: no browser refuses a POST, so the rendezvous is declined and the
+       engine forks a waiting arm and a failure arm, as for a refused document load. */
     const _xhrMethodRefusal = self.safeFetchMethodRefusal(q.method);
-    if (_xhrMethodRefusal) {
-      DFAIL("an XMLHttpRequest was DECLINED by the chokepoint (" + _xhrMethodRefusal.reason + ") and this " +
-            "seam can only answer it with §3.5.6 \"The send() method\"'s network error — the page's `error` " +
-            "event, for a request this zone chose never to send. The address is DERIVED IN FULL and REPORTED " +
-            "(§Attacker-sources: that is not a gap in the report, it IS the report), and what is missing is " +
-            "the way to say so to the FLOW: an `xhr.send` is a HOST REQUEST, so a decline means HOLDING it " +
-            "open as a relayed `perform` is held, with the flow SUSPENDED at the `send()` line rather than " +
-            "resumed down its failure path");
-      return { meta: { status: 0, statusText: _xhrMethodRefusal.reason, headers: [] }, bytes: null };
-    }
+    if (_xhrMethodRefusal) return { declined: q.method + " " + q.url + " — " + _xhrMethodRefusal.reason };
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
       /* The credentials mode (XHR §3.5.6 The send() method: `include` if cross-origin credentials is true,
@@ -2730,23 +2722,15 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
              "reason it is");
       /* The bytes cross beside the record, for `fetched`'s reason: XHR §3.6.6 Response body decodes the received
          bytes with the final encoding, and `responseType = "arraybuffer"` needs the server's own bytes. */
-      /* A decline is graded but cannot yet be acted on: XHR §3.5.6 The send() method's handle errors turns a
-         status-0 record into the page's `error` event, right where a browser also fails and false where this
-         zone declined. There is no decline channel: an `xhr.send` is a host request answered by
-         `engineAnswer(eng, id, …)`, and an unanswered one is re-reported by `qjs_host_requests` every step, so
-         declining by silence would spin. The DFAIL names what to build. */
+      /* A decline goes to `hostDecline` (see the delivery in the host-request loop). A network refusal is
+         XHR §3.5.6 "The send() method"'s network error: an answer with no body, so xhr_take_reply leaves the
+         response a network error and the page's XHR runs its error steps. A status-0 record with an empty
+         body would instead be a response, and fire `load`. */
       if (r.refusal) {
-        DCHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
-               "safeFetch graded an XHR's refusal `" + r.refusal.kind + "`, which is neither word it states");
-        if (r.refusal.kind === "decline")
-          DFAIL("an XMLHttpRequest was DECLINED by the chokepoint (" + r.refusal.reason + ") and this seam " +
-                "can only answer it with §3.5.6 \"The send() method\"'s network error — the page's `error` " +
-                "event, " +
-                "which tells the flow the server was unreachable for a request this zone chose never to send, " +
-                "and hands every branch under `onerror` a fact about the origin nothing observed. BUILD the " +
-                "decline: an `xhr.send` is a HOST REQUEST, so declining it means HOLDING it open the way a " +
-                "relayed `perform` is held, with the flow SUSPENDED at the line the page wrote `send()` on — " +
-                "not answered, and not re-reported into a spin by qjs_host_requests");
+        CHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
+              "safeFetch graded an XHR's refusal `" + r.refusal.kind + "`, which is neither word it states");
+        if (r.refusal.kind === "decline") return { declined: "GET " + abs + " — " + r.refusal.reason };
+        return { meta: { status: 0, statusText: r.statusText, headers: [] }, bytes: null };
       }
       /* The type the chokepoint computed, relayed as `fetched` does: this zone is the only one that may answer
          it (safeFetch saw the body and ran the sniff), and solver/reply_decode.c reads `computedType` rather than
@@ -3908,7 +3892,7 @@ async function engineServiceHostRequests(eng) {
         // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched
         // bytes and ran no program that could throw. A relayed cross-agent operation answers 1 with the thrown
         // value, so the asking page's `try`/`catch` runs.
-        (r) => engineAnswer(eng, id, r.meta, r.bytes));
+        (r) => r.declined ? engineDeclineRendezvous(eng, id, r.declined) : engineAnswer(eng, id, r.meta, r.bytes));
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
@@ -3956,17 +3940,18 @@ async function engineDeliverDocument(eng, id, r) {
      one arm keeps waiting with no value (the navigable keeps the `about:blank` HTML §7.3.1.3 Child navigables
      created it holding, and fires once the origin is widened), the other takes the network error and becomes
      the error-page document with its path marked forced. Both worlds are explored. */
-  if (r.declined) {
-    const matched = await eng.r.renderer.hostDecline({ request: id, reason: r.declined });
-    /* A refusal matching no parked flow is asserted: this zone issued the load against an id the engine had
-       just published, so a miss means `GetHostRequests` and this answer have drifted. */
-    DCHECK(matched && matched.matched === 1,
-           "the engine was parked on no flow for a document load this zone had just been asked for — the id " +
-           "came off `GetHostRequests` and is answered here against the same id, so a miss is this zone and the " +
-           "engine no longer agreeing about which rendezvous is outstanding");
-    return;
-  }
+  if (r.declined) return engineDeclineRendezvous(eng, id, r.declined);
   await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers) }, r.bytes);
+}
+/* A refusal of a synchronous request (a document load or an XHR fetch), recorded on the rendezvous it names.
+   A refusal matching no parked flow is asserted: this zone issued the request against an id the engine had
+   just published, so a miss means `GetHostRequests` and this answer have drifted. */
+async function engineDeclineRendezvous(eng, id, reason) {
+  const matched = await eng.r.renderer.hostDecline({ request: id, reason });
+  DCHECK(matched && matched.matched === 1,
+         "the engine was parked on no flow for a request this zone had just been asked for — the id came off " +
+         "`GetHostRequests` and is answered here against the same id, so a miss is this zone and the engine " +
+         "no longer agreeing about which rendezvous is outstanding");
 }
 /* The two channels for a synchronous answer. The document load and the XHR fetch carry a fetched body as bytes;
    every other answer (a number, a document name) has `bytes === null`. Completion 0 is ECMA-262 §6.2.4's

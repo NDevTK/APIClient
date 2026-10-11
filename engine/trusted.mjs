@@ -856,6 +856,39 @@ async function main() {
              bytes: rec.bytes };
   }
 
+  /* XHR §3.5.6 "The send() method"'s fetch, answered by request id as extension/bridge.js's `fetchedXhr` does.
+     The record is xml_http_request.c's `xhr_request_op`; the origin is this zone's record of the instance. A
+     policy refusal is a decline, which the engine forks into a waiting arm and a failure arm; a network
+     refusal is §3.5.6's network error, an answer with no body, so the page's XHR runs its error steps. */
+  const workXhr = async (e, id, record) => {
+    const q = JSON.parse(record);
+    for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned'])
+      if (typeof q[k] !== 'string' || q[k] === '')
+        throw new Error(`the engine's xhr.send record states no \`${k}\` — xhr_request_op writes every field`);
+    if (!Array.isArray(q.headers))
+      throw new Error("the engine's xhr.send record carries no header list — xhr_request_op writes one");
+    if (q.mode !== 'cors')
+      throw new Error(`the engine's xhr.send record states the mode \`${q.mode}\` — XHR §3.5.6 "The send() ` +
+                      'method" builds every request in cors mode');
+    const methodRefusal = ZONE.safeFetchMethodRefusal(q.method);
+    if (methodRefusal) { e.ready.push(declineAnswer(id, `${q.method} ${q.url} — ${methodRefusal.reason}`)); return; }
+    const abs = new URL(q.url, e.docUrl).href;
+    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination: '',
+                                            mode: q.mode, provenance: q.provenance, pinned: q.pinned,
+                                            actor: 'page', docReach: e.docReach, credentialed: false,
+                                            credentials: q.credentials,
+                                            headers: q.headers.length ? q.headers : undefined });
+    if (raw.refusal && raw.refusal.kind === 'decline') {
+      e.ready.push(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
+      return;
+    }
+    const rec = replyRecord(raw, `the XMLHttpRequest ${abs}`);
+    const meta = rec ? { status: rec.meta.status, statusText: rec.meta.statusText, headers: rec.meta.headers,
+                         computedType: rec.meta.computedType }
+                     : { status: 0, statusText: raw.statusText, headers: [] };
+    e.ready.push(['answer', String(id), b64(JSON.stringify(meta)), '0', rec ? b64(rec.bytes) : ABSENT].join('\t'));
+  };
+
   const workFetch = async (e, method, destination, initiator, provenance, pinned, credentials, mode, url) => {
     const abs = new URL(url, e.docUrl).href;
     /* EVERY ANSWER THIS FUNCTION HAS LEAVES THROUGH ONE DOOR, AND THE DOOR IS WHAT RELEASES THE KEY. Pushing
@@ -1644,13 +1677,16 @@ async function main() {
                         b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers) })),
                         '0', b64(loaded.bytes)].join('\t'));
         })());
+      } else if (op.startsWith('xhr.send\t')) {
+        track(e, key, workXhr(e, id, op.slice('xhr.send\t'.length)));
       } else {
         /* A REQUEST THIS ZONE DOES NOT CARRY IS REFUSED IN WORDS AND NOT LEFT SILENT: leaving it unanswered
            parks the asking flow for the rest of the session while the frontier reports nothing, which from
            outside is indistinguishable from a page that is merely slow. */
         e.ready.push(declineAnswer(id,
           `\`${op.slice(0, 120)}\` — an operation this zone does not carry. It routes ` +
-          '`windowproxy.get`, the `object.*` internal methods and `document.fetch`, and an operation outside ' +
+          '`windowproxy.get`, the `object.*` internal methods, `document.fetch` and `xhr.send`, and an ' +
+          'operation outside ' +
           'those is one the engine emits for and nothing performs'));
       }
     } else if (f[0] === 'notice') {

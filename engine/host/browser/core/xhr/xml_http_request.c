@@ -1404,6 +1404,11 @@ static JSValue xhr_decode_text(JSContext *ctx, XhrData *d)
    two readers whose result the page computes with. */
 static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
 {
+    /* §3.6.6 "get a text response" step 1: "If xhr's response's body is null, then return the empty string."
+       A network error's empty string is no server's bytes, so it is answered before the provenance wrap,
+       whose address assert holds for every response that has a body. A page reads this whenever a handler
+       runs after a failed request (`onloadend`, or a handler the solver drives uncalled). */
+    if (d->network_error) return JS_NewString(ctx, "");
     return xhr_reply_content(ctx, d, xhr_decode_text(ctx, d));
 }
 
