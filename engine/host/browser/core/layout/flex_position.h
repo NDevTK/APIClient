@@ -18,4 +18,10 @@
    corner, physical, in CSS pixels. `container` must be `item`'s flex container in the box tree (asserted). */
 void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y);
 
+/* The used value of element flex item `item`'s margin `name` (`margin-left`, `-right`, `-top` or `-bottom`):
+   §9.5 step 1's share of the line's free space for an `auto` main-axis margin and §9.6 step 13's for a cross-axis
+   one, as the same placement above uses them. core/layout/used_value.h answers a flex item's `auto` margin
+   through this. */
+CssPx flex_position_item_margin(lxb_dom_element_t *container, lxb_dom_element_t *item, const char *name);
+
 #endif

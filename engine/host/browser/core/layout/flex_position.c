@@ -54,8 +54,10 @@ static FpMain fp_main_terms(lxb_dom_element_t *container, const FlexLineMember *
 }
 
 /* §9.5 for the one line, as the distance from the line's main-start edge to `item`'s border box's main-start
-   edge, with `*border` its main extent. Free space is decided on the examples, as css_length.h's extremes are. */
-static CssPx fp_main_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, bool start_left, CssPx *border)
+   edge, with `*border` its main extent and `*ms`, `*me` its used main-start and main-end margins. Free space is
+   decided on the examples, as css_length.h's extremes are. */
+static CssPx fp_main_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, bool start_left, CssPx *border,
+                            CssPx *ms, CssPx *me)
 {
     FlexLineMember *m = NULL;
     size_t n = flex_line_members(container, &m), i, nauto = 0;
@@ -109,6 +111,8 @@ static CssPx fp_main_offset(lxb_dom_element_t *container, lxb_dom_element_t *ite
         if (!m[i].anonymous && m[i].first == lxb_dom_interface_node(item)) {
             at = pos;
             *border = t[i].border;
+            *ms = t[i].auto_start ? share : t[i].m_start;
+            *me = t[i].auto_end ? share : t[i].m_end;
             found = true;
         }
         pos = css_px_add(css_px_add(pos, t[i].border), css_px_add(t[i].auto_end ? share : t[i].m_end, gap));
@@ -120,25 +124,44 @@ static CssPx fp_main_offset(lxb_dom_element_t *container, lxb_dom_element_t *ite
     return at;
 }
 
+/* §9.6 step 13 for `item` on the one line, whose cross size is `line`: its used top and bottom margins, and
+   whether either was `auto` (step 14 then does not align it). */
+static bool fp_cross_margins(lxb_dom_element_t *item, CssPx line, CssPx *mt, CssPx *mb)
+{
+    bool auto_top, auto_bottom;
+    CssPx outer, diff;
+
+    *mt = fp_margin(item, "margin-top", &auto_top);
+    *mb = fp_margin(item, "margin-bottom", &auto_bottom);
+    if (!auto_top && !auto_bottom) return false;
+    outer = css_px_add(used_value_border_edge_px(item, true), css_px_add(*mt, *mb));
+    diff = css_px_sub(line, outer);
+    /* "If its outer cross size (treating those auto margins as zero) is less than the cross size of its flex
+       line, distribute the difference in those sizes equally to the auto margins. Otherwise, if the
+       block-start or inline-start margin (whichever is in the cross axis) is auto, set it to zero. Set the
+       opposite margin so that the outer cross size of the item equals the cross size of its flex line." */
+    if (diff.px > 0.0) {
+        CssPx each = css_px_scale(diff, auto_top && auto_bottom ? 0.5 : 1.0);
+
+        if (auto_top) *mt = each;
+        if (auto_bottom) *mb = each;
+        return true;
+    }
+    *mb = css_px_add(*mb, diff);
+    return true;
+}
+
 /* §9.6 steps 13 and 14 for `item` on the one line, whose cross size is `line`: the distance from the line's
    cross-start edge (the top, in `horizontal-tb`) to the item's border box. */
 static CssPx fp_cross_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx line)
 {
-    bool auto_top, auto_bottom;
-    CssPx mt = fp_margin(item, "margin-top", &auto_top), mb = fp_margin(item, "margin-bottom", &auto_bottom);
-    CssPx outer = css_px_add(used_value_border_edge_px(item, true), css_px_add(mt, mb));
-    CssPx diff = css_px_sub(line, outer);
+    CssPx mt, mb, outer, diff, at;
     char *align;
-    CssPx at;
     char nbuf[160];
 
-    /* Step 13: "If its outer cross size (treating those auto margins as zero) is less than the cross size of its
-       flex line, distribute the difference in those sizes equally to the auto margins. Otherwise, if the
-       block-start or inline-start margin (whichever is in the cross axis) is auto, set it to zero." */
-    if (auto_top || auto_bottom) {
-        if (diff.px > 0.0 && auto_top) return css_px_scale(diff, auto_bottom ? 0.5 : 1.0);
-        return mt;
-    }
+    if (fp_cross_margins(item, line, &mt, &mb)) return mt;
+    outer = css_px_add(used_value_border_edge_px(item, true), css_px_add(mt, mb));
+    diff = css_px_sub(line, outer);
     /* Step 14, per §8.3: the margin box is what is aligned. */
     align = flex_cross_size_resolved_align(container, item);
     if (strcmp(align, "flex-end") == 0) {
@@ -158,14 +181,13 @@ static CssPx fp_cross_offset(lxb_dom_element_t *container, lxb_dom_element_t *it
     return at;
 }
 
-void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y)
+/* The checks every entry makes, and which physical side is main-start (§5.1: `row` main-start is the inline-start
+   edge, the left in `ltr`; `row-reverse` swaps it). */
+static bool fp_require_built(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
-    bool reverse, rtl, start_left;
-    CssPx border = css_px(0.0), main;
     char nbuf[160];
 
-    DCHECK(container != NULL && item != NULL && x != NULL && y != NULL,
-           "a flex item's position was asked with no container, no item or nowhere to put it");
+    DCHECK(container != NULL && item != NULL, "a flex item's position was asked with no container or no item");
     DCHECKF(box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(item))) == container &&
                 flex_item_display_is_flex_container(css_computed_display(container)),
             "%s: a flex item's position was asked against an element that is not its flex container",
@@ -176,11 +198,34 @@ void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *
                "Build the line placement this container needs: §9.4's per-line cross sizes and `align-content` "
                "for `wrap`, §9.5 over the block axis for `column`",
                box_subject(container, nbuf, sizeof nbuf));
-    /* §5.1: `row` main-start is the inline-start edge, the left in `ltr`; `row-reverse` swaps it. */
-    reverse = css_computed_keyword_is(container, "flex-direction", CSS_KEYWORD_ROW_REVERSE);
-    rtl = css_computed_keyword_is(container, "direction", CSS_KEYWORD_RTL);
-    start_left = reverse == rtl;
-    main = fp_main_offset(container, item, start_left, &border);
+    return css_computed_keyword_is(container, "flex-direction", CSS_KEYWORD_ROW_REVERSE) ==
+           css_computed_keyword_is(container, "direction", CSS_KEYWORD_RTL);
+}
+
+CssPx flex_position_item_margin(lxb_dom_element_t *container, lxb_dom_element_t *item, const char *name)
+{
+    bool start_left = fp_require_built(container, item);
+    CssPx border = css_px(0.0), ms = css_px(0.0), me = css_px(0.0), mt, mb;
+    bool left = strcmp(name, "margin-left") == 0, right = strcmp(name, "margin-right") == 0;
+
+    if (left || right) {
+        (void)fp_main_offset(container, item, start_left, &border, &ms, &me);
+        return left == start_left ? ms : me;
+    }
+    DCHECKF(strcmp(name, "margin-top") == 0 || strcmp(name, "margin-bottom") == 0,
+            "`%s`: a flex item's used margin was asked for a property that is not a margin", name);
+    (void)fp_cross_margins(item, used_value_content_px(container, true), &mt, &mb);
+    return strcmp(name, "margin-top") == 0 ? mt : mb;
+}
+
+void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y)
+{
+    bool start_left;
+    CssPx border = css_px(0.0), ms = css_px(0.0), me = css_px(0.0), main;
+
+    DCHECK(x != NULL && y != NULL, "a flex item's position was asked with nowhere to put it");
+    start_left = fp_require_built(container, item);
+    main = fp_main_offset(container, item, start_left, &border, &ms, &me);
     *x = start_left ? main : css_px_sub(css_px_sub(used_value_content_px(container, false), main), border);
     /* §8.4 "Packing Flex Lines: the align-content property": "In a single-line flex container, the cross size of
        the line is the cross size of the flex container", its inner (content-box) one. */

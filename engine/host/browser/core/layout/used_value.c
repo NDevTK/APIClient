@@ -20,6 +20,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
+#include "core/layout/flex_position.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/intrinsic_size.h"
@@ -2381,6 +2382,8 @@ CssPx used_value_default_replaced_size(bool vertical)
  * IT IS ALSO WHY THE SECOND PASS COSTS NOTHING ON THE HEIGHT AXIS. §10.6.3's content-based height is a walk
  * over the whole subtree; the substituted pass never runs it, because the substituted value is a length. So a
  * declared `min-height` on every level of a tree adds one walk in total, not one per level. */
+static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box);
+
 static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *opposite, CssLength len, UvBox box,
                        const CssLength *size_len);
 static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool vertical);
@@ -2557,6 +2560,9 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
     if (vertical) {
         /* §10.6.3: "If 'margin-top', or 'margin-bottom' are 'auto', their used value is 0." */
         if (box == UV_BOX_BLOCK_FLOW) return css_px(0.0);
+        /* A `row` container's item: css-flexbox-1 §9.6 step 13 (core/layout/flex_position.h). */
+        if (box == UV_BOX_ITEM && uv_flex_item_container(el, box) != NULL)
+            return flex_position_item_margin(uv_flex_item_container(el, box), el, name);
         DFAIL("a VERTICAL margin computes to `auto` on a box CSS 2.1 §10.6.3 does not cover. §10.6.3 is the "
               "block-level-in-normal-flow section and it is the only one that gives `margin-top: auto` a used "
               "value of 0 outright; §10.6.1 says nothing at all about an INLINE box's vertical margins, and "
@@ -2693,16 +2699,15 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
               "states in its own words that an `auto` cross margin is what it cannot answer at step 8, "
               "because the line's cross size is an operand of the very distribution this margin needs. BUILD "
               "§9.6's first step there, over the line that component already resolves");
-    if (box == UV_BOX_ITEM)
-        DFAIL("a MAIN-AXIS `auto` margin on a FLEX or GRID ITEM, which css-flexbox-1 §9.5 "
-              "\"Main-Axis Alignment\" answers before alignment does: \"If the remaining free space is "
-              "positive and at least one main-axis margin on this line is auto, distribute the free space "
-              "equally among these margins\". It is the container's FREE SPACE and not §10.3.3's slack — the "
-              "two differ because the container has already flexed every item. "
-              "THE AXIS IS NOW ASKED AND THIS ARM IS WHAT IS LEFT: a `row` container's item, whose "
-              "horizontal axis is its MAIN axis, and a GRID item, for which css-grid-1 §11 \"Grid Layout "
-              "Algorithm\"' own auto-margin rule is the section rather than either of css-flexbox-1's. "
-              "BUILD the flex layout algorithm over the container's own used content size");
+    if (box == UV_BOX_ITEM) {
+        /* A `row` container's item: css-flexbox-1 §9.5 step 1's share of the line's free space, which
+           core/layout/flex_position.h computes with the placement that uses it. */
+        lxb_dom_element_t *container = uv_flex_item_container(el, box);
+
+        if (container != NULL) return flex_position_item_margin(container, el, name);
+        DFAIL("a horizontal `auto` margin on a GRID ITEM: css-grid-1 §11 \"Grid Layout Algorithm\"' own "
+              "auto-margin rule is the section, over the item's grid area; build it there");
+    }
     DFAIL("a HORIZONTAL `auto` margin reached the END of §10.3's per-box-type dispatch. The box types this "
           "function answers for have each returned above, and the ONE that is left — an ABSOLUTELY POSITIONED "
           "box — does not arrive here at all: CSS 2.1 §10.3.7 solves its two margins from the SAME constraint "
