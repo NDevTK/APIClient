@@ -2353,6 +2353,19 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
     return true;
 }
 
+/* Whether `el` is a block container on its parent's §9.4.1 stack whose height is its content's: its stack
+   contribution (`bf_box`, memoized by the layout job) then holds this very walk, run by the same call, so the
+   content height is served from it rather than walked again for every caller that sizes the box. */
+static bool bf_auto_height_is_stack_contribution(lxb_dom_element_t *el)
+{
+    BoxTreeChild c = box_tree_child_of_node(lxb_dom_interface_node(el));
+    lxb_dom_element_t *parent = box_tree_parent(c);
+
+    if (parent == NULL || !block_flow_display_is_block_container(css_computed_display(parent))) return false;
+    if (block_flow_child_kind(parent, c) != BLOCK_FLOW_CHILD_BLOCK) return false;
+    return block_flow_display_is_block_container(css_computed_display(el)) && bf_height_needs_content(el);
+}
+
 bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
 {
     CssPx unused = css_px(0.0);
@@ -2362,6 +2375,11 @@ bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
     BfBox b;
 
     DCHECK(el != NULL, "a content-based height was asked for with no element");
+    if (bf_auto_height_is_stack_contribution(el)) {
+        if (!bf_box(el, BF_BASELINE_NONE, &b)) return false;
+        *out = b.content_h;
+        return true;
+    }
     d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
     flex = css_display_spells(d, CSS_KEYWORD_FLEX) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX);
