@@ -729,6 +729,7 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
                                const char *destination, CspParserMetadata parser_metadata,
                                FetchCredentialsMode credentials, FetchMode mode, JSCFunctionData *deliver)
 {
+    char *upgraded;
     size_t integrity_n = 0;
     const char *integrity = link_attr(el, "integrity", &integrity_n);
     JSValue nonce_slot;
@@ -820,11 +821,15 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
        THE DISJUNCTION AND THE URL PARSE ARE NOT WRITTEN HERE — they were one of FOUR hand-written copies of
        §4.1 step 7, and core/fetch/fetch.h's fetch_main_blocked is the one component they collapsed into. What
        this site still states is what only it knows: the caller's destination and §4.2.4.3's metadata. */
-    /* FETCH §4.1 "Main fetch" STEP 6 HAS ALREADY RUN, AT THE CALLER, and it runs there rather than here for a
-       reason this signature states: `abs` is `const` and belongs to whoever resolved it, so a rewrite
-       performed here could not replace the address its caller goes on to use. Both callers upgrade before
-       they call, which keeps the judged address and the fetched address ONE value. */
+    /* FETCH §4.1 "Main fetch" STEPS 4 AND 6, HERE because this is where the request's metadata exists. Step 4
+       reports against the address as resolved; step 6's rewrite replaces `abs` for step 7 and the request. The
+       callers only free their address afterwards, so the upgraded copy is this function's to free. §4.2.4.3
+       and §4.6.8.12 state no INITIATOR. */
+    fetch_main_report_csp(ctx, abs, destination, metadata);
+    upgraded = fetch_main_upgrade(ctx, abs, destination, /*initiator*/ NULL);
+    if (upgraded) abs = upgraded;
     if (fetch_main_blocked(ctx, abs, destination, metadata, mode)) {
+        free(upgraded);
         JS_FreeCString(ctx, nonce);
         JS_FreeValue(ctx, nonce_slot);
         link_queue_fire(ctx, wrap, "error", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.20, a bare fire */
@@ -933,8 +938,10 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
         engine_pending_resource_url(ctx, d, &req);
         JS_FreeValue(ctx, d);
     }
-    /* …AND THE METADATA'S BYTES LAST, because the request above BORROWED them: the park copies what it needs
-       out of the record inside fetch_owe, so this is the first moment nothing is reading them. */
+    /* …AND THE METADATA'S BYTES AND THE UPGRADED ADDRESS LAST, because the request above BORROWED them: the
+       park copies what it needs out of the record inside fetch_owe, so this is the first moment nothing is
+       reading them. */
+    free(upgraded);
     JS_FreeCString(ctx, nonce);
     JS_FreeValue(ctx, nonce_slot);
 }
@@ -1148,15 +1155,8 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        `crossorigin` attribute is in the No CORS state, which HTML §2.5.1 "Terminology" answers `include` — the
        OPPOSITE of what its modulepreload sibling answers for the identical markup, and the reason this value
        is passed rather than computed inside the shared function. */
-    /* FETCH §4.1 "Main fetch" STEP 6, BEFORE THE STEP 7 THE CALL BELOW MAKES. `as=image`, `as=audio` and
-       `as=video` are exactly Mixed Content §4.1's three upgradeable, so this site reaches the
-       step for real. §4.2.4.3 states no INITIATOR — Mixed Content §4.1 step 1.5's exemption belongs to
-       §4.8.4.3.5's images
-       alone — so NULL is this algorithm's answer rather than a field this site failed to plumb. */
-    {
-        char *up = fetch_main_upgrade(ctx, abs, destination, /*initiator*/ NULL);
-        if (up) { free(abs); abs = up; }
-    }
+    /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. `as=image`, `as=audio` and `as=video` are
+       Mixed Content §4.1's three upgradeable, so this type reaches step 6 for real. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_EMPTY,
                        cors_potential_request_credentials(cors_settings_attribute_state(el)),
                        cors_potential_request_mode(cors_settings_attribute_state(el)), link_deliver);
@@ -1416,15 +1416,7 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
        simplification: its note says these are "more modern features, where the request's mode is always
        `cors`", and the attribute has been "repurposed … wherein they only impact the request's credentials
        mode". So the state decides the CREDENTIALS here and decides nothing about the mode. */
-    /* FETCH §4.1 "Main fetch" STEP 6. A `modulepreload`'s destination is `script` or one §4.6.8.12 step 3
-       translated, none of which Mixed Content §4.1 upgrades — so this call answers NULL today. It is made
-       anyway, because a step some request-creating sites run and others do not is one missing capability
-       wearing two names: the day §4.6.8.12 admits a destination Mixed Content §4.1 touches, this site
-       already asks. */
-    {
-        char *up = fetch_main_upgrade(ctx, abs, destination, /*initiator*/ NULL);
-        if (up) { free(abs); abs = up; }
-    }
+    /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
                        cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
                        FETCH_MODE_CORS, link_module_deliver);
@@ -1816,14 +1808,7 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el)
         JS_FreeValue(ctx, uv);
     }
 
-    /* FETCH §4.1 "Main fetch" STEP 6, before the step 7 the call below makes. Mixed Content §4.1 upgrades
-       `image`, `audio` and `video` and `style` is none of them, so this answers NULL today — made anyway, for
-       the reason link_modulepreload's identical call is: a step some request-creating sites run and others do
-       not is one missing capability wearing two names. §4.2.4.3 states no INITIATOR. */
-    {
-        char *up = fetch_main_upgrade(ctx, abs, "style", /*initiator*/ NULL);
-        if (up) { free(abs); abs = up; }
-    }
+    /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. */
 
     /* §4.2.4.3's create a link request step 4 — "Let request be the result of creating a potential-CORS
        request given url, options's DESTINATION, and options's crossorigin". The destination is Fetch §2.2.5's

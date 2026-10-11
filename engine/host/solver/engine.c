@@ -375,6 +375,10 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        request under an address the host is never asked for, and the entry would silently never settle. It is
        asked at this consumer as well as at the producers, because the parks in this file pass no producer's
        door; it is idempotent (core/fetch/fetch.h), so a producer having run it changes nothing. */
+    /* Fetch §4.1 step 4 runs here only for the program loads, whose park is the first point that judges them;
+       every other kind reaching this door was built by a component that ran step 4 itself (core/fetch/fetch.h). */
+    if (pending_kind_is_program(pkind))
+        fetch_main_report_csp(ctx, req->url, req->destination, req->metadata);
     up_url = fetch_main_upgrade(ctx, req->url, req->destination, req->initiator);
     use_url = up_url ? up_url : req->url;
     /* The mode is written FIRST because it is part of the identity the outstanding set keys on when the

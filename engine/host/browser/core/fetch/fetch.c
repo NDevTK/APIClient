@@ -320,6 +320,22 @@ char *fetch_main_upgrade(JSContext *ctx, const char *url, const char *destinatio
     return mixed_content_upgrade_url(ctx, url, destination, initiator);
 }
 
+void fetch_main_report_csp(JSContext *ctx, const char *url, const char *destination,
+                           CspRequestMetadata metadata)
+{
+    UrlRecord rec;
+
+    DCHECK(url != NULL && destination != NULL,
+           "§4.1 step 4 was asked about a request with no address or no destination — CSP §6.8.1 switches on "
+           "the destination, and every caller resolved the address before building the request");
+    url_record_init(&rec);
+    /* THE REPORTER IS THIS REALM, as at step 7: §2.4.2 reads "request's client's global object". */
+    if (url_parse(&rec, url, strlen(url), NULL))
+        policy_report_violations_for_request(csp_reporter(ctx), document_policy(ctx), &rec, destination,
+                                             metadata, /*redirect count*/ 0);
+    url_record_free(&rec);
+}
+
 /* FETCH §4.1 "Main fetch" STEP 7 — see core/fetch/fetch.h for why it is one component and what each caller
    owes it. The disjunction is written ONCE here; the four hand-written copies that stood at `fetch()`,
    §4.8.4.3.5, §4.6.8.20 and §3.5.2's send() are calls to it, and the fifth entry that had no copy at all —
@@ -1374,7 +1390,10 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
         if (url_is_real) {
             /* §5.4's constructor steps set no INITIATOR — the field's §2.2.5 initial value — so NULL is this
                algorithm's answer and not a value this entry failed to read off the record. */
-            char *up = fetch_main_upgrade(ctx, src, /*destination*/ "", /*initiator*/ NULL);
+            char *up;
+
+            fetch_main_report_csp(ctx, src, /*destination*/ "", csp_meta);   /* §4.1 step 4 */
+            up = fetch_main_upgrade(ctx, src, /*destination*/ "", /*initiator*/ NULL);
             DCHECK(up == NULL,
                    "Mixed Content §4.1 upgraded a fetch()'s address — its step 1.4 ends the algorithm for a "
                    "destination that is not `image`, `audio` or `video`, and Fetch §5.4 \"Request class\" "

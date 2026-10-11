@@ -2593,6 +2593,8 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        made because a step some request-creating sites run and others do not is one missing capability wearing
        two names — the same argument core/fetch/fetch.h makes about the disjunction below, which had four
        hand-written copies and a fifth entry with none. */
+    /* §4.1 step 4 first, with the metadata step 7 below states. */
+    if (parsed) fetch_main_report_csp(ctx, u, /*destination*/ "", csp_request_metadata_unstated());
     {
         char *up = fetch_main_upgrade(ctx, u, /*destination*/ "", /*initiator*/ NULL);
         DCHECK(up == NULL,

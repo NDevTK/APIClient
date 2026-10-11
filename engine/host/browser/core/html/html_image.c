@@ -1009,6 +1009,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        delivery names. There is ONE variable and it is overwritten here, because judging the old address and
        fetching the new one (or the reverse) is the defect core/fetch/fetch.h describes: nothing crashes, and
        the only trace is this element firing `error` where a browser fires `load`. */
+    fetch_main_report_csp(ctx, abs, /*destination*/ "image", csp_meta);   /* §4.1 step 4, before step 6 */
     {
         char *up = fetch_main_upgrade(ctx, abs, /*destination*/ "image", initiator);
         if (up) { free(abs); abs = up; }

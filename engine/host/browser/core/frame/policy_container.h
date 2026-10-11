@@ -444,6 +444,13 @@ CspRequestVerdict policy_should_block_request(CspReporter reporter, const Policy
                                               const UrlRecord *url, const char *destination,
                                               CspRequestMetadata metadata, int redirect_count);
 
+/* CSP §4.1.1 "Report Content Security Policy violations for request": every REPORT policy of the container's
+   list that the request violates under §6.7.2.1 is reported, and nothing is blocked. The operands are
+   policy_should_block_request's; a NULL container has no policies. */
+void policy_report_violations_for_request(CspReporter reporter, const PolicyContainer *p, const UrlRecord *url,
+                                          const char *destination, CspRequestMetadata metadata,
+                                          int redirect_count);
+
 /* CSP §4.1.2 asked for its answer alone, from outside any global object: policy_should_block_request under
    csp_reporter_none, so no §5.5 report is made and no event is queued. `*governing` is set to the §6.8.4
    governing directive of the first policy §6.7.2.1 finds violated, or NULL when the answer is Allowed, so a

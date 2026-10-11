@@ -873,6 +873,41 @@ CspRequestVerdict policy_should_block_request(CspReporter reporter, const Policy
     return result;
 }
 
+void policy_report_violations_for_request(CspReporter reporter, const PolicyContainer *p, const UrlRecord *url,
+                                          const char *destination, CspRequestMetadata metadata,
+                                          int redirect_count)
+{
+    const char *effective;
+    char *serialized = NULL;
+    size_t i;
+
+    DCHECK(metadata.nonce != NULL && metadata.integrity != NULL &&
+           metadata.parser != CSP_PARSER_METADATA_UNPLACED,
+           "§4.1.1 was entered with a CSP request metadata whose fields were never placed — build it with "
+           "csp_request_metadata or csp_request_metadata_unstated, as §4.1.2's own entry requires");
+    if (!p)
+        return;
+    effective = csp_effective_directive_for_request(destination);
+    if (!effective)
+        return;   /* §6.8.1's "report" row: no fetch directive governs the request, so nothing violates */
+    /* Step 2: "For each policy of CSP list's policies: if policy's disposition is "enforce", then skip to the
+       next policy", then §6.7.2.1, and §5.5 over §2.4.2's violation for each one violated. */
+    for (i = 0; i < p->csp.n_policies; i++) {
+        if (csp_policy_is_enforced(&p->csp.policies[i]))
+            continue;
+        if (!policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
+                                   p->csp.self_origin, redirect_count))
+            continue;
+        if (!serialized) {
+            serialized = url_serialize(url, /*exclude_fragment*/ false);
+            CHECK(serialized != NULL, "§2.4.2's resource could not be serialized — an allocation failure while "
+                                      "composing a report-only violation");
+        }
+        csp_report_violation_for_request(reporter, &p->csp.policies[i], destination, serialized);
+    }
+    free(serialized);
+}
+
 CspRequestVerdict policy_request_verdict(const PolicyContainer *p, const UrlRecord *url, const char *destination,
                                          CspRequestMetadata metadata, int redirect_count,
                                          const CspDirective **governing)

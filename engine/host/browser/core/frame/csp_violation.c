@@ -286,10 +286,10 @@ unsigned long csp_violation_reports(void) { return g_csp_violation_reports; }
    operand and `sample`/`sample_len` are §2.4's sample, already cut. The disposition is §2.4's "the
    disposition of the policy that has been violated", read off the policy.
      NAMED RESIDUAL — WHAT IS NOT COVERED: no policy reaches a container with disposition "report", so every
-     consumer's report-only arm is built and unreached. WHAT THE NEXT DIFFS BUILD: Fetch §4.1 "Main fetch"
-     step 4's CSP §4.1.1 walk, then §2.2.2's `Content-Security-Policy-Report-Only` extraction at document
-     creation and its carriage on every inherited-CSP path. HOW ITS ABSENCE WOULD SHOW: a document served
-     only `Content-Security-Policy-Report-Only` fires no securitypolicyviolation event. */
+     consumer's report-only arm, Fetch §4.1 step 4's CSP §4.1.1 walk included, is built and unreached. WHAT
+     THE NEXT DIFFS BUILD: §2.2.2's `Content-Security-Policy-Report-Only` extraction at document creation,
+     then its carriage on every inherited-CSP path. HOW ITS ABSENCE WOULD SHOW: a document served only
+     `Content-Security-Policy-Report-Only` fires no securitypolicyviolation event. */
 static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const char *effective_directive,
                                CspResourceKind kind, const char *resource_url,
                                const char *sample, size_t sample_len, const lxb_dom_element_t *element)

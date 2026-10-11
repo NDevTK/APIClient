@@ -378,6 +378,15 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
  * algorithm sets none — §2.2.5's own initial value and a real answer rather than a hole. */
 char *fetch_main_upgrade(JSContext *ctx, const char *url, const char *destination, const char *initiator);
 
+/* FETCH §4.1 "Main fetch" STEP 4, "Run report Content Security Policy violations for request" (CSP §4.1.1),
+ * over this realm's document's policy container. It runs before step 6, on the address as resolved, and
+ * EXACTLY ONCE per request, because a report-only violation blocks nothing and a second run would fire its
+ * event twice: at the component that builds the request (`fetch()`, XHR, `<img>`, `<link>`), and at
+ * solver/engine.c's park for the program loads no component pre-checks. An unparseable address reports
+ * nothing, as step 7 blocks nothing for one. */
+void fetch_main_report_csp(JSContext *ctx, const char *url, const char *destination,
+                           CspRequestMetadata metadata);
+
 /* IS THIS ONE OF FETCH §2.2.5 "Requests"' DESTINATION TYPES — the enumeration quoted in the paragraph above,
  * as a predicate, in the component whose record carries the field.
  * IT IS AN EXPORT BECAUSE THE FIELD HAS THREE CONSUMERS AND ALL THREE ASSERT AGAINST IT, and while it was a
