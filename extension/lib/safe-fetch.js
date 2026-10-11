@@ -1815,13 +1815,14 @@ async function safeFetch(url, opts) {
         "a " + mode + " request speaks as " + (opts.identity && opts.identity.origin) + " while its reply is read " +
         "by " + _pageOrigin + " — only a navigation's client differs from its reader, and the preflight and " +
         "the reply would be CORS-checked as two different requesters");
-  /* Named residual. Not covered: a redirect hop of a send that speaks as an identity, which Fetch §4.5
-     "HTTP-redirect fetch" and HTML §7.4.5 send with the request's destination, mode and referrer policy, and a
-     Referer and Cookie recomputed for the new URL. This document cannot read a Location before following it
-     (`redirect: "manual"` answers an opaqueredirect with no headers) and a speak-as rule must name its URL, so
-     the hop goes out as this extension, uncredentialed. The next diff re-speaks the request at the landed URL
-     when the reply was redirected. Its absence shows as a redirected document loaded logged out, its hop
-     reaching the server with `Sec-Fetch-Mode: cors` and no Referer. */
+  /* Named residual, a platform limit. Not covered: a redirect hop of a send that speaks as an identity, which
+     Fetch §4.5 "HTTP-redirect fetch" and HTML §7.4.5 send with the request's destination, mode and referrer
+     policy, and a Referer and Cookie recomputed for the new URL. In MV3 this document cannot read a redirect's
+     Location or headers (`redirect: "manual"` answers an opaqueredirect with none) and webRequest reports none
+     of its requests, so a speak-as rule cannot name the hop and it goes out as this extension, uncredentialed.
+     The route that closes it is the debugger permission, which this extension does not take (SECURITY.md). Its
+     absence shows as a redirected document loaded logged out, its hop sent `Sec-Fetch-Mode: cors` with no
+     Referer. */
   var init = { method: _method, credentials: "omit", redirect: "follow" };
   /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
      for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
