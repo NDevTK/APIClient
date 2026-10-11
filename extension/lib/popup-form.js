@@ -1945,6 +1945,7 @@ async function sendRequest() {
     body,
     frameId: replayFrameId,
     apiKeyOverride: currentKeyOverride,
+    requestInit: sendPanelRequestInit(),
   };
 
   try {

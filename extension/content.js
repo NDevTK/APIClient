@@ -423,33 +423,26 @@
            "a PAGE_FETCH reached the page-context relay with no headers object — lib/schema.js writes one " +
            "(possibly empty) on every message, and an absent one is a header list the caller composed and " +
            "this relay silently dropped");
-    // Strip browser-managed headers
-    const headers = { ...msg.headers };
-    delete headers["Cookie"];
-    delete headers["cookie"];
-    delete headers["Origin"];
-    delete headers["origin"];
-    delete headers["Referer"];
-    delete headers["referer"];
-
-    const opts = {
-      method: msg.method,
-      credentials: "same-origin",
-      headers,
-    };
+    DCHECK(!!msg.requestInit && typeof msg.requestInit === "object",
+           "a PAGE_FETCH reached the page-context relay with no requestInit — lib/schema.js writes one on " +
+           "every message, and an absent one is a request whose credentials mode nobody stated");
+    /* A null member is one the observed request did not supply; it is left out so fetch applies its own
+       default (Fetch §5.4 "Request class"). Fetch's forbidden request-headers are refused by
+       pageContextFetch before the message is built, so the header list needs no filtering here. */
+    const opts = { method: msg.method, headers: msg.headers };
+    for (const k of ["credentials", "mode", "referrer", "referrerPolicy"]) {
+      DCHECK(msg.requestInit[k] === null || typeof msg.requestInit[k] === "string",
+             "a PAGE_FETCH requestInit names " + k + " as neither a string nor null");
+      if (msg.requestInit[k] !== null) opts[k] = msg.requestInit[k];
+    }
 
     if (msg.body != null) {
       opts.body =
         msg.bodyEncoding === "base64" ? base64ToUint8(msg.body) : msg.body;
     }
 
-    /* THE ADDRESS IS COMPOSED OUTSIDE THE CATCH, because the catch below has a real job and this is not it: a
-       fetch that fails is a Fetch §5.6 network-error OUTCOME the caller is entitled to be told about, while a
-       message with no url is a broken contract with the trusted zone. Read inside the try, the second was
-       reported to the caller as the first. */
-    const fetchUrl = msg.url + (msg.url.includes("#") ? "&" : "#") + "_uasr_send";
     try {
-      const resp = await fetch(fetchUrl, opts);
+      const resp = await fetch(msg.url, opts);
       const respHeaders = {};
       resp.headers.forEach((v, k) => {
         respHeaders[k] = v;
@@ -495,7 +488,12 @@
      could not run, and an arm that cannot run is untested code rather than working code — reviving it later
      is a behaviour change owed the same reading as writing it, and until then it is surface for nothing.
      RESHIP, PAGE_FETCH, WS_SEND_MSG, PM_SEND_MSG and MC_SEND_MSG remain, and each has a sender in this tree. */
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    /* Every arm is an order from the trusted zone, so the browser-stamped sender must be this extension's
+       own origin and no tab: a message from a content script carries `sender.tab`. */
+    if (sender.id !== chrome.runtime.id || sender.origin !== new URL(chrome.runtime.getURL("")).origin ||
+        sender.tab !== undefined)
+      return;
     if (msg.type === "RESHIP") {
       // The offscreen brain came up AFTER our initial ship and broadcasts RESHIP
       // so we re-send the seed (the cold-start delivery race — the offscreen wasn't alive when content.js

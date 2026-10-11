@@ -955,7 +955,12 @@ function makePageGetFn(tabId, documentId, initiator) {
 
 function makePageFetchFn(tabId, documentId, initiator) {
   pageContextRequireUserInitiated(initiator, "makePageFetchFn (document " + documentId + ")");
-  return (url, opts) => pageContextFetch(tabId, url, opts, documentId, initiator);
+  // A probe this fn sends was composed, not observed, so it states PAGE_CONTEXT_COMPOSED_INIT.
+  return (url, opts) => {
+    DCHECK(!("requestInit" in opts), "a relay fn caller stated a requestInit; the fn states it for every probe");
+    return pageContextFetch(tabId, url, Object.assign({}, opts, { requestInit: PAGE_CONTEXT_COMPOSED_INIT }),
+                            documentId, initiator);
+  };
 }
 
 // ─── Discovery Document Fetching ─────────────────────────────────────────────

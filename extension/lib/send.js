@@ -784,6 +784,11 @@ function _checkSendPanelRequest(msg, command) {
          "discovery method chosen\", which is a state the panel is legitimately in and the consumer tests");
   DCHECK(msg.methodId === null || typeof msg.methodId === "string",
          command + " arrived with a methodId that is neither an id nor a stated absence — see `service`");
+  DCHECK(!!msg.requestInit && typeof msg.requestInit === "object" &&
+         ["credentials", "mode", "referrer", "referrerPolicy"].every((k) =>
+           msg.requestInit[k] === null || typeof msg.requestInit[k] === "string"),
+         command + " arrived with no requestInit — lib/popup-send.js's sendPanelRequestInit writes the four " +
+         "members (null where unstated) on every send, and without them nobody chose the credentials mode");
 }
 
 /**
@@ -999,6 +1004,7 @@ async function executeSendRequest(documentId, msg) {
         headers,
         body,
         bodyEncoding,
+        requestInit: msg.requestInit,
       },
       documentId,
       /* THE GRADE, AND THIS IS THE CALL IT WAS WRITTEN FOR. lib/schema.js's page-context relay is scoped out

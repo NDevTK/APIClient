@@ -519,6 +519,11 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
          "a page-context fetch named a body encoding this edge does not speak — content.js decodes base64 " +
          "and treats null as text, so any third spelling (or an absent one) is a body the page would send " +
          "raw where its caller had encoded it, or decode where its caller had not");
+  DCHECK(!!opts.requestInit && typeof opts.requestInit === "object" &&
+         ["credentials", "mode", "referrer", "referrerPolicy"].every((k) =>
+           opts.requestInit[k] === null || typeof opts.requestInit[k] === "string"),
+         "a page-context fetch reached the relay with no requestInit — every entry states one, the observed " +
+         "request's or PAGE_CONTEXT_COMPOSED_INIT, and without it nobody decided the credentials mode");
   const reply = await swRpc(
     "tabs.sendMessage",
     tabId,
@@ -529,6 +534,7 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
       headers: opts.headers,
       body: opts.body,
       bodyEncoding: opts.bodyEncoding,
+      requestInit: opts.requestInit,
     },
     { documentId },
   );
@@ -624,10 +630,39 @@ async function pageContextGet(tabId, url, headers, documentId, initiator) {
   return pageContextFetch(
     tabId,
     url,
-    { method: "GET", headers: headers || {}, body: null, bodyEncoding: null },
+    { method: "GET", headers: headers || {}, body: null, bodyEncoding: null,
+      requestInit: PAGE_CONTEXT_COMPOSED_INIT },
     documentId,
     initiator,
   );
+}
+
+/* The request facts of a request no observation describes: every member absent, so fetch applies its own
+   defaults (Fetch §5.4 "Request class"), which is what the page's own `fetch(url)` would send. */
+const PAGE_CONTEXT_COMPOSED_INIT = Object.freeze({ credentials: null, mode: null, referrer: null,
+                                                   referrerPolicy: null });
+
+/* Fetch §2.2.2 "Headers": a forbidden request-header is one "forbidden so the user agent remains in full
+   control over them". A script that sets one is ignored, so the composer refuses it by name instead of
+   letting the operator believe it was sent. Returns the refused name, or null. */
+const _FORBIDDEN_REQUEST_HEADER_NAMES = [
+  "accept-charset", "accept-encoding", "access-control-request-headers", "access-control-request-method",
+  "connection", "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host", "keep-alive", "origin",
+  "referer", "set-cookie", "te", "trailer", "transfer-encoding", "upgrade", "via",
+];
+const _METHOD_OVERRIDE_HEADER_NAMES = ["x-http-method", "x-http-method-override", "x-method-override"];
+function fetchForbiddenRequestHeader(headers) {
+  for (const name of Object.keys(headers)) {
+    const lower = name.toLowerCase();
+    if (_FORBIDDEN_REQUEST_HEADER_NAMES.includes(lower) || lower.startsWith("proxy-") || lower.startsWith("sec-"))
+      return name;
+    // "getting, decoding, and splitting" the value: comma-separated, whitespace-trimmed; a forbidden method
+    // (§2.2.1 "Methods") is CONNECT, TRACE or TRACK, compared byte-case-insensitively.
+    if (_METHOD_OVERRIDE_HEADER_NAMES.includes(lower) &&
+        String(headers[name]).split(",").some((m) => ["CONNECT", "TRACE", "TRACK"].includes(m.trim().toUpperCase())))
+      return name;
+  }
+  return null;
 }
 
 /* THE POPUP'S MANUAL REPLAY — the user named the method, the URL and the body in the Send panel. */
@@ -661,6 +696,12 @@ async function pageContextFetch(tabId, url, opts, documentId, initiator) {
   } catch (_) {
     return { error: "blocked: invalid URL" };
   }
+  DCHECK(!!opts.headers && typeof opts.headers === "object",
+         "a page-context fetch named no header list — every entry writes one, empty when there is none");
+  const forbidden = fetchForbiddenRequestHeader(opts.headers);
+  if (forbidden !== null)
+    return { error: "refused: `" + forbidden + "` is a forbidden request-header (Fetch §2.2.2 Headers) — the " +
+                    "browser sets it itself and ignores a script's value, so remove it from the request" };
 
   /* THE DESTRUCTIVE-PATH DENY LIST MUST NEVER APPLY HERE, AND THAT IS A RULE ABOUT WHO ACTED RATHER THAN
      ABOUT WHICH TRANSPORT CARRIED IT. The list is a floor under requests THIS TOOL COMPOSED AND FIRED ON ITS

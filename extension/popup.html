@@ -248,6 +248,17 @@
              It sits INSIDE .send-actions deliberately: setSendPanelVisible hides that container exactly when
              there is nothing to send, so the row's visibility needs no second rule of its own. -->
         <div id="send-url-row" class="send-url-row"></div>
+        <!-- The credentials mode this send uses (Fetch §2.2.5 Requests). loadSendRequestInit sets it from a
+             replayed request; sendPanelRequestInit (lib/popup-send.js) reads it on every send. -->
+        <div class="send-url-row">
+          <label class="send-url-label" for="send-credentials">Credentials</label>
+          <select id="send-credentials">
+            <option value="">not stated (fetch default: same-origin)</option>
+            <option value="omit">omit</option>
+            <option value="same-origin">same-origin</option>
+            <option value="include">include</option>
+          </select>
+        </div>
         <button id="btn-send" type="button">Send Request</button>
         <div class="export-row">
           <span class="export-label">Export:</span>

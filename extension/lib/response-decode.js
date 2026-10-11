@@ -355,7 +355,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   const url = new URL(msg.url);
 
   // Filter internal extension requests
-  if (url.hash.includes("_uasr_send")) return;
   if (url.hash.includes("_internal_probe")) return;
 
   // Static-asset filtering is CONTENT-based (see classifyResponseAsset

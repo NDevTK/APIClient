@@ -679,6 +679,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         headers: sendPanelHeaders(headers),
         body,
         apiKeyOverride: currentKeyOverride,
+        requestInit: sendPanelRequestInit(),
       });
     } catch (e) {
       /* An invariant abort travels ON (extension/check.js RETHROW_FATAL): `null` here is the ONE state the
@@ -2015,6 +2016,8 @@ async function replayRequest(reqId, sourceTabId) {
     document.querySelector(".tab[data-panel='send']").click();
     return;
   }
+
+  loadSendRequestInit(req);
 
   // Try to find and select the matching endpoint in the dropdown to load the schema
   const epSelect = document.getElementById("send-ep-select");

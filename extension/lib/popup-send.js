@@ -458,10 +458,7 @@ function renderServiceOriginHint() {
  * and MAY add a `key` query parameter, from `collectKeysForService` over the offscreen's per-tab store and
  * `globalStore.apiKeys` — a cross-session store the popup does not hold, so whether it will is not a small
  * fact this file declined to compute, it is UNKNOWN from here. Replicating that condition would be exactly
- * the second copy the paragraph above refuses. `content.js` then appends a `#_uasr_send` fragment, which the
- * server never sees: RFC 3986 §3.5 "Fragment" — "the fragment identifier is not used in the scheme-specific
- * processing of a URI; instead, the fragment identifier is separated from the rest of the URI prior to a
- * dereference".
+ * the second copy the paragraph above refuses.
  *
  * THIS IS A DISPLAY AND NEVER A GATE. It adds no confirmation, no token list and no veto — CLAUDE.md and
  * SECURITY.md both record a gate built at that relay and REMOVED, because a token list standing there is the
@@ -527,13 +524,43 @@ function renderSendUrl() {
     row.appendChild(unparseable);
   }
 
-  var note = document.createElement("div");
-  note.className = "send-url-note";
-  note.textContent =
+  var init = sendPanelRequestInit();
+  var stated = function (v, unstated) { return v === null ? unstated : v; };
+  row.appendChild(domElement("div", { class: "send-url-note" }, [
+    "Sent as the page with mode " + stated(init.mode, "not stated") + ", referrer " +
+    stated(init.referrer === "about:client" ? "the page's URL" : init.referrer === "" ? "none" : init.referrer,
+           "not stated") + ", referrer policy " +
+    stated(init.referrerPolicy === "" ? "the document's" : init.referrerPolicy, "not stated") +
+    ". What is not stated is fetch's default; the browser sets Cookie, Origin and Referer itself."]));
+  row.appendChild(domElement("div", { class: "send-url-note" }, [
     "Not decided here: an API key whose learned location is the URL is attached downstream as a `key` " +
     "query parameter, from a key store this panel cannot read — whether that happens to this request is " +
-    "UNKNOWN from here. A `#_uasr_send` fragment is also appended; a fragment is not sent to the server.";
-  row.appendChild(note);
+    "UNKNOWN from here."]));
+}
+
+/* The request facts the Send panel sends besides its bytes. Mode, referrer and referrer policy are the
+   replayed record's (null where it stated none, or where the panel holds no observed request); the
+   credentials mode is the operator's choice in #send-credentials, which loadSendRequestInit initialises
+   from the record. One function, so the note above and the request cannot differ. */
+function sendPanelRequestInit() {
+  var sel = document.getElementById("send-credentials");
+  DCHECK(!!sel, "the Send panel carries no #send-credentials — extension/popup.html declares it");
+  var observed = currentReplayRequest !== null && currentReplayRequest.kind === "http"
+    ? currentReplayRequest.requestInit : null;
+  return {
+    credentials: sel.value === "" ? null : sel.value,
+    mode: observed === null ? null : observed.mode,
+    referrer: observed === null ? null : observed.referrer,
+    referrerPolicy: observed === null ? null : observed.referrerPolicy,
+  };
+}
+
+function loadSendRequestInit(req) {
+  DCHECK(req.requestInit === null || (!!req.requestInit && typeof req.requestInit === "object"),
+         "a replayed HTTP record carries no requestInit — offscreen-brain.js's _checkLogEntry asserts one " +
+         "(null or the four members) on every entry it files");
+  document.getElementById("send-credentials").value =
+    req.requestInit === null || req.requestInit.credentials === null ? "" : req.requestInit.credentials;
 }
 
 // ─── API Key Selector ────────────────────────────────────────────────────────

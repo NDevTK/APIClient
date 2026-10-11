@@ -181,21 +181,53 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
 
 ## The page-context relay
 
-`pageContextGet`, `pageContextSend` and `pageContextFetch` in `lib/schema.js` send `PAGE_FETCH` through
-`swRpc("tabs.sendMessage", …, {documentId})`; `handlePageFetch` in `content.js` runs
-`fetch(url, {credentials: "same-origin", …})` from the content script's isolated world. The request goes out
-as the page: `Cookie`, `Origin` and `Referer` are Fetch's forbidden request-headers, which the browser sets
-itself and ignores when a script supplies them, so the `delete`s `handlePageFetch` applies to the caller's
-header list change nothing on the wire. The browser's SOP and CORS govern the request rather than ours.
-Not covered: `credentials: "same-origin"` is fixed, so a replay of a cross-origin request the page itself made
-with `credentials: "include"` goes out without the person's cookies; `intercept.js` does not record the page's
-credentials mode.
+The trusted zone decides every request, and the document's isolated world sends it. `pageContextGet`,
+`pageContextSend` and `pageContextFetch` in `lib/schema.js` send `PAGE_FETCH` through
+`swRpc("tabs.sendMessage", …, {documentId})`. The `documentId` is the one the browser stamped on the
+observation's sender, so it names the exact document, and a navigation cannot retarget it the way it can a
+`frameId`. `content.js` accepts an order only from a sender the browser stamps with this extension's origin
+and no tab. `handlePageFetch` runs `fetch(url, init)` in the isolated world. `init` carries the request's
+own `credentials`, `mode`, `referrer` and `referrerPolicy`: `intercept.js` records them on every observed
+fetch, XHR and EventSource request, and leaves out any member the page did not supply, so fetch applies its
+default. A request no observation describes states none (`PAGE_CONTEXT_COMPOSED_INIT`), which is what the
+page's own `fetch(url)` sends. The Send panel shows the mode, referrer and policy it will send, and lets the
+operator choose the credentials mode.
+
+Measured with `testing/page_identity_probe.cjs` (Chrome 148, a page on `http://localhost:18431` with
+`Referrer-Policy: unsafe-url`, a `connect-src` naming one cross-site origin, and a service worker). For the
+same credentials mode, the relay's raw header list matches the page's own fetch, order included: `Origin`,
+`Referer` under the page's policy, `Sec-Fetch-Site`/`-Mode`/`-Dest`, `Sec-Fetch-Storage-Access`, and the
+cookies, partitioned ones included. A cross-site POST gets the same CORS preflight. A recorded same-origin
+referrer arrives as that path. A cross-origin one arrives as the page's URL, because Fetch §5.4 "Request
+class" turns it into "client". The browser's SOP and CORS govern the request, not this extension.
+
+`pageContextFetch` refuses a forbidden request-header name (Fetch §2.2.2 "Headers": `Cookie`, `Origin`,
+`Referer`, `Host`, any `Sec-` or `Proxy-` name, and the rest of the list) with an error the Send panel shows.
+The browser sets these itself and ignores a script's value. Two residuals, each a difference from the page
+and not a privilege:
+- The page's service worker does not see the send. A request it would have answered, rewritten or served from
+  cache goes to the network instead.
+- The page's CSP does not bind the isolated world. A send can reach an address the page's `connect-src`
+  forbids, where the page's own fetch fails. The next member is the trusted zone applying the page's
+  `connect-src` to engine and tool sends.
+
+The alternatives were measured and rejected. A main-world send matches the page on every axis, but the
+page's service worker can see it and forge the reply. An offscreen (`safeFetch`) fetch sends
+`Sec-Fetch-Site: none`, no `Referer`, an `Origin` of `chrome-extension://…` on a POST and no preflight. It
+also sends the unpartitioned first-party jar, so a cross-site request carries Lax and Strict cookies but not
+partitioned ones. A `declarativeNetRequest` rule can rewrite those headers on the extension's own fetch, and
+it is confined by `initiatorDomains`, `tabIds` and `requestMethods`. Still, the cookie order and partition
+cannot be reproduced from `chrome.cookies` (no creation time, and the partition is keyed on the request's
+cross-siteness), the preflight is absent, a reply's `Set-Cookie` lands in the person's unpartitioned jar, and
+the rule set the `Origin` to an arbitrary site. That is an origin-forging capability this zone does not hold.
 
 - Trusted to untrusted (the request) confers no privilege. A content script can already fetch anything its page
-  can fetch with its own cookies; the relay asks for a subset of that. `pageContextFetch` refuses non-http(s)
-  URLs, and the verb is decided at the trusted call site, because the far end takes `msg.method` verbatim.
-- `credentials: "same-origin"` is what keeps a relayed cross-origin request from spending the person's cookies
-  at a host the page merely named.
+  can fetch with its own cookies, and the relay asks for exactly a request of that page. `pageContextFetch`
+  refuses non-http(s) URLs, and the verb is decided at the trusted call site, because the far end takes
+  `msg.method` verbatim.
+- The credentials mode is the observed request's, or the operator's choice. A relayed cross-origin request
+  spends the person's cookies at that host only when the page's own request did, or when the operator chose
+  `include`.
 - Every caller states whose act it is, and `pageContextRequireUserInitiated` `CHECK`s that it is
   `PAGE_CONTEXT_USER_INITIATED`. The callers that state it are the popup command cases (`PROBE_ENDPOINT`,
   `DISCOVER_SERVICE`, `FETCH_DISCOVERY` in `lib/popup-handlers.js`) and the Send panel's replay (`lib/send.js`).
@@ -221,7 +253,7 @@ surface that shows them the bytes, and what it owes is a destination this zone c
 | Channel | Destination chosen by | Credentials | Enforcement |
 |---------|----------------------|-------------|-------------|
 | Analyzer HTTP (`safeFetch`) | what the bundle computed, or a seed the browser stated | cookies only on a same-origin document load | the chokepoint, above |
-| Requests as the page (page-context relay) | the trusted call site, for an operator's act | the page's own, `same-origin` | the browser's SOP/CORS; the initiator grade |
+| Requests as the page (page-context relay) | the trusted call site, for an operator's act | the page's own, under the observed request's credentials mode or the operator's choice | the browser's SOP/CORS; the initiator grade; forbidden request-headers refused |
 | Renderer program assembly (`renderer-host.js`) | a constant list off the extension origin | none | no bundle influences it; a bundle-influenced name would make it analyzer HTTP |
 | The page's own traffic through `intercept.js`'s `fetch`, `XMLHttpRequest`, `WebSocket` and `EventSource` wrappers | the page | the page's | none needed: the wrapper calls the original and confers nothing |
 | Operator writes into a channel the page opened (`WS_SEND_MSG`, `PM_SEND_MSG`, `MC_SEND_MSG`) | the page opened the socket, port or window | the page's | the router's document→document rule; `documentId` routing; a postMessage target must be one real origin (`_isRealTargetOrigin` in `lib/popup-console.js`, DCHECKed in `lib/popup-handlers.js`) |
@@ -440,7 +472,8 @@ Each residual states what is not covered, what would close it, and how its absen
 | A seeded page's server redirects the cookie-bearing document load to another origin | mitigated: the credentialed SOP reads the landed origin (`blocked-cors-credentialed:`), and `bridge.js` refuses to seat a cross-origin response (`cross-origin-redirect:`) |
 | The analyzer's own credentialed GET ends the person's session or destroys a resource | mitigated as a floor: GET only, and `_destructiveToken` refuses a listed path token before the wire and after a redirect for any credentialed request that is not `observed`; an unmatched path is not thereby safe |
 | A compromised renderer asks the relay for a fetch the offscreen never authorized | not a threat: it cannot address the relay, and the relay confers nothing the renderer lacks |
-| A compromised renderer lies about a relayed reply | residual: the body is a claim filed under the requested URL; cross-origin cookies are withheld and CORS still applies |
+| A compromised renderer lies about a relayed reply | residual: the body is a claim filed under the requested URL; CORS still applies, and cross-origin cookies are spent only when the observed request or the operator chose `include` |
+| The page's script reads or alters a relayed send | not a threat: the send runs in the isolated world, and measured, the page's service worker does not see it |
 | A compromised renderer drives the socket, port or window send relays | not a threat: it cannot reach them, and the channel is the page's own |
 | An automatic caller in the trusted zone uses the relay or widens an origin | mitigated: the relay `CHECK`s `PAGE_CONTEXT_USER_INITIATED` and `AST_EGRESS_POLICY` `CHECK`s the initiator; the automatic sweep is routed to `safeFetch` |
 | A page widens its own origin for exploration | mitigated: `EGRESS_POLICY` is on the command surface the router gates on the extension origin |

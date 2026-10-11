@@ -64,6 +64,11 @@ async function main() {
   const off = await (await target(browser, (t) => t.url().startsWith("chrome-extension://" + extId +
                                   "/ast-worker.html"), "offscreen")).page();
   const tabId = await sw.evaluate(async (a) => (await chrome.tabs.query({ url: a + "/*" }))[0].id, A);
+  const route = await sw.evaluate(async (t) => ({ tabId: t,
+    documentId: (await chrome.webNavigation.getFrame({ tabId: t, frameId: 0 })).documentId }), tabId);
+  const popup = await browser.newPage();
+  await popup.goto("chrome-extension://" + extId + "/popup.html", { waitUntil: "domcontentloaded" });
+  await page.bringToFront();
   const hasDnr = await sw.evaluate(() => typeof chrome.declarativeNetRequest === "object");
 
   const setRule = (cond, headers) => sw.evaluate(async (c, h) => {
@@ -82,9 +87,22 @@ async function main() {
     const url = T[t] + "/echo?id=" + encodeURIComponent(id);
     if (how === "page") results[id] = await evalIn(mainCtx, fetchExpr(url, init));
     else if (how === "xhr") results[id] = await page.evaluate((u) => window.pageXhr(u, true), url);
-    // `#_uasr_send` keeps intercept.js from logging the probe's own request; a fragment is not sent.
-    else if (how === "main") results[id] = await evalIn(mainCtx, fetchExpr(url + "#_uasr_send", init));
+    else if (how === "main") results[id] = await evalIn(mainCtx, fetchExpr(url, init));
     else if (how === "iso") results[id] = await evalIn(iso, fetchExpr(url, init));
+    // The relay as the trusted zone orders it: a PAGE_FETCH from the extension service worker to the
+    // document, carrying the request's own credentials, mode, referrer and referrer policy.
+    else if (how === "relay") results[id] = await sw.evaluate((rt, u, o) => chrome.tabs.sendMessage(rt.tabId,
+      { type: "PAGE_FETCH", url: u, method: o.method || "GET", headers: o.headers || {}, body: o.body || null,
+        bodyEncoding: null, requestInit: o.requestInit }, { documentId: rt.documentId })
+      .then((x) => (x === undefined ? { error: "no answer" } : x.error ? { error: x.error } : { status: x.status })),
+      route, url, init);
+    // The Send panel's command, from an extension page, through lib/send.js and lib/schema.js.
+    else if (how === "send") results[id] = await popup.evaluate((rt, u, o) => chrome.runtime.sendMessage({
+      type: "SEND_REQUEST", tabId: rt.tabId, documentId: rt.documentId, endpointKey: "", service: null,
+      methodId: null, url: u, httpMethod: o.method || "GET", contentType: "", headers: o.headers || {},
+      body: o.body === undefined ? null : { mode: "raw", rawBody: o.body, formData: null },
+      frameId: 0, apiKeyOverride: null, requestInit: o.requestInit })
+      .then((x) => (x && x.error ? { error: x.error } : { status: x && x.status })), route, url, init);
     else if (how === "off" || how === "dnr") {
       if (how === "dnr") await setRule(rule(url), { "Origin": A, "Referer": A + "/page?x=secret",
                                                     "Cookie": "Bnone=1; Cnone=1; Bpart=1",
@@ -120,6 +138,25 @@ async function main() {
     await fire("ref.cross.page", t, "page", { credentials: "include", referrer: "http://evil.example/x" });
     await fire("ref.nopol.page", t, "page", { credentials: "include", referrerPolicy: "no-referrer" });
   }
+  // The relay and the Send panel, each replaying the record of the page's own request it is scored against.
+  const ri = (credentials, extra) => ({ requestInit: Object.assign({ credentials, mode: "cors", referrer: null,
+                                                                     referrerPolicy: null }, extra) });
+  const riPost = (credentials) => Object.assign(ri(credentials), { method: "POST", body: "{}",
+                                                headers: { "Content-Type": "application/json", "X-Probe": "1" } });
+  for (const how of ["relay", "send"]) {
+    for (const t of ["A", "B", "C"]) {
+      await fire(how + ".so", t, how, ri("same-origin"));
+      await fire(how + ".inc", t, how, ri("include"));
+    }
+    await fire(how + ".unstated", "B", how, ri(null));
+    await fire(how + ".post", "B", how, riPost("include"));
+    for (const t of ["A", "B"]) {
+      await fire(how + ".ref.same", t, how, ri("include", { referrer: A + "/other/path?r=1" }));
+      await fire(how + ".ref.cross", t, how, ri("include", { referrer: "http://evil.example/x" }));
+      await fire(how + ".ref.nopol", t, how, ri("include", { referrerPolicy: "no-referrer" }));
+    }
+  }
+  await fire("send.forbidden", "B", "send", Object.assign(ri("include"), { headers: { "Cookie": "x=1" } }));
   if (hasDnr) {
     const cond = (extra) => (url) => Object.assign({ urlFilter: "|" + url + "|", tabIds: [-1],
       initiatorDomains: [extId], requestMethods: ["get"], resourceTypes: ["xmlhttprequest", "other"] }, extra);
@@ -133,6 +170,7 @@ async function main() {
   const log = JSON.parse(await get(A + "/log"));
   fs.writeFileSync(outPath, JSON.stringify({ controlled, hasDnr, results, log }, null, 1));
   await page.close();
+  await popup.close();
   browser.disconnect();
   printTable(results, log);
 }
