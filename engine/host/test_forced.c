@@ -9405,7 +9405,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "EXISTS and the SOURCE was lost between `state.id` and the param — a collapse to the bare "
              "example, or a shape derived from it where the row asks for the source itself");
     /* THE PATH AND THE BODY, which this surface could not name at all. The address is RE-SPELLED so its hole
-       is one the popup's `/\{([^}\/]+)\}/` substitution can find — `{state}.id` has its braces around the root
+       is one the popup's `/\{([^{}]+)\}/` substitution can find — `{state}.id` has its braces around the root
        source and the member path OUTSIDE them, so the segment becomes `{state.id}` — and the param is that
        name at location "path" with NO value, because a symbolic server-injected field determined none. */
     /* THREE WHOLE-DOCUMENT EXISTENCES THAT NAMED NO RECORD BETWEEN THEM. `"name":"state.id"` and
@@ -9535,6 +9535,37 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        and the second implies the first. There is NO fourth clause over `tail`: its shape value holds no
        brace, so `kv_pairs` emits the SHAPE for it under every alignment and under none, and an assertion
        that reads `z` in every world is the check whose two sides cannot disagree. */
+    /* URL §4.4 "URL parsing" path state's two exits, one row each, over the navigator document's two statements.
+       A segment ends at a `/` the page wrote, so `{screen.width}/2`, whose `/` is the division's, is one hole: the
+       record is spelled `{screen.width/2}` and its param carries the quotient. The example is computed from
+       core/frame/screen.h's own answer, so this row holds no copy of the modelled width. */
+    const char *path_slash_why = NULL; int path_slash = 1;
+    char path_slash_want[32];
+    DCHECK(screen_width() / 2.0 == floor(screen_width() / 2.0),
+           "the modelled screen width is odd, so its half has a fraction, and this row's C spelling of it is "
+           "no longer the one Number::toString writes");
+    snprintf(path_slash_want, sizeof path_slash_want, "%.17g", screen_width() / 2.0);
+    fold_row(&path_slash, &path_slash_why, !!strstr(js, "\"/api/pdiv/"),
+             "NOT REACHED: there is no /api/pdiv record at all, so the division statement never ran. That is "
+             "the SCHEDULE");
+    fold_row(&path_slash, &path_slash_why, !strstr(js, "\"/api/pdiv/{screen.width}/2\""),
+             "the division's `/` was read as a segment separator: the record splits one hole into `{screen.width}` "
+             "and a literal `2`, which is path_scan splitting on a byte the page did not write");
+    fold_row(&path_slash, &path_slash_why,
+             param_value_is(js, "/api/pdiv/{screen.width/2}", "screen.width/2", path_slash_want),
+             "the record is spelled as one hole and its param `screen.width/2` does not carry the quotient — "
+             "path_align did not line the example's one segment up with the hole");
+    /* And the path ends at a `?` no page byte wrote: the data block's `k/j?x=1` is one hole's value over two
+       segments and the query after them, so the param carries all of it. A value of `k/j` is the example cut at
+       its first `?` as though the page had written that `?`. */
+    const char *path_query_why = NULL; int path_query = 1;
+    fold_row(&path_query, &path_query_why, !!strstr(js, "\"/api/pend/{script#pq}\""),
+             "NOT REACHED: there is no /api/pend/{script#pq} record at all, so the data-block statement never "
+             "ran. That is the SCHEDULE");
+    fold_row(&path_query, &path_query_why,
+             param_value_is(js, "/api/pend/{script#pq}", "script#pq", "k/j?x=1"),
+             "the record EXISTS and its hole does not carry `k/j?x=1` — the example was cut at a `?` the shape "
+             "does not have, so the hole lost the query its value carried on into");
     const char *query_run_why = NULL; int query_run = 1;
     fold_row(&query_run, &query_run_why, !!strstr(js, "\"/api/qrun\""),
              "NOT REACHED: there is no /api/qrun record at all, so the data-block statement never ran and "
@@ -14952,6 +14983,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
         { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
         { "path-run", path_run, "/api/ua/", SESS_EXPLORE, path_run_why },
+        { "path-slash", path_slash, "/api/pdiv/", SESS_EXPLORE, path_slash_why },
+        { "path-query", path_query, "/api/pend/", SESS_EXPLORE, path_query_why },
         /* KEYED ON THE STATEMENT'S OWN SPELLING, for the reason `lazy` states: `/api/qrun` is composed by
            a `+` over a data block's text and the record's address is the PATH half alone, so the key is the
            `fetch` this document writes and not the answer it produces. */

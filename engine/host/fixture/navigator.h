@@ -22,6 +22,7 @@ static const char HTML_NAVIGATOR[] =
        IT ADDS NO PROGRAM AND MOVES NO INDEX: core/loader/document_scripts.c skips a non-executing type in both
        its walks, and the block is named by its `id`. */
     "<script type='application/x-www-form-urlencoded' id='qrun'>a=1&page=2</script>"
+    "<script type='application/x-www-form-urlencoded' id='pq'>k/j?x=1</script>"
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     /* …AND THE HOLE WHOSE VALUE IS ITSELF SEVERAL SEGMENTS, which is the half an equal-count aligner cannot
@@ -48,6 +49,13 @@ static const char HTML_NAVIGATOR[] =
        ITS REACHABILITY IS `path-run`'s: the two are adjacent statements of one program, so `query-run` at NOT
        REACHED beside `path-run` answered is about this statement (DOM §4.4's descendant walk can park). */
     "fetch('/api/qrun?f=' + document.getElementById('qrun').textContent + '&tail=z');"
+    /* URL §4.4 "URL parsing" path state's two exits, over the path half. A segment ends at a U+002F (/) the PAGE
+       wrote: the division spells `{screen.width}/2`, one unknown whose `/` is the operator's, so the address has
+       one hole and not a hole beside a literal `2`. And the path ends at U+003F (?): the data block's example is
+       `k/j?x=1`, so its hole stands over two example segments and the query after them, and the shape, which
+       has no `?` of its own, puts none of it in a query param. */
+    "fetch('/api/pdiv/' + screen.width / 2);"
+    "fetch('/api/pend/' + document.getElementById('pq').textContent);"
     "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
     "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"
     "if (screen.width < 768) { fetch('/api/layout?v=mobile'); } else { fetch('/api/layout?v=desktop'); }"

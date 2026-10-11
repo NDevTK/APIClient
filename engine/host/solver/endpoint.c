@@ -74,6 +74,10 @@ typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *can
    needed the page's code to run, and a flag re-armed on every merge would answer it about the last sighting. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; int is_asset; int prov; int pre_program; int door;
+                 /* Every display spelling of the address this record was recorded under, owned: the string the
+                    host is handed and hands back with the reply (endpoint_mark_asset), which no scan of that
+                    string can map to `path`, because the scan reads the shape's hole mask and the string has none. */
+                 char **disps; int ndisp, dispcap;
                  /* `driven` is whose act the sighting was (solver/engine.h's PENDING_DRIVEN_*), part of the
                     identity beside `prov`: a drive's values are offered as examples marked driven, so they may
                     not merge into the page's own record. */
@@ -1279,19 +1283,27 @@ static char *url_example(JSContext *ctx, JSValueConst url) {
 /* One `/`-separated segment of an address, borrowed out of the string it was split from. */
 typedef struct { const char *p; size_t n; } Seg;
 
+/* The next segment separator of an address half at or after `p`, or NULL: URL §4.4 "URL parsing" path state ends a
+   segment at U+002F (/), and only a `/` the page wrote is one. `hm` is the half's hole mask aligned with `base`, NULL
+   for the example, whose every byte is the page's. */
+static const char *seg_next_sep(const char *base, const unsigned char *hm, const char *p) {
+    for (; *p; p++) if (*p == '/' && kv_is_page(base, hm, p)) return p;
+    return NULL;
+}
+
 /* The segments of one address half, malloc'd, from one walk, so the aligner and the scan that consumes its answer
-   index the same split. An address with no `/` is one segment and an empty one is one empty segment, as the
-   `strchr` walks compute. */
-static Seg *seg_split(const char *s, int *n_out) {
+   index the same split. An address with no separator is one segment and an empty one is one empty segment, as
+   seg_next_sep computes. */
+static Seg *seg_split(const char *s, const unsigned char *hm, int *n_out) {
     int n = 1, i = 0;
     const char *p = s, *e;
     Seg *v;
 
-    for (e = s; *e; e++) if (*e == '/') n++;
+    for (e = seg_next_sep(s, hm, s); e; e = seg_next_sep(s, hm, e + 1)) n++;
     v = malloc((size_t)n * sizeof *v);
     CHECK(v, "endpoint: OOM splitting an address into segments");
     for (;;) {
-        e = strchr(p, '/');
+        e = seg_next_sep(s, hm, p);
         v[i].p = p;
         v[i].n = e ? (size_t)(e - p) : strlen(p);
         i++;
@@ -1340,10 +1352,10 @@ static const char *seg_run_end(const char *b, int nseg) {
  * table cannot move an answer that was never in question.
  * Returns a malloc'd span per shape segment and writes the shape's segment count, or NULL when there is no reading
  * or more than one. */
-static int *path_align(const char *shape, const char *ex, int *nshape) {
+static int *path_align(const char *shape, const unsigned char *shm, const char *ex, int *nshape) {
     int n = 0, m = 0, i, j, k;
-    Seg *S = seg_split(shape, &n);
-    Seg *E = seg_split(ex, &m);
+    Seg *S = seg_split(shape, shm, &n);
+    Seg *E = seg_split(ex, NULL, &m);
     /* ways[i][j]: how many readings match the shape's segments from `i` onward against the example's from `j`
        onward, saturated at two. Filled backwards so each row reads only the row below it. */
     unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
@@ -1354,7 +1366,7 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
     for (i = n - 1; i >= 0; i--) {
         unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
         const unsigned char *nxt = cur + (m + 1);
-        if (memchr(S[i].p, '{', S[i].n)) {
+        if (kv_has_hole(shape, shm, S[i].p, S[i].n)) {
             unsigned suf = 0;                        /* the saturated sum of nxt[j + 1 .. m] */
             for (j = m; j >= 0; j--) {
                 cur[j] = (unsigned char)(suf > 2 ? 2 : suf);
@@ -1380,7 +1392,7 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
                    "an address alignment with exactly one reading reached a state holding a different number "
                    "of them — this walk is then choosing between readings instead of following the one the "
                    "count proved, and a hole would carry bytes another reading gives to its neighbour");
-            if (!memchr(S[i].p, '{', S[i].n)) {
+            if (!kv_has_hole(shape, shm, S[i].p, S[i].n)) {
                 span[i] = 1;
             } else {
                 for (k = j + 1; k <= m; k++) if (nxt[k]) break;
@@ -1410,35 +1422,35 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
     return span;
 }
 
-/* An unknown path segment is one path parameter, atomic in the template. `/v1/users/{state}.id/posts` has one, and
-   its value is the run of example segments `path_align` proved it stands over: one segment there (`42`), more
-   wherever the computed value holds a `/`. The template is built from the shape alone, so nothing the example does
-   moves a hole's boundaries, and the identity `endpoint_mark_asset` recomputes through this function with no
-   example cannot move either. The braces do not delimit the unknown: `concolic_exotic_get` composes a member read's
-   display as `"%s.%s"` over the parent's, so `state.id` displays as `{state}.id`, braces around the root source and
-   the member path outside them, and treating `}` as the unknown's end would ask the example segment to end in a
-   literal `.id`. So the segment is re-spelled as one hole (braces stripped, one pair around the whole), because the
-   consumer's substitution grammar is `/\{([^}\/]+)\}/` (lib/popup-form.js's applyPathParams): `{state}.id` becomes
-   `{state.id}`. A literal prefix in the segment (`u{state}.id`) is folded into the hole, since where the literal
-   ends is invisible at this layer and the example carries the whole segment. An unnameable hole (`{}`, a concolic
-   with no shape) mints nothing and keeps its shape in the address, as lib/learn.js's reconcile refuses the same
-   segment. Returns the re-spelled path, malloc'd. */
-static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
+/* An unknown path segment is one path parameter, atomic in the template. The segments are the page's: `shm` marks the
+   bytes this engine spelled for an unknown, and a `/` among them (a division spells `{a}/2`) is no separator, so
+   `/v1/users/{state}.id/posts` has one hole and `/p/{a}/2` has one too. Its value is the run of example bytes
+   `path_align` proved it stands over: one segment (`42`), several wherever the value holds a `/`, and, for a last
+   hole the example's query follows, the `?` and the query too (address_scan states when). The template is built from
+   the shape alone, so nothing the example does moves a hole's boundaries. The braces do not delimit the unknown
+   (`state.id` displays as `{state}.id`), so a holed segment is re-spelled as one hole with every brace stripped,
+   `{state.id}`, the grammar the consumer substitutes by (lib/popup-form.js's applyPathParams, `/\{([^{}]+)\}/`); a
+   literal prefix (`u{state}.id`) is folded in, since where it ends is invisible here. A brace the page wrote is
+   path percent-encode set data (URL §1.3 "Percent-encoded bytes") and is spelled `%7B`/`%7D`, so a brace in the
+   template is always a hole. An unnameable hole (`{}`) mints nothing and keeps its shape, as lib/learn.js's
+   reconcile refuses the same segment. Returns the re-spelled path, malloc'd. */
+static char *path_scan(KvBuf *out, const char *shape, const unsigned char *shm, const char *ex) {
     int nseg = 0, i = 0;
     /* NULL for both ways there is nothing to align against (no example, or no unique reading), one answer to this
        walk: it has no bytes to attribute to a hole. `path_align`'s banner tells them apart. */
-    int *span = ex ? path_align(shape, ex, &nseg) : NULL;
+    int *span = ex ? path_align(shape, shm, ex, &nseg) : NULL;
     const char *a = shape, *b = ex;
     /* core/json_buf.h's growing byte buffer, appended raw (a private one here would be the copy that header
        deleted); nothing here is JSON, and the emit quotes this string later. */
     JsonBuf p = { 0 };
 
     for (;;) {
-        const char *ae = strchr(a, '/');
+        const char *ae = seg_next_sep(shape, shm, a);
         const char *be = NULL;
         size_t an = ae ? (size_t)(ae - a) : strlen(a);
-        size_t bn = 0, nlen = 0;
-        char *seg, *name;
+        size_t bn = 0, nlen = 0, k;
+        int holed = kv_has_hole(shape, shm, a, an);
+        char *seg, *name = NULL;
 
         if (span) {
             DCHECK(i < nseg,
@@ -1459,20 +1471,24 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
         seg = malloc(an + 1); CHECK(seg, "endpoint: OOM copying a path segment");
         memcpy(seg, a, an); seg[an] = 0;
         /* The name is the hole key on this path, so it is spelled by the one speller: the emission rests on this
-           string being byte-identical to the one solver/decide.c filed the domain under. concolic_hole_key also
-           answers both conditions this branch needs: NULL for a brace-free segment and for the unnameable `{}`
-           whose strip is empty. */
-        name = concolic_hole_key(seg);
+           string being byte-identical to the one solver/decide.c filed the domain under. It answers NULL for the
+           unnameable `{}`, whose strip is empty. */
+        if (holed) name = concolic_hole_key(seg);
         if (!name) {
-            json_buf_raw(&p, seg);   /* a literal segment, or a `{}` this surface cannot name */
+            /* A literal segment, whose braces are the page's data, or a `{}` this surface cannot name, which keeps
+               its shape. */
+            for (k = 0; k < an; k++) {
+                char one[2] = { seg[k], 0 };
+
+                json_buf_raw(&p, holed || (seg[k] != '{' && seg[k] != '}') ? one : seg[k] == '{' ? "%7B" : "%7D");
+            }
         } else {
             nlen = strlen(name);
-            /* The grammar the consumer substitutes by, asserted at the mint: the speller strips the braces and a
-               segment cannot hold a `/` because this walk split on one, so it holds by construction, and the next
-               producer of a name has to keep it true. */
-            DCHECK(!strpbrk(name, "{}/"),
-                   "a path param's name still holds a brace or a slash — the popup substitutes a hole by matching "
-                   "/\\{([^}/]+)\\}/ against the path, so a name outside that grammar names a hole no substitution "
+            /* The grammar the consumer substitutes by, asserted at the mint: the speller strips every brace, and
+               the next producer of a name has to keep that true. A `/` is the hole's own spelling and is legal. */
+            DCHECK(!strpbrk(name, "{}"),
+                   "a path param's name still holds a brace — the popup substitutes a hole by matching "
+                   "/\\{([^{}]+)\\}/ against the path, so a name outside that grammar names a hole no substitution "
                    "can find");
             json_buf_raw(&p, "{"); json_buf_raw(&p, name); json_buf_raw(&p, "}");
             /* So a path param looks its domain up by the string the popup substitutes it by and decide.c filed it
@@ -1903,29 +1919,47 @@ static int same_identity(Endpoint *e, const char *method, const char *path, int 
 }
 
 /* The address's path, re-spelled by path_scan, and its path and query params into `kvb`: the one speller of a
-   request's address for the record and for a verification's observation. Returns the path, owned. */
-static char *address_scan(JSContext *ctx, JSValueConst url, KvBuf *kvb) {
+   request's address for the record and for a verification's observation. Returns the path, owned, and the display
+   spelling into `*disp_out` (owned) when it is non-NULL. */
+static char *address_scan(JSContext *ctx, JSValueConst url, KvBuf *kvb, char **disp_out) {
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);
-    /* The shape's own `?` and `&` are the page's bytes only: a hole this engine spelled (an operator, a joint's
-       separator, a member path) is one unknown and no syntax, so the split reads the hole mask. A concrete address
-       has none and is split as it stands. */
-    unsigned char *dhm = concolic_shape_hole_mask(url);
+    /* The shape's own `/`, `?` and `&` are the page's bytes only: a hole this engine spelled (an operator, a joint's
+       separator, a member path) is one unknown and no syntax, so the split reads the hole mask. Every byte of a
+       concrete address is the page's, so its mask is all page. */
+    unsigned char *dhm = concolic_is(url) ? concolic_shape_hole_mask(url) : calloc(strlen(disp) + 1, 1);
     const char *dq = disp;
     while (*dq && !(*dq == '?' && kv_is_page(disp, dhm, dq))) dq++;
     char *shape_path = strndup(disp, (size_t)(dq - disp));
-    char *expath = ex ? url_path_of(ex) : NULL;
-    CHECK(shape_path, "endpoint: OOM copying an address's path half");
-    /* Named residual. Not covered: the path half is split on every `/`, so a hole whose spelling holds one (a
-       division, `{a}/{b}`) is cut into two segments. Next diff: path_scan and path_align read the same mask, and a
-       path param's name grammar (the popup's /\{([^}/]+)\}/) admits a hole key holding `/`. How its absence shows: a
-       record whose path has a segment that is half of a hole's spelling. */
-    char *path = path_scan(kvb, shape_path, expath);
+    /* URL §4.4 "URL parsing" path state ends the path at the first U+003F (?). Where the shape has a page `?`, the
+       example's path is cut at its own first one. Where it has none, every `?` of the example is a byte some hole
+       computed, so the example is aligned whole and the hole standing over that `?` carries the query after it.
+       Named residual. Not covered: a hole ahead of a page `?` whose value holds a `?` is read as ending at it.
+       Next diff: the example's cut taken from the aligned run of that hole rather than from its first `?`. How
+       its absence shows: a path param whose example stops at a `?` its computed value carries on past. */
+    char *expath = !ex ? NULL : *dq ? url_path_of(ex) : strdup(ex);
+    CHECK(dhm && shape_path && (!ex || expath), "endpoint: OOM copying an address's path half");
+    char *path = path_scan(kvb, shape_path, dhm, expath);
     { const char *eq = ex ? strchr(ex, '?') : NULL;
       if (*dq && dq[1])
           kv_pairs(kvb, dq + 1, dhm ? dhm + (dq + 1 - disp) : NULL, (eq && eq[1]) ? eq + 1 : NULL, EP_QUERY); }
-    free(disp); free(dhm); free(ex); free(expath); free(shape_path);
+    if (disp_out) *disp_out = disp;
+    else free(disp);
+    free(dhm); free(ex); free(expath); free(shape_path);
     return path;
+}
+
+/* Files `disp` (borrowed) among `e`'s display spellings, once. */
+static void endpoint_disp_add(Endpoint *e, const char *disp) {
+    for (int i = 0; i < e->ndisp; i++) if (!strcmp(e->disps[i], disp)) return;
+    if (e->ndisp >= e->dispcap) {
+        e->dispcap = e->dispcap ? e->dispcap * 2 : 2;
+        e->disps = realloc(e->disps, (size_t)e->dispcap * sizeof *e->disps);
+        CHECK(e->disps, "endpoint: OOM filing an address's display spelling");
+    }
+    e->disps[e->ndisp] = strdup(disp);
+    CHECK(e->disps[e->ndisp], "endpoint: OOM filing an address's display spelling");
+    e->ndisp++;
 }
 
 /* A witness verification's own observation, made at its request (endpoint_record's suppressed arm): the run
@@ -1938,7 +1972,7 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
 
     witness_verify_key_split(key, &vm, &vp, &vc);
     if (strcmp(vm, method)) { free(vm); free(vp); free(vc); return; }
-    path = address_scan(ctx, url, &kvb);
+    path = address_scan(ctx, url, &kvb, NULL);
     kv_free(&kvb);
     own = witness_now();
     DCHECK(own.asked, "a witness verification observed a request with no flow standing");
@@ -2106,7 +2140,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        spells its holes and the JSON arm reads them, and a byte-by-byte body is named off its span record
        (body_params' residual has what is still missing). */
     KvBuf kvb = { 0 };
-    char *path = address_scan(ctx, url, &kvb);
+    char *disp = NULL;
+    char *path = address_scan(ctx, url, &kvb, &disp);
     /* Named fields first; the raw bytes only where there are none: a body this engine reads is better described by
        its fields, and both would put one fact on the record twice. */
     int body_named = body_params(ctx, &kvb, body);
@@ -2167,6 +2202,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                state is the local read at the door's entry, the record's is the flag its mint decided, and a later
                census holds only the second. */
             if (!ask_pre_program && g_eps[i].pre_program) g_ask_merged_pre_program++;
+            endpoint_disp_add(&g_eps[i], disp);
             goto done;
         }
     }
@@ -2174,6 +2210,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
     e->method = strdup(method); e->path = strdup(path); e->prov = prov; e->driven = driven;
+    endpoint_disp_add(e, disp);
     /* Whether any program had started when this record was born, read at the mint, the instant the fact is about;
        a read at the census would answer for the end of the run. */
     e->pre_program = !engine_any_program_started();
@@ -2218,6 +2255,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     flow_credit_emit(1.0);   /* a new endpoint: this flow emitted value of information, the WFQ reward */
 done:
     free(path);
+    free(disp);
     /* The root this call copied and no record took: a merge that did not raise the class. Both arms that keep it
        NULL the local on the same line. */
     free(aroot);
@@ -2227,31 +2265,28 @@ done:
 
 /* The asset decision's reader: solver/reply_decode.c asks what a reply is (of `computedType`, the one type decision,
    taken by the zone that read the bytes), and this marks the records whose replies were files, so an image's
-   address is not reported as an API endpoint. The key is computed by the two steps `endpoint_record` keys by,
-   called rather than restated, since a second normalisation would make a retraction silently match nothing.
-   `url_display` is not among them: it is the identity on a concrete string, and a concolic request carries its
-   shape to the host (core/fetch/fetch.c), so the string coming back with the reply is the display form this surface
-   filed it under. A component that hands the host a serialization still owes this call the shape: XHR §3.5.1 The
+   address is not reported as an API endpoint. The key is the display spelling `endpoint_record` filed on each
+   record: a concolic request carries its shape to the host (core/fetch/fetch.c), so the string coming back with the
+   reply is that display form, and a scan of it could not be the record's, since its hole mask stayed behind. A component that hands the host a serialization still owes this call the shape: XHR §3.5.1 The
    open() method parses, and URL Standard §1.3 "Percent-encoded bytes" puts U+007B ({) and U+007D (}) in the path
    percent-encode set, so a serialization spells holes `%7B…%7D`; core/xhr/xml_http_request.c answers through
    `xhr_request_address`, whose projection is this display form. It marks rather than deletes: the address may be
    recorded again in the same run and must stay suppressed, and dropping a record would shift its neighbours'
    params. Every same-(method, path) record is marked, since what the bytes were is a fact about the address. */
 void endpoint_mark_asset(const char *method, const char *url) {
-    KvBuf kvb = { 0 };
-    char *upath, *path;
-
     DCHECK(method && *method && url && *url,
            "an asset verdict arrived naming no request — the reply register is keyed on the (method, url) pair the "
            "request was owed under, so a verdict missing either half names no record");
-    upath = url_path_of(url);
-    path = path_scan(&kvb, upath, NULL);
-    for (int i = 0; i < g_eps_n; i++)
-        if (!strcmp(g_eps[i].method, method) && !strcmp(g_eps[i].path, path))
-            g_eps[i].is_asset = 1;
-    free(upath);
-    free(path);
-    kv_free(&kvb);
+    for (int i = 0; i < g_eps_n; i++) {
+        if (strcmp(g_eps[i].method, method)) continue;
+        for (int d = 0; d < g_eps[i].ndisp; d++) {
+            if (strcmp(g_eps[i].disps[d], url)) continue;
+            for (int j = 0; j < g_eps_n; j++)
+                if (!strcmp(g_eps[j].method, method) && !strcmp(g_eps[j].path, g_eps[i].path))
+                    g_eps[j].is_asset = 1;
+            break;
+        }
+    }
 }
 
 /* The numbers the emitted array is a fraction of (endpoint.h: its length alone is three states, and the fourth
@@ -3209,6 +3244,8 @@ char *endpoint_json_array(void) {
 void endpoint_free(void) {
     for (int i = 0; i < g_eps_n; i++) {
         free(g_eps[i].method); free(g_eps[i].path);
+        for (int d = 0; d < g_eps[i].ndisp; d++) free(g_eps[i].disps[d]);
+        free(g_eps[i].disps);
         /* The body fields freed where every other owned field is: a struct copied or freed field by field creates
            an obligation at every such site, which a field added to one and not the other silently breaks. */
         free(g_eps[i].body_mime); free(g_eps[i].body_b64); free(g_eps[i].body_shape);

@@ -24,10 +24,10 @@ int data_block_is(lxb_dom_element_t *el)
 }
 
 /* IS THIS ID SPELLABLE AS A HOLE? A shape names its unknown between braces and endpoint.c's consumer reads
-   one back with `/\{([^}\/]+)\}/`, so a name carrying a brace, a slash or whitespace is a hole the report can
-   print and the reviewer can never substitute — and a name that ends the segment early is worse than a
-   generic one, because it takes the parameter's value with it. The set kept here is what an author writes an
-   id out of; anything else falls back to the position, which is a fact about the document just as much. */
+   one back with `/\{([^{}]+)\}/`, so a name carrying a brace is a hole the report can print and the reviewer
+   can never substitute — and a name that ends the hole early is worse than a generic one, because it takes
+   the parameter's value with it. The set kept here is what an author writes an id out of; anything else falls
+   back to the position, which is a fact about the document just as much. */
 static int id_is_spellable(const lxb_char_t *s, size_t n)
 {
     size_t i;

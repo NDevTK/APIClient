@@ -4,9 +4,9 @@
 // THE PRODUCER'S GRAMMAR, WHICH IS WHERE THIS PARSER COMES FROM. `engine/host/solver/endpoint.c` builds an
 // endpoint's `url` as path_scan(url_path_of(url_display(address))): the address as the surface prints it (a
 // concolic's display SHAPE, a concrete URL's own bytes), cut at the first `?` — the query is not in this string,
-// it is in `params[]` under location "query" — and then re-spelled so that every `/`-separated segment is
-// EITHER brace-free literal bytes OR exactly one `{name}` hole covering the whole segment, with `name` free of
-// `{`, `}` and `/`. A hole is therefore atomic and segment-wide; there is no such thing as half a hole.
+// it is in `params[]` under location "query" — and then re-spelled so that every astTemplateSegments segment is
+// EITHER brace-free literal bytes OR exactly one `{name}` hole covering it, `name` free of `{` and `}` (a `/` in
+// it is the hole's own spelling). A hole is therefore atomic and segment-wide; there is no half a hole.
 //
 // WHAT THAT MAKES THE CONSUMER'S QUESTION. A URL record's ORIGIN is a tuple of its scheme, host and port
 // (WHATWG URL §4.7 Origin: for "http"/"https", "Return the tuple origin (url's scheme, url's host, url's port,
@@ -27,7 +27,7 @@
 var _AST_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.\-]*:/;
 
 /* DOES THIS ADDRESS HOLD A HOLE AT ALL — the question "is it concretely fetchable", asked in path_scan's own
-   grammar: a hole's name may hold anything except `{`, `}` and `/`. bridge.js asked it as `/\{[a-z]*\}/`, which
+   grammar: a hole's name may hold anything except `{` and `}`. bridge.js asked it as `/\{[a-z]*\}/`, which
    answers NO for every shape this engine actually emits — `{arg0}` has a digit, `{location.hash}` a dot,
    `{orphan3a153db70eec69f2.arg0.replace()}` all three — so the gate that exists to keep an undetermined
    address away from safeFetch matched only `{}` and `{id}`, and the rest went out to somebody's server as a
@@ -35,11 +35,11 @@ var _AST_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.\-]*:/;
    mints; it read `{orphan3.arg0…}` — the ordinal that the cross-session name retired — which is a shape no
    producer writes, i.e. exactly the criticism this paragraph levels at `${` and `(dynamic)` two comments up. */
 function astAddressHasHole(s) {
-  return typeof s === "string" && /\{[^{}\/]*\}/.test(s);
+  return typeof s === "string" && /\{[^{}]*\}/.test(s);
 }
 
 /* A HOLE'S NAME IS NOT URL SYNTAX, AND THE ONLY WAY TO SAY THAT TO A URL PARSER IS TO PERCENT-ENCODE IT.
-   `path_scan` keeps `{`, `}` and `/` out of a name and nothing else, because a name is a DISPLAY SHAPE and a
+   `path_scan` keeps `{` and `}` out of a name and nothing else, because a name is a DISPLAY SHAPE and a
    shape carries the page's own bytes verbatim: solver/concolic.c's `derived_operand_shape` renders a concrete
    String operand QUOTED with only `"` and `\` escaped, and `concolic_add_hook` renders one UNQUOTED, so
    `x.split("#")` and `"/api/" + h` put whatever the page wrote between the braces. `new URL` then reads that
@@ -75,7 +75,7 @@ function astAddressHasHole(s) {
    the span this file reads a hole by, and they are the one pair `_decHoles` already restores. */
 function _astHoleMasked(cp) {
   return cp <= 0x20 || cp >= 0x7f ||
-         cp === 0x22 || cp === 0x23 || cp === 0x25 || cp === 0x3c ||
+         cp === 0x22 || cp === 0x23 || cp === 0x25 || cp === 0x2f || cp === 0x3c ||
          cp === 0x3e || cp === 0x3f || cp === 0x5c || cp === 0x5e ||
          cp === 0x60 || cp === 0x7b || cp === 0x7d;
 }
@@ -106,11 +106,26 @@ function _astHoleUnmask(name) {
   try { return decodeURIComponent(name); } catch (e) { return name; }
 }
 
+/* A TEMPLATE'S SEGMENTS: split at every `/` outside a hole, the inverse of path_scan's join. A hole's name may
+   hold a `/` (a division spells `{a}/2`), and path_scan splits only on the page's own. Names hold no brace, so
+   one level of nesting is the whole grammar. */
+function astTemplateSegments(template) {
+  var segs = [], start = 0, inHole = false, i, c;
+  for (i = 0; i < template.length; i++) {
+    c = template.charAt(i);
+    if (c === "{") inHole = true;
+    else if (c === "}") inHole = false;
+    else if (c === "/" && !inHole) { segs.push(template.slice(start, i)); start = i + 1; }
+  }
+  segs.push(template.slice(start));
+  return segs;
+}
+
 /* THE TEMPLATE WITH EVERY HOLE MADE INERT, AND ITS INVERSE. Both walk SEGMENTS and not brace spans, because
    segment-atomicity is what astAddressCheckGrammar has just asserted and because a segment walk cannot be
    fooled by a `{` the BASE contributed through `_decHoles`. */
 function _astMaskHoles(template) {
-  var segs = template.split("/"), i;
+  var segs = astTemplateSegments(template), i;
   for (i = 0; i < segs.length; i++) {
     if (!_astSegIsHole(segs[i])) continue;
     segs[i] = "{" + _astHoleMask(segs[i].slice(1, -1)) + "}";
@@ -118,7 +133,7 @@ function _astMaskHoles(template) {
   return segs.join("/");
 }
 function _astUnmaskHoles(masked) {
-  var segs = masked.split("/"), i;
+  var segs = astTemplateSegments(masked), i;
   for (i = 0; i < segs.length; i++) {
     if (!_astSegIsHole(segs[i])) continue;
     segs[i] = "{" + _astHoleUnmask(segs[i].slice(1, -1)) + "}";
@@ -148,10 +163,10 @@ function astAddressOriginEnd(template) {
 
 /* THE ATOMICITY path_scan PROMISES, ASSERTED WHERE THIS FILE STARTS RELYING ON IT. Every split below reads a
    hole as a whole segment; a producer that ever emitted a partial one would silently re-cut every address here.
-   endpoint.c asserts the same contract from its own side (the path param's NAME may hold no brace and no
-   slash), so the two halves of it now crash on the same day rather than one of them going quiet. */
+   endpoint.c asserts the same contract from its own side (the path param's NAME may hold no brace), so the
+   two halves of it now crash on the same day rather than one of them going quiet. */
 function astAddressCheckGrammar(template) {
-  var segs = template.split("/"), i, s;
+  var segs = astTemplateSegments(template), i, s;
   for (i = 0; i < segs.length; i++) {
     s = segs[i];
     if (s.indexOf("{") < 0 && s.indexOf("}") < 0) continue;

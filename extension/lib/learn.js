@@ -978,7 +978,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
      && URL.canParse(_cm.origin)` below), reached one level earlier because here it is THIS side that has
      none. */
   if (csUrl && typeof m.path === "string" && m.path.indexOf("{") >= 0) {
-    const _tSegs = m.path.split("/").filter(Boolean);
+    const _tSegs = astTemplateSegments(m.path).filter(Boolean);
     const _hostname = csUrl.hostname;
     for (const [, _de] of tab.discoveryDocs) {
       if (!_de || !_de.doc || !_de.doc.resources) continue;
@@ -987,7 +987,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
         for (const _key of Object.keys(_bucket.methods)) {
           const _cm = _bucket.methods[_key];
           if (!_cm || _cm === m || _cm.httpMethod !== m.httpMethod || typeof _cm.path !== "string") continue;
-          const _cSegs = _cm.path.split("/").filter(Boolean);
+          const _cSegs = astTemplateSegments(_cm.path).filter(Boolean);
           if (_cSegs.length !== _tSegs.length) continue;
           const _oh = (_cm.origin && URL.canParse(_cm.origin)) ? new URL(_cm.origin).hostname : null;
           if (_oh !== _hostname) continue;
@@ -1175,7 +1175,7 @@ function _matchTemplatedMethod(learnedMethods, httpMethod, pathname) {
   for (const key in learnedMethods) {
     const mm = learnedMethods[key];
     if (!mm || mm.httpMethod !== httpMethod || !mm.path) continue;
-    const tps = mm.path.split("/").filter(Boolean);
+    const tps = astTemplateSegments(mm.path).filter(Boolean);
     if (tps.length !== segs.length) continue;
     let hasTemplate = false, ok = true;
     for (let i = 0; i < tps.length; i++) {
@@ -1385,7 +1385,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
     // Learn path parameters by comparing URL to stored template AND
     // by detecting ID-like segments on first observation.
     const segments = url.pathname.split("/").filter(Boolean);
-    const templateParts = (m.path || "").split("/").filter(Boolean);
+    const templateParts = astTemplateSegments(m.path || "").filter(Boolean);
     if (templateParts.length === segments.length) {
       let changed = false;
       for (let i = 0; i < segments.length; i++) {
@@ -1637,7 +1637,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
   // query params, so pickExampleValue picks the observed-top value.
   {
     const reqSegs = url.pathname.split("/").filter(Boolean);
-    const tmplSegs = (m.path || "").split("/").filter(Boolean);
+    const tmplSegs = astTemplateSegments(m.path || "").filter(Boolean);
     if (tmplSegs.length === reqSegs.length) {
       for (let i = 0; i < tmplSegs.length; i++) {
         const t = tmplSegs[i];

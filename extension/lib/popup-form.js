@@ -1472,9 +1472,11 @@ function _pathSegEncode(s) {
    three pieces and it is the THIRD that holds the port's own `:`, so relaxing only the piece that could be a
    scheme leaves the port percent-encoded and the whole address unparseable. One rule over every piece is
    also one fewer place for two answers to drift apart.
-   WHAT THIS DOES NOT DO IS DROP THE ESCAPE. `?`, `#`, SPACE, `\` and `%` are still encoded inside every
-   piece, so a value cannot end the path, open a query or a fragment, or smuggle a special URL's separator;
-   what it CAN now do is add segments, which is what a run IS. A scheme reaching the front of a relative
+   WHAT THIS DOES NOT DO IS DROP THE ESCAPE. `#`, SPACE, `\` and `%` are still encoded inside every piece, so
+   a value cannot open a fragment or smuggle a special URL's separator; what it CAN do is add segments and, at
+   its first `?`, end the path (URL §4.4 path state), which is what a run IS: path_scan hands a last hole the
+   query its value carried on into, and the rest after that `?` is query bytes, with only `#` escaped. A
+   scheme reaching the front of a relative
    template is refused ON THIS PATH by lib/send.js's `executeSendRequest`, which parses the address with no
    base and answers `{error: "blocked: invalid protocol"}` for anything but http/https before the request
    reaches lib/safe-fetch.js's operator tier (popup.js -> sendRequest -> SEND_REQUEST -> `executeSendRequest`
@@ -1495,10 +1497,7 @@ function _pathSegEncode(s) {
    instead of this function reading it off their text. ABSENCE SHOWS as an address carrying more path
    segments than the operator filled values for, read off the Send panel's own address row
    (`renderSendUrl`, lib/popup-send.js) BEFORE the request goes out, or off the request log's URL line
-   (lib/popup-reqlog.js renders `req.url`) after it. THIS CLAUSE USED TO SAY THE PANEL DISPLAYS THIS ADDRESS
-   NOWHERE and to send the reader to the log alone; that was true when written and the row retires it, so a
-   reader re-deriving it from `currentRequestUrl` having had no DOM reader will re-add a clause the surface
-   has already answered.
+   (lib/popup-reqlog.js renders `req.url`) after it.
    RETIREMENT: this argument goes when a path hole's value cannot reach here carrying a separator at all —
    that is, when `path_scan` no longer spans a hole over a run of example segments. */
 function applyPathParams(url, pathParams) {
@@ -1515,11 +1514,13 @@ function applyPathParams(url, pathParams) {
          "that survived it returned the un-substituted template: the request would go out carrying a " +
          "literal `{hole}` the panel had the operator's value for");
   if (!url) return url;
-  return url.replace(/\{([^}\/]+)\}/g, (m, name) =>
-    Object.prototype.hasOwnProperty.call(pathParams, name)
-      ? String(pathParams[name]).split("/").map(_pathSegEncode).join("/")
-      : m,
-  );
+  return url.replace(/\{([^{}]+)\}/g, (m, name) => {
+    if (!Object.prototype.hasOwnProperty.call(pathParams, name)) return m;
+    const v = String(pathParams[name]);
+    const q = v.indexOf("?");
+    const head = (q < 0 ? v : v.slice(0, q)).split("/").map(_pathSegEncode).join("/");
+    return q < 0 ? head : head + "?" + v.slice(q + 1).replace(/#/g, "%23");
+  });
 }
 
 /* THE SEND PANEL'S ADDRESS HAS ONE SPELLER, BECAUSE THE SURFACE THAT SHOWS IT AND THE PATH THAT SENDS IT

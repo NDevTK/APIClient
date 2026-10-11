@@ -39,12 +39,12 @@ typedef struct { const char *name; ByteReaderMake make; } ByteReader;
    user chose), which is one of the values the `_sourceReads` metric counts, and false for
    server-injected state, which is unknown input the attacker does not author and must not be counted as one.
    The name is MALLOC'D and the caller frees it, and it is SPELLED SO THE @H SURFACE CAN PRINT IT: a hole is
-   written between braces and the consumer reads one back with `/\{([^}\/]+)\}/`, so a name carrying `/` or `}`
-   is a hole nothing can substitute — and solver/endpoint.c's path scan splits a shape on `/` before it looks
-   for braces, so such a name is not merely unsubstitutable, it SHREDS the segment it sits in and takes the
-   value the run measured with it. A component naming a byte sequence after an address owes that address a
-   slash-free spelling, and core/fetch/reply_source.h is where an interface whose bytes came off the network
-   discharges that obligation — one spelling for every such interface, because two doors onto one reply that
+   written between braces and the consumer reads one back with `/\{([^{}]+)\}/`, so a name carrying `{` or `}`
+   is a hole nothing can substitute, and it ends the hole early in every reader that finds a hole by its
+   braces, taking the value the run measured with it. A component naming a byte sequence after an address owes
+   that address a brace-free spelling, and core/fetch/reply_source.h is where an interface whose bytes came off
+   the network discharges that obligation — one spelling for every such interface, because two doors onto one
+   reply that
    name it twice split every predicate over its bytes in two. `script#__NEXT_DATA__` and `gon.current_user_id`
    are what a name minted from something other than an address looks like. */
 typedef struct {

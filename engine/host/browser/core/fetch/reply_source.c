@@ -17,12 +17,12 @@
  *
  * WHY IT IS PERCENT-ENCODED, AND WHY THAT IS THE URL STANDARD'S OWN ANSWER RATHER THAN AN ESCAPE INVENTED
  * HERE. The name is spelled into an @H shape between braces, and that shape is read back as a PATH: the
- * consumer substitutes a hole by matching `/\{([^}\/]+)\}/`, and solver/endpoint.c's path scan splits the
- * shape on `/` BEFORE it looks for a brace. An address written raw therefore does not merely fail to
- * substitute — `{https://h/cfg.json}.region` turns one path segment into five, the shape and the concrete
- * example stop having the same segment count, and EVERY path parameter on that request loses the value the run
+ * consumer substitutes a hole by matching `/\{([^{}]+)\}/`, and every reader of a template finds a hole by its
+ * braces. An address may hold `{` and `}` (URL §1.3 puts both in the path percent-encode set, so they arrive
+ * raw only where a page wrote them), and one written raw would end its hole early, after which the shape and
+ * the concrete example no longer line up and EVERY path parameter on that request loses the value the run
  * measured, with nothing to say so. core/byte_reader.h states the obligation this discharges: a component
- * naming a byte sequence after an address owes that address a slash-free spelling.
+ * naming a byte sequence after an address owes that address a brace-free spelling.
  * URL §1.3 Percent-encoded bytes is where that spelling already exists. Its COMPONENT percent-encode set is
  * defined for exactly this: "could also be used by other standards to percent-encode data that can then be
  * embedded in a URL's path, query, or fragment". It contains `/`, `{` and `}` — and, because it is the
@@ -53,10 +53,9 @@ char *reply_source_name(const char *url, size_t len)
        is a string — so a NULL here would be that contract having changed under this file. */
     name = url_percent_encode(url, len, URL_SET_COMPONENT);
     DCHECK(name != NULL, "URL §1.3's percent-encode answered nothing for an address that is not empty");
-    DCHECK(!strpbrk(name, "{}/"),
-           "a reply's source name still carries a brace or a slash after URL §1.3 Percent-encoded bytes' "
-           "component percent-encode set — the @H surface splits a shape on `/` before it looks for a hole, "
-           "so such a name does not merely fail to substitute, it shreds the path segment it sits in and takes "
-           "that segment's measured value with it");
+    DCHECK(!strpbrk(name, "{}"),
+           "a reply's source name still carries a brace after URL §1.3 Percent-encoded bytes' component "
+           "percent-encode set — every reader of an @H template finds a hole by its braces, so such a name "
+           "does not merely fail to substitute, it ends its hole early and takes the measured value with it");
     return name;
 }
