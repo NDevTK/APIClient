@@ -46,6 +46,7 @@
 #include "core/realm.h"
 #include "core/streams/readable_stream.h"
 #include "core/url/url.h"
+#include "core/url/origin.h"
 
 /* §5.4's request, as the fields the interface reports. The enumerated members are stored as their spec strings
    because that is what the attributes return and what `init` supplies — there is no computation on them yet,
@@ -762,6 +763,42 @@ static bool req_init_is_empty(JSContext *ctx, JSValueConst init)
    A `?:` PAST A FAILED CONVERSION IS GONE — the read could only fail on OOM, and answering that with the
    default turned `this engine could not allocate` into `the page asked for same-origin credentials`, which is
    a plausible datum where a crash belonged. */
+/* Fetch §5.4 "Request class" step 14 over the record's referrer, which the record holds in the form the referrer
+   getter answers: "" for "no-referrer", "about:client" for "client", otherwise the URL's serialization. The empty
+   string stays; anything else is parsed against the API base URL ("If parsedReferrer is failure, then throw a
+   TypeError"), and an about:client address, or one not same origin with this realm's origin, becomes "client".
+   It is idempotent, so a referrer carried from a Request input and the "about:client" initial value pass
+   through unchanged. Returns -1 with the TypeError pending. */
+static int request_referrer_apply(JSContext *ctx, JSValue *referrer)
+{
+    size_t n = 0;
+    const char *s = JS_ToCStringLen(ctx, &n, *referrer);
+    UrlRecord u;
+    bool ok, client;
+    char *ser;
+
+    CHECK(s != NULL, "Request: OOM reading the referrer member");
+    if (n == 0) { JS_FreeCString(ctx, s); return 0; }
+    url_record_init(&u);
+    ok = fetch_parse_url(ctx, &u, s, n);
+    JS_FreeCString(ctx, s);
+    if (!ok) {
+        url_record_free(&u);
+        JS_ThrowTypeError(ctx, "the RequestInit member `referrer` is not a URL");
+        return -1;
+    }
+    client = (u.scheme && !strcmp(u.scheme, "about") && u.opaque_path && !strcmp(u.opaque_path, "client")) ||
+             !origin_same_as_url(origin_agent(), &u);
+    ser = client ? NULL : url_serialize(&u, /*exclude_fragment*/ false);
+    url_record_free(&u);
+    CHECK(client || ser != NULL, "Request: OOM serializing the referrer");
+    JS_FreeValue(ctx, *referrer);
+    *referrer = JS_NewString(ctx, client ? "about:client" : ser);
+    free(ser);
+    CHECK(!JS_IsException(*referrer), "Request: OOM holding the referrer");
+    return 0;
+}
+
 static JSValue init_strv(JSContext *ctx, JSValueConst init, const char *name, JSValueConst carried,
                          const char *dflt)
 {
@@ -905,6 +942,7 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
                                      (from && !init_not_empty) ? from->referrer : JS_UNDEFINED,
                                      "about:client");
     if (JS_IsException(rec->referrer)) { rec->referrer = JS_UNDEFINED; return -1; }
+    if (request_referrer_apply(ctx, &rec->referrer) < 0) return -1;
     rec->referrer_policy = init_strv(ctx, init, "referrerPolicy",                   /* steps 13, 15 */
                                      (from && !init_not_empty) ? from->referrer_policy : JS_UNDEFINED, "");
     if (JS_IsException(rec->referrer_policy)) { rec->referrer_policy = JS_UNDEFINED; return -1; }

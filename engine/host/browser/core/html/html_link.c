@@ -35,6 +35,7 @@
                                          test the solver's script deliveries make, spelled once */
 #include "solver/concolic.h"        /* §2.5.6's slot holds a JS value, so a nonce can be unknown input */
 #include "core/html/nonce_attribute.h" /* §4.2.4.3 takes the request's nonce from [[CryptographicNonce]] */
+#include "core/html/referrer_policy_attribute.h" /* HTML §2.5.5: the element's referrer policy */
 #include "core/html/cors_settings_attribute.h" /* …and its CREDENTIALS MODE from `crossorigin`, by
                                                   TWO algorithms this file's two types split on */
 #include "core/html/image_source_set.h" /* §4.6.8.20's step 1 and its "to preload" step 2: what source an
@@ -895,6 +896,10 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
            "more modern features, where the request's mode is always `cors`". Two `rel` keywords, two
            algorithms, and the same markup answers differently — which is exactly why this is passed. */
         req.mode = mode;
+        /* §2.2.5's "client", and the element's referrerpolicy attribute state, which is the referrer policy of
+           HTML §4.2.4.3's link processing options and of §4.6.8.12 step 11 alike. */
+        req.referrer = "client";
+        req.referrer_policy = referrer_policy_attribute_keyword(el);
         /* …AND IT IS OWED TO THIS ELEMENT'S OWN COMPLETION STEPS, WHICH IS WHAT THE PARK KIND SAYS AND WHAT
            `fetch_owe` COULD NOT. That door parks FLOW_PENDING_RESOLVE — §5.6's `fetch()`, whose delivery
            compiles a JavaScript-typed reply as a CLASSIC program, because a reply a page holds as DATA is one
@@ -1397,8 +1402,8 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
        values written where nothing can read them", which was right about all three when the record had no
        field for any of them and is wrong about this one now: the credentials mode reaches the trusted zone,
        which decides the credential question from it, so computing it here is a value with a consumer.
-       Step 11's referrer policy and step 12's fetch priority still have no field and still have no reader, so
-       the sentence holds for them and they stay uncomputed. Step 7 is "Let credentials mode be the CORS
+       Step 11's referrer policy rides the request too (link_fetch_request reads the attribute). Step 12's
+       fetch priority still has no field and no reader, so the sentence holds for it and it stays uncomputed. Step 7 is "Let credentials mode be the CORS
        settings attribute credentials mode for el's crossorigin attribute" — HTML §2.5.4 "CORS settings
        attributes"' table and not §2.5.1's algorithm, which is what makes a bare `<link rel=modulepreload>`
        `same-origin` where the identical `<link rel=preload>` is `include`.

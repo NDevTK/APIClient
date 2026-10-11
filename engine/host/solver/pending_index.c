@@ -28,6 +28,8 @@ typedef struct PendIndexMember {
 struct PendIndexNode {
     char             *method;
     char             *mode;    /* Fetch §2.2.5's request mode: two requests that differ only in it are two */
+    char             *referrer_policy;
+    char             *referrer;
     char             *url;
     uint32_t          hash;
     PendIndexMember **mem;
@@ -162,13 +164,29 @@ static uint32_t pend_hash_bytes(const char *s, uint32_t h)
     return h;
 }
 
-static uint32_t pend_hash_pair(const char *method, const char *mode, const char *url)
+static uint32_t pend_hash_pair(const PendRequestKey *k)
 {
-    uint32_t h = pend_hash_bytes(method, 2166136261u);
+    uint32_t h = pend_hash_bytes(k->method, 2166136261u);
     h = pend_hash_bytes("\t", h);       /* the separator is part of the key: `GET` + `\tx` is not `GET\t` + `x` */
-    h = pend_hash_bytes(mode, h);
+    h = pend_hash_bytes(k->mode, h);
     h = pend_hash_bytes("\t", h);
-    return pend_hash_bytes(url, h);
+    h = pend_hash_bytes(k->referrer_policy, h);
+    h = pend_hash_bytes("\t", h);
+    h = pend_hash_bytes(k->referrer, h);
+    h = pend_hash_bytes("\t", h);
+    return pend_hash_bytes(k->url, h);
+}
+
+static int pend_node_is(const PendIndexNode *n, uint32_t h, const PendRequestKey *k)
+{
+    return n->hash == h && !strcmp(n->method, k->method) && !strcmp(n->mode, k->mode) &&
+           !strcmp(n->referrer_policy, k->referrer_policy) && !strcmp(n->referrer, k->referrer) &&
+           !strcmp(n->url, k->url);
+}
+
+static int pend_key_whole(const PendRequestKey *k)
+{
+    return k && k->method && k->mode && k->referrer_policy && k->referrer && k->url;
 }
 
 static uint32_t pend_hash_ptr(JSValueConst rec)
@@ -331,31 +349,35 @@ void pending_index_unref(JSValueConst rec)
     }
 }
 
-void pending_index_key(JSValueConst rec, const char *method, const char *mode, const char *url)
+void pending_index_key(JSValueConst rec, const PendRequestKey *k)
 {
     PendIndexMember *m = pend_member(rec);
     PendIndexNode *n;
     uint32_t h, b;
 
-    DCHECK(method != NULL && mode != NULL && url != NULL,
+    DCHECK(pend_key_whole(k),
            "a request was keyed into the outstanding set with part of its identity — the reply seam is keyed "
-           "on (method, mode, url) and a partial key would collect another request's body");
+           "on (method, mode, referrer policy, referrer, url) and a partial key would collect another "
+           "request's body");
     DCHECK(m != NULL, "an untracked record was keyed — tracking begins at the push and a record that reaches "
                       "this line without it is one the last register already dropped");
     DCHECK(m->node == NULL, "a record was keyed twice — a request's identity is written once, at the park, so "
                             "a second key is either a rewritten address or a member the first key lost");
-    h = pend_hash_pair(method, mode, url);
+    h = pend_hash_pair(k);
     if (!g_pair_buckets) pend_pair_grow();
     for (n = g_by_pair[h & (g_pair_buckets - 1)]; n; n = n->hnext)
-        if (n->hash == h && !strcmp(n->method, method) && !strcmp(n->mode, mode) && !strcmp(n->url, url)) break;
+        if (pend_node_is(n, h, k)) break;
     if (!n) {
         if (g_pair_n >= g_pair_buckets) pend_pair_grow();
         n = calloc(1, sizeof *n);
         CHECK(n != NULL, "engine: OOM recording an outstanding request");
-        n->method = strdup(method);
-        n->mode = strdup(mode);
-        n->url = strdup(url);
-        CHECK(n->method && n->mode && n->url, "engine: OOM recording an outstanding request's identity");
+        n->method = strdup(k->method);
+        n->mode = strdup(k->mode);
+        n->referrer_policy = strdup(k->referrer_policy);
+        n->referrer = strdup(k->referrer);
+        n->url = strdup(k->url);
+        CHECK(n->method && n->mode && n->referrer_policy && n->referrer && n->url,
+              "engine: OOM recording an outstanding request's identity");
         n->hash = h;
         b = h & (g_pair_buckets - 1);
         n->hnext = g_by_pair[b];
@@ -445,6 +467,16 @@ const char *pending_index_node_mode(const PendIndexNode *n)
     DCHECK(n != NULL, "an outstanding request's mode was read off no node");
     return n->mode;
 }
+const char *pending_index_node_referrer_policy(const PendIndexNode *n)
+{
+    DCHECK(n != NULL, "an outstanding request's referrer policy was read off no node");
+    return n->referrer_policy;
+}
+const char *pending_index_node_referrer(const PendIndexNode *n)
+{
+    DCHECK(n != NULL, "an outstanding request's referrer was read off no node");
+    return n->referrer;
+}
 const char *pending_index_node_url(const PendIndexNode *n)
 {
     DCHECK(n != NULL, "an outstanding request's address was read off no node");
@@ -467,16 +499,15 @@ long pending_index_node_answered(const PendIndexNode *n)
     return n->answered;
 }
 
-PendIndexNode *pending_index_find(const char *method, const char *mode, const char *url)
+PendIndexNode *pending_index_find(const PendRequestKey *k)
 {
     uint32_t h;
     PendIndexNode *n;
-    DCHECK(method != NULL && mode != NULL && url != NULL,
-           "the outstanding set was searched with part of a request identity");
+    DCHECK(pend_key_whole(k), "the outstanding set was searched with part of a request identity");
     if (!g_pair_buckets) return NULL;
-    h = pend_hash_pair(method, mode, url);
+    h = pend_hash_pair(k);
     for (n = g_by_pair[h & (g_pair_buckets - 1)]; n; n = n->hnext)
-        if (n->hash == h && !strcmp(n->method, method) && !strcmp(n->mode, mode) && !strcmp(n->url, url))
+        if (pend_node_is(n, h, k))
             return n;
     return NULL;
 }
@@ -524,6 +555,8 @@ void pending_index_reset(JSContext *ctx)
         PendIndexNode *next = n->anext;
         free(n->method);
         free(n->mode);
+        free(n->referrer_policy);
+        free(n->referrer);
         free(n->url);
         free(n->mem);
         free(n);

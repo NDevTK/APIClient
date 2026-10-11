@@ -154,10 +154,10 @@ PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_o
        keeps ONE writer for that field — a container built with no text and one built with text are the same
        shape, so no reader has to ask which of the two it is holding. */
     csp_list_parse(&p->csp, p->csp_text, p->csp_text ? strlen(p->csp_text) : 0, self_origin);
-    if (referrer_policy) {
-        p->referrer_policy = strdup(referrer_policy);
-        CHECK(p->referrer_policy != NULL, "policy container: OOM copying a referrer policy");
-    }
+    /* §7.1.7: "A referrer policy, which is a referrer policy. It is initially the default referrer policy",
+       which Referrer Policy §3 makes "strict-origin-when-cross-origin". NULL is a creator that states none. */
+    p->referrer_policy = strdup(referrer_policy ? referrer_policy : "strict-origin-when-cross-origin");
+    CHECK(p->referrer_policy != NULL, "policy container: OOM copying a referrer policy");
     /* §7.1.4's ITEM, TAKING ITS OWN COPY OF BOTH ENDPOINT STRINGS. The caller's bytes belong to the operation
        creating this Document — a response's header list that is freed the moment the Document is installed, or
        a `navigable.create` record — and a container outlives every one of them. */
@@ -335,6 +335,14 @@ const CspList *policy_container_csp_list(const PolicyContainer *p) { return p ? 
 const Origin *policy_container_self_origin(const PolicyContainer *p) { return p ? p->csp.self_origin : NULL; }
 
 const EmbedderPolicy *policy_container_embedder(const PolicyContainer *p) { return p ? &p->embedder : NULL; }
+
+const char *policy_container_referrer_policy(const PolicyContainer *p)
+{
+    DCHECK(p != NULL && p->referrer_policy != NULL,
+           "a policy container's referrer policy was read off no container, or off one whose creation did not "
+           "set the item §7.1.7 gives every container");
+    return p->referrer_policy;
+}
 
 const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyContainer *p)
 {

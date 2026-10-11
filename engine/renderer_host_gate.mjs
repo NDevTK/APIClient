@@ -706,14 +706,14 @@ try {
        joined the line after the provenance and is answered the same way and for the same reason. */
     for (const line of (await opener.renderer.getPending()).requests.split('\n').filter(Boolean)) {
       const t = line.split('\t');
-      if (t.length !== 8 || t[0] === '' || t[7] === '')
-        fail('a pending line is not ' +
-             '`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`, and the ' +
-             `reply is delivered against the (method, mode, url) it names: ${line}`);
-      const method = t[0], mode = t[6], u = t[7];
+      if (t.length !== 10 || t[0] === '' || t[9] === '')
+        fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>' +
+             'CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`, and the reply is delivered ' +
+             `against the five-field identity it names: ${line}`);
+      const method = t[0], mode = t[6], referrerPolicy = t[7], referrer = t[8], u = t[9];
       console.log(`${TAG}   pending: ${method} ${u}`);
       await opener.renderer.provide({
-        method, mode, url: u,
+        method, mode, referrerPolicy, referrer, url: u,
         reply: JSON.stringify({ status: 200, statusText: 'OK', headers: [],
                                 urlList: [new URL(u, OPENER_ADDR).href], computedType: 'application/json',
                                 type: 'basic' }),

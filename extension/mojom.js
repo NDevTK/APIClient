@@ -440,7 +440,8 @@
         reply: [
           { name: "requests", type: "string",
             why: "the REQUESTS flows are parked on — one " +
-                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` line each, " +
+                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>" +
+                 "REFERRER_POLICY<TAB>REFERRER<TAB>URL` line each, " +
                  "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +
                  "two, and both settled with whichever body the zone fetched first. TAB can occur in none of " +
@@ -488,8 +489,14 @@
                  "identity and not a hint: the answer to a GET is not the answer to a POST of one address" },
           { name: "mode", type: "string", retained: false,
             why: "Fetch §2.2.5 \"Requests\"' request mode, which GetPending named beside the method: the " +
-                 "engine keys its pending register on (method, mode, url), because a `no-cors` and a `cors` " +
-                 "request to one address are two requests the trusted zone answers differently" },
+                 "engine keys its pending register on (method, mode, referrer policy, referrer, url), because a " +
+                 "`no-cors` and a `cors` request to one address are two requests the trusted zone answers " +
+                 "differently" },
+          { name: "referrerPolicy", type: "string", retained: false,
+            why: "the request's referrer policy as GetPending named it, part of the same key" },
+          { name: "referrer", type: "string", retained: false,
+            why: "the request's referrer as GetPending named it (\"no-referrer\" or a URL), part of the same " +
+                 "key: two referrers are two `Referer` headers and so two requests" },
           { name: "url", type: "string", retained: false,
             why: "the TARGET half of the same request, matched with the method against what a flow parked on " +
                  "— the engine's own qjs_provide DFAILs on a pair nothing is parked on, which is what an " +
@@ -709,6 +716,10 @@
           { name: "mode", type: "string", retained: false,
             why: "the request mode, keyed exactly as `Provide`'s is: two requests that differ only in mode are " +
                  "two requests, and a refusal of one is not a refusal of the other" },
+          { name: "referrerPolicy", type: "string", retained: false,
+            why: "the request's referrer policy, keyed exactly as `Provide`'s is" },
+          { name: "referrer", type: "string", retained: false,
+            why: "the request's referrer, keyed exactly as `Provide`'s is" },
           { name: "url", type: "string", retained: false,
             why: "the TARGET half of that same request, matched against what a flow parked on — " +
                  "`engine_decline` DFAILs on a pair no flow is parked on and no sale explains, for the reason " +

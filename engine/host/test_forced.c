@@ -747,6 +747,7 @@ static int fixture_provide(JSContext *ctx) {
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
         const char *method, *destination, *initiator, *provenance, *pinned, *credentials, *mode, *url;
+        const char *referrer_policy, *referrer;
         UrlRecord rec;
         char *abs;
         JSValue reply;
@@ -754,8 +755,8 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` AND IT
-           IS SPLIT BY THE
+        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>
+           REFERRER_POLICY<TAB>REFERRER<TAB>URL` AND IT IS SPLIT BY THE
            ENGINE'S OWN SPLITTER — the reply seam is keyed on the pair, so a fixture that answered the whole
            line as an address would match nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT
            ITSELF, deliberately: what it exercises is the PATH (parked, delivered, resumed), and both a firing
@@ -764,7 +765,7 @@ static int fixture_provide(JSContext *ctx) {
            what a fixture is for; the DESTINATION's is asserted inside the splitter against Fetch §2.2.5's own
            enumeration, which is too long to restate at each host and is one table for that reason. */
         engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &credentials, &mode,
-                             &url);
+                             &referrer_policy, &referrer, &url);
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
         DCHECK(!strcmp(pinned, PENDING_PINNED_YES) || !strcmp(pinned, PENDING_PINNED_NO),
@@ -818,7 +819,7 @@ static int fixture_provide(JSContext *ctx) {
            this branch is never reached a second time. A fixture-side `once` flag would be a second answer
            to that question and free to disagree with it. */
         if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
-            filled += engine_decline(ctx, method, mode, url,
+            filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
                                      "blocked-signal: this origin has not been widened for a program load "
                                      "at this address, so the act is derived and reported and not spent");
         } else {
@@ -848,7 +849,7 @@ static int fixture_provide(JSContext *ctx) {
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
                                     (const char *const *)&abs, 1, rtype, "basic");
             header_list_free(&eh);
-            filled += engine_provide(ctx, method, mode, url, reply);
+            filled += engine_provide(ctx, method, mode, referrer_policy, referrer, url, reply);
             JS_FreeValue(ctx, reply);
         }
         free(abs);
@@ -27237,6 +27238,8 @@ static int abi_pay(void)
         if (!strcmp(verb, "provide")) {
             const char *method = abi_take(&p, "request method");
             const char *mode = abi_take(&p, "request mode");
+            const char *referrer_policy = abi_take(&p, "request referrer policy");
+            const char *referrer = abi_take(&p, "request referrer");
             const char *url = abi_take(&p, "request address");
 
             reply_b64 = abi_take(&p, "reply record");
@@ -27257,7 +27260,7 @@ static int abi_pay(void)
                        "a reply body is longer than the ABI's length parameter can name — the truncated value "
                        "would be accepted, so the flow would resume on a PREFIX of the response and every "
                        "value learned from it would be a fact about bytes the server did not send");
-                qjs_provide(method, mode, url, reply, body, (unsigned)body_n);
+                qjs_provide(method, mode, referrer_policy, referrer, url, reply, body, (unsigned)body_n);
                 free(reply);
                 free(body);
             }
@@ -27469,6 +27472,8 @@ static int abi_pay(void)
                creates had ever been stepped, so the fork would exist and never once run. */
             const char *method = abi_take(&p, "refused request method");
             const char *mode = abi_take(&p, "refused request mode");
+            const char *referrer_policy = abi_take(&p, "refused request referrer policy");
+            const char *referrer = abi_take(&p, "refused request referrer");
             const char *url = abi_take(&p, "refused request URL");
             char *reason;
             size_t rn = 0;
@@ -27480,7 +27485,7 @@ static int abi_pay(void)
                   "a refused request named no method or no address — the refusal is keyed on the PAIR exactly "
                   "as a reply is, so a half-named one refuses whichever request the engine's pairing assert "
                   "happens to fall on and leaves the flow that IS parked waiting for the session");
-            qjs_decline(method, mode, url, reason);
+            qjs_decline(method, mode, referrer_policy, referrer, url, reason);
             /* AND THE SENTENCE IS STILL READ ALOUD, WHICH THE ENGINE ALONE WOULD NOT DO. The refusal now rides
                the engine's own record, which is what lets the flow park and fork — but nothing in this process
                PRINTS a record, so a reason relayed only through the ABI would be stored, asserted, acted on,

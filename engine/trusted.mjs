@@ -288,6 +288,10 @@ function fieldLines(entries) {
 const CENSUS_MARKERS = ['@SWAP', '@COLD', '@HEAP', '@WFQ', '@FORKAT'];
 const b64 = (x) => Buffer.from(x === undefined ? '' : x).toString('base64');
 const ABSENT = '-';
+/* Referrer Policy §3 "Referrer Policies", the empty string included. */
+const REFERRER_POLICIES = ['', 'no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin',
+                           'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin',
+                           'unsafe-url'];
 
 /* WHY THIS ZONE WOULD NOT PERFORM A REQUEST, IN ITS OWN WORDS. It crosses to the child because the party that
    refused is the party that knows why: a stall whose reason is guessed by the process that did not make the
@@ -306,8 +310,8 @@ function decline(reason) { return `decline\t${b64(reason)}`; }
    THE REASON IS BASE64 AND THE PAIR IS NOT, exactly as `provide` writes them: a method is a token and a URL has
    had every tab and newline removed by URL Standard §4.4 "URL parsing", while a reason is a whole English
    sentence this zone composed and the channel is line-oriented. */
-function declineRequest(method, mode, url, reason) {
-  return `decline-request\t${method}\t${mode}\t${url}\t${b64(reason)}`;
+function declineRequest(method, mode, referrerPolicy, referrer, url, reason) {
+  return `decline-request\t${method}\t${mode}\t${referrerPolicy}\t${referrer}\t${url}\t${b64(reason)}`;
 }
 
 /* …AND THE SAME ACT ADDRESSED BY REQUEST ID, WHICH IS A THIRD RECORD BECAUSE A THIRD INDEX ANSWERS IT. The pair
@@ -725,7 +729,8 @@ async function main() {
      apart by a TAB rather than by a convention that could drift: RFC 9110 §5.6.2 "Tokens" excludes it from a
      method and URL Standard §4.4 "URL parsing" removes every ASCII tab from an address, so a fetch key always
      holds exactly one and a request key can hold none. */
-  const fetchKey = (method, mode, url) => `${method}\t${mode}\t${url}`;
+  const fetchKey = (method, mode, referrerPolicy, referrer, url) =>
+    `${method}\t${mode}\t${referrerPolicy}\t${referrer}\t${url}`;
   const isFetchKey = (key) => key.includes('\t');
 
   /* A DOCUMENT LOAD, WHICH IS A DIFFERENT DECISION FROM A FETCH AND IS MADE HERE FOR BOTH OF ITS CALLERS —
@@ -869,6 +874,10 @@ async function main() {
       throw new Error("the engine's xhr.send record carries no header list — xhr_request_op writes one");
     if (typeof q.useCorsPreflight !== 'boolean')
       throw new Error("the engine's xhr.send record states no use-CORS-preflight flag — xhr_request_op writes one");
+    if (!REFERRER_POLICIES.includes(q.referrerPolicy) || typeof q.referrer !== 'string' ||
+        (q.referrer !== 'no-referrer' && !URL.canParse(q.referrer)))
+      throw new Error("the engine's xhr.send record states no Referrer Policy §3 referrer policy, or a referrer " +
+                      'that is neither "no-referrer" nor a URL — xhr_request_op writes both');
     if (q.mode !== 'cors')
       throw new Error(`the engine's xhr.send record states the mode \`${q.mode}\` — XHR §3.5.6 "The send() ` +
                       'method" builds every request in cors mode');
@@ -891,7 +900,8 @@ async function main() {
     e.ready.push(['answer', String(id), b64(JSON.stringify(meta)), '0', rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
-  const workFetch = async (e, method, destination, initiator, provenance, pinned, credentials, mode, url) => {
+  const workFetch = async (e, method, destination, initiator, provenance, pinned, credentials, mode,
+                           referrerPolicy, referrer, url) => {
     const abs = new URL(url, e.docUrl).href;
     /* EVERY ANSWER THIS FUNCTION HAS LEAVES THROUGH ONE DOOR, AND THE DOOR IS WHAT RELEASES THE KEY. Pushing
        the record and remembering the key are ONE act here rather than two statements a later arm could take
@@ -900,7 +910,10 @@ async function main() {
        which is exactly the state the `track` banner above records as having cost a session. The release itself
        happens at the WRITE (`flush` drains this list beside `ready`), because the pair is still owed while its
        answer is only queued. */
-    const settle = (rec) => { e.ready.push(rec); e.releaseOnWrite.push(fetchKey(method, mode, url)); };
+    const settle = (rec) => {
+      e.ready.push(rec);
+      e.releaseOnWrite.push(fetchKey(method, mode, referrerPolicy, referrer, url));
+    };
     /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two initiator
        tokens and exactly three provenance tokens, and an unknown one would be routed by whichever arm of the
        tests below happened to be written as the else — which is the defaulted-field defect landing on a
@@ -948,7 +961,7 @@ async function main() {
          the only way a wait can be spent badly: not at all. The flow keeps its park AND gets the arm that runs
          its failure path, which is the whole of what §Solver-half's both-arms means for an outcome nobody
          observed. */
-      settle(declineRequest(method, mode, url,
+      settle(declineRequest(method, mode, referrerPolicy, referrer, url,
                           `${method} ${abs} — ${methodRefusal.reason}. The chokepoint is GET-only by ` +
                            'ABSENCE (SECURITY.md §Network), so this address can only be DERIVED and reported, ' +
                            'never issued; answering it with a GET\'s body would be a wrong answer rather than ' +
@@ -1020,7 +1033,7 @@ async function main() {
                                                     actor: 'page',
                                                     docReach: e.docReach, credentialed: false, headers: null });
       if (!refusal) {
-        settle(declineRequest(method, mode, url,
+        settle(declineRequest(method, mode, referrerPolicy, referrer, url,
                             `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
                              'request: no browser refuses it, so there is nothing to hand the flow back and a ' +
                              'network error would tell it the server was unreachable. The flow stays PARKED, ' +
@@ -1028,7 +1041,7 @@ async function main() {
                              'is not a gap in the report but IS the report'));
         return;
       }
-      settle(declineRequest(method, mode, url,
+      settle(declineRequest(method, mode, referrerPolicy, referrer, url,
                             `${method} ${abs} — ${raw.refusal.reason}. This origin's egress policy refuses ` +
                             `it on \`${refusal}\`, which names the SIGNAL and the VALUE that held it: pass ` +
                            '`--explore <origin>` to permit every value of every signal at that host, ' +
@@ -1040,7 +1053,7 @@ async function main() {
       return;
     }
     const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
-    settle(['provide', method, mode, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
+    settle(['provide', method, mode, referrerPolicy, referrer, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
             rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
@@ -1611,26 +1624,37 @@ async function main() {
     }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 9)
+      if (f.length !== 11)
         throw new Error('the host announced a fetch that is not ' +
                         '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>' +
-                        'MODE<TAB>URL`: ' +
+                        'MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`: ' +
                         `${line} — the bill is ` +
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
-      const [, method, destination, initiator, provenance, pinned, credentials, mode, url] = f;
+      const [, method, destination, initiator, provenance, pinned, credentials, mode, referrerPolicy, referrer,
+             url] = f;
+      /* The request's referrer policy (after Fetch §4.1 "Main fetch" gave an empty one the policy container's)
+         and its referrer ("no-referrer" or a URL), both part of the identity the reply is keyed on;
+         extension/bridge.js's `pendingRequest` asserts the same shape. */
+      if (!REFERRER_POLICIES.includes(referrerPolicy))
+        throw new Error(`the host announced a fetch with the referrer policy \`${referrerPolicy}\`, which ` +
+                        'Referrer Policy §3 does not define');
+      if (referrer !== 'no-referrer' && !URL.canParse(referrer))
+        throw new Error(`the host announced a fetch with the referrer \`${referrer}\`, which is neither ` +
+                        '"no-referrer" nor a URL — the engine resolves Fetch §2.2.5\'s "client" before joining');
       /* Only the three modes whose reader is the asking page travel on this channel (extension/bridge.js's
          `pendingRequest` gives the reason); a `navigate` here would skip the response tainting. */
       if (mode !== 'same-origin' && mode !== 'cors' && mode !== 'no-cors')
         throw new Error(`the host announced a fetch in the mode \`${mode}\` — a reply on this channel returns ` +
                         'to the page that asked, so only `same-origin`, `cors` and `no-cors` may arrive here');
-      const key = fetchKey(method, mode, url);
+      const key = fetchKey(method, mode, referrerPolicy, referrer, url);
       /* AN ANSWER IS ALREADY OWED FOR THIS PAIR — it is in flight, or it is queued for the next write. Either
          way this announcement names the SAME outstanding record, because the child has not been let go since
          the answer was composed, so working it a second time would fetch one address twice for one park. Once
          the write goes out the key is released and the next announcement is a FRESH park (see `track`). */
       if (e.answered.has(key)) return;
-      track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, credentials, mode, url));
+      track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, credentials, mode,
+                              referrerPolicy, referrer, url));
     } else if (f[0] === 'request') {
       const id = Number(f[1]), op = f.slice(2).join('\t');
       const key = `req:${f[1]}`;

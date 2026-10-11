@@ -199,12 +199,14 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     M.HEAPU8[p + u8.length] = 0;
     return [p, u8.length];
   };
-  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` lines and
-     the delivery matches both halves, so a GET and a POST to one address are two questions with two replies. */
-  const provide = (method, mode, u, reply, body) => {
+  /* KEYED ON THE REQUEST: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>
+     CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` lines and the delivery matches the five-field
+     identity, so a GET and a POST to one address are two questions with two replies. */
+  const provide = (method, mode, referrerPolicy, referrer, u, reply, body) => {
     const [p, n] = bs(body);
-    try { M.ccall('qjs_provide', 'void', ['number','number','number','number','number','number'],
-                  [cs(method), cs(mode), cs(u), cs(JSON.stringify(reply)), p, n]); }
+    try { M.ccall('qjs_provide', 'void', ['number','number','number','number','number','number','number','number'],
+                  [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs(JSON.stringify(reply)),
+                   p, n]); }
     finally { M._free(p); }
   };
   const answer = (id, meta, body) => {
@@ -415,10 +417,11 @@ async function service(e) {
   let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const t = line.split('\t');
-    if (t.length !== 8 || t.some((x, i) => i !== 1 && x === ''))
-      fail('a pending line is not ' +
-           `\`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL\`: ${line} — ` +
-           'the empty DESTINATION is Fetch §2.2.5\'s own default and is the one field that may be empty');
+    if (t.length !== 10 || t.some((x, i) => i !== 1 && i !== 7 && x === ''))
+      fail('a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>' +
+           `CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL\`: ${line} — ` +
+           'the empty DESTINATION is Fetch §2.2.5\'s own default and the empty REFERRER POLICY is Referrer ' +
+           'Policy §3\'s, and they are the fields that may be empty');
     /* THE DESTINATION IS NOT NAMED HERE, AND THAT IS A STATEMENT. It is the CORB class — whether a reply may
        be ingested as code — and this driver ingests nothing: it mints its own reply out of a literal, so
        there are no fetched bytes for a class to be about. Its vocabulary is asserted where it is WRITTEN
@@ -430,7 +433,7 @@ async function service(e) {
        data request whose address rests on a witness this engine chose from one the app's own text spells, and
        this driver fires nothing — it answers every park out of a literal. Its vocabulary is checked below all
        the same, for the reason the other two vocabularies are. */
-    const [method, , initiator, provenance, pinned, , mode, u] = t;
+    const [method, , initiator, provenance, pinned, , mode, referrerPolicy, referrer, u] = t;
     /* THIS DRIVER ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF — its fixtures' fetches are named `/hold`,
        `/resume`, `/got` and `/closed` and the reply is `{}` served out of a literal, so there is no network
        here for a firing policy to be about. The vocabularies are checked because a driver that read a field it
@@ -464,7 +467,7 @@ async function service(e) {
     /* THE BODY TRAVELS AS BYTES, beside that JSON and never inside it: §2.2.5 makes a response's body a BYTE
        SEQUENCE, and the only ways to put one in JSON are to encode it or to DECODE it — and a decode run by
        the zone that FETCHED is exactly what left HTML §8.1.4.2's classic-script decode nothing to decode. */
-    e.provide(method, mode, u, reply, '{}');
+    e.provide(method, mode, referrerPolicy, referrer, u, reply, '{}');
     paid++;
   }
   /* ONE OP IS ANSWERED, exactly as the offscreen answers exactly one: a `document.fetch` is a network fetch this

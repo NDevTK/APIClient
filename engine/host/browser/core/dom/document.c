@@ -4894,6 +4894,37 @@ const char *document_url_of(const lxb_dom_document_t *dom)
     return d->addr.bytes;
 }
 
+char *document_referrer_source(JSContext *ctx)
+{
+    const lxb_dom_document_t *dom = lxb_dom_interface_document(doc_here(ctx)->dom);
+    Document *d = doc_rec(dom);
+
+    /* "If document's origin is an opaque origin, return no referrer." This instance is one origin-keyed agent
+       cluster, so the agent's origin is the document's. */
+    if (origin_is_opaque(origin_agent())) return NULL;
+    /* "While document is an iframe srcdoc document, let document be document's browsing context's browsing
+       context container's node document." A srcdoc document has its parent's origin, so that document is in
+       this instance. */
+    while (d->is_iframe_srcdoc) {
+        JSValue container = window_proxy_container(ctx, d->proxy);
+        lxb_dom_node_t *cn = node_of(container);
+
+        JS_FreeValue(ctx, container);
+        CHECK(cn != NULL && cn->owner_document != NULL,
+              "an iframe srcdoc document has no navigable container — HTML §4.8.5 \"The iframe element\" makes "
+              "it the document of an iframe's content navigable, so its container's node document is the "
+              "referrer source Referrer Policy §8.3 names");
+        dom = cn->owner_document;
+        d = doc_rec(dom);
+        CHECK(d != NULL, "an iframe srcdoc document's container is in a document with no record");
+    }
+    {
+        char *src = strdup(document_url_of(dom));
+        CHECK(src != NULL, "document: OOM copying a referrer source");
+        return src;
+    }
+}
+
 const char *document_content_type_of(const lxb_dom_document_t *dom)
 {
     Document *d = doc_rec(dom);

@@ -2662,6 +2662,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       CHECK(typeof eng.origin === "string",
             "an XMLHttpRequest is about to be judged with no origin on the instance that made it — the zone " +
             "assigns every instance its cluster origin at creation");
+      CHECK(_REFERRER_POLICIES.indexOf(q.referrerPolicy) >= 0 && typeof q.referrer === "string" &&
+            (q.referrer === "no-referrer" || URL.canParse(q.referrer)),
+            "the engine's xhr.send record states no Referrer Policy §3 referrer policy, or a referrer that is " +
+            "neither \"no-referrer\" nor a URL — xml_http_request.c's xhr_request_op writes both");
       CHECK(typeof q.useCorsPreflight === "boolean",
             "the engine's xhr.send record states no use-CORS-preflight flag — xhr_request_op writes XHR " +
             "§3.5.6 step 6's flag on every record, and the chokepoint decides from it whether to preflight");
@@ -3010,7 +3014,7 @@ function engineWeight(eng) {
 /* Delivered against the request, which is the pair: `qjs_provide` takes the method first, as a request line
    states it (RFC 9112 §3 Request Line), because the engine's pending register is keyed on both, so a GET and a
    POST to one address cannot collect each other's bodies. */
-async function engineProvide(eng, method, mode, url, rep) {
+async function engineProvide(eng, method, mode, referrerPolicy, referrer, url, rep) {
   /* A decline may not arrive here: `provide` settles the park, and `reply: "null"` settles it with a network
      error. A decline is delivered through engineDecline, which keeps the flow parked. */
   DCHECK(!(rep && rep.refusal),
@@ -3022,22 +3026,25 @@ async function engineProvide(eng, method, mode, url, rep) {
   DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
-  await eng.r.renderer.provide({ method, mode, url, reply: JSON.stringify(rep === null ? null : rep.meta),
+  await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, url,
+                                 reply: JSON.stringify(rep === null ? null : rep.meta),
                                  body: rep === null ? null : rep.bytes });
 }
 /* The other answer on the same pair: this zone stating it will not make the request. It is not a delivery
    with a different payload, which is why engineProvide refuses a refusal. The engine keeps the flow's park and
    forks an arm that runs the page's `catch`, so the wait is preserved and the failure path explored. No bytes
    accompany it, since nothing was fetched. */
-async function engineDecline(eng, method, mode, url, reason) {
+async function engineDecline(eng, method, mode, referrerPolicy, referrer, url, reason) {
   DCHECK(typeof method === "string" && method !== "" && typeof mode === "string" && mode !== "" &&
+         typeof referrerPolicy === "string" && typeof referrer === "string" && referrer !== "" &&
          typeof url === "string" && url !== "",
-         "a refusal was relayed naming no request — it is keyed on (method, mode, url) exactly as a reply is, " +
-         "because it answers the same question, and a partly-named one refuses a request no flow parked on");
+         "a refusal was relayed naming no request — it is keyed on the line's five-field identity exactly as " +
+         "a reply is, because it answers the same question, and a partly-named one refuses a request no flow " +
+         "parked on");
   DCHECK(typeof reason === "string" && reason !== "",
          "a refusal was relayed with no reason — the flow it refuses will not drain this session, so this is " +
          "the only account of it anybody gets and it is what says whether a widening would change the answer");
-  await eng.r.renderer.decline({ method, mode, url, reason });
+  await eng.r.renderer.decline({ method, mode, referrerPolicy, referrer, url, reason });
 }
 /* One pending line, split in one place, mirroring the engine's `engine_pending_split` so the grammar cannot
    drift across hosts. The TAB delimiter is unambiguous: URL Standard §4.4 URL parsing strips every ASCII tab
@@ -3049,11 +3056,12 @@ async function engineDecline(eng, method, mode, url, reason) {
    (Fetch §2.2.5 Requests: "" for a `fetch()`), so the shape assert is over the field count and the two ends. */
 function pendingRequest(line) {
   const f = line.split("\t");
-  CHECK(f.length === 8 && f[0] !== "" && f[6] !== "" && f[7] !== "",
-        "content.mojom.Renderer.GetPending answered a line that is not " +
-        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`: `" + line + "` — the " +
-        "engine joins the eight and this zone must deliver against (method, mode, url), so a line missing a " +
-        "field puts a token where the address belongs and keys a reply on a request nothing parked on");
+  CHECK(f.length === 10 && f[0] !== "" && f[6] !== "" && f[8] !== "" && f[9] !== "",
+        "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>" +
+        "PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`: `" + line +
+        "` — the engine joins the ten and this zone must deliver against (method, mode, referrer policy, " +
+        "referrer, url), so a line missing a field puts a token where the address belongs and keys a reply on " +
+        "a request nothing parked on");
   const destination = f[1];
   const initiator = f[2];
   const provenance = f[3];
@@ -3103,8 +3111,25 @@ function pendingRequest(line) {
         "GetPending stated the mode `" + mode + "` on a request whose reply returns to the asking page — " +
         "only `same-origin`, `cors` and `no-cors` requests are read by their requester, and anything else " +
         "here would skip the response tainting the chokepoint decides from the mode");
-  return { method: f[0], destination, initiator, provenance, pinned, credentials, mode, url: f[7] };
+  /* The request's referrer policy, after Fetch §4.1 "Main fetch" gave an empty one the policy container's,
+     and its referrer, "no-referrer" or a URL (core/fetch/fetch.h's fetch_referrer_for_wire resolved "client"
+     against the parking document). Both are part of the request's identity and are relayed for the
+     `Referer` this zone composes with Referrer Policy §8.3's later steps. */
+  const referrerPolicy = f[7];
+  const referrer = f[8];
+  CHECK(_REFERRER_POLICIES.indexOf(referrerPolicy) >= 0,
+        "GetPending stated the referrer policy `" + referrerPolicy + "`, which Referrer Policy §3 does not " +
+        "define — the `Referer` this request carries is composed from it, so an unknown word cannot be relayed");
+  CHECK(referrer === "no-referrer" || URL.canParse(referrer),
+        "GetPending stated the referrer `" + referrer + "`, which is neither \"no-referrer\" nor a URL — the " +
+        "engine resolves Fetch §2.2.5's \"client\" before the line is joined, so nothing else may arrive here");
+  return { method: f[0], destination, initiator, provenance, pinned, credentials, mode, referrerPolicy, referrer,
+           url: f[9] };
 }
+/* Referrer Policy §3 "Referrer Policies", the empty string included. */
+const _REFERRER_POLICIES = ["", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
+                            "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin",
+                            "unsafe-url"];
 /* The door that does not await a body with no end. A round that waited on each pending fetch in turn would let
    a response the server never ends (one `fetch()` or XHR to an endpoint that holds its body open) keep the
    document out of the rankable set for the session. No deadline is used: a timeout would truncate a legitimate
@@ -3190,14 +3215,15 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
      outstanding to wait on. */
   let issued = 0;
   for (const line of requests) {
-    const { method, destination, provenance, pinned, credentials, mode, url } = pendingRequest(line);
+    const { method, destination, provenance, pinned, credentials, mode, referrerPolicy, referrer, url } =
+      pendingRequest(line);
     /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
        the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
        surface is then about the driving), while `asked: 0` says this loop never ran. */
-    /* The dedup key is the (method, mode, url) the engine parked on, the key the answer is delivered under
+    /* The dedup key is the five-field identity the engine parked on, the key the answer is delivered under
        (`engine_provide` and `engine_decline` key on it, and `engine_pending_fetches` dedups over it). It uses
        the raw address off the line, never the absolute URL `fetched` resolves. */
-    const key = "fetch\n" + method + "\n" + mode + "\n" + url;
+    const key = "fetch\n" + method + "\n" + mode + "\n" + referrerPolicy + "\n" + referrer + "\n" + url;
     /* An entry stays listed until answered and this visits the list every slice, so without the dedup one
        page `fetch` would become one request per round. */
     if (eng._inflight.has(key)) continue;
@@ -3206,13 +3232,13 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     issued += engineIssue(eng, key,
       () => { eng._egress.asked++;
               return eng.fetched(method, url, destination, provenance, pinned, credentials, mode); },
-      (answer) => engineDeliverReply(eng, method, mode, url, answer));
+      (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
   }
   return issued;
 }
 /* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's
    own pair, so the reply cannot be handed over against a pair it was not fetched under. */
-async function engineDeliverReply(eng, method, mode, url, answer) {
+async function engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer) {
   /* A decline is its own delivery, on its own method. `Decline` carries the same pair `Provide` does with the
      chokepoint's reason: the engine records the refusal, stops listing the request (silence would be
      re-offered and re-refused every round), keeps one arm waiting with no reply invented, and forks the other
@@ -3243,11 +3269,11 @@ async function engineDeliverReply(eng, method, mode, url, answer) {
     const _tok = answer.refusal.reason;
     if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
     eng._egress.declined[_tok]++;
-    await engineDecline(eng, method, mode, url, answer.refusal.reason);
+    await engineDecline(eng, method, mode, referrerPolicy, referrer, url, answer.refusal.reason);
     /* `return`: the decline is the whole delivery for this request. */
     return;
   }
-  await engineProvide(eng, method, mode, url, answer);
+  await engineProvide(eng, method, mode, referrerPolicy, referrer, url, answer);
 }
 /* Every owed list crosses the same way, newline-joined records or "" for none, and is split here. The caller
    names the mojom method and mojom declares the reply's type, so a NULL cannot become the text "null" and one

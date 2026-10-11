@@ -29,6 +29,7 @@
 #include "core/html/cors_settings_attribute.h"   /* HTML §2.5.4: the CORS settings attribute credentials
                                                    mode an element's `crossorigin` state names, which is what a
                                                    §4.12.1.1 park states as its request's credentials mode */
+#include "core/html/referrer_policy_attribute.h"   /* HTML §2.5.5: a script element's referrer policy */
 #include "core/html/nonce_attribute.h"   /* §4.12.1.1 reads el's [[CryptographicNonce]] slot, not its attribute */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/loader/document_scripts.h"   /* §4.12.1.1's schedule, for engine_run's caller that states none */
@@ -371,6 +372,16 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        read of the reply, so a `fetch(u)` and a `<script src=u>` are two requests with two answers.
        `fetch_mode_token` is fatal on the unplaced zero, the release backstop under the DCHECK above. */
     pending_set(e, PEND_MODE, JS_NewString(ctx, fetch_mode_token(req->mode)));
+    /* The referrer policy and the referrer, also before the address because both are in the key: Fetch §4.1
+       "Main fetch" gives an empty policy the policy container's, and a "client" referrer is resolved against
+       this realm's Document (core/fetch/fetch.h says why that is this engine's). */
+    {
+        char *referrer = fetch_referrer_for_wire(ctx, req->referrer);
+        pending_set(e, PEND_REFERRER_POLICY,
+                    JS_NewString(ctx, fetch_referrer_policy_for_wire(ctx, req->referrer_policy)));
+        pending_set(e, PEND_REFERRER, JS_NewString(ctx, referrer));
+        free(referrer);
+    }
     pending_set(e, PEND_URL, JS_NewString(ctx, use_url));
     pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
     pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
@@ -514,6 +525,10 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     /* The mode: HTML §8.1.4.2's fetch a single module script creates the request with mode "cors" outright,
        so this is the module arm and never the element's. */
     req.mode = script_request_mode(SCRIPT_TYPE_MODULE, flow_dyn_el(f));
+    /* The referrer is §2.2.5's "client"; the referrer policy is the referring script's options', copied by
+       §8.1.4.2's descendant script fetch options, and a program no `<script>` produced has the empty string. */
+    req.referrer = "client";
+    req.referrer_policy = flow_dyn_el(f) ? referrer_policy_attribute_keyword(flow_dyn_el(f)) : "";
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());   /* a dynamic `import()` — §16.2.1.8 is reached by RUNNING code */
@@ -623,6 +638,10 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     /* The mode, which `stype` decides besides the decode: §2.5.1's mode off the element for a classic script,
        `cors` for a module (see script_request_mode). */
     req.mode = script_request_mode(stype, el);
+    /* §2.2.5's "client", and HTML §4.12.1.1's script fetch options' referrer policy: "the current state of
+       el's referrerpolicy content attribute". */
+    req.referrer = "client";
+    req.referrer_policy = el ? referrer_policy_attribute_keyword(el) : "";
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      parser_inserted, flow_work_seq_next());
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
@@ -3043,17 +3062,18 @@ static FetchCredentialsMode cred_of_token(const char *tok, size_t n) {
                 "written — the buffer is this function's alone", (int)n, tok);
 }
 
-/* The set's credentials mode is its least credentialed member. The dedup is over (method, mode, url), so one reply
-   satisfies every park in the set; the initiator and provenance fold toward the most observed (a claim about
-   evidence), but this is a claim about whose session pays, and the errors are asymmetric: fetching credentialed
-   for a set containing an `omit` park hands that park a personalised body its algorithm forbade, while fetching
-   uncredentialed for an `include` park only narrows. The fold is written over the enumerators, not their
-   numbers, because core/fetch/fetch.h does not declare its order a rank.
-   Named residual. Not covered: two parks on one (method, url) with different modes are two requests a browser
-   makes twice, and this folds them into one. Next diff builds: the mode in the dedup key beside method and url,
-   with engine_provide pairing on the same key (it would otherwise answer only the first line). Absence shows
-   as: a page whose `<img crossorigin=use-credentials src=u>` and `fetch(u)` name one address learns the
-   logged-out body for the image, and the census counts one request where a browser's log shows two. */
+/* The set's credentials mode is its least credentialed member. The dedup is over the request's identity
+   (engine_pending_fetches), so one reply satisfies every park in the set; the initiator and provenance fold
+   toward the most observed (a claim about evidence), but this is a claim about whose session pays, and the
+   errors are asymmetric: fetching credentialed for a set containing an `omit` park hands that park a
+   personalised body its algorithm forbade, while fetching uncredentialed for an `include` park only narrows. The
+   fold is written over the enumerators, not their numbers, because core/fetch/fetch.h does not declare its order
+   a rank.
+   Named residual. Not covered: two parks with one identity and different credentials modes are two requests a
+   browser makes twice, and this folds them into one. Next diff builds: the credentials mode in the key beside
+   the mode (solver/pending_index.h's PendRequestKey), with engine_provide pairing on it. Absence shows as: a page
+   whose `<img crossorigin=use-credentials src=u>` and `fetch(u)` name one address learns the logged-out body for
+   the image, and the census counts one request where a browser's log shows two. */
 static FetchCredentialsMode cred_narrower(FetchCredentialsMode a, FetchCredentialsMode b) {
     if (a == FETCH_CREDENTIALS_OMIT || b == FETCH_CREDENTIALS_OMIT) return FETCH_CREDENTIALS_OMIT;
     if (a == FETCH_CREDENTIALS_SAME_ORIGIN || b == FETCH_CREDENTIALS_SAME_ORIGIN)
@@ -3085,14 +3105,15 @@ static int pinned_is_yes(const char *tok, size_t n) {
                 "declares", (int)n, tok);
 }
 
-/* The URLs the host owes, newline-joined across every live flow and deduplicated over (method, mode, url), or
-   "". Several flows park on one request (a candidate re-fire re-runs the exploring flow's fetches) and
+/* The URLs the host owes, newline-joined across every live flow and deduplicated over the request's identity,
+   or "". Several flows park on one request (a candidate re-fire re-runs the exploring flow's fetches) and
    engine_provide fills every entry that names it, so the list is a set of requests, not of waiters;
    deduplicating over the URL alone would drop a POST behind a GET and settle the POST with the GET's body, and
    deduplicating without the mode (Fetch §2.2.5's request mode) would answer a `<script src=u>` and a
    `fetch(u)` with one reply, where Fetch §4.1 Main fetch gives the first the body and the second a CORS check.
    The buffer is this function's, valid until the next call. Each line is
-   `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`. */
+   `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>
+   REFERRER_POLICY<TAB>REFERRER<TAB>URL`. */
 const char *engine_pending_fetches(void) {
     static char *join;
     static size_t cap;
@@ -3110,7 +3131,9 @@ const char *engine_pending_fetches(void) {
             JSValue dv = pending_get(pe, PEND_DESTINATION);
             JSValue cv = pending_get(pe, PEND_CREDENTIALS);
             JSValue ov = pending_get(pe, PEND_MODE);
-            size_t ul = 0, ml = 0, dl = 0, cl = 0, ol = 0;
+            JSValue rpv = pending_get(pe, PEND_REFERRER_POLICY);
+            JSValue rv = pending_get(pe, PEND_REFERRER);
+            size_t ul = 0, ml = 0, dl = 0, cl = 0, ol = 0, rpl = 0, rl = 0;
             const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
             const char *m = JS_IsString(mv) ? JS_ToCStringLen(pending_ctx(), &ml, mv) : NULL;
             /* Fetch §2.2.5's destination, off the record the park stamped it on, not derived from the kind: one
@@ -3123,6 +3146,9 @@ const char *engine_pending_fetches(void) {
             /* The request mode, off the same record: it is the third half of the key below, written by
                `pending_park_request` before the address, so a record with an address and no mode bypassed it. */
             const char *o = JS_IsString(ov) ? JS_ToCStringLen(pending_ctx(), &ol, ov) : NULL;
+            /* The referrer policy and the referrer, the fourth and fifth parts of the key. */
+            const char *rp = JS_IsString(rpv) ? JS_ToCStringLen(pending_ctx(), &rpl, rpv) : NULL;
+            const char *r = JS_IsString(rv) ? JS_ToCStringLen(pending_ctx(), &rl, rv) : NULL;
             /* HTML §4.12.1.1's `parser document`, read off the record (pending.h's `parserIns`); engine.h's
                tokens say why the engine states it and does not act on it. Not derived from the kind: §4.12.1.1
                puts a non-parser-inserted element in the in-order list when the async setter clears force async,
@@ -3201,6 +3227,12 @@ const char *engine_pending_fetches(void) {
                        "asked a request whose reply it cannot decide the page may read");
                 /* The vocabulary, by making the call: the mapping is fatal on a word §2.2.5 does not define. */
                 (void)fetch_mode_of_token(o);
+                DCHECK(rp != NULL && fetch_is_referrer_policy(rp) && r != NULL && *r &&
+                       !memchr(r, '\t', rl) && !memchr(r, '\n', rl),
+                       "an outstanding request carries an ADDRESS and no Referrer Policy §3 referrer policy, or "
+                       "no referrer, or one a line cannot hold — pending_park_request writes both before the "
+                       "address, the policy through fetch_referrer_policy_for_wire and the referrer as "
+                       "\"no-referrer\" or a parsed URL, so this record bypassed that door");
                 /* Fetch §4.3 Scheme fetch's closure, at the consumer. The trusted zone fetches only HTTP(S)
                    (Fetch §2.1 URL) and its refusal looks like a network failure, so a URL §4.3 answers inside
                    this agent reaching this line is a park that never ran §4.3, owed an answer that can only be
@@ -3229,15 +3261,20 @@ const char *engine_pending_fetches(void) {
                     char *t5 = t4 ? memchr(t4 + 1, '\t', (size_t)(lend - t4 - 1)) : NULL;
                     char *t6 = t5 ? memchr(t5 + 1, '\t', (size_t)(lend - t5 - 1)) : NULL;
                     char *t7 = t6 ? memchr(t6 + 1, '\t', (size_t)(lend - t6 - 1)) : NULL;
-                    DCHECK(t7 != NULL,
-                           "a line already in this join carries fewer than seven TABs — the buffer is this "
+                    char *t8 = t7 ? memchr(t7 + 1, '\t', (size_t)(lend - t7 - 1)) : NULL;
+                    char *t9 = t8 ? memchr(t8 + 1, '\t', (size_t)(lend - t8 - 1)) : NULL;
+                    DCHECK(t9 != NULL,
+                           "a line already in this join carries fewer than nine TABs — the buffer is this "
                            "function's alone and every line it writes is `METHOD<TAB>DESTINATION<TAB>"
-                           "INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`, so this is the "
-                           "writer and the reader having parted");
-                    /* The key is (method, mode, url); the mode is never folded, because a line is one request. */
+                           "INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>"
+                           "REFERRER<TAB>URL`, so this is the writer and the reader having parted");
+                    /* The key is (method, mode, referrer policy, referrer, url); none of the last four is
+                       folded, because a line is one request. */
                     if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
                         (size_t)(t7 - (t6 + 1)) == ol && !memcmp(t6 + 1, o, ol) &&
-                        (size_t)(lend - (t7 + 1)) == ul && !memcmp(t7 + 1, u, ul)) {
+                        (size_t)(t8 - (t7 + 1)) == rpl && !memcmp(t7 + 1, rp, rpl) &&
+                        (size_t)(t9 - (t8 + 1)) == rl && !memcmp(t8 + 1, r, rl) &&
+                        (size_t)(lend - (t9 + 1)) == ul && !memcmp(t9 + 1, u, ul)) {
                         /* One reply fills every entry on the key, so each folded field states what survives
                            every member, independent of walk order. The initiator and the provenance fold to
                            the most observed (monotone): if any member's path stood on no contradicted arm, a
@@ -3299,7 +3336,7 @@ const char *engine_pending_fetches(void) {
                         join_set_field(&join, &n_out, &cap, i_at, i_len,
                                        mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
                         if (widen_dst) join_set_field(&join, &n_out, &cap, d_at, d_len, d);
-                        /* Both rewrites can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t7`) is
+                        /* Both rewrites can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t9`) is
                            dead from here; the break is what makes that safe. */
                         skip = 1; break;
                     }
@@ -3308,7 +3345,7 @@ const char *engine_pending_fetches(void) {
                 }
             }
             if (!skip) {
-                while (n_out + ml + dl + il + pl + nl + cl + ol + ul + 9 > cap) {
+                while (n_out + ml + dl + il + pl + nl + cl + ol + rpl + rl + ul + 11 > cap) {
                     cap *= 2;
                     join = realloc(join, cap);
                     CHECK(join, "engine: OOM growing the pending-request join");
@@ -3327,6 +3364,10 @@ const char *engine_pending_fetches(void) {
                 join[n_out++] = '\t';
                 memcpy(join + n_out, o, ol); n_out += ol;
                 join[n_out++] = '\t';
+                memcpy(join + n_out, rp, rpl); n_out += rpl;
+                join[n_out++] = '\t';
+                memcpy(join + n_out, r, rl); n_out += rl;
+                join[n_out++] = '\t';
                 memcpy(join + n_out, u, ul); n_out += ul;
                 join[n_out++] = '\n';
                 join[n_out] = 0;
@@ -3336,6 +3377,10 @@ const char *engine_pending_fetches(void) {
             if (d) JS_FreeCString(pending_ctx(), d);
             if (c) JS_FreeCString(pending_ctx(), c);
             if (o) JS_FreeCString(pending_ctx(), o);
+            if (rp) JS_FreeCString(pending_ctx(), rp);
+            if (r) JS_FreeCString(pending_ctx(), r);
+            JS_FreeValue(pending_ctx(), rpv);
+            JS_FreeValue(pending_ctx(), rv);
             JS_FreeValue(pending_ctx(), ov);
             JS_FreeValue(pending_ctx(), cv);
             JS_FreeValue(pending_ctx(), dv);
@@ -3348,10 +3393,12 @@ const char *engine_pending_fetches(void) {
 
 void engine_pending_split(char *line, const char **method, const char **destination, const char **initiator,
                           const char **provenance, const char **pinned, const char **credentials,
-                          const char **mode, const char **url) {
-    char *tab, *tab2, *tab3, *tab4, *tab5, *tab6, *tab7;
+                          const char **mode, const char **referrer_policy, const char **referrer,
+                          const char **url) {
+    char *tab, *tab2, *tab3, *tab4, *tab5, *tab6, *tab7, *tab8, *tab9;
 
-    DCHECK(line && method && destination && initiator && provenance && pinned && credentials && mode && url,
+    DCHECK(line && method && destination && initiator && provenance && pinned && credentials && mode &&
+           referrer_policy && referrer && url,
            "a pending line was split with nowhere to put its fields");
     tab = strchr(line, '\t');
     /* CHECKs, not DCHECKs: release has no defined answer, because the fields key the delivery, and a line not
@@ -3360,26 +3407,30 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        so the URL is the remainder of the line. */
     CHECK(tab != NULL,
           "engine: a host split a pending line that carries no TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` lines and this "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` lines and this "
           "one is none of that");
     tab2 = strchr(tab + 1, '\t');
     /* Without the second TAB the initiator would become the address. */
     CHECK(tab2 != NULL,
           "engine: a host split a pending line carrying one TAB — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and this host is "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
           "reading a shorter grammar that preceded it, so its address is about to be a destination");
     tab3 = strchr(tab2 + 1, '\t');
     /* Without the third the provenance would become the address, and the firing decision could not see whether
        a running-code park was derived or forced. */
     CHECK(tab3 != NULL,
           "engine: a host split a pending line carrying two TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and this host is "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
           "reading a shorter grammar that preceded it, so its address is about to be an initiator token");
     tab4 = strchr(tab3 + 1, '\t');
     /* Without the fourth the CORB class would be decided on a field that is not there. */
     CHECK(tab4 != NULL,
           "engine: a host split a pending line carrying three TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and this host is "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
           "reading the four-field grammar that preceded it, so its address is about to be a provenance token "
           "and its CORB class is about to be decided on a field that is not there");
     tab5 = strchr(tab4 + 1, '\t');
@@ -3387,7 +3438,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        decided by silence (Fetch §2.2.5 Requests: only the creating algorithm knows it). */
     CHECK(tab5 != NULL,
           "engine: a host split a pending line carrying four TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and this host is "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is "
           "reading the five-field grammar that preceded it, so its address is about to be a credentials "
           "token and whose session pays for this fetch is about to be decided on a field that is not there");
     tab6 = strchr(tab5 + 1, '\t');
@@ -3395,7 +3447,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        the page's own bundle from a data request whose address rests on a witness this engine picked. */
     CHECK(tab6 != NULL,
           "engine: a host split a pending line carrying five TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and this "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this "
           "host is reading the six-field grammar that preceded it, so its address is about to be a pinned "
           "token and whether this act may be spent is about to be decided on a field that is not there");
     tab7 = strchr(tab6 + 1, '\t');
@@ -3403,10 +3456,20 @@ void engine_pending_split(char *line, const char **method, const char **destinat
        reply passes a CORS check from a `<script src=u>` whose reply the page never reads. */
     CHECK(tab7 != NULL,
           "engine: a host split a pending line carrying six TABs — engine_pending_fetches joins "
-          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` "
           "and this host is reading the seven-field grammar that preceded it, so its address is about to be a "
           "mode token and what the page may read of the reply is about to be decided on a field that is not "
           "there");
+    tab8 = strchr(tab7 + 1, '\t');
+    tab9 = tab8 ? strchr(tab8 + 1, '\t') : NULL;
+    /* Without the eighth and ninth the referrer policy or the referrer would become the address, and the
+       request's identity would be read off a field that is not there. */
+    CHECK(tab8 != NULL && tab9 != NULL,
+          "engine: a host split a pending line carrying seven or eight TABs — engine_pending_fetches joins "
+          "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>"
+          "REFERRER_POLICY<TAB>REFERRER<TAB>URL` and this host is reading the grammar that preceded it, so "
+          "its address is about to be a referrer");
     *tab = 0;
     *tab2 = 0;
     *tab3 = 0;
@@ -3414,6 +3477,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
     *tab5 = 0;
     *tab6 = 0;
     *tab7 = 0;
+    *tab8 = 0;
+    *tab9 = 0;
     *method = line;
     *destination = tab + 1;
     *initiator = tab2 + 1;
@@ -3421,7 +3486,9 @@ void engine_pending_split(char *line, const char **method, const char **destinat
     *pinned = tab4 + 1;
     *credentials = tab5 + 1;
     *mode = tab6 + 1;
-    *url = tab7 + 1;
+    *referrer_policy = tab7 + 1;
+    *referrer = tab8 + 1;
+    *url = tab9 + 1;
     /* Fetch §2.2.5's enumeration, asked of the line: the join asked it before writing, and both parties check a
        contract. The empty string passes: it is §2.2.5's default and what `fetch()` has. */
     DCHECK(fetch_is_destination_type(*destination),
@@ -3449,6 +3516,10 @@ void engine_pending_split(char *line, const char **method, const char **destinat
     (void)fetch_credentials_of_token(*credentials);
     /* The request mode, through `fetch_mode_of_token`, which is fatal on an undefined word. */
     (void)fetch_mode_of_token(*mode);
+    DCHECK(fetch_is_referrer_policy(*referrer_policy) && **referrer,
+           "a pending line's REFERRER POLICY is not a Referrer Policy §3 referrer policy, or its REFERRER is "
+           "empty — the join writes the policy through fetch_referrer_policy_for_wire and the referrer as "
+           "\"no-referrer\" or a URL, so this is the writer and the reader having parted");
 }
 
 /* Is anything outstanding for the host on the whole frontier? The scheduler asks this before it may call a
@@ -3505,12 +3576,15 @@ int engine_frontier_settled(void) {
     return 1;
 }
 
-/* Delivers a body for the request `(method, mode, url)` into every flow parked on it. The value lands on each
-   flow's own pending entry, so the reaction the resolve enqueues belongs to that flow and its COW delta. The
-   method is part of the key because matching on the URL alone would settle a POST's promise with a GET's reply,
-   and the mode (Fetch §2.2.5's request mode) because the trusted zone answers a `cors` request and a `no-cors`
-   one to the same address differently. Returns how many entries it filled. */
-int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *url, JSValueConst value) {
+/* Delivers a body for the request `(method, mode, referrer policy, referrer, url)` into every flow parked on
+   it. The value lands on each flow's own pending entry, so the reaction the resolve enqueues belongs to that flow
+   and its COW delta. The method is part of the key because matching on the URL alone would settle a POST's
+   promise with a GET's reply, the mode (Fetch §2.2.5's request mode) because the trusted zone answers a `cors`
+   request and a `no-cors` one to the same address differently, and the referrer pair because two referrers are
+   two requests to the server. Returns how many entries it filled. */
+int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
+                   const char *referrer, const char *url, JSValueConst value) {
+    PendRequestKey key = { method, mode, referrer_policy, referrer, url };
     PendIndexNode *node;
     int n = 0, matched = 0, i, m;
     /* The reply's own grade, joined from the records it answers (see the fill loop). `-1` is "no record read
@@ -3527,7 +3601,9 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
            "a reply was provided with a method that is not a token (Fetch §2.2.1, RFC 9110 §5.6.2) — the host's "
            "operands are shifted by one");
     /* The mode the line stated, handed back; the mapping is fatal on a word Fetch §2.2.5 does not define. */
-    DCHECK(mode != NULL, "a reply was provided with no mode — the reply seam is keyed on (method, mode, url)");
+    DCHECK(mode != NULL && referrer_policy != NULL && referrer != NULL,
+           "a reply was provided with no MODE, REFERRER POLICY or REFERRER — the reply seam is keyed on all "
+           "five fields the pending line states");
     (void)fetch_mode_of_token(mode);
     /* One lookup in the frontier's outstanding set (solver/pending_index.h) rather than a walk of every flow's
        register: the walked set does not shrink (a flow keeps an answered entry until it delivers, and @S
@@ -3535,7 +3611,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
        Membership is the predicate the walk used (an entry with an address, not a synchronous request, no value
        yet), and a record leaves only when answered or when the last register naming it is gone, so nothing is
        dropped. */
-    node = pending_index_find(method, mode, url);
+    node = pending_index_find(&key);
     /* Taken before the fills move either: `m` is the outstanding members, `matched` adds the answered ones, so
        "answered twice" (matched, none fillable) reads differently from "answered for nobody" (nothing matched).
        A fill moves a record from one term to the other, so the sum is stable across the loop. */
@@ -3639,13 +3715,17 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
  * still owes its own arm, so the "this register has had its fork" mark is per register and not written here.
  * Every flow parked on it is askable again: a refusal is a host event, and without the clear the fork it exists
  * to make would never be taken. */
-int engine_decline(JSContext *ctx, const char *method, const char *mode, const char *url, const char *reason) {
+int engine_decline(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
+                   const char *referrer, const char *url, const char *reason) {
+    PendRequestKey key = { method, mode, referrer_policy, referrer, url };
     PendIndexNode *node;
     int matched, marked = 0, i;
     JSValue rv;
 
-    DCHECK(method != NULL && mode != NULL && url != NULL,
-           "a refusal was recorded for no request — a decline answers the same (method, mode, url) a reply answers");
+    DCHECK(method != NULL && mode != NULL && referrer_policy != NULL && referrer != NULL && url != NULL,
+           "a refusal was recorded for no request — a decline answers the same five-field identity a reply "
+           "answers, because it is an answer to the same question, and one that names part of it refuses "
+           "nothing and leaves every flow parked");
     DCHECK(method_is_token(method),
            "a refusal names a method that is not a token (Fetch §2.2.1, RFC 9110 §5.6.2) — the host's operands are "
            "shifted by one");
@@ -3657,7 +3737,7 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
     DCHECK(reason != NULL && *reason != '\0',
            "a request was refused with no reason — the refusing party states which rule holds the frontier");
     (void)fetch_mode_of_token(mode);
-    node = pending_index_find(method, mode, url);
+    node = pending_index_find(&key);
     matched = node ? pending_index_node_count(node) : 0;
     rv = JS_NewString(ctx, reason);
     CHECK(!JS_IsException(rv), "engine: OOM recording the trusted zone's refusal of a request");
@@ -5606,6 +5686,8 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
     /* The mode, off the element: fetch a classic script creates a potential-CORS request, so a document's own
        `<script src>` without `crossorigin` is `no-cors`, which is what an integrity policy refuses. */
     req.mode = script_request_mode(SCRIPT_TYPE_CLASSIC, f->dyn_el[at]);
+    req.referrer = "client";
+    req.referrer_policy = f->dyn_el[at] ? referrer_policy_attribute_keyword(f->dyn_el[at]) : "";
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      parser_inserted, flow_work_seq_next());
     /* Which row this park is for, by name: the row's `dyn_id` rather than its position, which holds only while

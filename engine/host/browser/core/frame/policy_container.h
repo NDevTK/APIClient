@@ -145,6 +145,15 @@ const EmbedderPolicy *policy_container_embedder(const PolicyContainer *p);
 struct IntegrityPolicy;
 const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyContainer *p);
 
+/* §7.1.7's referrer policy item, a Referrer Policy §3 referrer policy. BORROWED.
+   NAMED RESIDUAL. Not covered: §7.1.7's create-a-policy-container-from-a-fetch-response sets the item from the
+   response's `Referrer-Policy` header (Referrer Policy §8.1), and HTML §4.2.5.1 "Standard metadata names"' meta
+   `referrer` sets it on insertion; this engine sets it from neither, so every container holds the initial
+   default. Next diff: carry the parsed header through SerializedPolicyContainer as the integrity policy is
+   carried, and run the meta steps at insertion beside document_meta_csp_inserted. Its absence shows as a page
+   sending `Referrer-Policy: no-referrer` whose pending requests state `strict-origin-when-cross-origin`. */
+const char *policy_container_referrer_policy(const PolicyContainer *p);
+
 /* ---- HTML §7.1.7 "Policy containers" — THE CONTAINER IN THE FORM IT CROSSES A SEAM -------------------------
  *
  * ONE VALUE, BECAUSE §7.1.7 MAKES IT ONE STRUCT. "A policy container is a struct containing policies that apply

@@ -434,6 +434,10 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
    earlier two with it. This is what RFC 6265's request-uri, §4.4's clone-a-Document and §7.4.4's URL and
    history update steps are about. */
 const char *document_url_of(const lxb_dom_document_t *dom);
+/* Referrer Policy §8.3 "Determine request's Referrer"'s `client` arm for this realm's Window environment: the
+   URL of its Document (after walking out of iframe srcdoc documents to the container's node document), OWNED,
+   or NULL for "no referrer" when the Document's origin is opaque. */
+char *document_referrer_source(JSContext *ctx);
 /* §4.5's CONTENT TYPE — the string `document.contentType` answers, as a fact about ONE document rather than
    about the running realm. It is the field §4.4's "clone a single node" copies onto a Document's copy ("set
    copy's encoding, content type, URL, origin, type, mode, and allow declarative shadow roots to those of

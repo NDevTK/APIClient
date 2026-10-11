@@ -2209,6 +2209,16 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
        listener flag on this record before the request was built. The zone preflights from it (Fetch §4.1). */
     json_buf_raw(&b, ","); json_buf_key(&b, "useCorsPreflight");
     json_buf_raw(&b, d->upload_listener ? "true" : "false");
+    /* §3.5.6's request states neither, so they are Fetch §2.2.5's initial "client" and empty string, spelled
+       for the wire as the pending line spells them (core/fetch/fetch.h). */
+    {
+        char *referrer = fetch_referrer_for_wire(ctx, "client");
+        json_buf_raw(&b, ","); json_buf_key(&b, "referrer");
+        json_buf_str(&b, referrer);
+        free(referrer);
+    }
+    json_buf_raw(&b, ","); json_buf_key(&b, "referrerPolicy");
+    json_buf_str(&b, fetch_referrer_policy_for_wire(ctx, ""));
     json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
     json_buf_str(&b, engine_provenance_token(xhr_request_prov(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "pinned");
@@ -2597,6 +2607,9 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
     /* …AND §3.5.6's MODE, the literal `cors` row of that same list — stated on the record for the credentials
        mode's reason exactly: the park and the scheme-fetch route must carry one request, not two. */
     req.mode = FETCH_MODE_CORS;
+    /* §3.5.6's list states no referrer and no referrer policy, so they are Fetch §2.2.5's initial values. */
+    req.referrer = "client";
+    req.referrer_policy = "";
     switch (scheme_fetch(ctx, &req, JS_UNDEFINED, &reply)) {
     case SCHEME_FETCH_RESPONSE:
         /* Through the ONE reply object every answer to this component takes, exactly as a host reply is. */

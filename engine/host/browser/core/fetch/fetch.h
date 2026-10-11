@@ -140,6 +140,18 @@ typedef enum {
 FetchMode fetch_mode_of_token(const char *token);
 const char *fetch_mode_token(FetchMode m);
 
+/* Whether `p` is a Referrer Policy §3 referrer policy, the empty string included. */
+bool fetch_is_referrer_policy(const char *p);
+/* A request's referrer as the pending line states it: "no-referrer" or a URL. "client" is resolved here, by
+   Referrer Policy §8.3 "Determine request's Referrer"'s `client` arm against this realm's Document
+   (document_referrer_source), because that environment is this engine's and not the trusted zone's; the
+   policy and the stripping of §8.3's later steps are the zone's. OWNED. */
+char *fetch_referrer_for_wire(JSContext *ctx, const char *referrer);
+/* A request's referrer policy after Fetch §4.1 "Main fetch"'s "If request's referrer policy is the empty
+   string, then set request's referrer policy to request's policy container's referrer policy", with this
+   realm's Document's container. BORROWED from the request or the container. */
+const char *fetch_referrer_policy_for_wire(JSContext *ctx, const char *policy);
+
 typedef struct {
     const char   *method;
     const char   *url;
@@ -222,6 +234,12 @@ typedef struct {
        Read by §4.1 step 7's integrity-policy disjunct here, and carried on the pending line to the trusted
        zone, which decides from it what the page may read of the reply. */
     FetchMode mode;
+    /* Fetch §2.2.5 "Requests"' referrer: "no-referrer", "client", or a URL serialization. Unless stated
+       otherwise it is "client"; §5.4's constructor is the producer that states the others. BORROWED. */
+    const char *referrer;
+    /* Fetch §2.2.5's referrer policy, a Referrer Policy §3 referrer policy, the empty string where the creating
+       algorithm states none (§4.1 "Main fetch" then takes the policy container's). BORROWED. */
+    const char *referrer_policy;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to

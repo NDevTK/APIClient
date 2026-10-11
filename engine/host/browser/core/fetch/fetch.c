@@ -182,6 +182,49 @@ const char *fetch_mode_token(FetchMode m)
     return NULL;
 }
 
+/* Referrer Policy §3 "Referrer Policies": the empty string, "no-referrer", "no-referrer-when-downgrade",
+   "same-origin", "origin", "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin", or
+   "unsafe-url". */
+bool fetch_is_referrer_policy(const char *p)
+{
+    static const char *const POLICIES[] = {
+        "", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
+        "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"
+    };
+    size_t i;
+
+    if (!p) return false;
+    for (i = 0; i < sizeof POLICIES / sizeof *POLICIES; i++)
+        if (!strcmp(p, POLICIES[i])) return true;
+    return false;
+}
+
+char *fetch_referrer_for_wire(JSContext *ctx, const char *referrer)
+{
+    char *out;
+
+    DCHECK(referrer != NULL && *referrer,
+           "a request reached the wire with no Fetch §2.2.5 referrer — its initial value is \"client\", so a "
+           "NULL or empty one is a producer that did not state the field");
+    if (!strcmp(referrer, "client")) {
+        out = document_referrer_source(ctx);
+        if (out) return out;
+        referrer = "no-referrer";
+    }
+    out = strdup(referrer);
+    CHECK(out != NULL, "fetch: OOM spelling a referrer");
+    return out;
+}
+
+const char *fetch_referrer_policy_for_wire(JSContext *ctx, const char *policy)
+{
+    DCHECK(fetch_is_referrer_policy(policy),
+           "a request reached the wire with a referrer policy Referrer Policy §3 does not define — every "
+           "producer states an element attribute's keyword, a RequestInit enumeration value, or the empty "
+           "string, so anything else is a producer that did not state the field");
+    return *policy ? policy : policy_container_referrer_policy(document_policy(ctx));
+}
+
 /* FETCH §2.2.5 "Requests"' MODE, from the word §5.4's record holds. */
 FetchMode fetch_mode_of_token(const char *token)
 {
@@ -1158,6 +1201,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
        rather than four tests: `JS_FreeCString` over NULL is a no-op, and the early return above happens before
        any of them is taken. */
     const char *m_method = NULL, *m_dest = NULL, *m_integrity = NULL, *m_cred = NULL;
+    const char *m_ref = NULL, *m_refpol = NULL;
     size_t integrity_len = 0;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
@@ -1198,7 +1242,9 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
     m_method    = JS_ToCString(ctx, rec->method);
     m_dest      = JS_ToCString(ctx, rec->destination);
     m_cred      = JS_ToCString(ctx, rec->credentials);
-    CHECK(m_integrity && m_method && m_dest && m_cred,
+    m_ref       = JS_ToCString(ctx, rec->referrer);
+    m_refpol    = JS_ToCString(ctx, rec->referrer_policy);
+    CHECK(m_integrity && m_method && m_dest && m_cred && m_ref && m_refpol,
           "OOM borrowing the §2.2.5 request record's bytes for the trusted host seam");
     csp_meta = csp_request_metadata(/*cryptographic nonce metadata*/ "", 0,
                                     m_integrity, integrity_len,
@@ -1373,6 +1419,11 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
                `fetch(url)` a CORS request. request_init_apply writes that word; this reads it back as the
                domain, and its only consumer is §4.1 step 7's Integrity Policy disjunct. */
             req.mode = req_mode;
+            /* …AND §2.2.5's REFERRER AND REFERRER POLICY, off the same record. The record holds the referrer in
+               the form §5.4's getter answers (request_referrer_apply), so "" is "no-referrer" and
+               "about:client" is "client"; anything else is the URL step 14 kept. */
+            req.referrer = !*m_ref ? "no-referrer" : !strcmp(m_ref, "about:client") ? "client" : m_ref;
+            req.referrer_policy = m_refpol;
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;
@@ -1398,6 +1449,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
     JS_FreeCString(ctx, m_method);
     JS_FreeCString(ctx, m_dest);
     JS_FreeCString(ctx, m_cred);
+    JS_FreeCString(ctx, m_ref);
+    JS_FreeCString(ctx, m_refpol);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
     return promise;

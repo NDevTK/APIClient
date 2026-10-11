@@ -61,7 +61,7 @@ void pending_index_track(JSValueConst rec);
    already REFUSED, or already dropped by every register. The two calls below are no-ops on an untracked
    record, deliberately: a fork copies a register whose entries are a mix of all five states. */
 int  pending_index_tracked(JSValueConst rec);
-/* HAS IT AN ADDRESS THE HOST CAN BE SHOWN — tracked AND keyed under its (method, mode, url). */
+/* HAS IT AN ADDRESS THE HOST CAN BE SHOWN — tracked AND keyed under its PendRequestKey. */
 int  pending_index_keyed(JSValueConst rec);
 
 /* ANOTHER REGISTER NAMES IT — one call per shared record at a fork. */
@@ -71,11 +71,21 @@ void pending_index_ref(JSValueConst rec);
    host would fetch an address no flow is parked on. That is the resurrection hazard, closed at its origin. */
 void pending_index_unref(JSValueConst rec);
 
-/* THIS RECORD IS NOW A COMPLETE OUTSTANDING REQUEST — key it under (method, mode, url), Fetch §2.2.5's method,
-   request mode and URL: two requests that differ only in mode are two requests, answered differently by
-   Fetch §4.1 Main fetch. The strings are COPIED: the node outlives every record that named it (see `answered`
-   below), so it cannot borrow a register's bytes. */
-void pending_index_key(JSValueConst rec, const char *method, const char *mode, const char *url);
+/* A request's identity in the outstanding set: Fetch §2.2.5's method, mode, referrer policy, referrer and URL,
+   in the spellings the pending line carries. Two requests that differ in any of them are two requests: Fetch
+   §4.1 "Main fetch" answers two modes differently, and two referrers are two `Referer` headers. BORROWED. */
+typedef struct PendRequestKey {
+    const char *method;
+    const char *mode;
+    const char *referrer_policy;
+    const char *referrer;
+    const char *url;
+} PendRequestKey;
+
+/* THIS RECORD IS NOW A COMPLETE OUTSTANDING REQUEST — key it under its PendRequestKey. The strings are COPIED:
+   the node outlives every record that named it (see `answered` below), so it cannot borrow a register's
+   bytes. */
+void pending_index_key(JSValueConst rec, const PendRequestKey *k);
 /* THE REPLY LANDED — it leaves the outstanding set for good, and its pair remembers that it did. */
 void pending_index_answered(JSValueConst rec);
 /* THE TRUSTED ZONE REFUSED IT — it leaves the outstanding set for good, and NEITHER COUNTER MOVES.
@@ -102,13 +112,15 @@ PendIndexNode *pending_index_first(void);
 PendIndexNode *pending_index_next(PendIndexNode *n);
 const char *pending_index_node_method(const PendIndexNode *n);
 const char *pending_index_node_mode(const PendIndexNode *n);
+const char *pending_index_node_referrer_policy(const PendIndexNode *n);
+const char *pending_index_node_referrer(const PendIndexNode *n);
 const char *pending_index_node_url(const PendIndexNode *n);
 int          pending_index_node_count(const PendIndexNode *n);
 /* Member `i`, OWNED by the caller. */
 JSValue      pending_index_node_member(const PendIndexNode *n, int i);
 
 /* THE PAIR A REPLY ANSWERS, or NULL for one this frontier never parked on. */
-PendIndexNode *pending_index_find(const char *method, const char *mode, const char *url);
+PendIndexNode *pending_index_find(const PendRequestKey *k);
 /* HOW MANY OF THIS PAIR'S RECORDS HAVE BEEN ANSWERED — which is the ONE fact that separates a reply the host
    sent TWICE from a reply for a request nobody ever made, and the reason a node outlives its members. Those
    are different failures with different owners (the second is excused by the pager's sale credit and the first

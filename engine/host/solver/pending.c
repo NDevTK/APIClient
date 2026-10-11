@@ -728,8 +728,8 @@ static void pend_index_sync(JSValueConst e, int field)
 {
     JSValue uv, mv;
 
-    if (field != PEND_URL && field != PEND_METHOD && field != PEND_MODE && field != PEND_HAVE_VALUE &&
-        field != PEND_DECLINED) return;
+    if (field != PEND_URL && field != PEND_METHOD && field != PEND_MODE && field != PEND_REFERRER_POLICY &&
+        field != PEND_REFERRER && field != PEND_HAVE_VALUE && field != PEND_DECLINED) return;
     if (!pending_index_tracked(e)) return;   /* answered, refused, synchronous, or dropped by every register */
     /* A REFUSAL TAKES THE RECORD OUT OF THE SET THE HOST IS LOOKED UP IN, and this arm is asked BEFORE the
        `haveValue` one below because the two pay different counters and only one of them is right for a request
@@ -771,9 +771,9 @@ static void pend_index_sync(JSValueConst e, int field)
        flow parked on the new one would wait for the rest of the session. Asserted here rather than trusted,
        because the write that would break it is an ordinary-looking `pending_set` in some other file. */
     DCHECK(!pending_index_keyed(e),
-           "a request's METHOD, MODE or ADDRESS was rewritten after the frontier's outstanding set was keyed on "
-           "it — the reply seam is keyed on (method, mode, url), so the set would go on offering the old "
-           "identity to the host and the reply for the new one would match nothing");
+           "a request's identity (method, mode, referrer policy, referrer or address) was rewritten after the "
+           "frontier's outstanding set was keyed on it, so the set would go on offering the old identity to "
+           "the host and the reply for the new one would match nothing");
     uv = pending_get(e, PEND_URL);
     mv = pending_get(e, PEND_METHOD);
     if (JS_IsString(uv) && JS_IsString(mv)) {
@@ -781,19 +781,27 @@ static void pend_index_sync(JSValueConst e, int field)
            one writer of the address and the method, writes it before either, so a record whose pair is complete
            and whose mode is not is a writer that bypassed that door. */
         JSValue dv = pending_get(e, PEND_MODE);
-        const char *u, *m, *d;
-        DCHECK(JS_IsString(dv),
-               "a request's METHOD and ADDRESS were written with no MODE on the record — the outstanding set is "
-               "keyed on (method, mode, url) because Fetch §4.1 Main fetch answers two requests that differ only "
-               "in mode differently, and pending_park_request writes the mode before the other two");
-        u = JS_ToCString(pend_ctx(), uv);
-        m = JS_ToCString(pend_ctx(), mv);
-        d = JS_IsString(dv) ? JS_ToCString(pend_ctx(), dv) : NULL;
-        CHECK(u != NULL && m != NULL && d != NULL, "engine: OOM naming an outstanding request");
-        pending_index_key(e, m, d, u);
-        JS_FreeCString(pend_ctx(), d);
-        JS_FreeCString(pend_ctx(), m);
-        JS_FreeCString(pend_ctx(), u);
+        JSValue pv = pending_get(e, PEND_REFERRER_POLICY), rv = pending_get(e, PEND_REFERRER);
+        PendRequestKey k;
+        DCHECK(JS_IsString(dv) && JS_IsString(pv) && JS_IsString(rv),
+               "a request's METHOD and ADDRESS were written with no MODE, REFERRER POLICY or REFERRER on the "
+               "record — the outstanding set is keyed on all five because two requests differing in any of "
+               "them are two requests, and pending_park_request writes the other three before the pair");
+        k.url = JS_ToCString(pend_ctx(), uv);
+        k.method = JS_ToCString(pend_ctx(), mv);
+        k.mode = JS_IsString(dv) ? JS_ToCString(pend_ctx(), dv) : NULL;
+        k.referrer_policy = JS_IsString(pv) ? JS_ToCString(pend_ctx(), pv) : NULL;
+        k.referrer = JS_IsString(rv) ? JS_ToCString(pend_ctx(), rv) : NULL;
+        CHECK(k.url && k.method && k.mode && k.referrer_policy && k.referrer,
+              "engine: OOM naming an outstanding request");
+        pending_index_key(e, &k);
+        JS_FreeCString(pend_ctx(), k.referrer);
+        JS_FreeCString(pend_ctx(), k.referrer_policy);
+        JS_FreeValue(pend_ctx(), rv);
+        JS_FreeValue(pend_ctx(), pv);
+        JS_FreeCString(pend_ctx(), k.mode);
+        JS_FreeCString(pend_ctx(), k.method);
+        JS_FreeCString(pend_ctx(), k.url);
         JS_FreeValue(pend_ctx(), dv);
     }
     JS_FreeValue(pend_ctx(), mv);

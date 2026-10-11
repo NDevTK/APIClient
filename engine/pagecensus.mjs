@@ -424,13 +424,13 @@ for (;;) {
   let filled = 0;
   for (const line of pending) {
     const t = line.split("\t");
-    if (t.length !== 8 || t.some((x, i) => i !== 1 && x === ""))
+    if (t.length !== 10 || t.some((x, i) => i !== 1 && i !== 7 && x === ""))
       fail("a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>" +
-           "CREDENTIALS<TAB>MODE<TAB>URL` — qjs_pending joins the eight and the reply is delivered against " +
-           "(method, mode, url), so a " +
-           "short line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default and is " +
-           "the one field that may be empty");
-    const [method, , initiator, provenance, , , mode, u] = t;
+           "CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL` — qjs_pending joins the ten and the " +
+           "reply is delivered against (method, mode, referrer policy, referrer, url), so a short line makes a " +
+           "token the address. The empty DESTINATION is Fetch §2.2.5's own default and the empty REFERRER POLICY " +
+           "is Referrer Policy §3's, and they are the fields that may be empty");
+    const [method, , initiator, provenance, , , mode, referrerPolicy, referrer, u] = t;
     if (initiator !== "parser" && initiator !== "script")
       fail(`a pending line states the initiator \`${initiator}\`, which is neither token solver/engine.h ` +
            "declares — the vocabulary moved under every host that reads it");
@@ -467,15 +467,18 @@ for (;;) {
        page's `catch` arm. */
     if (rep.meta === null) {
       emit({ n, at: "reply", method, url: abs, networkError: rep.note });
-      M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number", "number"],
-              [cs(method), cs(mode), cs(u), cs("null"), 0, 0]);
+      M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number", "number", "number",
+                                      "number"],
+              [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs("null"), 0, 0]);
     } else {
       const b = rep.bytes;
       const p = M._malloc(b.length + 1);
       M.HEAPU8.set(b, p);
       try {
-        M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number", "number"],
-                [cs(method), cs(mode), cs(u), cs(JSON.stringify(rep.meta)), p, b.length]);
+        M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number", "number", "number",
+                                        "number"],
+                [cs(method), cs(mode), cs(referrerPolicy), cs(referrer), cs(u), cs(JSON.stringify(rep.meta)), p,
+                 b.length]);
       } finally { M._free(p); }
       emit({ n, at: "reply", method, url: abs, status: rep.meta.status,
              type: rep.meta.computedType, bytes: b.length });

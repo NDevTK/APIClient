@@ -402,6 +402,10 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     /* NO MODE STATED (Fetch §2.2.5's request mode), written by `pending_park_request` BEFORE the   \
        address, because the mode is the third half of the identity the outstanding set is keyed on */ \
     X(MODE,       "mode",      PEND_SHARE,  JS_NULL)                                   \
+    /* NO REFERRER POLICY OR REFERRER STATED (Fetch §2.2.5), written by `pending_park_request` before the  \
+       address for the mode's reason: both are part of the identity the outstanding set is keyed on */     \
+    X(REFERRER_POLICY,"referrerPolicy",PEND_SHARE, JS_NULL)                            \
+    X(REFERRER,   "referrer",  PEND_SHARE,  JS_NULL)                                   \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* the asking document, which every fetch park writes; 0 names none (a document script, a host request) */ \
