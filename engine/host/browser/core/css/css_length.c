@@ -47,8 +47,9 @@ CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px)
     return out;
 }
 
-CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value)
+CssPx css_px_fact(CssEnvFact fact, JSContext *realm)
 {
+    double value = viewport_env_fact_value(realm, fact);
     CssPx out = css_px_env(fact, realm, value);
 
     DCHECK(isfinite(value), "an environment fact's own value is not finite — every fact is a picked size or "
@@ -57,7 +58,6 @@ CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value)
     out.form.n = 1;
     out.form.m[0].e[fact] = 1;
     out.form.m[0].k = 1.0;
-    out.form.val[fact] = value;
     return out;
 }
 
@@ -299,21 +299,11 @@ CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px)
     return out;
 }
 
-/* Whether known `a` has a monomial over fact `f`, which is when its `val[f]` is written. */
-static bool css_px_uses(CssPx a, int f)
+/* `out`'s form becomes `p` in normal form. Too wide a form is one atom. The operands' facts are one realm's
+   (css_px_combine asserts it), and a fact is one number per realm, so the form holds no values to agree. */
+static void css_px_form_set(CssPx *out, CssPxPoly *p)
 {
-    int i;
-
-    if (a.env == CSS_ENV_NONE || !a.form.known) return false;
-    for (i = 0; i < a.form.n; i++) if (a.form.m[i].e[f]) return true;
-    return false;
-}
-
-/* `out`'s form becomes `p` in normal form, with each fact's value read off whichever operand used it — a fact
-   is one number per realm, so two operands that both used it agree. Too wide a form is one atom. */
-static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
-{
-    int i = 0, n = 0, f;
+    int i = 0, n = 0;
 
     qsort(p->m, (size_t)p->n, sizeof p->m[0], css_px_mono_cmp);
     while (i < p->n) {
@@ -350,15 +340,6 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
     out->form.n = n;
     out->form.c = p->c;
     memcpy(out->form.m, p->m, (size_t)n * sizeof p->m[0]);
-    for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
-        bool ua = css_px_uses(a, f), ub = css_px_uses(b, f);
-
-        DCHECKF(!ua || !ub || a.form.val[f] == b.form.val[f],
-                "fact %d entered two lengths of one realm with two values, %g and %g — a fact is one number "
-                "per realm, so one of the two was minted from something other than the fact", f,
-                a.form.val[f], b.form.val[f]);
-        out->form.val[f] = ua ? a.form.val[f] : ub ? b.form.val[f] : 0.0;
-    }
 }
 
 /* `out`'s form becomes `ka·a + kb·b`, over two known operands. */
@@ -371,7 +352,7 @@ static void css_px_form_lin(CssPx *out, CssPx a, double ka, CssPx b, double kb)
     p.n = 0;
     css_px_poly_axpy(&p, ka, a);
     css_px_poly_axpy(&p, kb, b);
-    css_px_form_set(out, &p, a, b);
+    css_px_form_set(out, &p);
 }
 
 double css_px_form_eval(CssPx a)
@@ -386,7 +367,8 @@ double css_px_form_eval(CssPx a)
         double t = a.form.m[i].k;
 
         if (a.form.m[i].atom) t *= a.form.m[i].aval;
-        for (f = 0; f < CSS_ENV_FACT_COUNT; f++) t *= pow(a.form.val[f], a.form.m[i].e[f]);
+        for (f = 0; f < CSS_ENV_FACT_COUNT; f++)
+            if (a.form.m[i].e[f]) t *= pow(viewport_env_fact_value(a.realm, (CssEnvFact)f), a.form.m[i].e[f]);
         v += t;
     }
     return v;
@@ -559,7 +541,7 @@ CssPx css_px_mul(CssPx a, CssPx b)
                 }
                 css_px_poly_add(&p, &m, a.form.m[i].k * b.form.m[j].k);
             }
-    css_px_form_set(&out, &p, a, b);
+    css_px_form_set(&out, &p);
     return out;
 }
 

@@ -217,21 +217,21 @@ typedef struct {
     double        aval;
 } CssPxMonomial;
 
-/* The polynomial form of a length over its facts: `px = c + Σ m[i]` in every world, with `val[f]` fact f's
-   value in this realm. It is a normal form of the function and not a record of the operations: the monomials
+/* The polynomial form of a length over its facts: `px = c + Σ m[i]` in every world. Fact f's value is one
+   number per realm, read from core/frame/viewport.h's `viewport_env_fact_value` and never copied into a form.
+   It is a normal form of the function and not a record of the operations: the monomials
    are sorted and merged, so two derivations of one function compose the same form. Sums, differences and
    products keep it (a font's ascent is the font size times a face metric); an extreme the facts' ranges do
    not decide, a snap, a math function, a quotient by a derived length, a product of two atoms and a form
    wider than CSS_PX_FORM_MAX each become one atom; only a non-finite example, and arithmetic over one, leaves
    an opaque function of the same set (`known` false). Read only where `env` is non-empty, since a determined
-   length is its own constant; every exponent names a fact in `env`, whose `val` is written. It is what lets core/frame/viewport.h say two
-   lengths differ by a constant in every world. */
+   length is its own constant; every exponent names a fact in `env`. It is what lets core/frame/viewport.h say
+   two lengths differ by a constant in every world. */
 typedef struct {
     bool          known;
     int           n;
     double        c;
     CssPxMonomial m[CSS_PX_FORM_MAX];
-    double        val[CSS_ENV_FACT_COUNT];
 } CssPxForm;
 
 typedef struct {
@@ -246,8 +246,9 @@ CssPx css_px(double px);
 /* A length derived from ONE fact in `realm` by a function this component does not state, carrying `px` as its
    example (a snapped border width). Its form is opaque. */
 CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px);
-/* The fact itself: `value` is fact `fact`'s value in `realm`, and the length's form is `1·fact`. */
-CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value);
+/* The fact itself: its example is fact `fact`'s value in `realm` (`viewport_env_fact_value`), and the length's
+   form is `1·fact`. */
+CssPx css_px_fact(CssEnvFact fact, JSContext *realm);
 /* `op` over `args` (`nargs` of them, borrowed), a function of their facts the form has no term for, with example
    `px`: the atom `op` and the operands' forms name, or an opaque form for a non-finite `px` or an operand with
    none. `op` names the function whole (a strategy or an argument's unit included). The one way to replace a

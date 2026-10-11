@@ -223,6 +223,11 @@ double font_metrics_typical_advance_measure_em(uint32_t codepoint, FontMetricsAd
    presents CRASHES rather than being handed a bare number, exactly as core/css/font_size_functions.h does. */
 CssPx font_metrics_ascent_px(JSContext *realm, CssPx font_size);
 
+/* The first available font's CSS 2.1 §10.8.1 `A` and `D` as fractions of the em: the per-realm values of
+   CSS_ENV_FONT_ASCENT and CSS_ENV_FONT_DESCENT that core/frame/viewport.h's `viewport_env_fact_value` answers. */
+double font_metrics_ascent_em(void);
+double font_metrics_descent_em(void);
+
 /* CSS 2.1 §10.8.1's `AD = A + D` — the first available font's height above the baseline plus its depth below,
    at `font_size`, in CSS pixels. It is CSS 2.1 §10.8's used value for `line-height: normal` ("tells user
    agents to set the used value to a 'reasonable' value BASED ON THE FONT of the element"), which css-inline-3

@@ -16,6 +16,11 @@
    is the only value in this file a reader has to weigh rather than read off the spec. */
 #define CSS_DEFAULT_FONT_SIZE_PX 16.0
 
+double css_default_font_size_px(void)
+{
+    return CSS_DEFAULT_FONT_SIZE_PX;
+}
+
 /* §2.5.1's SCALING FACTORS, as the exact fractions the table prints them as rather than as decimals: the table
    reads "3/5, 3/4, 8/9, 1, 6/5, 3/2, 2/1, 3/1" and 8/9 has no finite decimal, so a rounded copy would be a
    second answer that is always slightly wrong. The ORDER is the table's own, smallest first, which is what
@@ -75,7 +80,7 @@ CssPx css_default_font_size(JSContext *realm)
            "agent applying these guidelines should avoid creating. The fix is the PICKED number, not a clamp: "
            "clamping the table would make its two smallest keywords compute the same length and stop it being "
            "eight ratios of one value. Raise the default, or state why this user agent departs from §2.5.1");
-    return css_px_fact(CSS_ENV_DEFAULT_FONT_SIZE, realm, CSS_DEFAULT_FONT_SIZE_PX);
+    return css_px_fact(CSS_ENV_DEFAULT_FONT_SIZE, realm);
 }
 
 bool css_absolute_size_keyword(const char *kw, size_t n)

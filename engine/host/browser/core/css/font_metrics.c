@@ -203,7 +203,7 @@ double font_metrics_typical_advance_measure_em(uint32_t codepoint, FontMetricsAd
    viewport.h's test is whether the model picked one point out of a range the environment leaves free, and it
    still did: what is picked is now the FACE rather than the ratio, and a reader with a different default font
    reads a different `1cap` against the same `fontSize`. */
-static double font_metrics_ascent_em(void)
+double font_metrics_ascent_em(void)
 {
     const OpenTypeMetrics *face = font_metrics_face();
 
@@ -218,7 +218,7 @@ static double font_metrics_ascent_em(void)
     return (double)face->hhea_ascender / face->units_per_em;
 }
 
-static double font_metrics_descent_em(void)
+double font_metrics_descent_em(void)
 {
     const OpenTypeMetrics *face = font_metrics_face();
 
@@ -251,7 +251,7 @@ CssPx font_metrics_ascent_px(JSContext *realm, CssPx font_size)
     /* THE PRODUCT IS FORMED HERE so the two facts are unioned by css_length.h's arithmetic rather than by
        whichever caller remembered to: the answer is a joint function of the reader's font size, which the
        operand already carries, and of this user agent's face. */
-    return css_px_mul(font_size, css_px_fact(CSS_ENV_FONT_ASCENT, realm, font_metrics_ascent_em()));
+    return css_px_mul(font_size, css_px_fact(CSS_ENV_FONT_ASCENT, realm));
 }
 
 CssPx font_metrics_normal_line_height_px(JSContext *realm, CssPx font_size)
@@ -301,7 +301,7 @@ CssPx font_metrics_descent_px(JSContext *realm, CssPx font_size)
            "the first available font's `D` is NEGATIVE. CSS 2.2 §10.8.1 defines it as \"a depth below\" "
            "the baseline, so a negative one puts the baseline below the bottom of the face and makes every "
            "half-leading split in core/layout/line_box.c place a box above a line it sits below");
-    return css_px_mul(font_size, css_px_fact(CSS_ENV_FONT_DESCENT, realm, font_metrics_descent_em()));
+    return css_px_mul(font_size, css_px_fact(CSS_ENV_FONT_DESCENT, realm));
 }
 
 /* ---- the SHAPE of a glyph, out of the same face -------------------------------------------------------- */

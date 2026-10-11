@@ -195,6 +195,11 @@ bool viewport_canvas_region(JSContext *ctx, CssPx out[4]);
    resolved value, §6's `long` for a client extent) and is CONSUMED. A length whose `env` is CSS_ENV_NONE is
    handed back unchanged — that is the positive statement css_length.h describes, not a missing domain. */
 JSValue viewport_env_derived(CssPx len, JSValue computed);
+
+/* Environment fact `fact`'s value in `realm`: the one number a length minted from it carries as its example and
+   a form is evaluated at (core/css/css_length.h). Each fact is picked per realm and does not move while the
+   realm lives, which is what lets a form name the fact rather than copy its value. */
+double viewport_env_fact_value(JSContext *realm, CssEnvFact fact);
 /* …FOR A LENGTH THAT CROSSES AS A WEB IDL `long`, where `computed` is `len` rounded to the nearest integer
    (core/dom/element_view.h). Where `len`'s form is known (css_length.h's CssPxForm, `c + P(facts)`), the
    rounding is `floor(c) + round(P + frac(c))`, so the value is minted with an affine facet over that rounded

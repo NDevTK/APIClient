@@ -13,6 +13,8 @@
 #include "core/dom/element_scrolling.h"
 #include "core/dom/perform_scroll.h"
 #include "core/frame/screen.h"
+#include "core/css/font_metrics.h"
+#include "core/css/font_size_functions.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
 #include "core/layout/scrolling_area.h"
@@ -123,15 +125,35 @@ double viewport_device_pixel_ratio(JSContext *ctx)
     return VIEWPORT_DPPX;
 }
 
+double viewport_env_fact_value(JSContext *realm, CssEnvFact fact)
+{
+    DCHECK(realm != NULL, "an environment fact's value was asked of no realm");
+    switch (fact) {
+    case CSS_ENV_ICB_WIDTH:
+    case CSS_ENV_SMALL_VIEWPORT_WIDTH:
+    case CSS_ENV_DYNAMIC_VIEWPORT_WIDTH:  return viewport_width(realm);
+    case CSS_ENV_ICB_HEIGHT:
+    case CSS_ENV_SMALL_VIEWPORT_HEIGHT:
+    case CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT: return viewport_height(realm);
+    case CSS_ENV_DEVICE_PIXEL_RATIO:      return viewport_device_pixel_ratio(realm);
+    case CSS_ENV_DEFAULT_FONT_SIZE:       return css_default_font_size_px();
+    case CSS_ENV_FONT_ASCENT:             return font_metrics_ascent_em();
+    case CSS_ENV_FONT_DESCENT:            return font_metrics_descent_em();
+    default:
+        DFAILF("environment fact %d has no value source", (int)fact);
+        return 0.0;
+    }
+}
+
 /* CSS 2.1 §10.1: the initial containing block "has the dimensions of the viewport". */
 CssPx viewport_icb_width(JSContext *ctx)
 {
-    return css_px_fact(CSS_ENV_ICB_WIDTH, ctx, viewport_width(ctx));
+    return css_px_fact(CSS_ENV_ICB_WIDTH, ctx);
 }
 
 CssPx viewport_icb_height(JSContext *ctx)
 {
-    return css_px_fact(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
+    return css_px_fact(CSS_ENV_ICB_HEIGHT, ctx);
 }
 
 /* css-values-4 §6.1.2.1: the SMALL viewport size is "the viewport sized assuming any UA interfaces that are
@@ -141,22 +163,22 @@ CssPx viewport_icb_height(JSContext *ctx)
    shared is the FACT each carries, so a page comparing two families forks rather than being answered. */
 CssPx viewport_small_width(JSContext *ctx)
 {
-    return css_px_fact(CSS_ENV_SMALL_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
+    return css_px_fact(CSS_ENV_SMALL_VIEWPORT_WIDTH, ctx);
 }
 
 CssPx viewport_small_height(JSContext *ctx)
 {
-    return css_px_fact(CSS_ENV_SMALL_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
+    return css_px_fact(CSS_ENV_SMALL_VIEWPORT_HEIGHT, ctx);
 }
 
 CssPx viewport_dynamic_width(JSContext *ctx)
 {
-    return css_px_fact(CSS_ENV_DYNAMIC_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
+    return css_px_fact(CSS_ENV_DYNAMIC_VIEWPORT_WIDTH, ctx);
 }
 
 CssPx viewport_dynamic_height(JSContext *ctx)
 {
-    return css_px_fact(CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
+    return css_px_fact(CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT, ctx);
 }
 
 bool viewport_canvas_region(JSContext *ctx, CssPx out[4])

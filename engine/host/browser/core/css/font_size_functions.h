@@ -80,6 +80,10 @@
    to be an answer to. A document no navigable presents CRASHES here rather than being handed a bare number. */
 CssPx css_default_font_size(JSContext *realm);
 
+/* The number CSS_ENV_DEFAULT_FONT_SIZE stands for, in CSS pixels: core/frame/viewport.h's
+   `viewport_env_fact_value` answers it. */
+double css_default_font_size_px(void);
+
 /* IS THIS TOKEN ONE OF §2.5's EIGHT `<absolute-size>` KEYWORDS — the membership half, asked WITHOUT a realm
    because a grammar deciding whether `font: x-large serif` parses has no element and wants no number. The span
    need not be NUL-terminated or lowercased; a CSS keyword is ASCII case-insensitive and surrounding white
