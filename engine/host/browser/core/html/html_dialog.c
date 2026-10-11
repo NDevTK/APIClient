@@ -1705,9 +1705,10 @@ static int dialog_show_body(JSContext *ctx, JSStepHdr *hdr, void *state, int arg
            unconditional free would have eaten. */
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        /* `show()` step 4 / show a modal dialog step 7 — the attribute is read AGAIN, because a `beforetoggle`
-           handler had the element in its hands. */
-        if (!dialog_has_open(el)) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+        /* `show()` step 4 / show a modal dialog step 7 — "If this has an open attribute, then return." The
+           attribute is read AGAIN, because a `beforetoggle` handler had the element in its hands and may have
+           opened it. */
+        if (dialog_has_open(el)) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
         if (magic == M_SHOW_MODAL) {
             /* Steps 8 and 9 — the second look at connectedness and at the popover showing state, both of
                which a `beforetoggle` listener can have changed, and both of which merely RETURN here where
