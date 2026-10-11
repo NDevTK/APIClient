@@ -10647,63 +10647,38 @@ static int engine_sched_slice(void) {
                under it is merely slow. */
 #if APICLIENT_DEV
             {
-                /* THE WALL CLOCK'S OTHER END, taken once, for the two REPORTED numbers below. It is deliberately
-                   a different reading from the aging charge above: that one is the slice's measure and this one
-                   is elapsed time, and a message that printed one of them under the other's name is exactly the
-                   confusion §Testing's four false reds came from. */
+                /* The wall clock's other end, taken once for the two reported numbers below: a reading distinct
+                   from the aging charge's (the slice's measure), so a message never prints one under the other's
+                   name. */
                 int64_t done = engine_now_ms();
                 int64_t spent = done - wall0_ms;
                 (void)spent;
-                /* the TAIL closes the last gap: a step that offers a point and then runs for seconds before
+                /* The tail closes the last gap: a step that offers a point and then runs for seconds before
                    returning has that silence between its last offer and its end, and nothing else records it. */
                 int64_t gap = done - g_last_ask > g_max_gap ? done - g_last_ask : g_max_gap;
-                /* THE VERDICT IS WORK, NOT TIME — and the clock is now only something the message PRINTS.
-                   `asked == 0` says the path offered the scheduler no suspend point, which is the missing seam
-                   this exists to catch. It was ANDed with a wall-clock gap, and a wall clock cannot tell the two
-                   states apart that matter here:
-                     - a stretch of C that genuinely has no seam, which spins forever with the switch count
-                       frozen and is the real defect, and
-                     - a stretch that was simply DESCHEDULED because something else on the box had the CPU.
-                   A descheduled thread executes no instructions, so it reaches no preempt check either: it shows
-                   `asked=0` for exactly the same reason, and the wall gap it accumulates is not its own. That is
-                   not hypothetical — three concurrent builds made this fire at 14486 ms with `points asked=0` on
-                   a tree whose seam was intact, and the same commit run alone passed; the resulting diagnosis
-                   was published and had to be retracted. A false failure is worse than a missing one, because it
-                   sends the next reader hunting a phantom in whichever component happened to be under test.
-                   CPU TIME IS THE RIGHT MEASURE AND ONE OF THE TWO HOSTS HAS IT — see the second verdict below.
-                   This paragraph used to say flatly that "this host does not have one", which was true of the
-                   extension's wasm instance (emscripten's WASI clock_time_get answers CLOCK_MONOTONIC and both
-                   CPUTIME clocks from emscripten_get_now(), i.e. wall time) and false of the native build, which
-                   this same file compiles for. solver/quantum.h answers it per host instead of a comment
-                   claiming it for both, and quantum_measure_is_cpu() is what the CPU verdict is gated on so
-                   there is never a wall clock inside something calling itself CPU.
-                   WHAT IS MEASURED HERE IS WHAT THE STEP DID. Forks, flows created and jobs run are work the
-                   engine PERFORMED; being descheduled cannot inflate any of them, because a thread that is not
-                   running performs none. A step that mints thousands of siblings without once consulting the
-                   preempt hook has no seam on that path whatever the machine's load — that is the invariant,
-                   stated in the quantity it is actually about. It truncates nothing and drops no flow: the
-                   engine that reaches this margin is already the one that never returns.
-                   THE SHAPE THAT REACHES IT is real and is in the tree today: an unknown-length walk over
-                   opaque input asks one outcome-fork question per position and the driver re-enters the same
-                   step immediately after each fork, so one scheduler step mints an unbounded chain of siblings
-                   and never comes back to be ranked.
-                   THE ONE CASE THIS CANNOT SEE is a seamless stretch that also does no observable work — a bare
-                   `for(;;);` inside C, which forks nothing, queues nothing and emits nothing. That is what the
-                   SECOND verdict below is for, and it exists only because the native host now has a real thread
-                   CPU clock: consumed CPU cannot be inflated by load, so it separates a seamless stretch from a
-                   descheduled one where a wall clock never could. It is a SEPARATE verdict with its own message
-                   deliberately — §Testing: two measures must never collapse into one answer, or a reader cannot
-                   tell which one decided. */
+                /* The verdict is work, not time; the clock is only printed. `asked == 0` says the path offered
+                 * the scheduler no suspend point, but a wall clock cannot separate a stretch of C with no seam
+                 * (which spins for ever with the switch count frozen) from a stretch that was descheduled: a
+                 * descheduled thread reaches no preempt check either, so it shows `asked=0` too, and its wall gap
+                 * is not its own. A false failure sends the next reader hunting a phantom. Forks, flows created and
+                 * jobs run are work the engine performed, which descheduling cannot inflate, so a step that mints
+                 * thousands of siblings without consulting the preempt hook has no seam on that path whatever the
+                 * load. It truncates nothing: the engine reaching this margin is already one that never returns.
+                 * The shape that reaches it is in the tree: an unknown-length walk over opaque input asks one
+                 * outcome-fork question per position, and the driver re-enters the same step after each fork.
+                 *
+                 * A seamless stretch that does no observable work (a bare `for(;;);` in C) is invisible to this
+                 * verdict; the CPU verdict below covers it where the host has a thread CPU clock
+                 * (quantum_measure_is_cpu(): solver/quantum.h answers per host, and emscripten's WASI clocks are
+                 * all wall time). Consumed CPU cannot be inflated by load. The two are separate verdicts with
+                 * separate messages, so a reader can tell which one decided. */
                 long work = engine_work_done() - w0;
-                /* THE CPU VERDICT — the seamless stretch that does no observable work, which the work verdict
-                   below is blind to by construction. Gated on the host actually having a CPU clock rather than
-                   assumed: on emscripten this quantity is wall time, a loaded machine would falsify it, and a
-                   false red is worse than a missing one (§Testing). Its own message, its own margin, so the two
-                   answers are never confused for each other. */
+                /* The CPU verdict: the seamless stretch with no observable work, which the work verdict is blind
+                   to. Gated on the host having a CPU clock, since on emscripten this quantity is wall time and load
+                   would falsify it. */
                 if (quantum_measure_is_cpu() && (now - t0) > ENGINE_SEAMLESS_CPU_US && g_preempt_asked == pa0) {
-                    /* SIZED FOR THE WHOLE LINE, and 256 was not: the fixed text alone is over 200 bytes before
-                       quantum_measure()'s 54, so `unit=` and `script_i=` — the two fields that say WHERE — were
-                       the first things off the end. */
+                    /* Sized for the whole line: the fixed text alone is over 200 bytes before quantum_measure()'s
+                       54, and `unit=` and `script_i=` are the fields that say where. */
                     DFAILF("%d ms of THREAD CPU consumed in one step with NO suspend point offered (measure: "
                            "%s; %ld units of work, which is why the work verdict cannot see this one) — this "
                            "stretch has no suspend/resume seam; unit=%s script_i=%d",
@@ -10711,24 +10686,15 @@ static int engine_sched_slice(void) {
                            cur ? cur->script_i : -1);
                 }
                 if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
-                    /* THE TWO EXCERPTS ARE THE ONLY BOUNDED THINGS HERE, and they are bounded because their
-                       SOURCES are unbounded — a payload and a script body are page bytes of any length, so a
-                       diagnostic quotes an excerpt and says it is one. Everything else on this line is the
-                       assert's message and is sized by check.h, which is what deleted the clamp that used to
-                       stand here: `wi` took snprintf's return — the length it WOULD have written — so a
-                       truncated prefix left an index past the end and the body append computed `why + 900`
-                       with `sizeof why - 900` underflowing to ~2^64, writing the terminator outside a 640-byte
-                       stack buffer. The diagnostic that names a missing seam smashed the stack at the moment
-                       it named it. There is no index to get wrong now. */
+                    /* The two excerpts are the only bounded things here, because their sources (a payload, a script
+                       body) are page bytes of any length; everything else is the assert's message, sized by
+                       check.h. */
                     char pl_txt[512], body_txt[1024];
                     const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
                     const char *pl = cur ? cur->cand_payload : NULL;
-                    /* WHICH PROGRAM. "a resume ran 5s" is still a symptom until the JS it was running is named,
-                       and the flow already knows: script_i indexes the ONE sequence — the document's scripts and
-                       the flow's own dynamic bodies (a lazy chunk, an injected <script>, a fired PoC) are rows of
-                       the same table (solver/flow.h). Without this the only way
-                       left to find the code is bisecting the fixture by hand, which is the thing this assertion
-                       exists to replace. */
+                    /* Which program: script_i indexes the one sequence, the document's scripts and the flow's own
+                       dynamic bodies (a lazy chunk, an injected <script>, a fired PoC) as rows of one table
+                       (solver/flow.h), so the message can name the JS that was running. */
                     const char *bodytxt = NULL;
                     size_t bodyn = 0;
                     int si = cur ? cur->script_i : -1;
@@ -10745,32 +10711,24 @@ static int engine_sched_slice(void) {
                     int64_t steps_ms = idl_step_total(&steps_n);
                     JS_FlowPreemptStats(&pq, &pf);
                     if (g_wrap_stats) g_wrap_stats(&wrap_n, &wrap_cap);
-                    /* THE LIVE HEAP, because a garbage collection is the one thing reachable from an ordinary
-                       Web API call whose cost is the size of everything ELSE. createElement allocates — a
-                       wrapper, a shape — so it can trigger a collection, and a collection marks the whole live
-                       set. That makes ONE call arbitrarily slow while every other call of the same member is
-                       fast. The wrapper map's size sits beside it deliberately: the two together say whether
-                       the live set is the DOM the flows built or something else entirely, which is the
-                       difference between a leak this fixes and a leak still to find. */
+                    /* The live heap, because a garbage collection is the one thing reachable from an ordinary Web
+                       API call whose cost is the size of everything else: createElement allocates (a wrapper, a
+                       shape) and can trigger a collection, which marks the whole live set, so one call can be
+                       arbitrarily slow while every other call of the member is fast. The wrapper map's size beside
+                       it says whether the live set is the DOM the flows built or something else. */
                     JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &mem);
-                    /* THREE numbers, because two of them cannot separate the roots. `asked` is how many suspend
-                       points the path OFFERED (every consultation of the hook); `requested` is how many of those
-                       the WFQ wanted to take; `fired` is how many actually parked. asked==0 means the path has
-                       no suspend point on it at all — the seam is missing and must be built. asked>0 with
-                       requested==0 means the points were there and the scheduler declined every one, which is a
-                       ranking question, not a missing seam. requested>fired means a point was reached, the
-                       preempt was wanted, and it was DROPPED because no driver at that depth adopts the seam. */
-                    /* BOTH MEASURES ARE PRINTED, the work one that decided it and the wall clock that no
-                       longer does, so the next reader can see at a glance which state they are in: a big work
-                       count with a small gap is a real seamless stretch on an idle box, and a big gap with the
-                       same work count says the box was also loaded — neither changes the verdict, and that is
-                       the point. */
-                    /* BOTH EXCERPTS ARE WALKED BY LENGTH, NOT TO A TERMINATOR — this diagnostic exists to NAME
-                       the program a stuck flow is running, and a bundle carrying a U+0000 (ECMAScript §11.1
-                       "Source Text" permits one) would have named the empty string or a prefix of itself. The
-                       byte filter replaces every non-printable with '.', so a NUL prints as one character like
-                       every other control. It is NOT for the record's sake — check.h escapes what it emits —
-                       it is so a reader gets one line of source text instead of a run of escapes. */
+                    /* Three numbers, because two cannot separate the roots. `asked` is how many suspend points the
+                       path offered (every consultation of the hook), `requested` how many the WFQ wanted to take,
+                       `fired` how many parked. asked==0: the seam is missing and must be built. asked>0 with
+                       requested==0: the scheduler declined every point, a ranking question. requested>fired: a
+                       wanted preempt was dropped because no driver at that depth adopts the seam. */
+                    /* Both measures are printed, the work that decided and the wall clock that does not: a large
+                       work count with a small gap is a seamless stretch on an idle box, and a large gap with the
+                       same count says the box was loaded too; neither changes the verdict. */
+                    /* Both excerpts are walked by length, not to a terminator: a bundle carrying a U+0000
+                       (ECMAScript §11.1 "Source Text" permits one) would otherwise name the empty string or a
+                       prefix. The byte filter prints every non-printable, NUL included, as '.', so a reader gets one
+                       line of source text rather than escapes (check.h escapes what it emits regardless). */
                     excerpt(pl_txt, sizeof pl_txt, pl, pl ? strlen(pl) : 0);
                     excerpt(body_txt, sizeof body_txt, bodytxt, bodyn);
                     DFAILF("%ld units of work (forks+flows+jobs) with NO suspend point offered "
@@ -10791,19 +10749,14 @@ static int engine_sched_slice(void) {
             }
 #endif
             if (r == FLOW_STEP_DONE) {
-                /* THE IMAGE THIS MEMBER OWES THE HOST, TAKEN AT THE ONE MOMENT ITS WORLD IS COMPLETE —
-                   @PERWORLD. This is the closing edge of the member's last turn: it has run everything it
-                   will ever run, `flow_running()` still names it, and its COW and DOM deltas are still
-                   applied, because the two lines below are what unapply them. A member ends exactly ONCE, so
-                   a mark spent here costs exactly one return and one picture per world — the same price the
-                   discharge above this loop used to charge for a picture of nothing.
-                   THE YIELD IS TAKEN BEFORE THE FINISH AND THE FINISH IS OWED ACROSS IT, which is the whole
-                   of `g_sess_finish_owed` and is not a second teardown path: the SAME two calls run, at this
-                   function's own entry, before anything else this session does. Yielding after them would
-                   render a document whose delta had just been reverted — the baseline again, one turn later.
-                   NOTHING IS DEFERRED FOR A MEMBER THAT OWES NO PICTURE, so a run made without the ask —
-                   `engine_request_paint_every_world` — reaches none of this and finishes on the line it
-                   always did. */
+                /* The image this member owes the host, taken at the one moment its world is complete
+                   (@PERWORLD): the closing edge of its last turn, with `flow_running()` naming it and its COW and
+                   DOM deltas still applied, since the two lines below unapply them. A member ends once, so a mark
+                   spent here costs one return and one picture per world. The yield is taken before the finish and
+                   the finish is owed across it (`g_sess_finish_owed`): the same two calls run at this function's
+                   entry before anything else; yielding after them would render the baseline again. A member that
+                   owes no picture defers nothing, so a run without `engine_request_paint_every_world` finishes on
+                   this line. */
                 if (flow_paint_owed(cur)) {
                     flow_clear_paint_owed(cur);
                     g_sess_finish_owed = 1;
@@ -10813,58 +10766,25 @@ static int engine_sched_slice(void) {
                 solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL;
             }
             else if (r == FLOW_STEP_OWED) {
-                /* THIS FLOW CAN MAKE NO PROGRESS UNTIL THE HOST ANSWERS, and the scheduler records that ON THE
-                   FLOW. It is NOT skipped and NOT removed — it stays in the WFQ at its own weight with every
-                   work item it holds, and it is picked again at the top of the next slice — which is the first
-                   moment anything CAN have answered it, since only the host can.
-                   IT USED TO BE A COUNT of consecutive owed answers, broken at `flow_count()` on the claim that
-                   "every member has answered that in a row". The claim was false: this loop re-picks the SAME
-                   top-ranked flow, because an owed step burns microseconds and so moves neither its service
-                   notch nor its weight. N owed answers were therefore N answers from ONE flow, and the break
-                   declared the whole frontier stalled while runnable siblings had never been asked — which in
-                   the smoke host ends the run over them (the provider answers nothing and run_scheduler
-                   breaks). A no-progress count is in §NO-BOUNDS' own list, and this is why. */
-                /* AND THE MARK IS A CLAIM ABOUT THE HOST, ASSERTED WHERE IT IS MADE. A marked flow leaves the
-                   pick until a HOST EVENT clears it, so the mark is only ever true if there is something the
-                   host has actually been shown and can still answer: an entry on this flow's register the JOINS
-                   will list — or the one case with no entry at all, a document a peer holds a reference into.
-                   IT ASKED `pending_outstanding` AND JUSTIFIED ITSELF BY A PROPERTY THOSE JOINS DO NOT HAVE.
-                   The clause here read "which is in engine_pending_fetches or engine_host_requests by
-                   construction, since both walk every flow's register and select exactly the unanswered", and
-                   both joins select the unanswered AND NOT DECLINED — deliberately, so that a refusal is a fork
-                   rather than a spin. So the predicate was one bit looser than the sentence defending it, and
-                   the one state it let through is the one this assert was written to catch: the WAITING arm of
-                   a decline is marked host-owed, leaves the pick for good, and appears on neither join, so the
-                   host is billed for a reply nobody will ever send. Anything else is a flow that has left the
-                   run queue for good, and NOTHING would say so: `live` still counts it, `blocked` and `owed`
-                   still report it as waiting, and the whole timeline behind it simply never runs again.
-                   THE FRONTIER-WIDE FORM OF THIS EXISTS ALREADY AND CANNOT SEE IT (the stall claim below).
-                   That one is checked only when the pick finds NO runnable member, so a single permanently
-                   marked flow is invisible for as long as its siblings keep the loop busy — which is exactly
-                   the state in which a document stops getting deeper while every number about it looks
-                   healthy. It is also the STRICTER predicate: `pending_count > 0` is satisfied by a register
-                   whose every entry has already been ANSWERED, and a flow stuck on one of those is precisely
-                   the shape no host event can ever clear. Asked per flow, at the instant the mark is made. */
-                /* …AND THE THIRD REASON A MARK MAY REST ON SOMETHING, WHICH IS WHY THIS IS THREE CLAUSES AND
-                   NOT TWO. The paragraph above is right that the assert and the selecting arm ask different
-                   questions and WRONG about what follows from it: it concluded that the gap "is the FORCING
-                   FUNCTION" and that a refused flow needed a resting verdict of its own. A mark is a bit
-                   meaning INELIGIBLE, and a refused flow is exactly that — it can convert no slice into work,
-                   and taking it out of the pick is the right and only action. What the assert is really about
-                   is whether the mark RESTS ON ANYTHING, and there are three ways it can: a reply the host can
-                   still send, a peer that can still ask this timeline something, and a refusal this engine has
-                   recorded and can account for. The third was missing, so the one state the design REQUIRES
-                   aborted the dev build.
-                   THE DEFECT IT WAS WRITTEN TO CATCH IS UNTOUCHED, WHICH IS THE WHOLE TEST OF A WIDENING. A
-                   register whose every entry has been ANSWERED satisfies none of the three — `pend_owed` is
-                   false for an answered entry, so both register walks answer 0 — and it fires exactly as
-                   before. The widening admits the refusal and nothing else, which is what the partition assert
-                   in pending.c makes a property rather than a hope.
-                   AND IT MAY ONLY BE WIDENED BECAUSE THE STATE IS NOW CORRECT AT THE OTHER END. Until
-                   engine_sched_slice's tail wrote its survivors to the cold tier, admitting a refused flow
-                   here would have converted a loud dev abort into a silent DROP — a green gate over a
-                   timeline that ends with the process, which is choosing the result over the forcing
-                   function. The park and this clause are one diff for that reason. */
+                /* This flow can make no progress until the host answers, and the scheduler records that on the
+                 * flow. It is not skipped or removed: it keeps its WFQ weight and every work item, and is picked
+                 * again at the top of the next slice, the first moment anything can have answered it. Not a count
+                 * of consecutive owed answers: this loop re-picks the same top-ranked flow (an owed step burns
+                 * microseconds and moves neither its service notch nor its weight), so N owed answers come from
+                 * one flow, and a no-progress count would declare the frontier stalled with runnable siblings
+                 * never asked.
+                 *
+                 * The mark is a claim about the host, asserted where it is made: a marked flow leaves the pick
+                 * until a host event clears it, so it must rest on something, and there are three things it can
+                 * rest on. An entry the host can still answer (pending_host_outstanding; the joins select the
+                 * unanswered and not declined); a peer that can still ask this timeline something (g_referenced);
+                 * a refusal this engine has recorded and accounts for (pending_declined_outstanding), a flow that
+                 * can convert no slice into work and that the session's tail writes to the cold tier before it
+                 * closes. A register whose every entry has been answered satisfies none of them (`pend_owed` is
+                 * false for an answered entry): no host event can clear that mark, and the flow would leave the
+                 * run queue for good while `live`, `blocked` and `owed` still report it waiting. The
+                 * frontier-wide stall check below cannot see one such flow while its siblings keep the loop busy,
+                 * so this is asked per flow, when the mark is made. */
                 DCHECK(pending_host_outstanding(cur->pending) ||
                        pending_declined_outstanding(cur->pending) || g_referenced,
                        "a flow was marked host-owed while its mark rests on NOTHING — every entry on its "
@@ -10877,78 +10797,50 @@ static int engine_sched_slice(void) {
                        "and it satisfies the clause beside this one");
                 flow_set_host_owed(cur);
             }
-            /* AND NOTHING IS CLEARED BY PROGRESS, which is a statement about what a slice can do rather than an
-               omission. No step of any flow can answer another flow's wait: every kind on the register — a
-               fetch reply, an external script's text, a synchronous request's answer, a routed record, a
-               cross-agent operation — is filled by the HOST, and the host does not run until this slice
-               returns. Clearing here instead would re-admit every marked flow after every step, and with a
-               marked flow outranking a working one that is a wasted step and two COW swaps per unit of real
-               progress. */
+            /* Nothing is cleared by progress: no step can answer another flow's wait, since every kind on the
+               register (a fetch reply, an external script's text, a synchronous request's answer, a routed record,
+               a cross-agent operation) is filled by the host, which does not run until this slice returns.
+               Clearing here would re-admit every marked flow after every step, wasting a step and two COW swaps per
+               unit of real progress. */
         }
-        /* THREAD-SHARING, not value: the slice's budget is gone, so hand the thread back and keep the frontier.
-           It is the SAME question preempt_hook asks — one budget, one edge, asked at the two levels it acts on:
-           there the running flow parks, here the step returns. Asking it twice from one source is what makes a
-           flow that parked on the quantum and a step that ends on it the same event rather than two policies
-           that have to be kept in step. */
-        /* VALUE, in the two shapes below it: this engine's best is now worth less than the runner-up ENGINE's,
-           or a better DOCUMENT is waiting. The flow keeps its snapshot and resumes where it stands — an order
-           decision, never a drop. The document arm takes a FINITE weight only, and that is the whole of the
-           difference between the two answers this engine can give a host. engine_top_weight is the RUNNABLE
-           pick, so -inf means this frontier can hand the thread to nobody at all — which is not "the other
-           document is worth more", it is the STALL, and the host has to be told which because they ask for
-           opposite things: a yield asks to be outranked, a stall asks to be PAID. The stall is one iteration
-           away (the pick at the top of the loop returns NULL and breaks to it), so the guard costs a
-           comparison and keeps the two verdicts from collapsing into the weaker one.
-           THE THREE ARE ONE DECISION READ INTO ONE LOCAL, AND THAT IS WHAT MAKES THE DISCHARGE BELOW SOUND
-           RATHER THAN A SECOND COPY OF THEM. They used to be three `if`s with three returns; a picture owed at
-           a slice boundary has to be spent on exactly the turns that RETURN, and a second spelling of "does
-           this turn return" beside the first is two right answers to one question, which is the shape that
-           drifts the day a fourth yield is added. One evaluation, one answer, both consumers. `engine_top_weight`
-           is also asked exactly once here, where the old shape would have asked it twice. */
+        /* Thread-sharing, not value: the slice's budget is gone, so hand the thread back and keep the frontier. It
+         * is the question preempt_hook asks, one budget and one edge at the two levels it acts on (there the
+         * running flow parks, here the step returns), so a flow parked on the quantum and a step ended on it are
+         * one event.
+         *
+         * Value, in the two shapes below it: this engine's best is worth less than the runner-up engine's, or a
+         * better document is waiting. The flow keeps its snapshot and resumes where it stands. The document arm
+         * takes a finite weight only: engine_top_weight is the runnable pick, so -inf means this frontier can hand
+         * the thread to nobody, which is the stall rather than "the other document is worth more"; a yield asks
+         * to be outranked and a stall asks to be paid, and the stall is one iteration away (the pick returns NULL
+         * and breaks to it).
+         *
+         * The three are one decision read into one local, so the discharge below is spent on exactly the turns
+         * that return, with one spelling of "does this turn return", and `engine_top_weight` is asked at most
+         * once. */
         {
             int yielding = 0;
 
             if (quantum_expired()) yielding = 1;
             else if (cur && flow_weight(cur) < g_yield_floor) yielding = 1;
-            /* AND THE THIRD ARM IS ASKED ONLY WHERE IT CAN DISAGREE WITH THE SECOND — A COST AND NEVER A
-               DECISION, BECAUSE THE ANSWER IS IDENTICAL AT EVERY INPUT. The two arms read two POPULATIONS:
-               arm 2 is the INCUMBENT'S weight, arm 3 the maximum over the pick's RUNNABLE candidates.
-               flow_pick's only filter on a runnable entry is flow_host_owed — this call passes no seed and
-               no exclusion, so nothing else skips anything — hence an incumbent that is a live unmarked
-               member IS one of the candidates arm 3 maximises over, and `top >= flow_weight(cur)`. Reaching
-               arm 3 at all says arm 2 did not fire, i.e. `flow_weight(cur) >= g_yield_floor`. The two compose
-               to `top >= g_yield_floor`, so `top < g_yield_floor` is unreachable there and the scan cannot
-               move `yielding` off 0 — which is where the skip leaves it. Where the incumbent is NOT a
-               candidate that implication is gone and the scan is the only thing that can answer: `cur` is
-               NULL because the arm above FINISHED it, or `cur` is MARKED because the arm above MARKED it,
-               and in both cases arm 2 asked about a flow the pick no longer weighs.
-               THE FILTER IS READ AND NOT RE-DERIVED. flow_host_owed is flow_pick's own predicate, published
-               for this one consumer; inferring the mark from the step code that laid it down would be a
-               second writer's worth of knowledge about a mark with exactly one writer, which is the shape
-               the paragraph above this block already names for "does this turn return".
-               WHAT IS CONTINGENT IS MEMBERSHIP, AND IT IS THE HALF ASSERTED. Once the incumbent is in the
-               scanned set the arithmetic is an identity, so all that is left to be wrong is `cur` naming a
-               flow the registry no longer holds — O(1) through its registry handle, side-effect-free.
-               THE HANDLE IS READ HERE THOUGH flow_is_member REFUSES TO, and the difference is whose pointer
-               it is. That predicate answers for a pointer that MAY BE DANGLING, so it can only compare
-               addresses; `cur` is the member this iteration just stepped and ARM 2 ONE LINE ABOVE ALREADY
-               DEREFERENCED IT through flow_weight, so the read adds no exposure this decision did not
-               already have. `flow_running()` is not the witness to reach for instead: flow_remove does not
-               clear it, so it goes on naming a departed flow and would answer TRUE for exactly the state
-               this assert exists to catch.
-               ASSERTING THE CONCLUSION IS NOT AVAILABLE AT ANY PRICE: flow_pick raises `g_scan_runs` on
-               every call, so a dev-only re-scan would corrupt the very counters this decision is measured
-               with and make the dev build's census a different program from the one that ships.
-               NO ASSERTION COVERAGE GOES WITH THE CALL. engine_top_weight's own DCHECK fires only on a -inf
-               — a pick that came back empty — and in the skipped case the incumbent is a candidate, so the
-               pick returns at least it and that assert's first disjunct holds for every input reaching here.
-               IT IS A PRECONDITION AND NOT A FALLBACK BY §C-stack'S TEST: delete engine_top_weight and the
-               question still has to be asked, because "is the incumbent in the population the other arm
-               read" is what decides whether arm 2's answer already covers arm 3's. Nothing is selected
-               against and no second implementation waits behind a shape it fails to answer for.
-               RETIREMENT: this argument goes when the two arms become ONE reading over ONE population — an
-               arm 2 that asks the pick's maximum rather than the incumbent's own weight — because there is
-               then no second population for the implication to be about. */
+            /* The third arm is asked only where it can disagree with the second; elsewhere it is a cost with an
+             * identical answer. Arm 2 reads the incumbent's weight, arm 3 the maximum over the pick's runnable
+             * candidates. flow_pick's only filter on a runnable entry is flow_host_owed (this call passes no seed
+             * and no exclusion), so a live unmarked incumbent is one of arm 3's candidates and
+             * `top >= flow_weight(cur)`; reaching arm 3 says `flow_weight(cur) >= g_yield_floor`, so
+             * `top < g_yield_floor` is unreachable and the scan cannot move `yielding`. Where the incumbent is not a
+             * candidate (`cur` NULL because the arm above finished it, or marked because the arm above marked it)
+             * the scan is the only answer. The filter is read (flow_host_owed is flow_pick's own predicate,
+             * published for this consumer), not re-derived from the step code that marks.
+             *
+             * What is contingent is membership, the half asserted: `cur` naming a flow the registry no longer
+             * holds, read in O(1) through its registry handle. flow_is_member compares addresses because it
+             * answers for a pointer that may dangle; `cur` was just stepped and arm 2 already dereferenced it, so
+             * reading its handle adds no exposure. `flow_running()` is no witness, since flow_remove does not clear
+             * it. The conclusion cannot be asserted: flow_pick raises `g_scan_runs` on every call, so a dev-only
+             * re-scan would change the census the dev build reports. engine_top_weight's DCHECK fires only on -inf,
+             * impossible when the incumbent is a candidate, so skipping the call loses no assert. The argument
+             * disappears if arm 2 reads the pick's maximum rather than the incumbent's weight. */
             else if (cur == NULL || flow_host_owed(cur)) {
                 double top = engine_top_weight();
                 if (top > -1.0 / 0.0 && top < g_yield_floor) yielding = 1;
@@ -10963,16 +10855,12 @@ static int engine_sched_slice(void) {
                        "`cur` outlived a flow_remove that should have cleared it, or its registry handle "
                        "and the registry have come apart");
             }
-            /* AND THE OTHER CLOSING EDGE OF A TURN, DISCHARGED WITHOUT BUYING A RETURN — @PERWORLD. A yield
-               hands the host this exact member, standing, with its COW and DOM deltas applied and a step of
-               real work behind it: that IS the turn a picture is owed of, so a member whose mark is still up
-               when one fires has been paid, and clearing it is the discharge rather than a shortcut past one.
-               No extra return is taken because the return is already happening.
-               IT IS WHAT KEEPS A MEMBER THAT NEVER FINISHES FROM NEVER BEING PHOTOGRAPHED, which is the one
-               thing moving the discharge off the pre-step line could otherwise have cost: a flow that loops
-               for the rest of the session reaches the DONE arm never and reaches a slice boundary constantly.
-               The guard on `cur` is the same one the weight arm above carries — a slice can reach this line
-               with no member standing at all. */
+            /* The other closing edge of a turn, discharged without buying a return (@PERWORLD): a yield hands the
+               host this member standing, with its deltas applied and a step of real work behind it, which is the
+               turn a picture is owed of, so a mark still up is paid by the return already happening. This is what
+               photographs a member that never finishes (a flow looping for the rest of the session never reaches
+               the DONE arm but reaches slice boundaries constantly). The guard on `cur` is the weight arm's: a
+               slice can reach this line with no member standing. */
             if (yielding) {
                 if (cur != NULL && flow_paint_owed(cur)) flow_clear_paint_owed(cur);
                 g_sess_cur = cur;
@@ -10981,37 +10869,24 @@ static int engine_sched_slice(void) {
         }
     }
     g_sess_cur = cur;
-    /* THE STALL CLAIM, CHECKED OF EVERY MEMBER — the other half of the host-owed mark, and the half that would
-       catch the OPPOSITE failure from the one just fixed. flow_set_host_owed asserts that a mark is never
-       cleared by something that cannot have answered it; nothing asserted that a mark is never LAID DOWN on a
-       flow that could still have progressed. That failure is silent in the other direction: the engine stops
-       exploring early and reports a frontier "waiting on the host" that the host owes nothing, which from
-       outside is indistinguishable from a document that really is waiting.
-       Reaching this line means the pick found no runnable member, so every member is marked; each of them must
-       therefore hold something ONLY THE HOST can supply. That is an entry on its register — a fetch reply, a
-       document script's text, an answer to a synchronous request — or the one case with no register entry at
-       all: a document a peer still holds a reference into, whose last timeline reports host-owed INSTEAD of
-       finishing (engine_set_referenced), and which is waiting for an operation rather than for a reply.
-       IT IS ALSO WHERE "how many requests may one stall answer" IS DECIDED, and the answer is ALL of them:
-       engine_host_requests joins every outstanding record into a buffer that grows (no truncation, no cap) and
-       every host walks the whole list. So a frontier that stays blocked across a stall is not a seam that
-       answers one at a time — it is this set being REGENERATED by forking, since a fork re-issues its parent's
-       unanswered synchronous request under the sibling's own world (engine_fork_finalize). */
+    /* The stall claim, checked of every member: the other half of the host-owed mark. The mark's own assert says a
+       mark rests on something; nothing else says a mark was never laid on a flow that could still progress, a
+       failure that stops exploration early and reports a frontier "waiting on the host" the host owes nothing.
+       Reaching here means the pick found no runnable member, so every member is marked and must hold something
+       only the host can supply: an entry on its register (a fetch reply, a document script's text, an answer to a
+       synchronous request), or, with no entry, a document a peer still holds a reference into, whose last
+       timeline reports host-owed instead of finishing (engine_set_referenced). One stall answers every request:
+       engine_host_requests joins every outstanding record into a growing buffer (no truncation, no cap) and every
+       host walks the whole list; a frontier that stays blocked across stalls is the set being regenerated by
+       forking, since a fork re-issues its parent's unanswered synchronous request under the sibling's world
+       (engine_fork_finalize). */
     for (int i = 0; i < flow_count(); i++) {
-        /* OUTSTANDING, NOT MERELY PRESENT — the same correction the per-flow assert at the mark carries, and
-           the reason it is a correction rather than a tightening: `pending_count > 0` is true of a register
-           whose every entry has already been ANSWERED, and that is not a member waiting on the host, it is a
-           member nothing can wake. Counted, it read as a healthy stall; asked this way it names itself. */
-        /* AND THE MESSAGE ASKS THE PREDICATE'S OWN QUESTION NOW, WHICH IT DID NOT, AND THE GAP WAS A TRAP FOR
-           THE NEXT READER RATHER THAN A WORDING SLIP. It read "owed the host NOTHING" over
-           `pending_outstanding`, which is the FLOW question — and a reader who took the message at its word
-           would have "corrected" this to `pending_host_outstanding`, at which point it fires on every frontier
-           parked entirely on REFUSALS: a state that is legitimate, that reaches this walk on the one route
-           that gets past the two STALLED exits above, and whose members are written to the cold tier six lines
-           below. That is the mirror of the two corrections in pending.h, and the predicate here was right
-           while its sentence pointed at the wrong one. What this walk is actually about is a member holding
-           NOTHING AT ALL — a mark laid on a flow that could still have progressed — which is the failure
-           direction the mark's own assert cannot see. */
+        /* Outstanding, not merely present: `pending_count > 0` is true of a register whose every entry has been
+           answered, which is a member nothing can wake. The predicate is the flow question
+           (`pending_outstanding`), not the host question: a frontier parked entirely on refusals is legitimate,
+           reaches this walk past the two STALLED exits, and is written to the cold tier below, and its refused
+           entries are still outstanding to their flows. What this walk catches is a member holding nothing at all,
+           a mark laid on a flow that could still progress, which the mark's own assert cannot see. */
         DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced,
                "the frontier reported a STALL while one of its members was waiting on NOTHING — every entry on "
                "its register has been answered and delivered, so its mark was laid down while it still had "
@@ -11019,97 +10894,57 @@ static int engine_sched_slice(void) {
                "parked on a REFUSAL is not this state: a refused entry is still outstanding to its own flow, "
                "so it satisfies this and is carried out to the cold tier rather than caught here");
     }
-    /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
-       supply. Asked BEFORE closing — the session and every parked snapshot stay live, and the host steps again
-       once it has provided. It is the ENGINE's own question over the ENGINE's own registers now; it used to be
-       a host callback, and the shipped host answered half of it. See engine_host_owes. */
+    /* STALLED, not exhausted: the run queue is empty but flows are parked on something only the host can supply.
+       Asked before closing, so the session and every parked snapshot stay live and the host steps again once it
+       has provided. The engine's own question over its own registers (engine_host_owes). */
     if (engine_host_owes())
         return ENGINE_STEP_STALLED;
-    /* NO SEEDING HERE, AND THE FRONTIER IS NOT ASKED WHETHER IT IS BLOCKED. Both used to stand at this line —
-       the @S search was seeded exactly where the frontier had drained, guarded by an assert that no member was
-       parked on the host — and the whole of that is now one ask at the PICK above, where a candidate becomes a
-       member the moment its sink exists. What stood here could only ever have run for a document that DRAINS,
-       which §NO BOUNDS says need never happen. */
-    /* AND THE OTHER REASON A FRONTIER IS NOT EXHAUSTED, which is not a reply the host owes but a QUESTION it
-       has not yet been asked: a document another instance holds a reference into can be asked something at any
-       moment, so its timelines are parked (flow_step returns OWED for them) rather than finished, and the
-       session stays live with every snapshot intact. Closing here instead would leave the next operation with
-       no timeline to answer in — which engine_perform's own assert names, from the other end. */
+    /* No seeding here: the @S search is seeded at the pick above, where a candidate becomes a member the moment its
+       sink exists; seeding where the frontier drained would serve only documents that drain. */
+    /* And the other reason a frontier is not exhausted, a question the host has not yet been asked: a document
+       another instance holds a reference into can be asked something at any moment, so its timelines are parked
+       (flow_step returns OWED for them) and the session stays live. Closing here would leave the next operation
+       no timeline to answer in, which engine_perform's assert names from the other end. */
     if (g_referenced)
         return ENGINE_STEP_STALLED;
-    /* ASYNC-AS-FLOW forcing function: every flow has run to completion, so NO microtask/promise reaction may
-       still be queued. If one is, the scheduler DROPPED it — the not-yet-built async-as-flow capability (a
-       reaction must become a first-class scheduler flow carrying the queuing flow's COW, which needs a fork
-       job-enqueue hook). Crash LOUD here rather than silently drop it, so the gap cannot hide. */
+    /* Every reaction routes to its enqueuing flow's queue through the enqueue hook, so a job on quickjs's global
+       list was enqueued outside a flow and nothing will run it. */
     DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
            "async: a job reached the global list (enqueued outside a flow) but was never drained");
-    /* THE SAME RULE ONE LEVEL UP, over the FLOWS' OWN queues. flow_step asserts that a flow may not FINISH
-       holding work, and that covers the flow that runs out of work — but the loop above can also LEAVE with a
-       flow still alive: every member has reported itself host-owed, so no member can be picked, and this line
-       closes the session over the survivors. A reaction still on one of their queues is dropped exactly as it
-       would be at finish, and only the finish case was being checked, so the wider one was invisible. */
+    /* The same rule one level up, over the flows' own queues. flow_step asserts a flow may not finish holding work,
+       but the loop above can also leave with flows alive (every member host-owed, none pickable), and a reaction on
+       one of their queues would die with the session. */
     for (int i = 0; i < flow_count(); i++) {
         DCHECK(flow_job_pending(flow_at(i)) == 0,
                "the frontier was declared exhausted while a live flow still held queued jobs — its promise "
                "reactions, timer callbacks and delivered messages die with the session");
-        /* THE OWED-ANSWER ASSERT THAT STOOD HERE IS GONE, AND WHAT RETIRED IT IS THE PARK AT THE FOOT OF THIS
-           FUNCTION RATHER THAN ANYBODY DISAGREEING WITH IT. Its text read "the frontier was declared exhausted
-           while a live flow still owed a peer the answer to a cross-agent operation … this session is about to
-           end without ever telling it anything", and every word of that was true while this exit DROPPED its
-           survivors — which is exactly what engine_park_frontier's own banner below says of the state it ended
-           ("A SESSION THAT CLOSES OVER LIVE MEMBERS WRITES THEM DOWN FIRST, and until this line it did not").
-           IT IS NOT TRUE IN ANY STATE THIS LOOP CAN RUN IN, which is stronger than saying it went stale. The
-           loop iterates flow_count() times and the park below is gated on flow_count() > 0, so a body that
-           executes at all is a body whose park runs — and engine_retract_operations is the FIRST thing that
-           park does, unconditionally and ahead of cold_park, clearing BOTH disjuncts of flow_owes_answer for
-           every flow and emitting `remoteop.retracted` for every token that no staying member still holds. The
-           peer IS told, so the assert's own stated harm was false in one hundred per cent of the states it
-           could fire in — the concession tell (§Offensive-programming) arriving as a claim about the
-           continuation rather than about the case.
-           AND THE OBLIGATION IS ASSERTED TWICE MORE, both times AFTER the repair rather than in front of it:
-           engine_retract_span's own postcondition ("disjuncts of flow_owes_answer are addressed above"), and
-           cold_park_flow's pair over the arrival slot and the program's row. This line was the only one of the
-           three standing BEFORE the hand-back, which is why it was the only one that could abort a correct
-           session; deleting it loses no coverage and removes the copy that cannot be right.
-           WHAT WAS PROPOSED INSTEAD, RECORDED BECAUSE THE NEXT READER WILL RE-DERIVE IT AND BOTH ARMS ARE
-           WRONG: move the assert below engine_park_frontier — which is a fourth copy of a predicate already
-           asserted at its producer AND at its consumer — or scope it to the flow_count() == 0 arm, where this
-           loop iterates ZERO times and the assert becomes one whose two sides cannot disagree. The remedy half
-           of that reasoning was a hypothesis and its order half was evidence; only the order half held.
-           RESIDUAL — THE TWO ASSERTS THIS LOOP STILL CARRIES REST ON THE SAME RETIRED PREMISE AND ARE NOT SWEPT
-           WITH IT, because what stands downstream of them is not the same thing. NOT COVERED: `flow_job_pending
-           == 0` forbids a state cold_park_flow's own banner argues at length is CORRECT (a job the replay
+        /* Named residual. Not covered: the two asserts in this loop forbid states the park below handles.
+           `flow_job_pending == 0` forbids a state cold_park_flow's banner argues is correct (a job the replay
            re-causes rides the recipe; only flow_job_external is refused there), and `flow_deliver_pending == 0`
-           forbids a state the park REPAIRS by writing an 'm' record per delivery — but only when the park is
-           TAKEN, and cold_park has a declining arm. NEXT DIFF: settle whether the `zero == 0` conservation
-           assert further down still holds without this walk, since its banner cites "the walk above asserts no
-           live flow holds one" as its premise, then move both below the park gated on the decline
-           engine_frontier_paged() already names. ABSENCE SHOWS: a session whose members hold replay-caused
-           jobs, or a peer's message the park would have written, aborts at this loop instead of parking.
-           AND THE NOTE DIRECTLY BELOW IS NOW ADJACENT TO ITS OWN SUBJECT, which it was not before: it is about
-           a ROUTED RECORD and it sat above the owed-answer assert, one declaration too high, so a reader
-           scanning the loop bound it to the wrong line. A comment binds by POSITION and by nothing else, and
-           an assert inserted between a note and the thing it describes re-points it silently. */
-        /* AND THE SAME RULE FOR A ROUTED RECORD, which is a work item exactly as a job is. flow_finish asserts
-           it for the flow that RUNS OUT of work; a flow that leaves this loop alive (every member host-owed, so
-           none is pickable) had nothing checking it, and the record then dies in flow_registry_free — the
-           peer's message, dropped, indistinguishable from a page that registered no handler. A flow suspended
-           inside a live frame is the shape that reaches here holding one: the delivery is made only where
-           flow_step has no frame, so if this fires, the enqueue belongs earlier than that branch. */
+           forbids one the park repairs by writing an 'm' record per delivery, though only when the park is
+           taken, since cold_park has a declining arm. Next diff builds: confirm the `zero == 0` conservation
+           assert below holds without this walk (its premise cites the walk), then move both asserts below the
+           park, gated on the decline engine_frontier_paged() names. Absence shows as: a session whose members
+           hold replay-caused jobs, or a peer's message the park would have written, aborting at this loop
+           instead of parking. A peer owed an operation's answer is not asserted here: engine_park_frontier's
+           first act, engine_retract_operations, clears flow_owes_answer for every flow and tells the peer, and
+           engine_retract_span's postcondition and cold_park_flow assert it after that repair. */
+        /* The same rule for a routed record, a work item as a job is: flow_finish asserts it for a flow that
+           runs out of work, and a flow that leaves this loop alive would drop the record in flow_registry_free,
+           the peer's message indistinguishable from a page with no handler. A flow suspended inside a live
+           frame is the shape that reaches here holding one (deliveries are made only where flow_step has no
+           frame), so if this fires, the enqueue belongs earlier than that branch. */
         DCHECK(flow_deliver_pending(flow_at(i)) == 0,
                "the frontier was declared exhausted while a live flow still held routed records — a peer's "
                "message this document never received, dropped with the session");
     }
-    /* AND THE CONSERVATION LAW OVER THE DELIVERIES THAT DID BECOME TASKS. The THREE asserts above are each about
-       ONE queue at ONE moment — it read FOUR until the owed-answer assert above was retired, and the count is
-       stated here rather than silently renumbered so a reader re-deriving it does not put the fourth back;
-       this is the only line that can say the queued §9.3.3 tasks all reached an end,
-       because a task's end is a fact about a run and not about a queue. flow_deliver asserts the delivery
-       became exactly one task (§9.3.3 step 8 queues one global task, singular); nothing asserted that the task
-       RUNS, and a task that never ran leaves the page unable to tell a message it did not get from one that was
-       never sent. The four ends are engine.h's; the inequality is its too — a fork gives the arm its own Array
-       naming the parent's job records, so a timeline that branches between the enqueue and the run delivers in
-       both arms and the sum legitimately exceeds the count of tasks queued. Below it, a delivery vanished. */
+    /* The conservation law over the deliveries that became tasks. The asserts above are each about one queue at
+       one moment; this is the only line that can say every queued §9.3.3 task reached an end, a fact about a run.
+       flow_deliver asserts a delivery became exactly one task (§9.3.3 step 8 queues one global task); nothing else
+       asserts the task runs, and a task that never ran leaves the page unable to tell a message it did not get
+       from one never sent. The ends and the inequality are engine.h's: a fork gives the arm its own Array naming
+       the parent's job records, so a timeline branching between enqueue and run delivers in both arms and the sum
+       may exceed the tasks queued. Below it, a delivery vanished. */
     {
         long ends[ROUTED_TASK_END_N], sum = 0;
 
@@ -11125,32 +10960,22 @@ static int engine_sched_slice(void) {
                "picked");
         (void)sum;
     }
-    /* …AND THE CONSERVATION LAW ONE LEVEL UP, WHICH IS ABOUT RECORDS AND NOT ABOUT TASKS. Everything above is
-       per (record, TIMELINE) attachment: the three asserts are each about one queue, and the inequality beside
-       them compares two counts of attachments. NONE of them can say whether some ONE record was admitted by no
-       timeline at all — one record admitted by N timelines pays for N-1 records admitted by none, so a
-       shortfall in any of those sums names a loss when it fires and establishes nothing when it does not.
-       THIS IS THE LINE THAT CAN, AND ONLY THIS LINE. `zero_delivery` is a GAUGE: while the frontier is live it
-       counts records still in flight as indistinguishable from records that are lost, and it FALLS as
-       timelines admit them. Three lines above, every live flow has been asserted to hold no pending delivery
-       and every finished flow asserted the same at flow_finish — so at THIS instant every attachment this
-       instance ever made has been consumed, the gauge cannot fall again, and its value is the number of
-       peers' messages this document never received. That is the one number a page cannot distinguish from a
-       message that was never sent, which is why it is asserted rather than reported: a count that names a loss
-       and lets the session close is the concealment §Offensive-programming forbids, not the measurement.
-       WHAT FIRES HERE IS A REFUSAL WITH NO ARM BEHIND IT, and deliver_admits asserts the CONTRADICT half of
-       that at the refusal itself, where the reader is standing at the decision. This is the FORECLOSED half's
-       only witness and the backstop for both: an arm that was minted and then never picked, a record attached
-       to a flow that left the frontier through a path flow_finish does not cover, or a refusal whose covering
-       timeline exists and refuses it for a second reason of its own.
-       AND IT IS THE ONLY WITNESS FOR A THIRD REFUSAL, WHICH IS WHY THAT ONE DOES NOT ABORT WHERE IT IS MADE.
-       A commitment whose arm is OWED (flow.h's FLOW_COMMIT_ARM_ANSWER_OWED) cannot be asserted against at the
-       refusal: the arm is minted only if the answering peer answers from a SECOND timeline, so an abort there
-       would fire on a peer that answered once, which is a peer behaving correctly. The obligation is recorded
-       at the push and the only moment at which it can be known to have gone undischarged is here, with the
-       frontier exhausted and the gauge unable to fall again. That is the same reason this line exists at all
-       — a loss is a property of the whole session and never of one decision — and it is what makes an
-       obligation a sound thing to record rather than a deferral in a field. */
+    /* And the conservation law one level up, over records rather than tasks. Everything above is per (record,
+     * timeline) attachment, and one record admitted by N timelines pays for N-1 admitted by none, so none of those
+     * sums can say whether some record was admitted by no timeline. This line can: `zero_delivery` is a gauge that,
+     * while the frontier is live, counts records in flight with records lost and falls as timelines admit them.
+     * Here every live flow has been asserted to hold no pending delivery and every finished flow asserted it at
+     * flow_finish, so every attachment has been consumed, the gauge cannot fall again, and its value is the number
+     * of peers' messages this document never received: asserted rather than reported, because the page cannot
+     * tell such a message from one never sent.
+     *
+     * What fires here is a refusal with no arm behind it. deliver_admits asserts the contradict half at the
+     * refusal; this is the foreclosed half's only witness and the backstop for both (an arm minted and never
+     * picked, a record attached to a flow that left by a path flow_finish does not cover, a covering timeline
+     * that refuses for a reason of its own). It is also the only witness for a refusal whose arm is owed (flow.h's
+     * FLOW_COMMIT_ARM_ANSWER_OWED): the arm is minted only if the answering peer answers from a second timeline,
+     * so an abort at the refusal would fire on a peer that answered once, correctly; the obligation is recorded at
+     * the push and can be known undischarged only here, with the frontier exhausted. */
     {
         long d = 0, r = 0, zero = 0;
 
@@ -11173,39 +10998,24 @@ static int engine_sched_slice(void) {
                "peer answered from");
         (void)zero;
     }
-    /* A SESSION THAT CLOSES OVER LIVE MEMBERS WRITES THEM DOWN FIRST, and until this line it did not — which
-       is the §NO BOUNDS drop, reached by the one route that had nothing else standing in front of it. The
-       walks above are all about work a member HOLDS (a job, a routed record, an owed answer); none of them is
-       about the member ITSELF, and the banner over the per-member walk just above already says the state
-       plainly: "the loop
-       above can also LEAVE with a flow still alive: every member has reported itself host-owed, so no member
-       can be picked, and this line closes the session over the survivors." The survivors then went to
-       flow_registry_free with their snapshots, their deltas and their whole unexplored timelines.
-       IT IS NOT THE SAME EXIT AS AN EXHAUSTED FRONTIER AND THE GUARD IS WHAT SAYS SO. A frontier that DRAINED
-       has no member left to write — every flow ran to its end and flow_finish tore it down — so an empty park
-       there is a different statement (cold_park's own banner: it deletes the origin's entry, which is the
-       honest report for a residue that was resumed and consumed). Routing by `flow_count()` keeps the two
-       answers apart; it is routing and not a fallback by §C-stack's test, because deleting the survivors case
-       leaves the question still asked.
-       WHICH ROUTE REACHES IT, AND WHY NOTHING DID BEFORE. Three exits stand in front of this line and two of
-       them return STALLED — a member the host can still be asked about, and a document a peer holds a
-       reference into. What passes all three is a frontier every one of whose members is parked on a request
-       the trusted zone REFUSED: it is outstanding to the flow (so the timeline is not torn down) and owed by
-       nobody (so `engine_host_owes` correctly answers 0 and there is no bill to hand back). That is §@S's
-       search-not-yet-solved — waiting on a per-origin widening that happens in a LATER SESSION — and a
-       residue is exactly what carries it there. Before `engine_host_owes` asked the host question, this
-       frontier returned STALLED with an empty bill for the rest of the session, which is the livelock that
-       fix removed; what it left behind was this drop, which is better and is still a cap. */
+    /* A session that closes over live members writes them down first: the walks above are about work a member
+     * holds, none about the member itself, and the loop above can leave with flows alive (every member host-owed).
+     * Not the same exit as an exhausted frontier, and the guard says so: a frontier that drained has no member to
+     * write (every flow ran to its end through flow_finish), and an empty park there is a different statement
+     * (cold_park deletes the origin's entry, the honest report for a residue resumed and consumed). Routing on
+     * `flow_count()` keeps the two apart; deleting the survivors case would leave the question still asked, so it
+     * is routing, not a fallback. The route that reaches it passes the two STALLED exits above: a frontier every
+     * member of which is parked on a request the trusted zone refused, outstanding to the flow and owed by nobody
+     * (`engine_host_owes` answers 0). That is @S search not yet solved, waiting on a per-origin widening in a later
+     * session, and a residue is what carries it there. */
     if (flow_count() > 0) {
         engine_park_frontier(ctx, g_sess_cur);
         g_sess_cur = NULL;
     }
-    /* AND THE CLAIM IS ASSERTED WHERE IT IS MADE RATHER THAN LEFT TO THE CALL ABOVE BEING REMEMBERED. This is
-       the property §NO BOUNDS actually demands of a resting member — STARVE means deprioritize-and-PAGE,
-       resumable and cross-session, never terminate — and it is a statement about the FRONTIER at the one
-       instant the session stops existing. A member still standing here whose recipe was never written is a
-       timeline that ends with the process, and nothing anywhere would say so: `live` counted it, the census
-       reported it as merely waiting, and the result document named no residue at all. */
+    /* And the claim is asserted where it is made: a resting member is deprioritized and paged, resumable across
+       sessions, never terminated, so at the instant the session stops existing every standing member must have
+       its recipe written; otherwise its timeline ends with the process while `live` counted it and the result
+       document names no residue. */
     DCHECK(flow_count() == 0 || engine_frontier_paged(),
            "the session closed over LIVE members whose recipes were never written — every one of them holds a "
            "snapshot, a COW delta and an unexplored timeline, and the instance teardown is about to free them "
@@ -11239,22 +11049,19 @@ void engine_sched_end(void) {
  * accumulators are here and not at those returns. */
 int engine_sched_step(void) {
     int r;
-    /* THE EARLIEST READING THIS ENGINE TAKES ON ITS OWN THREAD, and it is the FIRST statement of the function
-       rather than a line inside the body for a reason that is arithmetic and not tidiness: everything between
-       here and `engine_sched_slice`'s own entry — arming the quantum, restoring the flow stamp and the
-       capture route, the stray check — is thread the engine spent, so a span opened past it would report that
-       work as the HOST's and the partition below would not sum. See solver/engine.h's `loop_us`. */
+    /* The earliest reading this engine takes on its own thread, the function's first statement: everything between
+       here and engine_sched_slice's entry (arming the quantum, restoring the flow stamp and capture route, the stray
+       check) is thread the engine spent, so a span opened past it would report that work as the host's and the
+       partition would not sum (solver/engine.h's `loop_us`). */
     int64_t t_in = quantum_thread_us();
 
-    /* AND THE SPAN EVERY COST THIS ENGINE REPORTS IS A SHARE OF, OPENED FROM THAT SAME READING — see
-       `g_instance_us0`, which used to be opened one call deeper and is opened here now so that `g_loop_us`
-       below cannot start before it. */
+    /* And the span every cost this engine reports is a share of, opened from that same reading (see
+       `g_instance_us0`), so `g_loop_us` below cannot start before it. */
     if (!g_instance_us0_set) { g_instance_us0 = t_in; g_instance_us0_set = 1; }
-    /* THE HOST'S OWN THREAD BETWEEN TWO SLICES, CHARGED AT THE READING THAT CLOSES IT — never from a third
-       clock read, which would be a different quantity wearing this one's name. `g_slice_exit_us` is the
-       PREVIOUS slice's closing reading, carried, so this gap and that slice's own span meet at one number and
-       the two accumulators telescope to the whole of `instance_us`. Nothing is charged before the first slice
-       has returned, which is what the flag says and is why it is a flag rather than a reserved reading. */
+    /* The host's own thread between two slices, charged at the reading that closes it, never from a third clock
+       read. `g_slice_exit_us` is the previous slice's closing reading, carried, so this gap and that slice's span
+       meet at one number and the two accumulators telescope to the whole of `instance_us`. Nothing is charged
+       before the first slice returns, which is what the flag says. */
     if (g_slice_exit_set) {
         DCHECKF(t_in >= g_slice_exit_us,
                 "solver/engine.c: this slice opened at %lld, BEFORE the previous one returned at %lld — the "
