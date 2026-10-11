@@ -177,8 +177,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
 /* EVERY DETECTED SINK as a JSON ARRAY (caller frees). Two entry shapes, because a sink is in one of two states
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
-                      ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
-                      [,"deliveryPrefix":"#"][,"principalDemand":".."][,"principalGates":[..]]}`
+                      ,"searched":N[,"deliveryProbed":B][,"sourceEncodes":".."][,"sourceDelivers":".."]
+                      [,"delivery":".."][,"deliveryPrefix":"#"][,"principalDemand":".."][,"principalGates":[..]]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"resumedWithdrawn":RW,
                       "reached":M,"turns":T,
                       "substituted":D,"sinkStrings":X,"runwayPerMille":R2,"survived":S,

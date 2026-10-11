@@ -808,27 +808,12 @@ function renderSecurityPanel() {
     if (entry.pageUrl && entry.pageUrl !== entry.sourceUrl)
       srcLink.push(" ", domElement("span", { class: "page-context", title: entry.pageUrl }, ["in " + _shortUrl(entry.pageUrl)]));
 
-    // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
-    // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
-    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, resumed, resumedWithdrawn,
-    // reached, turns, substituted, sinkStrings, runwayPerMille, runwayArms, runwayWalked, runwayOf, survived,
-    // survivedOf, survivedAt?, survivedTo?, escaped, fires?, witnessed?, deliveryProbed?, probes, payloads,
-    // survivedBy, withdrawn, sourceEncodes?, sourceDelivers?, delivery?,
-    // deliveryPrefix?}
-    // for a parked one — the unbracketed names are solve.h's own grammar and are emitted unconditionally, which
-    // is what makes 0 their load-bearing reading and absence the relay broken rather than a statement. This card used to read `shape`,
-    // `evidence`, `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so
-    // every card silently dropped its source line AND its CSP verdict, and the live-verify button (gated on
-    // `shape`) could not appear for any finding the engine has ever emitted. A bridge edge asserts its
-    // contract, per CLAUDE.md §Architecture, so drift like that crashes where it is born instead of quietly
-    // rendering less.
-    //
-    // THIS ENUMERATION USED TO END "— and nothing else", AND THAT WAS FALSE OF THE PARKED SHAPE FOR AS LONG AS
-    // IT STOOD: `reached`, `turns`, `fires` and `payloads` crossed the whole relay verbatim and were read by
-    // nothing in the tree, and this sentence is why nobody looked — it reads as authoritative and is checkable
-    // by one grep, which is the stale-DFAIL failure mode sitting in the popup. A prose statement of a
-    // producer's contract is a claim about ANOTHER file, so it is re-derived from that file when it is
-    // touched, never repeated from memory.
+    // The card reads the record `solve_json_array` (engine/host/solver/solve.c) emits, in the two shapes whose
+    // grammar engine/host/solver/solve.h states above solve_json_array's declaration: a fired sink carries `poc`
+    // and `searched`, a parked search carries `search:"parked"` and its counts. Names solve.h writes unbracketed
+    // are emitted unconditionally, so 0 is their load-bearing reading and absence is the relay broken. The
+    // grammar is read there rather than copied here, because a copy of another file's contract is the one that
+    // drifts. A bridge edge asserts this contract, so drift crashes where it is born instead of rendering less.
     DCHECK(item.sink && item.source && item.poc,
       "an @S record reached the popup without sink/source/poc — solve_json_array emits all three for a fired "
       + "sink, so a card is about to claim a working PoC it cannot show (sink=" + item.sink + " source="

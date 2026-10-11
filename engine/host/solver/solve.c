@@ -1829,6 +1829,26 @@ static const char *cand_delivers(const Cand *e, char *buf, size_t n) {
     return buf;
 }
 
+/* `deliveryProbed`, written the same way into both entry shapes: how many times the search's delivery probe
+   reached a sink. `sourceDelivers` is gated on `deliv_seen`, so its absence is read with this count — "the
+   probe has not run" against "it ran and the page destroyed every token" — and a fired finding's measured set
+   is the constraint its PoC was built under, so it carries the count too. Absent for a search with no delivery
+   probe (cand_has_delivery_probe). A measured set implies a probe that arrived, because observe_delivery counts
+   the arrival before it looks for a token. */
+static void emit_delivery_probed(JsonBuf *b, const Cand *e) {
+    char t[32];
+    int has = cand_has_delivery_probe(e);
+
+    DCHECK(!e->deliv_seen || (has && e->deliv_runs > 0),
+           "an @S search reports a delivered byte observed while it holds no delivery probe or its probe has "
+           "never reached a sink — observe_delivery counts the arrival before it looks for a single token, so "
+           "a byte learned without one is a second door into the delivery table, and `sourceDelivers` would be "
+           "a constraint no run of this search measured");
+    if (!has) return;
+    json_buf_raw(b, ","); json_buf_key(b, "deliveryProbed");
+    snprintf(t, sizeof t, "%d", e->deliv_runs); json_buf_raw(b, t);
+}
+
 /* The source's declared browser delivery, written the same way into both entry shapes: `sourceEncodes` is what a
    breakout had to survive and `sourceDelivers` what a run measured, while `delivery` and `deliveryPrefix` are
    what a reproduction must perform. Asked with the root, not the injection identity, because the registry
@@ -1982,6 +2002,7 @@ char *solve_json_array(JSContext *ctx) {
                   "list was rewritten under a finding and the report is about to state a cost it cannot read");
             json_buf_raw(&b, ","); json_buf_key(&b, "searched");
             snprintf(t, sizeof t, "%d", tw->tried); json_buf_raw(&b, t);
+            emit_delivery_probed(&b, tw);
             /* And the measured constraint the PoC was built under, which tells anyone reproducing it by hand which
                bytes the browser would have eaten. */
             emit_delivery(&b, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv));
@@ -2106,21 +2127,7 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_raw(&b, ","); json_buf_key(&b, "witnessed");
             snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_raw(&b, t);
         }
-        /* `deliveryProbed`: how many times the delivery probe reached a sink. Without it an absent `sourceDelivers`
-           says both "the probe has not run" (wait for the scheduler) and "it ran and the page destroyed every
-           token" (stop deriving: the strongest thing a parked search can report). It does not move
-           `sourceDelivers`' gate, which stays on `deliv_seen`, because a table narrowed by nothing is the
-           permissive one and would claim every declared byte arrives. Absent for a search with no delivery probe
-           (cand_has_delivery_probe). */
-        if (cand_has_delivery_probe(&g_pending[i])) {
-            DCHECK(!g_pending[i].deliv_seen || g_pending[i].deliv_runs > 0,
-                   "an @S search reports a delivered byte observed while its delivery probe has never reached "
-                   "a sink — observe_delivery counts the arrival before it looks for a single token, so a byte "
-                   "learned without one is a second door into the delivery table, and `sourceDelivers` would "
-                   "be a constraint no run of this search measured");
-            json_buf_raw(&b, ","); json_buf_key(&b, "deliveryProbed");
-            snprintf(t, sizeof t, "%d", g_pending[i].deliv_runs); json_buf_raw(&b, t);
-        }
+        emit_delivery_probed(&b, &g_pending[i]);
         /* `probes`: how many of `payloads`' entries are probes, from their labels. `payloads.length > probes` is
            "this search has constructed an escape" (cand_has_escape); the consumer must not re-derive it, since the
            marker vocabulary is this engine's. Without it an `innerHTML` sink fed the raw fragment, which seeds two
