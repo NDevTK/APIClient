@@ -390,82 +390,39 @@ static char *wpt_computed_type(const HeaderList *rh)
     return out;
 }
 
-/* ---- THE NETWORK EDGE IS A SET OF REQUESTS IN FLIGHT, NEVER A CALL THAT WAITS ---------------------------
+/* ---- The network edge: a set of requests in flight, never a call that waits ---------------------------
  *
- * WHAT WAS HERE. One `read(2)` loop per request, run from inside the step loop. The FLOW that issued a fetch
- * parked correctly — the engine's own register held it — and then this host stood in a blocking read with the
- * WHOLE FRONTIER behind it: the other timelines of this document, the deliveries a child instance had already
- * written up its pipe, the due timers, and the very flow whose POST would have satisfied whatever the answer
- * was waiting on. That is §scheduler's cardinal violation performed by the HOST rather than by the engine — a
- * wait that runs to completion and cannot be suspended — and where the answer depends on anything this process
- * would have done next it is a deadlock by construction, because the thread that owes the answer is the thread
- * that is blocked waiting for it.
+ * A request is begun and this host returns to the loop; its socket is a row in the table below, and the flow that
+ * asked stays parked on the engine's register. It is the park the extension pays through engine.h's `qjs_pending`
+ * → fetch → `qjs_provide` pair, whose network side is a Promise. Every slice boundary drains what arrived and
+ * delivers it. A blocking read would freeze the whole frontier, including the flow whose work may produce the
+ * answer. There is no timeout, poll budget or retry count: a reply that never comes leaves its flow parked. With
+ * nothing runnable and requests outstanding, this host blocks in `poll` with an infinite timeout.
  *
- * MEASURED, on the live process: `back-forward-cache/events.html` sat in this read for the gate's whole 600 s
- * wall backstop having consumed 0.00 s of CPU — subtests already reported, frontier frozen mid-poll, the
- * backtrace `main → wpt_provide_pending → wpt_http → read(3)`. Nine files in `html/browsers` did the same,
- * which is an hour and a half of every area run spent asleep in one syscall.
- *
- * WHAT IT IS NOW. A request is BEGUN and this host returns to the loop; its socket is a row in the table below
- * and the flow that asked stays parked on the engine's register exactly as it already did. This is the SAME
- * park, paid the way the extension pays it (engine.h's `qjs_pending` → fetch → `qjs_provide` pair, whose
- * network side is a Promise and has never blocked a step) — not a second wait primitive beside it. Every slice
- * boundary drains whatever arrived and delivers it; the flows that can run, run.
- *
- * THERE IS NO TIMEOUT, NO POLL BUDGET AND NO RETRY COUNT, and that is not an omission — §NO BOUNDS. A reply
- * that never comes leaves its flow parked for ever, which is the correct state: the frontier runs everything
- * else, and the only thing a deadline could do is truncate a reply that was merely slow. Where the frontier
- * has NOTHING runnable and requests are outstanding, this host has no work of its own left, so it blocks in
- * `poll` with an INFINITE timeout — a thread with nothing to do is not a bound, and that wait ends the moment
- * any one of the answers lands.
- *
- * AND THE CONNECTION IS THE BROWSER'S, NOT ONE PER REQUEST. A socket opened, used once and closed with
- * `Connection: close` is not a cheaper persistent connection, it is a DIFFERENT PROTOCOL — RFC 9112 §9.3
- * "Persistence" makes HTTP/1.1 persistent by DEFAULT and §9.6 "Tear-down" says a client that sends the `close`
- * option MUST NOT send another request on that connection. What that costs is not throughput: wptserve is a
- * ThreadingHTTPServer, so every connection is a THREAD, and every thread makes its own multiprocessing-manager
- * connection to the stash. One file's poll loop opened 865 of them in 40 s and left 1251 sockets in TIME_WAIT,
- * and it was under exactly that churn that a handler desynchronised against the stash manager WHILE HOLDING
- * `dispatcher.py`'s lock — the server-side half of the wedge this runner spends its wall clock inside. A
- * browser holds the connection open and the churn does not exist.
- *
- * SO THE POOL IS KEYED ON THE TARGET URI'S AUTHORITY, which is the key a browser pools on and not the socket
- * address: every corpus authority resolves to the one loopback port here (the Host header carries the real
- * one, which is what a hosts-file mapping does for a real browser), and pooling on the ADDRESS would put two
- * origins on one connection. There is no per-origin connection limit, because a limit is a bound: a request
- * that finds no idle connection for its authority opens one.
- *
- * READING TO EOF IS THEN NO LONGER A FRAMING, AND THAT IS THE REAL CHANGE. `Connection: close` made the body
- * "whatever arrives before the socket dies"; a persistent connection has the NEXT response behind this one, so
- * the length has to be READ — RFC 9112 §6.3 "Message Body Length" in its own order of precedence, which is the
- * state machine below: §6.3 rule 1 (a HEAD response, or 1xx/204/304, has no body WHATEVER its header fields
- * say — get this wrong and the reader waits for ever on a `Content-Length` the server will never send bytes
- * for), rule 4 with §7.1 "Chunked Transfer Coding" and §7.1.3 "Decoding Chunked", rule 6's `Content-Length`,
- * and rule 8's close-delimited body for a response that declares neither. Rule 8 is not a fallback: it is a
- * FRAMING, and it says this connection cannot carry another request, which is how wptserve serves every static
- * file (its FileHandler hands the response an open file object rather than bytes, so no `Content-Length` is
- * written and the server closes) and why persistence is a property of each RESPONSE rather than of the pool. */
+ * Connections persist and are pooled as a browser's are (RFC 9112 §9.3 "Persistence"; §9.6 "Tear-down" forbids
+ * another request after `close`). wptserve is a ThreadingHTTPServer with a stash-manager connection per thread, so
+ * one connection per request churns the server. The pool key is the target URI's authority, not the socket
+ * address, because every corpus authority resolves to the one loopback port. There is no per-origin limit. The body
+ * length is read in RFC 9112 §6.3 "Message Body Length"'s order; rule 8's close-delimited body (how wptserve serves
+ * static files) ends the connection, so persistence is a property of each response. */
 enum { WPT_REQ_SEND, WPT_REQ_READ, WPT_REQ_DONE };
-/* RFC 9112 §6.3 "Message Body Length" AS THE STATES ITS READER PASSES THROUGH — one state per way a body can
-   be delimited, plus the ones §7.1's chunked grammar needs. A reader that is in NONE of them has not decided
-   the framing, which is the assert at the bottom of this block. */
+/* RFC 9112 §6.3 "Message Body Length" as its reader's states: one per way a body can be delimited, plus the ones
+   §7.1 "Chunked Transfer Coding" needs. A reader in none of them has not decided the framing. */
 enum { WPT_MSG_HEAD, WPT_MSG_LENGTH, WPT_MSG_CHUNK_SIZE, WPT_MSG_CHUNK_DATA, WPT_MSG_CHUNK_CRLF,
        WPT_MSG_TRAILER, WPT_MSG_CLOSE, WPT_MSG_COMPLETE };
-/* WHAT A COMPLETED REQUEST IS DELIVERED AS. The four kinds differ in the ANSWER they build and in whom they
-   hand it to, and in NOTHING else — one HTTP implementation with four consumers, never four network edges.
-   SYNC is the one with no flow behind it: the document this process was started to run, and the external
-   scripts of it, are fetched BEFORE there is a session, so there is nothing to park and nothing to starve. */
+/* What a completed request is delivered as. The four kinds differ only in the answer they build and whom they hand
+   it to: one HTTP implementation with four consumers. SYNC has no flow behind it: the document this process was
+   started to run, and its external scripts, are fetched before there is a session, so nothing parks or starves. */
 enum { WPT_DELIVER_SYNC, WPT_DELIVER_FETCH, WPT_DELIVER_DOCUMENT, WPT_DELIVER_XHR };
 
 #define WPT_INFLIGHT_MAX 64
 #define WPT_CONN_MAX 64
 
-/* ONE TCP CONNECTION, HELD OPEN. `owner` is the request currently on it and 0 when it is idle — this runner
-   does not PIPELINE (RFC 9112 §9.3.2 "Pipelining" permits it and no browser does it), so one connection
-   carries one message at a time and §9.2 "Associating a Response to a Request"'s ordered outstanding-request
-   list is a single slot. `in` is the octets read from the socket and NOT YET CONSUMED by a message: it belongs
-   to the CONNECTION because framing does — what is left in it after a message ends is the beginning of the
-   next one, and with no pipelining that is exactly nothing, which is what its own assert says. */
+/* One TCP connection, held open. `owner` is the request on it and 0 when it is idle. This runner does not pipeline
+   (RFC 9112 §9.3.2 "Pipelining" permits it and no browser does it), so a connection carries one message at a time
+   and §9.2 "Associating a Response to a Request"'s outstanding-request list is one slot. `in` is the octets read
+   and not yet consumed by a message. It belongs to the connection because framing does; without pipelining
+   nothing should remain in it when a message ends. */
 typedef struct {
     uint64_t id;              /* stable across the table's compaction — an index is not */
     char    *authority;       /* the pool key: the target URI's host and port, the Host header's own value */
@@ -488,14 +445,13 @@ typedef struct {
     char    *referrer;
     char    *authority;        /* which pool this request draws its connection from */
     uint64_t conn;             /* the connection carrying it; 0 before it has one */
-    int      reused;           /* it was put on an ALREADY-OPEN connection — see §9.3.1 Retrying Requests */
+    int      reused;           /* it was put on an already-open connection; see §9.3.1 Retrying Requests */
     uint32_t id;               /* DOCUMENT/XHR: the request id engine_host_answer names */
-    char    *out;              /* the whole request, serialized ONCE at begin so nothing it borrowed has to
-                                  outlive this call — the ownership half of making a call a work item */
+    char    *out;              /* the whole request, serialized once at begin so nothing it borrowed has to
+                                  outlive this call: the ownership half of making a call a work item */
     size_t   out_n, out_off;
-    /* THE REPLY, PARSED AS IT ARRIVES rather than split out of one buffer at the end: with the connection held
-       open there is no "the end", so the header section is parsed the moment it is complete and the body is
-       accumulated by whichever of §6.3's framings the header section chose. */
+    /* The reply, parsed as it arrives: a held-open connection has no end of stream, so the header section is
+       parsed once it is complete and the body is accumulated by whichever of §6.3's framings it chose. */
     int      msg;              /* WPT_MSG_*: which delimiter this reader is inside */
     int      status;
     int      http_minor;       /* the version, which §9.3 "Persistence" asks about */
@@ -523,11 +479,9 @@ static WptConn *wpt_conn_find(uint64_t id)
     return NULL;
 }
 
-/* IS THIS QUESTION ALREADY ASKED. The pending registers list an entry until it is ANSWERED, so a host that
-   issued from them at every slice boundary would issue the same request once per slice — a page's one `fetch`
-   becoming an unbounded stream of them. The key is the one the delivery is keyed on, which is why these are
-   two functions and not one: a network park is its five-field identity (engine.h) and a host request is its
-   id. */
+/* Whether this question is already asked. The pending registers list an entry until it is answered, so a host
+   issuing from them at every slice boundary would send a page's one `fetch` once per slice. Two functions because
+   the delivery has two keys: a network park is its five-field identity (engine.h) and a host request is its id. */
 static bool wpt_request_asked(const char *method, const char *mode, const char *referrer_policy,
                               const char *referrer, const char *url)
 {
@@ -549,8 +503,8 @@ static bool wpt_request_asked_id(uint32_t id)
     return false;
 }
 
-/* Drop one connection and forget its buffered octets. A request still on it is NOT failed here — the caller
-   that killed the connection decides whether this was the end of a message, a network error or a retry. */
+/* Drop one connection and forget its buffered octets. A request still on it is not failed here: the caller that
+   killed the connection decides whether this was the end of a message, a network error or a retry. */
 static void wpt_conn_release_at(int i)
 {
     WptConn *c = &g_conn[i];
@@ -568,8 +522,8 @@ static void wpt_conn_release(WptConn *c)
           "corpus socket, so a pointer into it that no slot matches is a pointer to a freed slot");
 }
 
-/* A CONNECTION FOR THIS AUTHORITY. An idle open one is REUSED, which is the whole point; `force_new` is asked
-   only by §9.3.1's retry, where reusing anything is precisely the thing that just failed. */
+/* A connection for this authority. An idle open one is reused; `force_new` is asked only by §9.3.1's retry, where
+   reuse is what just failed. */
 static WptConn *wpt_conn_acquire(const char *authority, int force_new, int *preused)
 {
     struct sockaddr_in a;
@@ -588,11 +542,9 @@ static WptConn *wpt_conn_acquire(const char *authority, int force_new, int *preu
                 return &g_conn[i];
             }
 
-    /* THE POOL IS FULL AND AN IDLE CONNECTION IS A CACHE ENTRY, so one goes to make room. This is not a limit
-       on work — nothing is queued, dropped or deferred; a held-open socket for an authority nobody is asking
-       about right now is a saving, and giving one up costs the next request to that authority a connect. What
-       cannot be given up is a connection carrying a request, which is why the CHECK below is still fatal: past
-       that point this runner would have to hold a request it cannot send. */
+    /* A full pool gives up an idle connection, which is a cache entry: nothing is queued, dropped or deferred, and
+       the next request to its authority pays a connect. A connection carrying a request cannot be given up, so the
+       CHECK below stays fatal. */
     if (g_conn_n >= WPT_CONN_MAX)
         for (i = 0; i < g_conn_n; i++)
             if (!g_conn[i].owner) { wpt_conn_release_at(i); break; }
@@ -648,8 +600,8 @@ static void wpt_request_attach(WptRequest *r, int force_new)
     r->msg = WPT_MSG_HEAD;
 }
 
-/* Begin one request against the corpus server and RETURN, whatever stage it reaches. The socket is
-   non-blocking from before the connect, so not one of the stages below can hold this thread. */
+/* Begin one request against the corpus server and return, whatever stage it reaches. The socket is non-blocking
+   from before the connect, so no stage below can hold this thread. */
 static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t id)
 {
     UrlRecord base, rec;
@@ -678,8 +630,8 @@ static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t
     url_record_init(&rec);
     if (url_parse(&base, g_base_url, strlen(g_base_url), NULL) &&
         url_parse(&rec, req->url, strlen(req->url), &base)) {
-        /* THE REQUEST TARGET is the path and the query — the fragment never goes on the wire, which is what
-           `exclude_fragment` says, and the authority travels in the Host header instead. */
+        /* The request target is the path and the query. The fragment never goes on the wire, which is what
+           `exclude_fragment` says, and the authority travels in the Host header. */
         char *q = url_serialize_path(&rec);
         size_t n2 = strlen(q) + (rec.query ? strlen(rec.query) : 0) + 2;
         path = malloc(n2);
@@ -690,8 +642,8 @@ static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t
     }
     url_record_free(&base);
     url_record_free(&rec);
-    /* AN ADDRESS THAT DOES NOT PARSE IS A NETWORK ERROR, and it is DELIVERED as one rather than dropped: the
-       flow that asked is parked on this pair, so a silent return would park it for the life of the run. */
+    /* An address that does not parse is a network error and is delivered as one: the flow that asked is parked on
+       this pair, so a silent return would park it for the life of the run. */
     if (!path) { free(authority); r->failed = 1; r->state = WPT_REQ_DONE; return r->seq; }
     r->authority = strdup(authority ? authority : "127.0.0.1");
     CHECK(r->authority != NULL, "wpt: OOM recording a request's authority");
@@ -700,18 +652,17 @@ static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t
        + (req->headers ? (size_t)req->headers->n * 512 : 0) + (req->body ? req->body_len : 0);
     r->out = malloc(hn);
     CHECK(r->out, "wpt: OOM building a request");
-    /* NO `Connection` FIELD AT ALL, which is RFC 9112 §9.3 "Persistence"'s own default for HTTP/1.1 and not an
-       omission: `close` would forbid a second request on this connection (§9.6 "Tear-down") and `keep-alive`
-       is HTTP/1.0's mechanism for asking for what 1.1 already gives. */
+    /* No `Connection` field, which is RFC 9112 §9.3 "Persistence"'s default for HTTP/1.1: `close` would forbid a
+       second request on this connection (§9.6 "Tear-down"), and `keep-alive` is HTTP/1.0's way of asking for what
+       1.1 already gives. */
     n = (size_t)snprintf(r->out, hn, "%s %s HTTP/1.1\r\nHost: %s\r\n",
                          req->method ? req->method : "GET", path, r->authority);
     for (i = 0; req->headers && i < req->headers->n; i++)
         n += (size_t)snprintf(r->out + n, hn - n, "%s: %s\r\n",
                               req->headers->e[i].name, req->headers->e[i].value);
     n += (size_t)snprintf(r->out + n, hn - n, "Content-Length: %zu\r\n\r\n", req->body ? req->body_len : 0);
-    /* `snprintf` ANSWERS THE LENGTH IT WOULD HAVE WRITTEN, so an accumulated `n` that reached the end of the
-       buffer would run PAST it and make every `hn - n` below underflow to a huge size_t. The sizing above is
-       generous; this is what says so where a header list could outgrow it. */
+    /* `snprintf` answers the length it would have written, so an accumulated `n` past the buffer's end would make
+       every `hn - n` below underflow. The sizing above is generous; this covers a header list that outgrows it. */
     CHECK(n < hn, "wpt: a request outgrew the buffer sized for it — the header list is larger than the "
                   "allowance above, and the writes past this point would be counted against a negative size");
     if (req->body && req->body_len) { memcpy(r->out + n, req->body, req->body_len); n += req->body_len; }
@@ -723,7 +674,7 @@ static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t
     return r->seq;
 }
 
-/* ---- READING ONE RESPONSE: RFC 9112 §6.3 "Message Body Length" ------------------------------------------ */
+/* ---- Reading one response: RFC 9112 §6.3 "Message Body Length" ------------------------------------------ */
 
 /* Does a comma-separated field value carry this connection option? RFC 9112 §9.3 "Persistence" and §9.6
    "Tear-down" both ask that of `Connection`, case-insensitively and per token. */
@@ -757,10 +708,10 @@ static bool wpt_field_has_token(const char *value, const char *token)
     return false;
 }
 
-/* A BODY OF ZERO OCTETS IS A BODY, and this is what says so. A reply is turned into `fetch`'s network error by
-   having NO body at all (wpt_reply_value answers JS_NULL for one), so a 200 with `Content-Length: 0` — which is
-   what half the corpus's `.py` handlers answer — must arrive here with an empty buffer rather than a null one.
-   Called once the status line has been accepted, which is the first moment there is a response to have one. */
+/* A body of zero octets is a body. A reply becomes `fetch`'s network error by having no body (wpt_reply_value
+   answers JS_NULL for one), so a 200 with `Content-Length: 0`, which many of the corpus's `.py` handlers answer,
+   must arrive with an empty buffer rather than a null one. Called once the status line has been accepted, the first
+   moment there is a response. */
 static void wpt_body_init(WptRequest *r)
 {
     if (r->body) return;
@@ -785,29 +736,26 @@ static void wpt_body_append(WptRequest *r, const char *p, size_t n)
     r->body[r->body_n] = 0;
 }
 
-/* THE HEADER SECTION, and then §6.3's ORDER OF PRECEDENCE over it. `head` is the whole section including its
+/* The header section, then §6.3's order of precedence over it. `head` is the whole section including its
    terminating CRLF. Answers whether the reader may continue; a false answer has already failed the request. */
 static bool wpt_message_head(WptRequest *r, char *head, size_t hn)
 {
     char *line, *sep = head + hn - 4;
     char *cl, *te, *conn;
 
-    /* THE STATUS LINE. A version this runner cannot recognise is not a status — the octets on this connection
-       are then not an HTTP/1 message at all and nothing below can be computed from them. */
+    /* The status line. An unrecognised version means the octets on this connection are not an HTTP/1 message,
+       and nothing below can be computed from them. */
     if (hn < 12 || memcmp(head, "HTTP/1.", 7) != 0) { r->failed = 1; return false; }
     r->http_minor = head[7] - '0';
     r->status = atoi(head + 9);
     wpt_body_init(r);
 
     header_list_free(&r->hdrs);   /* zeroes it — a 1xx below comes back here for the final response */
-    /* EVERY FIELD LINE, AND THE LAST ONE IS A FIELD LINE. The search for a line's terminating CR ran to
-       `sep - 1` and so EXCLUDED `sep` itself — which is precisely the CR of the last header, because the
-       "\r\n\r\n" this section ends with IS that field's own terminator followed by the empty line. So the
-       final field of every response was silently dropped, and the octets it carried came back as an absence:
-       `wpt_computed_type` answered §5.1's "undefined" for a reply whose Content-Type was last, and the moment
-       the connection stopped being closed after each response the same hole became a FRAMING one — a dropped
-       `Content-Length` is §6.3 rule 8, so the reader waits for a hang-up on a connection the server is holding
-       open. The count is `sep - line` because the range wanted is [line+1, sep] inclusive. */
+    /* Every field line, including the last. The section ends with "\r\n\r\n", which is the last field's own CRLF
+       followed by the empty line, so the search for a line's CR must include `sep` itself: the range is
+       [line+1, sep] inclusive, `sep - line` octets. Dropping the last field loses whatever it carried, a
+       Content-Type or a Content-Length, and a lost Content-Length frames the body by close (§6.3 rule 8) on a
+       connection the server holds open. */
     line = memchr(head, '\n', hn);
     while (line && line + 1 < sep) {
         char *end = memchr(line + 1, '\r', (size_t)(sep - line));
@@ -831,23 +779,21 @@ static bool wpt_message_head(WptRequest *r, char *head, size_t hn)
                  (r->http_minor >= 1 || wpt_field_has_token(conn, "keep-alive"));
     free(conn);
 
-    /* §6.3 rule 1: a HEAD response and a 1xx/204/304 response are terminated by the first empty line after the
-       header fields REGARDLESS of the header fields present. This is not an optimisation — wptserve answers a
-       HEAD with the `Content-Length` its GET would have carried and no body, so a reader that believed the
-       field would wait for octets that are never sent, on a connection that stays open, for ever. */
+    /* §6.3 rule 1: a HEAD response and a 1xx/204/304 response end at the first empty line after the header fields,
+       regardless of the fields present. wptserve answers a HEAD with its GET's `Content-Length` and no body, so a
+       reader that believed the field would wait for ever on a connection that stays open. */
     if (!strcmp(r->method, "HEAD") || r->status == 204 || r->status == 304) {
         r->msg = WPT_MSG_COMPLETE;
         return true;
     }
-    /* §9.2 "Associating a Response to a Request": one or more informational responses may PRECEDE the final
-       one. A 1xx has no body (rule 1), so the whole of it is these header fields and the reader goes back for
-       the response the request is actually waiting on. */
+    /* §9.2 "Associating a Response to a Request": informational responses may precede the final one. A 1xx has no
+       body (rule 1), so the reader goes back for the response the request is waiting on. */
     if (r->status >= 100 && r->status < 200) {
         r->msg = WPT_MSG_HEAD;
         return true;
     }
-    /* §6.3 rule 2 is the CONNECT tunnel. This runner speaks to the corpus server directly and issues no
-       CONNECT, so reaching it would mean the request record and the wire disagree about the method. */
+    /* §6.3 rule 2 is the CONNECT tunnel. This runner speaks to the corpus server directly and issues no CONNECT,
+       so reaching it would mean the request record and the wire disagree about the method. */
     DCHECK(strcmp(r->method, "CONNECT") != 0,
            "a CONNECT reply reached this runner's message reader — RFC 9112 §6.3 Message Body Length rule 2 "
            "makes the octets after such a response a TUNNEL rather than a body, and this host has no proxy to "
@@ -856,21 +802,20 @@ static bool wpt_message_head(WptRequest *r, char *head, size_t hn)
     te = header_list_get(&r->hdrs, "transfer-encoding");
     cl = header_list_get(&r->hdrs, "content-length");
     if (te) {
-        /* §6.3 rule 3: Transfer-Encoding OVERRIDES Content-Length, and a message carrying both "ought to be
+        /* §6.3 rule 3: Transfer-Encoding overrides Content-Length, and a message carrying both "ought to be
            handled as an error". It is one here: the corpus server sends one or the other. */
         if (cl) { free(te); free(cl); r->failed = 1; return false; }
-        /* §6.3 rule 4 with §7.1 "Chunked Transfer Coding". A coding this host cannot decode is not a body it
-           can hand on — the octets are the CODED form — so it crashes at the read rather than delivering a
-           document that parses and is not what the server sent. */
+        /* §6.3 rule 4 with §7.1 "Chunked Transfer Coding". The octets of a coding this host cannot decode are the
+           coded form, so it crashes at the read rather than delivering a document that parses and is not what the
+           server sent. */
         if (!wpt_field_has_token(te, "chunked") || strchr(te, ',')) {
             free(te);
             DFAIL("a corpus reply named a transfer coding this host does not decode — RFC 9112 §6.3 Message "
                   "Body Length rule 4 frames the body by that coding, so the octets after the header section "
                   "are the CODED form and handing them on would be a short document that parses; build the "
                   "coding in this file's message reader (§7.2 Transfer Codings for Compression names them)");
-            /* IN A RELEASE BUILD THE LINE ABOVE IS NOTHING, so the coding is a NETWORK ERROR rather than a
-               body decoded by the wrong coding — the same answer §6.3 rule 5 gives for framing that cannot be
-               determined, and never the coded octets handed on as content. */
+            /* In a release build the line above is nothing, so the coding is a network error, the answer §6.3
+               rule 5 gives for framing that cannot be determined, never the coded octets handed on as content. */
             r->failed = 1;
             return false;
         }
@@ -879,11 +824,11 @@ static bool wpt_message_head(WptRequest *r, char *head, size_t hn)
         return true;
     }
     if (cl) {
-        /* §6.3 rule 6: a VALID Content-Length is the body length. Rule 5 makes an INVALID one an unrecoverable
-           framing error at which a user agent MUST close the connection and DISCARD the response — which is
-           the network error this delivers, never a body cut where the digits stopped. Rule 5's one exception
-           is a comma-separated list whose values are all valid and all THE SAME, which is the shape a field
-           sent twice arrives in (header_list_get joins repeats with ", "). */
+        /* §6.3 rule 6: a valid Content-Length is the body length. Rule 5 makes an invalid one an unrecoverable
+           framing error at which a user agent must close the connection and discard the response, which is the
+           network error this delivers, never a body cut where the digits stopped. Rule 5's one exception is a
+           comma-separated list of identical valid values, the shape a field sent twice arrives in
+           (header_list_get joins repeats with ", "). */
         const char *p = cl;
         unsigned long long v = 0;
         int first = 1, bad = 0;
@@ -893,7 +838,7 @@ static bool wpt_message_head(WptRequest *r, char *head, size_t hn)
             while (*p == ' ' || *p == '\t') p++;
             d = p;
             while (*p >= '0' && *p <= '9') {
-                /* A LENGTH THIS MACHINE CANNOT REPRESENT IS NOT A LENGTH. §7.1 says the same of a chunk size:
+                /* A length this machine cannot represent is not a length. §7.1 says the same of a chunk size:
                    anticipate large numerals and do not let the conversion overflow into a small one. */
                 if (w > ((unsigned long long)-1 - 9) / 10) { bad = 1; break; }
                 w = w * 10 + (unsigned long long)(*p - '0');
@@ -952,10 +897,10 @@ static void wpt_message_feed(WptRequest *r, WptConn *c)
             continue;
         }
         if (r->msg == WPT_MSG_CHUNK_SIZE) {
-            /* §7.1.3 "Decoding Chunked": chunk-size is 1*HEXDIG, followed by an OPTIONAL chunk-ext (§7.1.1,
-               which a recipient MUST ignore) and CRLF. A size that is not hex is a DECODING FAILURE, which
-               §8 "Handling Incomplete Messages" makes an incomplete message and therefore a network error —
-               `fetch/api/resources/bad-chunk-encoding.py` sends exactly that on purpose. */
+            /* §7.1.3 "Decoding Chunked": chunk-size is 1*HEXDIG, then an optional chunk-ext (§7.1.1, which a
+               recipient must ignore) and CRLF. A size that is not hex is a decoding failure, which §8 "Handling
+               Incomplete Messages" makes an incomplete message and so a network error;
+               `fetch/api/resources/bad-chunk-encoding.py` sends one on purpose. */
             char *nl = c->in_n ? memchr(c->in, '\n', c->in_n) : NULL;
             size_t i = 0, ln;
             unsigned long long v = 0;
@@ -966,8 +911,8 @@ static void wpt_message_feed(WptRequest *r, WptConn *c)
                               (c->in[i] >= 'A' && c->in[i] <= 'F'))) {
                 char d = c->in[i];
                 /* §7.1: "recipients MUST anticipate potentially large hexadecimal numerals and prevent parsing
-                   errors due to integer conversion overflows" — an overflowed size would frame a LATER part of
-                   the stream as this chunk's data, which is the smuggling shape §11.2 warns about. */
+                   errors due to integer conversion overflows". An overflowed size would frame a later part of the
+                   stream as this chunk's data, the smuggling shape §11.2 warns about. */
                 if (v > ((unsigned long long)-1 - 15) / 16) { r->failed = 1; return; }
                 v = v * 16 + (unsigned long long)(d <= '9' ? d - '0' : (d | 0x20) - 'a' + 10);
                 i++;
@@ -995,9 +940,9 @@ static void wpt_message_feed(WptRequest *r, WptConn *c)
             continue;
         }
         if (r->msg == WPT_MSG_TRAILER) {
-            /* §7.1.2 "Chunked Trailer Section", terminated by the empty line §7.1's chunked-body ends with. A
-               recipient MAY discard the trailer fields and this one does — §7.1.2 forbids merging one into the
-               header section unless that field's own definition says how. */
+            /* §7.1.2 "Chunked Trailer Section", ended by the empty line §7.1's chunked-body ends with. A recipient
+               may discard the trailer fields and this one does; §7.1.2 forbids merging one into the header section
+               unless that field's definition says how. */
             char *nl = c->in_n ? memchr(c->in, '\n', c->in_n) : NULL;
             size_t ln;
             if (!nl) return;
@@ -1011,16 +956,16 @@ static void wpt_message_feed(WptRequest *r, WptConn *c)
     }
 }
 
-/* THE PEER HUNG UP. §6.3 rule 8's framing ENDS here; every other framing is §8 "Handling Incomplete
-   Messages" — a body shorter than its Content-Length, or a chunked stream with no zero-sized chunk, is
-   INCOMPLETE and is delivered as the network error it is, never as the short body that arrived. */
+/* The peer hung up. §6.3 rule 8's framing ends here; for every other framing this is §8 "Handling Incomplete
+   Messages": a body shorter than its Content-Length, or a chunked stream with no zero-sized chunk, is incomplete
+   and is delivered as a network error, never as the short body that arrived. */
 static void wpt_message_eof(WptRequest *r)
 {
     if (r->msg == WPT_MSG_CLOSE) { r->msg = WPT_MSG_COMPLETE; return; }
     if (r->msg != WPT_MSG_COMPLETE) r->failed = 1;
 }
 
-/* Move one connection, and the request on it, as far as they can go WITHOUT blocking, and no further. */
+/* Move one connection, and the request on it, as far as they can go without blocking. */
 static void wpt_conn_advance(WptConn *c)
 {
     WptRequest *r = c->owner ? wpt_request_find(c->owner) : NULL;
@@ -1036,10 +981,10 @@ static void wpt_conn_advance(WptConn *c)
         c->connecting = 0;
     }
     if (!r) {
-        /* AN IDLE CONNECTION THAT HAS SOMETHING TO SAY. §9.2 "Associating a Response to a Request": data on a
-           connection with no outstanding request is not a response and the client closes. In practice this is
-           the server hanging up a connection whose last response was close-delimited, and dropping it here is
-           what keeps a stale one from being handed to the next request. */
+        /* An idle connection with something to say. §9.2 "Associating a Response to a Request": data on a
+           connection with no outstanding request is not a response, and the client closes. This is normally the
+           server hanging up after a close-delimited response; dropping the connection here keeps a stale one from
+           being handed to the next request. */
         char probe[512];
         ssize_t got = read(c->fd, probe, sizeof probe);
         if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return;
@@ -1055,10 +1000,9 @@ static void wpt_conn_advance(WptConn *c)
             if (w < 0 && errno == EINTR) continue;
             if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
             if (w <= 0) {
-                /* §9.3.1 "Retrying Requests": a connection can be closed at any time, and a REUSED one that
-                   died before it carried any of this response died for a reason that has nothing to do with
-                   this request. It is re-sent on a connection this call opens, so the condition cannot hold
-                   twice — this is a state, not a counter, and there is no retry budget anywhere. */
+                /* §9.3.1 "Retrying Requests": a connection can close at any time, and a reused one that died
+                   before carrying any of this response died for a reason unrelated to this request. It is re-sent
+                   on a new connection, so the condition cannot hold twice; it is a state, not a retry count. */
                 c->owner = 0;
                 r->conn = 0;
                 wpt_conn_release(c);
@@ -1094,8 +1038,8 @@ static void wpt_conn_advance(WptConn *c)
             if (got < 0) r->failed = 1;
             else wpt_message_eof(r);
             if (r->failed && r->reused && r->status == 0 && c->in_n == 0) {
-                /* §9.3.1 again, at the other end: the reused connection was closed before one octet of the
-                   response arrived, so nothing about this request has been answered yet. */
+                /* §9.3.1 again, at the other end: the reused connection closed before one octet of the response
+                   arrived, so nothing about this request has been answered yet. */
                 r->failed = 0;
                 c->owner = 0;
                 r->conn = 0;
@@ -1109,35 +1053,20 @@ static void wpt_conn_advance(WptConn *c)
             wpt_conn_release(c);
             return;
         }
-        /* THE MESSAGE ENDED WITH THE CONNECTION STILL OPEN — which is the whole point of §9.3's persistence.
-           What is left in the buffer is not attributable to any request: this runner does not pipeline, so
-           there is no next response for it to be the beginning of.
-           A FRAMING ERROR TAKES THE CONNECTION WITH IT: RFC 9112 §6.3 "Message Body Length" rule 5 and §8
-           "Handling Incomplete Messages" both say the recipient closes, because after a message whose end
-           nobody could find, every later octet on it is unattributable. */
+        /* The message ended with the connection still open, as §9.3's persistence intends. A framing error takes
+           the connection with it: RFC 9112 §6.3 "Message Body Length" rule 5 and §8 "Handling Incomplete
+           Messages" both have the recipient close, because after a message whose end nobody could find, every
+           later octet on it is unattributable. */
         r->state = WPT_REQ_DONE;
         c->owner = 0;
         r->conn = 0;
         if (r->failed || !r->persist || c->in_n) {
-            /* RESIDUE IS DISCARDED WITH THE CONNECTION, AND ASSERTING AGAINST IT WAS A CLAIM ABOUT THE SERVER
-               WEARING A CLAIM ABOUT THIS READER. A DCHECK stood here saying residue meant either this reader
-               stopped short of §6.3's end or the server overran its own framing — and RFC 9112 §6.3 "Message
-               Body Length" answers that in its own closing paragraph: "If the final response to the last
-               request on a connection has been completely received and there remains additional data to read,
-               a user agent MAY discard the remaining data or attempt to determine if that data belongs as part
-               of the prior message body, which might be the case if the prior message's Content-Length value is
-               incorrect. A client MUST NOT process, cache, or forward such extra data as a separate response."
-               So residue is a state the protocol ANTICIPATES; the client's obligation is to discard it and
-               never to attribute it, which is exactly what closing the connection here does, and no client can
-               guarantee the property the assert demanded.
-               MEASURED, NOT ARGUED: the corpus's own `xhr/resources/redirect.py` answers `?code=304` with
-               `Content-Length: 4` and the four octets `TEST`, which RFC 9112 §6.3 rule 1 says a 304 cannot
-               carry ("always terminated by the first empty line after the header fields, regardless of the
-               header fields present in the message") and RFC 9110 §15.4.5 "304 Not Modified" says a server has
-               no representation to transfer for. wptserve suppresses a body only for HEAD (its Response's
-               `write_content` checks the method and nothing else), so every `xhr/send-redirect.htm` run reached
-               this line with four octets left and aborted the file — a §6.3-correct reader reporting the SERVER
-               as its own bug, and burying the file's real subtests behind it. */
+            /* Residue is discarded with the connection. Without pipelining it belongs to no request, and RFC 9112
+               §6.3's closing paragraph anticipates it: "a user agent MAY discard the remaining data ... A client
+               MUST NOT process, cache, or forward such extra data as a separate response." The corpus produces it:
+               `xhr/resources/redirect.py` answers `?code=304` with `Content-Length: 4` and `TEST`, which §6.3 rule
+               1 says a 304 cannot carry, because wptserve's `write_content` suppresses a body only for HEAD. No
+               client can guarantee its absence, so it is not asserted. */
             wpt_conn_release(c);
             return;
         }
@@ -1155,18 +1084,18 @@ static void wpt_request_release(int i)
     g_inflight[i] = g_inflight[--g_inflight_n];
 }
 
-/* THE REQUESTS STILL OUTSTANDING WHEN THE RUN ENDS — each one a flow that parked and never resumed, which the
-   frontier's own teardown asserts about from the other end — and then the connections they were held open on.
-   Released here because a socket is not in the runtime's heap and no gc walk can see it. */
+/* The requests still outstanding when the run ends (each one a flow that parked and never resumed, which the
+   frontier's own teardown asserts about from the other end), then the connections they held open. Released here
+   because a socket is not in the runtime's heap and no GC walk can see it. */
 static void wpt_net_free(void)
 {
     while (g_inflight_n) wpt_request_release(g_inflight_n - 1);
     while (g_conn_n) wpt_conn_release_at(g_conn_n - 1);
 }
 
-/* §4.1's clone of the REQUEST's URL list. This runner serves the checked-out corpus and follows no redirect, so
-   the list is the one URL it was asked for — which is what makes `response.url` the address the test fetched
-   and `response.redirected` false, both computed rather than declared. */
+/* §4.1's clone of the request's URL list. This runner serves the checked-out corpus and follows no redirect, so
+   the list is the one URL it was asked for, which makes `response.url` the address the test fetched and
+   `response.redirected` false, both computed rather than declared. */
 static JSValue wpt_reply_value(JSContext *ctx, WptRequest *r, int status, HeaderList *rh,
                                char *body, size_t len)
 {
@@ -1177,8 +1106,8 @@ static JSValue wpt_reply_value(JSContext *ctx, WptRequest *r, int status, Header
     return v;
 }
 
-/* ONE COMPLETED REQUEST, HANDED TO WHOEVER PARKED ON IT. Answers how many registers it filled, which is what
-   tells a stall this host answered from one it could not. */
+/* One completed request, handed to whoever parked on it. Answers how many registers it filled, which tells a stall
+   this host answered from one it could not. */
 static int wpt_request_finish(JSContext *ctx, WptRequest *r)
 {
     size_t len = r->failed ? 0 : r->body_n;
