@@ -279,50 +279,27 @@ function readPaint(M, labels) {
    origin, the flow keeps its park, and the engine forks the arm that runs the page's failure path. */
 const PROGRAM_DESTINATIONS = new Set(['script', 'style', 'worker', 'sharedworker', 'serviceworker']);
 
+/* The ten fields of solver/engine.h's pending line, in engine_pending_split's order. */
+const PENDING_FIELDS = ['method', 'destination', 'initiator', 'provenance', 'pinned', 'credentials', 'mode',
+                        'referrerPolicy', 'referrer', 'url'];
 function splitPending(line) {
-  /* SPLIT WHERE THE ENGINE JOINED IT — `method\tdestination\tinitiator\tprovenance\tpinned\tcredentials\turl`,
-     engine.h's `engine_pending_split` order. Only the LAST field may contain the delimiter and the URL
-     provably cannot (URL Standard §4.4 removes every tab before anything else), so this splits on the first
-     six tabs and takes the remainder. A line with a different field count is a loud failure rather than a
-     silently mis-assigned address. */
+  /* Split where the engine joined it. No field can hold a TAB (URL Standard §4.4 URL parsing removes them and
+     the rest are tokens), so a line with another field count is a grammar this host does not share, and
+     guessing would attribute one request's address to another's method. The join asserts every field's
+     content and pending_park_request refuses an empty address, so the count is the shape left to check here.
+     The method, mode, referrer policy, referrer and URL are the request's identity, which the reply is
+     delivered against. */
   const f = line.split('\t');
-  if (f.length !== 7)
-    fail('a pending line carries ' + f.length + ' field(s) where engine_pending_split names seven ' +
-         '(method, destination, initiator, provenance, pinned, credentials, url) — this host is splitting a ' +
-         'record the engine joined differently, and guessing would attribute one request\'s address to ' +
-         'another\'s method: ' + JSON.stringify(line.slice(0, 200)));
-  /* THE FIELD COUNT IS THE WHOLE OF THE SHAPE CHECK, AND `url` IS GUARANTEED BY IT — which is why the two
-     reads of `req.url` under a `try` below are DECIDED and not defaulted, and this is recorded here because a
-     gate row naming them cannot show a reader the paragraph that settles them. Those trys exist for the acts
-     that can throw — `new URL` on an address the page composed, and the `fetch` — and each catch YIELDS THE
-     RECORD'S DECLARED ABSENCE with a named reason (a decline, or Fetch §5.6's network error) rather than
-     substituting a value for a missing field, so neither is the `catch {}` CLAUDE.md §A-FIELD-A-CONSUMER-
-     DEFAULTS names beside `|| 0`. `url` is also read UNGUARDED in `decline` above, so its presence is already
-     load-bearing here on a path no catch covers. NO NON-EMPTY CHECK IS ADDED, AND THE REASON THAT
-     STOOD HERE — that engine_pending_split "asserts the SEPARATORS, not the field contents" — IS KEPT
-     BECAUSE A READER RE-DERIVES IT AND IS FALSE OF THIS PRODUCER AT BOTH OF ITS ENDS. That splitter DCHECKs
-     the CONTENTS of destination, initiator, provenance and pinned against engine.h's own enumerations and
-     asks fetch_credentials_of_token for the fifth; and the field is not born there but at the JOIN, where
-     engine_pending_fetches asserts method (non-NULL, method_is_token), destination and credentials, asserts
-     `url`'s OWN extent — no TAB and no NEWLINE, URL Standard §4.4 URL parsing having removed both — and
-     SKIPS outright any entry whose url is not a string. So the presence read on this side is stated at BOTH
-     ends, and the producer is not the lax party that sentence described; what survives of it is only its
-     SHAPE, that a content check stated on this side alone would be one contract stated twice with the
-     stricter copy here. WHICH LEAVES EXACTLY ONE FIELD CONTENT NO ASSERT ANYWHERE REFUSES, and it is the
-     park's to refuse rather than this side's. NOT COVERED: an EMPTY `url`, which is not a page's bytes but
-     pending_park_request having stored an empty address. NEXT DIFF: a DCHECK there refusing one, naming the
-     algorithm that owes an address. HOW ITS ABSENCE SHOWS: a decline whose `why` reads `unparseable
-     address` beside a log entry whose own `url` is the empty string — the bytes called unparseable being
-     none. RETIREMENT: this record goes when that park refuses an empty address, because `new URL` can then
-     fail here only on bytes a PAGE composed, which is the refusal this decline already is. */
-  return { method: f[0], destination: f[1], initiator: f[2], provenance: f[3],
-           pinned: f[4], credentials: f[5], url: f[6] };
+  if (f.length !== PENDING_FIELDS.length)
+    fail('a pending line carries ' + f.length + ' field(s) where engine_pending_split names ' +
+         PENDING_FIELDS.length + ' (' + PENDING_FIELDS.join(', ') + '): ' + JSON.stringify(line.slice(0, 200)));
+  return Object.fromEntries(PENDING_FIELDS.map((k, i) => [k, f[i]]));
 }
 
 async function serveOne(M, cs, req, docOrigin, log) {
   const decline = (why) => {
-    M.ccall('qjs_decline', 'void', ['number', 'number', 'number'],
-            [cs(req.method), cs(req.url), cs(why)]);
+    M.ccall('qjs_decline', 'void', ['number', 'number', 'number', 'number', 'number', 'number'],
+            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs(why)]);
     log.push({ url: req.url, destination: req.destination, action: 'decline', why });
   };
   if (!PROGRAM_DESTINATIONS.has(req.destination))
@@ -352,8 +329,10 @@ async function serveOne(M, cs, req, docOrigin, log) {
     r = await fetch(req.url, { redirect: 'follow' });
     body = new Uint8Array(await r.arrayBuffer());
   } catch (e) {
-    M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number'],
-            [cs(req.method), cs(req.url), cs('null'), 0, 0]);
+    M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number',
+                                    'number'],
+            [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs('null'), 0,
+             0]);
     log.push({ url: req.url, destination: req.destination, action: 'network-error',
                why: (e && e.message) || String(e) });
     return;
@@ -362,15 +341,26 @@ async function serveOne(M, cs, req, docOrigin, log) {
      a byte sequence and the only way to put one in JSON is to run an algorithm over it first — which is the
      defect the ABI's own entry records: a script served `charset=windows-1252` decoded here would reach
      HTML §8.1.4.2's classic decode already mangled. No transform happens on this line. */
+  /* `type` is `basic` because this host serves only the document's own origin (the test above), and a reply
+     that redirected off it is a corpus this driver was not built for. `computedType` is this host's decision,
+     the declared Content-Type's essence: it serves the page's own program loads and runs no MIME sniff, which
+     is the trusted zone's (extension/lib/safe-fetch.js). */
+  if (r.url && new URL(r.url).origin !== docOrigin)
+    fail('a program load of ' + req.url + ' redirected off the document\'s origin to ' + r.url +
+         ' — this driver serves same-origin loads only and has no CORS or opaque arm for the reply');
   const reply = JSON.stringify({
     status: r.status, statusText: r.statusText || '',
     headers: [...r.headers].map(([k, v]) => [k, v]),
     urlList: [req.url, ...(r.url && r.url !== req.url ? [r.url] : [])],
+    computedType: (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase(),
+    type: 'basic',
   });
   const bp = heapAlloc(M, body.length + 1, 'the body of ' + req.url);
   M.HEAPU8.set(body, bp); M.HEAPU8[bp + body.length] = 0;
-  M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number'],
-          [cs(req.method), cs(req.url), cs(reply), bp, body.length]);
+  M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number', 'number', 'number',
+                                  'number'],
+          [cs(req.method), cs(req.mode), cs(req.referrerPolicy), cs(req.referrer), cs(req.url), cs(reply), bp,
+           body.length]);
   log.push({ url: req.url, destination: req.destination, action: 'provide',
              status: r.status, bytes: body.length });
 }

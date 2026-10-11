@@ -194,16 +194,18 @@ async function drive(gluePath, html, steps) {
   M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
   M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
 
-  /* `qjs_pending` is a SET keyed on the (method, URL) pair and is re-reported every step, so accumulating it
-     across the pump loses nothing and a URL seen once is a request made once. */
+  /* `qjs_pending` is a SET keyed on the request's identity and is re-reported every step, so accumulating it
+     across the pump loses nothing and a URL seen once is a request made once. The line is solver/engine.h's
+     ten fields, METHOD … MODE REFERRER_POLICY REFERRER URL; the count is asserted because a shorter grammar
+     would put a token where the address is read. */
   const seen = new Map();
   let code = -1;
   for (let i = 0; i < steps; i++) {
     code = M.ccall('qjs_step', 'number', [], []);
     for (const line of str('qjs_pending').split('\n').filter(Boolean)) {
       const t = line.split('\t');
-      if (t.length !== 7) fail('a pending line is not the ABI\'s seven tab-separated fields: ' + line);
-      if (!seen.has(t[6])) seen.set(t[6], t[0]);
+      if (t.length !== 10) fail('a pending line is not the ABI\'s ten tab-separated fields: ' + line);
+      if (!seen.has(t[9])) seen.set(t[9], t[0]);
     }
     if (code === 0) break;
   }
