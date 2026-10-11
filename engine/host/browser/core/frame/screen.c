@@ -347,16 +347,17 @@ static void screen_install_realm(JSContext *ctx)
     global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "Screen", idl_interface_object(ctx, "Screen", proto));
 
-    scr = JS_NewObjectProtoClass(ctx, proto, g_screen_class);
-    JS_FreeValue(ctx, proto);
-    CHECK(!JS_IsException(scr), "the Window's associated Screen could not be allocated");
-    /* THE RECORD, ATTACHED BEFORE THE OBJECT LEAVES THIS FUNCTION — which is what `screen_rec`'s "a branded
-       object without one came from a second mint that does not exist" rests on, and there is no second mint.
-       The values are built HERE rather than on first read for the reason the file comment gives: a value minted
-       lazily is built inside whichever FLOW got there first, making that flow's baseline everyone's. */
+    /* The record is complete before the object exists, and nothing allocates between the object's allocation
+       and its JS_SetOpaque: an allocation there can run the GC, which marks the externally held `scr` through
+       screen_gc_mark while it has no record. `s->vals` is held by this C reference until then, so it is rooted.
+       The values are built here rather than on first read because a value minted lazily is built inside
+       whichever flow got there first, making that flow's baseline everyone's. */
     s = calloc(1, sizeof *s);
     CHECK(s != NULL, "this realm's Screen record could not be allocated");
     s->vals = screen_build_values(ctx);
+    scr = JS_NewObjectProtoClass(ctx, proto, g_screen_class);
+    JS_FreeValue(ctx, proto);
+    CHECK(!JS_IsException(scr), "the Window's associated Screen could not be allocated");
     JS_SetOpaque(scr, s);
     /* CSSOM VIEW §4's Window extension: `[SameObject, Replaceable] readonly attribute Screen screen`. It was a
        plain data property, which is neither half of that — SameObject means every read is the one object this
