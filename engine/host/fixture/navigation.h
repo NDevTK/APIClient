@@ -45,22 +45,27 @@ static const char HTML_NAVIGATION[] =
     /* AND THE NAVIGABLE'S OWN STATE IS ANSWERED HERE, not by the peer: self/window/frames are this navigable's
        proxy by definition, `parent`/`top` are the creator, `opener` is null for a nested one, and `name` is the
        element's `name` ATTRIBUTE — which the removal below then empties while leaving the attribute alone. */
+    /* Each claim is one character of `_ifb`, `1` held, `0` not, `E` threw, so a failure names its claim. */
+    "var _ifb = ''; function _ift(f) { try { _ifb += f() ? '1' : '0'; } catch (e) { _ifb += 'E'; } }"
     "var _if = document.createElement('iframe'); _if.setAttribute('name','fr');"
     "document.body.appendChild(_if); var _cw = _if.contentWindow;"
-    "var _ifok = !!_cw && _cw.self === _cw && _cw.window === _cw && _cw.frames === _cw &&"
-    " _cw.globalThis === _cw && _cw.parent === window && _cw.top === window && _cw.opener === null &&"
-    " _cw.closed === false && _cw.name === 'fr';"
+    "_ift(function(){ return !!_cw; }); _ift(function(){ return _cw.self === _cw; });"
+    "_ift(function(){ return _cw.window === _cw; }); _ift(function(){ return _cw.frames === _cw; });"
+    "_ift(function(){ return _cw.globalThis === _cw; }); _ift(function(){ return _cw.parent === window; });"
+    "_ift(function(){ return _cw.top === window; }); _ift(function(){ return _cw.opener === null; });"
+    "_ift(function(){ return _cw.closed === false; }); _ift(function(){ return _cw.name === 'fr'; });"
     /* AND ONE READ THAT REACHES THE ACTIVE DOCUMENT, which is what makes the removal below a RECLAMATION probe
        rather than a flag probe. Every member above is answered from the navigable's own record, so none of them
        builds anything: without this line the srcless child stays unmaterialized for the whole fixture and the
        destroy has no realm to let go of. `document` forwards to the child's Window, so the initial about:blank
        Document and its realm exist from here on — ONE PER FLOW, which is the shape the ceiling is made of. */
-    "_ifok = _ifok && !!_cw.document && _cw.document !== document;"
+    "_ift(function(){ return !!_cw.document && _cw.document !== document; });"
     /* §4.8.5's REMOVING STEPS: the element loses its navigable, and the proxy the page still holds stays the
        same object while reporting a destroyed one. */
     "document.body.removeChild(_if);"
-    "_ifok = _ifok && _if.contentWindow === null && _cw.closed === true && _cw.name === '' &&"
-    " _cw.self === _cw && _if.getAttribute('name') === 'fr';"
+    "_ift(function(){ return _if.contentWindow === null; }); _ift(function(){ return _cw.closed === true; });"
+    "_ift(function(){ return _cw.name === ''; }); _ift(function(){ return _cw.self === _cw; });"
+    "_ift(function(){ return _if.getAttribute('name') === 'fr'; });"
     /* AND THE PROXY THE PAGE IS STILL HOLDING HAS NO ACTIVE DOCUMENT — HTML §7.5.10's own note ("even after
        destruction, the Document object itself might still be accessible to script, in the case where we are
        destroying a child navigable") is about a reference the PAGE kept, and `_cw` is exactly that reference.
@@ -69,8 +74,8 @@ static const char HTML_NAVIGATION[] =
        materialized, and only the destroyed flag tells them apart (window_proxy.c's proxy_realm asserts it).
        The `undefined` is §7.2.3's own surface answering a name it does not carry, which is this engine's
        pre-existing answer for every through-read on a closed navigable and not a value this probe chose. */
-    "_ifok = _ifok && _cw.document === undefined;"
-    "fetch('/api/iframenav?v=' + (_ifok ? 'ifnav' : 'wrong'));"
+    "_ift(function(){ return _cw.document === undefined; });"
+    "fetch('/api/iframenav?v=' + (/^1+$/.test(_ifb) ? 'ifnav' : 'claims' + _ifb));"
     /* NOT PROBED: an iframe with a REAL `src` (§7.4 step 14's load job, which parks on the host for the
        response and runs the child's scripts); `node engine/wpt.mjs html/browsers` runs those. A srcless
        navigable that something reads through is materialized exactly as a src'd one is, so this costs one

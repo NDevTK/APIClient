@@ -11643,9 +11643,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "NOT REACHED: there is no /api/iframenav record at all, so the inserted iframe statement never "
              "reached its fetch. That is the SCHEDULE");
     fold_row(&ifnav_tt, &ifnav_why, param_value_is(js, "/api/iframenav", "v", "ifnav"),
-             "the statement RAN and /api/iframenav's `v` is not `ifnav` — §4.8.5's inserted iframe got no "
-             "child navigable, its proxy was not stable across two reads, or the read through it did not "
-             "resolve to the peer's answer");
+             "the statement RAN and /api/iframenav's `v` is not `ifnav`: it is `claims` and one character per "
+             "claim of the statement in its order (1 held, 0 did not, E threw), so the first non-1 names the "
+             "§4.8.5 child navigable, proxy or §7.5.10 destroy claim that failed");
     /* §4.8.5's SRCDOC DOCUMENTS — the class §2.4.3 step 1 is about, and the class this fixture could not build
        until the markup above existed. The rows are ordered so that an earlier one surviving localises a later
        one's absence; see that markup for what each separates. */
