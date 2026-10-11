@@ -513,10 +513,12 @@ static const char HTML_PLATFORM[] =
     "soP.appendChild(soC); document.body.appendChild(soP);"
     "fetch('/api/snapoffset?v=' + (soC.offsetLeft === 10 ? 'is10' : 'wrong'));"
     "fetch('/api/snapdelta?l=' + soC.offsetLeft + '&w=' + soC.offsetWidth);"
-    /* css-values-4 §10.2 "Comparison Functions": `min(50vw, 50vw + 100px)` is 50vw in every world, so the two
-       widths differ by the constant 300 and their `long` difference is 300 at every viewport. */
-    "var mmA = document.createElement('p'); mmA.style.setProperty('width', 'min(50vw, 50vw + 100px)');"
-    "var mmB = document.createElement('p'); mmB.style.setProperty('width', 'calc(50vw - 300px)');"
+    /* css-values-4 §10.2 "Comparison Functions": `min(50vw + 300px, 50vw + 400px)` is 50vw + 300px in every
+       world, so the two widths differ by the constant 300 at every viewport. Both are non-negative in every
+       world, so the used width's clamp at zero is decided too; `calc(50vw - 300px)` is not, being clamped to 0
+       below a 600px viewport. */
+    "var mmA = document.createElement('p'); mmA.style.setProperty('width', 'min(50vw + 300px, 50vw + 400px)');"
+    "var mmB = document.createElement('p'); mmB.style.setProperty('width', '50vw');"
     "document.body.appendChild(mmA); document.body.appendChild(mmB);"
     "fetch('/api/mathextreme?v=' + (mmA.offsetWidth - mmB.offsetWidth === 300 ? 'is300' : 'wrong'));"
     /* §4.8.3's `[CEReactions, ReflectSetter] attribute unsigned long width`: the setter is HTML §2.6.1's
