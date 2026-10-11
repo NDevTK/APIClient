@@ -2077,7 +2077,7 @@ static bool handler_body_parsable(JSContext *ctx, JSValueConst body, bool five)
        question — and could not be pinned, since a source beginning with a `with` head is one
        js_parse_fn_ctor_source refuses by construction. */
     char *src = handler_source(ctx, body, five, 0, &n);
-    JSValue bc = JS_Eval(ctx, src, n, "<event handler>",
+    JSValue bc = JS_Eval(ctx, src, n, EVENT_HANDLER_SCRIPT_NAME,
                          JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_FUNCTION_CTOR | JS_EVAL_FLAG_COMPILE_ONLY);
 
     free(src);
@@ -2253,12 +2253,9 @@ static bool handler_compile_owed(JSContext *ctx, JSValueConst h)
  *     is a `with` head; see handler_source's banner for why that IS the abstract operation and not a stand-in
  *     for it, and for what makes the headed shape sound without the end-of-input pin.
  *
- * RESIDUAL: STEP 3.11 IS NOT PERFORMED. WHAT IS NOT COVERED: "Set function.[[ScriptOrModule]] to null". WHAT
- * THE NEXT DIFF BUILDS: a per-function script-or-module slot to null out — this engine has none, deriving the
- * name from the STACK (JS_GetScriptOrModuleName walks n_stack_levels), so there is no field here to write and
- * the step is not skipped so much as unreachable. HOW ITS ABSENCE SHOWS: a dynamic `import()` inside an inline
- * handler resolves a relative specifier against the nearest script on the stack instead of falling back to the
- * current settings object's API base URL, which is the one effect the standard's own note says this step has.
+ * Step 3.11, "Set function.[[ScriptOrModule]] to null", is the compile's name: this engine's script-or-module
+ * is the bytecode's name (JS_GetScriptOrModuleName), and EVENT_HANDLER_SCRIPT_NAME is the null one, which
+ * core/loader/module_loader.c resolves a specifier under against the current settings object's API base URL.
  *
  *   > 0  — parked; the caller returns the code as it stands.
  *   0    — the compile is complete, `*pout` is the handler function (owned) and step 3.12 has written it to
@@ -2412,7 +2409,7 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
            with this parameter list under JS_EVAL_FLAG_COMPILE_ONLY and answered that it parses, and the heads
            this shape adds are this file's own fixed text over a carrier it built, so a parse error here is the
            two probes disagreeing about one text. */
-        prog = JS_Eval(ctx, src, n, "<event handler>",
+        prog = JS_Eval(ctx, src, n, EVENT_HANDLER_SCRIPT_NAME,
                        JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE |
                        (layers == 0 ? JS_EVAL_FLAG_FUNCTION_CTOR : 0));
         free(src);

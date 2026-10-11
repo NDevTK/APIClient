@@ -81,6 +81,12 @@ typedef struct EventTargetTree {
    first, and event_target_free asserts. */
 void event_target_set_tree(const EventTargetTree *tree);
 
+/* The script name an event handler's compiled body carries. HTML §8.1.8.1 "Event handlers" step 3.11 sets
+   the handler's [[ScriptOrModule]] to null; this engine's script-or-module is the bytecode's name, so this
+   name is that null, and core/loader/module_loader.c resolves a specifier under it against the current
+   settings object's API base URL. */
+#define EVENT_HANDLER_SCRIPT_NAME "<event handler>"
+
 /* THE `is_window` PREDICATE ABOVE, ASKED OF ONE TARGET — the registered answer, reachable by the algorithms
    that need it rather than only by the walk that happens to hold the struct. IT ANSWERS ONE QUESTION AND THE
    STANDARD ASKS IT IN THOSE WORDS: HTML §8.1.8.1 Event handlers' get the current value of the event handler

@@ -550,6 +550,11 @@ static inline bool JS_VALUE_IS_NAN(JSValue v)
    was true of the only caller there was and hid (1) entirely — an under-claim, so the reader who needed the
    pin was told there was nothing here for them. */
 #define JS_EVAL_FLAG_FUNCTION_CTOR (1 << 4)
+/* The script name eval code and a dynamic function's body are compiled under (ECMAScript §19.2.1.1
+   "PerformEval ( source, strictCaller, direct )" and §20.2.1.1.1 "CreateDynamicFunction ( ctor, newTarget,
+   kind, paramArgs, bodyArg )"). It names no script, so a host resolving a module specifier under it has no
+   referrer base URL to read off it. */
+#define JS_EVAL_SCRIPT_NAME "<input>"
 /* compile but do not run. The result is an object with a
    JS_TAG_FUNCTION_BYTECODE or JS_TAG_MODULE tag. It can be executed
    with JS_EvalFunction(). */

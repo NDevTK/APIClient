@@ -76,6 +76,18 @@ static const char HTML_MODULES[] =
        measured before the gate existed. `SyntaxError` would be a third — a compile of bytes that did not parse —
        and is why the control's body parses. */
     "(async function(){ fetch('/api/modtypeask?w=mtASK'); try { var bad = await import('/chunk/mdbad.js'); fetch('/api/modtype?w=' + (bad ? 'mtLOADED' : 'mtEMPTY')); } catch (e) { fetch('/api/modtype?w=' + e.name); } })();"
+    /* HTML §8.1.5.1 "The resolution algorithm", read by the `mod-spec-*` rows. A bare specifier with no import
+       map is step 14's TypeError, even though the document-relative address it spells is served: `msLOADED` is
+       an engine that fetched it. Two spellings of one URL are one module map entry, so the namespaces are the
+       same object: `muTWO` is an engine keying the map by the specifier. */
+    "(async function(){ fetch('/api/modbareask?w=msASK'); try { await import('chunk/mdmod.js'); fetch('/api/modbare?w=msLOADED'); } catch (e) { fetch('/api/modbare?w=' + e.name); } })();"
+    "(async function(){ fetch('/api/modsameask?w=muASK'); try { var a = await import('/chunk/mdmod.js'), b = await import('./chunk/../chunk/mdmod.js'); fetch('/api/modsame?w=' + (a === b ? 'muSAME' : 'muTWO')); } catch (e) { fetch('/api/modsame?w=' + e.name); } })();"
+    /* …and the two referrers that name no script: an event handler (HTML §8.1.8.1 "Event handlers" step 3.11
+       nulls its [[ScriptOrModule]], so it resolves against the API base URL) and a dynamic function's body. */
+    "var mdh = document.createElement('div');"
+    "mdh.setAttribute('onclick', `fetch('/api/modhandlerask?w=ehASK'); import('./chunk/mdmod.js').then(function(n){ fetch('/api/modhandler?w=' + (n.default && n.default.tag === 'mmDEF' ? 'ehDEF' : 'ehNODEF')); }, function(e){ fetch('/api/modhandler?w=' + e.name); });`);"
+    "mdh.dispatchEvent(new Event('click'));"
+    "(async function(){ fetch('/api/modevalask?w=meASK'); try { var f = await (new Function('return import(\"./chunk/mdmod.js\")'))(); fetch('/api/modeval?w=' + (f.default && f.default.tag === 'mmDEF' ? 'meDEF' : 'meNODEF')); } catch (e) { fetch('/api/modeval?w=' + e.name); } })();"
     "</script>"
     /* §8.1.4.4 "Calling scripts"' module entry, read by `module-entry` and `module-tla`. The top-level `await`
        makes the records proof: ECMAScript §16.2.1.6 ParseModule accepts it and §16.1.6 ParseScript does not,

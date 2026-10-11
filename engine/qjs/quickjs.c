@@ -26620,7 +26620,7 @@ static int step_program_run(JSContext *ctx, JSStepHdr *h, JSContext *realm, JSVa
             return -1;
         /* NO CALLER FRAME, and that is what INDIRECT means: 19.2.1.1 evaluates in the GLOBAL environment, so
            there is no caller scope to take — the `-1` scope_idx beside it says the same thing. */
-        clo = JS_EvalInternal(realm, realm->global_obj, str, len, "<input>", 1,
+        clo = JS_EvalInternal(realm, realm->global_obj, str, len, JS_EVAL_SCRIPT_NAME, 1,
                               JS_EVAL_TYPE_INDIRECT | JS_EVAL_FLAG_TRAMP_CLOSURE | origin_flags, -1, NULL);
         JS_FreeCString(ctx, str);
         if (JS_IsException(clo))
@@ -30943,7 +30943,7 @@ static JSValue eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSVa
     JS_FreeValue(ctx, text);
     if (unlikely(!str))
         return JS_EXCEPTION;
-    clo = JS_EvalInternal(ctx, JS_UNDEFINED, str, len, "<input>", 1,
+    clo = JS_EvalInternal(ctx, JS_UNDEFINED, str, len, JS_EVAL_SCRIPT_NAME, 1,
                           JS_EVAL_TYPE_DIRECT | JS_EVAL_FLAG_TRAMP_CLOSURE, scope_idx, caller_sf);
     JS_FreeCString(ctx, str);
     if (unlikely(JS_IsException(clo)))
@@ -84685,7 +84685,7 @@ static int js_dynfunc_check_halves(JSContext *ctx, JSFunctionKindEnum func_kind,
         JS_FreeValue(ctx, src);
         if (!cstr)
             return -1;
-        fn = JS_EvalInternal(ctx, ctx->global_obj, cstr, len, "<input>", 1,
+        fn = JS_EvalInternal(ctx, ctx->global_obj, cstr, len, JS_EVAL_SCRIPT_NAME, 1,
                              JS_EVAL_TYPE_INDIRECT | JS_EVAL_FLAG_COMPILE_ONLY |
                              JS_EVAL_FLAG_FUNCTION_CTOR, -1, NULL);
         JS_FreeCString(ctx, cstr);

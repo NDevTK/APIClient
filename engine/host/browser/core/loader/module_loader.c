@@ -23,11 +23,96 @@
  * register, exactly as core/fetch parks a request: qjs_provide settles it, and the load resumes on its
  * reaction — compile, link, evaluate, and the page's `await import(...)` continues from where it suspended.
  * Nothing re-runs; the importing scope is never re-entered, which would be a replay. */
+#include <string.h>
+#include <stdlib.h>
 #include "check.h"
 #include "quickjs.h"
 #include "solver/engine.h"
 #include "core/agent_state.h"          /* the hook this component installs is what it holds for the agent */
+#include "core/dom/document.h"         /* the current settings object's API base URL */
+#include "core/events/event_target.h"  /* EVENT_HANDLER_SCRIPT_NAME, a null referrer */
+#include "core/url/url.h"
 #include "core/loader/module_loader.h"
+
+/* HTML §8.1.5.1 "The resolution algorithm"'s resolve a URL-like module specifier. Fills `out` and returns
+   true for a URL; false is the algorithm's null, with `out` initialised-and-empty either way. */
+static bool ml_resolve_url_like(const char *specifier, const UrlRecord *base, UrlRecord *out)
+{
+    size_t n = strlen(specifier);
+
+    if (!strncmp(specifier, "/", 1) || !strncmp(specifier, "./", 2) || !strncmp(specifier, "../", 3))
+        return url_parse(out, specifier, n, base);
+    return url_parse(out, specifier, n, NULL);
+}
+
+/* Steps 1-3 of resolve a module specifier: the referring script's base URL, or the current settings object's
+   API base URL when the referrer is null. `referrer` is the name the importing bytecode carries, which this
+   engine computed: a classic or module script's base URL (solver/engine.c names every program),
+   EVENT_HANDLER_SCRIPT_NAME (HTML's null referrer), or JS_EVAL_SCRIPT_NAME. Returns false only for a name that
+   does not parse, which the DFAIL refuses.
+   NAMED RESIDUAL. Not covered: eval code and a dynamic function's referrer, which ECMAScript §19.2.1.1
+   "PerformEval ( source, strictCaller, direct )" sets to the running context's ScriptOrModule; quickjs names
+   that code JS_EVAL_SCRIPT_NAME and keeps no script-or-module, so it resolves against the API base URL. The
+   next diff records the caller's script name on eval and dynamic-function bytecode. Its absence shows as a
+   relative `import()` inside eval'd code of an external script outside the document's directory fetching
+   from the document's directory. */
+static bool ml_referrer_base_url(JSContext *ctx, const char *referrer, UrlRecord *base)
+{
+    const char *s = referrer;
+
+    DCHECK(referrer != NULL && referrer[0] != '\0',
+           "a module specifier was resolved for a referrer with no name — every compile in this engine names "
+           "its program");
+    DCHECKF(strchr(referrer, '\001') == NULL,
+            "the referrer `%s` is a module map key carrying import attributes — only a synthetic module is "
+            "keyed so, and a synthetic module requests no modules", referrer);
+    if (!strcmp(referrer, EVENT_HANDLER_SCRIPT_NAME) || !strcmp(referrer, JS_EVAL_SCRIPT_NAME))
+        s = document_base_url(ctx);
+    if (url_parse(base, s, strlen(s), NULL))
+        return true;
+    DFAILF("the module specifier referrer `%s` is no URL — solver/engine.c names a program by its document's "
+           "base URL or its response URL, both serialized URLs, so this name came from a compile that names "
+           "its program otherwise", referrer);
+    return false;
+}
+
+/* HTML §8.1.5.1 "The resolution algorithm"'s resolve a module specifier, as quickjs's normalize hook: it
+   returns the serialized URL (js_malloc'd; js_host_resolve_imported_module frees it), which is the module map
+   key and the address the load parks, or NULL with a TypeError thrown.
+   NAMED RESIDUAL. Not covered: the import map steps 5, 10 and 11 read (HTML §8.1.5.2 "Import maps") and step
+   13's resolved module set; this engine parses no `<script type=importmap>`, so importMap is empty. The next
+   diff builds HTML §8.1.5.3 "Import map processing model" onto the Window. Its absence shows as a bundle that
+   imports bare specifiers through an import map rejecting every such import with a TypeError. */
+static char *module_normalize(JSContext *ctx, const char *referrer, const char *specifier, void *opaque)
+{
+    UrlRecord base, as_url;
+    char *serialized, *out = NULL;
+
+    (void)opaque;
+    DCHECK(specifier != NULL, "a module specifier was resolved with no specifier");
+    url_record_init(&base);
+    url_record_init(&as_url);
+    if (!ml_referrer_base_url(ctx, referrer, &base)) {
+        JS_ThrowTypeError(ctx, "the module referrer '%s' names no base URL", referrer);
+        goto done;
+    }
+    /* Steps 7-13 over an empty import map: the result is asURL. */
+    if (!ml_resolve_url_like(specifier, &base, &as_url)) {
+        /* Step 14. */
+        JS_ThrowTypeError(ctx, "Failed to resolve module specifier \"%s\". Relative references must start "
+                               "with either \"/\", \"./\", or \"../\".", specifier);
+        goto done;
+    }
+    serialized = url_serialize(&as_url, false);
+    CHECK(serialized != NULL, "OOM serializing a resolved module specifier");
+    out = js_strdup(ctx, serialized);
+    free(serialized);
+    /* js_strdup's NULL has thrown the OOM, which rejects the import like any other abrupt resolution. */
+done:
+    url_record_free(&as_url);
+    url_record_free(&base);
+    return out;
+}
 
 static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *opaque)
 {
@@ -90,7 +175,7 @@ void module_loader_install(JSRuntime *rt)
     DCHECK(g_module_rt == NULL, "the module loader is already installed for this agent — its release either "
                                 "did not run or did not give the runtime back, and a re-install would leave "
                                 "ECMAScript §16.2.1.10 HostLoadImportedModule pointing at the agent that went");
-    JS_SetModuleLoaderFunc(rt, NULL, module_load, NULL);
+    JS_SetModuleLoaderFunc(rt, module_normalize, module_load, NULL);
     g_module_rt = rt;
     agent_state_ptr("module_loader", &g_module_rt, "the runtime ECMAScript §16.2.1.10 HostLoadImportedModule "
                                                    "was installed into");

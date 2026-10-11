@@ -686,11 +686,9 @@ static const TfServed TF_SERVED[] = {
      * So the whole of ECMAScript §16.2.1.6.1.1.1 "InnerModuleLoading ( state, module )" — whose note is
      * that "HostLoadImportedModule will call FinishLoadingImportedModule, which re-enters the graph loading
      * process through ContinueModuleLoading" — was written for a shape no gate here exercises.
-     * THE SPECIFIER IS RELATIVE ON PURPOSE AND THAT IS NOT A SECOND TEST SMUGGLED IN. A specifier with no
-     * leading dot is returned UNMODIFIED by the normalizer (js_default_module_normalize_name's first
-     * statement), so a root-absolute one would ask nothing about naming that the `import('/chunk/...')`
-     * statements above do not already ask. A dotted one is resolved against the REFERRER'S OWN MODULE NAME,
-     * which js_host_resolve_imported_module states in its own words, backticked for the reason above:
+     * THE SPECIFIER IS RELATIVE ON PURPOSE: it is resolved against the REFERRER'S OWN MODULE NAME, the URL
+     * core/loader/module_loader.c's resolve a module specifier returned for it, which
+     * js_host_resolve_imported_module states in its own words, backticked for the reason above:
      * `the module name is also its resolution base for nested imports`. js_module_request_host_load
      * passes it as `referrer->module_name` — so `./mddep.js` from `/chunk/mdhost.js` is `/chunk/mddep.js`
      * and nothing else. `mh-dep` therefore carries
@@ -10197,6 +10195,38 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the `application/json`-served module's BODY RAN — /api/modbadran is in the document, so this "
              "engine compiled and evaluated a reply a browser refuses before any source text exists. That is "
              "the half a status or a parse error cannot report, and it is why this row is a conjunction");
+    /* HTML §8.1.5.1 "The resolution algorithm" — core/loader/module_loader.c's module_normalize. */
+    const char *ms_bare_ask_why = NULL; int ms_bare_ask = 1;
+    fold_row(&ms_bare_ask, &ms_bare_ask_why, param_value_is(js, "/api/modbareask", "w", "msASK"),
+             "NOT REACHED: there is no /api/modbareask record, so the bare-specifier statement never ran");
+    const char *ms_bare_why = NULL; int ms_bare = 1;
+    fold_row(&ms_bare, &ms_bare_why, param_value_is(js, "/api/modbare", "w", "TypeError")
+                                     && !param_value_is(js, "/api/modbare", "w", "msLOADED"),
+             "`import('chunk/mdmod.js')` did not reject with step 14's TypeError alone — `msLOADED` is the "
+             "bare specifier fetched as a document-relative address, which no import map remapped");
+    const char *ms_same_ask_why = NULL; int ms_same_ask = 1;
+    fold_row(&ms_same_ask, &ms_same_ask_why, param_value_is(js, "/api/modsameask", "w", "muASK"),
+             "NOT REACHED: there is no /api/modsameask record, so the two-spelling statement never ran");
+    const char *ms_same_why = NULL; int ms_same = 1;
+    fold_row(&ms_same, &ms_same_why, param_value_is(js, "/api/modsame", "w", "muSAME")
+                                     && !param_value_is(js, "/api/modsame", "w", "muTWO"),
+             "`/chunk/mdmod.js` and `./chunk/../chunk/mdmod.js` did not answer one namespace — `muTWO` is a "
+             "module map keyed by the specifier rather than by the URL resolve a module specifier returns; an "
+             "error name is a load of one spelling failing");
+    const char *ms_handler_ask_why = NULL; int ms_handler_ask = 1;
+    fold_row(&ms_handler_ask, &ms_handler_ask_why, param_value_is(js, "/api/modhandlerask", "w", "ehASK"),
+             "NOT REACHED: there is no /api/modhandlerask record, so the dispatched click ran no handler body");
+    const char *ms_handler_why = NULL; int ms_handler = 1;
+    fold_row(&ms_handler, &ms_handler_why, param_value_is(js, "/api/modhandler", "w", "ehDEF"),
+             "an `import()` inside an event handler, whose referrer is null, did not load the module its API "
+             "base URL names");
+    const char *ms_eval_ask_why = NULL; int ms_eval_ask = 1;
+    fold_row(&ms_eval_ask, &ms_eval_ask_why, param_value_is(js, "/api/modevalask", "w", "meASK"),
+             "NOT REACHED: there is no /api/modevalask record, so the dynamic-function statement never ran");
+    const char *ms_eval_why = NULL; int ms_eval = 1;
+    fold_row(&ms_eval, &ms_eval_why, param_value_is(js, "/api/modeval", "w", "meDEF"),
+             "an `import()` inside a dynamic function's body did not load the module — its referrer is "
+             "JS_EVAL_SCRIPT_NAME, which module_loader.c resolves against the API base URL");
     /* §9.3.3's CROSS-DOCUMENT MESSAGE, IN TWO ROWS BECAUSE A MISSING FORK TOKEN HAS TWO READINGS. The first
        is that the DELIVERY ran at all: step 7 serializes in the posting turn and step 8 delivers in a LATER
        task, so an absent handler emission is the SCHEDULE and says nothing whatever about what the record
@@ -15185,6 +15215,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
         { "mod-typeask", mod_typeask, "/api/modtypeask", SESS_EXPLORE, mod_typeask_why },
         { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
+        { "mod-spec-bare-ask", ms_bare_ask, "/api/modbareask", SESS_EXPLORE, ms_bare_ask_why },
+        { "mod-spec-bare", ms_bare, "/api/modbareask", SESS_EXPLORE, ms_bare_why, .gate = "mod-spec-bare-ask" },
+        { "mod-spec-same-ask", ms_same_ask, "/api/modsameask", SESS_EXPLORE, ms_same_ask_why },
+        { "mod-spec-same", ms_same, "/api/modsameask", SESS_EXPLORE, ms_same_why, .gate = "mod-spec-same-ask" },
+        { "mod-spec-handler-ask", ms_handler_ask, "/api/modhandlerask", SESS_EXPLORE, ms_handler_ask_why },
+        { "mod-spec-handler", ms_handler, "/api/modhandlerask", SESS_EXPLORE, ms_handler_why,
+          .gate = "mod-spec-handler-ask" },
+        { "mod-spec-eval-ask", ms_eval_ask, "/api/modevalask", SESS_EXPLORE, ms_eval_ask_why },
+        { "mod-spec-eval", ms_eval, "/api/modevalask", SESS_EXPLORE, ms_eval_why, .gate = "mod-spec-eval-ask" },
         { "mod-world-reach", mod_world_reach, "/api/modworldreach", SESS_EXPLORE, mod_world_reach_why },
         { "mod-world", mod_world, "/api/modworld", SESS_EXPLORE, mod_world_why, .gate = "mod-world-reach" },
         /* THE TWO-WORLD CACHE ROWS, WHOSE WHOLE VALUE IS BEING READ BESIDE `mod-world`: that row's subject is a
