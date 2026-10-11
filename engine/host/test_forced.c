@@ -1003,6 +1003,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/dom.h"
 #include "fixture/isolation.h"
 #include "fixture/platform.h"
+#include "fixture/windowclose.h"
+#include "fixture/windowopenerclose.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1420,6 +1422,8 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "dom", HTML_DOM },
     { "isolation", HTML_ISOLATION },
     { "platform", HTML_PLATFORM },
+    { "windowclose", HTML_WINDOWCLOSE },
+    { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -11393,6 +11397,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "NOT REACHED: there is no /api/navopen record at all, so this run did not answer the statement");
     fold_row(&navopen_tt, &navopen_why, param_value_is(js, "/api/navopen", "v", "proxy"),
              "§7.4 open() handed back no WindowProxy — this statement's `v` is `null`");
+    /* HTML §7.2.2.1's close() over a same-origin popup this document opened: `closed` reads true on the next
+       line, since the incumbent is familiar with the popup by §7.3.2.2's first step. */
+    const char *winclose_why = NULL; int winclose_tt = 1;
+    fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
+             "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
+    fold_row(&winclose_tt, &winclose_why, param_value_is(js, "/api/winclose", "v", "S"),
+             "§7.2.2.1's close() did not close a same-origin popup this document opened — `v` is `S` when "
+             "`closed` reads true, `s` when close() was refused and `E<name>` when it threw");
+    /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
+    const char *winopclose_why = NULL; int winopclose_tt = 1;
+    fold_row(&winopclose_tt, &winopclose_why, !!strstr(js, "\"/api/winopclose\""),
+             "NOT REACHED: there is no /api/winopclose record at all, so this run did not answer the statement");
+    fold_row(&winopclose_tt, &winopclose_why, param_value_is(js, "/api/winopclose", "v", "X"),
+             "§7.2.2.1's close() did not close a cross-origin popup this document opened — `v` is `X` when "
+             "`closed` reads true, `x` when close() was refused and `E<name>` when it threw");
     /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
     /* THE NEGATIVE STAYS WHOLE-DOCUMENT AND THE POSITIVES DO NOT, which is this file's own discriminator: a
        superstring or a neighbouring record can only make `!strstr` fail EARLY, never pass, so `LEAKED`
@@ -15165,6 +15184,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE, hostreqfork_why },
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE, jsonfork_why },
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
+        { "win-close", winclose_tt, "/api/winclose", SESS_EXPLORE, winclose_why },
+        { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
         { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE, xdocjob_why },
