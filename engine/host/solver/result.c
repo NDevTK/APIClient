@@ -475,10 +475,9 @@ char *result_wfq_json(void) {
 
     flow_wfq_census(&w);
     /* The four arming buckets in one read, since they are a partition (solver/flow.h). After the census,
-       because flow_wfq_census calls flow_best — flow_pick, which classifies every member it weighs — so an
+       because flow_wfq_census calls flow_best — flow_pick_walk, which classifies every member it weighs — so an
        earlier read would be one walk older than the scan rows containing it. Nothing below steps anything. */
     FlowKeyChecks kc = flow_key_checks();
-    FlowIndexChecks ic = flow_index_checks();
     /* …and the partition of the preempt hook's cache misses, in one read (solver/engine.h). */
     EngineRivalMiss rm = engine_rival_miss();
     /* …and which arm of flow_step took the step of a member holding a runnable task, in one read
@@ -489,7 +488,8 @@ char *result_wfq_json(void) {
     engine_ladder_task_census(&lt);
     /* The containment that holds in both builds: every bucket is raised on the statement after a scan's own
        `g_scan_weights[why]++`, so the four never sum above the weighings. Equality is not asserted here — the
-       scan totals also carry flow_pick's seed fold and the census walk — but inside flow_pick, over one loop.
+       scan totals also carry the order index's weighings and the census walk — but inside flow_pick_walk, over
+       one loop.
        In release all four are zero and this passes vacuously. Both sides are 64-bit (solver/flow.h's
        FlowKeyChecks static assertion): a `long` wraps past 2^31 on wasm32. If it fires, read the magnitudes
        first; near 2^31 with a negative right-hand side is a width, not the identity. */
@@ -676,6 +676,7 @@ char *result_wfq_json(void) {
     METRIC_SET(scan_other_weights, flow_scan_weights(FLOW_SCAN_OTHER));
     METRIC_SET(scan_census_runs, flow_scan_runs(FLOW_SCAN_CENSUS));
     METRIC_SET(scan_census_weights, flow_scan_weights(FLOW_SCAN_CENSUS));
+    METRIC_SET(scan_index_entries, flow_ix_entries());
     METRIC_SET(preempt_asks_lifetime, engine_preempt_asks());
     METRIC_SET(rival_miss_gen, rm.gen);
     METRIC_SET(rival_miss_cur, rm.cur);
@@ -684,12 +685,6 @@ char *result_wfq_json(void) {
     METRIC_SET(key_stale_gen_lifetime, kc.stale_gen);
     METRIC_SET(key_first_seen_lifetime, kc.first_seen);
     METRIC_SET(key_running_lifetime, kc.running);
-    METRIC_SET(key_index_asked_lifetime, ic.index_asked);
-    METRIC_SET(key_index_differed_lifetime, ic.index_differed);
-    METRIC_SET(key_index_differed_tie_lifetime, ic.differed_tie);
-    METRIC_SET(key_index_differed_strict_lifetime, ic.differed_strict);
-    METRIC_SET(key_index_band_members_lifetime, ic.band_members);
-    METRIC_SET(key_index_band_weighed_lifetime, ic.band_weighed);
     METRIC_SET(epoch_away_live, w.epoch_away_live);
     METRIC_SET(epoch_away_walk, w.epoch_away_walk);
     METRIC_SET(epoch_rebuild_lifetime, flow_epoch_rebuild());

@@ -52,12 +52,21 @@ typedef struct FlowAcct FlowAcct;
 /* The flow is a timeline that does not exist (a peer request no timeline will answer): it leaves unfinished. */
 #define FLOW_STEP_RETIRED 3
 
+/* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
+   the index allocates nothing. `s` is the null-path length; `off` is used only by a query's queue. */
+typedef struct FlowIxNode {
+    struct FlowIxNode *l, *r, *up;
+    double key, off;
+    int s;
+    unsigned char kind;
+} FlowIxNode;
+
 typedef struct Flow {
     /* This flow's slot in the frontier's array, so locating a member is a load rather than a walk. It names a
        slot, never a rank: the array is in arrival order and the order is by weight, so no term of flow_weight
        may read it. Exactly two writers keep it exact: flow_new's append and flow_remove's swap-remove, which
        re-keys only the member moved from the end into the vacated slot. No Flow is ever copied, and the
-       registry's realloc moves the pointer array, not members. flow_pick asserts the field against its index at
+       registry's realloc moves the pointer array, not members. flow_pick_walk asserts the field against its index at
        every member of every scan; flow_is_member cannot use it, because it must answer for a dangling pointer. */
     int reg_i;
     /* This flow's world: its name in the one timeline it owns, valid in every document it touches
@@ -503,7 +512,7 @@ typedef struct Flow {
        The walk stamps each member it weighs (it already holds the member and the key), and flow_age_running
        re-stamps the member it charges. Three operands are compared as one condition into one counter bucket,
        because key_checks_total() is asserted equal to the weighings one loop performed:
-         - `key_last`: flow_member_key, the sum that must stand still or flow_pick goes blind to a fork
+         - `key_last`: flow_member_key, the sum that must stand still or flow_pick_walk goes blind to a fork
            re-ranking a whole arm;
          - `phase_last`: flow_silence_phase, `own_silence % FLOW_SERVICE_US`, which the key's floor discards and
            which is the bucket key; a sub-quantum writer would re-bucket a member without moving `key_last`;
@@ -522,6 +531,16 @@ typedef struct Flow {
     int64_t  phase_last;
     double   ikey_last;
 #endif
+    /* This member's place in the order's index (flow.c's flow_ix_* banner): its node in its branch bucket's
+       member heap, keyed on flow_ix_member_key; its node in one query's best-first queue; and whether it is in
+       the index at all, which is exactly "a member not host-owed". Owned and read by flow.c alone. */
+    FlowIxNode ix_m, ix_q;
+    unsigned char ix_in;
+    /* Its links in two populations the index re-keys or re-admits as a whole: its family's away list (members
+       whose own silence is non-zero in the current window, the ones an emission re-keys) and the host-owed list
+       (members out of the index, re-admitted by flow_clear_host_owed_all). NULL-linked, owned by flow.c. */
+    struct Flow *away_prev, *away_next;
+    struct Flow *owed_prev, *owed_next;
 } Flow;
 
 /* `doc_name` is this instance's document identity, a parameter so a frontier cannot exist without one: every
@@ -1097,7 +1116,7 @@ typedef struct {
     /* The job backlog, split by what each job waits on, over the predicates flow_step and flow_pick already ask;
      * a job that never runs is a route that cannot reach it or an order that has not got to it. Disjoint and
      * exhaustive (two booleans over every member):
-     *   `jobs_owed`   host-owed mark, so flow_pick refuses it (`runnable_only`): it waits on the host.
+     *   `jobs_owed`   host-owed mark, so flow_pick refuses it (out of the order's index): it waits on the host.
      *   `jobs_framed` fails flow_stack_empty (HTML §8.1.4.4 "Calling scripts", clean up after running script
      *                 step 3), which every job arm of flow_step is under: a live frame or a DYN_POS_IMMEDIATE row
      *                 at the cursor, not `frame` alone. It waits on the member completing its unit of work, which
@@ -1214,8 +1233,7 @@ typedef struct {
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
-/* What the order costs to ask. Each scan is linear in the frontier (flow_weight itself is O(1), since the preempt
- * hook reads it per opcode), so "the tail is not reached" has two causes: too little thread for the members, or
+/* What the order costs to ask (flow_weight itself is O(1), since the preempt hook reads it per opcode), so "the tail is not reached" has two causes: too little thread for the members, or
  * the thread spent asking the order. Entries are counted apart because their cadences differ:
  *   `next-to-run`: the dispatch loop's pick, one per step, so weights over steps is the frontier a step pays for;
  *   `rival-of-incumbent`: the preempt hook's rescan, one per miss of a key that is a disjunction
@@ -1225,9 +1243,11 @@ void flow_wfq_census(WfqCensus *out);
  *   `wfq-census-walk`: the census's own walk, one per sample (two samplers in a smoke: the result composer and
  *      the native fixture's probe table), so the instrument's cost is visible: compare `scanCensusWeights`
  *      against `scanNextWeights`.
- * A count, not a clock, so loaded runs stay comparable. It counts weight evaluations the scan performed (its
- * seed's and its loop's), not loop trips (excluded and host-owed members are skipped unpriced) and not a
- * DCHECK's. It decides nothing. */
+ * A count, not a clock, so loaded runs stay comparable. It counts weight evaluations the ask performed, not a
+ * DCHECK's: a walk (`best-and-eviction-tail`'s flow_best and flow_worst, the census) weighs every member it does
+ * not exclude, and the order's index (the runnable asks, `next-to-run`, `rival-of-incumbent` and the host's
+ * best-weight read) weighs only the members whose bound reaches its answer, so per-ask weighings over `members`
+ * is that index's narrowing. It decides nothing. */
 #define FLOW_SCANS(X)                                                                     \
     /* the dispatch loop's pick — one per step */                                         \
     X(NEXT,  "next-to-run")                                                               \
@@ -1260,7 +1280,7 @@ static inline const char *flow_scan_name(FlowScan s)
 long flow_scan_runs(FlowScan s);
 int64_t flow_scan_weights(FlowScan s);   /* per member per scan — 64-bit for FlowKeyChecks' reason */
 
-/* What flow_pick's member-key assertion did with the weights the scan rows count; disjoint from them, since
+/* What flow_pick_walk's member-key assertion did with the weights the scan rows count; disjoint from them, since
    FLOW_SCANS never counts a DCHECK's weighing. The invariant is a predicted absence, and its condition is a
    four-way disjunction whose first three arms exempt the member, so a clean run cannot tell an invariant that
    holds from one never compared:
@@ -1272,7 +1292,7 @@ int64_t flow_scan_weights(FlowScan s);   /* per member per scan — 64-bit for F
    counts of comparisons, monotone, may be differenced, never read against `members`. Zero in a release build,
    where the check is compiled out (see `Flow.key_last`) while solver/result.c still publishes them: all four
    zero with any `scan<Entry>Weights` nonzero is a build that makes no check, and `armed: 0` with the four
-   summing above zero is the walk comparing nothing. flow_pick asserts their delta over one loop equals
+   summing above zero is the walk comparing nothing. flow_pick_walk asserts their delta over one loop equals
    `g_scan_weights[why]`'s, which catches a `continue` inserted between the weighing and the block. They
    decide nothing. */
 /* Counters raised once per member per scan grow as O(members × scans) and reach 2^31 within the hour on a real
@@ -1290,50 +1310,9 @@ _Static_assert(sizeof(((FlowKeyChecks *)0)->armed) >= 8,
                "solver/result.c rather than as anything a reader would connect to this declaration");
 FlowKeyChecks flow_key_checks(void);
 
-/* Whether an index over the member key would return the member the comparator did: the key standing still
-   (above) is not the key ordering. In exact arithmetic the surrogate is the order, but flow_nonreward evaluates
-   `((qn + opt) + dist) + bb` with the varying term first, so in floating point a surrogate is a re-association
-   that can differ in the last bit. flow_pick therefore folds the surrogate over its own population and
-   tie-break and counts what the two spellings did, with no equality assert, since flow_index_margin declares
-   them free to stand that far apart. Its band walk (a candidate set within flow_index_margin of the
-   surrogate's extremum, re-compared through flow_weight) asserts it returns the comparator's own extremum.
-   `index_asked` is the reachability witness for all six rows. `differed` (named a different member) is
-   partitioned by `differed_tie` (the surrogate reads the comparator's member at its own extremum: a lost
-   distinction a candidate set answers) and `differed_strict` (a real disagreement). Read the strict share of
-   `differed`, never a numerator alone.
-   `band_members / band_weighed` is the share of the frontier a re-compare costs. The band always contains every
-   member tied with the maximum (`S(m*) - S(a) <= 2M`), so its share is at least the tied share whatever the
-   margin: a large share is the order being tied, not a loose margin. Lifetime counts under APICLIENT_DEV,
-   deciding nothing. */
-/* Named residual. Not covered: whether to re-compose flow_weight so its member half is a subexpression, which
-   changes tie identity in the last bit and is the project owner's decision. Next diff builds: that decision,
-   informed by `differed_tie`/`differed_strict` over whole runs. Absence shows as: a strict share that stays
-   non-zero with the surrogate kept as only a re-association. */
-typedef struct {
-    long index_asked;      /* scans that folded the surrogate and had a maximum to compare it against */
-    long index_differed;   /* …of those, the ones where the surrogate named a different member. It tests no
-                              weight: the pair may weigh the same or differ in the last bits, and the two rows
-                              below separate those */
-    long differed_tie;     /* …of those, the ones where the surrogate reads the comparator's own member at its
-                              own extremum: it lost a distinction the comparator makes rather than making a
-                              different one, which is the arm a margin-carrying candidate set answers with
-                              flow_weight untouched */
-    long differed_strict;  /* …and the ones where it reads that member on the losing side of its extremum: a
-                              real disagreement, which is the arm the tie-identity decision is about. The pair
-                              is read against `index_differed`, which it partitions, and flow_pick asserts the
-                              sum because the three are raised by two statements over one condition */
-    /* The four `long` rows above are raised once per ask (outside flow_pick's member loop); the two below are
-       raised inside the band walk, once per member per ask, so they are int64_t for FlowKeyChecks' reason. */
-    int64_t band_members;  /* members the derived-margin candidate set admitted, summed over those scans */
-    int64_t band_weighed;  /* …and the members that set was tested over — the denominator of the row above;
-                              per member per scan, so 64-bit for FlowKeyChecks' reason */
-} FlowIndexChecks;
-_Static_assert(sizeof(((FlowIndexChecks *)0)->band_members) >= 8
-                   && sizeof(((FlowIndexChecks *)0)->band_weighed) >= 8,
-               "a per-member-per-scan lifetime counter in FlowIndexChecks is narrower than 64 bits — the two "
-               "band rows share FlowKeyChecks' unit and therefore its wall, and the comment above says which "
-               "rows of this struct are which so the answer is read rather than guessed");
-FlowIndexChecks flow_index_checks(void);
+/* Lifetime count of queue entries the order's index took across every runnable ask (flow.c's flow_ix_query):
+   the index's own work beside `scan<Entry>Weights`, the members it weighed. Never reset; may be differenced. */
+int64_t flow_ix_entries(void);
 
 /* Lifetime count of rank changes (raises of frontier_rank_changed): the denominator of the hook's rescan count.
  * The hook rescans when `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur` (engine.c), so its cadence is

@@ -236,6 +236,11 @@ METRIC(scan_other_weights, "scanOtherWeights", LIFETIME, "weighing", PROCESS, "s
    against `scanNextWeights` the share of weighing spent reporting. */
 METRIC(scan_census_runs, "scanCensusRuns", LIFETIME, "scan", PROCESS, "solver/flow.c", INT)
 METRIC(scan_census_weights, "scanCensusWeights", LIFETIME, "weighing", PROCESS, "solver/flow.c", INT)
+/* …and the order's index's own work: queue entries its runnable asks took, members and buckets
+   alike. Beside `scanNextWeights + scanRivalWeights` (the members those asks weighed) it is the
+   whole cost of an ask that does not walk; per ask against `members` and `families` it says
+   which of the two the index pays for (solver/flow.c's flow_ix_query states the residual). */
+METRIC(scan_index_entries, "scanIndexEntries", LIFETIME, "entry", PROCESS, "solver/flow.c", INT)
 /* …and how often the hook was asked. The rival rescan is close to half of all frontier
    weighing; this tells a cache that absorbs nothing (repair the cache) from a generation
    moving as fast as the hook is consulted (the page branching). `scanRivalRuns /
@@ -254,7 +259,7 @@ METRIC(preempt_asks_lifetime, "preemptAsksLifetime", LIFETIME, "ask", PROCESS, "
 METRIC(rival_miss_gen, "rivalMissGen", LIFETIME, "rescan", PROCESS, "solver/engine.c", INT)
 METRIC(rival_miss_cur, "rivalMissCur", LIFETIME, "rescan", PROCESS, "solver/engine.c", INT)
 METRIC(rival_miss_both, "rivalMissBoth", LIFETIME, "rescan", PROCESS, "solver/engine.c", INT)
-/* …and whether the dispatch walk's one assertion was ever asked. flow_pick's member-key
+/* …and whether the dispatch walk's one assertion was ever asked. flow_pick_walk's member-key
    invariant (solver/flow.h's FlowKeyChecks) is a predicted absence, exempting a member on
    three arms before comparing. `keyArmedLifetime` is the score and the other three, which
    partition the classifications with it, are why: `keyRunningLifetime` is bounded by one
@@ -268,39 +273,6 @@ METRIC(key_armed_lifetime, "keyArmedLifetime", LIFETIME, "classification", PROCE
 METRIC(key_stale_gen_lifetime, "keyStaleGenLifetime", LIFETIME, "classification", PROCESS, "solver/flow.c", INT)
 METRIC(key_first_seen_lifetime, "keyFirstSeenLifetime", LIFETIME, "classification", PROCESS, "solver/flow.c", INT)
 METRIC(key_running_lifetime, "keyRunningLifetime", LIFETIME, "classification", PROCESS, "solver/flow.c", INT)
-/* …and whether an index over that key would have answered what the comparator answered: the
-   four rows above score whether the key stands still, these whether it orders, which a
-   candidate set rests on. `keyIndexAskedLifetime` counts scans that folded the surrogate
-   against a maximum (the reachability witness); `keyIndexDifferedLifetime` the subset naming
-   a different member while the assert held, ordinary when two members tie. A zero there
-   with a large ask means the surrogate picked the same member every time. The
-   disagreement that matters is not an abort, since flow.c's flow_index_margin declares
-   the two spellings a derived distance apart; it is the partition on the next row.
-   Lifetime counts raised under APICLIENT_DEV, so two zeros first question the build. */
-METRIC(key_index_asked_lifetime, "keyIndexAskedLifetime", LIFETIME, "scan", PROCESS, "solver/flow.c", INT)
-METRIC(key_index_differed_lifetime, "keyIndexDifferedLifetime", LIFETIME, "scan", PROCESS, "solver/flow.c", INT)
-/* …and which mode each disagreement was. `keyIndexDifferedTieLifetime`: the surrogate read
-   the comparator's own member at its extremum, losing a distinction (flow.c shows a
-   margin-carrying candidate set answers it with flow_weight untouched).
-   `keyIndexDifferedStrictLifetime`: the member on the losing side, a real disagreement and
-   the tie-identity decision solver/flow.h reserves for the project owner. The mode compares
-   `sur_w` with the surrogate's reading of the returned member, never that member's weight.
-   They partition the row above (asserted in flow.c), so a strict count is read as a share.
-   Lifetime counts under APICLIENT_DEV; `keyIndexAskedLifetime` is the witness. */
-METRIC(key_index_differed_tie_lifetime, "keyIndexDifferedTieLifetime", LIFETIME, "scan", PROCESS, "solver/flow.c", INT)
-METRIC(key_index_differed_strict_lifetime, "keyIndexDifferedStrictLifetime", LIFETIME, "scan", PROCESS, "solver/flow.c", INT)
-/* …and what answering it would cost. The design that answers a tie edits flow_weight not at
-   all: a candidate set of every member within a derived margin of the surrogate's extremum,
-   re-compared through flow_weight, which flow.c proves contains the comparator's extremum
-   and asserts returns the same member. `keyIndexBandMembersLifetime` is how many members
-   the set admitted and `keyIndexBandWeighedLifetime` how many were tested, on the same
-   walk: their quotient is the share an index would still re-compare (near one saves
-   nothing). A large share is expected — the band holds every member tied with the maximum
-   whatever the margin (solver/flow.h) — so it is the order being tied, not a wide margin.
-   Lifetime counts summed over asks, under APICLIENT_DEV; `keyIndexAskedLifetime` is the
-   witness. */
-METRIC(key_index_band_members_lifetime, "keyIndexBandMembersLifetime", LIFETIME, "member", PROCESS, "solver/flow.c", INT)
-METRIC(key_index_band_weighed_lifetime, "keyIndexBandWeighedLifetime", LIFETIME, "member", PROCESS, "solver/flow.c", INT)
 /* The away-from-base population and what it costs an index. The `Live` rows are gauges, the
    `Lifetime` rows counters. `epochAwayLive` is maintained incrementally at four sites in
    solver/flow.c and summed per family at the census's family door; `epochAwayWalk` asks

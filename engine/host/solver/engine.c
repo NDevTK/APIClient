@@ -7149,8 +7149,8 @@ static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 
    below: that block holds the incumbent, whose terms may move while it runs; this holds a member that is not
    running and must not move except through the one quantity that legitimately does (flow_silence_phase: the
    aging's carry bit, whose threshold is the family's). If a reward, completed-unit count, fitness distance or own
-   service notch could move with the generation still, every sub-linear order over the frontier (flow_pick walks
-   it today because flow_weight's summands move under a key) would already be wrong; this catches it cheaply on a
+   service notch could move with the generation still, the order's index (flow.c's flow_ix_*, which holds each
+   member's key exact only because every such writer re-keys) would already be wrong; this catches it cheaply on a
    member the hook holds anyway, and also checks the pointer's safety argument for more than membership. Written
    in every build and read only in dev, like `g_ranked_*`: four stores after an O(members) walk, and guarding them
    would put the assertion's operands behind a second condition. */
@@ -10571,6 +10571,10 @@ static int engine_sched_slice(void) {
         }
         solve_seed_candidates(ctx);
         witness_verify_seed(ctx);   /* the same for an endpoint witness's verification (witness_verify.h) */
+        /* The seeding allocates, and an allocation at the RAM floor sells the frontier's tail, which may be the
+           incumbent switched out above. The pick reads its incumbent through its handle, so one that departed is
+           not offered: an address walk, paid only on the turn that switched the incumbent out to seed. */
+        if (incumbent && !cur && !flow_is_member(incumbent)) incumbent = NULL;
         /* WFQ: highest value of information among the members that can still make progress; a fresh fork (UCB)
            can preempt. The members waiting on the host are taken out of the pick only; they keep their weight,
            place and every work item (flow.h). The flow holding the thread is passed in, which makes this a
@@ -10917,7 +10921,7 @@ static int engine_sched_slice(void) {
 #if APICLIENT_DEV
             /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, "a UCB optimism bonus
                ∝ 1/(visits+1) so a never-run flow is never starved", is a floor on the weight flow_pick returns;
-               flow_pick's bound on the aging half is derived from flow_weight and catches only an edit to the
+               flow_pick_walk's bound on the aging half is derived from flow_weight and catches only an edit to the
                formula. This is observability: whether consuming a whole quantum moves the flow's rank at the
                granularity the thread is handed out in, since the next statement of this loop is the pick. Under
                today's unit it is an identity: `flow_silence_notch` divides by the cooperative quantum and the

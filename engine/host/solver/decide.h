@@ -400,8 +400,8 @@ void decide_fork_pinned_stats(long *total, long *over_pinned);
  * repeat is REFINED and not REPLAYED, so `replayHits` moves by ONE per collapsed fork whatever the repeat count
  * is, while the re-asks the name actually paid for are this pair's numerator.
  *
- * `asked` IS A REACHABILITY WITNESS AND NOT A SECOND OUTCOME, on the idiom flow.h's `index_asked` states for
- * the six FlowIndexChecks rows. `refined` at 0 has two readings and they take OPPOSITE work: no branch was
+ * `asked` IS A REACHABILITY WITNESS AND NOT A SECOND OUTCOME, on the idiom flow.h's FlowKeyChecks states for its
+ * `armed` row. `refined` at 0 has two readings and they take OPPOSITE work: no branch was
  * ever re-asked inside one flow's constraint, or NO SPELLABLE QUESTION WAS REACHED AT ALL. The second is not
  * the exotic case — it is the state fork_site_name's residual is entirely about, and the population it measures
  * was 26.9-37.2% of all forks on the one real document anybody has pooled — so a bare `refined` would read as a

@@ -1990,30 +1990,14 @@ function wfqReading(out) {
           `below are an instant's accumulation — no verdict is available from one sample`
         : `over the last interval the dispatch scan WEIGHED ${ivl.walked.toFixed(1)} member(s) of the ` +
           `${ivl.members} standing (${(100 * ivl.walked / ivl.members).toFixed(0)}%)` +
-          /* THIS RATIO IS NOT A COMPLEXITY AND IT USED TO BE READ AS ONE, WHICH IS A VACUOUS TEST PRINTED AS
-             A VERDICT. `scanNextWeights` is raised where the WEIGHT is taken, and solver/flow.c's loop skips
-             exactly three things before that line — the seed, the excluded member, and the host-owed ones
-             under `runnable_only`. So this quotient is `1 - (1 + exclude + hostOwed) / members` BY
-             CONSTRUCTION, and it reads high whatever the pick's shape is: it cannot fall unless most of the
-             frontier is host-owed, and no value of it distinguishes a linear scan from an indexed one. The
-             old arms branched on it at a half and asserted LINEAR above and NOT-TRACKING below; both were
-             conclusions the number has no power to support, and the second was additionally false about the
-             loop, which TRIPS over every member and merely declines to WEIGH the skipped ones — a
-             distinction the raise site's own comment already draws.
-             WHAT IT DOES MEASURE IS WORTH PRINTING: the share of the frontier the pick could actually
-             consider. A low reading is a run whose order was choosing from a small live subset because the
-             host owed the rest a reply, which is a fact about the DOOR and not about the ordering.
-             AND THE COMPLEXITY IS A STRUCTURAL FACT, READ RATHER THAN SAMPLED — flow_pick walks `g_flows`
-             end to end, so it is linear in the frontier and the run's total scan work is quadratic in its own
-             step count. That is true of every run and needs no census to say so, which is exactly why no
-             census row should appear to be establishing it. */
-          `, which is the share the pick could CONSIDER — the rest were host-owed, excluded or the seed, and ` +
-          `a low reading is a statement about the reply door rather than about the order. It is not a ` +
-          `complexity: the loop trips over every member and this counts only the ones it weighed, so no ` +
-          `value of it could distinguish a linear pick from an indexed one. The pick IS linear — that is ` +
-          `read off flow_pick walking the registry end to end, and it makes the run's total scan work ` +
-          `quadratic in its own step count, which is a throughput fact about every run and not a finding ` +
-          `about this one` +
+          /* WHAT THE RATIO MEASURES: the members the dispatch ask weighed per ask over the members standing.
+             The ask goes through solver/flow.c's order index, which weighs only the members whose bound
+             reaches its answer (the incumbent, the members level with or above it, and the carry and margin
+             slack around them), so this is the index's narrowing on this run: near zero on a frontier whose
+             top is a few members, rising toward one only where most of the frontier stands within one
+             quantum of the top. `scanIndexEntries` is the index's own queue work beside it. */
+          `, the share the index had to weigh to answer — the members whose bound reached the pick, not the ` +
+          `frontier, so a low reading is the ask not walking` +
           `; the preempt hook rescanned ${ivl.rival.toFixed(2)} time(s) per dispatch scan over ` +
           `${ivl.gen} rank change(s)` +
           /* THE COST AND THE CADENCE ARE TWO QUESTIONS AND THE SAME COUNT ANSWERS BOTH ONLY WITH TWO

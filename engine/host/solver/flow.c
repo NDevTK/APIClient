@@ -100,11 +100,11 @@ uint64_t flow_work_seq_next(void) {
  * passed over a member; `neverPickedGap` 0 means the best never-picked member stands at the top. An ordering defect
  * is repaired by a term and a throughput one by finding where a turn goes.
  *
- * Asking the order costs O(members) per ask, one ask per step and about two per fork (the rival cache's key is a
- * disjunction of the generation and the incumbent; `rivalMissGen`, `rivalMissCur` and `rivalMissBoth` in
- * solver/engine.h partition `scanRivalRuns`), so a forking page pays members squared to be ordered. A diff here
- * changes what an ask costs, never what it answers; capping a fork site or shedding an arm would answer a different
- * question.
+ * The order is asked once per step and about twice per fork (the rival cache's key is a disjunction of the
+ * generation and the incumbent; `rivalMissGen`, `rivalMissCur` and `rivalMissBoth` in solver/engine.h partition
+ * `scanRivalRuns`), and those runnable asks go through the order's index (the flow_ix_* banner), which weighs the
+ * members whose bound reaches its answer rather than the frontier. A diff here changes what an ask costs, never what
+ * it answers; capping a fork site or shedding an arm would answer a different question.
  *
  * `arrivals - departures == members` is a conservation identity asserted in flow_wfq_census and checkable on the
  * published document; it is exact because each counter has one writer (flow_new appends the only member the
@@ -213,10 +213,10 @@ typedef struct FlowAcct {
        generation skips zero on wrap. Written only by the census. */
     unsigned census_gen;
     /* How many live members of this family stand away from its epoch base: a gauge, meaningful where
-       `family == self`, which says whether an index over flow_index_key is a cost or a bar. flow_own_silence is
-       `cpu_gen == family->emit_gen ? cpu : 0`, so a member is at base exactly when that reads zero, and
-       flow_credit_emit sends a whole family there by moving `emit_gen` with no per-member write; an epoch-keyed
-       index rebuilds only the members away. Maintained incrementally at four sites and never walked (a walk at the
+       `family == self`, the length of `away_head`'s list. flow_own_silence is `cpu_gen == family->emit_gen ? cpu :
+       0`, so a member is at base exactly when that reads zero, and flow_credit_emit sends a whole family there by
+       moving `emit_gen` with no per-member write; the order's index re-keys only the members away, read off the
+       list. Maintained incrementally at four sites, beside the list's links, and never walked (a walk at the
        emission would be an instrument changing the run): flow_age_running (a charge takes the running member
        away), flow_fork_inherit (a newborn inherits its parent's silence), acct_depart (an away member leaves) and
        flow_credit_emit (the bump takes the family back and re-stamps the emitter alone). The arrival door is not
@@ -259,8 +259,8 @@ typedef struct FlowAcct {
     long sub_gone;
     /* The order's reading of `sub_born`, held once per bucket: `1.0 / sub_born`, the whole of what
        flow_branch_bonus returns and this scope contributes to each live member's weight. Not a cache for speed: it
-       makes the term spellable as a bucket quantity, the one form an index can hold per bucket and apply to a whole
-       arm (see the residual at flow_index_key). Written on the statement that writes `sub_born` and nowhere else
+       makes the term spellable as a bucket quantity, the form the order's index reads once per bucket and applies to
+       a whole arm (flow_ix_bucket_key). Written on the statement that writes `sub_born` and nowhere else
        (flow_new's initialisation and flow_fork_inherit's join write both adjacently), and acct_branch_offset
        compares it with the quotient recomputed from the integer at every read, so a raise without its offset fires
        at the next weighing. A pure function of `sub_born` at the instant read, monotone downward and published
@@ -281,6 +281,15 @@ typedef struct FlowAcct {
        generation on the first member of a scan that reaches its node rather than by a clearing pass. */
     unsigned fan_gen;
     long fan_n;
+    /* The order's index (the flow_ix_* banner). As a bucket (`branch == self`): its node in its family's bucket
+       heap, set while it holds a member (`ix_bin`), the root of its members' heap, and its node in one query's
+       queue. As a family root (`up == NULL`): the root of its buckets' heap, its links on the list of families the
+       index holds (`ix_listed`), and the head of its away list (the members `away_n` counts). A root is both. */
+    FlowIxNode ix_b, ix_q;
+    FlowIxNode *ix_members, *ix_buckets;
+    struct FlowAcct *ix_fprev, *ix_fnext;
+    unsigned char ix_bin, ix_listed;
+    Flow *away_head;
 } FlowAcct;
 
 /* The node census, counted where a node's lifetime begins and ends and asserted at the frontier's teardown, as for
@@ -314,6 +323,11 @@ static void acct_unref(FlowAcct *a) {
                "a fork-tree node reached its free with no branch bucket — flow_new, the only mint, points every node "
                "at one, so this node was built somewhere else");
         if (a->branch == a) g_branch_retired_us += a->sub_us;
+        /* And the index holds nothing through it: a bucket leaves its family's heap with its last member, and a
+           family leaves the list with its last bucket, both before the departure that drops the last reference. */
+        DCHECK(!a->ix_bin && !a->ix_members && !a->ix_buckets && !a->ix_listed && !a->away_head,
+               "a fork-tree node was freed while the order's index still links it — flow_remove takes a member out "
+               "of the index before acct_depart, so a node reaching its free is no member's bucket or family");
         free(a);
         g_acct_live--;
         a = up;
@@ -340,6 +354,28 @@ static void acct_compress_dead(FlowAcct *a) {
    since the away count is maintained in every build. */
 static int64_t flow_own_silence(const Flow *f);
 
+/* A member's links on its family's away list: the members whose own silence is non-zero in the current window,
+   the ones `away_n` counts and the ones an emission re-keys in the order's index (flow_credit_emit). Linked and
+   unlinked at the transitions that move `away_n`, beside them, so the list and the gauge are one population. */
+static void flow_away_link(Flow *f) {
+    DCHECK(f->family != NULL && f->away_prev == NULL && f->away_next == NULL && f->family->away_head != f,
+           "a member was put on its family's away list twice, or with no family — a member becomes away once per "
+           "window, at the charge or the fork that gives it its first microsecond");
+    f->away_next = f->family->away_head;
+    if (f->away_next) f->away_next->away_prev = f;
+    f->family->away_head = f;
+}
+
+static void flow_away_unlink(Flow *f) {
+    DCHECK(f->family != NULL && (f->away_prev != NULL || f->family->away_head == f),
+           "a member left its family's away list without standing on it — the list and `away_n` move together, so "
+           "an away member missing from the list was made away at a site that raised the gauge alone");
+    if (f->away_prev) f->away_prev->away_next = f->away_next;
+    else f->family->away_head = f->away_next;
+    if (f->away_next) f->away_next->away_prev = f->away_prev;
+    f->away_prev = f->away_next = NULL;
+}
+
 static void acct_depart(Flow *f) {
     DCHECK(f->acct != NULL && f->acct->owner == f,
            "a flow departed without owning its own fork-tree node — either it never got one, or another flow's "
@@ -348,7 +384,7 @@ static void acct_depart(Flow *f) {
     /* And an away member leaves the away population (FlowAcct's `away_n`), asked first because the statements
        below clear `f->acct` and then `f->family`, after which flow_own_silence answers zero and the gauge would
        drift up by one per away departure. */
-    if (flow_own_silence(f) > 0) f->family->away_n--;
+    if (flow_own_silence(f) > 0) { f->family->away_n--; flow_away_unlink(f); }
     /* And the member leaves its branch bucket, before the unref below, because the bucket may be this node and this
        is the last instant it is certainly addressable. `sub_gone` rather than a live decrement, for `g_departures`'
        reason. What the bucket received (`sub_us`) is untouched: a departed arm's thread time is part of what its
@@ -416,6 +452,18 @@ static double acct_family_val(const Flow *f);
 /* And the one statement that says the order moved, forward-declared because the clock's writer below raises it and
    the raise is defined with the registry it belongs to. */
 static void frontier_rank_changed(void);
+
+/* The order's index, forward-declared for the writers above its definition (the flow_ix_* banner): each writer of
+   an operand of a member's key re-keys that member after the write, and `g_ix_never_n` is the count of indexed
+   members never dispatched, which flow_credit_pick moves. */
+static void flow_ix_insert(Flow *f);
+static void flow_ix_remove(Flow *f);
+static void flow_ix_rekey(Flow *f);
+static FlowAcct *g_ix_fams;   /* the families holding an indexed member, linked through `ix_fprev`/`ix_fnext` */
+static long g_ix_fams_n;      /* …how many */
+static long g_ix_n;           /* members in the index: the frontier's members not host-owed */
+static long g_ix_never_n;     /* …of those, the ones never dispatched (`picks == 0`) */
+static Flow *g_owed_head;     /* the host-owed members, out of the index; see flow_owed_link */
 
 #if APICLIENT_DEV
 /* And the member half of the weight, forward-declared for the one writer that moves it without raising the
@@ -525,8 +573,9 @@ static void frontier_vt_serve(const Flow *f) {
 /* And the reward that silence is subtracted from, read through the same pointer (FlowAcct's reward): the WFQ's
    reward term and the only reading of it the order makes (`Flow.val` is what one member emitted, a census quantity).
    Exported as flow_reward (flow.h) because the node is private to this file and the ranked-state cache and the cold
-   tier both name the quantity the weight is a function of. */
-static double acct_family_val(const Flow *f) {
+   tier both name the quantity the weight is a function of. Read off the family root, so the order's index reads it
+   once per family (flow_ix_family_bound) and every member's weight reads the same bits. */
+static double acct_root_val(const FlowAcct *fam) {
     /* The order's reward is the sum of the two, spelled only here, so the split cannot leak into a caller that adds
        one of them. `base` is where the account entered the order and `earned` what it has emitted since. While the
        account has never been served the first is a relation: an unplaced account has emitted nothing (only the
@@ -535,12 +584,18 @@ static double acct_family_val(const Flow *f) {
        freezes and it stands on its own ledger. The `+ earned` is written on both arms rather than factored out:
        it is zero on the unplaced arm by construction (asserted), and factoring it would read as an arm that
        discards a ledger rather than one where it is empty. */
-    if (!f->family) return 0.0;                                     /* departed: its node is gone, so is its rank */
-    DCHECK(f->family->placed || f->family->earned == 0.0,
+    DCHECK(fam->up == NULL, "a reward was read off a fork-tree node that is not a family root — the reward is held "
+                            "only on the root every member's `family` names");
+    DCHECK(fam->placed || fam->earned == 0.0,
            "an account that has never held the thread was credited an emission — only the running flow is credited "
            "and a dispatch places its account, so a detector credited a flow not in service or an account was "
            "un-placed");
-    return (f->family->placed ? f->family->base : frontier_vt()) + f->family->earned;
+    return (fam->placed ? fam->base : frontier_vt()) + fam->earned;
+}
+
+static double acct_family_val(const Flow *f) {
+    if (!f->family) return 0.0;                                     /* departed: its node is gone, so is its rank */
+    return acct_root_val(f->family);
 }
 
 double flow_reward(const Flow *f) {
@@ -618,6 +673,11 @@ void flow_registry_init(const char *doc_name) {
            "arrival/departure pair is the only thing that can see it because there will be no member left to "
            "ask. flow_registry_free drains through flow_release, so this is a host that raised a second "
            "registry without taking the first one down");
+    /* And the order's index drained with it: every departure takes its member out (flow_remove), so a drained
+       frontier leaves no family listed, no member counted and no host-owed member waiting to be re-admitted. */
+    DCHECK(g_ix_fams == NULL && g_ix_n == 0 && g_ix_never_n == 0 && g_owed_head == NULL,
+           "the flow registry is coming up over an order's index that still holds members — a departure that "
+           "skipped flow_ix_remove, whose bucket and family nodes are about to be freed under the index");
     g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL;
     /* The queue's clock comes up with the queue, at SFQ's v(0) = 0. Left standing, it would place this frontier's
        first from-baseline flows at the coordinate another document's leader reached: a lifetime quantity read as
@@ -863,7 +923,11 @@ void flow_credit_emit(double v) {
     g_epoch_resets++;
     g_running->family->emit_gen++;
     /* And the gauge goes with the window it counted: every member now reads zero own silence, so the away
-       population is empty for an instant; the emitter is put back below. */
+       population is empty for an instant; the emitter is put back below. The list goes with it, held here to be
+       re-keyed once the emitter's own half is final. */
+    long was_away_n = g_running->family->away_n;
+    Flow *was_away = g_running->family->away_head;
+    g_running->family->away_head = NULL;
     g_running->family->away_n = 0;
     /* And the emitter carries its own burn across the bump. The bump forgives the own half for every arm, which is
        right for every arm except the one holding the thread: the credit is the family's (`earned`, read by every
@@ -880,7 +944,7 @@ void flow_credit_emit(double v) {
        per arm across the bump, a per-member window mark the O(1) bump cannot reach, so a change to how `emit_gen`
        forgives. Absence shows as: `picksMax` staying at the mean sweep depth between two emissions (flow.h's
        `top_forgiven` reading) while `neverPicked` climbs with `members`, a sweep that restarts.
-       It narrows flow_pick's `unrun` population, which needs every non-reward term at zero: `fam_us` is non-zero
+       It narrows flow_pick_walk's `unrun` population, which needs every non-reward term at zero: `fam_us` is non-zero
        right after an emission, so the two ordering guards there short-circuit within one quantum of a finding, but
        only when the emitter burned a whole cooperative quantum between two findings (below FLOW_SERVICE_US the
        notch floors to zero). */
@@ -891,6 +955,24 @@ void flow_credit_emit(double v) {
        stored, rather than by reading flow_own_silence back. */
     if (own_us > 0) g_running->family->away_n = 1;
     g_running->family->fam_us  = own_us;
+    /* And the index learns what the bump did: every member that was away now reads zero own silence, a key that
+       rose, and the order's index holds every key exact (the flow_ix_* banner), so each is re-keyed. These are the
+       only members whose own half the bump moved; the family's notch and reward are read per family at the query.
+       Then the emitter rejoins the list it is the whole of. */
+    {
+        long n = 0;
+        while (was_away) {
+            Flow *m = was_away;
+            was_away = m->away_next;
+            m->away_prev = m->away_next = NULL;
+            flow_ix_rekey(m);
+            n++;
+        }
+        DCHECK(n == was_away_n,
+               "an emission's away list did not hold the members its gauge counted — `away_n` and the list move at "
+               "the same four transitions, so one of them moved alone and the index re-keyed the wrong population");
+        if (own_us > 0) flow_away_link(g_running);
+    }
     /* The two halves are equal for the emitter and zero for every other arm: the family's burn over the new window
        is the emitter's, the only burn that survived the bump. The mirror transition (the family half zeroed while
        a sibling's own half holds a previous window's burn) is caught because the macro is expanded at every
@@ -962,6 +1044,7 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
     f->cand_replay = frac;
     f->cand_replay_arms = consumed;
     f->cand_replay_of = total;
+    flow_ix_rekey(f);   /* the fitness distance is an operand of the member's key in the order's index */
     frontier_rank_changed();
 }
 
@@ -987,6 +1070,7 @@ void flow_observe_survival(Flow *f, double frac) {
            "measured would be the page's own bytes coinciding with the candidate's");
     if (frac <= f->cand_surv) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
     f->cand_surv = frac;
+    flow_ix_rekey(f);   /* as flow_observe_replay */
     frontier_rank_changed();
 }
 
@@ -1030,6 +1114,7 @@ void flow_observe_rung(Flow *f, int rung) {
        comparator stands and the pair what was last observed, which is why flow_observe_replay asserts their
        identity only below the delivery. */
     f->cand_replay = 1.0;
+    flow_ix_rekey(f);   /* as flow_observe_replay: the rung and the pinned fraction are both its operands */
     frontier_rank_changed();
 }
 
@@ -1152,7 +1237,7 @@ void flow_age_running(int64_t us) {
        flow_own_silence already answered zero, so base to away is the only direction and a member already away
        stays away. A zero-microsecond charge against a member at base moves nothing, and the test says so rather
        than assuming `us` is positive. */
-    if (!was_away && flow_own_silence(g_running) > 0) g_running->family->away_n++;
+    if (!was_away && flow_own_silence(g_running) > 0) { g_running->family->away_n++; flow_away_link(g_running); }
     /* And the same microseconds on the family. Both are the aging term's (it is their sum), answering two
        comparisons over one window: `cpu` is what this flow has burned since the family last emitted, ordering a
        family's members against each other, and `fam_us` what the whole family burned over that window, ordering
@@ -1179,6 +1264,9 @@ void flow_age_running(int64_t us) {
        that adds to either, so the only one that could add to one alone; a charge reaching `cpu` and missing
        `fam_us` would make an arm's own silence outgrow its family's. */
     DCHECK_AGING_ONE_WINDOW(g_running, "a slice of the thread was charged to this flow and its family");
+    /* And the charge moves the member's own notch, an operand of its key in the order's index, so it is re-keyed;
+       the family's half is read per family at the query and needs nothing here. */
+    flow_ix_rekey(g_running);
 #if APICLIENT_DEV
     /* And the stamp flow_best's walk compares against, maintained here because this is the one writer of a
        member-half summand that raises no generation: `cpu` is read by flow_own_silence, quantised by
@@ -1278,6 +1366,7 @@ void flow_credit_visit(Flow *f) {
            "asserts above passed — the unit boundary gained a clause in one of the two places that state it and not "
            "the other");
     f->visits++;
+    flow_ix_rekey(f);   /* the optimism term is an operand of the member's key in the order's index */
     /* And the order is told, because this credit lowers the optimism term and so is a rank change. Every writer
        that moves a member's rank raises the generation; engine.c's rescan hook rests on the claim that a
        per-member term cannot move between two generations, and its DCHECKF prints the five terms side by side so
@@ -1300,6 +1389,8 @@ void flow_credit_pick(Flow *f) {
            "the scheduler credited a dispatch to a flow that is not a member of the frontier — the census row "
            "this feeds is taken over the members, so a departed flow's dispatch would be counted nowhere and "
            "the starvation reading would be a fraction of the wrong population");
+    /* And the index's count of eligible members never dispatched loses this one, read by the plateau rows. */
+    if (f->ix_in && f->picks == 0) g_ix_never_n--;
     f->picks++;
     /* And the same event counted for the life of the instance: a member that departs takes its share of the
        per-member total with it, so the sum over standing members is a gauge and a difference of two gauges is not
@@ -1412,6 +1503,9 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     DCHECK(sib->acct != NULL && sib->acct->up == NULL,
            "a forked sibling already stands under a flow in the fork tree — flow_new mints a root, so this is a "
            "second inheritance onto one sibling");
+    /* Out of the order's index while its key's operands and its bucket and family are rewritten: flow_new indexed
+       it under the root it minted, and it is indexed again under its parent's family once the transfer below ends. */
+    flow_ix_remove(sib);
     /* The reward is not copied here; the family join below carries it, one pointer read by every arm, which is why
        the equality at the end holds over a term this function never names. `Flow.val` is what one member emitted,
        never inherited and unranked, so the precondition requires it to be zero rather than assigning it. */
@@ -1456,7 +1550,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* And a newborn that inherited a burn is born away from its family's base (FlowAcct's `away_n`). The family
        pointer is only now in place, so this is the first instant flow_own_silence can be asked of this member; a
        fork off a parent at base mints a member at base, hence the test. */
-    if (flow_own_silence(sib) > 0) sib->family->away_n++;
+    if (flow_own_silence(sib) > 0) { sib->family->away_n++; flow_away_link(sib); }
     /* And the edge itself, which makes a fork chain an accounting unit: the newborn's place in the ranking is under
        the flow it branched from. */
     sib->acct->up = parent->acct;
@@ -1509,6 +1603,10 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
             sib->acct->branch = br;
         }
     }
+    /* Back into the index under its final bucket and family. Inserting into `br` re-keys that bucket in its
+       family's heap, which is where the `sub_born++` above, a new offset for every member of the arm, reaches the
+       index: one bucket re-keyed, no member. */
+    flow_ix_insert(sib);
     /* And the path's forced mark, the one inherited thing the ranking never reads: an arm is its parent's path with
        one more arm on it, so it stands on everything the parent's path stood on. A sibling born clean of it would
        declare its requests derived on the strength of being forked, the provenance form of reset-by-splitting, and
@@ -1862,6 +1960,9 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        slot. */
     f->reg_i = g_flows_n;
     g_flows[g_flows_n++] = f;
+    /* And into the order's index under the root and bucket minted above: a newcomer is runnable (calloc leaves no
+       host-owed mark), and a fork re-indexes it under its parent's family in flow_fork_inherit. */
+    flow_ix_insert(f);
     /* And the arrival counted as an arrival: this is the one place the frontier gains a member, so `g_arrivals` is
        a definition. The rank change below is also raised by other sites, so it cannot answer this. See the banner
        at `g_arrivals`. */
@@ -2829,15 +2930,14 @@ int64_t flow_silence_notch(const Flow *f) {
         family, and a real page's frontier is one family.
      the carry is one bit, and its threshold `S - R` is common and sweeps downward as the family burns, so members
         cross it in descending order of `p`: the boundary moving, not a member being re-keyed.
-   So flow_pick's "N heap updates per dispatch" counts crossings, not updates: indexed by `p`, the sweep costs
-   nothing per member and the maximum is the larger of two contiguous ranges of `p`. This pair is the key a
-   sub-linear ask would be built on. It is not a term and not a second spelling of the notch: `-(double)notch *
-   FLOW_AGE_QUANTUM` is one multiply of one exact integer, and an index summing three products would differ in the
-   last bit and reorder members the order ties, so an index decides which members can be the maximum and the exact
-   comparison stays flow_weight's. The identity is a theorem of integer division for non-negative operands
-   (flow_age_running asserts the charge's sign), so it is not asserted; what can fail (nothing else in the weight
-   moves between two frontier generations) is asserted in engine.c's preempt hook over its cached rival. This pair
-   retires when the ask no longer walks the frontier and the index is its reader. */
+   So the carry is the one part of a non-running member's weight that moves with no write to that member, which
+   is why the order's index bounds the notch by `k + K` and leaves the carry as at most one quantum of slack
+   (flow_ix_member_key, flow_ix_family_bound) rather than keying on it: keyed on `p`, the sweep would be one
+   crossing per member per quantum. Not a term and not a second spelling of the notch: `-(double)notch *
+   FLOW_AGE_QUANTUM` is one multiply of one exact integer, and the index's exact comparison stays flow_weight's.
+   The identity is a theorem of integer division for non-negative operands (flow_age_running asserts the charge's
+   sign), so it is not asserted; what can fail (nothing else in the weight moves between two frontier generations)
+   is asserted in engine.c's preempt hook over its cached rival. */
 int64_t flow_silence_phase(const Flow *f) { return flow_own_silence(f) % FLOW_SERVICE_US; }
 
 /* And the bit itself, the one part of a non-running member's weight that moves with no generation bump behind it.
@@ -2946,15 +3046,8 @@ double flow_distance(const Flow *f) {
 }
 
 /* The bucket's contribution to the order, asked of the bucket: the one entry that reads the branch term without
-   holding a member, which is what an ask that does not walk would need from this scope. flow_pick's banner says
-   the branch term "is carried as a per-BUCKET OFFSET read at query time or the index is not sub-linear";
-   flow_branch_bonus takes a Flow, so a candidate set could only bake it into a per-member key and pay O(live
-   members of the bucket) per fork. Today its only caller is flow_branch_bonus, once per member.
-   `branch_take` already enumerates the buckets, once per scan however many doors reach each (a per-node generation
-   mark), with completeness asserted (`br_live_sum == members`) and the count published as `branches`. What is absent
-   is an enumeration that does not walk the members, and before it the consumer: a per-bucket index fold at the
-   pick, which does not exist, so a walk-free count alone would be a write with no reader. The residual at
-   flow_index_key says what the walk costs.
+   holding a member, which is how the order's index applies it: once per bucket at the query
+   (flow_ix_bucket_key), so a fork's `sub_born++` re-keys one bucket in its family's heap and no member.
    The guard is two writers against one reader: the stored double is maintained at flow_new and at
    flow_fork_inherit's join, and the quotient is recomputed here from the integer those statements wrote, the same
    expression on the same operand, so the equality is exact. It breaks only for a third writer of `sub_born` that
@@ -3057,40 +3150,16 @@ long flow_branch_born(const Flow *f) {
     return f->acct->branch->sub_born;
 }
 
-/* The half of the member key an index may be keyed on: every summand that is a reading of this member and of
+/* The half of the member key the order's index is keyed on: every summand that is a reading of this member and of
    nothing it shares. The weight's terms partition by scope three ways: acct_family_val and the family notch are
    per account, flow_branch_bonus is per bucket (`1.0 / sub_born` through `f->acct->branch`, one pointer shared by
-   every live arm, so the fork's `br->sub_born++` re-weighs the whole bucket and an index baking it into a member key
-   "pays O(live members of the bucket) PER FORK"), and the own notch, the optimism and the fitness distance are per
-   member (`f->cpu` against its family's `emit_gen`, `f->visits`, `f->cand_replay`/`cand_surv`/`cand_rung`), which no
-   other member can move. flow_pick's banner names the same three groups.
-   A subexpression, not a re-association: C evaluates `A + B + C + D` as `((A + B) + C) + D`, so flow_member_key is
-   this value plus the bucket term, bit for bit, and a candidate set keyed here with the bucket offset applied at
-   query time reproduces it exactly. solver/flow.h's FlowIndexChecks names the re-association that remains
-   (flow_weight's own member half), an order change in the last bit and a decision. Excess precision (FLT_EVAL_METHOD
-   2 rounding at the return) is the one way the identity fails, and flow_member_key's DCHECK guards it. Not a term:
-   flow_weight is untouched.
-   Named residual. Not covered: there is no candidate set, so flow_pick weighs every member and reads the bucket
-   offset once per member. Three things stand between that and an ask that does not walk. Nothing enumerates the
-   distinct buckets without walking members (`branch_take` reaches each through a member, and `branch_gen`
-   de-duplicates within the walk). `FlowAcct` is private to this file, so a holder outside it uses
-   `flow_branch_born`'s integer. And the family's `emit_gen` bulk-invalidates this key: an emission sends every
-   member's `k` and phase to zero in one statement, and a real page's frontier is one family. That reset is uniform,
-   which an epoch-keyed structure expresses with no per-member write; leaving it is bounded by dispatches plus forks
-   since the last emission, which `FlowAcct.away_n` counts (summed into `g_epoch_rebuild` at each emission, published
-   as `epochRebuildLifetime` against `epochResetsLifetime`, checked against a walk in flow_wfq_census). Its reading
-   is `epochRebuildLifetime` over `scanNextWeights`, lifetime over lifetime and per host (testing/live-wfq.js
-   composes it as `epochRebuildWalkShare`); it is not flow.h's `sil_phases`, which is a clock reading.
-   Next diff builds: one commit holding a walk-free bucket enumeration (maintained at flow_new, the fork's join and
-   acct_depart for a live-bearing count, plus acct_unref to mirror `branches` with empties) and the per-bucket fold
-   over this key at the pick, with the walk kept inside a DCHECK as a cross-check. Read `branches` per document
-   first: a single bucket makes the offset a common constant and the fold narrows nothing. A new branch-scope row
-   lands in four files (flow.c, flow.h, result.c, testing/live-wfq.js, whose `branchScope()` reads result.c's
-   `result_wfq_json` and throws on a `br`-prefixed row its lists do not name).
-   Absence shows as: on consecutive @WFQ censuses of one run, the interval's `scanNextWeights` delta over its
-   `scanNextRuns` delta, against `members` over the interval, reads about one (every member weighed per ask). Read
-   per interval: lifetime counts against a terminal gauge under-read by the factor the frontier grew.
-   This record retires when flow_member_key cannot be written without naming the scope each summand is read at. */
+   every live arm, so the fork's `br->sub_born++` re-weighs the whole bucket), and the own notch, the optimism and
+   the fitness distance are per member (`f->cpu` against its family's `emit_gen`, `f->visits`,
+   `f->cand_replay`/`cand_surv`/`cand_rung`), which no other member can move. The index holds each scope where it
+   moves: this per member (flow_ix_member_key), the bucket offset per bucket, the family's reward and notch per
+   family, so no write re-keys more members than it moved. A subexpression, not a re-association: C evaluates
+   `A + B + C + D` as `((A + B) + C) + D`, so flow_member_key is this value plus the bucket term, bit for bit, and
+   excess precision (FLT_EVAL_METHOD 2) is the one way that fails, which flow_member_key's DCHECK guards. */
 static double flow_index_key(const Flow *f) {
     return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
            + flow_optimism(f) + flow_distance(f);
@@ -3099,7 +3168,7 @@ static double flow_index_key(const Flow *f) {
 /* Every term of the weight that is not the family's: the quantity whose invariance between two frontier
    generations every proposed sub-linear order presupposes, and not the key an order may be keyed on, which is
    flow_index_key above. One quantity, two questions, and the stricter decides the composition: what must stand
-   still between generations includes the bucket term, or flow_pick's walk goes blind to a fork re-ranking a whole
+   still between generations includes the bucket term, or flow_pick_walk's stamps go blind to a fork re-ranking a whole
    arm; what an index is keyed on excludes it. Two functions over one composition.
    flow_weight is the family's coordinate plus this member's, minus a carry bit: the reward and the family notch are
    read through one pointer by every arm, a common offset that orders nothing within a family, and
@@ -3119,7 +3188,7 @@ static double flow_member_key(const Flow *f) {
        other fires here, and so does a host evaluating doubles wider than binary64 that rounds at the call
        boundary. A new member-half term goes at the end of flow_index_key and a new bucket term after this one, the
        only placements under which both sides associate the same way. A second evaluation of the member half per
-       call, so in a dev build flow_pick's per-member stamp pays this key twice; in release the condition is a
+       call, so in a dev build flow_pick_walk's per-member stamp pays this key twice; in release the condition is a
        `sizeof` and neither side is evaluated. */
     DCHECK(k == -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
                 + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f),
@@ -3142,70 +3211,9 @@ static double flow_member_key(const Flow *f) {
     return k;
 }
 
-#if APICLIENT_DEV
-/* What an index over that key would compare, written once so the check and its prose cannot drift: the member's own
-   half shifted by the two quantities an index would hold per account. `acct_family_val` and `flow_family_notch` are
-   read through one pointer by every arm, a common offset within a family; the carry is the one per-member bit that
-   moves between two frontier generations, decomposed out by `flow_silence_phase`. That is
-   `notch = k + K + (p + R >= S)` spelled as what a candidate set would be taken from. A re-association by design:
-   flow_weight sums one product of one exact integer and this sums two, so it may differ in the last bit, and the
-   fold in flow_pick measures whether that ever reaches the answer (solver/flow.h's FlowIndexChecks says what each
-   outcome licenses). Dev-only, and it raises no scan counter: flow.h's FLOW_SCANS banner counts only the
-   flow_weight the scan itself performs, and every caller of this is a DCHECK. */
-static double flow_index_surrogate(const Flow *f) {
-    return acct_family_val(f) + flow_member_key(f)
-           - (double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM;
-}
-
-/* How far that re-association may stand from the comparator, derived from the two expressions and never measured.
-   The surrogate "may differ from the comparator in the last bit"; this bounds by how much, the claim an index can
-   be built on. A candidate set of every member within this margin of the surrogate's extremum provably contains the
-   comparator's extremum (the proof is at flow_pick's band walk), so re-comparing the survivors through flow_weight,
-   with the same direction bit and tie-break, returns the full scan's member pointer for pointer, with flow_weight
-   untouched. A tolerance fitted to the populations tried says nothing about the next frontier; this is an upper
-   bound on |surrogate - weight| for every member of every frontier, and the fold's DCHECK asks it of every member
-   weighed, so a wrong derivation fires.
-
-   The derivation. Write `V = acct_family_val`, `P = N*Q` with `N = flow_silence_notch` and `Q = FLOW_AGE_QUANTUM`,
-   `O = flow_optimism`, `D = flow_distance`, `B = flow_branch_bonus`; the exact target is `R = V - P + O + D + B`.
-   The five leaves are the same calls on the same operands in both spellings, so their rounding cancels; only the
-   arithmetic between them is bounded. `N = k + K + c` is an exact integer identity (flow_silence_phase), so the
-   surrogate's target is the comparator's.
-   Roundings: flow_weight computes one product (`N*Q`) and four sums (`+O`, `+D`, `+B`, `V+..`), five; the surrogate
-   two products (`k*Q`, `(K+c)*Q`) and five sums (`+O`, `+D`, `+B`, `V+..`, `-..`), seven. The notch casts are
-   exact (2^53 quanta is three million years of thread time) and negation is exact.
-   Chains: let `L = |V| + P + O + D + B`; every exact intermediate of either spelling is a signed sub-sum of those
-   five terms, so has magnitude at most `L`. Each rounding is `fl(a.b) = (a.b)(1+d)` with `|d| <= u = 2^-53`; along a
-   left-associated chain whose fresh operand is exact `|e_j| <= |e_{j-1}|*(1+u) + u*L`, and each product contributes
-   at most `u*L` at its leaf. So `|computed - R| <= n*u*L*(1+u)^n` for `n` roundings: `|weight - R| <= 5*u*L*(1+u)^5`,
-   `|surrogate - R| <= 7*u*L*(1+u)^7`, and `|surrogate - weight| <= 12*u*L*(1+u)^7`.
-   The constant is the next power of two, 12 -> 16, and the remaining `4*u*L` absorbs (a) the `(1+u)^7` factor,
-   under 8e-16 relative; (b) up to three further roundings where FLT_EVAL_METHOD is 2 rounds at the returns from
-   flow_index_key, flow_member_key and flow_nonreward (flow_member_key's guard catches that regime), taking the
-   figure to `15*u*L`; (c) the rounding of `L` itself, three operations, so what is returned is at least
-   `16*u*L*(1-4u)`, still above `15*u*L`; and (d) the single rounding of the band edge at flow_pick, at most `u*L`.
-   `O`, `D` and `B` are bounded by FLOW_NONREWARD_MAX, whose value is the sum of the three positive terms' maxima
-   (the aging summand is zero silence) and which flow_nonreward asserts; a term added to the order is also one more
-   rounding in both spellings, which the fold's DCHECK reports.
-   Not a term and nothing ranks by it: the member flow_pick returns is the comparator's extremum whether this is
-   right or wrong. It is recomputed per member per ask from quantities a fork carries, and two arms may read
-   different margins with no rank moving, since the margin decides which members are compared and flow_weight which
-   wins. Dev-only, and it raises no scan counter, for flow_index_surrogate's reason. */
-#define FLOW_UNIT_ROUNDOFF (1.0 / 9007199254740992.0)  /* 2^-53: binary64 round-to-nearest unit roundoff */
-#define FLOW_INDEX_MARGIN_ULPS 16.0                    /* derived above: 12 roundings, next power of two up */
-static double flow_index_margin(const Flow *f) {
-    double v = acct_family_val(f);
-    if (v < 0.0) v = -v;  /* negation of a double is exact, so the bound loses nothing to this */
-    /* The scale factor is a power of two, so its product is exact, which is why clause (c) counts only the three
-       operations of the sum and the one that scales it. */
-    return (FLOW_INDEX_MARGIN_ULPS * FLOW_UNIT_ROUNDOFF)
-           * (v + (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM + FLOW_NONREWARD_MAX);
-}
-#endif
-
 /* What the order is made of besides the reward, and the one place "the reward is the only unranged term" is asked.
    Every ordering assertion in this file is derived from that claim; asked against a reference member whose
-   non-reward terms all stand at zero, it is asserted by nothing once that population empties (flow_pick says
+   non-reward terms all stand at zero, it is asserted by nothing once that population empties (flow_pick_walk says
    when), which is the stalled frontier the never-starved guarantee is about. Asked of one item, its population is
    every flow whose weight is read. It supersedes the pairwise form `w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`:
    with N for this quantity that is `N(best) − N(u) <= 1.0`, and `N(u) = 1.0 + D_u >= 1.0`, so it says
@@ -3232,9 +3240,9 @@ static double flow_nonreward(const Flow *f) {
        Asked here because this is where a new term is added, so it fires on the diff that causes it.
        Its precondition is rarely true on a real page: `flow_family_notch(f) == 0` means the family has burned less
        than one cooperative quantum since any arm last emitted, and on a one-family frontier that empties the guard
-       as it empties flow_pick's `unrun` population. So it is armed on the smoke fixture and just after an emission.
+       as it empties flow_pick_walk's `unrun` population. So it is armed on the smoke fixture and just after an emission.
        A general guard would compare against a re-association, which differs in the last bit and would report a
-       divergence the comparator does not have. The population is covered instead by flow_pick's walk, which stamps
+       divergence the comparator does not have. The population is covered instead by flow_pick_walk, which stamps
        `key_last`/`phase_last` per member per scan and compares them across a frontier generation: that asks whether
        a value moved, this whether a summand reached one function and not the other. This record retires when
        flow_weight's member half is a subexpression of it rather than a re-association, so the equality holds for
@@ -3252,13 +3260,240 @@ double flow_weight(const Flow *f) {
     return acct_family_val(f) + flow_nonreward(f);
 }
 
+/* The order's index: the runnable maximum asked without weighing the frontier. Members stand in leftist max-heaps,
+   one per branch bucket, keyed on flow_ix_member_key, the member's own half of the weight plus its share of the
+   rounding margin; buckets stand in one heap per family, keyed on the bucket's offset plus its top member's key;
+   families holding a bucket are on one list. The bucket offset and the family's reward and notch are read once per
+   bucket and family at the query, so a fork re-keys one bucket and an emission one family, never their members.
+   Every stored key equals the key recomputed from its member's current fields: each writer of an operand re-keys at
+   the write, and an emission re-keys its away list, the only members whose own half it raises. A query explores
+   best-first from each family's top, bounding each entry by a value no member below it can weigh more than, and
+   calls flow_weight on every member whose bound reaches the answer so far; so it returns what a walk of the
+   runnable members with the walk's tie-break would, pointer for pointer, and flow_ix_check asserts that at every
+   census. The bound's slack is the carry bit (the notch is `k + K + carry`, the bound reads `k + K`) and the
+   margin. The nodes are embedded in Flow and FlowAcct, so no step of the index allocates or can page a flow out. */
+static int ix_s(const FlowIxNode *n) { return n ? n->s : 0; }
+
+/* Meld two leftist heaps and return the root (whose `up` the caller sets). The recursion runs down the two right
+   spines, each at most log2(n + 1) long in a leftist heap, so its depth is a property of the heap's size. */
+static FlowIxNode *ix_meld(FlowIxNode *a, FlowIxNode *b) {
+    FlowIxNode *t;
+    if (!a) return b;
+    if (!b) return a;
+    if (b->key > a->key) { t = a; a = b; b = t; }
+    a->r = ix_meld(a->r, b);
+    a->r->up = a;
+    if (ix_s(a->l) < ix_s(a->r)) { t = a->l; a->l = a->r; a->r = t; }
+    a->s = ix_s(a->r) + 1;
+    return a;
+}
+
+static void ix_push(FlowIxNode **root, FlowIxNode *x, double key) {
+    DCHECK(key == key, "a key entered the order's index as NaN — it compares false both ways, so the heap order "
+                       "and every bound read through it would be undefined");
+    x->l = x->r = x->up = NULL; x->s = 1; x->key = key;
+    *root = ix_meld(*root, x);
+    (*root)->up = NULL;
+}
+
+/* Take an arbitrary node out: its two subtrees are melded into its place, and the null-path lengths above are
+   repaired until one stops changing. Heap order needs no repair, since the meld is no larger than the node. */
+static void ix_unlink(FlowIxNode **root, FlowIxNode *x) {
+    FlowIxNode *p = x->up, *m = ix_meld(x->l, x->r);
+    if (m) m->up = p;
+    if (!p) {
+        DCHECK(*root == x, "a node with no parent was taken out of a heap it is not the root of");
+        *root = m;
+    } else {
+        if (p->l == x) p->l = m; else p->r = m;
+        while (p) {
+            int ns;
+            if (ix_s(p->l) < ix_s(p->r)) { FlowIxNode *t = p->l; p->l = p->r; p->r = t; }
+            ns = ix_s(p->r) + 1;
+            if (ns == p->s) break;
+            p->s = ns; p = p->up;
+        }
+    }
+    x->l = x->r = x->up = NULL;
+}
+
+#define IX_MEMBER(n) ((Flow *)((char *)(n) - offsetof(Flow, ix_m)))
+#define IX_BUCKET(n) ((FlowAcct *)((char *)(n) - offsetof(FlowAcct, ix_b)))
+#define IX_Q_BUCKET 1   /* a query entry standing for a bucket's node in its family's heap */
+#define IX_Q_MEMBER 2   /* …for a member's node in its bucket's heap */
+
+/* The rounding margin, derived rather than fitted. For a member with own notch `k` in a family at reward `V` and
+   notch `K`, write `L = |V| + (k + K + 1)*Q + FLOW_NONREWARD_MAX`: every exact intermediate of flow_weight and of the
+   bound is a signed sub-sum of terms whose magnitudes sum to at most `L`, the true notch being at most `k + K + 1`.
+   flow_weight rounds five times; the bound nine (three in flow_index_key, two in the family's coordinate, one adding
+   each half's margin, one adding the bucket offset, one joining the halves), so the two together are within
+   `14*u*L*(1+u)^9` of their real values, `u = 2^-53`. The real bound exceeds the real weight by the carry's quantum
+   or by nothing, plus `IX_MU * L`; with `IX_MU = 32u` the computed bound exceeds the computed weight strictly, and
+   the margin's own arithmetic moves it by a relative `u`, inside the 18 ulps left. It is split as
+   `IX_MU*(k*Q + FLOW_NONREWARD_MAX)` on the member and `IX_MU*(|V| + (K+1)*Q)` on the family, summing to
+   `IX_MU*L`. flow_ix_query asserts `weight < bound` of every member it weighs and flow_ix_check of every member. */
+#define IX_MU (32.0 / 9007199254740992.0)
+
+static double flow_ix_member_key(const Flow *f) {
+    return flow_index_key(f)
+           + IX_MU * ((double)flow_service_notch(f) * FLOW_AGE_QUANTUM + FLOW_NONREWARD_MAX);
+}
+
+/* The family's coordinate in the bound: its reward less its whole notches of silence, plus its half of the margin.
+   Read at the query, so the reward an emission raises, the clock an unplaced account tracks and the notch the
+   family's burn advances reach the index with no write. */
+static double flow_ix_family_bound(const FlowAcct *fam) {
+    double v = acct_root_val(fam), av = v < 0.0 ? -v : v;
+    int64_t notch = fam->fam_us / FLOW_SERVICE_US;
+    return (v - (double)notch * FLOW_AGE_QUANTUM) + IX_MU * (av + (double)(notch + 1) * FLOW_AGE_QUANTUM);
+}
+
+/* A member's bound: its family's coordinate, plus its bucket's offset and its stored key joined first, so a
+   bucket's own key (`ix_b.key`) is the bound of its top member to the bit and children never bound above parents. */
+static double flow_ix_bucket_key(const FlowAcct *br) {
+    return acct_branch_offset(br) + br->ix_members->key;
+}
+
+/* Re-file a bucket in its family's heap after its member heap or its offset moved, and the family on the list
+   after its bucket heap did. `fam` is the family every member of `br` names. */
+static void flow_ix_bucket_sync(FlowAcct *br, FlowAcct *fam) {
+    if (br->ix_bin) { ix_unlink(&fam->ix_buckets, &br->ix_b); br->ix_bin = 0; }
+    if (br->ix_members) { ix_push(&fam->ix_buckets, &br->ix_b, flow_ix_bucket_key(br)); br->ix_bin = 1; }
+    if (fam->ix_buckets && !fam->ix_listed) {
+        fam->ix_fprev = NULL; fam->ix_fnext = g_ix_fams;
+        if (g_ix_fams) g_ix_fams->ix_fprev = fam;
+        g_ix_fams = fam; fam->ix_listed = 1; g_ix_fams_n++;
+    } else if (!fam->ix_buckets && fam->ix_listed) {
+        if (fam->ix_fprev) fam->ix_fprev->ix_fnext = fam->ix_fnext; else g_ix_fams = fam->ix_fnext;
+        if (fam->ix_fnext) fam->ix_fnext->ix_fprev = fam->ix_fprev;
+        fam->ix_fprev = fam->ix_fnext = NULL; fam->ix_listed = 0; g_ix_fams_n--;
+    }
+}
+
+static void flow_ix_insert(Flow *f) {
+    FlowAcct *br;
+    DCHECK(f != NULL && !f->ix_in && !flow_host_owed(f) && f->family != NULL && f->acct != NULL &&
+           f->acct->branch != NULL,
+           "a member entered the order's index twice, while host-owed, or without the bucket and family its key is "
+           "read against — the index holds exactly the members not host-owed, each once");
+    br = f->acct->branch;
+    DCHECK((br->up ? br->up : br) == f->family,
+           "a member's branch bucket does not hang under its family's root — a bucket is a root or a node forked off "
+           "one, so the index would file this member's bound under another family's coordinate");
+    ix_push(&br->ix_members, &f->ix_m, flow_ix_member_key(f));
+    f->ix_in = 1;
+    g_ix_n++;
+    if (f->picks == 0) g_ix_never_n++;
+    flow_ix_bucket_sync(br, f->family);
+}
+
+static void flow_ix_remove(Flow *f) {
+    FlowAcct *br;
+    DCHECK(f != NULL && f->ix_in && f->family != NULL && f->acct != NULL && f->acct->branch != NULL,
+           "a member left the order's index without standing in it — the index holds the members not host-owed, so "
+           "this member's mark and its index state came apart");
+    br = f->acct->branch;
+    ix_unlink(&br->ix_members, &f->ix_m);
+    f->ix_in = 0;
+    g_ix_n--;
+    if (f->picks == 0) g_ix_never_n--;
+    flow_ix_bucket_sync(br, f->family);
+}
+
+/* After a write to an operand of the member's key. A host-owed member is out of the index and is keyed afresh when
+   it comes back, and a write that left the key's bits standing moves nothing. */
+static void flow_ix_rekey(Flow *f) {
+    if (!f->ix_in || f->ix_m.key == flow_ix_member_key(f)) return;
+    flow_ix_remove(f);
+    flow_ix_insert(f);
+}
+
+/* What one ask of the index answered: the maximum (`best`, `bw`) with the incumbent folded in, whether the
+   incumbent was weighed, whether a never-dispatched member other than it weighs exactly `bw` (the plateau and
+   starvation rows' question), and the work: members weighed and queue entries taken. */
+typedef struct {
+    Flow *best;
+    double bw;
+    int seeded, never_tie;
+    int64_t weighed, entries;
+} FlowIxAnswer;
+
+static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double bound, double off, unsigned char kind) {
+    ix_push(q, n, bound);
+    n->off = off; n->kind = kind;
+}
+
+/* The runnable maximum, best-first. `seed`, when given, is a live member and the incumbent: it is weighed first and
+   folded last with a non-strict comparison, as a walk seeded with it would. `exclude` is skipped. The loop stops at
+   the first entry no member below can make matter: one bounded at or under the seed's weight cannot beat the seed
+   (the seed keeps ties), and one under the best so far cannot reach it. A member weighing exactly `bw` is bounded
+   strictly above `bw`, so every member a tie-break could name, and every never-dispatched member at `bw`, is weighed.
+   Members are compared by weight and then registry slot, the walk's first maximum. Pure: it writes only the queue
+   nodes, which nothing reads outside one query. */
+static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
+    FlowIxAnswer a = { NULL, 0.0, 0, 0, 0, 0 };
+    FlowIxNode *q = NULL;
+    double sw = 0.0, nmax = 0.0;
+    int nseen = 0;
+    FlowAcct *fam;
+    if (seed && seed->ix_in) { sw = flow_weight(seed); a.seeded = 1; a.weighed++; }
+    /* Named residual. Not covered: the queue is seeded by walking the family list, so an ask costs O(families)
+       before it weighs anyone. Next diff builds: a heap over families keyed on flow_ix_family_bound plus the top
+       bucket's key, re-keyed where a family's reward, placement or notch moves (flow_credit_emit, flow_set_running,
+       flow_restore_reward, flow_age_running), with unplaced families keyed off the clock as one group. Absence
+       shows as: `scanIndexEntries` per ask rising with `families` while weighings per ask stay flat. */
+    for (fam = g_ix_fams; fam; fam = fam->ix_fnext) {
+        double fb = flow_ix_family_bound(fam);
+        FlowAcct *br = IX_BUCKET(fam->ix_buckets);
+        ix_q_push(&q, &br->ix_q, fb + br->ix_b.key, fb, IX_Q_BUCKET);
+    }
+    while (q) {
+        FlowIxNode *e = q, *c[2];
+        if ((a.seeded && e->key <= sw) || (a.best && e->key < a.bw)) break;
+        q = ix_meld(e->l, e->r);
+        if (q) q->up = NULL;
+        a.entries++;
+        if (e->kind == IX_Q_BUCKET) {
+            FlowAcct *br = (FlowAcct *)((char *)e - offsetof(FlowAcct, ix_q));
+            double b = acct_branch_offset(br);
+            FlowIxNode *top = br->ix_members;
+            DCHECK(br->ix_bin && top != NULL && br->ix_b.key == b + top->key,
+                   "a bucket in the order's index holds no member, or its key is not its offset plus its top "
+                   "member's key — flow_ix_bucket_sync files it from both, so a writer of either skipped the sync");
+            ix_q_push(&q, &IX_MEMBER(top)->ix_q, e->off + (b + top->key), e->off, IX_Q_MEMBER);
+            c[0] = br->ix_b.l; c[1] = br->ix_b.r;
+            for (int i = 0; i < 2; i++)
+                if (c[i]) ix_q_push(&q, &IX_BUCKET(c[i])->ix_q, e->off + c[i]->key, e->off, IX_Q_BUCKET);
+        } else {
+            Flow *m = (Flow *)((char *)e - offsetof(Flow, ix_q));
+            double b = acct_branch_offset(m->acct->branch), w;
+            c[0] = m->ix_m.l; c[1] = m->ix_m.r;
+            for (int i = 0; i < 2; i++)
+                if (c[i]) ix_q_push(&q, &IX_MEMBER(c[i])->ix_q, e->off + (b + c[i]->key), e->off, IX_Q_MEMBER);
+            if (m == seed || m == exclude) continue;
+            w = flow_weight(m);
+            a.weighed++;
+            DCHECKF(w < e->key && m->ix_m.key == flow_ix_member_key(m),
+                    "the order's index bounded a member at or below its weight, or holds a stale key for it "
+                    "(weight %.17g, bound %.17g, key %.17g, fresh key %.17g) — the margin's derivation is wrong or "
+                    "a writer of the key's operands did not re-key",
+                    w, e->key, m->ix_m.key, flow_ix_member_key(m));
+            if (m->picks == 0 && (!nseen || w > nmax)) { nmax = w; nseen = 1; }
+            if (!a.best || w > a.bw || (w == a.bw && m->reg_i < a.best->reg_i)) { a.best = m; a.bw = w; }
+        }
+    }
+    if (a.seeded && (!a.best || sw >= a.bw)) { a.best = (Flow *)seed; a.bw = sw; }
+    a.never_tie = nseen && nmax == a.bw;
+    return a;
+}
+
 /* The silence at which a flow is guaranteed to rank below any never-run sibling: the crossing the never-starved
    guarantee claims, computed from the flow's own reward rather than a fixed threshold that would fire falsely on a
    very productive flow. Compared against both halves of the silence, this flow's own and its family's: against the
    per-arm half alone it holds for a family whose arms each burn a sliver while the family monopolises the thread,
    and against the family half alone it holds for every member of a one-family frontier at once.
    Derived from flow_weight, and redone whenever the formula moves. An unrun candidate (all its terms at zero, as
-   flow_pick's `unrun` tests) weighs its reward plus its distance and branch bonus plus 1.0, at least 1.0, so the
+   flow_pick_walk's `unrun` tests) weighs its reward plus its distance and branch bonus plus 1.0, at least 1.0, so the
    pick's maximum is at least 1.0. For the picked flow, with `v` its visit count, `D` its fitness distance, `B` its
    branch bonus, `A` its silence notch in quanta and `Q` the price of one quantum (FLOW_AGE_QUANTUM):
    `val + D + B + 1/(1+v) − A*Q >= 1`, and `1/(1+v) <= 1` forces `A*Q <= val + D + B`. `D` and `B` are each in
@@ -3290,6 +3525,24 @@ static unsigned g_owed_gen = 1;   /* NEVER 0: a fresh (calloc'd) flow must read 
    second site learns to mark. */
 int flow_host_owed(const Flow *f) { return f->owed_gen == g_owed_gen; }
 
+/* The members out of the order's index because they are host-owed (`g_owed_head`), linked so a clear of every mark
+   re-admits them without a walk of the frontier. A member is on this list exactly when flow_host_owed says so. */
+static void flow_owed_link(Flow *f) {
+    f->owed_prev = NULL; f->owed_next = g_owed_head;
+    if (g_owed_head) g_owed_head->owed_prev = f;
+    g_owed_head = f;
+}
+
+static void flow_owed_unlink(Flow *f) {
+    DCHECK(f->owed_prev != NULL || g_owed_head == f,
+           "a member left the host-owed list without standing on it — a member is out of the order's index exactly "
+           "while it is host-owed, so it is either indexed or on this list");
+    if (f->owed_prev) f->owed_prev->owed_next = f->owed_next;
+    else g_owed_head = f->owed_next;
+    if (f->owed_next) f->owed_next->owed_prev = f->owed_prev;
+    f->owed_prev = f->owed_next = NULL;
+}
+
 int flow_host_owed_count(void) {
     int n = 0;
     for (int i = 0; i < g_flows_n; i++) if (flow_host_owed(g_flows[i])) n++;
@@ -3308,6 +3561,9 @@ void flow_set_host_owed(Flow *f) {
     DCHECK(!flow_host_owed(f),
            "a flow reported host-owed again with no host event in between — a marked flow is out of the pick, so its "
            "mark was cleared by something that cannot have answered it");
+    /* Out of the order's index, which holds the runnable members, and onto the list a clear re-admits from. */
+    flow_ix_remove(f);
+    flow_owed_link(f);
     f->owed_gen = g_owed_gen;
     /* And the ranking changed: the value yield fires "the moment a parked flow outranks", and the WFQ's answer is
        the best eligible flow, so the eligible set is a term of that answer. A mark takes a member out of the pick
@@ -3321,7 +3577,12 @@ void flow_set_host_owed(Flow *f) {
 /* THE HOST ANSWERED THIS FLOW — see flow.h for why the clear is per flow and per EVENT. */
 void flow_clear_host_owed(Flow *f) {
     DCHECK(f != NULL, "a host event cleared the mark of no flow at all");
+    /* A clear reaches marked and unmarked members alike (the host answers whoever it reaches), and only a marked one
+       comes back into the order's index. */
+    int was_owed = flow_host_owed(f);
+    if (was_owed) flow_owed_unlink(f);
     f->owed_gen = 0;   /* never equal to g_owed_gen, which starts at 1 and only ever moves forward */
+    if (was_owed) flow_ix_insert(f);
     /* And this direction needs it as much: a clear makes eligible a flow the scheduler's last pick could not
        consider, and the pick and the preempt hook do not run at the same instant. A clear landing during the picked
        flow's first step (flow_deliver_one_reply settles the shared document-script slot for every flow waiting on
@@ -3337,6 +3598,13 @@ void flow_clear_host_owed_all(void) {
     if (++g_owed_gen == 0) {
         for (int i = 0; i < g_flows_n; i++) g_flows[i]->owed_gen = 0;
         g_owed_gen = 1;
+    }
+    /* And every member the marks kept out of the order's index comes back into it, read off the list rather than
+       the frontier, so the clear costs what it re-admits. */
+    while (g_owed_head) {
+        Flow *m = g_owed_head;
+        flow_owed_unlink(m);
+        flow_ix_insert(m);
     }
     /* The whole-frontier form: every member just became eligible, the largest ranking change one call makes. The
        host reaches this between slices (the provider's own edges), so the yield request is
@@ -3397,13 +3665,10 @@ static long g_scan_runs[FLOW_SCAN_N];
 static int64_t g_scan_weights[FLOW_SCAN_N];   /* per member per scan — see FlowKeyChecks in flow.h */
 /* And what the one assertion in that walk did with those weights; solver/flow.h states the partition, the kind, why
    the four are read through one call, and why all four at zero beside a nonzero scan row is a build that makes no
-   check. Raised only in flow_pick's dev block; the storage and accessor are unconditional because solver/result.c
+   check. Raised only in flow_pick_walk's dev block; the storage and accessor are unconditional because solver/result.c
    publishes them in every build. */
 static FlowKeyChecks g_key_checks;
 FlowKeyChecks flow_key_checks(void) { return g_key_checks; }
-
-static FlowIndexChecks g_index_checks;
-FlowIndexChecks flow_index_checks(void) { return g_index_checks; }
 #if APICLIENT_DEV
 static int64_t key_checks_total(void) {
     return g_key_checks.armed + g_key_checks.stale_gen + g_key_checks.first_seen + g_key_checks.running;
@@ -3420,119 +3685,43 @@ int64_t flow_scan_weights(FlowScan s) {
     return g_scan_weights[s];
 }
 
-/* The three skips the order's walk makes, written once because two walks use them: the dispatch scan and the dev
-   band walk, which must weigh exactly the population the scan weighed or its published count is over a different
-   denominator. A pure predicate; `seed_live` is set by the caller first, so a pointer that is both the seed and the
-   exclusion is marked live and then skipped, and the arms' order is unobservable because all three end in
-   `continue`. */
-static int flow_pick_skipped(const Flow *m, const Flow *seed, const Flow *exclude, int runnable_only) {
-    return m == seed || m == exclude || (runnable_only && flow_host_owed(m));
-}
-
-/* The one order, asked through one scan. Four questions are put to the ranking (who should be running, who the
-   running flow is defending against, this document's best weight for the host's Level-1 order, and which member the
-   pager gives up first), and they are a seed, filters and a direction over one comparator, never separate rankings
-   (one WFQ policy at both levels), so every pick is made under the assertions below.
-   The incumbent is the seed, not a candidate like the rest: the scan compares strictly, so seeding it with the flow
-   that holds the thread states the rule that the thread moves only for a strictly better flow, the rule the preempt
-   hook's value clause applies at the other end. Without the seed the pick returns the first maximum in registry
-   order, so a field of equal weights (the ordinary state) would hand the thread to g_flows[0] every iteration and
-   pay a COW swap for an unchanged ranking. It is not a hysteresis margin, minimum service or switch budget: there
-   is no number in it, and a strictly better flow takes the thread at the next opcode. */
-static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only, int worst, FlowScan why) {
+/* The order asked by walking every member: the two questions the index does not hold, flow_best (every member,
+   host-owed or not, for the census and the host's report) and flow_worst (the pager's tail, the minimum, read the
+   other way through the same comparator so the pager has no ranking of its own). The runnable maximum, asked per
+   dispatch, per preempt-hook rescan and per host report, is flow_pick's over the index, with the same
+   comparator and the same first-maximum-in-registry-order tie-break. One WFQ policy, never a second ranking. */
+static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
     Flow *best = NULL; double bw = 0.0;
-    /* The scan is counted here, not at its return, so every exit counts, including one added later. `why` is the
-       caller's, threaded in rather than derived from the flags, since two entries share a flag shape (`flow_best`
-       and the census read differ only in their question), as solver/step_unit.h's arm is assigned at each arm. A
-       CHECK rather than a DCHECK, for solver/cold.c's reason at its histogram: the increment is a write in every
-       build, so a dev-only guard would vanish exactly where the store happens. */
+    /* The scan is counted here, not at its return, so every exit counts, including one added later. A CHECK
+       rather than a DCHECK, for solver/cold.c's reason at its histogram: the increment is a write in every build,
+       so a dev-only guard would vanish exactly where the store happens. */
     CHECK((unsigned)why < (unsigned)FLOW_SCAN_N,
           "engine: the order was asked through a scan entry not in solver/flow.h's list — the value is written only "
           "from that enum at a flow_pick call site, so this is a cast or an uninitialised read");
     g_scan_runs[why]++;
-    /* The best member carrying the full bonus and no aging: its weight is its reward + 1.0, at least 1.0, which is
-       the property the assertions below need. The test is that premise, every non-reward term of flow_weight at
-       zero read through the weight's own functions (the notch rather than its summands, so the population follows
-       however many quantities the notch is built from). It is the best member rather than a boolean, because "a
-       never-run flow is never starved" is a claim about a distance (how far the best untouched member stands
-       behind the pick), as the census's `job_w_gap` is the reading `jobs_ready` cannot make.
-       The population empties, which is why the range claim lives at flow_nonreward. `flow_silence_notch` reads the
-       shared `fam_us`: once a family has burned one cooperative quantum since any arm last emitted,
-       `acct_family_us` alone exceeds FLOW_SERVICE_US and no member of it answers this, and on a real page the
-       frontier is one family. A fork does not refill it (the arm takes its parent's silence, window mark and
-       family). An arrival does: a from-baseline flow copies nothing (flow_arrive_at_virtual_time), so it stands at
-       zero silence and zero units, and every unplaced account keeps the population non-empty while it stands,
-       which is when the never-starved guarantee is about somebody. flow_credit_emit refills it within a family
-       for one quantum. The visit clause means what it reads, a member whose prefix has completed no unit, since an
-       emission no longer zeroes the emitter's `visits`. A frontier whose accounts have all been served is the
-       residual at the bottom of this function. */
-    const Flow *unrun = NULL;   /* the best-weighted member with EVERY non-reward term of flow_weight at zero */
+    /* The best member carrying the full bonus and no aging, every non-reward term of flow_weight at zero read
+       through the weight's own functions: its weight is its reward + 1.0, at least 1.0, the premise of the two
+       guards after the loop. The population empties once a family has burned one cooperative quantum since any
+       arm last emitted (`fam_us` alone then exceeds FLOW_SERVICE_US), and an unplaced account refills it, so the
+       guards are live while an arrival stands; the residual after them says what that leaves unasked. */
+    const Flow *unrun = NULL;
     double unrun_w = 0.0;
-    /* And the best weight any never-dispatched member offers, a different population: `unrun` needs every
-       non-reward term at zero, which flow_credit_emit's forgiveness gives to members that produced, while
-       `picks == 0` is the population starvation is about and the one field nothing resets. Held here because the
-       maximum is known only when the scan ends. */
-    const Flow *never = NULL;
-    double never_w = 0.0;
-    DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — a seed names who keeps the "
-                             "thread, which is not a question the pager asks");
-    /* Is the seed still standing: answered by the scan below rather than a second walk, which is why the
-       eligibility block sits after the loop. This function visits every member and compares each against `seed`,
-       by address against members the registry holds (flow_is_member's comparison), so a dangling seed matches
-       nothing and is never dereferenced, and `g_scan_weights` prices the only walk the pick makes.
-       Why this is still a walk: a heap keyed on flow_weight is invalidated faster than it can be kept. Every term
-       except the aging moves only on an event that raises the generation or touches the running member; the aging
-       is `-FLOW_AGE_QUANTUM * ((own_silence + fam_us) / FLOW_SERVICE_US)`, and `fam_us` is shared by the family,
-       advances every step and raises no generation. The shared advance reorders nothing continuously; the floor's
-       phase does, each member straddling its boundary at its own instant, once per FLOW_SERVICE_US of family time,
-       which is one dispatch's slice: N heap updates per dispatch. flow_silence_phase makes that a count of
-       crossings: the notch is exactly `k + K + (p + R >= S)`, so what moves with no bump is one bit against a
-       threshold the family sweeps, a residue indexed by `p` with flow_weight untouched.
-       The update cost is decided by scope, not by "moves only on an event that raises the generation", which is a
-       cache's test (a bump drops a cached answer in O(1)); an index is maintained across the bump and pays for the
-       keys the event moved. `acct_family_val` and the family notch are per account; `flow_optimism`,
-       `flow_distance` and the own notch per member. `flow_branch_bonus` is neither: it is `1.0 / sub_born` through
-       `f->acct->branch`, the fork's `br->sub_born++` raises it for the bucket the arm joins, and every live member
-       of that bucket changes weight in that one statement (solver/engine.c's `g_rival_branch_born`: "one sibling
-       forking re-ranks every member of the arm simultaneously"). So an index baking it into a per-member key pays
-       O(live members of the bucket) per fork; it is carried as a per-bucket offset read at query time or the index
-       is not sub-linear, and `br_fan_max`/`br_fan_sum` on the census price that choice. This record retires when
-       the ask no longer walks the frontier, or when no per-bucket quantity can be summed into flow_weight. */
-    int seed_live = 0;
-    /* Whether the seed was a candidate at all, written at the one site that decides it: the fold admits the
-       incumbent only if it is still registered and not host-owed on a runnable-only scan, and the plateau rows
-       at the end ask "did the incumbent keep the thread" only of a seed the scan weighed. */
-    int seed_weighed = 0;
 #if APICLIENT_DEV
     /* The two sides of the identity that makes the arming count a measurement rather than a sum of its own
        summands, snapshotted here and compared where the loop ends (solver/flow.h's FlowKeyChecks). */
     int64_t kc_before = key_checks_total(), sw_before = g_scan_weights[why];
-    /* And the member an index over the member key would have returned, folded beside the comparator's maximum over
-       the same population with the same tie-break (solver/flow.h's FlowIndexChecks). */
-    const Flow *sur_best = NULL; double sur_w = 0.0;
-    /* And the widest margin any member of this scan carries, from which the band's edge is set: a maximum over the
-       folded population, because the band must admit the comparator's extremum and the two members that argument
-       concerns are known only when the fold ends. The band walk below proves the set exact. */
-    double sur_mmax = 0.0;
 #endif
     for (int i = 0; i < g_flows_n; i++) {
         double w;
         /* The registry handle, checked over every member of every scan (flow.h's `reg_i`), since the loop holds `i`
-           and the pointer. Before the `continue`s, so a seeded, excluded or host-owed member is checked too: a member
-           skipped from the order is not exempt from the registry's invariant. */
+           and the pointer, before the exclusion's `continue`. */
         DCHECK(g_flows[i]->reg_i == i,
                "a flow's registry handle names a slot the registry does not hold it at — the frontier gains a "
                "member on exactly one line and loses one on exactly one line, so the two writers of this "
                "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
                "whichever member is standing there");
-        /* The flag is set before the skip; the three skip arms are flow_pick_skipped's, shared with the band walk. */
-        if (g_flows[i] == seed) seed_live = 1;
-        /* Not a drop or a deprioritisation: a skipped flow keeps its weight, its place and its work items, and is
-           picked again the moment anything could have answered it (flow_clear_host_owed). */
-        if (flow_pick_skipped(g_flows[i], seed, exclude, runnable_only)) continue;
-        /* Counted where the weight is taken, so the count is what the scan cost: the skip passes the seed, the
-           excluded member and the host-owed ones unpriced, and `members` on the census says how big the frontier
-           was. */
+        if (g_flows[i] == exclude) continue;
+        /* Counted where the weight is taken, so the count is what the scan cost. */
         w = flow_weight(g_flows[i]); g_scan_weights[why]++;
         /* And the precondition of every sub-linear order, asked of every member: engine.c's preempt hook holds it
            over the one rival it caches, and its retirement clause says an index "will hold it at its own update
@@ -3591,44 +3780,14 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
             unrun = g_flows[i]; unrun_w = w;
         }
-        if (g_flows[i]->picks == 0 && (!never || w > never_w)) { never = g_flows[i]; never_w = w; }
-        /* The tail is this scan read the other way, so the pager has no ranking of its own: the flow the cold tier
-           gives up first must be the one the WFQ would run last, or the engine would page out a member the
-           scheduler still wanted. One comparator, one scan, one direction bit. */
         if (!best || (worst ? w < bw : w > bw)) { best = g_flows[i]; bw = w; }
-#if APICLIENT_DEV
-        /* The same fold on the surrogate, with the comparison copied from the line above (direction, strictness,
-           empty-accumulator arm), so the two name different members only when the surrogate disagrees. */
-        {
-            double s = flow_index_surrogate(g_flows[i]);
-            /* And the derived bound asked of the member both spellings are in hand for, at no extra evaluation:
-               `w` is the weight this loop took and `s` the surrogate it folded, so a derivation wrong about the
-               roundings, the ranges from FLOW_NONREWARD_MAX or an added term fires on the member that refutes
-               it. It is the precondition of the band below, whose proof is derived from this inequality holding
-               for every member of the fold. */
-            double mg = flow_index_margin(g_flows[i]);
-            double dv = s - w; if (dv < 0.0) dv = -dv;
-            DCHECKF(dv <= mg,
-                    "the index surrogate stands further from the comparator than flow_index_margin's derived bound "
-                    "allows — a summand was added to flow_weight, a term's range left FLOW_NONREWARD_MAX, or this "
-                    "host rounds at more returns than clause (b) allows. surrogate=%.17g weight=%.17g "
-                    "|difference|=%.17g margin=%.17g, over val=%.17g notch=%lld optimism=%.17g distance=%.17g "
-                    "branch=%.17g",
-                    s, w, dv, mg, acct_family_val(g_flows[i]),
-                    (long long)flow_silence_notch(g_flows[i]), flow_optimism(g_flows[i]),
-                    flow_distance(g_flows[i]), flow_branch_bonus(g_flows[i]));
-            if (mg > sur_mmax) sur_mmax = mg;
-            if (!sur_best || (worst ? s < sur_w : s > sur_w)) { sur_best = g_flows[i]; sur_w = s; }
-        }
-#endif
     }
 #if APICLIENT_DEV
     /* The partition against the counter it partitions, both deltas in one hand. The four buckets are raised on the
        statement after `g_scan_weights[why]++` with no branch between, so over one loop their total moves by what
-       that counter moved; two statements maintain them, so this is a check. Asked before the seed fold, which
-       weighs one more member outside the stamped population (the seed is the incumbent the exemption is about).
-       It catches a `continue` introduced between the weighing and the block, after which the arming count would
-       describe a subset of the frontier the order walked. */
+       that counter moved; two statements maintain them, so this is a check. It catches a `continue` introduced
+       between the weighing and the block, after which the arming count would describe a subset of the frontier
+       the order walked. */
     DCHECKF(key_checks_total() - kc_before == g_scan_weights[why] - sw_before,
             "the member-key check ran on a different set of members than this scan weighed — the four buckets "
             "are raised on the statement after the scan's own weight counter with nothing between them, so "
@@ -3639,190 +3798,6 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
             /* Cast, because int64_t is `long` natively and `long long` on wasm32, so no one specifier is right on
                both; this file's idiom for a 64-bit operand. */
             (long long)(g_scan_weights[why] - sw_before), (long long)(key_checks_total() - kc_before));
-#endif
-    /* The seed is folded in after the scan with a non-strict comparison, the same answer as seeding before the
-       loop: there the maximum was over {seed} ∪ members with ties to the seed and then registry order; here the
-       loop's maximum is over the members with ties to registry order and the seed takes it back on `>=`. Ties go
-       to the incumbent ("a top-ranked flow runs on at ~zero switch cost"); a `>=` in the loop itself would hand the
-       thread away at every opcode. `unrun` and `never` fold the same way. The direction bit is carried though
-       `worst` cannot be set with a seed: that DCHECK is dev-only, and release must not answer differently on an
-       argument pair nothing else rejects. The seed is weighed once here while the loop skips it, so
-       `g_scan_weights` counts exactly the eligible members. */
-    if (seed_live && !(runnable_only && flow_host_owed(seed))) {
-        double w = flow_weight(seed); g_scan_weights[why]++;
-        seed_weighed = 1;
-        if (seed->visits == 0 && flow_silence_notch(seed) == 0 && (!unrun || w >= unrun_w)) {
-            unrun = seed; unrun_w = w;
-        }
-        if (seed->picks == 0 && (!never || w >= never_w)) { never = seed; never_w = w; }
-        if (!best || (worst ? w <= bw : w >= bw)) { best = (Flow *)seed; bw = w; }
-#if APICLIENT_DEV
-        /* And the seed takes the surrogate back on the same non-strict comparison, so a surrogate keeping the
-           loop's winner on a tie does not name a different member by tie-break. */
-        {
-            double s = flow_index_surrogate(seed);
-            /* And the derived bound is asked of the seed: the band's edge is set from the widest margin over the
-               whole folded population, and leaving the seed out of `sur_mmax` could narrow the edge enough to
-               exclude the member the candidate set is proved to contain. */
-            double mg = flow_index_margin(seed);
-            double dv = s - w; if (dv < 0.0) dv = -dv;
-            DCHECKF(dv <= mg,
-                    "the index surrogate stands further from the comparator than the derived bound permits, "
-                    "at the incumbent — see the same check inside the scan loop for what a fire means and "
-                    "what to repair. surrogate=%.17g weight=%.17g |difference|=%.17g margin=%.17g, over "
-                    "val=%.17g notch=%lld optimism=%.17g distance=%.17g branch=%.17g",
-                    s, w, dv, mg, acct_family_val(seed), (long long)flow_silence_notch(seed),
-                    flow_optimism(seed), flow_distance(seed), flow_branch_bonus(seed));
-            if (mg > sur_mmax) sur_mmax = mg;
-            if (!sur_best || (worst ? s <= sur_w : s >= sur_w)) { sur_best = seed; sur_w = s; }
-        }
-#endif
-    }
-#if APICLIENT_DEV
-    /* Whether an index would have answered what the comparator answered (solver/flow.h's FlowIndexChecks holds the
-       readings). Asked after the seed fold, because it is a claim about the scan's answer and the seed is part of
-       it. It counts and does not abort: the two spellings are declared free to differ by flow_index_margin, so an
-       equality between their extrema is an expectation, not an invariant, and the band walk below carries the
-       derived margin and is asserted. No epsilon is used anywhere.
-       Two modes, stated by `sur_w` against the surrogate's reading of `best` (never against `bw`, which crosses both
-       the spelling and the member): a tie (`sur_w == S(best)`), where the surrogate lost a distinction the
-       comparator makes and the fold's tie-break (strict `>` in the loop, `>=` at the seed) named another member;
-       and a strict disagreement, where the surrogate reads `best` strictly worse. The identity below makes them
-       exhaustive. They are counted as `keyIndexDifferedTieLifetime` and `keyIndexDifferedStrictLifetime`, summing
-       to `keyIndexDifferedLifetime`; no row separates within-account from cross-account disagreements.
-       Disagreements arise from commensurability, not frontier size: FLOW_AGE_QUANTUM is 3/250, flow_branch_bonus
-       `1/sub_born` and flow_optimism `1/(1+visits)`, so a member silent `d` quanta longer than a sibling whose bonus
-       terms exceed it by `d * FLOW_AGE_QUANTUM` is tied in the reals (buckets of 75 and 750 give
-       `1/75 - 1/750 = 3/250` exactly), and both spellings round a tie the order meant to have. Both approximate one
-       real (`N = k + K + carry` is exact) and both round, so neither is the reference and a strict fire does not say
-       which named the lesser member.
-       The band walk answers both modes: its containment proof uses only that `b` carries the extremum. What a
-       re-composed flow_weight would decide is tie identity, which members share the maximum, which on a frontier
-       mostly tied at the top is most of what the order decides; that is the project owner's decision. This record
-       retires when the order stops resolving below the step it can express (a tie predicate at FLOW_AGE_QUANTUM
-       instead of `>` on a raw double, an order change), since there is then no sub-quantum verdict to disagree
-       about. */
-    if (best && sur_best) {
-        g_index_checks.index_asked++;
-        if (sur_best != best) g_index_checks.index_differed++;
-        /* The surrogate's reading of the comparator's own member, the other half of the pair that states the mode.
-           Taken once and used by the identity below and the mode count, one extra evaluation per scan; it raises
-           no scan counter, for flow_index_surrogate's reason. */
-        double sur_of_best = flow_index_surrogate(best);
-        /* And the identity that makes the two modes the only two: `sur_w` is the surrogate's extremum over a
-           population both folds admit `best` into on the same gate and direction bit, so the surrogate reads `best`
-           at `sur_w` (a tie) or on the losing side (strict). Unlike the band walk's population check, which compares
-           two walks' counts, this compares the extremum against a named member, so it also catches a fold that
-           visited `best` and failed to admit it. */
-        DCHECKF(worst ? sur_w <= sur_of_best : sur_w >= sur_of_best,
-                "the surrogate's extremum is not extremal over a population containing the comparator's pick — both "
-                "folds admit `best` on the same gate and direction bit, so the surrogate's fold dropped it. "
-                "sur_w=%.17g, surrogate of the comparator's pick %.17g, over %d member(s), worst=%d",
-                sur_w, sur_of_best, g_flows_n, (int)worst);
-        /* And the candidate set that answers both modes, walked so that its cost is a census row: every member
-           within the derived margin of the surrogate's extremum, re-compared through flow_weight. flow_weight, the
-           order and the member this function returns are untouched; the only claim is an equality asserted below.
-
-           The set is exact. Write `S` for the surrogate, `W` the comparator, `M(f)` flow_index_margin (`|S(f) - W(f)|
-           <= M(f)` for every member, asserted by the fold above), and `Mmax` the largest margin over the folded
-           population. Let `b` be the comparator's pick and `m*` the surrogate's, so `S(m*)` is `sur_w`. Maximising:
-           `W(b) >= W(m*)`, `W(m*) >= S(m*) - M(m*)` and `S(b) >= W(b) - M(b)`, so `S(b) >= sur_w - 2*Mmax` and `b`
-           is in the band; the eviction direction reverses every inequality, hence the direction bit. The band is
-           walked in registry order with the scan's strict comparison and the seed folded after with the non-strict
-           one, so the comparator's tie-break is reproduced over a subset containing `b`: no band member can
-           outweigh `b`, and none of equal weight can precede it. So `cand` is `best`, pointer for pointer.
-
-           It is not a bound: it decides which member runs next, as the full scan does and by the same comparator.
-           Every member keeps its weight, place, account and work items, and a member outside the band is weighed
-           again at the next ask; the narrowing is of who is compared, with an answer proved identical.
-
-           Two walks, because the band is defined against the surrogate's extremum, known only when the fold ends:
-           a single pass counting against a running extremum overcounts by an order-dependent set (`0, w, 2w` at
-           band width `w` counts three where the band holds two). The second walk costs one flow_index_surrogate per
-           member weighed (instrument overhead; an index would hold its key) and one flow_weight per member admitted
-           (what the design would pay per ask); dev-only, and no scan counter.
-
-           `band` is how many members the set admitted and `band_of` how many the test was applied to, raised over
-           the same walk, so their quotient is the share of the frontier an index would re-compare. Lifetime counts,
-           summed over asks, never read against `members`. A small share is an index that narrows; most of the
-           frontier is one that saves nothing, a finding for the project owner. `band_of` must move with the scan's
-           own weight counter, maintained by another statement over another walk; flow_pick_skipped is shared so
-           the two weigh one population, and the identity below fires if they stop. */
-        {
-            /* The edge carries the direction bit, as the seed fold does: `worst` beside a seed is refused only by a
-               dev guard. `2.0 * sur_mmax` is exact and the subtraction rounds once, by at most `u` of its magnitude,
-               clause (d) of flow_index_margin's derivation. */
-            double edge = worst ? sur_w + 2.0 * sur_mmax : sur_w - 2.0 * sur_mmax;
-            const Flow *cand = NULL; double cand_w = 0.0;
-            long band = 0, band_of = 0;
-            for (int bi = 0; bi < g_flows_n; bi++) {
-                Flow *m = g_flows[bi];
-                double s, mw;
-                if (flow_pick_skipped(m, seed, exclude, runnable_only)) continue;
-                band_of++;
-                s = flow_index_surrogate(m);
-                if (worst ? s > edge : s < edge) continue;
-                band++;
-                mw = flow_weight(m);
-                if (!cand || (worst ? mw < cand_w : mw > cand_w)) { cand = m; cand_w = mw; }
-            }
-            /* The seed enters the band as it enters the scan: tested for membership and folded with the non-strict
-               comparison, since the incumbent keeps the thread on a tie. It counts in the denominator whether or not
-               the band admits it. */
-            if (seed_live && !(runnable_only && flow_host_owed(seed))) {
-                double s = flow_index_surrogate(seed);
-                band_of++;
-                if (!(worst ? s > edge : s < edge)) {
-                    double mw = flow_weight(seed);
-                    band++;
-                    if (!cand || (worst ? mw <= cand_w : mw >= cand_w)) { cand = seed; cand_w = mw; }
-                }
-            }
-            g_index_checks.band_members += band;
-            g_index_checks.band_weighed += band_of;
-            DCHECKF(band_of == g_scan_weights[why] - sw_before,
-                    "the band walk and the order's own scan weighed different populations — the two share "
-                    "flow_pick_skipped precisely so they cannot, and a difference is a `continue` introduced "
-                    "into one of the two walks or a skip arm that reached one of them and not the other. "
-                    "`keyIndexBandWeighedLifetime` is then a denominator over a set the order did not walk, "
-                    "and the band share published against it is a fraction of the wrong thing. The scan "
-                    "weighed %lld member(s) and the band walk tested %ld",
-                    (long long)(g_scan_weights[why] - sw_before), band_of);
-            DCHECKF(cand == best,
-                    "the candidate set carrying the derived margin did not return the comparator's member — either "
-                    "the band's edge is wrong (`2*sur_mmax` over the whole folded population, seed included) or the "
-                    "band walk's order, strictness or seed fold differs from the scan's. The band held %ld of %ld "
-                    "member(s) tested, edge=%.17g from sur_w=%.17g and 2*margin=%.17g; the band returned slot %d "
-                    "weighing %.17g and the scan slot %d weighing %.17g",
-                    band, band_of, edge, sur_w, 2.0 * sur_mmax,
-                    cand ? cand->reg_i : -1, cand ? cand_w : 0.0, best->reg_i, bw);
-        }
-        /* And which of the surrogate's two modes this scan was in, counted rather than asserted. An abort on
-           `flow_weight(sur_best) == bw` would guard a state the declared margin permits on every real frontier,
-           which is neither an invariant nor a missing capability; the design that answers it is the band walk
-           above, which reads no mode and answers both arms. No gap bound is asserted in its place: the sound
-           statement `0 <= bw - W(m*) <= M(best) + M(m*)` is entailed by the per-member fold (`|S(m) - W(m)| <=
-           M(m)`) and the identity above (`W(m*) >= sur_w - M(m*) >= S(best) - M(m*) >= bw - M(best) - M(m*)`), so a
-           third spelling could not fail first.
-           The rows partition `index_differed` by the pair that states the mode. The sum is asserted because the
-           total is raised where the members are compared and the arms here, over one condition.
-           Named residual. Not covered: tie identity, which members share the maximum, which these rows count
-           disagreements about rather than measure. Next diff builds: nothing in this file; an order that stops
-           resolving below its step is an order change and the project owner's, decided from these rows. Absence
-           shows as: a run whose strict arm is a large share of its differed total, the single top key naming a
-           member the comparator calls worse repeatedly. */
-        if (sur_best != best) {
-            if (sur_w == sur_of_best) g_index_checks.differed_tie++;
-            else                      g_index_checks.differed_strict++;
-            DCHECKF(g_index_checks.differed_tie + g_index_checks.differed_strict
-                        == g_index_checks.index_differed,
-                    "the surrogate's tie and strict counts do not sum to the scans in which it named another member "
-                    "— the total and the arms are raised over one condition at two sites, so the two sites came "
-                    "apart. tie=%ld strict=%ld differed=%ld",
-                    g_index_checks.differed_tie, g_index_checks.differed_strict,
-                    g_index_checks.index_differed);
-        }
-    }
 #endif
     /* "CPU-AGING so a monopolizer that burns CPU without emitting sinks below productive+unrun flows", asserted
        where the choice is made. It catches an edit to flow_weight, not a state of the frontier: the bound is
@@ -3863,6 +3838,18 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        beside `val` and `fam_us`, written once per family per emission and read by every arm. Absence shows as: a
        frontier whose census reports members at `turns:0` while `wTop` climbs, with every ordering assertion silent
        and nothing distinguishing it from a frontier served correctly. */
+    return best;
+}
+
+/* The dispatch ask's two rows of what the tie-break did (the plateau and starvation counters), over the index's
+   answer. The index never weighs a never-dispatched member below `bw`, so `never_tie` (one stands at exactly `bw`)
+   and `g_ix_never_n` (one stands at all) are the walk's `never_w == bw` and `never != NULL`; the incumbent is not
+   among them, having been dispatched, which is asserted. */
+static void flow_count_plateau(const Flow *seed, const FlowIxAnswer *a) {
+    const Flow *best = a->best;
+    DCHECK(!a->seeded || seed->picks > 0,
+           "the dispatch ask's incumbent was never dispatched — engine.c's incumbent is the member it switched in "
+           "and credited, so a seed at `picks == 0` would count itself as the never-run member level with itself");
     /* Starvation, counted at the line that decides; the census's gauges say a tied tail exists, not that a pick
        passed over it. It counts the dispatch pick returning a member dispatched before while a never-dispatched one
        stood at the same weight, only where the pick displaces the incumbent (`best != seed`): engine.c credits a
@@ -3875,21 +3862,19 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        exactly. The complement, the incumbent keeping the thread level with a never-run member, is the plateau rows
        below. Exact `==`: two members at one weight read one value twice. Lifetime counters off the flows, reset by
        nothing; both raised under one condition, so `idle <= starved` by construction. */
-    if (why == FLOW_SCAN_NEXT && best && best != seed && best->picks > 0 && never && never_w == bw) {
+    if (best && best != seed && best->picks > 0 && a->never_tie) {
         g_starved_picks++;
         if (flow_between_units(best) && !flow_holds_park(best)) g_starved_picks_idle++;
     }
     /* And the complement, in one evaluation, so the identities hold by construction: `held` is decided by the same
-       `best`, `seed`, `never` and `bw`, and every subset is raised inside its population's `if`, so
-       `runs <= held <= asked` and `held_idle <= held` (asserted in result.c) fail only for a second writer.
-       `never != seed` is part of the question: "a never-run member stood level with the incumbent" needs a member
-       that is not the incumbent, and a seed with `picks == 0` would otherwise become its own `never` through the
-       fold's `>=`. (That the incumbent has `picks > 0` is an argument about engine.c's displacement block, and
-       `cur` is restored from `g_sess_cur` across a resume.) Closed by any dispatch scan that did not hold, asked
-       or not, so the write to `g_plateau_open` is inside the scan test (see its banner). */
-    if (why == FLOW_SCAN_NEXT) {
-        int asked = seed_weighed && best && never && never != seed;
-        int held  = asked && best == seed && never_w == bw;
+       `best`, `seed` and `never_tie`, and every subset is raised inside its population's `if`, so
+       `runs <= held <= asked` and `held_idle <= held` (asserted in result.c) fail only for a second writer. "A
+       never-run member stood level with the incumbent" needs a member that is not the incumbent, which the assert
+       above makes every never-dispatched member. Closed by any dispatch ask that did not hold, asked or not, so the
+       write to `g_plateau_open` is unconditional here (see its banner). */
+    {
+        int asked = a->seeded && best && g_ix_never_n > 0;
+        int held  = asked && best == seed && a->never_tie;
         if (asked) g_plateau_asked++;
         if (held) {
             g_plateau_held++;
@@ -3903,8 +3888,93 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         }
         g_plateau_open = held;
     }
-    return best;
 }
+
+/* The runnable maximum: the members not host-owed, asked once per dispatch (flow_next_to_run), once per preempt-hook
+   rescan (flow_rival_of) and per host report (engine_top_weight), answered by the index. The incumbent is the seed,
+   not a candidate like the rest: the comparison is strict, so seeding it states the rule that the thread moves only
+   for a strictly better flow, the rule the preempt hook's value clause applies at the other end. Without the seed
+   the pick returns the first maximum in registry order, so a field of equal weights would hand the thread to the
+   lowest slot every iteration and pay a COW swap for an unchanged ranking. There is no number in it: a strictly
+   better flow takes the thread at the next opcode. The seed is a live member (engine.c drops an incumbent the
+   seeding paged out before asking), so it is read through its handle. */
+static int64_t g_ix_entries;   /* lifetime: queue entries the index's asks took, published as `scanIndexEntries` */
+static Flow *flow_pick(const Flow *seed, const Flow *exclude, FlowScan why) {
+    FlowIxAnswer a;
+    CHECK((unsigned)why < (unsigned)FLOW_SCAN_N,
+          "engine: the order was asked through a scan entry not in solver/flow.h's list — the value is written only "
+          "from that enum at a flow_pick call site, so this is a cast or an uninitialised read");
+    g_scan_runs[why]++;
+    DCHECK(!seed || (seed->reg_i >= 0 && seed->reg_i < g_flows_n && g_flows[seed->reg_i] == seed),
+           "the runnable ask was seeded with a flow that is not a member — the incumbent engine.c passes is the "
+           "member holding the thread, or one it re-checked after the candidate seeding could page it");
+    a = flow_ix_query(seed, exclude);
+    g_scan_weights[why] += a.weighed;
+    g_ix_entries += a.entries;
+    if (why == FLOW_SCAN_NEXT) flow_count_plateau(seed, &a);
+    return a.best;
+}
+
+int64_t flow_ix_entries(void) { return g_ix_entries; }
+
+#if APICLIENT_DEV
+/* The index against the frontier it indexes, asked at every census: the eager checks in flow_ix_query see only
+   the members a query weighs, and a missed re-key or a wrong margin is a fact about the members it skips. Every
+   member is indexed exactly when it is not host-owed, under a key equal to its fresh key, bounded strictly above
+   its weight, in a heap whose order and parent links hold, on its family's away list exactly when it is away;
+   and the query's answer is a walk's. Dev-only and uncounted: no scan row moves, so two documents composed at one
+   boundary still differ only in the rows main.c's qjs_emit_partial names. */
+static void flow_ix_check(void) {
+    long in = 0, never = 0, owed = 0, listed = 0;
+    const Flow *ref = NULL; double rw = 0.0;
+    FlowIxAnswer a;
+    for (int i = 0; i < g_flows_n; i++) {
+        const Flow *m = g_flows[i];
+        const FlowAcct *br = m->acct->branch;
+        int away = flow_own_silence(m) > 0, on_list = m->away_prev != NULL || m->family->away_head == m;
+        DCHECKF(away == on_list, "a member's away state and its family's away list disagree (own silence %lld, on "
+                "the list %d) — the list and `away_n` move at the same four transitions",
+                (long long)flow_own_silence(m), on_list);
+        if (flow_host_owed(m)) {
+            DCHECK(!m->ix_in, "a host-owed member stands in the order's index — the runnable ask would offer it");
+            owed++;
+            continue;
+        }
+        DCHECK(m->ix_in, "a runnable member is missing from the order's index — the runnable ask can never name it");
+        in++;
+        if (m->picks == 0) never++;
+        {
+            double w = flow_weight(m), k = flow_ix_member_key(m);
+            double bound = flow_ix_family_bound(m->family) + (acct_branch_offset(br) + m->ix_m.key);
+            DCHECKF(m->ix_m.key == k && w < bound,
+                    "the order's index holds a stale key for a member, or bounds it at or below its weight (key "
+                    "%.17g, fresh %.17g, weight %.17g, bound %.17g) — a writer of the key's operands skipped "
+                    "flow_ix_rekey, or the margin's derivation is wrong", m->ix_m.key, k, w, bound);
+            if (!ref || w > rw) { ref = m; rw = w; }
+        }
+        DCHECK((!m->ix_m.l || (m->ix_m.l->up == &m->ix_m && m->ix_m.l->key <= m->ix_m.key)) &&
+               (!m->ix_m.r || (m->ix_m.r->up == &m->ix_m && m->ix_m.r->key <= m->ix_m.key)) &&
+               ix_s(m->ix_m.l) >= ix_s(m->ix_m.r) && m->ix_m.s == ix_s(m->ix_m.r) + 1,
+               "a member heap of the order's index lost its order, its parent links or its leftist shape");
+        DCHECK(br->ix_bin && br->ix_b.key == flow_ix_bucket_key(br) &&
+               (!br->ix_b.l || (br->ix_b.l->up == &br->ix_b && br->ix_b.l->key <= br->ix_b.key)) &&
+               (!br->ix_b.r || (br->ix_b.r->up == &br->ix_b && br->ix_b.r->key <= br->ix_b.key)) &&
+               m->family->ix_listed,
+               "a bucket of the order's index is unfiled, keyed off its offset and top member, or out of heap "
+               "order in its family's heap, or its family is off the list");
+    }
+    for (const Flow *o = g_owed_head; o; o = o->owed_next) owed--;
+    for (const FlowAcct *f = g_ix_fams; f; f = f->ix_fnext) listed++;
+    DCHECKF(in == g_ix_n && never == g_ix_never_n && owed == 0 && listed == g_ix_fams_n,
+            "the order's index counts disagree with the frontier (indexed %ld against %ld, never dispatched %ld "
+            "against %ld, host-owed list off by %ld, families %ld against %ld)",
+            in, g_ix_n, never, g_ix_never_n, owed, listed, g_ix_fams_n);
+    a = flow_ix_query(NULL, NULL);
+    DCHECKF(a.best == ref,
+            "the order's index answered the runnable maximum differently from a walk (index slot %d weight %.17g, "
+            "walk slot %d weight %.17g)", a.best ? a.best->reg_i : -1, a.bw, ref ? ref->reg_i : -1, rw);
+}
+#endif
 
 /* How much of an order spread the census's own rows can account for: one term of flow_weight per line, each at most
    its reported range, since the range of a sum is at most the sum of the ranges. The bound flow_wfq_census's closing
@@ -4035,6 +4105,9 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
 void flow_wfq_census(WfqCensus *out) {
     Flow *top;
     int i;
+#if APICLIENT_DEV
+    flow_ix_check();   /* the order's index against the frontier, at the census's cadence */
+#endif
     /* The best weight any ready job holder offers, held as a separate maximum because `job_w_gap` is a difference
        against a top known only when flow_best runs below, and "no ready holder" must differ from "a ready holder
        at weight zero". */
@@ -4530,7 +4603,7 @@ void flow_wfq_census(WfqCensus *out) {
     }
     g_wfq_census_minter = NULL;
     top = flow_best();
-    /* A non-empty frontier has a front. flow_best is flow_pick with no seed, no exclusion and `runnable_only` off,
+    /* A non-empty frontier has a front. flow_best is flow_pick_walk with no exclusion over every member,
        so it skips nothing; a NULL with members standing would be the pick hiding part of the frontier from its own
        maximum. Every row derived from `top` stays at zero without a top, and a zero silence notch is an ordinary
        reading for a just-forgiven leader, so the assert makes the zeros below mean only an empty frontier. The `if`
@@ -4870,19 +4943,19 @@ void flow_wfq_census(WfqCensus *out) {
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
-Flow *flow_best(void) { return flow_pick(NULL, NULL, 0, 0, FLOW_SCAN_OTHER); }
+Flow *flow_best(void) { return flow_pick_walk(NULL, 0, FLOW_SCAN_OTHER); }
 
 /* Which flow should hold the thread: the dispatch loop's pick, defending the incumbent on a tie. */
-Flow *flow_next_to_run(const Flow *incumbent, FlowScan why) { return flow_pick(incumbent, NULL, 1, 0, why); }
+Flow *flow_next_to_run(const Flow *incumbent, FlowScan why) { return flow_pick(incumbent, NULL, why); }
 
 /* Who the incumbent defends against: the same scan with the incumbent taken out rather than seeded in, since the
    hook applies the strict comparison itself; seeded, it would answer `cur` and compare a flow with itself. */
-Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, 1, 0, FLOW_SCAN_RIVAL); }
+Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, FLOW_SCAN_RIVAL); }
 
-/* Is `tail` the lowest-weight candidate? The assert's own scan, independent of flow_pick, and a function because a
+/* Is `tail` the lowest-weight candidate? The assert's own scan, independent of flow_pick_walk, and a function because a
    DCHECK condition must be side-effect-free and is evaluated only inside the condition, so release never runs it
    (in dev it is a scan on the reclaim path, reached at the RAM floor). It calls flow_weight and nothing else, so
-   the order stays single while the scan is a re-derivation. Ties pass: flow_pick may return either of two equal
+   the order stays single while the scan is a re-derivation. Ties pass: flow_pick_walk may return either of two equal
    minima. */
 static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
     double tw = flow_weight(tail);
@@ -4895,7 +4968,7 @@ static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
 }
 
 Flow *flow_worst(const Flow *exclude) {
-    Flow *tail = flow_pick(NULL, exclude, 0, 1, FLOW_SCAN_OTHER);
+    Flow *tail = flow_pick_walk(exclude, 1, FLOW_SCAN_OTHER);
     /* Every member, runnable or not, which is what eviction is about: a flow waiting on the host cannot use the
        thread, so the pick skips it, but it still occupies RAM and is the cheapest member to page, since its recipe
        re-issues the request it waits on. The one inversion is `exclude`: the flow switched in cannot be written out
@@ -4963,6 +5036,10 @@ void flow_remove(JSContext *ctx, Flow *f) {
            `f->picks` is unreachable two statements below, so this cannot stand beside `g_departures++` (see the
            banner at `g_picks_departed`). */
         g_picks_departed += f->picks;
+        /* And out of the order: the index if it is runnable, the host-owed list if it is not, the two exactly
+           partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
+        if (f->ix_in) flow_ix_remove(f);
+        else          flow_owed_unlink(f);
         acct_depart(f);
         free(f);
         g_flows[slot] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
@@ -4981,15 +5058,14 @@ void flow_remove(JSContext *ctx, Flow *f) {
 int flow_count(void) { return g_flows_n; }
 
 /* Is this pointer one of the flows standing? Answered by an address walk and never through flow.h's `reg_i`,
-   because the callers ask two questions of one predicate and the stricter decides: flow_pick asks whether a
-   pointer it believes live is still a member, while engine.c's hook and this file's guards ask whether a pointer
-   is dangling (`g_rival` is cached across opcodes and goes stale, and flow_remove frees the flow). An address
+   because the callers ask two questions of one predicate and the stricter decides: engine.c's dispatch asks whether
+   an incumbent it switched out to seed is still a member, while engine.c's hook and this file's guards ask whether
+   a pointer is dangling (`g_rival` is cached across opcodes and goes stale, and flow_remove frees the flow). An address
    comparison never dereferences `f`, so it answers both; the handle would have to load `f->reg_i`, reading freed
    memory in the state the strict question exists to catch. A caller known live would get a second entry, never a
    conversion of this one. The walk checks the handle as it goes, two-sided (the field against the array) and
-   after the address match, so it dereferences `f` only once the pointer is proven live. flow_pick decides its
-   seed's membership inside its own scan and asserts `reg_i` for every member, so this walk is not on the
-   dispatch path. */
+   after the address match, so it dereferences `f` only once the pointer is proven live. The dispatch asks it only
+   on a turn that switched its incumbent out, so this walk is not on the dispatch path. */
 int flow_is_member(const Flow *f) {
     for (int i = 0; i < g_flows_n; i++) if (g_flows[i] == f) {
         DCHECK(f->reg_i == i,

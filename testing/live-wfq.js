@@ -196,28 +196,31 @@ function branchScope() {
 }
 
 /* THE COST SCOPE — WHAT ASKING THIS ORDER COST, which every row in the two lists above is silent about
-   because every row above is about what the order DECIDED. result.c publishes nine rows here and states
+   because every row above is about what the order DECIDED. result.c publishes ten rows here and states
    what they are FOR in its own words: "the tail is not being reached" has two causes — "not enough thread
    time for the members standing, or the thread spent asking the order rather than running it" — and no
    other row on that line separates them.
 
    THEY HAD NO LIVE-PAGE READER AT ALL, which is the same defect one scope over from the minter triple and
-   is why the check below is written the way `branchScope` is. `engine/build.mjs` reads all nine and
+   is why the check below is written the way `branchScope` is. `engine/build.mjs` reads all ten and
    `engine/solvergate.mjs` reads three, and both of those drive the SMOKE FIXTURE — whose fork factor,
    frontier growth and dispatch count are its author's design decisions rather than a document's. So the
    one question a growing frontier poses about the ORDERING'S OWN COST — does a dispatch weigh a
    constant number of members or all of them — was measurable only where the population was chosen.
 
-   THE KINDS, FROM result.c's OWN TEXT AND NOT FROM THE NAMES. All nine are LIFETIME COUNTS and may be
+   THE KINDS, FROM result.c's OWN TEXT AND NOT FROM THE NAMES. All ten are LIFETIME COUNTS and may be
    differenced: `preemptAsksLifetime` is stated as one outright ("solver/engine.c never resets it, so two
    censuses carrying one `workDone` give a RATE over the interval between them, and that is the only
-   reading a wall-denominated quantum leaves quotable at all"), and the eight `scan*` rows are the same
+   reading a wall-denominated quantum leaves quotable at all"), and the nine `scan*` rows are the same
    kind by the same argument — they count WALKS AND WEIGHINGS PERFORMED, which nothing takes back. They
    are COUNTS AND NOT CLOCKS on purpose: solver/flow.h's FLOW_SCANS says a duration here "would be a fact
    about the machine and these are facts about what the engine did", and this host's quantum is
    wall-denominated. */
 const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
               "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
+              /* …and the order's index's own work, the queue entries its runnable asks took, beside the
+                 weighings above that are those asks' members (solver/metrics/wfq_frontier.def). */
+              "scanIndexEntries",
               "preemptAsksLifetime",
               /* …AND WHICH HALF OF THE HOOK'S KEY MOVED WHEN IT MISSED. `scanRivalRuns` is close to half of
                  all the frontier weighing this engine does and is keyed on a DISJUNCTION — the frontier
@@ -226,7 +229,7 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
                  miss is the order genuinely having changed; a `cur` miss is a walk for a frontier in which
                  only the EXCLUDED member moved. `rivalMissBoth` is what prices either repair: where both
                  halves moved in one interval, removing one invalidator buys NOTHING because the other would
-                 have forced the same walk. LIFETIME counts like the nine above, differenceable for the same
+                 have forced the same walk. LIFETIME counts like the ten above, differenceable for the same
                  reason, and a PARTITION of `scanRivalRuns` — which is checked below rather than assumed. */
               "rivalMissGen", "rivalMissCur", "rivalMissBoth"];
 
@@ -235,7 +238,7 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
    occur in exactly ONE file in this tree — result.c, which emits them — and `keyArmedLifetime` in that file
    and the one that raises it. No driver anywhere, fixture or live, read any of the four.
 
-   WHY THAT IS THE EXPENSIVE ONE TO HAVE UNREAD. result.c: flow_pick's member-key invariant "is a predicted
+   WHY THAT IS THE EXPENSIVE ONE TO HAVE UNREAD. result.c: flow_pick_walk's member-key invariant "is a predicted
    ABSENCE, and a run in which it never fires is satisfied identically by an invariant that HOLDS and by a
    walk that COMPARED NOTHING.  Its condition exempts a member on three arms before it compares anything".
    `keyArmedLifetime` is the SCORE — how many comparisons were actually made — and the other three are the
@@ -248,47 +251,7 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
    driver samples is a DEV build, by the presence of that walk's own abort text in the shipped wasm with an
    invented string as the control, so a zero here is a statement about the run and not about the build.  A
    reader meeting four zeros should re-take that control before concluding anything. */
-/* …AND THE SECOND PAIR AT THE SAME SCOPE, WHICH SCORES A DIFFERENT CLAIM ABOUT THE SAME KEY. The four above
-   score whether the member key STANDS STILL between two frontier generations; `keyIndexAskedLifetime` and
-   `keyIndexDifferedLifetime` score whether it ORDERS — whether an index over it would have returned a member
-   the comparator also calls maximal. A candidate set rests on the second and nothing measured it.
-   READ THEM AS A PAIR. The ask is the reachability witness: a zero `differed` beside a zero ask is a fold
-   that never ran, and beside a large ask it is the strongest available result — the surrogate picked the
-   SAME member every time. A nonzero `differed` is two members named apart, which is this frontier's ordinary
-   state and not a defect.
-   THIS READ `the disagreement that matters ABORTS in flow_pick and is on no row here`, AND IS REWRITTEN
-   RATHER THAN DELETED BECAUSE THAT IS THE READING A DRIVER RE-DERIVES FROM A ROW THAT ONLY EVER COUNTED
-   TIES. That abort is gone — it asked two spellings of one weight to agree bit for bit where flow.c's own
-   flow_index_margin declares them a derived distance apart, so it ended every run that reached a few thousand
-   members on a real page — and the disagreement it used to end a run on is now the PARTITION below:
-   `keyIndexDifferedTieLifetime` and `keyIndexDifferedStrictLifetime`, summing to `keyIndexDifferedLifetime`.
-   So a defect that used to be readable from one dying run's crash text is readable from every run's census,
-   and a reader who wants to know how OFTEN the surrogate names a worse member has a row instead of a count of
-   aborted sessions.
-   THE STRICT ARM IS A SHARE AND NEVER A QUANTITY. Large against the differed total, the single top key names
-   a member the comparator calls worse repeatedly; small beside a much larger tie count, the order is simply
-   tied and the design flow.c proves exact — a candidate set within a derived margin, re-compared through
-   flow_weight — answers it with no edit to the order at all.
-   They are named here because result.c publishes them and `keyScope`'s derived check would throw otherwise —
-   which is that check doing the one thing it exists for. An artifact older than these rows prints null for
-   each, which is this stream's absent-versus-zero rule and is the honest answer: the run did not state them. */
-/* …AND THE THIRD PAIR AT THE SAME SCOPE, WHICH SCORES WHAT AN ANSWER TO THE SECOND WOULD COST. Where the
-   surrogate merely TIES with the comparator, the design that answers it takes a CANDIDATE SET within a
-   derived margin of the surrogate's extremum and re-compares the survivors through `flow_weight` — which
-   solver/flow.c proves returns the full scan's member pointer for pointer, so it is exact and needs no edit
-   to the order. `keyIndexBandMembersLifetime` over `keyIndexBandWeighedLifetime` is the SHARE OF THE
-   FRONTIER that set holds, which is the number that decides whether an index narrows anything: a small
-   share is an index worth building, and a share near one is one that saves nothing and whose per-ask cost is
-   the walk the order already performs.
-   READ THEM AS A FRACTION. The numerator alone is a count over a frontier whose size this stream publishes
-   separately and which GROWS, so a lifetime numerator against a terminal gauge under-reads by the factor the
-   frontier grew — the denominator is raised on the same walk over the same population precisely so nobody
-   has to construct one. Both are LIFETIME counts and may be differenced; `keyIndexAskedLifetime` is the
-   reachability witness for both. */
-const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime",
-                "keyIndexAskedLifetime", "keyIndexDifferedLifetime",
-                "keyIndexDifferedTieLifetime", "keyIndexDifferedStrictLifetime",
-                "keyIndexBandMembersLifetime", "keyIndexBandWeighedLifetime"];
+const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime"];
 
 /* WHAT THE ORDER IS MADE OF, WHICH EVERY ROW ABOVE PRESUPPOSES AND NONE OF THEM ASKS. The scopes above say
    what the order DECIDED, what it COST and whether its key stands still.  These six say whether it can
@@ -687,7 +650,7 @@ async function main() {
               "grows with it. `scanNextWeights / steps` and `scanRivalRuns / forks` need @COLD's `steps` " +
               "and `forks` and are NOT composed here.");
   console.log("# key-check scope, derived from result_wfq_json (" + KEYROWS.length + " rows) — ALL LIFETIME " +
-              "COUNTS: " + KEYROWS.join(",") + " | the SCORE of flow_pick's member-key invariant, which is a " +
+              "COUNTS: " + KEYROWS.join(",") + " | the SCORE of flow_pick_walk's member-key invariant, which is a " +
               "PREDICTED ABSENCE: a run in which it never fires is satisfied identically by an invariant that " +
               "holds and by a walk that compared nothing. `keyArmedLifetime` is the comparisons actually " +
               "made; the other three are the exemptions that absorbed the rest. Raised under APICLIENT_DEV, " +
