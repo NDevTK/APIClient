@@ -348,12 +348,10 @@ static void acct_depart(Flow *f) {
        below clear `f->acct` and then `f->family`, after which flow_own_silence answers zero and the gauge would
        drift up by one per away departure. */
     if (flow_own_silence(f) > 0) f->family->away_n--;
-    /* …AND THE MEMBER LEAVES ITS BRANCH BUCKET, on the line that performs the departure and BEFORE the unref
-       below, because the bucket may BE this node and this is the last instant it is certainly addressable.
-       `sub_gone` and not a live decrement, for `g_departures`' reason: a gauge cannot say whether a bucket
-       holding a hundred members has minted a hundred or a hundred thousand, and that difference is the entire
-       question a branching subtree poses. What the bucket RECEIVED (`sub_us`) is untouched here — a departed
-       arm's thread time is part of what its subtree got, which is the whole reason the bucket outlives it. */
+    /* And the member leaves its branch bucket, before the unref below, because the bucket may be this node and this
+       is the last instant it is certainly addressable. `sub_gone` rather than a live decrement, for `g_departures`'
+       reason. What the bucket received (`sub_us`) is untouched: a departed arm's thread time is part of what its
+       subtree got, which is why the bucket outlives it. */
     DCHECK(f->acct->branch != NULL,
            "a departing flow's fork-tree node names no branch bucket — flow_new points every node at one, so "
            "this member's whole subtree is unaccounted and the census's membership identity is about to fail "
@@ -362,61 +360,41 @@ static void acct_depart(Flow *f) {
     acct_compress_dead(f->acct);
     acct_unref(f->acct);
     f->acct = NULL;
-    /* THE TAG GOES WITH IT. The root node stays alive while any descendant's `up` chain refs it, so a live
-       flow's `family` is never dangling; a departed flow's would be, the moment the last of its family goes. */
+    /* The tag goes with it: the root node stays alive while any descendant's `up` chain refs it, so a live flow's
+       `family` never dangles, and a departed flow's would once the last of its family goes. */
     f->family = NULL;
 }
 
-/* THE THREAD TIME THIS FLOW'S WHOLE FORK FAMILY HAS BURNED SINCE ITS LAST EMISSION — one indirection, because
-   every flow points STRAIGHT at its family's root (`family`, joined at flow_fork_inherit) rather than walking
-   an ancestry whose length is the fork depth. flow_weight calls this once per member per pick and flow_weight
-   is itself evaluated inside DCHECK conditions, so this is READ-ONLY: a compressing find here would make every
-   assertion in this file mutate the structure it is asking about. */
+/* The thread time this flow's whole fork family has burned since its last emission, in one indirection, because
+   every flow points straight at its family's root (`family`, joined at flow_fork_inherit). flow_weight calls this
+   once per member per pick and is itself evaluated inside DCHECK conditions, so this is read-only: a compressing
+   find here would make every assertion in this file mutate the structure it asks about. */
 static int64_t acct_family_us(const Flow *f) {
     return f->family ? f->family->fam_us : 0;   /* departed: its node is gone and so is its rank */
 }
 
-/* …AND THIS ONE FLOW'S OWN SHARE OF THAT SAME WINDOW — the aging term's other half, read over the family's
-   silence window rather than over the flow's own, for the reason FlowAcct's `emit_gen` gives. `Flow.cpu` is a
-   reading only while `cpu_gen` matches the account's generation; past an emission the field holds a stale
-   window's arithmetic and the answer is ZERO, because a flow that has not been charged since the window opened
-   has burned nothing in it.
-   IT IS THE ONE PLACE `Flow.cpu` MAY BE READ AS A QUANTITY. Every other site — the weight, both notches, the
-   census rows, flow_pick's guard, the arrival rule — goes through here, so the field and its generation cannot
-   be separated by an edit that touches only one of them. Reading the raw field instead is exactly the defect:
-   it charges a member for thread time it never consumed and that no emission of its family can forgive.
-   READ-ONLY, with no lazy normalisation, because flow_weight calls this once per member per pick and
-   flow_weight is evaluated inside DCHECK conditions — a write here would make every assertion in this file
-   mutate the structure it is asking about. The normalisation happens where the flow is CHARGED
-   (flow_age_running), which is a write site already, and it is observationally a no-op: it writes the field to
-   the value this function was already returning for it. */
+/* And this flow's own share of that window, the aging term's other half, read over the family's silence window
+   (FlowAcct's `emit_gen`): `Flow.cpu` is a reading only while `cpu_gen` matches the account's generation, and past
+   an emission the answer is zero, because a flow not charged since the window opened has burned nothing in it.
+   This is the one place `Flow.cpu` may be read as a quantity (the weight, both notches, the census rows,
+   flow_pick's guard and the arrival rule all come through here), so the field and its generation cannot be
+   separated by an edit to one of them; the raw field would charge a member for thread time no emission of its
+   family can forgive. Read-only, for acct_family_us's reason; the normalisation happens where the flow is charged
+   (flow_age_running), and is observationally a no-op. */
 static int64_t flow_own_silence(const Flow *f) {
     if (!f->family) return 0;                   /* departed: its node is gone and so is its rank */
     return f->cpu_gen == f->family->emit_gen ? f->cpu : 0;
 }
 
-/* THE ONE RELATION THE AGING'S TWO HALVES OWE EACH OTHER, AND THE ONLY THING THAT MAKES THEM SUMMABLE: a
-   flow's own burn over the window is part of its FAMILY's burn over that same window, so the own half can
-   never exceed the family half. The notch adds them and weighs the sum against ONE reward (the family's), and
-   that addition is only meaningful while both readings are over one epoch — which is a claim about the two
-   fields' WINDOWS, not about their magnitudes, and it is a claim nothing else in this file states.
-   IT IS THE EXACT SHAPE OF THE DEFECT IT EXISTS TO FORBID, which is why it earns a check rather than a
-   comment. The own half used to be measured since this FLOW's own last emission and the family half since ANY
-   arm's — a strictly longer window against a strictly shorter one — and the observable of that mismatch is
-   precisely this inequality inverting: a sibling forked BEFORE its family emitted kept the raw burn it had
-   inherited, while the emission zeroed the family's, so the arm stood at `own > 0 == fam` and paid a debt no
-   emission of its family could forgive and no dispatch would ever be offered to clear. Measured, on the
-   artifact built one commit before the repair and on this reproduction: a document whose gate forks a sibling
-   and then forks an unbounded generator emitted ONE of its two worlds, and putting a longer busy loop between
-   the two — which raises the `cpu` every newborn rival copies at its fork, and nothing else — brought the lost
-   world back. An ordering that a rival's idle burn can restore is not one any resume seam can be blamed for.
-   ASSERTED AT EVERY TRANSITION THAT CAN MOVE EITHER HALF AND NOWHERE ELSE — a MACRO expanded at each of them,
-   never a function they call, so the abort stamps the transition that broke the relation instead of naming one
-   forwarding line for all four. It is deliberately NOT placed in flow_own_silence: that reader is called once
-   per member per pick and from inside other DCHECK conditions, so a check there would report the same line for
-   every caller and would name no site to fix, which is the assert-with-a-remedy-and-no-address shape.
-   The condition is READ-ONLY on both sides (both readers say so at their own definitions), so it is a legal
-   DCHECK condition and evaluating it cannot move the structure it asks about. */
+/* The one relation the aging's two halves owe each other, which makes them summable: a flow's own burn over the
+   window is part of its family's burn over that window, so the own half can never exceed the family half. It is a
+   claim about the two fields' windows, not their magnitudes, and its inversion is the shape of the defect it
+   forbids: an own half measured since the flow's own emission and a family half since any arm's would leave a
+   sibling forked before its family emitted at `own > 0 == fam`, paying a debt no emission forgives and no dispatch
+   clears (a document whose gate forks a sibling and then an unbounded generator would emit one of its two worlds).
+   A macro expanded at every transition that can move either half, so the abort names the transition; not in
+   flow_own_silence, which is called once per member per pick and inside other DCHECK conditions, so it would name
+   one line for every caller. Both sides are read-only, so it is a legal DCHECK condition. */
 #define DCHECK_AGING_ONE_WINDOW(f, what)                                                                     \
     DCHECK(flow_own_silence(f) <= acct_family_us(f),                                                          \
            "a flow's OWN silence exceeds its FAMILY's over the same window, after " what " — the aging term "  \
@@ -426,78 +404,59 @@ static int64_t flow_own_silence(const Flow *f) {
            "forecloses, which is §scheduler's razor's STARVES: fix the transition this abort names so both "   \
            "halves move over the epoch FlowAcct's `emit_gen` keeps")
 
-/* THE QUEUE COORDINATE, forward-declared because the frontier's virtual time below is a reading OF it and the
-   ordering itself is stated once, further down beside the terms it is made of. */
+/* The queue coordinate, forward-declared because the frontier's virtual time below is a reading of it and the
+   ordering is stated once, further down beside the terms it is made of. */
 static double flow_queue_weight(const Flow *f);
 
-/* …AND THE REWARD ALONE, forward-declared because the clock's writer samples THAT and not the queue weight —
-   see frontier_vt_serve for why the server's own aging may not enter the coordinate a newcomer arrives at. */
+/* And the reward alone, forward-declared because the clock's writer samples that and not the queue weight (see
+   frontier_vt_serve for why the server's own aging may not enter the coordinate a newcomer arrives at). */
 static double acct_family_val(const Flow *f);
 
-/* …AND THE ONE STATEMENT THAT SAYS THE ORDER MOVED, forward-declared because the clock's writer below raises
-   it and the raise is defined with the registry it belongs to. */
+/* And the one statement that says the order moved, forward-declared because the clock's writer below raises it and
+   the raise is defined with the registry it belongs to. */
 static void frontier_rank_changed(void);
 
 #if APICLIENT_DEV
-/* …AND THE MEMBER HALF OF THE WEIGHT, forward-declared for the ONE writer that moves it without raising the
-   statement above. flow_age_running is that writer and it is deliberately silent (see its own banner: the
-   charge IS the quantity the aging term exists to read, and a bump per charge would invalidate every cached
-   rival every dispatch), so it MAINTAINS the stamp flow_best's walk compares against rather than leaving a
-   move behind it. Declared here beside the other three and not defined here, because the key is stated once,
-   beside the terms it is made of. DEV-only in the declaration as in the use, for `Flow.key_last`'s reason. */
+/* And the member half of the weight, forward-declared for the one writer that moves it without raising the
+   statement above: flow_age_running is deliberately silent (its banner: the charge is what the aging term reads,
+   and a bump per charge would invalidate every cached rival every dispatch), so it maintains the stamp flow_best's
+   walk compares against. Defined beside the terms it is made of. Dev-only in declaration and use, for
+   `Flow.key_last`'s reason. */
 static double flow_member_key(const Flow *f);
 
-/* …AND THE PER-MEMBER HALF OF THAT KEY, FORWARD-DECLARED FOR THE SAME ONE WRITER AND FOR A DIFFERENT CLAIM.
-   flow_member_key is the quantity that must STAND STILL between two frontier generations; this is the
-   quantity an index may be KEYED on, and flow_index_key's own banner is emphatic that the two are different
-   compositions of one sum ("ONE QUANTITY, TWO QUESTIONS, AND THE STRICTER ONE DECIDES THE COMPOSITION").
-   The stamp above asserts the SUM; the stamp this declares asserts the HALF, at the same seam, on the same
-   member, for the reason solver/flow.h's `ikey_last` gives. */
+/* And the per-member half of that key, for the same writer and a different claim: flow_member_key is the quantity
+   that must stand still between two frontier generations, while this is the quantity an index may be keyed on
+   (flow_index_key's banner: one quantity, two questions, and the stricter decides the composition). The stamp
+   above asserts the sum and this one the half, at the same seam, for solver/flow.h's `ikey_last` reason. */
 static double flow_index_key(const Flow *f);
 #endif
 
-/* THE FRONTIER'S VIRTUAL TIME — SFQ's v(t), WHICH IS THE SERVICE TAG OF THE ITEM IN SERVICE AND NOT A QUANTITY
- * OF ITS OWN. It is the one place the queue's clock is spelled, and the reason it is a stored scalar rather
- * than a derivation is that it has to be readable when NOTHING is in service: the frontier persists across
- * slices and across sessions, so a definition that answers only while `g_running` is set would hand every
- * newcomer a different coordinate depending on whether the host happened to be between two dispatches.
+/* The frontier's virtual time: SFQ's v(t), the service tag of the item in service, stored as a scalar because it
+ * must be readable when nothing is in service (the frontier persists across slices and sessions, so a definition
+ * that answers only while `g_running` is set would place every newcomer differently depending on whether the host
+ * was between two dispatches).
  *
- * IT IS WRITTEN AT EXACTLY ONE EVENT — AN EMISSION BY THE ITEM IN SERVICE, which raises that item's
- * coordinate by what it just earned, so v(t) follows it up. Between two emissions the clock is CONSTANT, which
- * is what SFQ says of it and what makes a newcomer's placement a fact rather than a race with whichever
- * microsecond it was created in.
+ * It is written at one event, an emission by the item in service, which raises that item's coordinate by what it
+ * earned, so v(t) follows it up; between emissions the clock is constant, as SFQ says, so a newcomer's placement is
+ * a fact rather than a race with its creation microsecond. A dispatch does not write it: moving the clock to the
+ * winner's own coordinate would lift every unplaced account the pick compared it against to that coordinate,
+ * where a full optimism bonus puts them above it, and the pick would un-choose its own winner (see
+ * flow_set_running). The clock follows what the frontier earns, never which member holds the thread.
  *
- * IT USED TO BE WRITTEN AT TWO, AND THE SECOND ONE WAS A DISPATCH. That is deleted rather than described,
- * because it was not a second flavour of the same event: a dispatch moved this clock to the WINNER's own
- * queue coordinate, and an unplaced account's reward IS this clock read live — so the act of choosing a flow
- * lifted every account the pick had just compared it against to that flow's own coordinate, where a full
- * optimism bonus then put them above it. The pick un-chose its own winner, every time, and engine.c's
- * value-yield assertion fired on a state whose five clauses are all terms of the winner and so could not see
- * it. See flow_set_running for the arithmetic and for why the argument in this banner was only ever about the
- * emission. What survives is the property that argument actually needs: the clock follows what the frontier
- * EARNS, and never which member happens to be holding the thread.
+ * Every write raises the frontier generation at the writer: the clock is a term of every unplaced account's
+ * weight, and the preempt hook's rival cache is correct only if such a move arrives through the generation.
  *
- * AND EVERY WRITE OF IT RAISES THE FRONTIER GENERATION, at the writer rather than at the caller — it is a term
- * of every unplaced account's weight, so a write re-ranks all of them, and the preempt hook's rival cache is
- * correct only if such a move arrives through the generation. A second caller therefore cannot be added
- * without one, which is exactly how the dispatch came to move this clock silently.
+ * It does not follow the aging down: the item in service sinks as it burns, and following it would charge every
+ * never-served member for the thread time of the one being served. A member given nothing owes nothing.
  *
- * AND IT DELIBERATELY DOES **NOT** FOLLOW THE AGING DOWN, WHICH IS THE ASYMMETRY THE WHOLE FIX RESTS ON. The
- * item in service sinks as it burns the thread, and following it down would charge every member that has never
- * been served for the thread time of the one that IS being served — the unforgivable debt this file already
- * removed from the arrival door in the aging term, arriving through the clock instead. A member that has been
- * given nothing owes nothing.
+ * Floored at zero, the clock's origin rather than a clamp: the first flow enters at v(0) = 0 and none enters
+ * below, so a serving tag below zero (an item that has burned more than its whole reward, flow_pick's monopolizer
+ * state) moves the clock no further back than the busy period's start. The floor also keeps that guard's
+ * derivation true: it reads `val + 1` off the picked flow and an untouched member, and a negative reward on a
+ * member that did nothing would fire it on a healthy run.
  *
- * FLOORED AT ZERO, WHICH IS THE CLOCK'S ORIGIN AND NOT A CLAMP ON A COMPUTED VALUE. The frontier's first flow
- * enters at v(0) = 0 and no member has ever entered below that, so a serving tag below zero — an item that has
- * burned more than its whole reward is worth, which is exactly the state flow_pick's monopolizer guard names —
- * moves the clock no further back than the start of the busy period. The floor is also what keeps that guard's
- * own derivation true: it reads `val + 1` off the picked flow and off the untouched member it is compared
- * against, and a negative reward on a member that has done nothing would make the bound fire on a healthy run.
- *
- * READ-ONLY AND O(1) AT EVERY READER, because acct_family_val is called once per member per pick and from
- * inside DCHECK conditions, where a reader that walked or normalised anything would make every assertion in
- * this file mutate the structure it is asking about. */
+ * Read-only and O(1) at every reader, because acct_family_val is called once per member per pick and inside DCHECK
+ * conditions. */
 static double g_vt;
 
 static double frontier_vt(void) {
@@ -509,14 +468,12 @@ static double frontier_vt(void) {
     return g_vt;
 }
 
-/* …AND THE ONE WRITER OF IT. `f` is the item whose tag the clock is now a reading of: the flow just dispatched,
-   or the flow in service whose own tag an emission has just raised. Called with the flow ALREADY installed as
-   `g_running`, so the coordinate it reads is the one every other member is about to be compared against. */
-/* DOES THE CLOCK STILL LEAD EVERY ACCOUNT — the definition of `g_vt` asked as a question, for the assertion in
-   the writer below. Walked over the MEMBERS because an account is reached through its arms, exactly as the
-   census counts families; a family reached twice answers the same value twice, so no marking is needed for a
-   maximum. Mentioned only inside a DCHECK condition, so release neither calls it nor emits it — the shape
-   flow_is_min_weight already establishes in this file. */
+/* The one writer of it. `f` is the item whose tag the clock is now a reading of, the flow in service whose own tag
+   an emission (or a restore) has just raised, already installed as `g_running`. */
+/* Does the clock still lead every account: the definition of `g_vt` asked as a question, for the assert in the
+   writer below. Walked over the members, as the census counts families; a family reached twice answers the same
+   value, so no marking is needed for a maximum. Mentioned only inside a DCHECK condition, so release neither calls
+   nor emits it, as flow_is_min_weight. */
 static int acct_vt_leads(void) {
     int i;
     for (i = 0; i < g_flows_n; i++)
@@ -534,80 +491,52 @@ static void frontier_vt_serve(const Flow *f) {
            "the frontier's clock was asked to follow an account that is still reading the clock — the two "
            "would define each other, so this is a dispatch that installed a flow without stamping its account "
            "first (see flow_set_running, which does both in one operation and in that order)");
-    /* THE REWARD AND NOT THE QUEUE WEIGHT, WHICH IS THE WHOLE OF WHAT THIS SAMPLE IS. It read
-       flow_queue_weight, and that carries the server's own AGING — negative, and grown by the whole FAMILY's
-       thread time — so the coordinate every newcomer arrived at was the leader's earnings MINUS the leader's
-       debt. That is not a statement anybody can act on: a newcomer owes nothing (FlowAcct's `placed`: "a
-       member that has been given nothing owes nothing"), so charging it for the leader's silence is the
-       unforgivable-debt shape this file already removed from the arrival door in the aging term, arriving
-       through the clock instead. MEASURED: with the dispatch write gone, the monotonicity assert that stood
-       here fired on the emission caller alone, which leaves the aging as the only term in the sample that can
-       fall. The coordinate a newcomer arrives at is a statement about what the frontier has EARNED. */
+    /* The reward, not the queue weight: the queue weight carries the server's own aging, grown by the whole
+       family's thread time, so a coordinate sampled from it would charge every newcomer for the leader's debt, and a
+       member given nothing owes nothing. The coordinate a newcomer arrives at is what the frontier has earned. */
     v = acct_family_val(f);
     v = v > 0.0 ? v : 0.0;      /* the clock's origin: no member has ever entered below the busy period's start */
-    /* AND IT IS THE MAXIMUM OVER ACCOUNTS, TAKEN INCREMENTALLY — WHICH IS SFQ'S OWN `max(v(t), F)` COMPUTED
-       ONCE HERE RATHER THAN AT EVERY ARRIVAL, AND IT IS NOT THE CLAMP THIS FUNCTION REFUSED ONE DIFF AGO.
-       The difference is what the quantity DOES. `flow_queue_weight` genuinely falls — the aging is a real
-       decrease of a real quantity — so a maximum over IT would have discarded a measurement, which is a `?:`
-       past a broken invariant and was refused as one. `acct_family_val` is `base + earned` with `base` frozen
-       at placement and `earned` a ledger nothing decreases, so NO ACCOUNT'S COORDINATE EVER FALLS. A lower
-       sample here is therefore never a decrease of anything; it is a DIFFERENT, lesser account emitting, and
-       the maximum is the only reading that answers the question the clock is asked — where does the FRONT of
-       the order stand — rather than the question of who emitted last.
-       AND THE INCREMENTAL FORM IS EXACT, NOT AN APPROXIMATION, which is what makes it a definition. Every
-       increase of any account's `acct_family_val` passes through one of exactly three sites and this covers
-       all three: an EMISSION (`earned += v`, which calls this function); a PLACEMENT (flow_set_running writes
-       `base = frontier_vt()` and asserts `earned == 0`, so the value equals `g_vt` and cannot exceed it); and
-       a cold-tier RESTORE (flow_restore_reward writes a parked coordinate that CAN lead, which is why it now
-       calls this function too). An UNPLACED account reads `frontier_vt() + earned` with `earned == 0` forced
-       by acct_family_val's own assertion, so it stands exactly at `g_vt`. There is no fourth writer, and the
-       assertion below is what makes that a checked claim rather than this paragraph. */
+    /* And it is the maximum over accounts, taken incrementally: SFQ's `max(v(t), F)` computed here rather than at
+       every arrival. Not a clamp over a falling quantity: `acct_family_val` is `base + earned`, with `base` frozen
+       at placement and `earned` a ledger nothing decreases, so no account's coordinate ever falls, and a lower
+       sample is a lesser account emitting; the maximum answers where the front of the order stands. The
+       incremental form is exact, because every increase of an account's `acct_family_val` passes through one of
+       three sites, all covered: an emission (`earned += v`, which calls this); a placement (flow_set_running writes
+       `base = frontier_vt()` and asserts `earned == 0`, so the value equals `g_vt`); and a cold-tier restore
+       (flow_restore_reward writes a parked coordinate that can lead, and calls this). An unplaced account stands
+       exactly at `g_vt` (acct_family_val asserts `earned == 0` there). The assertion below checks there is no
+       fourth writer. */
     if (v > g_vt) g_vt = v;
-    /* THE DEFINITION, ASSERTED — `g_vt` IS THE MAXIMUM COORDINATE ANY ACCOUNT STANDS AT. This replaces the
-       monotonicity assert that stood here, and it is strictly stronger: a clock that only never decreases can
-       still sit BELOW the leading account, at which point a newcomer arrives underneath a member it has every
-       right to tie, `valMin` pins at a coordinate the frontier has left behind, and nothing says so. What it
-       catches is a FOURTH writer of a reward — the one thing the paragraph above claims does not exist — and
-       that is exactly the edit this is here for, because such a writer is invisible in every other row: the
-       account leads the order, the clock does not know, and the two disagree silently for the rest of the
-       session. O(members) and DEV-ONLY, in the shape flow_is_min_weight establishes in this file, and paid
-       once per EMISSION rather than per pick — a finding is not a hot path, and the pick beside it already
-       walks the frontier. */
+    /* The definition, asserted: `g_vt` is the maximum coordinate any account stands at. Stronger than
+       monotonicity, since a clock that never decreases can still sit below the leading account, so newcomers would
+       arrive underneath a member they are entitled to tie, silently, for the rest of the session. It catches a
+       fourth writer of a reward. O(members) and dev-only, as flow_is_min_weight, and paid once per emission rather
+       than per pick. */
     DCHECK(acct_vt_leads(), "an account stands at a reward ABOVE the frontier's clock — the clock is the "
            "coordinate every newcomer and every unplaced account is ranked at, so a leader the clock does not "
            "know about means arrivals are entering BELOW a member they are entitled to tie, permanently and "
            "with no row saying so. A reward was written by a site that did not serve the clock");
-    /* AND MOVING THE CLOCK IS A RANK CHANGE, RAISED AT THE WRITER AND NOT AT THE CALLER. This value is a term
-       of every unplaced account's weight, so a write to it re-ranks all of them at once; the preempt hook's
-       rival cache is correct only if every such move arrives through the frontier generation, which is what
-       engine.c means by "the eligible set the hook ranks against is the same one the pick used". Raised HERE
-       so a second caller cannot be added without it — which is exactly how the dispatch caller came to move
-       this clock silently, and the whole of the defect this file removed one diff ago. It is raised on every
-       call and not only where the maximum moved: a caller reaching this function has just written a reward,
-       and an account's own coordinate changing re-ranks that account whether or not it took the lead. */
+    /* And moving the clock is a rank change, raised at the writer: this value is a term of every unplaced account's
+       weight, and the preempt hook's rival cache is correct only if every such move arrives through the frontier
+       generation (engine.c: "the eligible set the hook ranks against is the same one the pick used"). Raised on
+       every call, not only where the maximum moved, since a caller here has just written a reward and an account's
+       own coordinate changing re-ranks that account. */
     frontier_rank_changed();
 }
 
-/* …AND THE REWARD THAT SILENCE IS SUBTRACTED FROM, read through the SAME pointer for the same reason — see
-   FlowAcct's `val`. It is the WFQ's reward term and the only reading of it the order makes: `Flow.val` beside
-   it is what ONE member emitted and is a census quantity, never a rank. Exported as flow_reward (flow.h)
-   because the node is private to this file and the ranked-state cache and the cold tier both have to name the
-   quantity the weight is actually a function of. */
+/* And the reward that silence is subtracted from, read through the same pointer (FlowAcct's reward): the WFQ's
+   reward term and the only reading of it the order makes (`Flow.val` is what one member emitted, a census quantity).
+   Exported as flow_reward (flow.h) because the node is private to this file and the ranked-state cache and the cold
+   tier both name the quantity the weight is a function of. */
 static double acct_family_val(const Flow *f) {
-    /* THE ORDER'S REWARD IS THE SUM OF THE TWO, and this is the one place that sum is spelled — every
-       reader in the tree comes through here, so the split above cannot leak into a caller that adds only one
-       of them. `base` is where the account entered the order and `earned` is what it has emitted since.
-       AND THE FIRST OF THE TWO IS A RELATION WHILE THE ACCOUNT HAS NEVER BEEN SERVED, which is the whole of
-       what `placed` says. An unplaced account has emitted nothing (only the flow holding the thread can be
-       credited, and holding the thread is what places an account), so its reward IS the frontier's virtual
-       time — re-read here at every pick rather than copied once at its creation. That is start-time fair
-       queueing's `max(v(t), F)` as a CONTINUING relation: a member the order has never reached does not fall
-       behind the clock, and the instant it is served its tag freezes and it stands on its own ledger like
-       every other account.
-       THE `+ earned` IS WRITTEN ON BOTH ARMS RATHER THAN FACTORED OUT, and the assert says why: it is zero on
-       the unplaced arm by construction, so factoring it would read as an arm where a ledger is DISCARDED
-       rather than one where it is empty, and the day an emission could reach an unplaced account the two
-       spellings would differ by exactly the findings nobody could see going missing. */
+    /* The order's reward is the sum of the two, spelled only here, so the split cannot leak into a caller that adds
+       one of them. `base` is where the account entered the order and `earned` what it has emitted since. While the
+       account has never been served the first is a relation: an unplaced account has emitted nothing (only the
+       flow holding the thread is credited, and holding it places the account), so its reward is the frontier's
+       virtual time re-read at every pick, SFQ's `max(v(t), F)` as a continuing relation; once served, its tag
+       freezes and it stands on its own ledger. The `+ earned` is written on both arms rather than factored out:
+       it is zero on the unplaced arm by construction (asserted), and factoring it would read as an arm that
+       discards a ledger rather than one where it is empty. */
     if (!f->family) return 0.0;                                     /* departed: its node is gone, so is its rank */
     DCHECK(f->family->placed || f->family->earned == 0.0,
            "an account that has never held the thread has been credited with an emission — only the running "
@@ -623,19 +552,15 @@ double flow_reward(const Flow *f) {
     return acct_family_val(f);
 }
 
-/* A REBUILT FLOW'S ACCOUNT, REPLACED RATHER THAN INHERITED — the ONE writer of the reward that is neither an
-   emission nor an arrival, and the only caller is the cold tier's rebuild.
-   WHY IT IS A REPLACEMENT AND NOT AN ADD. flow_add places a from-baseline flow at the frontier's virtual time,
-   which includes the reward tag, because a newcomer with no account of its own must enter beside the flow in
-   service rather than below the whole frontier. A rebuilt flow is not a newcomer: it is a member coming BACK,
-   carrying the account the session that parked it wrote down. Adding would credit this session's findings to
-   last session's flow; leaving the placement would silently discard the cross-session ordering the park exists
-   to preserve, which is §Time-travel's "a high-value flow suspended last week resumes ahead of a low-value
-   fresh one today".
-   IT MAY ONLY EVER WRITE A FAMILY OF ITS OWN. A rebuilt flow founds its own family by construction (it is
-   from-baseline, so flow_add_unseeded minted it a root and never joined it to anything), and writing through a
-   JOINED tag would silently re-place every arm of somebody else's family — the one way this entry could reach
-   past the flow it was handed. Asserted here rather than trusted, because the caller cannot see the tag. */
+/* A rebuilt flow's account, replaced rather than inherited: the one writer of the reward that is neither an
+   emission nor an arrival, called only by the cold tier's rebuild. flow_add places a from-baseline flow at the
+   frontier's virtual time so a newcomer enters beside the flow in service, but a rebuilt flow is a member coming
+   back with the account the parking session wrote down: adding would credit this session's findings to last
+   session's flow, and keeping the placement would discard the cross-session ordering the park exists to keep ("a
+   high-value flow suspended last week resumes ahead of a low-value fresh one today"). It may only write a family of
+   its own: a rebuilt flow founds its own family (flow_add_unseeded mints it a root and joins it to nothing), and
+   writing through a joined tag would re-place every arm of another family. Asserted, since the caller cannot see
+   the tag. */
 void flow_restore_reward(Flow *f, double val) {
     DCHECK(f != NULL && f->acct != NULL && f->family == f->acct && f->acct->up == NULL,
            "a rebuilt flow's parked reward was written through a fork family it does not own — a resume founds "
@@ -644,67 +569,40 @@ void flow_restore_reward(Flow *f, double val) {
     DCHECK(val == val && val >= 0.0 && val < 1e300,
            "a parked reward came back as something the WFQ cannot order by — a NaN compares false in both "
            "directions, so the resumed frontier's order would fall back on registry position");
-    /* A RESUME RESTORES A COORDINATE, NOT EARNINGS, and the split is what lets that be said. The parked
-       number is where this recipe STOOD when the session that wrote it ended; crediting it as `earned` would
-       report last session's findings as this session's on the `self_emit` row and would make the census's
-       forgiveness identity claim this account had emitted without ever bumping its generation. `base + earned`
-       is unchanged, so §Time-travel's "a high-value flow suspended last week resumes ahead of a low-value
-       fresh one today" holds exactly as before.
-       AND IT IS A TAG AND NOT A READING, WHICH IS THE ONE LINE BELOW IT. `base` is only read at all once the
-       account is PLACED (FlowAcct's `placed`), so writing the parked number without placing the account would
-       store last session's coordinate and then rank the recipe at THIS session's clock, discarding exactly the
-       cross-session ordering the park exists to preserve. A rebuilt flow is not a newcomer — it is a member
-       coming BACK with a tag of its own — so it is placed here, by the same statement that writes the tag.
-       NAMED RESIDUAL — A RECIPE PARKED BEFORE IT WAS EVER SERVED COMES BACK PLACED, AND IT SHOULD COME BACK
-       READING. Not covered: an account whose flows never once held the thread is parked as a single number
-       (cold.c writes `%.17g` of flow_reward, which for such an account is the coordinate THIS session's clock
-       stood at) and is restored here as a frozen tag — so a never-served recipe re-enters the next session at
-       a foreign clock's reading rather than continuing to track the one it is now a member of, which is the
-       one-time copy the arrival rule stopped making, arriving through the tier instead of through the door.
-       It is CORRECT for the population the entry was written for — a member coming back that HAS earned — and
-       narrower than the rule, which is why it is named here rather than crashed on: the value is a real
-       coordinate and there is nothing wrong to abort at. What the next diff builds: a park record that carries
-       the account's two quantities apart, as `base` and `earned` are apart here, plus the placement bit, so a
-       rebuild restores a served account at its own tag and a never-served one UNPLACED; that record's format
-       and its writer are cold.c's, and this entry's signature is one number today. How its absence shows: a
-       resumed session reporting `valUnplaced: 0` at its FIRST census while rebuilt recipes are standing, with
-       `valMin` pinned at a coordinate no member of this session has ever been served at — the same signature
-       the arrival copy left, one session removed. */
+    /* A resume restores a coordinate, not earnings: the parked number is where this recipe stood when its session
+       ended, and crediting it as `earned` would report last session's findings on the `self_emit` row and break the
+       census's forgiveness identity; `base + earned` is unchanged. And it is a tag, placed by the statement that
+       writes it: `base` is read only once the account is placed, so writing the parked number without placing it
+       would rank the recipe at this session's clock.
+       Named residual. Not covered: a recipe parked before it was ever served comes back placed and should come back
+       reading: cold.c parks a never-served account as `%.17g` of flow_reward (this session's clock reading), and it
+       is restored here as a frozen tag, so it re-enters at a foreign clock rather than tracking the one it now
+       belongs to. Correct for a member coming back that has earned. Next diff builds: a park record carrying
+       `base`, `earned` and the placement bit apart (cold.c's format and writer), so a rebuild restores a served
+       account at its tag and a never-served one unplaced. Absence shows as: a resumed session reporting
+       `valUnplaced: 0` at its first census while rebuilt recipes stand, with `valMin` pinned at a coordinate no
+       member of this session was served at. */
     f->family->base   = val;
     f->family->placed = 1;
-    /* …AND THE CLOCK LEARNS ABOUT IT, WHICH IS THE THIRD AND LAST WRITER OF A REWARD. §Time-travel has "a
-       high-value flow suspended last week resumes ahead of a low-value fresh one today", and a coordinate that
-       leads the frontier is precisely one the frontier's clock has to know: `g_vt` is what every UNPLACED
-       account and every newcomer is ranked at, so a restored leader the clock did not learn about leaves
-       arrivals entering BELOW a member they are entitled to tie — for the rest of the session, with `valMin`
-       pinned at a coordinate the frontier has left behind and no row saying so. That is the arrival-copy
-       defect one session removed, and it is the SAME signature the residual above describes for the other
-       half of this entry.
-       IT IS ALSO WHAT MAKES frontier_vt_serve's INCREMENTAL MAXIMUM EXACT rather than approximate: that
-       function's claim is that every increase of any account's `acct_family_val` passes through it, and this
-       line is one of the three sites the claim enumerates. Without it the assertion there fires, which is the
-       correct outcome and the reason the two landed together. The serve also raises the frontier generation,
-       which a rebuild owes for its own sake: a member coming back at a tag of its own has changed the order. */
+    /* And the clock learns about it, the third writer of a reward: a restored leader the clock did not know about
+       would leave arrivals entering below a member they are entitled to tie for the rest of the session. It is one
+       of the three sites frontier_vt_serve's incremental maximum enumerates, and the serve also raises the
+       frontier generation, which a rebuild owes, since a member coming back at its own tag changes the order. */
     frontier_vt_serve(f);
 }
 
-/* THE RANKING CHANGED, SO THE RUNNING FLOW'S CLAIM ON THE THREAD MAY HAVE. §scheduler's VALUE YIELD fires "the
-   moment a parked flow outranks (or on an emit/fork/suspension that changes ranks)", and this is the moment: a
-   sibling landed on the frontier, a flow left it, or the running flow emitted. Bumping the generation alone made
-   the new answer AVAILABLE and left it unasked until the running flow happened to reach a suspend point — which,
-   before the interpreter polled at every opcode, meant until the page happened to execute a loop back-edge. So
-   the bump raises the engine's yield request: the running flow reaches its next opcode boundary, the poll asks
-   preempt_hook, and the WFQ decides there. Raising is not deciding — a flow that still outranks everything keeps
-   the thread and pays one declined hook call for the question. */
+/* The ranking changed, so the running flow's claim on the thread may have: the value yield fires "the moment a
+   parked flow outranks (or on an emit/fork/suspension that changes ranks)", and this is that moment (a sibling
+   landed, a flow left, the running flow emitted). Bumping the generation alone would make the answer available but
+   unasked until the running flow reached a suspend point, so the bump raises the engine's yield request: the running
+   flow reaches its next opcode boundary, the poll asks preempt_hook, and the WFQ decides there. Raising is not
+   deciding: a flow that still outranks everything keeps the thread for one declined hook call. */
 static void frontier_rank_changed(void) {
     g_gen++;
-    /* …AND THE SAME EVENT COUNTED FOR THE LIFE OF THE INSTANCE, which `g_gen` cannot answer however much it
-       looks like it could. flow_registry_init RESETS `g_gen` and does not reset the scan counters, so the
-       generation NUMBER and `scanRivalRuns` would be two quantities over two lifetimes the moment a host
-       initialised a second registry — the reader would divide one by the other and get a ratio about no run at
-       all. That is the lifetime-over-instant collapse this file already corrected once in build.mjs, and the
-       cure is the same: make the two commensurable AT THE SOURCE rather than assume the call site that would
-       break them is never reached. Counted here because this is the one place a rank change happens. */
+    /* And the same event counted for the life of the instance: flow_registry_init resets `g_gen` and not the scan
+       counters, so the generation number and `scanRivalRuns` would be over two lifetimes once a host initialised a
+       second registry, and a ratio of them would be about no run. Counted here, the one place a rank change
+       happens. */
     g_rank_changes++;
     JS_RequestFlowYield();
 }
