@@ -30614,6 +30614,19 @@ static void js_with_has_free(JSContext *ctx, JSWithHas *wh)
     if (wh->owns_atom) JS_FreeAtom(ctx, wh->atom);
     js_free_rt(ctx->rt, wh);
 }
+/* The sibling's copy for a fork: it takes a reference to each field js_with_has_free releases. `base` and
+   `vdepth` are operand-stack depths, which the cloned frame's stack keeps. */
+static JSWithHas *js_with_has_clone(JSContext *ctx, const JSWithHas *wh)
+{
+    JSWithHas *n = js_malloc(ctx, sizeof(*n));
+
+    if (unlikely(!n))
+        return NULL;
+    *n = *wh;
+    n->arr = js_dup(wh->arr);
+    if (n->owns_atom) n->atom = JS_DupAtom(ctx, wh->atom);
+    return n;
+}
 
 #define CONT_KEYED_INV     59  /* gp_outer = JSKeyedInv: 10.5.7 step 9 / 10.5.10 steps 9-12, which read the
                                   TARGET's descriptor bits and its extensibility — internal methods both, so a
@@ -30637,94 +30650,49 @@ static void js_with_has_free(JSContext *ctx, JSWithHas *wh)
                                   js_for_in_next used to run JS_HasProperty from C, which fires a `has` trap on
                                   any Proxy in the receiver's prototype chain. */
 
-/* THE CONT_* NAMESPACE IS ONE NAMESPACE. A TrampFrame's cont_kind and a continuation's outer_kind both hold values
-   from it (a JSToPrim's outer is CONT_STEP / CONT_IMPORT / CONT_ITER_CONSUME; a JSGetProp's is CONT_STEP or
-   CONT_ITER_CONSUME), so two kinds sharing a number silently routes one continuation's state through the other
-   one's reader — a use-after-free or worse, and only for the first program that pairs them. The kinds are declared
-   next to the state structs they describe, hundreds of lines apart, which is exactly how CONT_IMPORT and
-   CONT_PROMISE_TRY both ended up at 18. A switch is the one construct C has that makes a duplicate constant a
-   COMPILE ERROR ("duplicate case value"), so this function exists only to be compiled. Every new kind goes here. */
+/* Every CONT_* kind, once, by its canonical name (an `_FWD` spelling is an alias of one of these). A TrampFrame's
+   cont_kind and every record's outer_kind hold values from this one namespace, and each kind is answered by the
+   same per-kind walks: tramp_cont_free, cont_outer_get, cont_outer_set and tramp_cont_clone_one. Each is a
+   switch over `enum ContKind` with no `default`, compiled under CONT_KIND_SWITCH_CHECKED_BEGIN, so a kind added
+   here and not answered by one of them is a compile error, and so is a case label naming a kind missing from
+   here. A new kind is added to this list in the diff that declares it; a retired kind leaves it and its
+   number moves to CONT_KIND_BURNED_LIST, so the number is never reused. */
+#define CONT_KIND_LIST(X) \
+    X(CONT_NONE) X(CONT_AGEN_CREATE) X(CONT_CONSTRUCT) X(CONT_SETTER) X(CONT_ITER_CONSUME) X(CONT_PROMISE_ALL) \
+    X(CONT_ASYNC_FROM_SYNC) X(CONT_ITER_HELPER) X(CONT_ITER_FROM) X(CONT_PROMISE_EXEC) X(CONT_PROMISE_TRY) \
+    X(CONT_STEP) X(CONT_IMPORT) X(CONT_CONSUME_GETITER) X(CONT_FOROF_NEXT) X(CONT_TOPRIM) X(CONT_GETPROP) \
+    X(CONT_INSTANCEOF) X(CONT_ACQUIRE_GET) X(CONT_AGEN_DRIVE) X(CONT_FROM_CTOR) X(CONT_ITER_CLOSE) \
+    X(CONT_ITER_CLOSE_CALL) X(CONT_ITER_NEXT_OP) X(CONT_TRAP_GET) X(CONT_OP_KEYED) X(CONT_FOROF_ACQUIRE) \
+    X(CONT_FOROF_GET) X(CONT_FORAWAIT_GET) X(CONT_FORAWAIT_SYNC_GET) X(CONT_FORAWAIT_WRAP) X(CONT_PROMISE_CAP) \
+    X(CONT_PROMISE_TRY_SETTLE) X(CONT_ASYNC_SETTLE) X(CONT_PROMISE_ALL_THEN) \
+    X(CONT_AFS_GET) X(CONT_ITER_HELPER_GET) X(CONT_PROMISE_ALL_GET) X(CONT_FOROF_UNPACK) X(CONT_ITER_CALL_GET) \
+    X(CONT_ITER_CALL_GET_NOARG) X(CONT_ITER_CALL) X(CONT_FOROF_ENUMREC_GET) X(CONT_CONSUME_NEXT_GET) \
+    X(CONT_PROMISE_ALL_NEXT_GET) X(CONT_FOROF_ENUMREC_WRAP) X(CONT_ITER_FROM_NEXT_GET) X(CONT_GOPD_DESC) \
+    X(CONT_FOR_IN_HAS) X(CONT_OWNKEYS_CHK) X(CONT_PROXY_INV) X(CONT_KEYED_INV) X(CONT_WITH_HAS) X(CONT_SET_RECV) \
+    X(CONT_TOPRIM_GET) X(CONT_DEFINE_CLASS) X(CONT_ARRAY_LEN) X(CONT_CTOR_PROTO) X(CONT_TA_TARGET) \
+    X(CONT_SETMAP_CTOR) X(CONT_ARG_LIST) X(CONT_PROMISE_ALL_RESOLVE) X(CONT_PROMISE_ALL_SETTLE) \
+    X(CONT_AGEN_DEFER) X(CONT_AFS_CONT) X(CONT_ASYNC_AWAIT) X(CONT_STEP_YIELD) X(CONT_PROMISE_ALL_RECAP) \
+    X(CONT_GETPROP_YIELD) X(CONT_ARRAY_LEN_YIELD) X(CONT_ARG_LIST_YIELD)
+#define CONT_KIND_BURNED_LIST(X) X(CONT_AGEN_SETTLE_DELETED)
+enum ContKind {
+#define CONT_KIND_ENUMERATOR(k) k##_KIND = k,
+    CONT_KIND_LIST(CONT_KIND_ENUMERATOR)
+#undef CONT_KIND_ENUMERATOR
+};
+/* -Wswitch as an error over one walk: an enumerator the switch leaves out, or a case value outside the enum. */
+#define CONT_KIND_SWITCH_CHECKED_BEGIN \
+    _Pragma("clang diagnostic push") _Pragma("clang diagnostic error \"-Wswitch\"")
+#define CONT_KIND_SWITCH_CHECKED_END _Pragma("clang diagnostic pop")
+/* Two kinds sharing a number would route one record through the other's reader, and a burned number reused
+   would name a record no walk expects. A duplicate case value is a compile error, so this function exists
+   only to be compiled. */
 static inline void cont_kinds_are_distinct(int k)
 {
     switch (k) {
-    case CONT_NONE:
-    case CONT_AGEN_CREATE:
-    case CONT_AGEN_DRIVE:
-    case CONT_CONSTRUCT:
-    case CONT_SETTER:
-    case CONT_ITER_CONSUME:
-    case CONT_PROMISE_ALL:
-    case CONT_ASYNC_FROM_SYNC:
-    case CONT_ITER_HELPER:
-    case CONT_ITER_FROM:
-    case CONT_INSTANCEOF:
-    case CONT_PROMISE_EXEC:
-    case CONT_FOROF_UNPACK:
-    case CONT_PROMISE_ALL_GET:
-    case CONT_ITER_HELPER_GET:
-    case CONT_AFS_GET:
-    case CONT_PROMISE_ALL_RESOLVE:
-    case CONT_PROMISE_ALL_THEN:
-    case CONT_AGEN_DEFER:
-    case CONT_AFS_CONT:
-    case CONT_ASYNC_AWAIT:
-    case CONT_STEP_YIELD:
-    case CONT_GETPROP_YIELD:
-    case CONT_ASYNC_SETTLE:
-    case CONT_PROMISE_TRY_SETTLE:
-    case CONT_PROMISE_ALL_SETTLE:
-    case CONT_PROMISE_CAP:
-    case CONT_PROMISE_TRY:
-    case CONT_STEP:
-    case CONT_IMPORT:
-    case CONT_CONSUME_GETITER:
-    case CONT_ACQUIRE_GET:
-    case CONT_FROM_CTOR:
-    case CONT_FORAWAIT_GET:
-    case CONT_FORAWAIT_SYNC_GET:
-    case CONT_FORAWAIT_WRAP:
-    case CONT_FOROF_GET:
-    case CONT_FOROF_ACQUIRE:
-    case CONT_FOROF_NEXT:
-    case CONT_TOPRIM:
-    case CONT_GETPROP:
-    case CONT_ITER_CLOSE:
-    case CONT_ITER_CLOSE_CALL:
-    case CONT_ITER_NEXT_OP:
-    case CONT_ITER_CALL:
-    case CONT_ITER_CALL_GET:
-    case CONT_ITER_CALL_GET_NOARG:
-    case CONT_FOROF_ENUMREC_GET:
-    case CONT_FOROF_ENUMREC_WRAP:
-    case CONT_TRAP_GET:
-    case CONT_GOPD_DESC:
-    case CONT_SET_RECV:
-    case CONT_TOPRIM_GET:
-    case CONT_DEFINE_CLASS:
-    case CONT_ARRAY_LEN:
-    case CONT_ARRAY_LEN_YIELD:
-    case CONT_ARG_LIST_YIELD:
-    case CONT_CTOR_PROTO:
-    case CONT_TA_TARGET:
-    case CONT_SETMAP_CTOR:
-    case CONT_ARG_LIST:
-    case CONT_OP_KEYED:
-    case CONT_FOR_IN_HAS:
-    case CONT_OWNKEYS_CHK:
-    case CONT_PROXY_INV:
-    case CONT_KEYED_INV:
-    case CONT_WITH_HAS:
-    /* FOUR LIVE KINDS THAT WERE OUTSIDE THIS GUARD, which is the guard failing silently rather than the kinds
-       being new: 51, 52, 54 and 76 are each assigned, each dispatched on, and none of them was here — so the
-       one construct that makes a duplicate constant a COMPILE ERROR was not covering them, and the next kind
-       to reuse one of those numbers would have collided in exactly the way CONT_IMPORT and CONT_PROMISE_TRY
-       both landing at 18 collided. Found while giving CONT_TOPRIM_GET its ownership arms: the same namespace,
-       the same failure to notice, and the same reason — a kind that appears only as another record's
-       outer_kind has no frame arm and no switch entry to be conspicuously missing from. */
-    case CONT_CONSUME_NEXT_GET:
-    case CONT_PROMISE_ALL_NEXT_GET:
-    case CONT_ITER_FROM_NEXT_GET:
-    case CONT_PROMISE_ALL_RECAP:
+#define CONT_KIND_CASE(k) case k:
+    CONT_KIND_LIST(CONT_KIND_CASE)
+    CONT_KIND_BURNED_LIST(CONT_KIND_CASE)
+#undef CONT_KIND_CASE
         break;
     }
 }
@@ -32595,6 +32563,84 @@ static void js_ownkeys_chk_free(JSContext *ctx, struct JSOwnKeysChk *ok)
     JS_FreeValue(ctx, ok->trap_res);
     JS_FreeValue(ctx, ok->tkeys);
     js_free_rt(ctx->rt, ok);
+}
+
+/* The forked sibling's copies of the three proxy-invariant records. Each takes a reference to every field its
+   free above releases, so the two flows own disjoint records. `outer` still names the original's requester and
+   is rebound by tramp_cont_relink_outer. `facts` is an answer a keyed read writes through its desc_out, and a
+   read with desc_out set refuses the fork (js_desc_out_fork_refuse), so the copied facts are settled ones. */
+static void js_desc_facts_dup(JSDescFacts *f)
+{
+    f->value = js_dup(f->value);
+    f->getter = js_dup(f->getter);
+    f->setter = js_dup(f->setter);
+}
+static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len)
+{
+    JSPropertyEnum *n = js_malloc(ctx, sizeof(*n) * (len > 0 ? len : 1));
+    uint32_t i;
+
+    if (unlikely(!n))
+        return NULL;
+    for (i = 0; i < len; i++) {
+        n[i].is_enumerable = tab[i].is_enumerable;
+        n[i].atom = JS_DupAtom(ctx, tab[i].atom);
+    }
+    return n;
+}
+static struct JSKeyedInv *js_keyed_inv_clone(JSContext *ctx, const struct JSKeyedInv *ki)
+{
+    struct JSKeyedInv *n = js_malloc(ctx, sizeof(*n));
+
+    if (unlikely(!n))
+        return NULL;
+    *n = *ki;
+    js_desc_facts_dup(&n->facts);
+    n->operand = js_dup(ki->operand);
+    n->in_getter = js_dup(ki->in_getter);
+    n->in_setter = js_dup(ki->in_setter);
+    n->target = js_dup(ki->target);
+    n->atom = JS_DupAtom(ctx, ki->atom);
+    return n;
+}
+static struct JSProxyInv *js_proxy_inv_clone(JSContext *ctx, const struct JSProxyInv *pv)
+{
+    struct JSProxyInv *n = js_malloc(ctx, sizeof(*n));
+
+    if (unlikely(!n))
+        return NULL;
+    *n = *pv;
+    n->obj = js_dup(pv->obj);
+    n->target = js_dup(pv->target);
+    n->res = js_dup(pv->res);
+    n->proto_arg = js_dup(pv->proto_arg);
+    return n;
+}
+static struct JSOwnKeysChk *js_ownkeys_chk_clone(JSContext *ctx, const struct JSOwnKeysChk *ok)
+{
+    struct JSOwnKeysChk *n = js_malloc(ctx, sizeof(*n));
+    JSPropertyEnum *tab = NULL, *tab2 = NULL;
+
+    if (unlikely(!n))
+        return NULL;
+    if (ok->tab && !(tab = js_prop_enum_dup(ctx, ok->tab, ok->len))) {
+        js_free(ctx, n);
+        return NULL;
+    }
+    if (ok->tab2 && !(tab2 = js_prop_enum_dup(ctx, ok->tab2, ok->len2))) {
+        js_free_prop_enum(ctx, tab, ok->len);
+        js_free(ctx, n);
+        return NULL;
+    }
+    *n = *ok;
+    n->tab = tab;
+    n->tab2 = tab2;
+    js_desc_facts_dup(&n->facts);
+    n->obj = js_dup(ok->obj);
+    n->target = js_dup(ok->target);
+    n->trap_res = js_dup(ok->trap_res);
+    n->tkeys = js_dup(ok->tkeys);
+    return n;
 }
 
 /* Turn an engine-built key ARRAY into an atom snapshot. It reads nothing of the page's: every [[OwnPropertyKeys]]
@@ -53286,12 +53332,13 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
    frame continuation clone_deep_flow has an arm for, plus every kind this walk can itself reach. A kind that
    is absent CRASHES rather than answering "none" — a record whose requester silently reads as absent is the
    original defect wearing a default. */
+CONT_KIND_SWITCH_CHECKED_BEGIN
 static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
 {
     *out_kind = CONT_NONE;
     if (!st || kind == CONT_NONE)
         return NULL;
-    switch (kind) {
+    switch ((enum ContKind)kind) {
     case CONT_STEP: case CONT_STEP_YIELD:
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
@@ -53381,7 +53428,36 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
                "deep-fork of an async-from-sync wrapper whose in-flight call has a REQUESTER under it — give "
                "that link its arm in cont_outer_get/cont_outer_set so the sibling's copy names its own");
         return NULL;
-    default: break;
+    case CONT_OWNKEYS_CHK:
+        *out_kind = ((struct JSOwnKeysChk *)st)->outer_kind;
+        return ((struct JSOwnKeysChk *)st)->outer;
+    case CONT_PROXY_INV:
+        *out_kind = ((struct JSProxyInv *)st)->outer_kind;
+        return ((struct JSProxyInv *)st)->outer;
+    case CONT_KEYED_INV:
+        *out_kind = ((struct JSKeyedInv *)st)->outer_kind;
+        return ((struct JSKeyedInv *)st)->outer;
+    case CONT_WITH_HAS:
+        /* TERMINAL, like CONT_OP_KEYED: the reference it resolves belongs to the OP_with_* opcode, whose operands
+           are on the frame's own stack, which the frame clone carries. The record has no requester field. */
+        return NULL;
+    case CONT_NONE:
+        /* answered above */
+        break;
+    /* No arm yet: a kind that has never been asked for its requester by a fork. */
+    case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
+    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF: case CONT_ACQUIRE_GET:
+    case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
+    case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
+    case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
+    case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
+    case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
+    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
+    case CONT_PROMISE_ALL_RECAP:
+        break;
     }
     {
 #define CONT_OUTER_FMT                                                                                     \
@@ -53395,13 +53471,15 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     }
     return NULL;
 }
+CONT_KIND_SWITCH_CHECKED_END
 
 /* The mirror, and it is separate from the read for the reason every other two-sided pair in this file is: the
    walk reads the ORIGINAL's link and writes the CLONE's, so one function doing both would need the two records
    to be the same one. */
+CONT_KIND_SWITCH_CHECKED_BEGIN
 static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_kind)
 {
-    switch (kind) {
+    switch ((enum ContKind)kind) {
     case CONT_STEP: case CONT_STEP_YIELD:
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
     case CONT_GETPROP_YIELD:
@@ -53422,12 +53500,36 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
     case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
         ((JSAsyncSettle *)st)->cont = outer; ((JSAsyncSettle *)st)->cont_kind = outer_kind; return;
-    default: break;
+    case CONT_OWNKEYS_CHK:
+        ((struct JSOwnKeysChk *)st)->outer = outer; ((struct JSOwnKeysChk *)st)->outer_kind = outer_kind; return;
+    case CONT_PROXY_INV:
+        ((struct JSProxyInv *)st)->outer = outer; ((struct JSProxyInv *)st)->outer_kind = outer_kind; return;
+    case CONT_KEYED_INV:
+        ((struct JSKeyedInv *)st)->outer = outer; ((struct JSKeyedInv *)st)->outer_kind = outer_kind; return;
+    /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
+    case CONT_OP_KEYED: case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
+    case CONT_ASYNC_FROM_SYNC: case CONT_WITH_HAS: case CONT_NONE:
+        break;
+    /* No arm yet, as in cont_outer_get. */
+    case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
+    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF: case CONT_ACQUIRE_GET:
+    case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
+    case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
+    case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
+    case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
+    case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
+    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
+    case CONT_PROMISE_ALL_RECAP:
+        break;
     }
     DFAIL("cont_outer_set: a kind cont_outer_get answered with a link has no way to write one back — the two "
           "are one accessor read in opposite directions and a kind present in only one of them is a link that "
           "is cloned and then dropped");
 }
+CONT_KIND_SWITCH_CHECKED_END
 
 /* Clone ONE link-only record — one that no frame owns, so no frame's arm builds it. The alternation is made of
    a machine waiting on a request and a request waiting on a machine, and every kind that can stand in either
@@ -53436,11 +53538,13 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
    NO CENSUS OF WHAT IT CURRENTLY HAS: this message used to name two arms while the function held four, so the
    crash told its reader the walk was less finished than it was — a DFAIL that stays true about the OBLIGATION
    and goes wrong about the tree is the one failure mode this mechanism has, and a list is how it gets there. */
+CONT_KIND_SWITCH_CHECKED_BEGIN
 static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
 {
-    if (kind == CONT_STEP || kind == CONT_STEP_YIELD)
+    switch ((enum ContKind)kind) {
+    case CONT_STEP: case CONT_STEP_YIELD:
         return tramp_step_state_clone(ctx, st);
-    if (kind == CONT_TOPRIM || kind == CONT_TOPRIM_GET) {
+    case CONT_TOPRIM: case CONT_TOPRIM_GET: {
         /* BOTH ROLES OF ONE RECORD. 21 is the coercion's METHOD CALL waiting under the callee it dispatched;
            62 is the METHOD READ — §7.1.1 step 1.a's GetMethod or §7.1.1.1 step 3.a's Get — waiting under the
            keyed operation that performs it. A fork inside a `get` trap or a getter that answers one of those
@@ -53450,7 +53554,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         TOPRIM_ROLE_AGREES(st, kind);
         return js_toprim_clone(ctx, (const struct JSToPrim *)st);
     }
-    if (kind == CONT_ASYNC_SETTLE || kind == CONT_ASYNC_AWAIT)
+    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
         /* AN ASYNC CALL'S OWN OUTCOME, waiting under whichever machine its completion still owes — the
            capability's resolving function (40) or Await's (74). A NATIVE promise's resolving function IS a
            step machine the moment its `Get(resolution,"then")` has to be a request, and Await is one always,
@@ -53459,11 +53563,11 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
            BOTH KINDS, ONE CLONE, for the reason the arm above gives for 21/62: the record and its release are
            identical and only the machine above it differs. */
         return js_async_settle_clone(ctx, (const JSAsyncSettle *)st);
-    if (kind == CONT_ARRAY_LEN)
+    case CONT_ARRAY_LEN:
         return js_array_len_clone(ctx, (const JSArrayLen *)st);
-    if (kind == CONT_OP_KEYED)
+    case CONT_OP_KEYED:
         return js_op_keyed_clone(ctx, (const JSOpKeyed *)st);
-    if (kind == CONT_ARG_LIST)
+    case CONT_ARG_LIST:
         /* 7.3.19's sequence IN ITS LINK ROLE — under whichever read it is waiting on: its `length` Get, its
            ToPrimitive, or an element Get. Both of the page's operations it performs can fork, so this is
            reached by an ordinary `f.apply(t, x)` whose `x` has a getter that branches on unknown input.
@@ -53472,19 +53576,47 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
            unknown-length chain's outcome fork, and clone_deep_flow's arm builds that one — reached here would
            mean one record cloned twice, which is exactly what the two kinds exist to keep apart. */
         return js_arg_list_clone(ctx, (const JSArgList *)st);
-    if (kind == CONT_GETPROP)
+    case CONT_GETPROP:
         /* a keyed property OPERATION whose callee turned out to be a step machine — `new Proxy(t, {ownKeys:
            Object.getOwnPropertyNames})` — so the machine is the frame's continuation and the operation is the
            LINK under it. The same record is a frame's own cont_state when the callee is a bytecode accessor or
            trap, which is why one clone serves both walks. */
         return js_getprop_clone(ctx, (const JSGetProp *)st);
-    if (kind == CONT_ITER_CONSUME || kind == CONT_CONSUME_NEXT_GET) {
+    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
         /* A CONSUMER UNDER THE KEYED OPERATION IT ISSUED — `[...src]`, `new Uint8Array(src)`, `new Map(src)`
            whose iterator's `next` is a getter (51), or whose result's `done`/`value`, entry element or
            set-record member is (8). A branch inside that getter forks with the consume mid-loop, so the
            sibling needs its own cursor and its own result count. */
         ITERCONS_ROLE_AGREES(st, kind);
         return js_iter_consume_clone(ctx, (const JSIterConsume *)st);
+    }
+    case CONT_WITH_HAS:
+        /* a `with` reference whose HasBinding or @@unscopables read is a Proxy trap or a getter: the keyed
+           operation is the frame's continuation and this record is the link under it. */
+        return js_with_has_clone(ctx, (const JSWithHas *)st);
+    case CONT_PROXY_INV:
+        return js_proxy_inv_clone(ctx, (const struct JSProxyInv *)st);
+    case CONT_KEYED_INV:
+        return js_keyed_inv_clone(ctx, (const struct JSKeyedInv *)st);
+    case CONT_OWNKEYS_CHK:
+        return js_ownkeys_chk_clone(ctx, (const struct JSOwnKeysChk *)st);
+    /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
+       cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
+    case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_CONSTRUCT: case CONT_SETTER: case CONT_PROMISE_ALL:
+    case CONT_ASYNC_FROM_SYNC: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_EXEC:
+    case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
+    case CONT_ACQUIRE_GET: case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
+    case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE:
+    case CONT_FOROF_GET: case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP:
+    case CONT_PROMISE_CAP: case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET:
+    case CONT_ITER_HELPER_GET: case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET:
+    case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
+    case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
+    case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
+    case CONT_TA_TARGET: case CONT_SETMAP_CTOR: case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE:
+    case CONT_AGEN_DEFER: case CONT_AFS_CONT: case CONT_PROMISE_ALL_RECAP: case CONT_GETPROP_YIELD:
+    case CONT_ARRAY_LEN_YIELD:
+        break;
     }
     {
 #define CONT_CLONE_FMT                                                                                      \
@@ -53499,6 +53631,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     }
     return NULL;
 }
+CONT_KIND_SWITCH_CHECKED_END
 
 /* Walk OUTWARD from a freshly cloned record whose `outer` still names the original flow's chain, cloning each
    link and binding it. Returns 0, or -1 on OOM with the partial chain left for the fork's own abort path (the
@@ -54321,50 +54454,19 @@ static void free_generator_stack_rt(JSRuntime *rt, JSGeneratorData *s)
    this chain belongs to is being destroyed, so the whole chain of waiting machines is released and the
    completion nobody will observe is not computed. That is the ONE difference from tramp_chain_unwind, and it is
    why this exists rather than a call to it.
-   The KIND LIST IS clone_deep_flow's LIST. A frame kind that can ride a parked chain must be answerable by
-   both — the clone takes a second reference to everything the frame owns and this releases one — so a kind
-   missing from either is the same defect, and the DFAIL below names it exactly as the clone's does.
-   AND "clone_deep_flow's LIST" IS FOUR FUNCTIONS, NOT ONE, WHICH IS WHERE A KIND HIDES. The frame arms live in
-   clone_deep_flow; the LINK arms live in tramp_cont_clone_one, and the link accessors in
-   cont_outer_get/cont_outer_set. A kind that only ever appears as another record's outer_kind — every
-   `gp_outer = …` kind is one — has no frame arm to be missing from, so it can be absent from all four at once
-   and read as covered from any of them. CONT_TOPRIM_GET was: 62 is 21's record in the METHOD-READ role, none
-   of the four knew it, and the free walk's DFAIL was where it surfaced because a flow is destroyed more often
-   than it is forked. When you add a kind, add it to all four in one diff and say which role it stands in.
-
-   AND THE GAP IS LARGE, WHICH IS WHY THIS SAYS HOW TO COUNT IT AND NOT WHAT THE COUNT IS. A reader who meets
-   the DFAIL below is meeting one member of a SET, not an isolated omission, and the next failure is the next
-   kind this walk is dispatched with rather than a harder case of whichever one stopped them. So the useful
-   thing to hand them is the set — and the set is a fact about the tree at a revision. NO CENSUS AND NO LIST,
-   for the reason tramp_cont_clone_one gives over its own DFAIL: a message that names arms stays true about the
-   OBLIGATION and goes wrong about the TREE, in the direction that tells its reader the walk is less finished
-   than it is. A COUNT would be worse than a list, because it shrinks every time somebody does the work and
-   nothing anywhere says so. DERIVE IT INSTEAD — the vocabulary is every kind ASSIGNED to a cont_kind or an
-   outer_kind, the covered set is this function's own arms, and the gap is the difference:
-
-       comm -23 \
-        <(grep -oE '(cont_kind|outer_kind) *= *CONT_[A-Z_0-9]+' quickjs.c | grep -oE 'CONT_[A-Z_0-9]+' | sort -u) \
-        <(sed -n '/^static void tramp_cont_free(/,/^}/p' quickjs.c | grep -oE 'CONT_[A-Z_0-9]+' | sort -u)
-
-   Read its output with two corrections it cannot make for itself: a kind whose declaration says
-   `cont_state = NULL` carries no record and is answered by the !st early return below, and CONT_AGEN_CREATE /
-   CONT_AGEN_DRIVE are refused earlier still by free_tramp_chain's own DCHECK. What remains carries a record
-   and would abort here. (The pattern needs the space before `=`: written without one it matches nothing and
-   returns a confident empty answer, which is how this command was first got wrong.)
-
-   WHAT DOES NOT ROT IS THE SHAPE OF THAT SET, and it is the same sentence as the paragraph above rather than a
-   new one: nearly every kind in the gap is LINK-ONLY — declared `gp_outer = …`, never a frame's cont_state.
-   A link-only kind has no frame arm to be conspicuously missing from and no per-frame switch to be absent
-   from, so it goes missing from all four walks at once and reads as covered from any one of them. The gap is
-   therefore not a backlog that happens to be long; it is a blind spot with a DIRECTION, and that direction is
-   where to look first. */
+   This walk, clone_deep_flow's frame arms, tramp_cont_clone_one and cont_outer_get/cont_outer_set are one
+   ownership list: the clone takes a second reference to everything a record owns and this releases one.
+   Every kind in CONT_KIND_LIST has a case here, so the kinds with no arm yet are the group spelled before
+   the DFAIL, and a kind added to the list without a case here does not compile. */
+CONT_KIND_SWITCH_CHECKED_BEGIN
 static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
 {
     JSRuntime *rt = ctx->rt;
 
     if (kind == CONT_NONE || !st)
         return;
-    if (kind == CONT_STEP || kind == CONT_STEP_YIELD) {
+    switch ((enum ContKind)kind) {
+    case CONT_STEP: case CONT_STEP_YIELD: {
         /* the machine AND every machine waiting on it. What the walk does not own it REPORTS, and here that
            report is the next iteration rather than a hand-back to the interpreter. */
         uint8_t left = CONT_NONE;
@@ -54375,7 +54477,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, rest, left);
         return;
     }
-    if (kind == CONT_GETPROP_YIELD) {
+    case CONT_GETPROP_YIELD: {
         /* A KEYED PROPERTY OPERATION PARKED AT ITS OWN RE-ENTRY, released with nobody to answer to — a
            cold-tier tail dropped, a flow destroyed under a throw. The operation can never finish, so whatever
            asked for the property can never be answered either and goes with it, which is what every other arm
@@ -54388,7 +54490,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, co, ck);
         return;
     }
-    if (kind == CONT_GETPROP) {
+    case CONT_GETPROP: {
         /* A KEYED PROPERTY OPERATION WHOSE ACCESSOR OR TRAP WAS STILL RUNNING, released with nobody to answer
            to — a cold-tier tail dropped, a flow destroyed under a throw. The operation can never finish, so
            whatever asked for the property can never be answered either and goes with it, which is what every
@@ -54404,7 +54506,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, go, gk);
         return;
     }
-    if (kind == CONT_ARRAY_LEN || kind == CONT_ARRAY_LEN_YIELD) {
+    case CONT_ARRAY_LEN: case CONT_ARRAY_LEN_YIELD: {
         /* §10.4.2.4's carrier released with nobody to answer to — a cold-tier tail dropped, a flow destroyed
            under a throw. The WRITE can never finish, so whatever asked for it can never be answered either and
            goes with it, which is what every other arm in this walk does with its requester. Taken BEFORE the
@@ -54418,7 +54520,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, ao, ak);
         return;
     }
-    if (kind == CONT_OP_KEYED) {
+    case CONT_OP_KEYED: {
         /* THE TERMINAL LINK, and the walk stops here rather than recursing: an operator's answer is the operand
            stack's, and the frame that owns that stack is freed by its own arm. Only the key is this record's. */
         JSOpKeyed *ok = st;
@@ -54426,7 +54528,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_free_rt(rt, ok);
         return;
     }
-    if (kind == CONT_ARG_LIST || kind == CONT_ARG_LIST_YIELD) {
+    case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: {
         /* 7.3.19's SEQUENCE, TERMINAL for cont_outer_get's reason — the finished List goes to a call, whose
            result is the operand stack's, so there is nothing above it to release and the walk stops here.
            THE OTHER DIRECTION OF js_arg_list_clone, and it lands in the SAME diff because that is what this
@@ -54440,7 +54542,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_arg_list_free(ctx, (JSArgList *)st);
         return;
     }
-    if (kind == CONT_TOPRIM || kind == CONT_TOPRIM_GET) {
+    case CONT_TOPRIM: case CONT_TOPRIM_GET: {
         /* THE ARM THE CLONE HAD AND THIS DID NOT. clone_deep_flow has copied a coercion sequence since the
            frame it rides was first cloned, so a parked flow could hold one and could not be released — the
            kind DFAILed here, which means a flow suspended inside `${o}` or `"" + o` could be forked and could
@@ -54499,7 +54601,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, rest, left);
         return;
     }
-    if (kind == CONT_ITER_CONSUME || kind == CONT_CONSUME_NEXT_GET) {
+    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
         /* BOTH ROLES OF ONE RECORD, AND WHOEVER WAS WAITING ON IT — `Reflect.construct(Map, entries)` puts a
            machine under a consume. js_iter_consume_end releases that requester exactly once, through
            js_construct_requester_abandon, which owns the list of kinds a consume's requester can be; a second
@@ -54510,17 +54612,17 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_free_rt(rt, st);
         return;
     }
-    if (kind == CONT_PROMISE_ALL) {
+    case CONT_PROMISE_ALL: {
         js_promise_all_end(ctx, (struct JSPromiseAll *)st);
         js_free_rt(rt, st);
         return;
     }
-    if (kind == CONT_ASYNC_FROM_SYNC) {
+    case CONT_ASYNC_FROM_SYNC: {
         js_async_from_sync_end(ctx, (struct JSAsyncFromSync *)st);
         js_free_rt(rt, st);
         return;
     }
-    if (kind == CONT_PROMISE_EXEC) {
+    case CONT_PROMISE_EXEC: {
         /* THE REQUESTER IS RELEASED, NOT REFUSED — the mirror of the clone's relink, and the reason both arms
            read their link BEFORE the free: the free is what makes the record unreadable. The refusal that stood
            here was the free half of the pair the clone has now built. */
@@ -54536,7 +54638,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, po, pk);
         return;
     }
-    if (kind == CONT_CONSTRUCT) {
+    case CONT_CONSTRUCT: {
         struct JSConstruct *cs = (struct JSConstruct *)st;
         void *co = cs->outer;
         uint8_t ck = cs->outer_kind;
@@ -54546,7 +54648,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, co, ck);
         return;
     }
-    if (kind == CONT_ASYNC_SETTLE || kind == CONT_ASYNC_AWAIT) {
+    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT: {
         /* AN ASYNC CALL'S OUTCOME RELEASED WITH NOBODY TO ANSWER TO — a cold-tier tail dropped, a flow
            destroyed under a throw. The promise can never be settled, so whoever asked for it can never be
            answered either and goes with it, which is what every other arm here does with its requester. This
@@ -54561,6 +54663,56 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, ao, ak);
         return;
     }
+    case CONT_WITH_HAS:
+        /* TERMINAL for cont_outer_get's reason: the reference belongs to the opcode, whose frame is freed by its
+           own arm. */
+        js_with_has_free(ctx, (JSWithHas *)st);
+        return;
+    case CONT_OWNKEYS_CHK: {
+        /* a proxy invariant check released with nobody to answer to, and whatever asked for the operation goes
+           with it, as in the CONT_GETPROP arm. The link is read BEFORE the free. */
+        struct JSOwnKeysChk *okc = st;
+        void *oo = okc->outer;
+        uint8_t ok2 = okc->outer_kind;
+        js_ownkeys_chk_free(ctx, okc);
+        tramp_cont_free(ctx, oo, ok2);
+        return;
+    }
+    case CONT_PROXY_INV: {
+        struct JSProxyInv *pv = st;
+        void *po = pv->outer;
+        uint8_t pk = pv->outer_kind;
+        js_proxy_inv_free(ctx, pv);
+        tramp_cont_free(ctx, po, pk);
+        return;
+    }
+    case CONT_KEYED_INV: {
+        struct JSKeyedInv *ki = st;
+        void *ko = ki->outer;
+        uint8_t kk = ki->outer_kind;
+        js_keyed_inv_free(ctx, ki);
+        tramp_cont_free(ctx, ko, kk);
+        return;
+    }
+    case CONT_NONE:
+        /* answered above */
+        break;
+    /* No arm yet: a record no released flow has yet held. A kind whose state is NULL never reaches the switch.
+       CONT_IMPORT is reached as the TOPRIM arm's parked capability, which that arm releases itself. */
+    case CONT_IMPORT: case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
+    case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF: case CONT_ACQUIRE_GET:
+    case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
+    case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
+    case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
+    case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
+    case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
+    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
+    case CONT_PROMISE_ALL_RECAP:
+        break;
+    }
     {
         char why[384];   /* see step_request_check */
         snprintf(why, sizeof why,
@@ -54571,6 +54723,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         DCHECK(kind == CONT_NONE, why);
     }
 }
+CONT_KIND_SWITCH_CHECKED_END
 
 /* TEAR DOWN A STASHED HEAP-FRAME CHAIN — the other half of the snapshot, and the operation JS_FlowFree used to
  * DFAIL on.
