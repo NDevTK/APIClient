@@ -1651,6 +1651,7 @@ function renderDataPanel() {
 function onSendEndpointSelected() {
   const select = document.getElementById("send-ep-select");
   const epKey = select.value;
+  forgetReplayedRequest();
 
   // Clear previous send result
   const respEl = document.getElementById("send-response");
@@ -1925,7 +1926,18 @@ function getStatusBadge(status) {
   return domElement("span", { class: "badge" }, [String(code)]);
 }
 
+/* The request-log record the Send panel was loaded from by click-to-replay, or null. Send reads its target
+   document and frame and its mode, referrer and referrer policy, so it belongs to the endpoint replayRequest
+   selected and to nothing the operator picks after it. */
 let currentReplayRequest = null;
+
+/* The operator chose an endpoint of their own: the panel no longer shows the replayed record, so neither its
+   facts nor the credentials mode loadSendRequestInit took from it stay, and Send targets the pinned frame. */
+function forgetReplayedRequest() {
+  currentReplayRequest = null;
+  document.getElementById("send-credentials").value = "";
+  _refreshSendEnabled();
+}
 
 /* THE REPLAY LOOKUP'S KEY IS ASSERTED, NOT CONVERTED — on BOTH sides of the comparison.
    `String(r.id) === String(reqId)` stood here, and the two conversions were the whole defect. Neither
