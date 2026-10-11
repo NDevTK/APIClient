@@ -6300,10 +6300,14 @@ self.astDispatch = async function astDispatch(msg) {
     /* The policy container of a document the person's browser loaded is the browser's; this zone knows it
        through the response's address (Local Network Access §3.5).
        Named residual: a browser-reported local-scheme frame (match_origin_as_fallback runs content.js in a
-       data: or blob: frame) is given a new container, initially public, since this zone holds no record of
-       its creator. Next diff stamps the parent frame's browser-stated address onto the document's facts and
-       derives the space from it. Absence shows as `blocked-local-network:<space>-from-public` on a request
-       from a local-scheme frame of a loopback or local page. */
+       data:, blob: or about: frame) is given a new container, initially public, where HTML §7.1.7 clones its
+       navigation initiator's. No browser-stated fact names the initiator: webNavigation's parentDocumentId is
+       the parent, which a sibling's navigation is not, and the frame's sender.origin does not fix the
+       initiator's container (FileAPI §8.3.2 lets a top-level navigation load another origin's blob: URL), so
+       either would widen. Next diff reads the initiator from a browser source that states it, the DevTools
+       Protocol under the `debugger` permission being the unmeasured candidate. Absence shows as
+       `blocked-local-network:<space>-from-public` on a request from a local-scheme frame of a loopback or
+       local page. */
     msg.addressSpace = self.safeFetchDocumentAddressSpace(loaded.url, null);
     msg.arrival = docRecordArrival(docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned",
                                              NAVIGABLE_NOTICE.sandbox.none, msg.addressSpace));
