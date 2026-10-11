@@ -237,7 +237,7 @@ typedef struct {
     double      px;      /* THE EXAMPLE — the modelled number, always present, and what C compares */
     CssEnvSet   env;
     JSContext  *realm;   /* the realm whose environment `env` names; NULL exactly when `env` is CSS_ENV_NONE */
-    CssPxForm   form;    /* see CssPxForm; a writer of `px` outside this file goes through css_px_opaque */
+    CssPxForm   form;    /* see CssPxForm; a writer of `px` outside this file goes through css_px_atom */
 } CssPx;
 
 /* A length the cascade and the layout determined. */
@@ -247,9 +247,10 @@ CssPx css_px(double px);
 CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px);
 /* The fact itself: `value` is fact `fact`'s value in `realm`, and the length's form is `1·fact`. */
 CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value);
-/* An opaque function of `of`'s facts with example `px` — the one way to replace a length's number outside the
-   arithmetic below (a math function, a rounding, a clamp written by hand). */
-CssPx css_px_opaque(CssPx of, double px);
+/* A function of `of`'s facts the form has no term for, with example `px`: one fresh atom, or an opaque form
+   for a non-finite `px` — the one way to replace a length's number outside the arithmetic below (a math
+   function, a rounding, a clamp written by hand). */
+CssPx css_px_atom(CssPx of, double px);
 /* The form, evaluated at its own facts' values: the number the layout computed, up to rounding. Asserts the
    form is known. */
 double css_px_form_eval(CssPx a);

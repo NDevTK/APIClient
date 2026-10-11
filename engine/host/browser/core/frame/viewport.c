@@ -324,11 +324,11 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
     if (len.env == CSS_ENV_NONE || !len.form.known) return viewport_env_derived(len, computed);
     n = viewport_env_members(len, &m);
     /* The form evaluated at this realm's facts is the example the layout computed: a writer that replaced the
-       number and kept the form would fail here (css_px_opaque is the route that drops it). */
+       number and kept the form would fail here (css_px_atom is the route that replaces it). */
     at = css_px_form_eval(len);
     DCHECKF(fabs(at - len.px) <= 1e-9 * fmax(1.0, fabs(len.px)),
             "a length of %.17g CSS px carries a form that evaluates to %.17g at its own facts — its number "
-            "was replaced past css_px_opaque, or its form was composed from a different operation than its "
+            "was replaced past css_px_atom, or its form was composed from a different operation than its "
             "example", len.px, at);
     /* An atom's name is this process's, so a form still holding one names a term no other session can. */
     for (i = 0; i < len.form.n; i++)

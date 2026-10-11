@@ -61,16 +61,6 @@ CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value)
     return out;
 }
 
-CssPx css_px_opaque(CssPx of, double px)
-{
-    CssPx out = css_px(px);
-
-    if (of.env == CSS_ENV_NONE) return out;
-    out.env = of.env;
-    out.realm = of.realm;
-    return out;
-}
-
 /* THE UNION, WHICH IS THE WHOLE OF THE PROPAGATION — a length is a joint function of every fact either operand
    was a function of. The result's form is opaque; the operations below restore it where they can.
    THE REALM IS ONE, and it is asserted rather than merged: §10.1's containing-block chain and §6's snap are
@@ -160,6 +150,17 @@ static void css_px_form_atom(CssPx *out)
     out->form.m[0].atom = ++g_css_px_atom;
     out->form.m[0].k = 1.0;
     out->form.m[0].aval = out->px;
+}
+
+CssPx css_px_atom(CssPx of, double px)
+{
+    CssPx out = css_px(px);
+
+    if (of.env == CSS_ENV_NONE) return out;
+    out.env = of.env;
+    out.realm = of.realm;
+    css_px_form_atom(&out);
+    return out;
 }
 
 /* Whether known `a` has a monomial over fact `f`, which is when its `val[f]` is written. */
@@ -346,10 +347,10 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     else if (hi <= 0.0) win = want_hi ? &b : &a;
     /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
        atom so that every place this one result is carried to can still subtract it.
-       Named residual. Not covered: the other opaque results (css_px_opaque's writers, a quotient by a derived
-       length, a product with an atom, a form too wide) still leave no form. Next diff: each mints an atom
-       through css_px_form_atom. How its absence shows: two lengths downstream of one such result that differ
-       by a constant and still cross the `long` boundary as two forks. */
+       Named residual. Not covered: the other opaque results (a quotient by a derived length, a product with an
+       atom, a form too wide) still leave no form. Next diff: each mints an atom through css_px_form_atom. How
+       its absence shows: two lengths downstream of one such result that differ by a constant and still cross
+       the `long` boundary as two forks. */
     if (win == NULL) {
         DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
         css_px_form_atom(&out);
