@@ -370,21 +370,16 @@ typedef struct {
 } CssFontMetrics;
 
 /* CLASSIFY AND ABSOLUTIZE a length-valued property's value, as the cascade serialized it — CSS 2.1 §4.3.2's
-   computed value for a `<length>`, which is why this is the step core/css/css_computed_value.c performs and
-   the only caller it has. A dimension in a unit this engine cannot absolutize CRASHES here rather than being
-   reported as a fourth kind — see the header: each group names a DIFFERENT missing component, and a caller
-   handed "unresolvable" could only guess which.
-   `realm` IS THE REALM THE VIEWPORT IS ANSWERED PER — the ELEMENT's document's active realm, never the running
-   one, because an iframe's ICB is 300 CSS pixels wide and its parent's is 1280. It may be NULL for a document
-   no navigable presents; only a viewport-percentage unit needs it, and that is the arm that crashes.
-   `font` ANSWERS §6.1.1's TWO FONT-SIZE-RELATIVE UNITS and is required — every caller here holds an element,
-   and the one question this file cannot answer for itself is which element's computed `font-size` a unit means
-   (see above). It is consulted only when an `em` or a `rem` is actually present.
-   A UNITLESS ZERO is a `<length>` (CSS Values §6 permits the unit to be omitted for zero, and it is how
-   lexbor serializes every box-model property's initial value).
-   AN IDENTIFIER IS MAPPED TO ITS KEYWORD HERE, once, and is admitted only if `keywords` — the property's set
-   from core/css/css_property_id.h — holds it. FALSE is an identifier outside the set: the value does not match
-   the property's grammar, which is page input (a `var()` substitution reaches here unvalidated), so the caller
+   computed value for a `<length>`. A dimension in a unit this engine cannot absolutize CRASHES here rather than
+   being reported as a fourth kind, since each group names a DIFFERENT missing component (see the header).
+   `realm` is the ELEMENT's document's active realm, never the running one (an iframe's ICB is 300 CSS pixels
+   wide and its parent's is 1280); NULL for a document no navigable presents, which only a viewport-percentage
+   unit needs, and that arm crashes. `font` answers §6.1.1's `em` and `rem` and is required; it is consulted
+   only when one is present. A UNITLESS ZERO is a `<length>` (CSS Values §6, and how lexbor serializes every
+   box-model property's initial value).
+   AN IDENTIFIER IS MAPPED TO ITS KEYWORD HERE, once, and admitted only if `keywords` — the property's set from
+   core/css/css_property_id.h — holds it. FALSE is an identifier outside the set: the value does not match the
+   property's grammar, which is page input (a `var()` substitution reaches here unvalidated), so the caller
    answers with CSS's invalid-declaration rule and `*out` is not written. */
 bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value, CssKeywordSet keywords,
                       CssLength *out);
