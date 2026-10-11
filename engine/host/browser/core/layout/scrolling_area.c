@@ -259,9 +259,10 @@ static bool sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, CssPx origi
 {
     char sbuf[160], fbuf[160], ebuf[160];
     CssPx lo, hi;
+    size_t from = 0;
 
     /* The span reads every line's extent, which reads the atomic inlines' heights and baselines. */
-    if (!line_box_atomics_ask(style, run, line_box_available_width_derived())) return false;
+    if (!line_box_atomics_ask(style, run, line_box_available_width_derived(), &from)) return false;
     line_box_content_span(style, run, vertical, &lo, &hi);
     /* THE ESTABLISHING BOX AND THE RUN'S TWO DELIMITERS ARE THE SUBJECT, AND THE TWO COORDINATES ARE THE FACT.
        Which of this function's two callers reached it is already in a frame list — they are distinct functions

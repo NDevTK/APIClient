@@ -53,12 +53,6 @@
  * How its absence shows: a deep document's C stack grows with its depth along a frame cycle that names no
  * `bf_box`, `uv_sized` or `used_value_px`. */
 
-/* NAMED RESIDUAL, replay. Not covered: a LAYOUT_Q_BF_WALK body in §9.4.2's inline formatting context stages
- * nothing, so after "not yet" it re-runs from its start: its child-list classification and the asks of every
- * atomic inline before the one that deferred. Next: the atomic-inline index staged with the walk, so the
- * context resumes at the item it stopped at. How its absence shows: `_layoutBfReplays`, which counts exactly
- * those re-runs. */
-
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
 #include <stdbool.h>
@@ -92,8 +86,8 @@ typedef struct {
    are the walk's enumeration cursor and stay valid across a rest by the memo validity argument above. */
 typedef struct {
     lxb_dom_node_t *prev, *brk;
-    size_t wi;
-    bool   at_run, escaping, placed, has_line_box;
+    size_t wi, item;
+    bool   ifc, at_run, escaping, placed, has_line_box;
     CssPx  pos, run_pos, run_neg, esc_pos, esc_neg, baseline;
 } LayoutBfCursor;
 
@@ -182,7 +176,8 @@ void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer);
 
 /* The computing body at `at` returned "not yet": asserts every entry above it is suspended and suspends it.
    A body suspends with a deferred question above it, or with a staged walk and nothing above it when its
-   walk stopped at a spent quota (`layout_job_bf_step`). */
+   walk stopped at a spent quota (`layout_job_bf_step`). A stack always stages; a contribution's body, one ask
+   of its stack, re-runs from its start (`_layoutBfReplays`). */
 void layout_job_suspend(size_t at);
 
 /* The computing body at `at`, whose question is about `el`, stages its walk before returning "not yet", and

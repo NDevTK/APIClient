@@ -448,8 +448,10 @@ void layout_job_suspend(size_t at)
            "stopped by a spent quota suspends with nothing above it, and it stages first");
     job->stack[at].state = LJ_SUSPENDED;
     job->nest--;
-    /* A stack with no staged walk re-runs from its start; a contribution's body is one ask of its stack. */
-    if (job->stack[at].q.kind == LAYOUT_Q_BF_WALK && !job->stack[at].staged) METRIC_ADD(bf_replays, 1);
+    DCHECK(job->stack[at].q.kind != LAYOUT_Q_BF_WALK || job->stack[at].staged,
+           "a §9.4.1 stack returned \"not yet\" without staging its walk; every return of \"not yet\" in "
+           "block_flow.c's bf_layout stages, so its next run continues rather than restarts");
+    if (!job->stack[at].staged) METRIC_ADD(bf_replays, 1);
 }
 
 static LjEntry *lj_body(LayoutJob *job, size_t at, const lxb_dom_element_t *el)

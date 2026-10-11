@@ -1493,11 +1493,13 @@ static BfBox bf_table_box(lxb_dom_element_t *table)
 }
 
 /* The stack walk's loop state: the enumeration's place (`prev`, `brk`, `at_run`, and `wi` on a wrapper's
-   stack), the running position, the open run, and the run escaping through the top edge. */
+   stack), the running position, the open run, and the run escaping through the top edge. `ifc` is the walk
+   having taken §9.4.2's branch, and `item` the atomic inline its line boxes' asks reached in the current
+   run (line_box_atomics_ask's `from`). */
 typedef struct {
     lxb_dom_node_t *prev, *brk;
-    size_t wi;
-    bool   at_run, escaping, placed;
+    size_t wi, item;
+    bool   ifc, at_run, escaping, placed;
     CssPx  pos;
     BfRun  run, esc_run;
 } BfWalk;
@@ -1511,6 +1513,8 @@ static bool bf_walk_stage(size_t body, lxb_dom_element_t *el, const BfWalk *w, c
     c.prev = w->prev;
     c.brk = w->brk;
     c.wi = w->wi;
+    c.item = w->item;
+    c.ifc = w->ifc;
     c.at_run = w->at_run;
     c.escaping = w->escaping;
     c.placed = w->placed;
@@ -1534,6 +1538,8 @@ static bool bf_walk_resume(size_t body, lxb_dom_element_t *el, BfWalk *w, BfBox 
     w->prev = c.prev;
     w->brk = c.brk;
     w->wi = c.wi;
+    w->item = c.item;
+    w->ifc = c.ifc;
     w->at_run = c.at_run;
     w->escaping = c.escaping;
     w->placed = c.placed;
@@ -1609,16 +1615,19 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     w.prev = NULL;
     w.brk = NULL;
     w.wi = 0;
+    w.item = 0;
+    w.ifc = false;
     w.at_run = true;
     w.escaping = esc_top;
     w.placed = false;
     w.pos = css_px(0.0);
     w.run = bf_run_empty();
     w.esc_run = bf_run_empty();
-    /* A staged walk is a stack walk: the inline formatting context below stages nothing. */
     resumed = bf_walk_resume(body, el, &w, &out);
     if (wrapper) wn = bf_wrapper_boxes(el, &wl);
-    if (!resumed && !wrapper && bf_content_kind(el) == BF_CONTENT_INLINE) {
+    /* A resumed walk took its branch on its first run. */
+    if (!resumed) w.ifc = !wrapper && bf_content_kind(el) == BF_CONTENT_INLINE;
+    if (w.ifc) {
         /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
            margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
            same block formatting context", and there is no such box here — an inline box's vertical margins are
@@ -1653,8 +1662,8 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             /* THE BOX HAS AN ELEMENT AND ITS OWN CONTENT BOX IS THE CONTAINING BLOCK OF ITS LINES, so
                §9.4.2's width is `el`'s and is left to be derived — which also keeps it unread for a run with
                no break position in it, the skip line_box.h states as load-bearing. */
-            if (!line_box_atomics_ask(el, whole, line_box_available_width_derived()))
-                return false;   /* "not yet": an atomic inline's height or baseline was deferred */
+            if (!line_box_atomics_ask(el, whole, line_box_available_width_derived(), &w.item))
+                return bf_walk_stage(body, el, &w, &out);   /* "not yet": an atomic inline was deferred */
             h = line_box_content_height(el, whole, line_box_available_width_derived(),
                                         &any_line_box, &first_baseline, &last_baseline);
         }
@@ -1742,10 +1751,11 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             }
             /* The anonymous box is one of a resting drive's boxes; a body's walk that has spent them stops. */
             if (!layout_job_bf_step(body)) return bf_walk_stage(body, el, &w, &out);
-            if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived()))
+            if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived(), &w.item))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": an atomic inline was deferred */
             b = bf_anon_box(el, anon_run, pass);
             w.at_run = false;
+            w.item = 0;
         } else if (w.brk != NULL) {
             ce = lxb_dom_interface_element(w.brk);
             if (!bf_box(ce, pass, &b))
