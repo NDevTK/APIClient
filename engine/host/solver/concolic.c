@@ -3331,11 +3331,13 @@ const char *concolic_cmp_subject_ident(JSValueConst v) {
 /* JSConcolicCmpHook for == / === / != / !==: a concolic operand yields a concolic bool whose identity is the
    operator the page wrote and both operands, carrying the pin when one side is concrete. Matches the slow-eq
    stack effect (both operands freed, result in sp[-2]). `is_neq` flips EQ to NE; `op` names the algorithm. */
-/* Whether an example may be compared, asked of both sides before §7.2.13 or §7.2.14 runs. No for an Object or
-   a Symbol: §7.2.13 IsLooselyEqual ( x, y ) step 12 would run the page's own ToPrimitive, and naming its result
-   would invent it; §7.2.14 IsStrictlyEqual ( x, y ) runs no code but would compare the identity of an object
-   this engine minted to stand for an unknown, a fact about an allocation the program never made. */
-static int example_comparable(JSValueConst v) {
+/* Whether an operator hook may run its algorithm over an example. No for an Object or a Symbol, which is a
+   legitimate example for a value whose domain holds structured values (a routed message's `data`, a published
+   record): §7.1.1 ToPrimitive over it runs the page's own code (valueOf, toString, @@toPrimitive), which a hook
+   cannot run from C, and §7.2.14 IsStrictlyEqual ( x, y ) would compare the identity of an object this engine
+   minted. Such an operand gives the result no example, so decide.c observes no arm and the domain, not the
+   example's type, decides what runs. */
+static int example_operable(JSValueConst v) {
     return !JS_IsObject(v) && !JS_IsSymbol(v);
 }
 
@@ -3357,7 +3359,7 @@ static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int c
     int havb = cb ? !JS_IsUndefined(exb) : 1;
     JSValue out = JS_UNDEFINED;
 
-    if (hava && havb && example_comparable(exa) && example_comparable(exb)) {
+    if (hava && havb && example_operable(exa) && example_operable(exb)) {
         int eq;
         DCHECK(!concolic_is(exa) && !concolic_is(exb),
                "an example that is itself a concolic value reached the real comparison — `JS_IsEqual` would "
@@ -3613,8 +3615,8 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
             JSValue exa = concolic_example(ctx, a), exb = concolic_example(ctx, b);
             double da = 0.0, db = 0.0;
 
-            if (!JS_IsUndefined(exa) && !JS_IsUndefined(exb) && JS_ToFloat64(ctx, &da, exa) == 0 &&
-                JS_ToFloat64(ctx, &db, exb) == 0)
+            if (!JS_IsUndefined(exa) && !JS_IsUndefined(exb) && example_operable(exa) && example_operable(exb) &&
+                JS_ToFloat64(ctx, &da, exa) == 0 && JS_ToFloat64(ctx, &db, exb) == 0)
                 DCHECKF(da - db == konst,
                         "two values whose affine forms differ by the constant %.17g have examples %.17g and "
                         "%.17g — one operand's form is not the function its example was computed by", konst,
@@ -3853,14 +3855,16 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
         JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
         JSValue exb = nops == 2 ? (cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b)) : JS_UNDEFINED;
 
-        /* An example is a primitive. Every conversion below is §7.1.4 ToNumber ( arg ), whose object case runs
-           ToPrimitive and so the page's valueOf from this C frame; the assert names the producer that attached
-           an object example. */
-        DCHECK(!JS_IsObject(exa) && !JS_IsObject(exb),
-               "a concolic carries an OBJECT as its concrete example — an example is the value the engine "
-               "COMPUTED, so it is a primitive; ToNumber over an object one reaches ToPrimitive from C");
+        /* Every conversion below is §7.1.4 ToNumber ( arg ), whose object case runs ToPrimitive and so the page's
+           valueOf from this C frame. A concrete Object operand is the operator's to convert on its ToPrimitive
+           trampoline before this hook; a concolic one's structured example gives the result none
+           (example_operable). */
+        DCHECK((ca || !JS_IsObject(exa)) && (cb || nops == 1 || !JS_IsObject(exb)),
+               "a CONCRETE Object operand reached the arithmetic hook unconverted — §7.1.4 ToNumber over it runs "
+               "the page's valueOf, which belongs on the operator's ToPrimitive trampoline before the hook");
 
-        if (!JS_IsUndefined(exa) && (nops == 1 || !JS_IsUndefined(exb))) {
+        if (!JS_IsUndefined(exa) && (nops == 1 || !JS_IsUndefined(exb)) && example_operable(exa) &&
+            (nops == 1 || example_operable(exb))) {
             if (carith_is_32bit(op)) {
                 JSValue r32 = JS_UNDEFINED;
                 if (carith_apply32(ctx, op, exa, exb, &r32))
@@ -3932,7 +3936,8 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     f[0] = concolic_ident_c(v);
     ident = concolic_ident_compose("String", f, 1);
     ex = concolic_example(ctx, v);
-    if (!JS_IsUndefined(ex)) {
+    /* §7.1.19 over an Object or a Symbol example runs ToPrimitive or throws, so the result has none. */
+    if (!JS_IsUndefined(ex) && example_operable(ex)) {
         const char *p = JS_ToCString(ctx, ex);
         if (p) { example = JS_NewString(ctx, p); JS_FreeCString(ctx, p); }
     }
@@ -4026,8 +4031,8 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     /* An object example is accepted: this function runs no coercion, it only stores the example. A record's
        example is legitimately an object (concolic_new attaches one for server-injected state, and §25.5.2
        JSON.parse ( text [ , reviver ] ) over an unknown text attaches the parsed record), which example_slot,
-       concolic_exotic_own_names and concolic_exotic_delete then model. The object refusals stand at the
-       coercions themselves: concolic_arith_hook, the `+` hook and example_comparable. */
+       concolic_exotic_own_names and concolic_exotic_delete then model. The coercions (concolic_arith_hook, the
+       `+` hook, the String hook, cmp_example) give such an operand's result no example (example_operable). */
     for (i = 0; i < n; i++)
         if (concolic_is(operands[i])) { first = i; break; }
     /* No operand is unknown, so the caller already has the answer (as concolic_builtin_hook says for a known
@@ -5451,23 +5456,19 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
     JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
     /* A concrete operand always has a value, including `undefined`, as in cmp_example: `"a" + undefined` is
-       `"aundefined"` and `1 + undefined` is NaN, so absence is asked of the concolic side only. */
-    int hava = ca ? !JS_IsUndefined(exa) : 1;
-    int havb = cb ? !JS_IsUndefined(exb) : 1;
+       `"aundefined"` and `1 + undefined` is NaN, so absence is asked of the concolic side only. A concolic
+       operand's structured example is absent here too: steps 1.a and 1.b would run §7.1.1 ToPrimitive over it,
+       which is the page's code (example_operable). */
+    int hava = ca ? !JS_IsUndefined(exa) && example_operable(exa) : 1;
+    int havb = cb ? !JS_IsUndefined(exb) && example_operable(exb) : 1;
     JSValue example = JS_UNDEFINED;
+    /* A concrete operand is a primitive by the time it reaches here: §7.1.1 over a raw Object runs the page's
+       valueOf/toString, which belongs on the ToPrimitive trampoline (js_toprim_operand / do_toprim_tramp)
+       before the arm is chosen — `x + {valueOf(){return 5}}` is an addition. */
+    DCHECK((ca || example_operable(exa)) && (cb || example_operable(exb)),
+           "§13.15.3 steps 1.a and 1.b ToPrimitive both operands first, and a CONCRETE operand reached the "
+           "concatenation hook unconverted — it belongs on the ToPrimitive trampoline before the arm is chosen");
     if (hava && havb) {
-        /* Step 1.c tests primitives. A non-primitive here is either a concolic example (a producer attached a
-           value this engine never computed) or a raw concrete operand (it belongs on the ToPrimitive
-           trampoline before the arm is chosen); the message names both. */
-        DCHECK(!JS_IsObject(exa) && !JS_IsObject(exb) && !JS_IsSymbol(exa) && !JS_IsSymbol(exb),
-               "§13.15.3 step 1.c tests PRIMITIVES — its steps 1.a and 1.b §7.1.1 ToPrimitive both operands "
-               "first — and one operand here is not one. From the CONCOLIC side that is a producer having "
-               "attached a value this engine never computed: an example rides the value the interpreter "
-               "actually produced, so it is an operable primitive. From the CONCRETE side it is the operator "
-               "handing over its RAW operand: §7.1.1 there runs the PAGE's valueOf/toString, so it belongs on "
-               "the ToPrimitive trampoline (js_toprim_operand / do_toprim_tramp) BEFORE the arm is chosen — "
-               "choosing from an unconverted object takes the string arm for `x + {valueOf(){return 5}}`, "
-               "which §13.15.3 makes an addition");
         /* §13.15.3 step 1.c: "If leftPrimitive is a String or rightPrimitive is a String". §22.1.3.5
            String.prototype.concat ( ...args ) asks no such question (its pieces are already ToString'd), so it
            takes the string arm. */
