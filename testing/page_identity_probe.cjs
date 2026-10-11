@@ -201,7 +201,7 @@ function zoneSend(off, spec) {
     return withSpeakAsRules(facts.origin, s.url, rules, null, async () => {
       if (s.pageFetchDuring) await new Promise((r) => setTimeout(r, 1500));   // the tab's own fetch lands here
       if (s.preflightUnsafe) await fetch(s.url, { method: "OPTIONS", credentials: "omit" });
-      const r = await fetch(s.url, { method: s.method, credentials: c.wire, headers: s.headers, body: s.body });
+      const r = await fetch(s.url, { method: s.method, credentials: "omit", headers: s.headers, body: s.body });
       return { status: r.status };
     });
   }, spec).catch((e) => ({ error: String(e) }));

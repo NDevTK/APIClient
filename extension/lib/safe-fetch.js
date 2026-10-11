@@ -1405,8 +1405,9 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
 }
 /* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send` under
    lib/speak-as.js's rules: one for its own method and, when `preflightNames` is a list, one for its OPTIONS
-   request. Its cookies are the identity's (cookieHeaderFor, which also sets `init.credentials`) only where
-   this zone is willing (`credentialed`); otherwise it carries none. `stated` is null, or the operator tier's
+   request. Its cookies are the identity's (cookieHeaderFor's Cookie) only where this zone is willing
+   (`credentialed`); otherwise it carries none. The zone's own fetch omits credentials, so this extension's
+   jar adds nothing and a reply's Set-Cookie is not stored. `stated` is null, or the operator tier's
    person-typed {origin, referer}, each of which replaces the identity's header on every rule of the send. A
    request with no identity runs `send` as this extension. */
 async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
@@ -1416,7 +1417,7 @@ async function _speakAs(identity, href, method, mode, destination, credentialed,
         "be dropped and the request would go out as this extension");
   var facts = credentialed ? identity : Object.assign({}, identity, { credentials: "omit" });
   var cookie = await cookieHeaderFor(facts, href);
-  init.credentials = cookie.wire;
+  init.credentials = "omit";
   var rules = [{ method: method, headers: speakAsHeaders(facts, method, mode, destination, href, cookie) }];
   if (preflightNames !== null)
     rules.push({ method: "OPTIONS", headers: speakAsPreflightHeaders(facts, method, destination, href, preflightNames) });

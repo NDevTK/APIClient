@@ -651,7 +651,7 @@ function renderSendIdentity(url) {
                                 title: "chrome.cookies.getPartitionKey for the frame's document" }, ["(observed)"]),
       " credentials " + p.credentials])];
     lines.push(domElement("div", {}, [
-      p.cookieArm === "jar" ? "Sends the browser's jar for this URL: " : "Sends: ",
+      "Sends: ",
       p.cookieNames.length === 0 ? "no cookies" : p.cookieNames.join(", ")]));
     p.excluded.forEach(function (x) { lines.push(domElement("div", {}, ["Not sent: " + x.name + ", " + x.rule])); });
     if (p.producibleBy === null) lines.push(domElement("div", {}, ["Refused at send: " + p.statedRefusal]));

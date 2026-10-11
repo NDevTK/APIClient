@@ -20,7 +20,7 @@ function checkIdentityPreview(p, who) {
            ["client", "none", "request"].indexOf(p.referrerSource) >= 0 &&
            !!p.sent && strOrNull(p.sent.origin) && strOrNull(p.sent.referer) && strOrNull(p.statedRefusal) &&
            IDENTITY_PREVIEW_CREDENTIALS.indexOf(p.credentials) >= 0 &&
-           ["none", "jar", "listed"].indexOf(p.cookieArm) >= 0 &&
+           ["none", "listed"].indexOf(p.cookieArm) >= 0 &&
            Array.isArray(p.cookieNames) && p.cookieNames.every(str) && Array.isArray(p.excluded) &&
            p.excluded.every((e) => !!e && str(e.name) && str(e.rule) && Object.keys(e).length === 2) &&
            (pb === null) === (p.statedRefusal !== null) &&

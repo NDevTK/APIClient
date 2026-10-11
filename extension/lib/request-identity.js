@@ -90,20 +90,18 @@ function pageRequestIdentity(origin, docUrl, url, credentials, mode, referrerPol
                      "strict-origin-when-cross-origin");
 }
 
-/* Which cookies a document of this identity sends with `url`, as {arm, wire, rule}. `wire` is the
-   credentials mode the zone's own fetch uses.
-   - "none": omit, or same-origin to another origin (Fetch §2.2.5 "Requests"); `rule` says which.
-   - "jar": same-site: the browser's own jar, which is the page's: `wire` "include" and no Cookie set.
-   - "listed": cross-site: `_crossSiteCookies`' list, set as the Cookie; `wire` "omit", so the extension's
-     own jar adds nothing and a reply's Set-Cookie is not stored. */
+/* Whether a document of this identity sends cookies with `url`, as {arm, rule}: "none" for omit, or
+   same-origin to another origin (Fetch §2.2.5 "Requests"), with `rule` saying which; otherwise "listed".
+   The zone's own fetch omits credentials on every arm and a "listed" send sets the Cookie
+   `_identityCookies` computes, so the extension's own jar, whose partition is the extension's and holds what
+   the zone's earlier fetches stored, adds nothing, and a reply's Set-Cookie is not stored. */
 function cookieArmFor(identityFacts, url) {
-  const { credentials, sameSite, origin } = identityFacts;
-  if (credentials === "omit")
-    return { arm: "none", wire: "omit", rule: "the credentials mode is omit (Fetch §2.2.5 Requests)" };
+  const { credentials, origin } = identityFacts;
+  if (credentials === "omit") return { arm: "none", rule: "the credentials mode is omit (Fetch §2.2.5 Requests)" };
   if (credentials === "same-origin" && new URL(url).origin !== origin)
-    return { arm: "none", wire: "omit", rule: "the credentials mode is same-origin and " + new URL(url).origin +
-                                             " is not " + origin + " (Fetch §2.2.5 Requests)" };
-  return sameSite ? { arm: "jar", wire: "include", rule: null } : { arm: "listed", wire: "omit", rule: null };
+    return { arm: "none", rule: "the credentials mode is same-origin and " + new URL(url).origin + " is not " +
+                                origin + " (Fetch §2.2.5 Requests)" };
+  return { arm: "listed", rule: null };
 }
 
 /* The cookies of the partition `partitionKey` for `url`. chrome.cookies states a partitioned cookie's key on
@@ -111,57 +109,51 @@ function cookieArmFor(identityFacts, url) {
 async function _partitionedCookies(url, partitionKey) {
   const list = await swRpc("cookies.getAll", { url, partitionKey });
   for (const c of list)
-    DCHECK(!!c.partitionKey && c.partitionKey.topLevelSite === partitionKey.topLevelSite,
+    DCHECK(!!c.partitionKey && c.partitionKey.topLevelSite === partitionKey.topLevelSite &&
+           c.partitionKey.hasCrossSiteAncestor === partitionKey.hasCrossSiteAncestor,
            "chrome.cookies.getAll for the partition " + JSON.stringify(partitionKey) + " answered the cookie " +
            JSON.stringify(c.name) + " of the partition " + JSON.stringify(c.partitionKey) + " — a send that " +
            "joins this list to the unpartitioned one would carry an unpartitioned cookie twice");
   return list;
 }
 
-/* RFC 6265bis §5.8.3 "Retrieval Algorithm" for a cross-site request that is not a navigation: a cookie whose
-   same-site-flag is not "None" is excluded (the Lax exception is for navigations), so the unpartitioned
-   SameSite=None cookies plus the request's partition's, as {sent, excluded: [{name, rule}]}.
+/* RFC 6265bis §5.8.3 "Retrieval Algorithm" for a request that is not a navigation: on a cross-site one
+   (`sameSite` false) a cookie whose same-site-flag is not "None" is excluded, as the Lax exception is for
+   navigations. So the unpartitioned cookies that survive plus the request's partition's, merged by path
+   length, as {sent, excluded: [{name, rule}]}.
    Not covered: the creation-time order between the two lists (chrome.cookies states no creation time, so each
-   list keeps its own order and the merge is by path length only), and the person's third-party-cookie
-   setting. Their absence shows as a Cookie header whose order or members differ from the page's own. */
-async function _crossSiteCookies(url, partitionKey) {
+   list keeps its own order), and the person's third-party-cookie setting. Their absence shows as a Cookie
+   header whose order or members differ from the page's own. */
+async function _identityCookies(url, partitionKey, sameSite) {
   const all = await swRpc("cookies.getAll", { url });
-  const excluded = all.filter((c) => c.sameSite !== "no_restriction").map((c) => ({ name: c.name,
+  const kept = (c) => sameSite || c.sameSite === "no_restriction";
+  const excluded = all.filter((c) => !kept(c)).map((c) => ({ name: c.name,
     rule: "SameSite " + c.sameSite + " on a cross-site request that is not a navigation (RFC 6265bis §5.8.3)" }));
-  const sent = all.filter((c) => c.sameSite === "no_restriction").concat(await _partitionedCookies(url, partitionKey))
+  const sent = all.filter(kept).concat(await _partitionedCookies(url, partitionKey))
     .map((c, i) => ({ c, i })).sort((a, b) => (b.c.path.length - a.c.path.length) || (a.i - b.i)).map((x) => x.c);
   return { sent, excluded };
 }
 
-/* The cookies a document of this identity sends with `url`, as {wire, cookie}: `cookie` is the Cookie value
-   the send sets, or null, on cookieArmFor's arms. */
+/* The cookies a document of this identity sends with `url`, as {cookie}: the Cookie value the send sets, or
+   null. */
 async function cookieHeaderFor(identityFacts, url) {
-  const arm = cookieArmFor(identityFacts, url);
-  if (arm.arm !== "listed") return { wire: arm.wire, cookie: null };
-  const { sent } = await _crossSiteCookies(url, identityFacts.partitionKey);
-  if (sent.length === 0) return { wire: "omit", cookie: null };
-  return { wire: "omit", cookie: sent.map((c) => (c.name !== "" ? c.name + "=" : "") + c.value).join("; ") };
+  if (cookieArmFor(identityFacts, url).arm === "none") return { cookie: null };
+  const { sent } = await _identityCookies(url, identityFacts.partitionKey, identityFacts.sameSite);
+  if (sent.length === 0) return { cookie: null };
+  return { cookie: sent.map((c) => (c.name !== "" ? c.name + "=" : "") + c.value).join("; ") };
 }
 
-/* The cookie names, never values, a send as this identity carries, as {arm, names, excluded: [{name, rule}]}
-   on cookieArmFor's arms; a "jar" send carries the browser's unpartitioned jar for `url`.
-   Not covered: a same-site send's partitioned cookies, which the zone's fetch does not carry. They are listed
-   as excluded under that rule, so their absence shows in the preview as that rule. */
+/* The cookie names, never values, a send as this identity carries, as {arm, names, excluded: [{name, rule}]},
+   from what cookieHeaderFor reads. */
 async function cookieNamesFor(identityFacts, url) {
   const arm = cookieArmFor(identityFacts, url);
   const pk = identityFacts.partitionKey;
   if (arm.arm === "listed") {
-    const { sent, excluded } = await _crossSiteCookies(url, pk);
+    const { sent, excluded } = await _identityCookies(url, pk, identityFacts.sameSite);
     return { arm: arm.arm, names: sent.map((c) => c.name), excluded };
   }
-  const unpartitioned = await swRpc("cookies.getAll", { url });
-  const partitioned = await _partitionedCookies(url, pk);
-  if (arm.arm === "none")
-    return { arm: arm.arm, names: [],
-             excluded: unpartitioned.concat(partitioned).map((c) => ({ name: c.name, rule: arm.rule })) };
-  return { arm: arm.arm, names: unpartitioned.map((c) => c.name),
-           excluded: partitioned.map((c) => ({ name: c.name, rule: "partitioned under " + pk.topLevelSite +
-             ", which a same-site send from this extension does not carry" })) };
+  const all = (await swRpc("cookies.getAll", { url })).concat(await _partitionedCookies(url, pk));
+  return { arm: arm.arm, names: [], excluded: all.map((c) => ({ name: c.name, rule: arm.rule })) };
 }
 
 /* Whether a real frame could send this request: one speaking as `speaking` (the Origin the request carries as
