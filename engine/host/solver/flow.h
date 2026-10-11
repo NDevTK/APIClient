@@ -584,7 +584,8 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
  * flow_world_commit_at returns an entry the caller owns. What a commitment means is engine.c's. */
 /* Which mechanism minted the flow on the other side of the branch a commitment names. Both refusal kinds defer:
  * a received row leaves a contradicting record to the sibling arm minted where this timeline took that world,
- * and a foreclosed row leaves one at or under its subtree to the parent. Whether that flow exists is a fact
+ * and a foreclosed row leaves one at or under its subtree to the flow that took that world (the parent, or for
+ * an issuer's row over a peer answer, the arm flow_answer_fork minted over it). Whether that flow exists is a fact
  * about the producing mechanism, stated at the push; a reader cannot re-derive it from the vector. A reader
  * that meets a value it has no arm for crashes.
  *
@@ -605,7 +606,11 @@ typedef enum {
        not guaranteed. A reader may file it under neither neighbour: read as DELIVERY_FORK it asserts an arm that
        may not exist, read as NONE it aborts on a peer behaving correctly. Its refusals have their own census
        row (solver/step_unit.h). */
-    FLOW_COMMIT_ARM_ANSWER_OWED = 2
+    FLOW_COMMIT_ARM_ANSWER_OWED = 2,
+    /* Foreclosed rows only: one peer read split the asking family, and the member that took this world's answer
+       is on the other side. On an issuer, the arm flow_answer_fork minted over that answer; on a standby, the
+       parent whose take flow_answer_standby left it beside. That member exists by construction. */
+    FLOW_COMMIT_ARM_ANSWER_TAKEN = 3
 } FlowCommitArm;
 
 /* Is `a` a member of FlowCommitArm? The enum's only statement of its membership, kept beside it so adding a
@@ -613,7 +618,7 @@ typedef enum {
    test a member with a comparison. */
 static inline int flow_commit_arm_is_member(FlowCommitArm a) {
     return a == FLOW_COMMIT_ARM_NONE || a == FLOW_COMMIT_ARM_DELIVERY_FORK ||
-           a == FLOW_COMMIT_ARM_ANSWER_OWED;
+           a == FLOW_COMMIT_ARM_ANSWER_OWED || a == FLOW_COMMIT_ARM_ANSWER_TAKEN;
 }
 
 int     flow_world_commits(const Flow *f);

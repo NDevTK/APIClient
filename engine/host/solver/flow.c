@@ -2181,6 +2181,11 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
            "a receiving timeline foreclosed a sender subtree while naming no flow on the other side of the branch — "
            "a foreclosed row says this flow is the arm minted where its parent took that world, so the other side "
            "cannot be absent");
+    /* FLOW_COMMIT_ARM_ANSWER_TAKEN names who took a world this flow did not, so a received row naming it says
+       this flow both took and did not take one answer. */
+    DCHECK(taken == 0 || arm != FLOW_COMMIT_ARM_ANSWER_TAKEN,
+           "a receiving timeline recorded a world it received under FLOW_COMMIT_ARM_ANSWER_TAKEN, the member that "
+           "says another member of its family took that world's answer");
     /* And the received rows stay pairwise consistent, the one claim this list makes that no row makes, asked at the
        append where a producer hands one over. Two received worlds that contradict are two sending timelines neither
        of which is the other continued, so no timeline of that document is in both (solver/engine.c's
