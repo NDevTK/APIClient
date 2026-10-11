@@ -1,5 +1,5 @@
-/* css-flexbox-1 §9.3 "Main Size Determination" and §9.7 "Resolving Flexible Lengths" over one flex line. See
-   flex_line.h. */
+/* css-flexbox-1 §9.3 "Main Size Determination" and §9.7 "Resolving Flexible Lengths" over a container's flex
+   lines. See flex_line.h. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +33,10 @@ typedef struct {
     /* The item's identity: the element's node, or the first text node of an anonymous item's sequence. A
        node the child list holds, so no two items on the line can share one. */
     lxb_dom_node_t    *first;
+    lxb_dom_node_t    *end;   /* one past an anonymous item's text sequence (NULL at the list's end) */
+    long   order;             /* css-display-3 §3 "Display Order: the order property"'s ordinal group */
+    size_t doc_index;         /* the item's position in §4's document-order walk */
+    size_t line;              /* §9.3's step 5 line, counted from zero in collection order */
     CssPx  base;          /* §9.2 "Line Length Determination"'s flex base size */
     CssPx  hypothetical;  /* §9.2's hypothetical main size */
     CssPx  surround;      /* the item's main-axis margin + border + padding */
@@ -457,11 +461,28 @@ static void fl_require_horizontal_tb(lxb_dom_element_t *el, const char *what)
            what);
 }
 
-/* §9.3's step 5, "Collect flex items into flex lines", for the arm that needs no breaking: "If the flex
-   container is single-line, collect all the flex items into a single flex line." §4's item list ("Each in-flow
-   child of a flex container becomes a flex item", text sequences wrapped once each) is enumerated as
-   core/layout/flex_intrinsic_size.c enumerates it. `out` may be NULL to count only; it is one walk run twice,
-   because classifying a text node walks its whole sequence and a half-built list would have to carry that. */
+/* css-display-3 §3 "Display Order: the order property"'s ordinal group of an element item: `Computed value:
+   specified integer`. §4's anonymous item is unstyleable, so it takes the `Initial:` 0 at its caller. */
+static long fl_item_order(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "order"), *endp;
+    long order;
+    char nbuf[160];
+
+    DCHECKF(v != NULL, "%s: the cascade produced no computed `order` — it is in lexbor's registry with an initial "
+                       "value, so the last layer always answers", box_subject(el, nbuf, sizeof nbuf));
+    order = strtol(v, &endp, 10);
+    DCHECKF(endp != v && *endp == '\0',
+            "%s: `order` computed to `%s`, which is not the integer its `Computed value:` line states",
+            box_subject(el, nbuf, sizeof nbuf), v);
+    free(v);
+    return order;
+}
+
+/* §4's item list ("Each in-flow child of a flex container becomes a flex item", text sequences wrapped once
+   each), enumerated as core/layout/flex_intrinsic_size.c enumerates it, in document order; `fl_lines_build`
+   reorders and breaks it. `out` may be NULL to count only; it is one walk run twice, because classifying a
+   text node walks its whole sequence and a half-built list would have to carry that. */
 static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool vertical, FlItem *out)
 {
     /* §4's child list is css-display-3 §2.5 "Box Generation: the none and contents keywords"' spliced
@@ -493,6 +514,8 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
             next = end;
             it.el = NULL;
             it.first = c;
+            it.end = end;
+            it.order = 0;
             if (out != NULL) fl_fill(&it, inner_main, fl_measure_run(container, seq, vertical), vertical);
             break;
         }
@@ -500,12 +523,13 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
             next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
             it.el = lxb_dom_interface_element(c);
             it.first = c;
+            it.end = NULL;
             /* css-flexbox-1 §4.4 "Collapsed Items" gives this item a second layout round and this component runs
                one. §9.4 "Cross Size Determination"' step 10: "If any flex items have visibility: collapse, note
                the cross size of the line they're in as the item's strut size, and restart layout from the
                beginning. In this second layout round, when collecting items into lines, treat the collapsed
-               items as having zero main size." core/layout/flex_cross_size.c refuses the same item for the
-               strut its step 8 owes; what is missing is step 10's two rounds. */
+               items as having zero main size." core/layout/flex_cross_size.c walks lines through this
+               collection, so this refusal covers its strut too; what is missing is step 10's two rounds. */
             if (flex_item_is_collapsed(it.el))
                 DFAILF("%s: this flex item's computed `visibility` is `collapse`, so css-flexbox-1 §4.4 "
                        "\"Collapsed Items\" makes it a COLLAPSED FLEX ITEM and §9.4 \"Cross Size "
@@ -516,11 +540,12 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
                        "the one a browser throws away — and every other item on the line would be flexed "
                        "against free space this item is still occupying. BUILD §9.4's STEP 10, WHICH OWNS "
                        "BOTH ROUNDS — its step 8 is built (core/layout/flex_cross_size.h) and supplies "
-                       "the STRUT SIZE the second one carries, and refuses this same item at its own walk "
-                       "for that reason, so what is absent is the two ROUNDS and neither measurement",
+                       "the STRUT SIZE the second one carries, so what is absent is the two ROUNDS and "
+                       "neither measurement",
                        box_subject(it.el, nbuf, sizeof nbuf));
             if (out != NULL) {
                 fl_require_horizontal_tb(it.el, "FLEX ITEM");
+                it.order = fl_item_order(it.el);
                 fl_fill(&it, inner_main, fl_measure_element(it.el, vertical), vertical);
             }
             break;
@@ -539,6 +564,7 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
                "css-flexbox-1 §4's item walk did not advance past the child it had just collected, so this "
                "walk would put the same flex item on the line for ever. A text sequence always contains at "
                "least the node it was delimited from, and an element item always advances by one sibling");
+        it.doc_index = n;
         if (out != NULL) out[n] = it;
         n++;
         c = next;
@@ -695,52 +721,61 @@ static void fl_resolve(FlItem *items, size_t n, CssPx inner_main)
     }
 }
 
-CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item)
+/* css-display-3 §3 "Display Order: the order property": "Flex and grid containers lay out their contents in
+   order-modified document order, starting from the lowest numbered ordinal group and going up. Items with the
+   same ordinal group are laid out in the order they appear in the source document." `doc_index` breaks ties,
+   which makes the sort stable whatever qsort does. */
+static int fl_order_compare(const void *a, const void *b)
 {
-    FlItem *items;
-    size_t n, i;
-    CssPx inner_main, out;
-    char nbuf[160];
-    bool found = false, vertical;
+    const FlItem *x = (const FlItem *)a, *y = (const FlItem *)b;
 
-    DCHECK(container != NULL && item != NULL,
-           "css-flexbox-1 §9.3 \"Main Size Determination\"'s used main size was asked for with no container "
-           "or no item");
-    DCHECK(box_tree_parent(box_tree_child_of_node(item)) == container,
-           "css-flexbox-1 §9.7 \"Resolving Flexible Lengths\"' used main size was asked for an item that is "
-           "not a child of the container it was asked about. §9.7's every sum is over \"all items on the "
-           "line\", so a subject drawn from one container and a free space drawn from another is an item "
-           "flexed against a rectangle it is not in. "
-           "THIS EQUALITY USED TO READ `item->parent == container` AND IS REWRITTEN RATHER THAN DELETED: "
-           "css-display-3 §2.5 \"Box Generation: the none and contents keywords\" makes an item on this "
-           "container's line need not be a DOM child of it, so the DOM reading refused exactly the items "
-           "`fl_collect` now collects, and the box-tree one is the same precondition stated over the tree §4 "
-           "is about");
+    if (x->order != y->order) return x->order < y->order ? -1 : 1;
+    DCHECK(x->doc_index != y->doc_index, "two flex items of one container share a document-order position");
+    return x->doc_index < y->doc_index ? -1 : 1;
+}
+
+/* §9.3's step 5, "Collect flex items into flex lines", over `items` in order-modified document order, writing
+   each item's `line`; returns the line count. "If the flex container is single-line, collect all the flex
+   items into a single flex line. Otherwise, starting from the first uncollected item, collect consecutive
+   items one by one until the first time that the next collected item would not fit into the flex container's
+   inner main size … If the very first uncollected item wouldn't fit, collect just it into the line. For this
+   step, the size of a flex item is its outer hypothetical main size."
+   Step 5's forced breaks come from §10 "Fragmenting Flex Layout", which applies in a fragmentation context;
+   this engine's layout establishes none, so there is no forced break to honour. */
+static size_t fl_break_lines(FlItem *items, size_t n, CssPx inner_main, bool multi_line)
+{
+    size_t line = 0, i;
+    double used = 0.0;
+    bool open = false;
+
+    for (i = 0; i < n; i++) {
+        double outer = css_px_add(items[i].hypothetical, items[i].surround).px;
+
+        if (multi_line && open && used + outer > inner_main.px) {
+            line++;
+            used = 0.0;
+        }
+        items[i].line = line;
+        used += outer;
+        open = true;
+    }
+    return n == 0 ? 0 : line + 1;
+}
+
+/* §9.2 and §9.3's steps up to 5 for `container`: its items measured, in order-modified document order, and
+   broken into lines. Returns the item count with `*items` owned by the caller (NULL when there are none). */
+static size_t fl_lines_build(lxb_dom_element_t *container, FlItem **items, CssPx *inner_main, size_t *lines)
+{
+    size_t n, filled;
+    bool vertical;
+
+    DCHECK(container != NULL && items != NULL && inner_main != NULL && lines != NULL,
+           "css-flexbox-1 §9.3 \"Main Size Determination\"'s lines were asked for with no container or no out");
     /* §5.1's mapping, asked first over the whole container: which physical axis is the main one is a fact of
        its `flex-direction` (§9.3 and §9.4 share no step). `fl_measure_element` and `fl_measure_run` measure
        either dimension. */
     vertical = flex_container_axis_is_vertical(container, FLEX_AXIS_MAIN);
     fl_require_horizontal_tb(container, "FLEX CONTAINER");
-    /* §5.2 "Flex Line Wrapping: the flex-wrap property"'s multi-line arm. §9.3's step 5 then breaks lines
-       ("collect consecutive items one by one until the first time that the next collected item would not fit
-       into the flex container's inner main size") over the outer hypothetical main sizes `fl_fill` computes,
-       plus §10 "Fragmenting Flex Layout"'s forced breaks; neither is built. */
-    if (flex_container_is_multi_line(container))
-        DFAILF("%s: this FLEX CONTAINER is MULTI-LINE (css-flexbox-1 §5.2 \"Flex Line Wrapping: the flex-wrap "
-               "property\"; §6 \"Flex Lines\" makes `wrap` and `wrap-reverse` one case against `nowrap`), "
-               "so css-flexbox-1 §9.3 \"Main Size Determination\"' step 5 must BREAK its items into lines "
-               "before §9.7 \"Resolving Flexible Lengths\" can run over any of them — and every free space "
-               "§9.7 distributes is per LINE, so answering from one line holding every item would flex each "
-               "of them against space the other lines are using. §9.3's own sentence is the algorithm: "
-               "\"Otherwise, starting from the first uncollected item, collect consecutive items one by one "
-               "until the first time that the next collected item would not fit into the flex container's "
-               "inner main size (or until a forced break is encountered, see § 10 Fragmenting Flex Layout). "
-               "If the very first uncollected item wouldn't fit, collect just it into the line. For this "
-               "step, the size of a flex item is its outer hypothetical main size.\" THE SIZE IT BREAKS ON "
-               "IS ALREADY COMPUTED HERE — `fl_fill` produces exactly that outer hypothetical main size for "
-               "every item — so what is missing is the BREAKING and §10's forced break, not the measurement",
-               box_subject(container, nbuf, sizeof nbuf));
-
     /* §9.2 "Line Length Determination"'s step 2 for the main axis, first arm: "if that dimension of the flex
        container's content box is a definite size, use that". A `row` container's inline size is CSS 2.1
        §10.3.3's equation (core/layout/used_value.h). A `column` container's declared `height` is §10.6's used
@@ -749,27 +784,64 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
        `flex_intrinsic_max_content_main_block_size`. So no definiteness gate here.
        It is the content box (§9.2 says "content box"; `used_value_px` would be the border box under
        `border-box`), on the main axis, "that dimension". */
-    inner_main = used_value_content_px(container, vertical);
+    *inner_main = used_value_content_px(container, vertical);
+    *items = NULL;
+    *lines = 0;
+    n = fl_collect(container, *inner_main, vertical, NULL);
+    if (n == 0) return 0;
+    *items = (FlItem *)calloc(n, sizeof **items);
+    CHECK(*items != NULL,
+          "allocating css-flexbox-1 §6 \"Flex Lines\"' items for §9.7 \"Resolving Flexible Lengths\" failed. "
+          "The record is one per flex item of ONE container and its caller frees it before returning, so this "
+          "is the physical RAM floor and not a leak");
+    filled = fl_collect(container, *inner_main, vertical, *items);
+    DCHECK(filled == n,
+           "css-flexbox-1 §4 \"Flex Items\"' walk counted one number of items and then filled another over the "
+           "same child list, so the list changed under the walk");
+    qsort(*items, n, sizeof **items, fl_order_compare);
+    *lines = fl_break_lines(*items, n, *inner_main, flex_container_is_multi_line(container));
+    return n;
+}
 
-    n = fl_collect(container, inner_main, vertical, NULL);
+CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item)
+{
+    FlItem *items;
+    size_t n, i, start, lines;
+    CssPx inner_main, out;
+    char nbuf[160];
+    bool found = false;
+
+    DCHECK(container != NULL && item != NULL,
+           "css-flexbox-1 §9.3 \"Main Size Determination\"'s used main size was asked for with no container "
+           "or no item");
+    DCHECK(box_tree_parent(box_tree_child_of_node(item)) == container,
+           "css-flexbox-1 §9.7 \"Resolving Flexible Lengths\"' used main size was asked for an item that is "
+           "not a child of the container it was asked about. §9.7's every sum is over \"all items on the "
+           "line\", so a subject drawn from one container and a free space drawn from another is an item "
+           "flexed against a rectangle it is not in. The relation is the box tree's: css-display-3 §2.5 \"Box "
+           "Generation: the none and contents keywords\" puts a `contents` element's children on this "
+           "container's line, so a DOM-parent reading would refuse items `fl_collect` collects");
+    n = fl_lines_build(container, &items, &inner_main, &lines);
     DCHECK(n > 0,
            "css-flexbox-1 §9.7 \"Resolving Flexible Lengths\" was asked for an item of a container whose §4 "
            "\"Flex Items\" walk found NO item at all, and the subject of the ask is one of them. §6 \"Flex "
            "Lines\" is what makes that impossible — \"Every line contains at least one flex item, unless the "
            "flex container itself is completely empty\" — so two readings of one child list have disagreed, "
            "which means the list changed under the walk");
-    /* The release arm of that assert: `calloc(0, …)` may return NULL and trip the allocation `CHECK` below
-       for what is a walk disagreement. Zero is visibly not a used main size (as core/layout/
+    /* The release arm of that assert: zero is visibly not a used main size (as core/layout/
        flex_intrinsic_size.c chooses). */
     if (n == 0) return css_px(0.0);
-    items = (FlItem *)calloc(n, sizeof *items);
-    CHECK(items != NULL,
-          "allocating css-flexbox-1 §6 \"Flex Lines\"' line for §9.7 \"Resolving Flexible Lengths\" failed. "
-          "The line is one record per flex item of ONE container and it is freed before this entry returns, so "
-          "this is the physical RAM floor and not a leak: §9.7's sums are over every item on the line at once "
-          "and there is no smaller unit of it to resolve");
-    (void)fl_collect(container, inner_main, vertical, items);
-    fl_resolve(items, n, inner_main);
+    /* §9.3's step 6, "Resolve the flexible lengths of all the flex items to find their used main size", which
+       §9.7 states per line ("To resolve the flexible lengths of the items within a flex line"). Each line is a
+       contiguous run of the reordered items. */
+    for (start = 0; start < n; ) {
+        size_t end = start;
+
+        while (end < n && items[end].line == items[start].line) end++;
+        fl_resolve(items + start, end - start, inner_main);
+        start = end;
+    }
+    DCHECK(items[n - 1].line + 1 == lines, "§9.3's step 5 counted a different number of lines than it wrote");
 
     out = css_px(0.0);
     for (i = 0; i < n; i++)
@@ -779,12 +851,34 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
             "%s: css-flexbox-1 §4 \"Flex Items\"' walk over this item's own flex container did not produce "
             "the item the used main size was asked for. Every caller establishes that it IS one before asking "
             "— core/layout/used_value.c classifies the box as a flex item from its box parent's `display`, and "
-            "core/layout/flex_cross_size.c reaches §4's anonymous item through the same "
-            "`flex_item_child_kind` walk this one runs — so the two readings of one child list have "
-            "disagreed, and the number this entry would otherwise return is another item's. THE SUBJECT IS A "
-            "NODE AND NOT AN ELEMENT for the reason §4 gives: its anonymous block container flex item is \"the "
-            "one box a flex container's item list holds that is not an element\", so a TEXT node here is the "
-            "FIRST node of a child text sequence and an ELEMENT node is an item in its own right",
+            "core/layout/flex_cross_size.c reaches §4's anonymous item through `flex_line_members` — so the "
+            "two readings of one child list have disagreed, and the number this entry would otherwise return "
+            "is another item's. A TEXT node here is the first node of a child text sequence (§4's anonymous "
+            "block container flex item) and an ELEMENT node is an item in its own right",
             box_subject_node(item, nbuf, sizeof nbuf));
     return out;
+}
+
+size_t flex_line_members(lxb_dom_element_t *container, FlexLineMember **out)
+{
+    FlItem *items;
+    size_t n, i, lines;
+    CssPx inner_main;
+
+    DCHECK(out != NULL, "css-flexbox-1 §9.3's line membership was asked for with nowhere to put it");
+    n = fl_lines_build(container, &items, &inner_main, &lines);
+    *out = NULL;
+    if (n == 0) return 0;
+    *out = (FlexLineMember *)calloc(n, sizeof **out);
+    CHECK(*out != NULL, "allocating css-flexbox-1 §6 \"Flex Lines\"' membership list failed — it is one record "
+                        "per flex item of one container, so this is the physical RAM floor");
+    for (i = 0; i < n; i++) {
+        (*out)[i].first = items[i].first;
+        (*out)[i].anonymous = items[i].el == NULL;
+        (*out)[i].end = items[i].end;
+        (*out)[i].line = items[i].line;
+    }
+    free(items);
+    DCHECK((*out)[n - 1].line + 1 == lines, "§9.3's step 5 counted a different number of lines than it wrote");
+    return n;
 }

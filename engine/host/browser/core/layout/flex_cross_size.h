@@ -1,16 +1,16 @@
-/* css-flexbox-1 §9.4 "Cross Size Determination"' steps 7, 8 and 11 and §9.6 "Cross-Axis Alignment"'s container
+/* css-flexbox-1 §9.4 "Cross Size Determination"' steps 7, 8, 9 and 11 and §9.6 "Cross-Axis Alignment"'s container
  * cross-size step: a flex container's content-based cross size, and a flex item's used cross size. CSS 2.1
  * §10.6.3 stacks children; items on one line do not stack, and the line is as tall as the largest of them.
  *
  * §9.6's step reads §9.4's: "Determine the flex container's used cross size using the rules of the formatting
  * context in which it participates. If a content-based cross size is needed, use the sum of the flex lines'
- * cross sizes." For a single-line container the sum has one term, step 8's line over step 7's hypothetical
- * sizes, so it is one call with no intermediate object. Step 11 is the second entry because it shares the item
- * walk, cross edges, §8.3 alignment and line size. The cross axis is whichever one §5.1 makes it; the physical
- * axis comes from `flex_container_axis_is_vertical` (core/layout/flex_item.h).
- * §9.4's step 9 (`align-content: stretch` on a "definite cross size") is unreachable here, since a
- * content-based size is asked exactly when there is none. §9 numbers steps globally, so §9.6 holds steps 13 to
- * 16; 13, 14 and 16 place items and are not here. Nothing is stored (per-flow state, solver/dom_cow.h). */
+ * cross sizes." The lines are §9.3's step 5 (core/layout/flex_line.h's `flex_line_members`); each is step 8's
+ * maximum over its items' step 7 sizes. Step 11 is the second entry because it shares the item walk, cross
+ * edges, §8.3 alignment and line size; step 9 (`align-content: stretch` on a "definite cross size") enters only
+ * there, since a content-based size is asked exactly when there is none. The cross axis is whichever one §5.1
+ * makes it; the physical axis comes from `flex_container_axis_is_vertical` (core/layout/flex_item.h).
+ * §9 numbers steps globally, so §9.6 holds steps 13 to 16; 13, 14 and 16 place items and are not here.
+ * Nothing is stored (per-flow state, solver/dom_cow.h). */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_CROSS_SIZE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_CROSS_SIZE_H
 
@@ -19,9 +19,9 @@
    its used width, which routes through `uv_flex_item_main_size`). So N items cost N line resolutions plus
    this walk's own, and publishing a line from core/layout/flex_line.h would not retire the element items'
    asks; a stated main size on `used_value_block_level_content_px` would.
-   Release arms: with the DFAILs compiled out, a multi-line container answers from one line holding every item
-   and a `column` container answers a cross size where a main size was asked. Both are defined numbers, never
-   a negative extent or one on the wrong axis. */
+   Release arms: with the DFAILs compiled out, a `column` container answers a cross size where a main size was
+   asked, and a stretched item of a multi-line `column` container is sized against its line's block-axis walk.
+   Both are defined numbers, never a negative extent. */
 
 #include <lexbor/dom/dom.h>
 
@@ -29,7 +29,7 @@
 
 /* css-flexbox-1 §9.6 "Cross-Axis Alignment"' "If a content-based cross size is needed, use the sum of the flex
    lines' cross sizes" for `container`, as a content-box extent in CSS pixels on its cross axis. `container`
-   must be a flex container (`flex_item_display_is_flex_container`), single-line and `horizontal-tb`, and its
+   must be a flex container (`flex_item_display_is_flex_container`) and `horizontal-tb`, and its
    cross axis must be its block axis (`row` or `row-reverse`); asserted here, since §5, §8 and §9's properties
    read off another box answer their initial values.
    The block-axis precondition is about who asks: a `column` container's cross size is a width whose formatting
@@ -52,12 +52,11 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container);
    'height' property" and §10.2 "Content width: the 'width' property" make the declaration the size (§10.6.3 and
    §10.3.3 solve only for `auto`). used_value.c's declared arm computes that and does not ask here.
    No clamp here: §8.3's "while still respecting the constraints imposed by min-height/min-width/max-height/
-   max-width" is CSS 2.1 §10.7, run by the caller (`uv_sized` re-runs the pass with the limit); step 11, unlike
-   §9.7, states no clamp of its own.
-   `container` must be `item`'s flex container in the box tree, single-line and `horizontal-tb`. Either axis
-   may be the cross one; `horizontal-tb` keeps the one `vertical` bit naming both the physical edge pair
-   (css-writing-modes-4 §7.2 "Dimensional Mapping") and the sizing dimension (CSS 2.1 §10.6 versus css-sizing-3
-   §5.1 "Intrinsic Sizes"). */
+   max-width" is CSS 2.1 §10.7, run by the caller (`uv_sized` re-runs the pass with the limit).
+   `container` must be `item`'s flex container in the box tree and `horizontal-tb`; either axis may be the cross
+   one, but a stretched item of a multi-line container needs the block one. `horizontal-tb` keeps the one
+   `vertical` bit naming both the physical edge pair (css-writing-modes-4 §7.2 "Dimensional Mapping") and the
+   sizing dimension (CSS 2.1 §10.6 versus css-sizing-3 §5.1 "Intrinsic Sizes"). */
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
 #endif

@@ -4,10 +4,10 @@
  *
  * Main axis only, per §5.1's mapping: a flex item's cross size is §9.4 "Cross Size Determination"'s step 11.
  * A caller holding a physical axis asks core/layout/flex_item.h's `flex_container_main_axis` first.
- *
  * §9.7 operates on a flex line ("To resolve the flexible lengths of the items within a flex line"), and §9.3's
- * first step gives a single-line container that line: "If the flex container is single-line, collect all the
- * flex items into a single flex line". A multi-line container crashes until line breaking is built.
+ * step 5 makes the lines: one for a single-line container, and for a multi-line one consecutive items, in
+ * css-display-3 §3 "Display Order: the order property"'s order-modified document order, broken where the next
+ * outer hypothetical main size would not fit the container's inner main size.
  *
  * Nothing is stored: layout is per-flow state and a cache would be shared state solver/dom_cow.h does not
  * swap. Asking for N items of one container therefore resolves the line N times; each item's answer depends on
@@ -15,6 +15,9 @@
  * Alignment" (positions) is not built here. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_LINE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_LINE_H
+
+#include <stdbool.h>
+#include <stddef.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -32,5 +35,20 @@
    property": "flex-basis determines the size of the content box"); converting to css-sizing-3 §3.3's
    `box-sizing` used value is the exposing caller's job. */
 CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item);
+
+/* One flex item of a container as §9.3's step 5 collected it: its identity node (as `flex_line_used_main_size`
+   takes it), whether it is §4's anonymous item, one past its text sequence when it is (NULL at the end of the
+   child list, and for an element item), and its line, counted from zero. */
+typedef struct {
+    lxb_dom_node_t *first;
+    bool            anonymous;
+    lxb_dom_node_t *end;
+    size_t          line;
+} FlexLineMember;
+
+/* §9.3's step 5 over `container`'s items, for §9.4's per-line steps: writes the items in order-modified
+   document order to a calloc'd `*out` the caller frees (NULL when there are none) and returns how many. Lines
+   are contiguous runs of equal `line`. The preconditions are `flex_line_used_main_size`'s on `container`. */
+size_t flex_line_members(lxb_dom_element_t *container, FlexLineMember **out);
 
 #endif

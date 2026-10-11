@@ -200,8 +200,8 @@ static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_d
            box_subject_node(subject, nbuf, sizeof nbuf));
 }
 
-/* css-flexbox-1 §9.4 "Cross Size Determination"' step 8 for the one line of a single-line container. Its two
- * arms coincide here, so there is one call and no dispatch on definiteness:
+/* css-flexbox-1 §9.4 "Cross Size Determination"' step 8 for a single-line container's line (multi-line:
+ * `fx_line_cross_sizes`). Its two arms coincide here, so there is one call and no dispatch on definiteness:
  *   - Definite: "If the flex container is single-line and has a definite cross size, the cross size of the flex
  *     line is the flex container's inner cross size", which `used_value_content_px` on the cross axis is.
  *   - Indefinite: step 8.3's maximum, which §9.6 makes the container's auto cross size ("the sum of the flex
@@ -331,11 +331,10 @@ static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container,
     return inner;
 }
 
-/* The three preconditions both entries state, in one place: the box is a flex container, its block axis is
-   vertical (`horizontal-tb`), and it is single-line. They are one fact about the container shared by §9.4's
-   steps 8 and 11. Either physical axis may be the cross one (edges come from `fx_cross_props`); the
-   entry-specific block-axis condition is `flex_cross_size_content_based`'s. Messages name the section, not
-   the caller. */
+/* The two preconditions both entries state, in one place: the box is a flex container and its block axis is
+   vertical (`horizontal-tb`). They are one fact about the container shared by §9.4's steps 8 and 11. Either
+   physical axis may be the cross one (edges come from `fx_cross_props`); the entry-specific block-axis
+   condition is `flex_cross_size_content_based`'s. Messages name the section, not the caller. */
 static void fx_require_supported_container(lxb_dom_element_t *container)
 {
     char nbuf[160], wbuf[64];
@@ -386,30 +385,59 @@ static void fx_require_supported_container(lxb_dom_element_t *container)
                "core/layout/intrinsic_size.h is named for the INLINE one and says so",
                box_subject(container, nbuf, sizeof nbuf),
                box_subject_computed(container, "writing-mode", wbuf, sizeof wbuf));
-    /* §5.2 "Flex Line Wrapping: the flex-wrap property"'s multi-line arm, refused here for line breaking (also
-       refused at core/layout/flex_line.c) and for per-line step 8. */
-    if (flex_container_is_multi_line(container))
-        DFAILF("%s: this FLEX CONTAINER is MULTI-LINE (css-flexbox-1 §5.2 \"Flex Line Wrapping: the flex-wrap "
-               "property\"; §6 \"Flex Lines\" makes `wrap` and `wrap-reverse` one case against `nowrap`), so "
-               "§9.6 \"Cross-Axis Alignment\"' \"use the sum of the flex lines' cross sizes\" is a sum over "
-               "SEVERAL lines and the walk below computes ONE. TWO THINGS ARE MISSING AND ONLY THE FIRST OF "
-               "THEM IS core/layout/flex_line.c's: §9.3 \"Main Size Determination\"' step 5 must BREAK the "
-               "items into lines before any of them has a used main size, and §9.4 \"Cross Size "
-               "Determination\"' step 8 must then be run PER LINE, because its own step 8.3 takes the largest "
-               "outer hypothetical cross size among the items OF ONE LINE — a single maximum over every item "
-               "in the container would report the tallest item's height as the height of every line. §9.4's "
-               "step 9 becomes reachable at the same moment and is unreachable now: \"If the flex container "
-               "has a definite cross size, align-content is stretch, and the sum of the flex lines' cross "
-               "sizes is less than the flex container's inner cross size, increase the cross size of each "
-               "flex line by equal amounts\" — a condition on a DEFINITE cross size, which is the one thing "
-               "a content-based cross size is asked for exactly because the container does not have",
-               box_subject(container, nbuf, sizeof nbuf));
+}
+
+/* §9.4's steps 8.2 and 8.1's refusal for one line member on a block cross axis: its outer hypothetical cross
+   size. An element item is step 7 plus its edges; §4's anonymous item is line boxes at its used main size.
+   The baseline refusal comes first because §9.4's step 8.1 collects those items instead. */
+static CssPx fx_member_outer_hypothetical_cross(lxb_dom_element_t *container, const FlexLineMember *m)
+{
+    lxb_dom_element_t *item;
+
+    DCHECK(m->first != NULL, "a flex line member carries no identity node");
+    if (m->anonymous) {
+        /* Step 8.1 applies to this box too: §8.3's `align-items` sets the default "for all of the flex
+           container's items, including anonymous flex items". */
+        fx_require_no_baseline_alignment(container, NULL, m->first);
+        return fx_anonymous_outer_hypothetical_cross(container, m->first, m->end,
+                                                     flex_line_used_main_size(container, m->first));
+    }
+    DCHECK(m->first->type == LXB_DOM_NODE_TYPE_ELEMENT && m->end == NULL,
+           "a flex line member that is not §4's anonymous item is not an element, or carries a text-sequence end");
+    item = lxb_dom_interface_element(m->first);
+    fx_require_no_baseline_alignment(container, item, m->first);
+    return fx_outer_hypothetical_cross(container, item, true);
+}
+
+/* §9.4's step 8 for every line of `container` on a block cross axis, in the `Otherwise` arm: "for each flex
+   line: … The used cross size of the flex line is the largest of the numbers found in the previous two steps
+   and zero." Writes one size per line to a calloc'd `*sizes` the caller frees and returns the line count.
+   The single-line clamp of step 8.3 is §10.7's, run in a used value (see `fx_line_cross_size`). */
+static size_t fx_line_cross_sizes(lxb_dom_element_t *container, CssPx **sizes)
+{
+    FlexLineMember *m;
+    size_t n, lines, i;
+
+    n = flex_line_members(container, &m);
+    *sizes = NULL;
+    if (n == 0) return 0;
+    lines = m[n - 1].line + 1;
+    *sizes = (CssPx *)calloc(lines, sizeof **sizes);
+    CHECK(*sizes != NULL, "allocating css-flexbox-1 §9.4 step 8's per-line cross sizes failed — one number per "
+                          "flex line of one container, so this is the physical RAM floor");
+    for (i = 0; i < n; i++) {
+        DCHECK(m[i].line < lines && (i == 0 || m[i].line >= m[i - 1].line),
+               "flex_line_members answered lines that are not contiguous runs in collection order");
+        (*sizes)[m[i].line] = css_px_max((*sizes)[m[i].line], fx_member_outer_hypothetical_cross(container, &m[i]));
+    }
+    free(m);
+    return lines;
 }
 
 CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
 {
-    lxb_dom_node_t *c;
-    CssPx largest = css_px(0.0);
+    CssPx *sizes, sum = css_px(0.0);
+    size_t lines, i;
     char nbuf[160];
 
     fx_require_supported_container(container);
@@ -426,106 +454,76 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
                "for it is a WIDTH — and §9.6 \"Cross-Axis Alignment\"' step asks for one only where the "
                "rules of the formatting context need it, which for a block-level container is CSS 2.1 "
                "§10.3.3 \"Block-level, non-replaced elements in normal flow\"' constraint equation and "
-               "therefore never. THE STEP 8 WALK BELOW IS NOT WHAT IS MISSING FOR THIS BOX: §9.4 \"Cross "
-               "Size Determination\"' step 7 reads either dimension now and step 11 answers this "
-               "container's items, so a reader who builds this walk in the inline dimension has built a "
-               "measurement with no consumer. BUILD css-flexbox-1 §9.9.2 \"Flex Container Intrinsic Cross "
-               "Sizes\" INSTEAD — \"The min-content/max-content cross size of a single-line flex container "
-               "is the largest min-content contribution/max-content contribution (respectively) of its flex "
-               "items.\" — in "
-               "core/layout/flex_intrinsic_size.c beside §9.9.1 \"Flex Container Intrinsic Main Sizes\"' "
-               "inline arm, because a SHRINK-TO-FIT `column` container is the one box that asks this "
-               "question and it asks it as an intrinsic size rather than as §9.6's sum",
+               "therefore never. BUILD css-flexbox-1 §9.9.2 \"Flex Container Intrinsic Cross Sizes\" — \"The "
+               "min-content/max-content cross size of a single-line flex container is the largest min-content "
+               "contribution/max-content contribution (respectively) of its flex items.\" — in "
+               "core/layout/flex_intrinsic_size.c, because a SHRINK-TO-FIT `column` container is the one box "
+               "that asks this question and it asks it as an intrinsic size rather than as §9.6's sum",
                box_subject(container, nbuf, sizeof nbuf));
-    /* No precondition excludes step 8's definite arm ("If the flex container is single-line and has a definite
-       cross size, the cross size of the flex line is the flex container's inner cross size"), and
-       `used_value_height_behaves_as_auto` must not be asserted: used_value.c also asks this automatic size
-       for css-sizing-3 §3.2's `min-content`/`max-content` on `min-height`/`max-height` ("equivalent to its
-       automatic size"), with a declared `height` in hand. §9.6's "If a content-based cross size is needed"
-       is the callers' to read. */
-    /* §4's child list is css-display-3 §2.5's spliced sequence, enumerated as core/layout/flex_line.c and
-       core/layout/flex_intrinsic_size.c enumerate it, so step 8's maximum is over §9.3's collected items.
-       Every member is a node (css-display-3 §2.3 "Generating Marker Boxes: the list-item keyword" pairs
-       `list-item` with `flow` or `flow-root` only). */
-    for (c = box_tree_child_node(box_tree_first_child(container)); c != NULL; ) {
-        lxb_dom_node_t *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
-        FlexItemChildKind kind = flex_item_child_kind(container, c);
+    /* §9.6's "If a content-based cross size is needed, use the sum of the flex lines' cross sizes", over step
+       8's `Otherwise` arm. Step 8's definite single-line arm and step 9's stretch are not read: a content-based
+       size is the automatic size (css-sizing-3 §3.2 makes `min-content`/`max-content` block sizes "equivalent
+       to its automatic size" too), and an automatic size is not a definite cross size. An empty container sums
+       nothing (§6 "Flex Lines": "unless the flex container itself is completely empty"). */
+    lines = fx_line_cross_sizes(container, &sizes);
+    for (i = 0; i < lines; i++) sum = css_px_add(sum, sizes[i]);
+    free(sizes);
+    return sum;
+}
 
-        if (kind == FLEX_ITEM_CHILD_NONE) { c = next; continue; }
-        switch (kind) {
-        case FLEX_ITEM_CHILD_TEXT: {
-            /* css-flexbox-1 §4 "Flex Items"' anonymous flex item ("each child text sequence is wrapped in an
-               anonymous block container flex item"), which step 8 needs like any other item. Its used main size
-               is named by its first node, this text node (core/layout/flex_line.h), and its cross size is line
-               boxes at that width, stated to core/layout/line_box.h. `next` is the same delimiter
-               core/layout/flex_line.c uses, so the walk's advance and the measurement's end are one value. */
-            CssPx used_main;
+/* §9.4's step 9 over a multi-line container's line sizes: "If the flex container has a definite cross size,
+   align-content is stretch, and the sum of the flex lines' cross sizes is less than the flex container's inner
+   cross size, increase the cross size of each flex line by equal amounts such that the sum of their cross
+   sizes exactly equals the flex container's inner cross size." On a block cross axis a definite cross size is
+   a `height` that does not behave as auto (css-sizing-3 §3.2.1 "“Behaving as auto”").
+   Named residual. Not covered: §9.8 "Definite and Indefinite Sizes"' flex-specific rules that make a flex
+   item's size definite without a declaration, so a multi-line container that is itself a stretched item of a
+   definite single-line container counts as indefinite here. Next: a definiteness test built from §9.8's
+   rules, which core/layout/flex_line.c's replaced-item refusal also names. Absence shows as such a container's lines not
+   growing to fill the height its parent stretched it to. */
+static void fx_stretch_lines(lxb_dom_element_t *container, CssPx *sizes, size_t lines)
+{
+    CssPx sum = css_px(0.0), inner, share;
+    size_t i;
 
-            next = flex_item_text_sequence_end(container, c);
-            /* Step 8.1 applies to this box too: §8.3's `align-items` sets the default "for all of the flex
-               container's items, including anonymous flex items". */
-            fx_require_no_baseline_alignment(container, NULL, c);
-            used_main = flex_line_used_main_size(container, c);
-            largest = css_px_max(largest,
-                                 fx_anonymous_outer_hypothetical_cross(container, c, next, used_main));
-            break;
-        }
-        case FLEX_ITEM_CHILD_ELEMENT: {
-            lxb_dom_element_t *item = lxb_dom_interface_element(c);
+    if (used_value_height_behaves_as_auto(container)) return;
+    if (!fx_computed_is(container, "align-content", "stretch")) return;
+    for (i = 0; i < lines; i++) sum = css_px_add(sum, sizes[i]);
+    inner = used_value_content_px(container, true);
+    if (!(sum.px < inner.px)) return;
+    share = css_px_scale(css_px_sub(inner, sum), 1.0 / (double)lines);
+    for (i = 0; i < lines; i++) sizes[i] = css_px_add(sizes[i], share);
+}
 
-            next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
-            /* §9.4's step 10 is unbuilt: this walk owes the line a strut size only a second round produces
-               (core/layout/flex_line.c refuses the same item for its first-round main size). */
-            if (flex_item_is_collapsed(item))
-                DFAILF("%s: this flex item's computed `visibility` is `collapse`, so css-flexbox-1 §4.4 "
-                       "\"Collapsed Items\" makes it a COLLAPSED FLEX ITEM and css-flexbox-1 §9.4 \"Cross "
-                       "Size Determination\"' step 10 owns it — \"note the cross size of the line they're in "
-                       "as the item's strut size, and restart layout from the beginning\". THE STRUT IS WHY "
-                       "THIS IS STEP 8's PROBLEM AND NOT ONLY §9.3's: step 10's second round ignores the "
-                       "collapsed items \"entirely (as if they were display:none) except that after "
-                       "calculating the cross size of the lines, if any line's cross size is less than the "
-                       "largest strut size among all the collapsed items in the line, set its cross size to "
-                       "that strut size\" — so the line's cross size is a FLOOR taken from a number this "
-                       "walk's own first round produces, and answering from one round drops it. BUILD STEP "
-                       "10's TWO ROUNDS HERE: this walk is the first of them, what it owes is to record each "
-                       "collapsed item's line cross size and run itself again with those items at zero main "
-                       "size and out of the maximum below",
-                       box_subject(item, nbuf, sizeof nbuf));
-            fx_require_no_baseline_alignment(container, item, c);
-            /* The axis is a literal `true`: this entry runs on the block cross axis only (refused above). */
-            largest = css_px_max(largest, fx_outer_hypothetical_cross(container, item, true));
-            break;
-        }
-        case FLEX_ITEM_CHILD_NONE:
-            /* Unreachable by the guard above; asserted because a skipped member would shorten the line. The arm
-               exists for `-Wswitch`, as in core/layout/flex_line.c. */
-            DFAIL("css-flexbox-1 §4 \"Flex Items\"' classification answered FLEX_ITEM_CHILD_NONE for a child "
-                  "this walk had already decided to measure. The loop skips that value before it reaches this "
-                  "switch, so two readings of one child list disagreed — which means the child list changed "
-                  "under the walk");
-            break;
-        /* No `default` arm: `-Wswitch` forces a new `FlexItemChildKind` to be handled, since step 8's maximum
-           must not silently omit a member. */
-        }
-        DCHECK(next != c,
-               "css-flexbox-1 §4 \"Flex Items\"' item walk did not advance past the child it had just "
-               "measured, so this walk would add the same flex item to the maximum for ever. A text sequence "
-               "always contains at least the node it was delimited from, and an element item always advances "
-               "by one sibling");
-        c = next;
-    }
-    /* §9.4's step 8.3: "The used cross size of the flex line is the largest of the numbers found in the
-       previous two steps and zero"; the baseline step is refused above. The zero answers an empty container
-       (§6 "Flex Lines": "unless the flex container itself is completely empty"). §9.6's sum is this one number
-       because multi-line is refused. No non-negativity assert: a maximum with zero cannot fail it; the
-       meaningful one is per item, in `fx_hypothetical_cross`. */
-    return largest;
+/* §9.4's steps 8 and 9 for the line holding `item` in a multi-line container on a block cross axis. */
+static CssPx fx_multi_line_cross_size_of(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    FlexLineMember *m;
+    CssPx *sizes, out;
+    size_t n, lines, i, line = 0;
+    bool found = false;
+    char nbuf[160];
+
+    n = flex_line_members(container, &m);
+    for (i = 0; i < n; i++)
+        if (m[i].first == lxb_dom_interface_node(item)) { line = m[i].line; found = true; break; }
+    free(m);
+    DCHECKF(found, "%s: css-flexbox-1 §9.3's step 5 did not collect this item into any line of its own "
+                   "container, so the two readings of one child list disagree",
+            box_subject(item, nbuf, sizeof nbuf));
+    lines = fx_line_cross_sizes(container, &sizes);
+    DCHECK(line < lines, "an item's §9.3 line is past the lines §9.4's step 8 measured over the same walk");
+    fx_stretch_lines(container, sizes, lines);
+    out = sizes[line];
+    free(sizes);
+    return out;
 }
 
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
     bool vertical;
     CssPx line, surround;
+    char nbuf[160];
 
     fx_require_supported_container(container);
     /* Which physical axis the cross axis is, asked once of the container (css-writing-modes-4 §7.4
@@ -539,13 +537,8 @@ CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_elem
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for an item that is not a "
            "child of the container it was asked about. Step 11's operand is \"the flex line's cross size\", "
            "so a subject drawn from one container and a line drawn from another is an item sized against a "
-           "line it is not on — the same precondition core/layout/flex_line.h states for the main axis. "
-           "THIS EQUALITY USED TO READ THE DOM PARENT AND TO SAY THAT css-display-3 §2.5 \"Box Generation: "
-           "the none and contents keywords\"' SPLICE WAS A CASE THIS COMPONENT HAD NOT BEEN HANDED. IT IS "
-           "HANDED IT NOW and the sentence is rewritten rather than deleted, because a reader who re-derives "
-           "the refusal from the DOM reading will re-add it: the walk above enumerates this container's "
-           "box-tree child sequence, so an item spliced out of a `contents` child IS on this line and the DOM "
-           "equality would refuse exactly those items");
+           "line it is not on. The relation is the box tree's, since css-display-3 §2.5 \"Box Generation: the "
+           "none and contents keywords\" puts a `contents` child's children on this line");
     /* css-sizing-3 §3.2.1 "“Behaving as auto”" names only "block percentage heights resolving against an
        indefinite size, see CSS2§10.5"; an inline percentage resolves against a definite width here, so on
        the inline axis behaving as auto is computing to `auto`. `used_value_height_behaves_as_auto` on both
@@ -572,7 +565,23 @@ CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_elem
        caller's §10.7. The operands are read inside this arm: `fx_cross_margins` refuses `auto`, one of the
        things §8.3 tests. */
     if (fx_is_stretched(container, item, vertical)) {
-        line = fx_line_cross_size(container, vertical);
+        if (!flex_container_is_multi_line(container)) {
+            line = fx_line_cross_size(container, vertical);
+        } else {
+            /* A multi-line container's line is step 8's `Otherwise` arm plus step 9, whose definite cross
+               size on an INLINE cross axis is a width; css-sizing-3 makes a stretch-fit width definite and a
+               shrink-to-fit one not, and nothing here tells the two apart. */
+            if (!vertical)
+                DFAILF("%s: a stretched item of a MULTI-LINE `column` flex container needs its line's cross "
+                       "size, and css-flexbox-1 §9.4 \"Cross Size Determination\"' step 9 asks whether the "
+                       "container's WIDTH is definite: css-sizing-3 §2 \"Terminology\"' definite size admits "
+                       "the stretch-fit sizing of non-replaced blocks and not a shrink-to-fit width. BUILD "
+                       "that test over core/layout/used_value.c's width rules (§9.8 \"Definite and Indefinite "
+                       "Sizes\" adds the flex cases), then run step 8's per-line walk on the inline axis with "
+                       "§4's anonymous item measured at fit-content",
+                       box_subject(item, nbuf, sizeof nbuf));
+            line = fx_multi_line_cross_size_of(container, item);
+        }
         surround = css_px_add(fx_cross_border_padding(item, vertical), fx_cross_margins(item, vertical));
         return css_px_max(css_px_sub(line, surround), css_px(0.0));
     }

@@ -482,16 +482,12 @@ static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_li
                "max-content cross-size contribution among the flex items as the available space in the cross "
                "axis for each of the flex items during layout.\" THE MIN-CONTENT HALF IS ALREADY THE ANSWER "
                "ABOVE — §9.9.2 makes it \"the largest min-content contribution among all of its flex items\", "
-               "a maximum over items with no line in it — so what is missing is exactly the LINES: §9.3 "
-               "\"Main Size Determination\"'s step 5 collects items into flex lines, and §9.4 \"Cross Size "
-               "Determination\" is what gives each line the cross size this sum is over. ONE OF THOSE TWO IS "
-               "BUILT AND THE OTHER IS EXACTLY WHAT THIS ARM STILL NEEDS: core/layout/flex_cross_size.h runs "
-               "§9.4's steps 7 and 8 and answers §9.6 \"Cross-Axis Alignment\"' sum, and it REFUSES a "
-               "multi-line container by name because §9.3's step 5 has no line BREAKING behind it — which is "
-               "the same sentence this crash is making, one axis over. So the component that answers this "
-               "arm exists and what it is waiting on is §9.3's breaking, not §9.4. THE CLAUSE THAT STOOD "
-               "HERE NAMED core/layout/block_flow.c AS THE SAME ABSENCE and that file now CALLS that "
-               "component, so a reader who follows the old sentence finds a call",
+               "a maximum over items with no line in it. §9.3 \"Main Size Determination\"'s step 5 breaks "
+               "lines (core/layout/flex_line.h's `flex_line_members`) and §9.4 \"Cross Size Determination\"' "
+               "step 8 sizes them on a BLOCK cross axis (core/layout/flex_cross_size.c). What is missing is "
+               "step 8 on this container's INLINE cross axis, with §4's anonymous item measured at "
+               "fit-content and each item's available space the largest max-content contribution, as the "
+               "sentence above states",
                box_subject(el, nbuf, sizeof nbuf));
     return out;
 }
