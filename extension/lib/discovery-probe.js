@@ -5,23 +5,23 @@
 // generateSchemaFromJson, safeFetch) at call-time. KEEPS the discovery-document-learning feature, just
 // relocated.
 //
-// THE TWO HALVES USE TWO DIFFERENT RELAY ENTRIES BECAUSE THEY ARE TWO DIFFERENT REQUESTS. Fetching a
-// published document is a GET of a public URL, so `fetchDiscoveryForService` reaches the relay through
+// THE TWO HALVES USE TWO DIFFERENT OPERATOR SEND FUNCTIONS BECAUSE THEY ARE TWO DIFFERENT REQUESTS. Fetching a
+// published document is a GET of a public URL, so `fetchDiscoveryForService` sends through
 // `makePageGetFn` and a candidate is `{url, headers}` with no method field — the POST candidate that carried
 // `X-Http-Method-Override: GET` is gone, because a GET a service answers 405 to is a GET that failed and not
 // a reason to send something else. The error probe is a POST by construction: `performProbeAndPatch` and
 // `probeEndpoint` send a DELIBERATELY MALFORMED body to a Google API and read the `google.rpc.Status`
-// rejection that describes the request the service wanted, so they reach the relay through `makePageFetchFn`
+// rejection that describes the request the service wanted, so they send through `makePageFetchFn`
 // and lib/req2proto.js names the method. An endpoint that answers 4xx to a malformed body has not been
 // mutated.
 //
 // AND THERE IS A THIRD AXIS THAT IS NOT ABOUT THE REQUEST AT ALL — WHOSE ACT IT IS — WHICH DECIDES THE
-// TRANSPORT BEFORE THE VERB DECIDES THE ENTRY. The page-context relay issues the request AS THE PAGE with the
-// person's own cookies, and lib/schema.js scopes it out of the credentialed destructive-path deny list on the
-// ground that a human composed what it carries. `fetchDiscoveryForService` is reached from BOTH grades — the
+// TRANSPORT BEFORE THE VERB DECIDES THE ENTRY. An operator send (safe-fetch.js `safeFetchOperator`) speaks AS
+// THE PAGE with the person's own cookies and no destructive-path deny list, on the ground that a human
+// composed what it carries. `fetchDiscoveryForService` is reached from BOTH grades — the
 // popup's FETCH_DISCOVERY button and lib/response-decode.js's automatic sweep — so it takes the grade as an
-// argument and picks its transport from it: a human's act goes to the relay, this tool's own act goes to
-// `safeFetch`, the chokepoint that asks the provenance, credential and deny-list questions the relay cannot.
+// argument and picks its transport from it: a human's act is an operator send, this tool's own act goes to
+// `safeFetch`, which asks the provenance, credential and deny-list questions the operator tier does not.
 // It is not a fallback and neither arm is legacy: they are two POLICIES over one question, and the grade is
 // stated by the caller rather than inferred here, so a site that cannot name it aborts instead of defaulting
 // into the exempt one.
@@ -147,10 +147,10 @@ function _seedIsProbeable(seedUrl, seedMethod) {
   return seedMethod === "POST";
 }
 
-/* THE AUTOMATIC ARM'S GET FUNCTION — the same question the relay's answers, asked at the chokepoint instead.
+/* THE AUTOMATIC ARM'S GET FUNCTION — the question the operator arm answers, asked of `safeFetch` instead.
  *
  * WHY IT IS AN ADAPTER AND NOT A SECOND LOOP. The candidate walk below is written against a FUNCTION taking
- * `(url, headers)` and answering `{ok, status, headers, body}` or `{error}`, which is the relay's vocabulary;
+ * `(url, headers)` and answering `{ok, status, headers, body}` or `{error}`, the operator arm's vocabulary;
  * the chokepoint answers its own record (`{ok, status, statusText, headers, body: Uint8Array, urlList,
  * computedType, refusal}`). One loop over two transports is the whole point — duplicating the walk would be
  * two copies of the candidate list, the diff, the merge and the not_found record, and the day they disagreed
@@ -212,7 +212,8 @@ function _chokepointGetFn(tab, who) {
          a well-known path PUBLISHES, which is the same for every visitor: the authenticated view is not what
          this sweep is asking for, and the header list below could not ride along with cookies anyway. */
       credentialed: false,
-      headers: headers || {},
+      // safeFetch takes a header list of [name, value] pairs, over which it computes CORS-unsafe names.
+      headers: Object.keys(headers || {}).map((k) => [k, String(headers[k])]),
     });
     /* `refusal` IS A POSITIVE STATEMENT ON EVERY RECORD safeFetch RETURNS — `null` means the request reached
        the wire and what follows is the server's answer, an HTTP error status included. So this reads the
@@ -222,8 +223,8 @@ function _chokepointGetFn(tab, who) {
        STRING CANNOT BE ASKED. `error` is the account a reader gets; `refusal` is the same fact GRADED, and
        a consumer that recovered the grade by matching the prefix of `error` would be writing a second copy
        of safe-fetch.js's own vocabulary in a format nothing checks — which that file forbids by name at
-       `_refused`. The relay arm (lib/schema.js `pageContextGet`) carries NO `refusal`, and that absence is a
-       POSITIVE statement rather than a hole: `pageContextFetch` is a different transport with a different
+       `_refused`. The operator arm (`makePageGetFn`) carries NO `refusal`, and that absence is a
+       POSITIVE statement rather than a hole: the operator tier has a different
        authorization — a human at a surface that shows them the bytes — so its refusals are not this egress
        policy's and may not be counted as though they were. */
     if (r.refusal) return { error: r.refusal.kind + ":" + r.refusal.reason,
@@ -255,23 +256,24 @@ async function fetchDiscoveryForService(
   seedUrl,
   seedMethod,
   initiator,
+  sender,
 ) {
   pageContextStatedGrade(initiator, "lib/discovery-probe.js fetchDiscoveryForService, service " +
                                     JSON.stringify(service));
   const tab = _docForLearning(documentId);
   /* NO TERNARY. `_docForLearning` asserts the document is registered AND that it carries a tabId (the browser
-     states one on every content message and the page-context relay routes by it), so `(tab && tab.tabId != null)
+     states one on every content message and an operator send finds its frame by it), so `(tab && tab.tabId != null)
      ? … : null` re-answered a question that has already been answered by an abort. */
   const tabId = tab.tabId;
 
   /* A GET FUNCTION, AND THERE IS NO PARAMETER HERE IN WHICH TO ASK FOR ANYTHING ELSE — the candidate carries a
-     URL and headers, and the relay's learning entry (lib/schema.js `pageContextGet`) takes exactly those. This
-     loop used to hand the relay a `method` off each candidate, one of which was a POST.
+     URL and headers, and the operator arm's GET (`makePageGetFn`) takes exactly those. This loop used to
+     hand the transport a `method` off each candidate, one of which was a POST.
      WHICH GET FUNCTION IS THE GRADE'S ANSWER AND NOT THIS LOOP'S. Both arms answer the same question in the
      same vocabulary — `{ok, status, headers, body}` or `{error}` — which is what lets one loop drive either,
      and is also why the DCHECK below can assert that vocabulary for both without knowing which one ran. */
   const getFn = initiator === PAGE_CONTEXT_USER_INITIATED
-    ? makePageGetFn(tabId, documentId, initiator)
+    ? makePageGetFn(tabId, documentId, initiator, sender)
     : _chokepointGetFn(tab, "lib/discovery-probe.js fetchDiscoveryForService, service " +
                             JSON.stringify(service));
   const triedKeys = new Set();
@@ -323,7 +325,7 @@ async function fetchDiscoveryForService(
            document" for every candidate of every service. It is asked of BOTH transports and names both,
            because the point of one loop over two is that neither gets to answer in its own dialect. */
         DCHECK(resp && typeof resp === "object",
-               "the discovery GET function answered with no reply record — lib/schema.js's `pageContextGet` " +
+               "the discovery GET function answered with no reply record — `makePageGetFn`'s operator send " +
                "and this file's `_chokepointGetFn` each return {ok, status, headers, body} or {error} (the " +
                "chokepoint arm grading that error with a `refusal` beside it), so " +
                "anything else is one of those two edges broken and every discovery candidate would read as " +
@@ -342,9 +344,9 @@ async function fetchDiscoveryForService(
           /* THE `else` IS THE POSITIVE STATEMENT AND NOT THE LEFTOVER ARM. A candidate reaches here having
              been PUT TO THE TRANSPORT — a 404, a 500, a non-document body and a `network` refusal are all
              answers about the ORIGIN, which is why the grade and not the status decides this the same way it
-             decides the line above. The relay arm (lib/schema.js `pageContextGet`) states no `refusal` at
+             decides the line above. The operator arm (`makePageGetFn`) states no `refusal` at
              all, so every candidate a USER-initiated sweep walks counts here: that is this file's own rule
-             at `_chokepointGetFn` — the relay is a different transport with a different authorization and
+             at `_chokepointGetFn` — the operator tier has a different authorization and
              its refusals are not this egress policy's and may not be counted as though they were.
              NEITHER COUNTER IS RAISED WHEN `getFn` THROWS, which is deliberate and is what the gate's second
              conjunct is for: a transport that threw asked nothing AND declined nothing, and that is a broken
@@ -449,7 +451,7 @@ async function fetchDiscoveryForService(
             const match = findDiscoveryMethod(mergedDoc, seedUrlObj.pathname, seedMethod);
             if (!match && initiator === PAGE_CONTEXT_USER_INITIATED) {
               notifyPopup(tabId);
-              await performProbeAndPatch(documentId, service, seedUrl, apiKey, initiator);
+              await performProbeAndPatch(documentId, service, seedUrl, apiKey, initiator, sender);
               return;
             }
           }
@@ -540,7 +542,7 @@ async function fetchDiscoveryForService(
       initiator === PAGE_CONTEXT_USER_INITIATED) {
     // Pick a key to try probing with (use the first available one if any)
     const probeKey = keysToTry[0] || null;
-    await performProbeAndPatch(documentId, service, finalSeedUrl, probeKey, initiator);
+    await performProbeAndPatch(documentId, service, finalSeedUrl, probeKey, initiator, sender);
   } else {
     /* TRULY NOT FOUND, AND NO TIMESTAMP ON IT. `_failedAt` was recorded here and response-decode.js read it
        as a 300-SECOND COOLDOWN before this service could be asked again — a clock deciding when work may
@@ -649,7 +651,7 @@ const _inflight = new Set();
  * defaulting: this used to be reached from lib/response-decode.js the instant a captured response body was
  * protobuf, with nobody at any surface.
  */
-async function performProbeAndPatch(documentId, service, targetUrl, apiKey, initiator) {
+async function performProbeAndPatch(documentId, service, targetUrl, apiKey, initiator, sender) {
   pageContextRequireUserInitiated(initiator,
     "lib/discovery-probe.js performProbeAndPatch, service " + JSON.stringify(service));
   // Deduplicate: skip if already probing this service+url combo
@@ -668,7 +670,7 @@ async function performProbeAndPatch(documentId, service, targetUrl, apiKey, init
          "its absence is the loader having dropped it and every error probe in the extension silently doing " +
          "nothing");
 
-  const fetchFn = makePageFetchFn(tabId, documentId, initiator);
+  const fetchFn = makePageFetchFn(tabId, documentId, initiator, sender);
 
   /* THE SIXTH COPY, AND THE ONE THAT WAS FACING THE OTHER WAY. `apiKey ? {"x-goog-api-key": apiKey} : {}`
      stood here: where `probeEndpoint` below refuses to invent an injection point, this INVENTED one for every
@@ -1076,7 +1078,7 @@ function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
 /* THE PANEL'S PER-ENDPOINT PROBE. Same malformed credentialed POST as `performProbeAndPatch`, same reason the
    grade is a required argument, and this is the entry the capability now lives at: lib/popup-handlers.js's
    PROBE_ENDPOINT, posted by a click listener on the Discovery panel's own button. */
-async function probeEndpoint(documentId, endpointKey, initiator) {
+async function probeEndpoint(documentId, endpointKey, initiator, sender) {
   pageContextRequireUserInitiated(initiator,
     "lib/discovery-probe.js probeEndpoint, endpoint " + JSON.stringify(endpointKey));
   const tab = _docForLearning(documentId);
@@ -1102,7 +1104,7 @@ async function probeEndpoint(documentId, endpointKey, initiator) {
          "that view and this backend disagreeing about the record they share");
   if (ep.method !== "POST") return null;
 
-  // Cookie, Origin, Referer are handled by the browser via the content script relay.
+  // Cookie, Origin and Referer are the frame's, set by the operator send (lib/speak-as.js).
   const headers = {};
   const probeUrl = new URL(ep.url);
   probeUrl.searchParams.delete("key");
@@ -1132,7 +1134,7 @@ async function probeEndpoint(documentId, endpointKey, initiator) {
     else if (_e.source.startsWith("header:")) headers[_e.source.slice("header:".length)] = _k;
   }
 
-  const fetchFn = makePageFetchFn(tabId, documentId, initiator);
+  const fetchFn = makePageFetchFn(tabId, documentId, initiator, sender);
   const result = await probeApiEndpoint(probeUrl.toString(), headers, {
     fetchFn,
   });
@@ -1174,7 +1176,7 @@ async function probeEndpoint(documentId, endpointKey, initiator) {
 //
 // WHAT ACTUALLY ENDED THE BLIND SWEEP IS THE GRADE, WHICH IS A STRICTLY LARGER ANSWER TO THE SAME QUESTION.
 // A dedup set makes an unauthorised request happen ONCE per address instead of many times; it never asked
-// whether it should happen at all. lib/schema.js now requires an act's INITIATOR at the page-context relay,
+// whether it should happen at all. lib/schema.js now requires an act's INITIATOR at the operator tier,
 // the automatic caller in lib/response-decode.js is deleted, and the probe survives at the Discovery panel's
 // per-endpoint buttons — where a human names the endpoint, which is also why a per-address dedup would now be
 // a tool refusing to repeat an act its operator asked for twice.

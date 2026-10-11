@@ -27,10 +27,14 @@ async function frameIdentity(tabId, documentId) {
    ancestor; the next diff passes the ancestor origins engineCreate already holds. Its absence shows as
    such a document's cross-site sends carrying no partitioned cookies. */
 function engineIdentity(origin, docUrl) {
-  CHECK(typeof origin === "string" && URL.canParse(docUrl) && new URL(docUrl).origin === origin,
+  /* An opaque cluster ("null", a sandboxed document) speaks as "null" whatever its URL; a document whose URL
+     has no origin of its own (about:blank, data:) speaks as the origin it inherited. */
+  CHECK(typeof origin === "string" && URL.canParse(docUrl) &&
+        (origin === "null" || [origin, "null"].indexOf(new URL(docUrl).origin) >= 0),
         "an engine identity's document URL " + JSON.stringify(docUrl) + " is not of its cluster origin " +
         JSON.stringify(origin) + " — the zone speaks as the origin it assigned, never as one a URL names");
-  return { origin, docUrl, partitionKey: { topLevelSite: siteOf(docUrl), hasCrossSiteAncestor: false } };
+  const site = origin === "null" ? siteOf(docUrl) : siteOf(origin + "/");
+  return { origin, docUrl, partitionKey: { topLevelSite: site, hasCrossSiteAncestor: false } };
 }
 
 /* RFC 6265bis §5.2 "Same-site" and "cross-site" Requests: same-site when the request URL's origin is same
@@ -57,7 +61,8 @@ function identityFor(identity, request, documentPolicy) {
         JSON.stringify(credentials) + ", which Fetch §2.2.5 does not define");
   const policy = ri.referrerPolicy === null || ri.referrerPolicy === "" ? documentPolicy : ri.referrerPolicy;
   let referrer;
-  if (ri.referrer === "") referrer = null;
+  // §8.3: a client whose origin is opaque has no referrer, and §5.4 makes every stated referrer "client" there.
+  if (ri.referrer === "" || identity.origin === "null") referrer = null;
   else {
     const r = ri.referrer === null ? "client" : referrerForIdentity(ri.referrer, identity.origin);
     referrer = determineRequestReferrer(r, policy, identity.docUrl, request.url);

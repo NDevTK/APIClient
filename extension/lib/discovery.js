@@ -32,7 +32,7 @@
 // `{method:"POST", headers:{"X-Http-Method-Override":"GET"}}` — the documented trick for prising a discovery
 // document out of a service that 405s a plain GET — and it is not back with the rest: a service that answers
 // 405 to a GET of its description has answered, and re-asking with a different verb is a request the fetch
-// was not asked to make. The record is `{url, headers}`, which is exactly what `pageContextGet` takes.
+// was not asked to make. The record is `{url, headers}`, which is exactly what `makePageGetFn`'s fn takes.
 
 /**
  * Build candidate discovery URLs for a given hostname.

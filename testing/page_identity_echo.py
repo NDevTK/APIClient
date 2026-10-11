@@ -34,6 +34,17 @@ window.pageXhr = (url, withCredentials) => new Promise(res => {
 });
 </script><p>probe page</p>"""
 
+ENGINE_PAGE = """<!doctype html><meta charset=utf-8><title>engine probe</title>
+<script>
+fetch("http://127.0.0.1:%(b)d/echo?id=engine.fetch.B", {credentials: "include"});
+if (location.search.includes("xhr=1")) {
+  var x = new XMLHttpRequest();
+  x.open("GET", "http://127.0.0.1:%(b)d/echo?id=engine.xhr.B");
+  x.setRequestHeader("X-Probe", "1");
+  x.send();
+}
+</script><p>engine probe</p>"""
+
 SW = """self.addEventListener('install', e => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
@@ -98,6 +109,10 @@ class H(http.server.BaseHTTPRequestHandler):
                                             ("Referrer-Policy", "unsafe-url"),
                                             ("Content-Security-Policy",
                                              "connect-src 'self' http://127.0.0.1:%d" % PB)])
+        elif p == "/enginepage":
+            # A page whose own script fetches cross-site at load, so the engine's re-execution of it sends
+            # an engine-originated request through bridge.js and safeFetch.
+            self._send(200, (ENGINE_PAGE % {"b": PB}).encode(), [("Content-Type", "text/html")])
         elif p == "/sw.js":
             self._send(200, SW.encode(), [("Content-Type", "application/javascript")])
         elif p == "/setcookies":

@@ -54,7 +54,7 @@ let currentSchema = null;
    to the `CTLOWNER` of the previous send, because `applyPathParams` had no `{owner}` left to substitute;
    (b) a query parameter the operator CLEARED could never be removed, since `composeSendUrl` reaches its
    `searchParams.set` only for a parameter the form still states and an absent one leaves the baked-in copy
-   standing; and (c) `renderSendUrl`'s address row — the surface SECURITY.md's `pageContextFetch` exemption
+   standing; and (c) `renderSendUrl`'s address row — the surface SECURITY.md's operator-tier exemption
    is named after, "a human at a surface that shows them the bytes" — showed one answer while the operator's
    own form field showed another. A panel giving two answers about one quantity does not weaken that
    authorization, it FORGES it, which is the argument `composeSendUrl` already makes one file over.
@@ -269,7 +269,7 @@ function setBodyMode(mode) {
     isConsole ? "none" : "";
   /* THE ADDRESS ROW IS RECOMPUTED, NEVER LEFT STANDING. A display taken once is stale the moment the panel
      changes, and a stale address at THIS surface is the defect the row exists to end — SECURITY.md scopes
-     the page-context relay out of the destructive-path deny list on the ground that a human saw the bytes,
+     the operator tier out of the destructive-path deny list on the ground that a human saw the bytes,
      and bytes that were true a mode ago are not the bytes. This is the mode hook; the endpoint hook is at
      loadVirtualSchema's tail and the typing hook is the delegated listener in init(). */
   renderSendUrl();
@@ -613,7 +613,7 @@ document.addEventListener("DOMContentLoaded", async () => {
        THE HEADER HALF DIVERGED THE OTHER WAY (see `sendPanelHeaders`, lib/popup-form.js), so the snippet the
        operator copies and the request the button fires were two different requests in two directions, and the
        one that was wrong on the wire was the one that actually went out. SECURITY.md scopes
-       `pageContextFetch` out of the credentialed destructive-path deny list on the ground that the request is
+       the operator tier out of the credentialed destructive-path deny list on the ground that the request is
        "authorized by a human at a surface that shows them the bytes"; an export that shows bytes the send does
        not carry does not weaken that authorization, it FORGES it, which is the argument `composeSendUrl`
        already makes for the address row. One speller each, so the two cannot disagree. */
@@ -690,8 +690,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  /* THE BUILT REQUEST, ASSERTED WHERE IT ARRIVES — the same shape as lib/schema.js's `_checkPageFetchReply`,
-     for the same reason. `buildExportRequest` answers with EITHER an `error` string or the four fields the
+  /* THE BUILT REQUEST, ASSERTED WHERE IT ARRIVES, so a consumer never renders a gap as the server's
+     answer. `buildExportRequest` answers with EITHER an `error` string or the four fields the
      three formatters below turn into curl, fetch and python, and those formatters were reading all four
      through `||`: `req.headers || {}` in four places and `req.body` inside a swallowing try. What that
      concealed is precise — a curl command with no `-H` lines is a VALID command, and so is one with no

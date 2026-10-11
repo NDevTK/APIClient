@@ -1998,6 +1998,18 @@ function embedderPolicyWhole(e) {
          typeof e.reportOnlyEndpoint === "string";
 }
 
+/* The identity a page request speaks as on the wire (lib/request-identity.js): the cluster origin this zone
+   assigned the instance and the document URL it loaded, never a word the engine states.
+   Not covered: the pending line states no referrer and no document referrer policy, so the referrer is
+   "client" and the policy is Referrer Policy §3's default, strict-origin-when-cross-origin. The next diff
+   reads both off the pending line once the engine states them there. Its absence shows as a Referer that
+   differs from the page's own, for a page that states a referrer or sets a referrer policy. */
+function pageRequestIdentity(origin, docUrl, url, credentials, mode) {
+  return identityFor(engineIdentity(origin, docUrl),
+                     { url, requestInit: { credentials, mode, referrer: null, referrerPolicy: null } },
+                     "strict-origin-when-cross-origin");
+}
+
 // ---- Engine lifecycle over one wasm instance (one agent cluster) ----
 /* `docName` is set only for a document another engine created: its name arrived in that engine's
    navigable.create notice (HTML §4.8.5 The iframe element creates a child navigable inside the insertion
@@ -2499,7 +2511,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          and a request on this seam is a GET, which §5.4 refuses a body. */
       const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      credentials, actor: "page", useCorsPreflight: false,
-                     docReach: msg.provenance, credentialed: false };
+                     docReach: msg.provenance, credentialed: false,
+                     identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs, credentials, mode) };
       const r = await self.safeFetch(abs, opts);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
          every path, blocked ones included, so a malformed answer is asserted rather than turned into a network
@@ -2717,7 +2730,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                                             mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                             docReach: msg.provenance, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
-                                            credentials: q.credentials, headers: q.headers });
+                                            credentials: q.credentials, headers: q.headers,
+                                            identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs,
+                                                                          q.credentials, q.mode) });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +

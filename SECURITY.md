@@ -23,7 +23,7 @@ either the mechanism or its absence, and an absence is a finding about this file
 
 The offscreen concentrates everything that needs trust: the one `chrome.runtime.onMessage` router of that
 document (in `offscreen-brain.js`), the principal mint (`_browserFacts`), the privileged-RPC client (`swRpc`),
-the network chokepoint (`lib/safe-fetch.js`), the trusted end of the page-context relay (`lib/schema.js`),
+the network chokepoint and its operator tier (`lib/safe-fetch.js`), the speak-as identity (`lib/request-identity.js`),
 IndexedDB, the engine pool and its level-1 WFQ (`bridge.js`), the renderer registry (`render-process-host.js`)
 and the frames it materializes (`renderer-host.js`), the popup command surface (`lib/popup-handlers.js`) and the
 live-verify sessions. One trusted zone means one place to get the principal right. The invariants that make it
@@ -73,11 +73,11 @@ The other ends apply the same rules:
   hand every future page whose name begins with that string the largest privilege the extension has.
 - `popup.js` accepts only `sender.origin === EXTENSION_ORIGIN` (`isExtensionPage`), so the reverse direction is
   gated on the same fact.
-- `content.js`'s `onMessage` does not check its sender. Chrome delivers to a content script only
-  `chrome.tabs.sendMessage` from a privileged extension context, and `manifest.json` declares no
-  `externally_connectable`, so no web page and no other extension has a door. Every payload-carrying send is
-  routed with `{documentId}` and refused without one (`_sendPageFetch` in `lib/schema.js`; the `WS_SEND_MSG`,
-  `PM_SEND_MSG` and `MC_SEND_MSG` cases in `lib/popup-handlers.js`). `RESHIP`, which carries no data, goes to
+- `content.js`'s `onMessage` accepts only a sender the browser stamps with this extension's origin and no
+  tab. Chrome delivers to a content script only `chrome.tabs.sendMessage` from a privileged extension
+  context, and `manifest.json` declares no `externally_connectable`, so no web page and no other extension
+  has a door. Every payload-carrying send is routed with `{documentId}` and refused without one (the
+  `WS_SEND_MSG`, `PM_SEND_MSG` and `MC_SEND_MSG` cases in `lib/popup-handlers.js`). `RESHIP`, which carries no data, goes to
   every frame of every http(s) tab.
 
 `sender.tab.url` authorizes nothing. It is HTML §8.1.3.1 "Environments"' top-level creation URL, carried as
@@ -180,67 +180,58 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
 - A cross-origin script acts with the origin of the page it is loaded into, never its own host, which is what
   the per-call principal encodes.
 
-## The page-context relay
+## Operator sends
 
-The trusted zone decides every request, and the document's isolated world sends it. `pageContextGet`,
-`pageContextSend` and `pageContextFetch` in `lib/schema.js` send `PAGE_FETCH` through
-`swRpc("tabs.sendMessage", …, {documentId})`. The `documentId` is the one the browser stamped on the
-observation's sender, so it names the exact document, and a navigation cannot retarget it the way it can a
-`frameId`. `content.js` accepts an order only from a sender the browser stamps with this extension's origin
-and no tab. `handlePageFetch` runs `fetch(url, init)` in the isolated world. `init` carries the request's
-own `credentials`, `mode`, `referrer` and `referrerPolicy`: `intercept.js` records them on every observed
-fetch, XHR and EventSource request, and leaves out any member the page did not supply, so fetch applies its
-default. A request no observation describes states none (`PAGE_CONTEXT_COMPOSED_INIT`), which is what the
-page's own `fetch(url)` sends. The Send panel shows the mode, referrer and policy it will send, and lets the
-operator choose the credentials mode.
+A request a person composes in the popup (the Send panel, and the Discovery panel's probe, service-info and
+fetch-discovery buttons) leaves from the offscreen document through `safeFetchOperator` in
+`lib/safe-fetch.js`. It speaks as the frame the request was observed in. The identity is that frame's, from
+browser-stamped facts only (`frameIdentity`, `lib/request-identity.js`), and the request carries its headers
+through a speak-as rule (below, "Sends that speak as a document"). There is no relay through the page's
+renderer, so a compromised renderer can neither read nor forge an operator's reply.
 
-Measured with `testing/page_identity_probe.cjs` (Chrome 148, a page on `http://localhost:18431` with
-`Referrer-Policy: unsafe-url`, a `connect-src` naming one cross-site origin, and a service worker). For the
-same credentials mode, the relay's raw header list matches the page's own fetch, order included: `Origin`,
-`Referer` under the page's policy, `Sec-Fetch-Site`/`-Mode`/`-Dest`, `Sec-Fetch-Storage-Access`, and the
-cookies, partitioned ones included. A cross-site POST gets the same CORS preflight. A recorded same-origin
-referrer arrives as that path. A cross-origin one arrives as the page's URL, because Fetch §5.4 "Request
-class" turns it into "client". The browser's SOP and CORS govern the request, not this extension.
+- The tier CHECKs that the sender is an extension document, by its browser-set `MessageSender.origin`
+  (`senderIsExtensionDocument`, the router's own gate for the popup command surface). Every extension page
+  shares that origin and that trust; `sender.url` is not consulted, as it authorizes only the service
+  worker's frameless hop. `lib/popup-handlers.js` hands the sender down to every send. A compromised
+  extension page could therefore send as any observed frame, and the extension pages' Trusted Types policy
+  and CSP are what bound that.
+- Every caller also states whose act it is, and `pageContextRequireUserInitiated` `CHECK`s
+  `PAGE_CONTEXT_USER_INITIATED`. The automatic discovery sweep (`handleResponseBody`) states
+  `PAGE_CONTEXT_TOOL_INITIATED`, and `fetchDiscoveryForService` routes it to `safeFetch`.
+- The request is the observed one. `intercept.js` records each fetch, XHR and EventSource request's
+  `credentials`, `mode`, `referrer` and `referrerPolicy`, and an absent member is null rather than a default.
+  The Send panel shows what it will send and lets the person choose the credentials mode. A request no
+  observation describes states none, which is what the page's own `fetch(url)` sends.
+- What a browser refuses still applies: a non-http(s) scheme, credentials in the URL, a same-origin-mode
+  request to another origin, and Fetch §4.8's preflight. A forbidden request-header name (Fetch §2.2.2
+  "Headers": `Cookie`, `Origin`, `Referer`, `Host`, any `Sec-` or `Proxy-` name, and the rest of the list)
+  is refused with an error the Send panel shows, because the browser owns those headers.
+- The destructive-path deny list does not apply. It is a floor under requests this tool composes on its
+  own, where a wrong deny costs one unfired request. Applied here, it would veto the person's explicit act
+  on a substring match.
+- The reply is the trusted zone's own fetch, returned whole whether or not the frame's own script could
+  have read it under CORS.
+- Not built: a custom `Origin` or `Referer`, for testing a server's CORS or CSRF checks. Today an operator
+  send speaks only as the frame's own identity. The next member adds an explicit, visible Send-panel field.
+  It is reachable from an extension document only, never from an engine send, and the service worker's
+  identity CHECK names it.
 
-`pageContextFetch` refuses a forbidden request-header name (Fetch §2.2.2 "Headers": `Cookie`, `Origin`,
-`Referer`, `Host`, any `Sec-` or `Proxy-` name, and the rest of the list) with an error the Send panel shows.
-The browser sets these itself and ignores a script's value. Two residuals, each a difference from the page
-and not a privilege:
-- The page's service worker does not see the send. A request it would have answered, rewritten or served from
-  cache goes to the network instead.
-- The page's CSP does not bind the isolated world. A send can reach an address the page's `connect-src`
-  forbids, where the page's own fetch fails. The next member is the trusted zone applying the page's
-  `connect-src` to engine and tool sends.
+Measured with `testing/page_identity_probe.cjs`. The oracle is the page's own fetch from
+`http://localhost:18431` (`Referrer-Policy: unsafe-url`, a `connect-src` naming one cross-site origin, a
+service worker). The Send panel's request carries the same set of header names and values as the page's
+request, for same-origin and cross-site targets and both credentials modes: Origin, Cookie (partitioned
+cookie included), `Sec-Fetch-*`, and the CORS preflight. Each difference is a named residual of "Sends that
+speak as a document":
+- Referer. The frame's own referrer policy is not observable from this zone, so a request that states none
+  uses the default, strict-origin-when-cross-origin.
+- Header-name case and order.
+- The page's service worker does not see the send.
+- The page's `connect-src` does not bind it.
 
-The alternatives were measured and rejected. A main-world send matches the page on every axis, but the
-page's service worker can see it and forge the reply. An offscreen (`safeFetch`) fetch sends
-`Sec-Fetch-Site: none`, no `Referer`, an `Origin` of `chrome-extension://…` on a POST and no preflight. It
-also sends the unpartitioned first-party jar, so a cross-site request carries Lax and Strict cookies but not
-partitioned ones. A `declarativeNetRequest` rule can rewrite those headers on the extension's own fetch, and
-it is confined by `initiatorDomains`, `tabIds` and `requestMethods`. Still, the cookie order and partition
-cannot be reproduced from `chrome.cookies` (no creation time, and the partition is keyed on the request's
-cross-siteness), the preflight is absent, a reply's `Set-Cookie` lands in the person's unpartitioned jar, and
-the rule set the `Origin` to an arbitrary site. That is an origin-forging capability this zone does not hold.
-
-- Trusted to untrusted (the request) confers no privilege. A content script can already fetch anything its page
-  can fetch with its own cookies, and the relay asks for exactly a request of that page. `pageContextFetch`
-  refuses non-http(s) URLs, and the verb is decided at the trusted call site, because the far end takes
-  `msg.method` verbatim.
-- The credentials mode is the observed request's, or the operator's choice. A relayed cross-origin request
-  spends the person's cookies at that host only when the page's own request did, or when the operator chose
-  `include`.
-- Every caller states whose act it is, and `pageContextRequireUserInitiated` `CHECK`s that it is
-  `PAGE_CONTEXT_USER_INITIATED`. The callers that state it are the popup command cases (`PROBE_ENDPOINT`,
-  `DISCOVER_SERVICE`, `FETCH_DISCOVERY` in `lib/popup-handlers.js`) and the Send panel's replay (`lib/send.js`).
-  The automatic discovery sweep fired from `handleResponseBody` (`lib/response-decode.js`) states
-  `PAGE_CONTEXT_TOOL_INITIATED`, and `fetchDiscoveryForService` then routes it to `safeFetch` instead. The grade
-  separates an operator's act from an automatic caller inside the trusted zone; it is not proof that a person
-  clicked.
-- The destructive-path deny list does not apply here. It is a floor under requests this tool composes on its
-  own, where a wrong deny costs one unfired request; applied here it would veto the operator's explicit act on
-  a substring match.
-- Untrusted to trusted (the reply) is attacker data. Nothing binds the returned `{status, headers, body}` to
-  the request, and the offscreen files it under the URL it asked for (a residual, below).
+Rejected alternatives, measured:
+- The isolated world's fetch matches the page byte for byte, but its reply is a renderer's claim, and the
+  engine needs a sender when no frame is open.
+- A main-world fetch is visible to the page's service worker, which can forge the reply.
 
 ## Sends that speak as a document
 
@@ -248,6 +239,11 @@ The trusted zone can make its own fetch carry the request headers a document of 
 send. An identity is a document: its origin and URL, and its cookie partition key. A frame's identity
 comes from browser-stamped facts (`webNavigation`'s record and `cookies.getPartitionKey`, by
 `documentId`). An engine instance's identity is the cluster origin the zone assigned and the URL it loaded.
+Two callers speak as a document:
+- every page request `bridge.js` hands `safeFetch` (`pageRequestIdentity`). These are uncredentialed under
+  the egress default, so they carry the identity's Origin, Referer and `Sec-Fetch-*` and no cookies;
+- every operator send (above).
+Neither a message nor the engine can state an identity.
 - `lib/request-identity.js` and `lib/speak-as.js` compute the headers:
   - `Origin` by Fetch §3.2 "append a request `Origin` header";
   - `Referer` by Fetch §5.4's referrer rule, so a referrer not same-origin with the identity is "client",
@@ -278,8 +274,20 @@ Residuals, each a difference from the document's own request:
 - The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
   `chrome.cookies` states no creation time.
 - The storage access status is assumed `active`.
+- A cross-site reply's cookies are not stored. The zone's fetch omits credentials there, so a `Set-Cookie`
+  never lands in a jar the document would not have written. A same-site reply's lands in the browser's
+  unpartitioned jar, which is the document's.
+- The partition bit is computed as the request's own cross-site status, with the frame's
+  `hasCrossSiteAncestor`. A same-site send's partitioned cookies are not attached, and the person's
+  third-party-cookie setting is not read.
+- A redirect leaves the rule behind. The rule matches the first URL only, so a redirected request goes out
+  as this extension.
+- The engine states no referrer and no document referrer policy on its pending line, and an operator's frame
+  policy is not observable from this zone. Both use the default policy, strict-origin-when-cross-origin.
+- An iframe srcdoc document's referrer source, its container's URL, is not held.
 - The document's service worker does not see the send.
-- The document's CSP `connect-src` does not bind it.
+- The document's CSP `connect-src` does not bind it. The next member is the zone applying the document's
+  `connect-src` to engine and tool sends.
 
 ## Every way bytes leave
 
@@ -293,7 +301,7 @@ surface that shows them the bytes, and what it owes is a destination this zone c
 | Channel | Destination chosen by | Credentials | Enforcement |
 |---------|----------------------|-------------|-------------|
 | Analyzer HTTP (`safeFetch`) | what the bundle computed, or a seed the browser stated | cookies only on a same-origin document load | the chokepoint, above |
-| Requests as the page (page-context relay) | the trusted call site, for an operator's act | the page's own, under the observed request's credentials mode or the operator's choice | the browser's SOP/CORS; the initiator grade; forbidden request-headers refused |
+| Operator sends as a frame (`safeFetchOperator`) | the person, in the popup | the frame's own, by its partition and the request's credentials mode | the popup-sender CHECK; the initiator grade; Fetch's own refusals and §4.8 preflight; forbidden request-headers refused |
 | Renderer program assembly (`renderer-host.js`) | a constant list off the extension origin | none | no bundle influences it; a bundle-influenced name would make it analyzer HTTP |
 | The page's own traffic through `intercept.js`'s `fetch`, `XMLHttpRequest`, `WebSocket` and `EventSource` wrappers | the page | the page's | none needed: the wrapper calls the original and confers nothing |
 | Operator writes into a channel the page opened (`WS_SEND_MSG`, `PM_SEND_MSG`, `MC_SEND_MSG`) | the page opened the socket, port or window | the page's | the router's document→document rule; `documentId` routing; a postMessage target must be one real origin (`_isRealTargetOrigin` in `lib/popup-console.js`, DCHECKed in `lib/popup-handlers.js`) |
@@ -495,7 +503,6 @@ Each residual states what is not covered, what would close it, and how its absen
 | Hit attribution is not tied to the delivery witness | `_recordProbeHit` latches the first top-level document of the target origin to fire the marker; it does not require that document to be the one `_recordProbeDelivery` witnessed | compare `facts.documentId` against `ses.delivered.documentId` | an attributed hit whose `documentId` differs from the session's `delivered.documentId` |
 | Fragment deliveries may not be witnessed | a witness needs the payload's component in `MessageSender.url` or in the seed address; if both drop the fragment, a `#` delivery latches nothing | `content.js` ships the document's `location.href` on `CONTENT_SEED` beside `seedUrl`, compared as a third source | a `#` delivery reporting not delivered with a nonzero `deliveredNearMiss` |
 | A forgeable principal demand needs a chosen origin | `ATTACKER_PAGE_URL` is a constant, so a delivery whose victim checks `event.origin` against a shape is refused with the shape stated | a per-session attacker address derived from `principalGates`, plus the person's statement of which origins they control | a `forgeable` finding answering `pocWhy` where `none` findings beside it arm a Run button |
-| Relayed-reply attribution | a `PAGE_FETCH` reply is vouched for only by the renderer that returned it and is filed under the requested URL, cross-origin included | none; the learned store is a research artifact, never evidence about a third party | a learned endpoint at another origin whose reply no server sent |
 | Passive learning is page-claimed | `RESPONSE_BODY`, `CONTENT_FORM_SUBMIT` and the `sourceOrigin` / `targetOrigin` on `PM_RECV` / `MC_OPEN` records are built in the page's renderer, and any script there can dispatch the wrapper events, so a page can file records under any address or origin. They do not reach the engine as an `event.origin` | none at this layer; the popup labels them as claims (`_claimedOriginPair`) and refuses to reply to a non-origin (`_isRealTargetOrigin`) | records for an origin the person never visited, learned while on an unrelated page |
 | Cross-origin child navigables load uncredentialed | `navigationCarriesSession` refuses the session cross-origin, because the chokepoint's credentialed gate asks whether the requesting principal may read the bytes, while a navigation's reader is another instance keyed on the response's origin | a document-load type in `safe-fetch.js` whose read principal is the response's own origin, not an `if` at the caller | cross-origin child documents loading in their logged-out form |
 | Page requests are uncredentialed | `fetched` and `fetchedXhr` state `credentialed: false`, so the analysed page's own data requests see the logged-out reply. They already pass the page origin the credentialed SOP would need (`eng.origin`); the wrong origin would be `originOf(msg.sourceUrl)`, which gives a sandboxed iframe its embedder's | a per-origin credential decision over the request's own credentials mode | an app whose boot data differs by session analysed in its logged-out form |
@@ -504,7 +511,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | A joined document is judged under its root's reach grade | `fetched` reads `msg.provenance` from the root's message, so a document joined through `engineJoin` is judged as its root was reached | the park's document name on the pending line, so the lookup is per document | at an origin widened for one grade, identical requests firing from a joined document and refused from a top-level one reached the same way |
 | An auxiliary opened without `noopener` | it shares its opener's group but lands in another tab, so `clusterKeyOf` splits the pair; `MessageSender` carries no opener | a browser-stated opener fact joined to the opener's group | an opener and its popup analysed in two instances |
 | Unused privileged primitives | the `tabs.remove` arm of `_swRpc` and the `readExecFlag`, `postMessage`, `seedStorage` and `dispatchEvents` injectors in `_PROBE_INJECTORS` have no caller; `scripting.exec` accepts any `tabId` and `allFrames`. Today they are reachable only by the offscreen (`OFFSCREEN_HREF` equality), so they are the blast radius of a hole in that gate | delete them; the `scripting` permission stays for `pocAttackerButton` | `git grep` finding the names in `background.js` and nowhere else |
-| Dev-build asserts on renderer-supplied input | `_checkPageFetchReply` (`lib/schema.js`) DCHECKs the shape of the content script's reply, and `renderer-host.js`'s window handshake DCHECKs the frame's record. In dev a compromised renderer can make those handlers throw; in release a malformed reply reaches its consumers unvalidated | refuse a malformed reply with the relay's own error instead of asserting on it | a dev build throwing at those sites for a page's malformed reply |
+| Dev-build asserts on renderer-supplied input | `renderer-host.js`'s window handshake DCHECKs the frame's record. In dev a compromised renderer can make those handlers throw; in release a malformed reply reaches its consumers unvalidated | refuse a malformed record with the handshake's own error instead of asserting on it | a dev build throwing at those sites for a page's malformed reply |
 | Channels CSP does not govern, after a sandbox escape | an escape into `renderer.html`'s realm has no `chrome.*`, no principal and no `fetch`; whether it can reach the network through a channel CSP does not cover (such as WebRTC) or by navigating its own frame is not measured in this tree. The offscreen's `frame-src 'self'` is the policy that would answer the navigation half | a measured negative in real Chrome with a positive control beside it | traffic from the engine frame's process that no `safeFetch` call accounts for |
 
 ## Attack scenarios
@@ -526,11 +533,10 @@ Each residual states what is not covered, what would close it, and how its absen
 | A page sandboxes its own iframe to read the embedder's credentialed API | mitigated: the credentialed-read principal is the requesting frame's `MessageSender.origin`, opaque-unique, and an opaque origin is same-origin with nothing |
 | A seeded page's server redirects the cookie-bearing document load to another origin | mitigated: the credentialed SOP reads the landed origin (`blocked-cors-credentialed:`), and `bridge.js` refuses to seat a cross-origin response (`cross-origin-redirect:`) |
 | The analyzer's own credentialed GET ends the person's session or destroys a resource | mitigated as a floor: GET only, and `_destructiveToken` refuses a listed path token before the wire and after a redirect for any credentialed request that is not `observed`; an unmatched path is not thereby safe |
-| A compromised renderer asks the relay for a fetch the offscreen never authorized | not a threat: it cannot address the relay, and the relay confers nothing the renderer lacks |
-| A compromised renderer lies about a relayed reply | residual: the body is a claim filed under the requested URL; CORS still applies, and cross-origin cookies are spent only when the observed request or the operator chose `include` |
-| The page's script reads or alters a relayed send | not a threat: the send runs in the isolated world, and measured, the page's service worker does not see it |
+| A compromised renderer forges an operator's reply | not a threat: an operator send is the offscreen document's own fetch and never passes through the renderer |
+| A compromised extension page sends as an observed frame | residual: the operator tier trusts every extension document; the pages' Trusted Types policy and CSP bound it |
 | A compromised renderer drives the socket, port or window send relays | not a threat: it cannot reach them, and the channel is the page's own |
-| An automatic caller in the trusted zone uses the relay or widens an origin | mitigated: the relay `CHECK`s `PAGE_CONTEXT_USER_INITIATED` and `AST_EGRESS_POLICY` `CHECK`s the initiator; the automatic sweep is routed to `safeFetch` |
+| An automatic caller in the trusted zone makes an operator send or widens an origin | mitigated: the operator tier `CHECK`s an extension-document sender and `PAGE_CONTEXT_USER_INITIATED`, and `AST_EGRESS_POLICY` `CHECK`s the initiator; the automatic sweep is routed to `safeFetch` |
 | A page widens its own origin for exploration | mitigated: `EGRESS_POLICY` is on the command surface the router gates on the extension origin |
 | A grant for one origin fires requests at another | mitigated: the table is keyed by the serialized tuple origin and compared with the request URL's own `.origin` |
 | A request arrives before the person's grants are restored | mitigated: `safeFetch` awaits the restore registered with `safeFetchEgressStating` |

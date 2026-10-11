@@ -85,10 +85,8 @@ function swRpc(api) {
   });
 }
 
-// External fetches go through the single safeFetch (lib/safe-fetch.js, loaded
-// before this file): direct, GET only, cookies omitted, http(s) only. There is no
-// swFetch / SW relay any more — the offscreen document fetches cross-origin itself.
-// Credentialed same-origin requests (schema.verify) still use the page-context relay (lib/schema.js).
+// Every external fetch goes out from this document through lib/safe-fetch.js, loaded before this file:
+// `safeFetch` for the engine and this tool, `safeFetchOperator` for a person's act speaking as a frame.
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -438,7 +436,7 @@ function getDoc(documentId) {
       // ── identity / routing ──
       documentId: documentId,   // storage key (also a field)
       tabId: null,              // UI filter (network tab) + Chrome routing ONLY — never a key
-      frameId: 0,               // Chrome routing ONLY (tabs.sendMessage / the page-context relay)
+      frameId: 0,               // Chrome routing ONLY (tabs.sendMessage)
       origin: "",               // MessageSender principal (set at CONTENT_SEED) — NEVER url-derived
       url: "",                  // the document's OWN url (display + relative TARGET resolution)
       title: "",                // multi-tab log label
@@ -784,12 +782,11 @@ function _docForLearning(documentId) {
   DCHECK(!!doc,
          "a learner ran against a document that is not registered (" + documentId + ") — handleContentMessage " +
          "registers every document that sends a message, so everything this call is about to learn (keys, " +
-         "endpoints, schemas, probe results) has nowhere to land and the page-context relay has no tab to " +
-         "route to");
+         "endpoints, schemas, probe results) has nowhere to land and an operator send has no frame to speak as");
   DCHECK(!doc || doc.tabId != null,
-         "a registered document carries no tabId — the browser states it on every content message and the " +
-         "page-context relay (req2proto probes, discovery fetches) routes by it, so a null one is every " +
-         "active-discovery request failing with relay_failed");
+         "a registered document carries no tabId — the browser states it on every content message and an " +
+         "operator send (req2proto probes, discovery fetches) finds its frame by it, so a null one is every " +
+         "active-discovery request failing to find its identity");
   return doc;
 }
 
@@ -922,44 +919,26 @@ function stripJsonp(text) {
 // (VDD passive learning -- learnFromAstCallSite/learnFromRequest/learnFromResponse + stats + templated-
 // method matching -- extracted to lib/learn.js, loaded first. One problem per file.)
 
-/* TWO DOCUMENT-BOUND RELAYS, ONE PER OPERATION. Both bind the DOCUMENT (stable) so a page-context read hits
-   the exact document's own origin/credentials, routed by documentId only — a page-context request is the
-   ANALYZER acting AS the page, so the page's own jar and origin are the whole point of the edge.
-
-   THE DOCUMENT FETCH names no method because the candidate it walks has no field for one: an API's published
-   description is read with a GET of a published address (lib/discovery-probe.js `fetchDiscoveryForService`
-   over lib/discovery.js `buildDiscoveryUrls`).
-
-   THE ERROR PROBE names POST because the probe IS a POST. lib/req2proto.js sends a deliberately malformed
-   body to a Google API and reads the `google.rpc.Status` rejection describing the request the service wanted;
-   `sendProbe` writes `method: "POST"` at the call site. A rejected malformed body mutates nothing, and there
-   was for a while a rule here saying no caller could express that verb at all — it is deleted, because it did
-   not stop a state change, it stopped a measurement. */
-/* AND BOTH BIND THE INITIATOR GRADE, WHICH IS WHY THEY ASSERT IT HERE AND NOT ONLY AT THE RELAY. A relay fn is
-   a closure that outlives the frame that made it — `probeApiEndpoint` and `discoverServiceInfo` take one as
-   `opts.fetchFn` and call it several times, once per content type — so the moment of MAKING one is the last
-   place the act's grade is still obviously in view, and the first place a caller that has none can be stopped.
-   Making one is therefore a statement that a human initiated this act; a caller that cannot make that
-   statement is not choosing a different fetch fn, it is choosing `safeFetch`, which is a different POLICY and
-   not a different transport (lib/safe-fetch.js: the deny list, the credential decision and the firing decision
-   are one policy at one chokepoint). The relay asserts again because it is the boundary and because these two
-   factories are not its only door. */
-/* NO `documentId = null` DEFAULT ON EITHER. It was there, it was unreachable (all four call sites pass one),
-   and it is exactly the shape a required trailing parameter must not sit behind — a caller that omitted the
-   document would have been silently given the relay's own `blocked: no documentId` refusal instead of naming
-   the gap. Both arguments are the caller's to state. */
-function makePageGetFn(tabId, documentId, initiator) {
+/* TWO DOCUMENT-BOUND OPERATOR SEND FUNCTIONS, ONE PER OPERATION, each speaking as the frame `documentId`
+   names (lib/send.js `operatorSendAsFrame`). The document fetch is a GET of an API's published description
+   (lib/discovery-probe.js `fetchDiscoveryForService`). The error probe is a POST because the probe is one:
+   lib/req2proto.js sends a deliberately malformed body and reads the `google.rpc.Status` rejection.
+   A function outlives the frame that made it (`probeApiEndpoint` and `discoverServiceInfo` call it once per
+   content type), so making one asserts the person's grade and carries the extension-document `sender` the operator tier
+   CHECKs. A caller with no person behind it uses `safeFetch` instead. A probe was composed, not observed, so
+   it states PAGE_CONTEXT_COMPOSED_INIT. */
+function makePageGetFn(tabId, documentId, initiator, sender) {
   pageContextRequireUserInitiated(initiator, "makePageGetFn (document " + documentId + ")");
-  return (url, headers) => pageContextGet(tabId, url, headers, documentId, initiator);
+  return (url, headers) => operatorSendAsFrame(sender, tabId, documentId, initiator, url,
+    { method: "GET", headers: headers || {}, body: null, bodyEncoding: null, requestInit: PAGE_CONTEXT_COMPOSED_INIT });
 }
 
-function makePageFetchFn(tabId, documentId, initiator) {
+function makePageFetchFn(tabId, documentId, initiator, sender) {
   pageContextRequireUserInitiated(initiator, "makePageFetchFn (document " + documentId + ")");
-  // A probe this fn sends was composed, not observed, so it states PAGE_CONTEXT_COMPOSED_INIT.
   return (url, opts) => {
-    DCHECK(!("requestInit" in opts), "a relay fn caller stated a requestInit; the fn states it for every probe");
-    return pageContextFetch(tabId, url, Object.assign({}, opts, { requestInit: PAGE_CONTEXT_COMPOSED_INIT }),
-                            documentId, initiator);
+    DCHECK(!("requestInit" in opts), "a probe fn caller stated a requestInit; the fn states it for every probe");
+    return operatorSendAsFrame(sender, tabId, documentId, initiator, url,
+                               Object.assign({}, opts, { requestInit: PAGE_CONTEXT_COMPOSED_INIT }));
   };
 }
 
@@ -2580,6 +2559,11 @@ async function buildExportRequest(msg) {
 }
 
 const EXTENSION_ORIGIN = `chrome-extension://${chrome.runtime.id}`;
+/* A real (non-opaque) extension document, by its browser-set `MessageSender.origin`: the router's gate for the
+   popup command surface, and safe-fetch.js's for an operator send. */
+function senderIsExtensionDocument(sender) {
+  return !!sender && sender.origin === EXTENSION_ORIGIN;
+}
 /* NO `CONTENT_PING`. The type was admitted here and handled above by appending {at, pageUrl} to a per-document
    array that NOTHING has ever read — and no content script has ever sent one, so it was a liveness channel
    with neither end. A document's liveness is answered by webNavigation.getAllFrames (GET_FRAMES), which is the
@@ -2628,7 +2612,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // mitigated. The popup itself already gates the reverse direction on sender.origin (popup.js); a
   // boundary checked on one side only is not a boundary.
   const fromExtUrl = !!(sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/"));   // SW OR extension document
-  const fromExtDocument = sender.origin === EXTENSION_ORIGIN;                            // a real (non-opaque) extension document
+  const fromExtDocument = senderIsExtensionDocument(sender);
 
   if (msg.__evt) {
     // The SW's own hop: it has no frame, so sender.origin is undefined and sender.url is the only

@@ -22,6 +22,7 @@ function speakAsOrigin(origin, method, mode, url, policy) {
 /* Fetch Metadata §2.3 "The Sec-Fetch-Site HTTP Request Header" over a one-URL url list: same-origin, else
    same-site, else cross-site, against the identity's origin. */
 function speakAsFetchSite(origin, url) {
+  if (origin === "null") return "cross-site";   // an opaque origin is same site with no URL's origin
   if (new URL(url).origin === origin) return "same-origin";
   return sameSite(origin + "/", url) ? "same-site" : "cross-site";
 }

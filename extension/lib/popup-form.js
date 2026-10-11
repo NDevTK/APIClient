@@ -1456,12 +1456,10 @@ function _pathSegEncode(s) {
    WHAT THIS DOES NOT DO IS DROP THE ESCAPE. `?`, `#`, SPACE, `\` and `%` are still encoded inside every
    piece, so a value cannot end the path, open a query or a fragment, or smuggle a special URL's separator;
    what it CAN now do is add segments, which is what a run IS. A scheme reaching the front of a relative
-   template is refused ON THIS PATH by lib/schema.js's `pageContextFetch`, which parses the address with no
-   base and answers `{error: "blocked: invalid protocol"}` for anything but http/https — named here rather
-   than lib/safe-fetch.js's `blocked-scheme:` because the Send button reaches the page-context relay
-   (popup.js -> sendRequest -> SEND_REQUEST -> lib/send.js `executeSendRequest` -> `pageContextSend`) and
-   never safeFetch, and a gate cited from the wrong chokepoint is a reader sent to a file this path does not
-   enter. Either way scheme policy lives at the chokepoint: this file holds no network policy
+   template is refused ON THIS PATH by lib/send.js's `executeSendRequest`, which parses the address with no
+   base and answers `{error: "blocked: invalid protocol"}` for anything but http/https before the request
+   reaches lib/safe-fetch.js's operator tier (popup.js -> sendRequest -> SEND_REQUEST -> `executeSendRequest`
+   -> `operatorSendAsFrame` -> `safeFetchOperator`), whose `blocked-scheme:` is the second gate. Either way scheme policy lives at the chokepoint: this file holds no network policy
    (§Architecture) and must not grow one to cover for an encoder.
    THE VALUE IS THE OPERATOR'S OWN TEXT, SO NOTHING HERE ASSERTS ANYTHING ABOUT IT: a DCHECK on a field the
    researcher typed is an abort switch handed to whoever is typing (§WHOSE-BYTES-STATE-THE-VALUE), so the
@@ -1509,7 +1507,7 @@ function applyPathParams(url, pathParams) {
    MUST BE THE SAME BYTES. This body stood TWICE inside `sendRequest`, character for character, in the
    GET/DELETE arm and in the form-body arm — two right answers to one question, which is the shape that
    drifts. A DISPLAY built beside them would have been a THIRD, and a third copy is worse than no display at
-   all: SECURITY.md scopes `pageContextFetch` out of the credentialed destructive-path deny list on the
+   all: SECURITY.md scopes the operator tier out of the credentialed destructive-path deny list on the
    ground that the request is "authorized by a human at a surface that shows them the bytes", so a surface
    showing an address the request does not carry does not weaken that authorization, it FORGES it.
    IT IS PURE AND IT WRITES NOTHING, and this clause used to give the wrong reason for that: it read
@@ -1769,7 +1767,7 @@ async function sendRequest() {
   /* THE ADDRESS IS COMPOSED ONCE, HERE, AND RENDERED FROM THE SAME CALL. `renderSendUrl` re-runs
      `sendPanelAddress` in this same synchronous turn over a DOM nothing between these two lines mutates, so
      the row the operator is looking at when this handler returns is the string this request carries — which
-     is the whole of what SECURITY.md's "a surface that shows them the bytes" buys the page-context relay.
+     is the whole of what SECURITY.md's "a surface that shows them the bytes" buys the operator tier.
      What this panel CANNOT know is stated at the row rather than omitted: lib/send.js re-parses this address
      and may add a `key` query parameter from a key store the popup cannot read. */
   let url = sendPanelAddress();

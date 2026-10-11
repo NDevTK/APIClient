@@ -57,7 +57,7 @@
 <script src="lib/openapi-export.js"></script>
 <!-- ERROR-BASED SCHEMA LEARNING: the payloads a Google API rejects, and the schema its rejection describes.
      It reads the `google.rpc.Status` envelope with lib/protobuf.js's codec (loaded above) and issues its
-     probes through the page-context relay its caller injects, so it is loaded before lib/discovery-probe.js,
+     probes through the operator send function its caller injects, so it is loaded before lib/discovery-probe.js,
      which is the caller. -->
 <script src="lib/req2proto.js"></script>
 <script src="lib/stats.js"></script>

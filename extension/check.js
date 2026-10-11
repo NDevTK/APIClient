@@ -14,7 +14,7 @@
 // checks itself against, and the CONTENT SCRIPT's isolated world gets it from manifest content_scripts, where
 // it is listed AHEAD of content.js —
 // content.js is a party to two seams (intercept.js's per-transport RESPONSE_BODY detail, and the trusted
-// zone's PAGE_FETCH / *_SEND_MSG relays) and had no way to state either contract before it was injected
+// zone's *_SEND_MSG orders) and had no way to state either contract before it was injected
 // there. A content script is UNTRUSTED (SECURITY.md) and that is not in tension with this: the assertions it
 // makes are about what the TRUSTED zone promised to send it, and an abort there costs one page's relay.
 //

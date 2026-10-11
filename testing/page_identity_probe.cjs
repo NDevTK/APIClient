@@ -11,6 +11,8 @@
 // captured; `off` is a fetch in the offscreen document; `dnr` is an offscreen fetch under a declarativeNetRequest
 // session rule installed by the service worker. A `dnr` row whose rule is scoped to another initiator, another
 // tab or another method is a negative control: it must arrive exactly as the rule-less `off` row does.
+// `send` is the Send panel's SEND_REQUEST from the popup document, and `zone` rows are the zone's own fetch
+// speaking as an identity through lib/request-identity.js and lib/speak-as.js.
 "use strict";
 const path = require("path");
 const http = require("http");
@@ -63,7 +65,10 @@ async function main() {
                                  "extension service worker")).worker();
   const off = await (await target(browser, (t) => t.url().startsWith("chrome-extension://" + extId +
                                   "/ast-worker.html"), "offscreen")).page();
-  const tabId = await sw.evaluate(async (a) => (await chrome.tabs.query({ url: a + "/*" }))[0].id, A);
+  // The probe page's own tab, by its exact URL: another tab on A would lend the sends a different frame.
+  const tabs = await sw.evaluate(async (a) => (await chrome.tabs.query({ url: a + "/page?x=secret" })).map((t) => t.id), A);
+  if (tabs.length !== 1) throw new Error("expected one tab on " + A + "/page?x=secret, found " + tabs.length);
+  const tabId = tabs[0];
   const route = await sw.evaluate(async (t) => ({ tabId: t,
     documentId: (await chrome.webNavigation.getFrame({ tabId: t, frameId: 0 })).documentId }), tabId);
   const popup = await browser.newPage();
@@ -89,14 +94,7 @@ async function main() {
     else if (how === "xhr") results[id] = await page.evaluate((u) => window.pageXhr(u, true), url);
     else if (how === "main") results[id] = await evalIn(mainCtx, fetchExpr(url, init));
     else if (how === "iso") results[id] = await evalIn(iso, fetchExpr(url, init));
-    // The relay as the trusted zone orders it: a PAGE_FETCH from the extension service worker to the
-    // document, carrying the request's own credentials, mode, referrer and referrer policy.
-    else if (how === "relay") results[id] = await sw.evaluate((rt, u, o) => chrome.tabs.sendMessage(rt.tabId,
-      { type: "PAGE_FETCH", url: u, method: o.method || "GET", headers: o.headers || {}, body: o.body || null,
-        bodyEncoding: null, requestInit: o.requestInit }, { documentId: rt.documentId })
-      .then((x) => (x === undefined ? { error: "no answer" } : x.error ? { error: x.error } : { status: x.status })),
-      route, url, init);
-    // The Send panel's command, from an extension page, through lib/send.js and lib/schema.js.
+    // The Send panel's command, from the popup document, through lib/send.js and safe-fetch.js's operator tier.
     else if (how === "send") results[id] = await popup.evaluate((rt, u, o) => chrome.runtime.sendMessage({
       type: "SEND_REQUEST", tabId: rt.tabId, documentId: rt.documentId, endpointKey: "", service: null,
       methodId: null, url: u, httpMethod: o.method || "GET", contentType: "", headers: o.headers || {},
@@ -138,12 +136,12 @@ async function main() {
     await fire("ref.cross.page", t, "page", { credentials: "include", referrer: "http://evil.example/x" });
     await fire("ref.nopol.page", t, "page", { credentials: "include", referrerPolicy: "no-referrer" });
   }
-  // The relay and the Send panel, each replaying the record of the page's own request it is scored against.
+  // The Send panel, replaying the record of the page's own request it is scored against.
   const ri = (credentials, extra) => ({ requestInit: Object.assign({ credentials, mode: "cors", referrer: null,
                                                                      referrerPolicy: null }, extra) });
   const riPost = (credentials) => Object.assign(ri(credentials), { method: "POST", body: "{}",
                                                 headers: { "Content-Type": "application/json", "X-Probe": "1" } });
-  for (const how of ["relay", "send"]) {
+  for (const how of ["send"]) {
     for (const t of ["A", "B", "C"]) {
       await fire(how + ".so", t, how, ri("same-origin"));
       await fire(how + ".inc", t, how, ri("include"));

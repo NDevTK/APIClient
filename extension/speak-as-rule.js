@@ -35,7 +35,7 @@ function _speakAsCondition(method, url) {
 async function speakAsInstall(o) {
   CHECK(typeof o.url === "string" && /^https?:/.test(o.url) && !o.url.includes("#"),
         "a speak-as rule names " + JSON.stringify(o.url) + ", which is not a fragment-less http(s) URL");
-  CHECK(typeof o.origin === "string" && new URL(o.origin).origin === o.origin,
+  CHECK(typeof o.origin === "string" && (o.origin === "null" || new URL(o.origin).origin === o.origin),
         "a speak-as rule names the identity origin " + JSON.stringify(o.origin) + ", which is not a serialized origin");
   const addRules = o.rules.map((r) => {
     CHECK(_speakAsInFamily(r.ruleId), "a speak-as rule id " + r.ruleId + " is outside the family");

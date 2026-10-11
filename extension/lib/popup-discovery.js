@@ -15,7 +15,7 @@
    fields, its canonical service/method and its scopes are read.
 
    EACH ACTION RUNS AS THE PAGE, so each needs a LIVE pinned document (currentDocumentId()): the offscreen
-   resolves `msg.documentId` to the DocData whose tabId routes the page-context relay, and refuses when there is
+   resolves `msg.documentId` to the DocData whose frame the operator send speaks as, and refuses when there is
    none. That refusal is stated in the panel rather than swallowed — a button that silently does nothing is the
    defect this file exists to end. */
 
@@ -134,7 +134,7 @@ function renderDiscoveryPanel() {
   const hint = (children) => domElement("div", { class: "hint" }, children);
   const disabled = docId ? {} : { disabled: "" };
 
-  /* WHY A BUTTON MAY BE OFF, SAID OUT LOUD. These requests are issued BY THE PAGE (the page-context relay), so
+  /* WHY A BUTTON MAY BE OFF, SAID OUT LOUD. These requests are issued AS THE PAGE (an operator send), so
      they need a live document to be issued from — the same pin the Send panel gates on. */
   if (!docId) {
     out.push(hint(["No live document is pinned. Every probe below is issued ", domElement("em", {}, ["as the page"]),
@@ -212,7 +212,7 @@ function renderDiscoveryPanel() {
    TWO OF THE FOUR SPELLINGS WERE MINTED BY PROBES THAT RAN WITH NO HUMAN WATCHING, AND THAT IS NO LONGER A
    THING THIS EXTENSION DOES. The paragraph here used to say the panel skipping those two was the defect — "a
    probe that fires on every page load and reaches no reader is worse off than one nobody triggers" — and the
-   renderers were added. The deeper answer arrived later: lib/schema.js's page-context relay is exempt from the
+   renderers were added. The deeper answer arrived later: the operator tier (`safeFetchOperator`) is exempt from the
    credentialed destructive-path deny list because a HUMAN composed what it carries, and a probe firing on
    every page load was that exemption covering an act nobody initiated. So `svcinfo:` has no writer in this
    tree at all (its producer is deleted, and the read below serves records already in a store), and `auto:` is

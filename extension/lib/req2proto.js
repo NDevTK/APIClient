@@ -531,23 +531,23 @@ function isBinaryContentType(ct) {
 // ─── Fetch Adapters ──────────────────────────────────────────────────────────
 
 // THERE IS NO DEFAULT FETCH. SECURITY.md, 'Network — one chokepoint': 'Every analyzer-driven request goes
-// through safeFetch (lib/safe-fetch.js); credentialed / page-context requests go through pageContextFetch
-// (as the actual page, browser-CORS/PNA-gated). There is no raw fetch on any analyzer path.'
+// through safeFetch (lib/safe-fetch.js); a person's act speaking as the page goes through safeFetchOperator.
+// There is no raw fetch on any analyzer path.'
 //
 // A `defaultFetchFn` living here WAS that raw fetch: an unconditional `fetch(url, opts)` in the TRUSTED
 // offscreen document, which holds <all_urls> host permissions — so it carried none of the chokepoint's
 // guarantees (no http(s)-only, no origin-relative SSRF classification, no GET forcing, no CORB) and it
 // issued the probe's POST bodies at whatever URL an error-probe target resolved to. Every real caller
-// already passes `fetchFn: makePageFetchFn(tabId, documentId, initiator)` (the pageContextFetch relay), so the only
+// already passes `fetchFn: makePageFetchFn(tabId, documentId, initiator, sender)` (an operator send), so the only
 // thing it ever did was stand ready to be selected by a caller that forgot — the shape of a legacy
 // fallback, whose whole failure mode is that it silently works.
 //
-// It is DELETED, and the absence CRASHES rather than degrading: a caller with no relay has no principal
+// It is DELETED, and the absence CRASHES rather than degrading: a caller with no send function has no principal
 // and no document to fetch as, which is not a request this zone may make on its own authority.
 function _requireFetchFn(fn, who) {
   CHECK(typeof fn === "function",
         "req2proto: " + who + " was called with no opts.fetchFn — every analyzer request goes through the " +
-        "pageContextFetch relay (or safeFetch); there is no raw-fetch path for one to fall back to");
+        "operator tier (or safeFetch); there is no raw-fetch path for one to fall back to");
   return fn;
 }
 
@@ -566,11 +566,11 @@ function _requireFetchFn(fn, who) {
 async function sendProbe(url, payload, contentType, headers, fetchFn) {
   const reqHeaders = { "Content-Type": contentType, ...headers };
 
-  // Binary protobuf payload: Uint8Array → base64 for message relay
+  // Binary protobuf payload: Uint8Array → base64, which the operator send decodes back to bytes
   const isBinary = payload instanceof Uint8Array;
   const body = isBinary ? uint8ToBase64(payload) : JSON.stringify(payload);
-  /* NULL, NOT `undefined` — the relay's own vocabulary. lib/schema.js's `_sendPageFetch` asserts this field is
-     either "base64" or null and content.js reads null as "the body is text"; `undefined` was a third spelling
+  /* NULL, NOT `undefined` — the send's own vocabulary. lib/send.js `operatorSendAsFrame` reads this field as
+     "base64" or null, null meaning "the body is text"; `undefined` was a third spelling
      that only ever survived because a `?? null` downstream translated it, and a translation is the thing that
      makes a producer which stopped writing the field indistinguishable from one that meant text. */
   const bodyEncoding = isBinary ? "base64" : null;
@@ -587,8 +587,8 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
       return { error: resp.error, fields: [], metadata: {} };
     }
 
-    /* `resp` IS THE PAGE-CONTEXT RELAY'S RECORD AND lib/schema.js HAS ALREADY PROVEN ITS SHAPE — see
-       `_checkPageFetchReply`, which asserts headers/body/status on every non-error answer. So the `?.` on
+    /* `resp` IS lib/send.js `operatorSendAsFrame`'s RECORD, which writes headers/body/status on every
+       non-error answer. So the `?.` on
        `headers` is gone: what is genuinely optional is a HEADER, which is a fact about the server this probe
        is here to learn, and `|| ""` on the key lookup is that fact read as one. */
     const respCt =
@@ -667,10 +667,10 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
       raw: jsonBody,
     };
   } catch (err) {
-    /* AN INVARIANT ABORT IS NOT A PROBE THAT FAILED. Everything inside this try runs through the relay —
-       `_requireFetchFn`'s CHECK, `pageContextFetch`'s method DCHECK, and the reply-record assert this file
+    /* AN INVARIANT ABORT IS NOT A PROBE THAT FAILED. Everything inside this try runs through the send —
+       `_requireFetchFn`'s CHECK, `operatorSendAsFrame`'s method DCHECK, and the reply-record assert this file
        now relies on — and each of those is a THROW on this side (extension/check.js). Without this line a
-       broken relay contract came back as `{ error: <the assert's own message> }`, which every caller reads as
+       broken send contract came back as `{ error: <the assert's own message> }`, which every caller reads as
        "the service refused the probe": the one reading in which nobody looks at this extension, and one that
        then propagates, because an error probe's whole output is a description of a service derived from what
        came back. Everything a real probe failure can be is still handled as this catch intends. */
@@ -694,7 +694,7 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
  * @param {object} headers - Auth headers (API key, Authorization — NOT Cookie/Origin/Referer)
  * @param {object} opts - { maxDepth: number, fetchFn: function }
  *   fetchFn: (url, {method, headers, body}) → Promise<{status, headers, body}>
- *   When provided, all HTTP requests go through this function (e.g. page-context relay).
+ *   When provided, all HTTP requests go through this function (e.g. an operator send as the page).
  * @returns {object} Probe result with discovered fields
  */
 async function probeApiEndpoint(url, headers = {}, opts = {}) {
@@ -975,7 +975,7 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
       // For binary protobuf, send minimal binary message instead of JSON
       const isBinaryCt = ct === "application/x-protobuf";
       const reqBody = isBinaryCt ? uint8ToBase64(new Uint8Array(0)) : "{}";
-      /* NULL, NOT `undefined` — see `sendProbe`: "base64" or null is the relay's whole vocabulary for this
+      /* NULL, NOT `undefined` — see `sendProbe`: "base64" or null is the send's whole vocabulary for this
          field, and a third spelling is one a downstream default has to translate. */
       const bodyEncoding = isBinaryCt ? "base64" : null;
 
@@ -1026,7 +1026,7 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
         }
       }
 
-      /* Same record, same proof — lib/schema.js's `_checkPageFetchReply`. The optional thing is the HEADER. */
+      /* Same record (`operatorSendAsFrame`'s). The optional thing is the HEADER. */
       const respCt =
         resp.headers["content-type"] || resp.headers["Content-Type"] || "";
 

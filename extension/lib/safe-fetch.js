@@ -435,7 +435,7 @@ function _pinnedOf(opts) {
    page's XHR states a list, so it cannot stand in for this row.
    It is a value typed at each asker and CHECKed here, never inferred from who the callers are, and an absent
    one aborts. The words are deliberately not `lib/schema.js`'s `PAGE_CONTEXT_*`, which answer human or tool
-   for the operator relay; a page's `fetch()` is neither. It is the one gating fact the untrusted zone cannot
+   for an operator send (`safeFetchOperator`); a page's `fetch()` is neither. It is the one gating fact the untrusted zone cannot
    reach, a literal in trusted-zone source, hence `certain`. A request this tool composed at a person's
    direction (`trusted.mjs`'s seed, `bridge.js`'s residue re-fetch) is still `tool`; its human authorization
    belongs on another axis. */
@@ -710,8 +710,8 @@ var _SIGNALS = [
   /* Intended invalidity: an intent the engine holds and cannot verify, with no population at this chokepoint.
      A probe built to fail validation is a POST with a body, and the closed option set has neither, so no
      caller can state such an intent; `unstated` is a structural fact, not a default. The population lives on
-     `pageContextFetch`, the operator relay, whose verb is stated at its own call site. The row starts gating
-     the day a verb and a body exist in `_SAFEFETCH_OPTIONS`; until then `_signalRegistryCheck` asserts it has
+     `safeFetchOperator`, whose verb is stated at its own call site and which has no firing decision. The
+     row starts gating the day a verb and a body exist in `_SAFEFETCH_OPTIONS`; until then `_signalRegistryCheck` asserts it has
      one value. */
   { name: "invalidity", gates: false, certainty: "intent", values: ["unstated"],
     of: function () { return "unstated"; } }
@@ -1353,9 +1353,9 @@ function _extractTokenList(headers, name) {
    provide for a cache, then return response" ends it and `Access-Control-Max-Age` is not read. */
 async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, identity, signal) {
   var unsafe = _corsUnsafeRequestHeaderNames(headerList);
-  var h = [["Accept", "*/*"], ["Access-Control-Request-Method", method]];
-  if (unsafe.length) h.push(["Access-Control-Request-Headers", unsafe.join(",")]);
-  var init = { method: "OPTIONS", headers: h, credentials: "omit", redirect: "manual" };
+  /* `Access-Control-Request-Method` and `-Headers` are forbidden request-headers (§2.2.2), which a script's
+     fetch cannot set; the OPTIONS rule speakAsPreflightHeaders composes (lib/speak-as.js) supplies both. */
+  var init = { method: "OPTIONS", headers: [["Accept", "*/*"]], credentials: "omit", redirect: "manual" };
   if (signal) init.signal = signal;
   var resp = await fetch(href, init);
   var headers = {};
@@ -1383,6 +1383,24 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
     if (headerNames.indexOf(unsafe[j]) < 0 && (credentialsMode === "include" || headerNames.indexOf("*") < 0))
       return "header-not-allowed:" + unsafe[j];
   return null;
+}
+/* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send` under
+   lib/speak-as.js's rules: one for its own method and, when `preflightNames` is a list, one for its OPTIONS
+   request. Its cookies are the identity's (cookieHeaderFor, which also sets `init.credentials`) only where
+   this zone is willing (`credentialed`); otherwise it carries none. A request with no identity runs `send`
+   as this extension. */
+async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, init, send) {
+  if (!identity) return send();
+  CHECK(typeof withSpeakAsRules === "function",
+        "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
+        "be dropped and the request would go out as this extension");
+  var facts = credentialed ? identity : Object.assign({}, identity, { credentials: "omit" });
+  var cookie = await cookieHeaderFor(facts, href);
+  init.credentials = cookie.wire;
+  var rules = [{ method: method, headers: speakAsHeaders(facts, method, mode, destination, href, cookie) }];
+  if (preflightNames !== null)
+    rules.push({ method: "OPTIONS", headers: speakAsPreflightHeaders(facts, method, destination, href, preflightNames) });
+  return withSpeakAsRules(identity.origin, href, rules, send);
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   /* CORB for a script-like load, over facts already computed, answering the rule that refused or null, so
@@ -1792,22 +1810,19 @@ async function safeFetch(url, opts) {
      "HTTP fetch" with makeCORSPreflight, and with no CORS-preflight cache §4.4 always runs §4.8 "CORS-preflight
      fetch" first. Its failure is a network error, and the request itself is never sent. The request's origin
      is `identity.origin`, the trusted zone's identity for this request, which must agree with `pageOrigin`. */
-  if (actor === "page" && mode === "cors" && !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin) &&
-      (opts.useCorsPreflight || !_corsSafelistedMethod(_method) ||
-       _corsUnsafeRequestHeaderNames(opts.headers || []).length > 0)) {
-    CHECK(opts.identity && typeof opts.identity === "object" && typeof opts.identity.origin === "string",
-          "safeFetch must CORS-preflight this request and was handed no request identity — Fetch §4.8's " +
-          "preflight carries the request's origin and is CORS-checked against it, and that origin is the " +
-          "trusted zone's `identityFor(request)`, which the caller passes as `opts.identity`");
-    CHECK(opts.identity.origin === (_isRealOrigin(_pageOrigin) ? _pageOrigin : "null"),
-          "the request identity's origin (" + opts.identity.origin + ") is not the page origin this zone " +
-          "judges the reply against (" + _pageOrigin + ") — two zone records of one request disagree, and the " +
-          "preflight and the reply would be CORS-checked as two different requesters");
-    var _pf = await _corsPreflight(parsed.href, _method, opts.headers || [], opts.credentials,
-                                   opts.useCorsPreflight, opts.identity, opts.signal);
-    if (_pf)
-      return _refused("network", "blocked-cors-preflight:" + _pf + ":" + parsed.origin, [parsed.href], {});
-  }
+  // A page's `cors` request carries a header list of pairs (asserted at the entry); no other request is preflighted.
+  var _unsafeNames = actor === "page" && mode === "cors" ? _corsUnsafeRequestHeaderNames(opts.headers || []) : [];
+  var _preflight = actor === "page" && mode === "cors" &&
+                   !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin) &&
+                   (opts.useCorsPreflight || !_corsSafelistedMethod(_method) || _unsafeNames.length > 0);
+  CHECK(!_preflight || (opts.identity && typeof opts.identity === "object" && typeof opts.identity.origin === "string"),
+        "safeFetch must CORS-preflight this request and was handed no request identity — Fetch §4.8's " +
+        "preflight carries the request's origin and is CORS-checked against it, and that origin is the " +
+        "trusted zone's `identityFor(request)`, which the caller passes as `opts.identity`");
+  CHECK(!opts.identity || opts.identity.origin === (_isRealOrigin(_pageOrigin) ? _pageOrigin : "null"),
+        "the request identity's origin (" + (opts.identity && opts.identity.origin) + ") is not the page origin " +
+        "this zone judges the reply against (" + _pageOrigin + ") — two zone records of one request disagree, " +
+        "and the preflight and the reply would be CORS-checked as two different requesters");
   var init = { method: _method, credentials: credentialed ? "include" : "omit", redirect: "follow" };
   /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
      for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
@@ -1815,7 +1830,20 @@ async function safeFetch(url, opts) {
      in credentialed mode, are the browser's own and are gated by the SOP/CORS check below. */
   if (opts.headers) init.headers = opts.headers;
   if (opts.signal) init.signal = opts.signal;
-  var resp = await fetch(parsed.href, init);
+  /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one unit. A request with an
+     identity speaks as it (`_speakAs`); its failure is a network error and the request is never sent. */
+  var _sent = await _speakAs(opts.identity, parsed.href, _method, mode, destination, credentialed,
+                             _preflight ? _unsafeNames : null, init, async function () {
+    if (_preflight) {
+      var _pf = await _corsPreflight(parsed.href, _method, opts.headers || [], opts.credentials,
+                                     opts.useCorsPreflight, opts.identity, opts.signal);
+      if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + parsed.origin,
+                                          [parsed.href], {}) };
+    }
+    return { resp: await fetch(parsed.href, init) };
+  });
+  if (_sent.refusal) return _sent.refusal;
+  var resp = _sent.resp;
   /* The URL the bytes came from, parsed once above every gate that judges it. Fetch §2.2.5 "Requests": "A
      request has an associated current URL. It is a pointer to the last URL in request's URL list", and §4.1
      "Main fetch" bases readability on that URL's origin, not on the address requested. With `redirect:
@@ -2021,6 +2049,89 @@ async function safeFetch(url, opts) {
            urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed,
            refusal: null, type: _type };
 }
+
+/* Fetch §2.2.2 "Headers": a forbidden request-header is one "forbidden so the user agent remains in full
+   control over them". A script's value for one is ignored, so a request this zone sends refuses it by name
+   rather than letting the person believe it was sent. Returns the refused name, or null. */
+var _FORBIDDEN_REQUEST_HEADER_NAMES = [
+  "accept-charset", "accept-encoding", "access-control-request-headers", "access-control-request-method",
+  "connection", "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host", "keep-alive", "origin",
+  "referer", "set-cookie", "te", "trailer", "transfer-encoding", "upgrade", "via",
+];
+var _METHOD_OVERRIDE_HEADER_NAMES = ["x-http-method", "x-http-method-override", "x-method-override"];
+function fetchForbiddenRequestHeader(pairs) {
+  for (var i = 0; i < pairs.length; i++) {
+    var lower = pairs[i][0].toLowerCase();
+    if (_FORBIDDEN_REQUEST_HEADER_NAMES.indexOf(lower) >= 0 || lower.startsWith("proxy-") || lower.startsWith("sec-"))
+      return pairs[i][0];
+    // "getting, decoding, and splitting" the value, then §2.2.1 "Methods"' forbidden methods.
+    if (_METHOD_OVERRIDE_HEADER_NAMES.indexOf(lower) >= 0 && pairs[i][1].split(",").some(function (m) {
+          return ["CONNECT", "TRACE", "TRACK"].indexOf(m.trim().toUpperCase()) >= 0; }))
+      return pairs[i][0];
+  }
+  return null;
+}
+
+/* The operator tier: a request the person composed in the popup, sent as the identity of a frame they
+   picked (`opts.identity`, identityFor's answer over lib/request-identity.js's frameIdentity). Any method and
+   a body. No firing decision and no destructive deny list: a person authorized these bytes at a surface that
+   showed them, and a token list there would veto their act. What a browser refuses still applies: the
+   scheme, credentials in the URL, a forbidden request-header, a same-origin-mode request to another origin,
+   and Fetch §4.8's preflight. The reply is returned whole, whether or not Fetch §4.10's CORS check would let
+   the frame's own script read it. */
+async function safeFetchOperator(url, opts) {
+  CHECK(typeof senderIsExtensionDocument === "function" && senderIsExtensionDocument(opts.sender),
+        "an operator send arrived from " + JSON.stringify(opts.sender && opts.sender.origin) + " — only an " +
+        "extension document (the router's own predicate) carries a person's act, and this tier spends the " +
+        "person's cookies with no deny list");
+  CHECK(!!opts.identity && typeof opts.identity.origin === "string",
+        "an operator send names no identity — it speaks as a frame the person picked, never as this extension");
+  CHECK(typeof opts.method === "string" && opts.method !== "" && Array.isArray(opts.headers) &&
+        (opts.body === null || typeof opts.body === "string" || opts.body instanceof Uint8Array) &&
+        ["cors", "no-cors", "same-origin"].indexOf(opts.mode) >= 0,
+        "an operator send is missing its method, header pairs, body statement or mode");
+  var parsed;
+  try { parsed = new URL(String(url)); } catch (e) { return _refused("network", "bad-url", [], {}); }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+    return _refused("network", "blocked-scheme:" + parsed.protocol, [parsed.href], {});
+  if (parsed.username !== "" || parsed.password !== "")
+    return _refused("network", "blocked-url-credentials", [parsed.href], {});
+  var forbidden = fetchForbiddenRequestHeader(opts.headers);
+  if (forbidden !== null)
+    return _refused("network", "forbidden-request-header:" + forbidden, [parsed.href], {});
+  var sameOrigin = parsed.origin === opts.identity.origin;
+  if (opts.mode === "same-origin" && !sameOrigin)
+    return _refused("network", "blocked-mode-same-origin:" + parsed.origin, [parsed.href], {});
+  var unsafe = _corsUnsafeRequestHeaderNames(opts.headers);
+  var preflight = opts.mode === "cors" && !sameOrigin && (!_corsSafelistedMethod(opts.method) || unsafe.length > 0);
+  var init = { method: opts.method, headers: opts.headers, redirect: "follow" };
+  if (opts.body !== null) init.body = opts.body;
+  var sent = await _speakAs(opts.identity, parsed.href, opts.method, opts.mode, "", true, preflight ? unsafe : null,
+                            init, async function () {
+    /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant abort
+       travels on. */
+    try {
+      if (preflight) {
+        var pf = await _corsPreflight(parsed.href, opts.method, opts.headers, opts.identity.credentials, false,
+                                      opts.identity, undefined);
+        if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + parsed.origin,
+                                           [parsed.href], {}) };
+      }
+      return { resp: await fetch(parsed.href, init) };
+    } catch (e) {
+      RETHROW_FATAL(e);
+      return { refusal: _refused("network", "network-error:" + ((e && e.message) || String(e)), [parsed.href], {}) };
+    }
+  });
+  if (sent.refusal) return sent.refusal;
+  var resp = sent.resp;
+  var headers = {};
+  resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
+  var body = new Uint8Array(await resp.arrayBuffer());
+  return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
+           urlList: _urlList(parsed.href, resp.url || parsed.href, resp.redirected), computedType: "",
+           refusal: null };
+}
 /* The chokepoint and the policy that decides whether it fires, installed together so no host holds half the
    contract. `engine/trusted.mjs` runs this file in a vm context and reads them off it; `ast-worker.html`
    loads it into the offscreen document before `bridge.js`.
@@ -2034,9 +2145,11 @@ async function safeFetch(url, opts) {
    not a fetch, in the reply record's refusal vocabulary. Every one resolves to `_firingRefusal`,
    `_signalVector` or a predicate they compare against, so none is a second policy.
    There is no exported destructive-path check: the deny list is a floor under requests this file composes
-   and fires on its own, and never overrules an operator's explicit act through the page-context relay. */
+   and fires on its own, and never overrules an operator's explicit act (`safeFetchOperator`). */
 if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
+  self.safeFetchOperator = safeFetchOperator;
+  self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchWiden = safeFetchWiden;
   self.safeFetchUnwiden = safeFetchUnwiden;

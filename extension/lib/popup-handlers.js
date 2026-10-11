@@ -104,10 +104,10 @@ async function handlePopupMessage(msg, sender, sendResponse) {
        backend with no caller is a UI gap, and deleting the backend closes the gap by removing the capability.
        The backends are lib/req2proto.js (`probeEndpoint`, `discoverServiceInfo`) and lib/discovery-probe.js
        (`fetchDiscoveryForService`).
-       AND THIS IS WHERE THAT "USER ACTION" STOPS BEING A DESCRIPTION AND BECOMES A VALUE. All three reach the
-       page-context relay, which issues the request AS THE PAGE with the person's own cookies and is scoped out
-       of the credentialed destructive-path deny list on the ground that a human composed what it carries —
-       so the grade is stated HERE, at the door the human's message arrives at, and carried down. What proves
+       So "user action" is a VALUE here: all three are operator sends (`safeFetchOperator`), which speak AS
+       THE PAGE with the person's cookies and no destructive-path deny list because a human composed what they
+       carry — so the grade and the browser-set `sender` are stated HERE, where the human's message arrives, and
+       carried down. What proves
        it for each of the three is one line of popup code: lib/popup-discovery.js's `initDiscoveryPanel`
        registers a `click` listener on the panel body and `_discAction` is the only site that posts any of
        these three types, so a message of one of these types exists only because a button was pressed. Nothing
@@ -124,7 +124,7 @@ async function handlePopupMessage(msg, sender, sendResponse) {
     case "PROBE_ENDPOINT": {
       const _pdoc = _docFromMsg(msg);
       if (!_pdoc) { sendResponse(null); return; }
-      probeEndpoint(_pdoc.documentId, msg.endpointKey, PAGE_CONTEXT_USER_INITIATED).then((result) => {
+      probeEndpoint(_pdoc.documentId, msg.endpointKey, PAGE_CONTEXT_USER_INITIATED, sender).then((result) => {
         sendResponse(result);
       });
       return true;
@@ -171,7 +171,7 @@ async function handlePopupMessage(msg, sender, sendResponse) {
         if (_kEntry.source === "url") discoverUrl.searchParams.set("key", _k);
         else if (_kEntry.source.startsWith("header:")) headers[_kEntry.source.slice("header:".length)] = _k;
       }
-      const fetchFn = makePageFetchFn(tab.tabId, tab.documentId, PAGE_CONTEXT_USER_INITIATED);
+      const fetchFn = makePageFetchFn(tab.tabId, tab.documentId, PAGE_CONTEXT_USER_INITIATED, sender);
       discoverServiceInfo(discoverUrl.toString(), headers, { fetchFn }).then(
         (result) => {
           tab.probeResults.set(`svc:${msg.endpointKey}`, result);
@@ -216,10 +216,10 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       if (msg.apiKey && !apiKeys.includes(msg.apiKey)) apiKeys.push(msg.apiKey);
       /* NO SEED AND NO SEED METHOD — this command names a service, and the seed that named it is already on
          the stored record (lib/discovery-probe.js reads `currentStatus?.seedUrl` for exactly this caller). The
-         GRADE is what this call adds: it is the button's, so the candidate GETs go through the page-context
-         relay as the page, and the error-probe tail is permitted to fire. */
+         GRADE is what this call adds: it is the button's, so the candidate GETs are operator sends as the
+         page, and the error-probe tail is permitted to fire. */
       fetchDiscoveryForService(tab.documentId, msg.service, hostname, apiKeys, undefined, undefined,
-                               PAGE_CONTEXT_USER_INITIATED).then(
+                               PAGE_CONTEXT_USER_INITIATED, sender).then(
         () => {
           sendResponse(serializeTabData(tab));
         },
@@ -510,7 +510,7 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       _checkSendPanelRequest(msg, "SEND_REQUEST");
       const _srdoc = _docFromMsg(msg);
       if (!_srdoc) { sendResponse({ error: "no document for request" }); return; }
-      executeSendRequest(_srdoc.documentId, msg).then((result) => {
+      executeSendRequest(_srdoc.documentId, msg, sender).then((result) => {
         sendResponse(result);
       });
       return true;

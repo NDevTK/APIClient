@@ -436,7 +436,7 @@ function renderServiceOriginHint() {
 
 /* THE SURFACE SECURITY.md'S EXEMPTION IS NAMED AFTER, WHICH DID NOT EXIST.
  *
- * `pageContextFetch` is scoped OUT of the credentialed destructive-path deny list, and lib/schema.js states
+ * The operator tier is scoped OUT of the credentialed destructive-path deny list, and lib/schema.js states
  * the one ground for it in SECURITY.md's own words: a path answering the operator "is authorized by a human
  * at a surface that shows them the bytes". The Send panel was that surface and it rendered the endpoint
  * dropdown, the verb, the headers and the body — and never the ADDRESS. `currentRequestUrl` had no reader
@@ -528,11 +528,13 @@ function renderSendUrl() {
   var init = sendPanelRequestInit();
   var stated = function (v, unstated) { return v === null ? unstated : v; };
   row.appendChild(domElement("div", { class: "send-url-note" }, [
-    "Sent as the page with mode " + stated(init.mode, "not stated") + ", referrer " +
+    "Sent from this extension as the frame the request was observed in — its Origin, its Referer and its " +
+    "cookies — with mode " + stated(init.mode, "not stated") + ", referrer " +
     stated(init.referrer === "about:client" ? "the page's URL" : init.referrer === "" ? "none" : init.referrer,
            "not stated") + ", referrer policy " +
     stated(init.referrerPolicy === "" ? "the document's" : init.referrerPolicy, "not stated") +
-    ". What is not stated is fetch's default; the browser sets Cookie, Origin and Referer itself."]));
+    ". What is not stated is fetch's default (an unstated policy is strict-origin-when-cross-origin). " +
+    "Cookie, Origin and Referer cannot be typed as headers: the browser owns them."]));
   row.appendChild(domElement("div", { class: "send-url-note" }, [
     "Not decided here: an API key whose learned location is the URL is attached downstream as a `key` " +
     "query parameter, from a key store this panel cannot read — whether that happens to this request is " +

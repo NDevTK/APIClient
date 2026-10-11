@@ -1,7 +1,8 @@
 // lib/send.js — Send-panel replay backend: resolve an endpoint's request schema, coerce the form field values
-// to their declared types, and EXECUTE the request in the target page's context (PAGE_FETCH relay -- cookies +
-// session state attached). Extracted from the offscreen-brain.js monolith (one problem per file); loaded before
-// it, resolves the encode fns (lib/encode.js) + pageContextSend at call-time. The manual testing workbench.
+// to their declared types, and SEND the request from this zone as the frame it was observed in
+// (`operatorSendAsFrame`: the frame's Origin, Referer and cookies, through lib/safe-fetch.js's operator tier).
+// Extracted from the offscreen-brain.js monolith (one problem per file); loaded before it, resolves the encode
+// fns (lib/encode.js) at call-time. The manual testing workbench.
 
 /* A PROBE FIELD IS A DIFFERENT RECORD FROM A FieldDef, AND IT IS TRANSLATED RATHER THAN SPREAD. lib/
    req2proto.js composes it by reading a `google.rpc.Status` the SERVER wrote, and it carries names the Send
@@ -791,11 +792,54 @@ function _checkSendPanelRequest(msg, command) {
          "members (null where unstated) on every send, and without them nobody chose the credentials mode");
 }
 
+/* A body is bytes when its type is a binary wire format; JSPB (json+protobuf) is text. */
+function _isBinaryContentType(ct) {
+  const lower = ct.toLowerCase();
+  if (lower.includes("json")) return false;
+  return lower.includes("proto") || lower.includes("grpc") || lower.includes("octet-stream") ||
+         lower.startsWith("image/") || lower.startsWith("video/") || lower.startsWith("audio/") ||
+         lower.includes("application/pdf") || lower.includes("application/zip");
+}
+
+/* An operator send: a request the person composed, sent from this zone as the frame `documentId` names
+   (lib/request-identity.js's frameIdentity, browser-stamped), through safe-fetch.js's operator tier, which
+   CHECKs that `sender` is an extension document. `opts` is {method, headers (a map), body (string or null),
+   bodyEncoding (null or "base64"), requestInit}. Answers {error} or {ok, status, statusText, headers, body,
+   bodyEncoding?}, where `body` is text or, for a binary type, base64.
+   Not covered: the frame's own referrer policy is not observable from this zone, so a request that states
+   none uses Referrer Policy §3's default. The next diff reads the policy the engine parsed when it loaded
+   that document. Its absence shows as a Referer differing from the frame's own for a page that sets a policy. */
+async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, opts) {
+  pageContextRequireUserInitiated(initiator, "operatorSendAsFrame (document " + documentId + ")");
+  DCHECK(!!opts && typeof opts.method === "string" && opts.method !== "" && !!opts.headers &&
+         (opts.body === null || typeof opts.body === "string") && !!opts.requestInit,
+         "an operator send named no method, header map, body statement or requestInit");
+  if (!URL.canParse(url)) return { error: "blocked: invalid URL" };
+  const identity = await frameIdentity(tabId, documentId);
+  if (identity === null) return { error: "the frame this request speaks as is gone (document " + documentId + ")" };
+  const facts = identityFor(identity, { url, requestInit: opts.requestInit }, "strict-origin-when-cross-origin");
+  const mode = opts.requestInit.mode === null ? "cors" : opts.requestInit.mode;
+  const body = opts.body === null ? null : opts.bodyEncoding === "base64" ? base64ToUint8(opts.body) : opts.body;
+  const r = await safeFetchOperator(url, { sender, identity: facts, method: opts.method, mode, body,
+                                          headers: Object.keys(opts.headers).map((k) => [k, String(opts.headers[k])]) });
+  if (r.refusal && r.refusal.reason.startsWith("forbidden-request-header:"))
+    return { error: "refused: `" + r.refusal.reason.slice("forbidden-request-header:".length) + "` is a " +
+                    "forbidden request-header (Fetch §2.2.2 Headers) — the browser sets it itself, so remove it " +
+                    "from the request" };
+  if (r.refusal) return { error: r.refusal.kind + ": " + r.refusal.reason };
+  const ct = r.headers["content-type"] || "";
+  if (_isBinaryContentType(ct))
+    return { ok: r.ok, status: r.status, statusText: r.statusText, headers: r.headers,
+             body: uint8ToBase64(r.body), bodyEncoding: "base64" };
+  return { ok: r.ok, status: r.status, statusText: r.statusText, headers: r.headers,
+           body: new TextDecoder().decode(r.body) };
+}
+
 /**
  * Execute a request from the Send panel.
- * Encodes form data, sends via pageContextSend, decodes response.
+ * Encodes form data, sends it as the observed frame (`operatorSendAsFrame`), decodes the response.
  */
-async function executeSendRequest(documentId, msg) {
+async function executeSendRequest(documentId, msg, sender) {
   const startTime = Date.now();
   const service = msg.service;
   const methodId = msg.methodId;
@@ -828,7 +872,7 @@ async function executeSendRequest(documentId, msg) {
   // lib/merge.js, its only producer, writes none, so the lookup that stood here was fetching a record to
   // read two fields off it that do not exist.)
   const tab = _docForLearning(documentId);
-  const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // Chrome routing for pageContextSend — the doc's tab; fall back to msg.tabId for cross-tab replay
+  const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // the frame's tab, for frameIdentity; msg.tabId for a cross-tab replay
   let apiKey = null;
   let apiKeySource = "header";
 
@@ -993,58 +1037,28 @@ async function executeSendRequest(documentId, msg) {
     headers["Content-Type"] = "application/json";
   }
 
-  // Send request via page context (session-aware)
+  /* The Send panel's act: `extension/popup.js` binds `sendRequest` to the `btn-send` click, and the address,
+     verb, headers and body came out of controls that person filled in and can see. It speaks as the frame the
+     request was observed in, with the requestInit the panel states. A network error is an answer the person
+     is shown; an invariant abort is not one. */
   let resp;
   try {
-    resp = await pageContextSend(
-      tabId,
-      url,
-      {
-        method: msg.httpMethod,
-        headers,
-        body,
-        bodyEncoding,
-        requestInit: msg.requestInit,
-      },
-      documentId,
-      /* THE GRADE, AND THIS IS THE CALL IT WAS WRITTEN FOR. lib/schema.js's page-context relay is scoped out
-         of the credentialed destructive-path deny list because a human composed what it carries, and the Send
-         panel is that claim in its strongest form: `extension/popup.js` binds `sendRequest` to the `btn-send`
-         click, and every field of this request — the address, the verb, the headers and the body — came out of
-         controls that person filled in and can see. This is the one path where a token list refusing on a
-         substring would be the tool vetoing its operator. */
-      PAGE_CONTEXT_USER_INITIATED,
-    );
+    resp = await operatorSendAsFrame(sender, tabId, documentId, PAGE_CONTEXT_USER_INITIATED, url,
+                                     { method: msg.httpMethod, headers, body, bodyEncoding,
+                                       requestInit: msg.requestInit });
   } catch (err) {
-    /* AN INVARIANT ABORT IS NOT A FAILED REQUEST. `pageContextSend` and the `pageContextFetch` under it each
-       DCHECK that the caller named an HTTP method, and a DCHECK is a throw on this side (extension/check.js);
-       without this line a broken relay contract would be reported to the reviewer as `fetch_exception`, i.e.
-       as the server or the network having refused — the one reading in which the user has no reason to look
-       at this extension. Everything else a relay throw can be is still handled as the catch intends. */
     RETHROW_FATAL(err);
     return { error: `fetch_exception: ${err.message}`, timing: Date.now() - startTime };
   }
 
   const timing = Date.now() - startTime;
-
-  /* THE RELAY ALWAYS ANSWERS WITH AN OBJECT. lib/schema.js's `pageContextFetch` returns {error} for a bad
-     URL, {error} for an unreachable content script, and the content script's own reply otherwise — there is
-     no arm on which it resolves undefined. `resp?.error || "fetch_failed: no response"` therefore carried a
-     third case that cannot happen, and a `?.` over a guaranteed object is how a relay that started
-     answering nothing would be reported as a request that simply failed. */
-  DCHECK(resp && typeof resp === "object",
-         "the page-context relay resolved without a response object — lib/schema.js's pageContextFetch " +
-         "answers {error} on every failure arm, so an absent object is that relay broken rather than a " +
-         "request the page refused");
   if (resp.error) {
     return { error: resp.error, timing };
   }
 
-  /* EVERY FIELD READ BELOW IS ONE lib/schema.js's `_checkPageFetchReply` HAS ALREADY PROVEN EXISTS, which is
-     why none of them is read through a default any more. `resp.headers` is an object, so the `?.` is gone; the
-     KEY lookup keeps its `|| ""` because a response legitimately carries no content-type and "" is what the
-     sniffs below are written against — an absent HEADER is a fact about the server, an absent `headers` was a
-     fact about this extension, and only the second was ever being concealed. */
+  /* `operatorSendAsFrame` writes every field below on its success arm. The content-type lookup keeps its
+     `|| ""` because a response legitimately carries none, and "" is what the sniffs below are written
+     against. */
   const respCt = resp.headers["content-type"] || "";
   let bodyResult;
 

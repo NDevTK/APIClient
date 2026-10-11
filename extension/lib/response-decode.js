@@ -701,7 +701,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
   /* THE PROTOBUF PROBING TRIGGER IS DELETED, AND WHAT IT DID IS WORTH STATING SO THE NEXT READER DOES NOT
      REBUILD IT. It fired `performProbeAndPatch` — a POST of a deliberately-malformed body through the
-     page-context relay, so with the person's own session attached — the instant a captured response body
+     page itself, so with the person's own session attached — the instant a captured response body
      looked like protobuf and the discovery document did not already describe the method. Nobody had pressed
      anything: `handleResponseBody` runs on traffic the page made, and the probe is a request THIS TOOL
      composed at somebody else's server on the strength of that traffic arriving.
@@ -826,13 +826,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
          had only GET'd. `_seedIsProbeable` aborts on the absence rather than guessing.
          AND THE GRADE TRAVELS THE SAME WAY, FOR THE SAME REASON. This frame is the only one that knows nobody
          asked for this: it runs on a response body arriving. Stating `PAGE_CONTEXT_TOOL_INITIATED` here sends
-         the candidate GETs through `safeFetch` instead of the page-context relay — uncredentialed, so this
+         the candidate GETs through `safeFetch` instead of the operator tier — uncredentialed, so this
          sweep sees only what a logged-out client sees — and stops the sweep's own POST error-probe tail from
-         firing at all. Both are behaviour changes and both are the point: this call used to reach the relay,
-         whose exemption from the credentialed destructive-path deny list is scoped to acts a human initiated,
-         and no human initiates this one. */
+         firing at all. The operator tier's exemption from the destructive-path deny list is scoped to acts a
+         human initiated, and no human initiates this one, so it states no popup sender. */
       fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url, msg.method,
-                               PAGE_CONTEXT_TOOL_INITIATED);
+                               PAGE_CONTEXT_TOOL_INITIATED, null);
     }
   }
 
@@ -841,7 +840,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      thing that made it wrong and read it as a feature: "This is the automatic form of the DISCOVER_SERVICE
      message (which is a user action over one endpoint, not a background step)." DISCOVER_SERVICE is a user
      action; an automatic form of a user action is not that action, it is the tool performing it without being
-     asked — and the transport both used, the page-context relay, is scoped out of the credentialed
+     asked — and the transport both used, a send as the page, is scoped out of the credentialed
      destructive-path deny list precisely BECAUSE a human composed what it carries.
      WHAT IT DID: for every captured POST that was not a boring asset fetch, it sent `discoverServiceInfo` —
      THREE malformed POSTs, one per content type — at the request's own URL with the person's session

@@ -2,8 +2,8 @@
 // nothing else. A seed is an address, never bytes: this zone ships no document body, no response headers and
 // no identity, because the custom browser LOADS the suggested address itself through the one network
 // chokepoint (lib/safe-fetch.js), where the scheme allowlist, the origin-relative SSRF/PNA guard, CORB and the
-// destructive-path deny list live. Also relays raw network response bodies from intercept.js (RESPONSE_BODY),
-// acts as a fetch relay for the trusted zone, and collects form metadata for the form-submission pipeline.
+// destructive-path deny list live. Also relays raw network response bodies from intercept.js (RESPONSE_BODY)
+// and collects form metadata for the form-submission pipeline.
 // Does NOT ship script sources or run any regex / heuristic pre-scan: HTML parsing is Lexbor's job in the
 // worker, and the document's scripts are run by QuickJS (qjs_run_doc_scripts)
 // under forced execution — endpoint/API-key discovery is real fetch/XHR
@@ -279,8 +279,8 @@
        a cycle      -> the call REJECTS, "Could not serialize message."
      Real structured clone does none of that: in that same document `structuredClone` answers a Map for a Map
      and a Uint8Array for a Uint8Array, and THROWS DataCloneError on a function. Two mechanisms, and this file
-     is talking to the other one. A CALLER WITH BYTES ENCODES THEM — `uint8ToBase64` below is this zone's
-     answer and is why it exists; base64 costs 1.33x where the numeric-key object form costs 13x.
+     is talking to the other one. A CALLER WITH BYTES ENCODES THEM — intercept.js's `uint8ToBase64` is this
+     side's answer; base64 costs 1.33x where the numeric-key object form costs 13x.
      THE 64 MiB CAP NAMED BELOW IS NOT PART OF THAT MEASUREMENT and stands exactly as this file stated it: a
      4,096,000-byte typed array did arrive, which is consistent with the figure and establishes nothing about
      it. Re-derive the table with `node testing/harness.js offscreen`/`popup` against a listener that replies
@@ -364,130 +364,11 @@
     chrome.runtime.sendMessage({ type: "CONTENT_SEED", seedUrl: seedUrl });
   }
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
-
-  function isBinaryContentType(ct) {
-    if (!ct) return false;
-    const lower = ct.toLowerCase();
-    // JSPB (json+protobuf) is NOT binary wire format
-    if (lower.includes("json")) return false;
-    return (
-      lower.includes("protobuf") ||
-      lower.includes("proto") ||
-      lower.includes("grpc") ||
-      lower.includes("octet-stream") ||
-      lower.startsWith("image/") ||
-      lower.startsWith("video/") ||
-      lower.startsWith("audio/") ||
-      lower.includes("application/pdf") ||
-      lower.includes("application/zip")
-    );
-  }
-
-  function uint8ToBase64(bytes) {
-    let bin = "";
-    for (let i = 0; i < bytes.length; i += 8192) {
-      const chunk = bytes.subarray(i, Math.min(i + 8192, bytes.length));
-      bin += String.fromCharCode.apply(null, chunk);
-    }
-    return btoa(bin);
-  }
-
-  function base64ToUint8(b64) {
-    const bin = atob(b64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  }
-
-  // ─── Fetch relay: background → content script → response ──────────────────
-
-  async function handlePageFetch(msg) {
-    /* WHAT THE TRUSTED ZONE PROMISED TO SEND, ASSERTED WHERE IT ARRIVES. lib/schema.js's `_sendPageFetch`
-       composes this message in ONE object literal and writes url/method/headers/body/bodyEncoding on every
-       one it sends — `pageContextFetch` above it DCHECKs the method is a non-empty string before that literal
-       is even built — so `msg.headers || {}` and `msg.method || "GET"` were a SECOND layer of the producer's
-       own defaults, and what a second layer buys is that a producer which stops writing a field is answered
-       here with a plausible request instead of a crash. The verb is the half that matters: a relay that
-       silently sends GET for a message whose method went missing performs a DIFFERENT REQUEST than the
-       caller asked for, against a page's real credentials, and reports it as that caller's answer. */
-    DCHECK(!!msg && typeof msg.url === "string" && msg.url !== "",
-           "a PAGE_FETCH reached the page-context relay with no url — lib/schema.js writes one on every " +
-           "message it sends, so an absent one is that composition broken and this relay is about to fetch " +
-           "the string \"undefined\" against the page's own credentials");
-    DCHECK(typeof msg.method === "string" && msg.method !== "",
-           "a PAGE_FETCH reached the page-context relay with no method — pageContextFetch asserts one before " +
-           "the message is built, and defaulting to GET here would run a different request than the caller " +
-           "named and answer them with its result");
-    DCHECK(msg.headers && typeof msg.headers === "object",
-           "a PAGE_FETCH reached the page-context relay with no headers object — lib/schema.js writes one " +
-           "(possibly empty) on every message, and an absent one is a header list the caller composed and " +
-           "this relay silently dropped");
-    DCHECK(!!msg.requestInit && typeof msg.requestInit === "object",
-           "a PAGE_FETCH reached the page-context relay with no requestInit — lib/schema.js writes one on " +
-           "every message, and an absent one is a request whose credentials mode nobody stated");
-    /* A null member is one the observed request did not supply; it is left out so fetch applies its own
-       default (Fetch §5.4 "Request class"). Fetch's forbidden request-headers are refused by
-       pageContextFetch before the message is built, so the header list needs no filtering here. */
-    const opts = { method: msg.method, headers: msg.headers };
-    for (const k of ["credentials", "mode", "referrer", "referrerPolicy"]) {
-      DCHECK(msg.requestInit[k] === null || typeof msg.requestInit[k] === "string",
-             "a PAGE_FETCH requestInit names " + k + " as neither a string nor null");
-      if (msg.requestInit[k] !== null) opts[k] = msg.requestInit[k];
-    }
-
-    if (msg.body != null) {
-      opts.body =
-        msg.bodyEncoding === "base64" ? base64ToUint8(msg.body) : msg.body;
-    }
-
-    try {
-      const resp = await fetch(msg.url, opts);
-      const respHeaders = {};
-      resp.headers.forEach((v, k) => {
-        respHeaders[k] = v;
-      });
-      const ct = resp.headers.get("content-type") || "";
-
-      if (isBinaryContentType(ct)) {
-        const buf = await resp.arrayBuffer();
-        return {
-          ok: resp.ok,
-          status: resp.status,
-          statusText: resp.statusText,
-          headers: respHeaders,
-          body: uint8ToBase64(new Uint8Array(buf)),
-          bodyEncoding: "base64",
-        };
-      }
-
-      const body = await resp.text();
-      return {
-        ok: resp.ok,
-        status: resp.status,
-        statusText: resp.statusText,
-        headers: respHeaders,
-        body,
-      };
-    } catch (err) {
-      return { error: err.message };
-    }
-  }
-
-  /* Listen for messages from the background service worker.
-     THREAT MODEL: this content script runs in the web page's renderer process, so the set it accepts IS its
-     attack surface — it never reads storage and never handles a data-returning message type. See SECURITY.md.
-     THE SET IS THE ARMS BELOW AND THIS LINE USED TO BE A SUMMARY OF IT: "it only accepts PING and PAGE_FETCH".
-     That was wrong in BOTH directions at once, which is why it is now an enumeration a reader can check
-     against the code beneath it rather than a sentence they have to trust. It NAMED a type nothing sends, and
-     it OMITTED FOUR the listener handles — RESHIP and the three per-transport relays — so anybody auditing
-     what an untrusted renderer's script accepts read a surface of two where there were six. An under-claim is
-     not discovered by acting on it: acting on it means not looking at the four it left out.
-     `PING` IS DELETED RATHER THAN LISTED. It answered `{ok:true}` to a liveness probe no part of this product
-     sends: the string occurs nowhere else in the extension, in the engine drivers or in testing/, so the arm
-     could not run, and an arm that cannot run is untested code rather than working code — reviving it later
-     is a behaviour change owed the same reading as writing it, and until then it is surface for nothing.
-     RESHIP, PAGE_FETCH, WS_SEND_MSG, PM_SEND_MSG and MC_SEND_MSG remain, and each has a sender in this tree. */
+  /* Orders from the trusted zone. This content script runs in the web page's renderer process, so the set it
+     accepts is its attack surface: it never reads storage and handles no data-returning message type (see
+     SECURITY.md). The set is RESHIP, WS_SEND_MSG, PM_SEND_MSG and MC_SEND_MSG; each has a sender in this
+     tree. It sends no request for the trusted zone: every external request leaves from the offscreen
+     document (lib/safe-fetch.js). */
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     /* Every arm is an order from the trusted zone, so the browser-stamped sender must be this extension's
        own origin and no tab: a message from a content script carries `sender.tab`. */
@@ -503,10 +384,6 @@
       _sendPageSeed();
       sendResponse({ ok: true });
       return;
-    }
-    if (msg.type === "PAGE_FETCH") {
-      handlePageFetch(msg).then(sendResponse);
-      return true;
     }
     if (msg.type === "WS_SEND_MSG") {
       /* `binary` DECIDES HOW THE MAIN WORLD READS `data` — intercept.js base64-decodes it when the flag is
