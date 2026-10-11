@@ -1271,16 +1271,23 @@ int rendering_run_opportunity(JSContext *ctx)
     JS_FreeValue(ctx, next);
     JS_FreeValue(ctx, now);
 
-    /* STEP 3: "queue a global task on the rendering task source given that navigable's active window to update
-       the rendering". The task is given the TOP-LEVEL TRAVERSABLE's window, which is whose driver runs the
-       algorithm; the algorithm's own per-document steps then run in each document's realm. */
+    /* STEP 3: "For each navigable that has a rendering opportunity, queue a global task on the rendering task
+       source given navigable's active window to update the rendering". The navigables are those "whose active
+       document's relevant agent's event loop is eventLoop" (step 1), so the task is given the window of the
+       FIRST navigable of this agent's walk (core/frame/navigable.h's navigable_tree_order): the top-level
+       traversable when this agent holds it, and otherwise the root this instance holds under a peer's
+       navigable. One task covers them all, since the algorithm's own steps iterate every document of the
+       event loop in its realm; the spec's note calls the other tasks redundant. */
     {
-        JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
-        DCHECK(window_proxy_materialized(top),
-               "the top-level traversable is not materialized — this document is IN it, so it is the one "
-               "navigable that cannot be deferred");
-        topctx = window_proxy_realm(ctx, top);
-        JS_FreeValue(ctx, top);
+        JSValue all = navigable_tree_order(ctx);
+        JSValue first = JS_GetPropertyUint32(ctx, all, 0);
+
+        DCHECK(window_proxy_is(first) && window_proxy_materialized(first),
+               "this agent's navigable walk listed no navigable whose document it holds — the document asking "
+               "for a rendering opportunity is one, so the walk and the asking realm have come apart");
+        topctx = window_proxy_realm(ctx, first);
+        JS_FreeValue(ctx, first);
+        JS_FreeValue(ctx, all);
     }
     driver = realm_value_get(topctx, g_driver_slot);
     DCHECK(JS_IsFunction(topctx, driver),
