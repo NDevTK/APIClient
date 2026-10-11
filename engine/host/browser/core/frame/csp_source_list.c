@@ -736,7 +736,9 @@ static CspMatch csp_host_part_match(CspToken pattern, const UrlHost *host)
     size_t i;
 
     /* STEP 1, and it is the whole reason an IP address is unspellable as a host-part: "if host is not a
-       domain, return Does Not Match". §4.2's five kinds and only one of them is a domain. */
+       domain, return Does Not Match". §4.2's five kinds and only one of them is a domain.
+       Known interop divergence, kept to the step: Chrome matches an IP-literal host-part against an equal IP
+       host, so `connect-src http://127.0.0.1:8080` allows a request there in Chrome and blocks it here. */
     if (host->kind != URL_HOST_DOMAIN)
         return CSP_DOES_NOT_MATCH;
     DCHECK(host->domain != NULL, "§4.2's DOMAIN host carries no bytes — a record the host parser produced "
