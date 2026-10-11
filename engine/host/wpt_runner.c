@@ -1625,6 +1625,7 @@ static int wpt_issue_pending(void)
 typedef struct { char *name; char *origin; int to, from; pid_t pid; int at_rest; } ChildDoc;
 static ChildDoc g_children[WPT_CHILD_MAX];
 static int g_children_n;
+static int wpt_child_marker(const ChildDoc *c, const char *line);
 static const char *g_self_exe;   /* argv[0], which is what a child navigable is re-executed from */
 
 static ChildDoc *wpt_child_for(const char *name)
@@ -1813,8 +1814,20 @@ static const char *wpt_child_ask(ChildDoc *c, const char *op)
         }
         /* The end of the child's boot round, if this ask was written before it rested. */
         if (!strcmp(buf, "S")) { c->at_rest = 1; continue; }
+        if (wpt_child_marker(c, buf)) continue;
         return buf;
     }
+}
+
+/* A line of the engine's own census and denomination stream (`@QUANTUM`, `@SWAP`, … — solver/quantum.c and
+   engine_census_emit print them on stdout, which is this child's channel). It is neither a notice nor an
+   answer, so it is relayed to this process's diagnostics under the child's name. Answers to `true` when the
+   line was one. */
+static int wpt_child_marker(const ChildDoc *c, const char *line)
+{
+    if (line[0] != '@') return 0;
+    fprintf(stderr, "[child %s] %s\n", c->name, line);
+    return 1;
 }
 
 static int wpt_children_booting_fds(struct pollfd *pfd, int *which)
@@ -1844,6 +1857,7 @@ static int wpt_child_take_unasked(int which)
     CHECKF(wpt_child_read_line(c, &buf, &buf_cap),
            "wpt: child document %s closed its channel before its boot round rested", c->name);
     if (!strcmp(buf, "S")) { c->at_rest = 1; return 0; }
+    if (wpt_child_marker(c, buf)) return 0;
     CHECKF(!strncmp(buf, "N\t", 2),
            "wpt: child document %s wrote a line nobody asked for that is not a notice: [%.120s]", c->name, buf);
     line = strdup(buf + 2);
