@@ -12415,8 +12415,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "field lost its SOURCE in the entry list, or an invented value stands where the source belongs");
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "\"off\""),
              "§4.10 a DISABLED control contributed nothing");
-    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"agree\""),
-             "§4.10 the box CHECKED before the second submit contributed");
+    /* The two submissions go to two addresses, so each record answers for one of them: the first, with the
+       box unchecked, carries no `agree`; the second, after checking it, does. */
+    fold_row(&nodealgo_tt, &nodealgo_why, !emitted_record_has(js, "https://x.test/api/search", "\"agree\""),
+             "§4.10 the UNCHECKED box contributed to the first submission");
+    fold_row(&nodealgo_tt, &nodealgo_why, emitted_record_has(js, "https://x.test/api/consent", "\"agree\""),
+             "§4.10 the box CHECKED before the second submit did not contribute to it");
     /* requestSubmit(): the CANCELLED form's action must never appear, and the uncancelled one's must. */
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "/api/never"),
              "§4.10 requestSubmit()'s CANCELLED form never reached its action");

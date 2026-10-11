@@ -568,7 +568,7 @@ static const char HTML_DOM[] =
     "var fd = document.createElement('input'); fd.name = 'off'; fd.setAttribute('disabled',''); fq.appendChild(fd);"
     "var fc = document.createElement('input'); fc.name = 'agree'; fc.setAttribute('type','checkbox');"
     "fq.appendChild(fc); document.body.appendChild(fq); fq.submit();"
-    "fc.checked = true; fq.submit();"
+    "fc.checked = true; fq.action = '/api/consent'; fq.submit();"
     /* NOT `fi.value === state.q` — that compares two CONCOLICS, which forks both ways and reports both
        answers. The state's presence is proved by the submission carrying {state}.q; what this asserts is the
        tree-shaped half, which is concrete. */
