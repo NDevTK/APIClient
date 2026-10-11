@@ -498,6 +498,41 @@ function endpointAddressRootHistogram(rows) {
   }
   return Object.assign({}, h);
 }
+/* THE ROUTED-POST JOIN, this zone's half of engine/trusted.mjs's `@JOIN`, in the same record shape. A receiver
+   mints its whole routed `data` as `message.data:<id>`; the sender's `routedPosts` (solver/post_index.h) names
+   its own source at each member path under that id. Every arriving document's posts are kept here under their
+   id with the sender origin this zone stamps from its own record of the instance (the engine may not state its
+   own), and each document's findings over `message.data:<id>[.path]` are joined on the run row. A receiver path
+   is covered by the sender symbol at its longest prefix, or holds the symbols below it (`contains`); an id no
+   sender has indexed yet (a message holding no unknown is never indexed) reads `sender: null`. The map is this
+   zone's in-memory record of what instances emitted, as `_remoteOps` is. */
+const _routedPosts = new Map();
+function routedPostsTake(eng, msg, result) {
+  for (const p of result.routedPosts)
+    _routedPosts.set(p.id, { sender: msg.sourceUrl, senderOrigin: stampOrigin(eng.origin), post: p });
+}
+function routedPostJoins(msg, result) {
+  const ref = /message\.data:([0-9a-f]{16})\}?((?:\.[^\s"{}\[\].]+)*)/g;
+  const text = JSON.stringify([result.fetchCallSites, result.securitySinks]);
+  const seen = new Set();
+  const out = [];
+  for (const m of text.matchAll(ref)) {
+    const key = m[1] + " " + m[2];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const s = _routedPosts.get(m[1]);
+    if (!s) { out.push({ receiver: msg.sourceUrl, id: m[1], path: m[2], sender: null }); continue; }
+    const sym = s.post.symbols.filter((x) => m[2].startsWith(x.path))
+                              .sort((a, b) => b.path.length - a.path.length)[0] || null;
+    const contains = sym ? [] : s.post.symbols.filter((x) => x.path.startsWith(m[2]))
+                                               .map((x) => ({ path: x.path, source: x.source }));
+    out.push({ receiver: msg.sourceUrl, id: m[1], path: m[2], sender: s.sender, senderOrigin: s.senderOrigin,
+               relation: s.post.relation, targetOrigin: s.post.targetOrigin,
+               source: sym ? sym.source : null, shape: sym ? sym.shape : null, contains });
+  }
+  return out;
+}
+
 function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
@@ -567,6 +602,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   /* A document that is present is asserted whether or not one was required, including a crashed instance's
      unconsumed partial, whose fields are read below. */
   if (result) assertResultDocument(result);
+  /* The instance's routed posts enter the join on every document that carries them, before this one's own
+     findings are joined, so a page that posts to itself through a peer is joined on the row it arrives on. */
+  if (result && eng) routedPostsTake(eng, msg, result);
   /* A complete run with an empty `_park` must have no live members. `finish` joins `_park` into the recipe
      string and frontierWrite deletes the origin's cross-session entry when it is empty, which is right for a
      drained frontier (solver/cold.h) and an erasure of earlier parked flows otherwise. solver/engine.c asserts
@@ -718,6 +756,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         endpointAddressRoot: endpointAddressRootHistogram(result.fetchCallSites),
         park: result._park.length, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
+        /* This document's findings over a routed message, joined to the sender's post (routedPostJoins). */
+        routedJoins: routedPostJoins(msg, result),
         url: (msg && msg.sourceUrl) || "" }
     /* A crashed run reports no cost counters: zeroes would read as a run that explored nothing. `run` keeps the
        three states (partial, ended, died) apart. The arm is chosen by the outcome, not by whether a document
