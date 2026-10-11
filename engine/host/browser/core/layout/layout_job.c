@@ -325,7 +325,7 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
             "contribution is left above a drive's mark, because every other entry is closed by its own frame",
             e->state == LJ_COMPUTING ? "computing" : "suspended", (int)e->q.kind);
     DCHECK(!layout_job_drive_spent(d),
-           "a resting drive was continued after it spent its bodies; its driver rests instead");
+           "a resting drive was continued after it spent its boxes; its driver rests instead");
     e->state = LJ_COMPUTING;
     job->nest++;
     /* A resumed body continues a box already counted; a deferred one lays out its box now. */
