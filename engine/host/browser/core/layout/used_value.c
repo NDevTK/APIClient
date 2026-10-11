@@ -1144,6 +1144,25 @@ static CssPx uv_table_row_used_height(lxb_dom_element_t *el)
     return h;
 }
 
+/* A ROW GROUP box's block-axis extent: CSS 2.1 §17.5 Visual layout of table contents' rule 2, "A row group
+   occupies the same grid cells as the rows it contains", read through core/layout/table_height.h's
+   `table_row_group_used_extent`. It is a placement and never a used `height` ("CSS 2 does not define the
+   meaning of height on row groups"), so only the edge queries below ask it. */
+static CssPx uv_table_row_group_extent(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *table = table_box_table_of(el);
+    TableGrid grid;
+    TableUsedHeights heights;
+    CssPx h;
+
+    table_grid_build(table, &grid);
+    table_heights(table, &grid, &heights);
+    h = table_row_group_used_extent(&heights, table_grid_row_group_of(&grid, el));
+    table_heights_release(&heights);
+    table_grid_release(&grid);
+    return h;
+}
+
 /* THE TABLE BOXES WHOSE USED HEIGHT IS STILL UNANSWERED, which after §17.5.3's own three routes is two
    different questions and not one leftover — so the crash NAMES the box and says which section owns it. It is
    ONE function reached from the one place the block axis is decided, for the reason its inline twin is one:
@@ -4713,6 +4732,14 @@ static CssPx uv_edge_px(lxb_dom_element_t *el, bool vertical, bool with_border)
     CssPx content;
 
     s = uv_surround(el, vertical);
+    /* A row group's block-axis edges are its rule 2 extent: it has no used height to start from, and CSS 2.1
+       §8.4 and §17.6.1 give it no padding or border, so its content, padding and border edges coincide. */
+    if (vertical && uv_box_kind(el) == UV_BOX_TABLE && table_box_kind_is_row_group(uv_table_box_kind(el))) {
+        DCHECK(s.padding.px == 0.0 && s.border.px == 0.0,
+               "a row group box reports block-axis padding or border — uv_edge_model gives the internal table "
+               "boxes none, and §17.5 rule 2's extent is then all three of its edges");
+        return uv_table_row_group_extent(el);
+    }
     content = uv_content_size(el, vertical, s);
     DCHECK(content.px >= 0.0,
            "the CONTENT box derived from a used size is NEGATIVE. Under `box-sizing: border-box` css-sizing-3 §3.3 "
