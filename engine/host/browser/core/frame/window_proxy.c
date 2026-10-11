@@ -659,7 +659,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
            "a navigable was navigated while this timeline still held UNSTARTED PROGRAM ROWS for the document "
            "it is navigating away from — a row names its document by HANDLE and the write below moves the one "
            "answer that handle has, so every one of those rows is about to become uncompilable AND to be "
-           "carrying a borrowed element pointer into a tree this navigable no longer presents. HTML §7.4.4 "
+           "carrying a borrowed element pointer into a tree this navigable no longer presents. HTML §7.5.11 "
            "aborts a navigated-away Document's fetches, so these rows are what §7.5.10 step 5's removal takes "
            "off the queue without running; they are not work to preserve");
     p->realm  = realm;
@@ -1363,7 +1363,7 @@ void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy)
        Chrome has cut off, and the @S half would emit a breakout the browser forbids. */
     DCHECK(window_proxy_closed(ctx, proxy),
            "a browsing context §7.1.3.2's swap has just discarded still answers §7.2.2.1's `closed` as false — "
-           "the getter's \"this's browsing context is null\" has THREE writers (this swap, §7.5.10's destroy "
+           "the getter's null browsing context has THREE writers (this swap, §7.5.10's destroy "
            "and §7.3.1.6's synchronous sever) and is reading fewer than all of them");
 }
 
@@ -1780,7 +1780,7 @@ SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy)
            "for — §7.1.5's flag set is handed to a Document at its creation and this instance creates none for "
            "a remote navigable. The PEER HAS THE SET: it crosses on the `navigable.create` notice. What is "
            "absent is this instance's own record of it, and which diff that is depends on where this proxy "
-           "came from — see the paragraph above this assert, not the one this message used to carry");
+           "came from — see the paragraph above this assert");
     return p->creation_sandbox_flags;
 }
 
@@ -3827,7 +3827,7 @@ void window_proxy_free(JSRuntime *rt)
            "never brought up");
     DCHECK(g_wp_rt == rt,
            "§7.2.3's surface was released against a RUNTIME other than the one it was declared in — its class "
-           "and its five pool entries are registrations in that runtime, and giving them back against another "
+           "and its six pool entries are registrations in that runtime, and giving them back against another "
            "frees atoms of a heap this component never interned into");
     while (e) { OwnedStr *n = e->next; free(e->s); free(e); e = n; }
     g_strings = NULL;
