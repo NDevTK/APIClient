@@ -1511,7 +1511,15 @@ const char *engine_host_requests(void) {
        would convert every record twice. */
     if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the outstanding host requests"); }
     join[0] = 0;
-    for (int k = 0; (f = flow_at(k)) != NULL; k++)
+    /* Named residual. Not covered: the walk visits every live flow to read its register's count of unanswered
+       rendezvous, so a call costs O(members) though it reads entries only where that count is non-zero. Next diff
+       builds: a frontier-level list of the registers whose count is non-zero, linked where pending.c moves it.
+       Absence shows as: host-request asks costing time in proportion to `members` on a frontier none of whose
+       members is blocked. */
+    for (int k = 0; (f = flow_at(k)) != NULL; k++) {
+        /* A register owing no rendezvous lists nothing below: what is listed is an unanswered rendezvous, which
+           is exactly what pending_blocked counts. */
+        if (!pending_blocked(f->pending)) continue;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
             JSValue o;
@@ -1557,6 +1565,7 @@ const char *engine_host_requests(void) {
             JS_FreeValue(pending_ctx(), o);
             JS_FreeValue(pending_ctx(), p);
         }
+    }
     return join;
 }
 
