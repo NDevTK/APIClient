@@ -262,12 +262,11 @@ static TcwDeclaredWidth tcw_declared_width(lxb_dom_element_t *box)
                box_subject(box, nbuf, sizeof nbuf));
         return out;
     }
-    DCHECK(w.px.px >= 0.0,
-           "a column or column-group box's computed `width` is NEGATIVE, which CSS 2.1 §10.2 \"Content width: "
-           "the 'width' property\" states outright is not a value: \"Negative values for 'width' are illegal.\" "
-           "lexbor drops such a declaration, so this is arithmetic that lost a sign rather than a document");
+    /* CSS 2.1 §10.2: "Negative values for 'width' are illegal", so a negative literal is dropped at parse and
+       only a math function reaches here negative. css-values-4 §9.1 "Numeric Functions" clamps that one "to
+       the range allowed in the context", as §17.5.2.1's column read does. */
     out.declared = true;
-    out.px = w.px;
+    out.px = css_px_max(w.px, css_px(0.0));
     return out;
 }
 
