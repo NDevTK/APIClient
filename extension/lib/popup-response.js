@@ -1,7 +1,8 @@
 /* Popup response-body rendering — extracted from popup.js (classic script, shares the popup global scope
    + DOM). renderResponse dispatches a Send result to renderResultBody, which renders JSON / a decoded
    protobuf tree (renderPbTree/_renderPbNode/jsonToTree) with the request's schema (findSchemaForRequest).
-   Protocol-specific renderers (gRPC-Web/SSE/NDJSON/GraphQL) remain in popup.js and are called globally. */
+   Protocol-specific renderers (gRPC-Web/SSE/NDJSON/GraphQL) live in lib/popup-protocols.js. All of them
+   return nodes built through lib/dom-builder.js. */
 /* WHAT A SEND RESULT IS, ASSERTED WHERE IT ARRIVES IN THE POPUP. lib/send.js answers a manual replay with
    exactly two shapes and this is the popup's statement of both: an ERROR arm carrying `error` (and `timing`
    on the two arms that got as far as issuing the request), and a SUCCESS record that writes
@@ -453,13 +454,6 @@ function _shortUrl(u) {
   } catch (_) {
     return u;
   }
-}
-
-function esc(s) {
-  if (s == null) return "";
-  const d = document.createElement("div");
-  d.textContent = String(s);
-  return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/`/g, "&#96;");
 }
 
 /* renderPbTree — a decoded body as a `.pb-tree` element. Iterative: the stack holds one job per field node,

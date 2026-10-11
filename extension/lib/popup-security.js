@@ -92,8 +92,7 @@ function _blockerNames(blockers) {
 // as an empty string, because `if (enc)` is true for it in C. On this side `if (item.sourceEncodes)` is FALSE
 // for it, so a source that carries the attacker's bytes to the page UNTOUCHED — the strongest fact this field
 // has, and the reason a raw-fragment JS-context breakout is real — read exactly like a source the engine never
-// declared. Returns HTML (it emits <code>), so callers place it WITHOUT esc().
-// Returns a node list; an empty one for a source that declares no percent-encode set.
+// declared. Returns a node list; an empty one for a source that declares no percent-encode set.
 function _encodeSentence(item) {
   if (typeof item.sourceEncodes !== "string") return [];   // undeclared source — _deliverySentence states that
   if (item.sourceEncodes === "")

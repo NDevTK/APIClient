@@ -2,6 +2,11 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <!-- Trusted Types with no policy (Trusted Types §4.2.1 require-trusted-types-for directive, §4.2.2
+         trusted-types directive): every HTML sink (innerHTML, outerHTML, insertAdjacentHTML, DOMParser,
+         document.write) throws a TypeError when handed a string, so page-derived text reaches this document
+         only as text nodes and attribute values built by lib/dom-builder.js. -->
+    <meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types 'none'" />
     <title>API Security Researcher</title>
     <link rel="stylesheet" href="popup.css" />
   </head>

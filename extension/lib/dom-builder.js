@@ -1,6 +1,7 @@
 /* lib/dom-builder.js — the popup's DOM builder. Elements come from createElement, text from createTextNode,
    attributes from setAttribute over an allowlist; no markup string is ever parsed, so a value a page or a
-   server chose can only ever become a text node or an attribute value.
+   server chose can only ever become a text node or an attribute value. Popup code writes no HTML string at
+   all, and popup.html's Trusted Types policy makes every HTML sink throw if it tries.
    The allowlists are about this codebase's own calls: a tag or attribute name outside them is a caller of
    ours asking for an execution sink, so it is a DCHECK. Attribute values may be stranger text and are not
    asserted on; that is safe because no allowed attribute is a URL, a style or an event handler. The one URL
