@@ -881,7 +881,9 @@ QJS_EXPORT void qjs_set_referenced(int referenced)
            "a peer reference was declared with something that is neither of the two answers — the host either "
            "provisioned this instance for a navigable another agent created or it did not, and a third value "
            "would be read by whichever arm the scheduler's test happens to be written as");
-    engine_set_referenced(referenced);
+    /* A 0 says the provisioning gave no reference. It leaves standing one the parse inside qjs_init already
+       raised: markup that creates a cross-origin `<iframe>` makes this document the child's `parent`. */
+    if (referenced) engine_set_referenced(1);
 }
 
 /* Whether a peer holds a reference into this instance's document, read off solver/engine.c's one flag. It is
