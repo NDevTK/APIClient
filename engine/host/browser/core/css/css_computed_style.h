@@ -28,6 +28,7 @@ typedef union {
     CssBorderSpacing border_spacing;  /* CSS_COMPUTED_SHAPE_BORDER_SPACING */
     CssKeyword       keyword;         /* CSS_COMPUTED_SHAPE_KEYWORD */
     CssDisplay       display;         /* CSS_COMPUTED_SHAPE_DISPLAY */
+    CssAlign         align;           /* CSS_COMPUTED_SHAPE_ALIGN */
 } CssComputedValue;
 
 typedef struct CssComputedStyle CssComputedStyle;

@@ -53,6 +53,28 @@ static FpMain fp_main_terms(lxb_dom_element_t *container, const FlexLineMember *
     return t;
 }
 
+/* css-align-3 §4.1 "Positional Alignment: the center, start, end, self-start, self-end, flex-start, flex-end,
+   left, and right keywords"' `justify-content` position `v` on §9.5's main axis, as the share of the free space
+   before the first item: 0 at main-start, 1 at main-end. `start` and `end` are the container's inline edges and
+   `left` and `right` physical ones; `start_left` says whether main-start is the left edge. */
+static double fp_main_share(lxb_dom_element_t *container, CssKeyword v, bool start_left)
+{
+    bool start_is_main_start = start_left == !css_computed_keyword_is(container, "direction", CSS_KEYWORD_RTL);
+
+    switch (v) {
+    case CSS_KEYWORD_FLEX_START: return 0.0;
+    case CSS_KEYWORD_FLEX_END:   return 1.0;
+    case CSS_KEYWORD_CENTER:     return 0.5;
+    case CSS_KEYWORD_START:      return start_is_main_start ? 0.0 : 1.0;
+    case CSS_KEYWORD_END:        return start_is_main_start ? 1.0 : 0.0;
+    case CSS_KEYWORD_LEFT:       return start_left ? 0.0 : 1.0;
+    case CSS_KEYWORD_RIGHT:      return start_left ? 1.0 : 0.0;
+    default:
+        DFAILF("`%s` reached the main-axis share and is no `justify-content` position", css_keyword_name(v));
+        return 0.0;
+    }
+}
+
 /* §9.5 for the one line, as the distance from the line's main-start edge to `item`'s border box's main-start
    edge, with `*border` its main extent and `*ms`, `*me` its used main-start and main-end margins. Free space is
    decided on the examples, as css_length.h's extremes are. */
@@ -65,8 +87,8 @@ static CssPx fp_main_offset(lxb_dom_element_t *container, lxb_dom_element_t *ite
     CssPx free_space = used_value_content_px(container, false), lead = css_px(0.0), gap = css_px(0.0);
     CssPx share = css_px(0.0), pos, at = css_px(0.0);
     bool found = false;
-    char *jc;
-    char nbuf[160], vbuf[64];
+    CssAlign jc;
+    char nbuf[160];
 
     t = n == 0 ? NULL : calloc(n, sizeof *t);
     CHECK(n == 0 || t != NULL, "out of memory holding one flex line's main-axis terms");
@@ -81,30 +103,37 @@ static CssPx fp_main_offset(lxb_dom_element_t *container, lxb_dom_element_t *ite
         share = css_px_scale(free_space, 1.0 / (double)nauto);
         free_space = css_px(0.0);
     }
-    /* Step 2, §8.2's five values (its `Value:` line is the cascade's whole set). */
-    jc = css_computed_value(container, "justify-content");
-    DCHECK(jc != NULL, "the cascade produced no computed `justify-content`; lexbor's registry has an initial value");
-    if (strcmp(jc, "flex-end") == 0) {
-        lead = free_space;
-    } else if (strcmp(jc, "center") == 0) {
-        lead = css_px_scale(free_space, 0.5);
-    } else if (strcmp(jc, "space-between") == 0) {
-        /* "If the leftover free-space is negative or there is only a single flex item on the line, this value
-           falls back to safe flex-start." */
+    /* Step 2, over css-align-3 §5.1's `justify-content`. A distribution that cannot distribute takes
+       css-align-3 §4.3's fallback, `safe flex-start` or `safe center`, and css-align-3 §4.4's `safe` aligns an
+       overflowing subject "as if the alignment mode were flex-start": with no positive free space all three
+       lead with nothing. */
+    jc = css_computed_align(container, "justify-content");
+    switch (jc.value) {
+    /* css-align-3 §5.1.3 "Flex Containers": `normal` "behaves as stretch", and `stretch` "behaves as
+       flex-start" because flex controls main-axis stretching. */
+    case CSS_KEYWORD_NORMAL:
+    case CSS_KEYWORD_STRETCH:
+        break;
+    case CSS_KEYWORD_SPACE_BETWEEN:
         if (free_space.px > 0.0 && n > 1) gap = css_px_scale(free_space, 1.0 / (double)(n - 1));
-    } else if (strcmp(jc, "space-around") == 0) {
-        /* "If the leftover free-space is negative or there is only a single flex item on the line, this value
-           falls back to safe center": safe alignment of an overflowing line is flex-start's. */
+        break;
+    case CSS_KEYWORD_SPACE_AROUND:
         if (free_space.px > 0.0) {
             gap = css_px_scale(free_space, 1.0 / (double)n);
             lead = css_px_scale(gap, 0.5);
         }
-    } else {
-        DCHECKF(strcmp(jc, "flex-start") == 0, "%s: computed `justify-content` `%s` is outside §8.2's `Value:` line",
-                box_subject(container, nbuf, sizeof nbuf), box_subject_computed(container, "justify-content", vbuf,
-                                                                                 sizeof vbuf));
+        break;
+    case CSS_KEYWORD_SPACE_EVENLY:
+        if (free_space.px > 0.0) {
+            gap = css_px_scale(free_space, 1.0 / (double)(n + 1));
+            lead = gap;
+        }
+        break;
+    default:
+        if (jc.overflow != CSS_KEYWORD_SAFE || free_space.px >= 0.0)
+            lead = css_px_scale(free_space, fp_main_share(container, jc.value, start_left));
+        break;
     }
-    free(jc);
     pos = lead;
     for (i = 0; i < n; i++) {
         pos = css_px_add(pos, t[i].auto_start ? share : t[i].m_start);
@@ -155,30 +184,57 @@ static bool fp_cross_margins(lxb_dom_element_t *item, CssPx line, CssPx *mt, Css
    cross-start edge (the top, in `horizontal-tb`) to the item's border box. */
 static CssPx fp_cross_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx line)
 {
-    CssPx mt, mb, outer, diff, at;
-    char *align;
+    CssPx mt, mb, outer, diff;
+    CssAlign align;
+    double share = 0.0;
     char nbuf[160];
 
     if (fp_cross_margins(item, line, &mt, &mb)) return mt;
     outer = css_px_add(used_value_border_edge_px(item, true), css_px_add(mt, mb));
     diff = css_px_sub(line, outer);
-    /* Step 14, per §8.3: the margin box is what is aligned. */
+    /* Step 14, over css-align-3 §6.2's `align-self`: the margin box is what is aligned. The line's cross-start
+       is its top, which is also the container's block-start: fp_require_built admits no `wrap-reverse`. */
     align = flex_cross_size_resolved_align(container, item);
-    if (strcmp(align, "flex-end") == 0) {
-        at = css_px_add(diff, mt);
-    } else if (strcmp(align, "center") == 0) {
-        at = css_px_add(css_px_scale(diff, 0.5), mt);
-    } else if (strcmp(align, "flex-start") == 0 || strcmp(align, "stretch") == 0) {
-        /* A stretched item's used cross size already fills the line (§9.4 step 11), so it starts there. */
-        at = mt;
-    } else {
-        DFAILF("%s: §8.3's `%s` aligns the item's baseline with the line's baseline group (§9.4 step 8.1); build "
-               "that alignment over core/layout/block_flow.h's first-line-box baseline before placing it",
-               box_subject(item, nbuf, sizeof nbuf), align);
-        at = mt;
+    switch (align.value) {
+    /* css-align-3 §6.2.4 "Flex Items": `normal` "Behaves as stretch". A stretched item's used cross size
+       already fills the line (§9.4 step 11), and one that is not stretched takes css-align-3 §4.3's
+       `flex-start` fallback. */
+    case CSS_KEYWORD_NORMAL:
+    case CSS_KEYWORD_STRETCH:
+    case CSS_KEYWORD_FLEX_START:
+    case CSS_KEYWORD_START:
+        break;
+    case CSS_KEYWORD_FLEX_END:
+    case CSS_KEYWORD_END:
+        share = 1.0;
+        break;
+    case CSS_KEYWORD_CENTER:
+        share = 0.5;
+        break;
+    /* css-align-3 §4.1: the item's own start or end side in the cross axis, which is its block-start only for an item
+       whose writing mode is the container's. */
+    case CSS_KEYWORD_SELF_START:
+    case CSS_KEYWORD_SELF_END:
+        if (!css_computed_keyword_is(item, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB))
+            DFAILF("%s: `align-self: %s` on an item whose writing mode is not its container's names the item's "
+                   "own start side in the cross axis; build that side's mapping before placing it",
+                   box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.value));
+        share = align.value == CSS_KEYWORD_SELF_END ? 1.0 : 0.0;
+        break;
+    case CSS_KEYWORD_BASELINE:
+        DFAILF("%s: `align-self: %s baseline` aligns the item's baseline with the line's baseline group (§9.4 "
+               "step 8.1); build that alignment over core/layout/block_flow.h's first-line-box baseline before "
+               "placing it",
+               box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.baseline));
+        break;
+    default:
+        DFAILF("%s: `%s` is no value css-align-3 §6.2's `align-self` or css-align-3 §7.2's `align-items` resolves to",
+               box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.value));
+        break;
     }
-    free(align);
-    return at;
+    /* css-align-3 §4.4's `safe`: an overflowing subject is aligned "as if the alignment mode were flex-start". */
+    if (align.overflow == CSS_KEYWORD_SAFE && diff.px < 0.0) share = 0.0;
+    return css_px_add(css_px_scale(diff, share), mt);
 }
 
 /* The checks every entry makes, and which physical side is main-start (§5.1: `row` main-start is the inline-start

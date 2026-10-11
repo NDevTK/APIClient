@@ -112,6 +112,7 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_align.h"
 #include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
@@ -181,6 +182,9 @@ bool css_computed_models(const char *name);
 /* Is it KEYWORD-shaped — so `css_computed_keyword` is the entry? */
 bool css_computed_models_keyword(const char *name);
 
+/* Is it ALIGN-shaped — so `css_computed_align` is the entry? */
+bool css_computed_models_align(const char *name);
+
 /* Is it a LENGTH — so `css_computed_length` is the entry and `css_computed_value` is not? */
 bool css_computed_models_length(const char *name);
 
@@ -234,6 +238,11 @@ CssDisplay css_computed_display(lxb_dom_element_t *el);
 
 /* Is it the value the one keyword `k` spells (core/css/css_display.h's `css_display_spells`)? */
 bool css_computed_display_is(lxb_dom_element_t *el, CssKeyword k);
+
+/* One of css-align-3's six alignment properties' COMPUTED value on `el` (core/css/css_align.h): §7's defaulting
+   and the property's grammar, with `justify-items`' `legacy` rule. A declaration outside the grammar is invalid
+   at computed-value time. `name` must be one of the six rows. */
+CssAlign css_computed_align(lxb_dom_element_t *el, const char *name);
 
 /* CSSOM §9's own split, per property. */
 typedef enum {

@@ -567,6 +567,78 @@ bool css_computed_display_is(lxb_dom_element_t *el, CssKeyword k)
     return css_display_spells(css_computed_display(el), k);
 }
 
+/* ---- css-align-3's six alignment properties ---------------------------------------------------------------- */
+
+/* The property's SPECIFIED value: CSS Cascade §7's defaulting and the grammar. A declaration outside the
+   grammar, which only a substitution can hand over, is invalid at computed-value time and defaults as `unset`;
+   none of the six is inherited, so that is the initial value. */
+static CssAlign cv_align_specified(lxb_dom_element_t *el, CssPropertyId id)
+{
+    const char *name = css_property_name(id);
+    char *cascaded = css_cv_cascaded(el, name);
+    CssDefaulting defaulting = css_defaulting_of(name, cascaded);
+    CssAlign a;
+    bool ok;
+
+    if (defaulting == CSS_DEFAULTING_DECLARED) {
+        ok = css_align_parse(id, cascaded, &a);
+        free(cascaded);
+        if (ok) return a;
+        defaulting = css_defaulting_of(name, "unset");
+    } else {
+        free(cascaded);
+    }
+    if (defaulting == CSS_DEFAULTING_INHERITED) {
+        lxb_dom_element_t *parent = css_parent_element(el);
+
+        if (parent != NULL) return css_computed_align(parent, name);
+    }
+    cascaded = cssom_initial_value(name);
+    DCHECKF(cascaded != NULL, "`%s`: §7.1 produced no initial value for a css-align-3 property", name);
+    ok = cascaded != NULL && css_align_parse(id, cascaded, &a);
+    free(cascaded);
+    DCHECKF(ok, "`%s`: the initial value fails the property's own css-align-3 grammar", name);
+    return a;
+}
+
+/* The computed value: the specified one, except css-align-3 §7.1's `legacy` alone: "if the inherited value of
+   justify-items includes the legacy keyword, this value computes to the inherited value; otherwise it computes
+   to normal". */
+static CssAlign cv_align(lxb_dom_element_t *el, CssPropertyId id)
+{
+    CssAlign a;
+    lxb_dom_element_t *parent;
+
+    css_cv_modelled(el, css_property_name(id));
+    a = cv_align_specified(el, id);
+    if (id != CSS_PROPERTY_JUSTIFY_ITEMS || a.value != CSS_KEYWORD_LEGACY) return a;
+    parent = css_parent_element(el);
+    if (parent != NULL) {
+        CssAlign inherited = css_computed_align(parent, "justify-items");
+
+        if (inherited.legacy) return inherited;
+    }
+    a.value = CSS_KEYWORD_NORMAL;
+    return a;
+}
+
+CssAlign css_computed_align(lxb_dom_element_t *el, const char *name)
+{
+    CssPropertyId id = css_property_id_of(name);
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+
+    DCHECKF(id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_ALIGN,
+            "`%s`: css_computed_align was asked for a property that is none of css-align-3's six", name);
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, id, &v)) {
+        v.align = cv_align(el, id);
+        css_computed_style_answer(el, id, &v);
+    }
+    css_computed_style_hold_end(&hold);
+    return v.align;
+}
+
 CssDisplay css_hypothetical_static_display(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's hypothetical `display` was asked for with no element");
@@ -1267,6 +1339,13 @@ bool css_computed_models_keyword(const char *name)
     CssPropertyId id = css_property_id_of(name);
 
     return id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_KEYWORD;
+}
+
+bool css_computed_models_align(const char *name)
+{
+    CssPropertyId id = css_property_id_of(name);
+
+    return id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_ALIGN;
 }
 
 /* Every row of core/css/css_property_id.h's table is a property this component derives. */
@@ -1994,21 +2073,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        `0.0` and `0e0` are zero. */
     case CSS_PROPERTY_FLEX_GROW:
     case CSS_PROPERTY_FLEX_SHRINK:
-    /* css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and align-self properties", `Computed value:
-       specified keyword`. core/layout/flex_cross_size.h reads `align-items` off the container and `align-self`
-       off the item. This is §8.3's grammar and not css-align-3 §7.2's, which supersedes it: lexbor takes one
-       ident over §8.3's keywords and its initial is `stretch`; core/css/css_shorthand.c's `place-items` entry
-       owns that residual. */
-    case CSS_PROPERTY_ALIGN_ITEMS:
-    case CSS_PROPERTY_ALIGN_SELF:
-    /* css-flexbox-1 §8.4 "Packing Flex Lines: the align-content property", `Computed value: specified
-       keyword`, over the same one-ident grammar; §9.4's step 9 reads `stretch` off a multi-line container.
-       css-align-3 §5.2's `place-content` sets it too (core/css/css_shorthand.c). */
-    case CSS_PROPERTY_ALIGN_CONTENT:
-    /* css-flexbox-1 §8.2 "Axis Alignment: the justify-content property", `Computed value: specified keyword`,
-       over the same one-ident grammar; core/layout/flex_position.c reads it for §9.5's main-axis placement.
-       css-align-3 §5.2's `place-content` sets it too (core/css/css_shorthand.c). */
-    case CSS_PROPERTY_JUSTIFY_CONTENT:
     /* css-display-3 §3 "Display Order: the order property", `Computed value: specified integer`, an
        `<integer>` carried as text; core/layout/flex_line.c parses it for order-modified document order. */
     case CSS_PROPERTY_ORDER:
@@ -2072,6 +2136,10 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
     DCHECKF(shape != CSS_COMPUTED_SHAPE_DISPLAY,
             "`%s`: css_computed_value was asked for `display`, whose computed value is css-display-3 §2's pair. "
             "Ask css_computed_display, or css_computed_display_is at a call site that tests one keyword",
+            name);
+    DCHECKF(shape != CSS_COMPUTED_SHAPE_ALIGN,
+            "`%s`: css_computed_value was asked for a css-align-3 property, whose computed value is a typed "
+            "alignment. Ask css_computed_align",
             name);
     DCHECKF(shape != CSS_COMPUTED_SHAPE_KEYWORD,
             "`%s`: css_computed_value was asked for a property whose computed value is a typed keyword. Ask "
@@ -2218,6 +2286,13 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
 
         out = JS_NewString(ctx, d);
         free(d);
+        return out;
+    }
+    if (css_computed_models_align(name)) {
+        char *a = css_align_serialize(css_computed_align(el, name));
+
+        out = JS_NewString(ctx, a);
+        free(a);
         return out;
     }
     v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);

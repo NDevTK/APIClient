@@ -25,6 +25,7 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_align.h"
 #include "core/css/css_length.h"
 
 /* css-flexbox-1 §9.6 "Cross-Axis Alignment"' "If a content-based cross size is needed, use the sum of the flex
@@ -59,10 +60,10 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container);
    sizing dimension (CSS 2.1 §10.6 versus css-sizing-3 §5.1 "Intrinsic Sizes"). */
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
-/* §8.3 "Cross-axis Alignment: the align-items and align-self properties"' resolved alignment of `item` in
-   `container`, as the computed keyword the caller frees: the item's `align-self`, or the container's
-   `align-items` where that is `auto`. §4's anonymous item is `item == NULL`: "align-items sets the default
-   alignment for all of the flex container's items, including anonymous flex items". */
-char *flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item);
+/* css-align-3 §6.2 "Block-Axis (or Cross-Axis) Self-Alignment: the align-self property"' resolved alignment of
+   `item` in `container`: the item's computed `align-self`, or the container's `align-items` where that is
+   `auto`. §4's anonymous item is `item == NULL`: "align-items sets the default alignment for all of the flex
+   container's items, including anonymous flex items". */
+CssAlign flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
 #endif

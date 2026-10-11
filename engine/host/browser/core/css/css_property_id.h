@@ -8,6 +8,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_ID_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_ID_H
 
+#include <stdint.h> /* lexbor/css/property/const.h uses uintptr_t without including it */
+
 #include <lexbor/css/property/const.h>
 
 #include "core/css/css_keyword.h"
@@ -25,7 +27,9 @@ typedef enum {
     /* "specified keyword": one of the row's keyword set, a `CssKeyword` */
     CSS_COMPUTED_SHAPE_KEYWORD,
     /* css-display-3 §2's "pair of keywords ... or a <display-internal> or <display-box> keyword": a CssDisplay */
-    CSS_COMPUTED_SHAPE_DISPLAY
+    CSS_COMPUTED_SHAPE_DISPLAY,
+    /* css-align-3's "specified keyword(s)": a CssAlign (core/css/css_align.h) */
+    CSS_COMPUTED_SHAPE_ALIGN
 } CssComputedShape;
 
 /* The range a property's grammar admits for its numeric values, which css-values-4 §9.1 "Numeric Functions"
@@ -101,6 +105,12 @@ typedef enum {
     X(BASELINE_SOURCE,     "baseline-source",     LXB_CSS_PROPERTY_BASELINE_SOURCE, KEYWORD, ALL, BASELINE_SOURCE) \
     X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     KEYWORD, ALL, OVERFLOW)        \
     X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     KEYWORD, ALL, OVERFLOW)        \
+    X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  ALIGN, ALL, NONE)              \
+    X(JUSTIFY_CONTENT,     "justify-content",     LXB_CSS_PROPERTY_JUSTIFY_CONTENT, ALIGN, ALL, NONE)             \
+    X(ALIGN_ITEMS,         "align-items",         LXB_CSS_PROPERTY_ALIGN_ITEMS,    ALIGN, ALL, NONE)              \
+    X(JUSTIFY_ITEMS,       "justify-items",       LXB_CSS_PROPERTY__UNDEF,         ALIGN, ALL, NONE)              \
+    X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     ALIGN, ALL, NONE)              \
+    X(JUSTIFY_SELF,        "justify-self",        LXB_CSS_PROPERTY__UNDEF,         ALIGN, ALL, NONE)              \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -113,10 +123,6 @@ typedef enum {
     X(TRANSFORM,           "transform",           LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(FLEX_GROW,           "flex-grow",           LXB_CSS_PROPERTY_FLEX_GROW,      TEXT, NON_NEGATIVE, UNTYPED)   \
     X(FLEX_SHRINK,         "flex-shrink",         LXB_CSS_PROPERTY_FLEX_SHRINK,    TEXT, NON_NEGATIVE, UNTYPED)   \
-    X(ALIGN_ITEMS,         "align-items",         LXB_CSS_PROPERTY_ALIGN_ITEMS,    TEXT, ALL, UNTYPED)            \
-    X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     TEXT, ALL, UNTYPED)            \
-    X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  TEXT, ALL, UNTYPED)            \
-    X(JUSTIFY_CONTENT,     "justify-content",     LXB_CSS_PROPERTY_JUSTIFY_CONTENT, TEXT, ALL, UNTYPED)           \
     X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT, ALL, UNTYPED)            \
     X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \

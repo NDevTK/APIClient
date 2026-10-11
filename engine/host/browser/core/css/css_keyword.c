@@ -194,6 +194,25 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     case CSS_KEYWORDS_OVERFLOW:
         return k == CSS_KEYWORD_VISIBLE || k == CSS_KEYWORD_HIDDEN || k == CSS_KEYWORD_CLIP ||
                k == CSS_KEYWORD_SCROLL || k == CSS_KEYWORD_AUTO;
+    /* css-align-3 §4.1 "Positional Alignment: the center, start, end, self-start, self-end, flex-start,
+       flex-end, left, and right keywords": `<self-position> = center | start | end | self-start | self-end |
+       flex-start | flex-end` and `<content-position> = center | start | end | flex-start | flex-end`. They are
+       productions, no row's set; core/css/css_align.c composes them into the six properties' grammars. */
+    case CSS_KEYWORDS_SELF_POSITION:
+        return css_keyword_set_has(CSS_KEYWORDS_CONTENT_POSITION, k) || k == CSS_KEYWORD_SELF_START ||
+               k == CSS_KEYWORD_SELF_END;
+    case CSS_KEYWORDS_CONTENT_POSITION:
+        return k == CSS_KEYWORD_CENTER || k == CSS_KEYWORD_START || k == CSS_KEYWORD_END ||
+               k == CSS_KEYWORD_FLEX_START || k == CSS_KEYWORD_FLEX_END;
+    /* css-align-3 §4.3 "Distributed Alignment: the stretch, space-between, space-around, and space-evenly
+       keywords": `<content-distribution> = space-between | space-around | space-evenly | stretch`. */
+    case CSS_KEYWORDS_CONTENT_DISTRIBUTION:
+        return k == CSS_KEYWORD_SPACE_BETWEEN || k == CSS_KEYWORD_SPACE_AROUND || k == CSS_KEYWORD_SPACE_EVENLY ||
+               k == CSS_KEYWORD_STRETCH;
+    /* css-align-3 §4.4 "Overflow Alignment: the safe and unsafe keywords and scroll safety limits":
+       `<overflow-position> = unsafe | safe`. */
+    case CSS_KEYWORDS_OVERFLOW_POSITION:
+        return k == CSS_KEYWORD_UNSAFE || k == CSS_KEYWORD_SAFE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

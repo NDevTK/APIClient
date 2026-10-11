@@ -22,6 +22,12 @@ const char *box_subject_computed(lxb_dom_element_t *el, const char *name, char *
         n = snprintf(buf, cap, "%s", css_keyword_name(css_computed_keyword(el, name)));
         return n < 0 ? "(computed value unavailable)" : buf;
     }
+    if (css_computed_models_align(name)) {
+        v = css_align_serialize(css_computed_align(el, name));
+        n = snprintf(buf, cap, "%s", v);
+        free(v);
+        return n < 0 ? "(computed value unavailable)" : buf;
+    }
     v = css_computed_value(el, name);
     if (v == NULL) return "(no computed value)";
     n = snprintf(buf, cap, "%s", v);

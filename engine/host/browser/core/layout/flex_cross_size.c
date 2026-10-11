@@ -19,20 +19,6 @@
 #include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
 
-/* Keyword-valued properties only. Length-valued ones (a cross size, a cross margin) go through
-   `css_computed_length_is` (core/css/css_computed_value.h), whose `CssPx` keeps the environment fact a `50vh`
-   size carries; the text entry refuses them. */
-static bool fx_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = css_computed_value(el, name);
-    bool same;
-
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
-                      "them is in lexbor's registry with an initial value, so the last layer always answers");
-    same = strcmp(v, kw) == 0;
-    free(v);
-    return same;
-}
 
 /* css-writing-modes-4 §7.2 "Dimensional Mapping"'s physical names of the three cross-axis properties read as
    computed values, for a vertical (`vertical`) or horizontal cross axis; the mirror of core/layout/
@@ -102,29 +88,16 @@ static CssPx fx_cross_margins_stretch_fit(lxb_dom_element_t *el, bool vertical)
     return m;
 }
 
-/* §8.3's resolved cross-axis alignment for one item, as the keyword: one resolution that the baseline refusal,
-   step 11's stretched test and core/layout/flex_position.h's §9.6 placement all read, so they cannot disagree
-   about `align-self: auto`. See flex_cross_size.h. */
-char *flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item)
+/* One resolution that the baseline refusal, step 11's stretched test and core/layout/flex_position.h's §9.6
+   placement all read, so they cannot disagree about `align-self: auto`. See flex_cross_size.h. */
+CssAlign flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
-    char *items = css_computed_value(container, "align-items");
-    char *self = NULL;
-
-    DCHECK(items != NULL,
-           "the cascade produced no computed value for `align-items` — it is in lexbor's registry with an "
-           "initial value, so the last layer always answers");
     if (item != NULL) {
-        self = css_computed_value(item, "align-self");
-        DCHECK(self != NULL,
-               "the cascade produced no computed value for `align-self` — it is in lexbor's registry with an "
-               "initial value, so the last layer always answers");
+        CssAlign self = css_computed_align(item, "align-self");
+
+        if (self.value != CSS_KEYWORD_AUTO) return self;
     }
-    if (self == NULL || strcmp(self, "auto") == 0) {
-        free(self);
-        return items;
-    }
-    free(items);
-    return self;
+    return css_computed_align(container, "align-items");
 }
 
 /* §8.3's `stretch` antecedent, three conditions: "If the cross size property of the flex item computes to
@@ -138,18 +111,16 @@ char *flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_eleme
 static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *item, bool vertical)
 {
     FxCrossProps prop = fx_cross_props(vertical);
-    char *align;
-    bool stretch;
+    CssKeyword align;
 
     DCHECK(item != NULL,
            "css-flexbox-1 §8.3 \"Cross-axis Alignment: the align-items and align-self properties\"' STRETCHED "
            "test was asked with no item element. §4 \"Flex Items\"' anonymous flex item has no used cross size "
            "any caller asks for yet — §9.6 \"Cross-Axis Alignment\" is what would place it — so a NULL here is "
            "a caller that reached this predicate through a walk that should have stopped at step 8");
-    align = flex_cross_size_resolved_align(container, item);
-    stretch = strcmp(align, "stretch") == 0;
-    free(align);
-    if (!stretch) return false;
+    /* css-align-3 §6.2.4 "Flex Items": `normal` "Behaves as stretch". */
+    align = flex_cross_size_resolved_align(container, item).value;
+    if (align != CSS_KEYWORD_STRETCH && align != CSS_KEYWORD_NORMAL) return false;
     if (!css_computed_length_is(item, prop.size, CSS_KEYWORD_AUTO)) return false;
     return !css_computed_length_is(item, prop.margin_start, CSS_KEYWORD_AUTO) &&
            !css_computed_length_is(item, prop.margin_end, CSS_KEYWORD_AUTO);
@@ -159,19 +130,14 @@ static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *ite
    step 8.3's maximum. §8.3 "Cross-axis Alignment: the align-items and align-self properties" declares
    `flex-start | flex-end | center | baseline | stretch` (`align-self` adds `auto`), with "align-items sets the
    default alignment for all of the flex container's items, including anonymous flex items. align-self allows
-   this default alignment to be overridden for individual flex items."
-   The test is a substring on purpose: css-align-3's `first baseline` and `last baseline` are baseline
-   alignments too, and over-refusing is a crash rather than a wrong number. */
+   this default alignment to be overridden for individual flex items." css-align-3 §4.2's `first baseline` and
+   `last baseline` are both baseline alignments. */
 static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_dom_element_t *item,
                                              lxb_dom_node_t *subject)
 {
-    char *align = flex_cross_size_resolved_align(container, item);
-    bool baseline;
     char nbuf[160];
 
-    baseline = strstr(align, "baseline") != NULL;
-    free(align);
-    if (!baseline) return;
+    if (flex_cross_size_resolved_align(container, item).value != CSS_KEYWORD_BASELINE) return;
     DFAILF("%s: this FLEX ITEM is BASELINE-ALIGNED in the cross axis (css-flexbox-1 §8.3 \"Cross-axis "
            "Alignment: the align-items and align-self properties\"), so css-flexbox-1 §9.4 \"Cross Size "
            "Determination\"' step 8 puts it in the FIRST of its two collections and not the second: "
@@ -480,10 +446,12 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
 static void fx_stretch_lines(lxb_dom_element_t *container, CssPx *sizes, size_t lines)
 {
     CssPx sum = css_px(0.0), inner, share;
+    CssKeyword align = css_computed_align(container, "align-content").value;
     size_t i;
 
     if (used_value_height_behaves_as_auto(container)) return;
-    if (!fx_computed_is(container, "align-content", "stretch")) return;
+    /* css-align-3 §5.1.3 "Flex Containers": `normal` "behaves as stretch". */
+    if (align != CSS_KEYWORD_STRETCH && align != CSS_KEYWORD_NORMAL) return;
     for (i = 0; i < lines; i++) sum = css_px_add(sum, sizes[i]);
     inner = used_value_content_px(container, true);
     if (!(sum.px < inner.px)) return;

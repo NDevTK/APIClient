@@ -122,7 +122,20 @@
     X(FIRST,              "first") \
     X(LAST,               "last") \
     X(CLIP,               "clip") \
-    X(SCROLL,             "scroll")
+    X(SCROLL,             "scroll") \
+    X(NORMAL,             "normal") \
+    X(SAFE,               "safe") \
+    X(UNSAFE,             "unsafe") \
+    X(START,              "start") \
+    X(END,                "end") \
+    X(SELF_START,         "self-start") \
+    X(SELF_END,           "self-end") \
+    X(FLEX_START,         "flex-start") \
+    X(FLEX_END,           "flex-end") \
+    X(SPACE_BETWEEN,      "space-between") \
+    X(SPACE_AROUND,       "space-around") \
+    X(SPACE_EVENLY,       "space-evenly") \
+    X(LEGACY,             "legacy")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -176,7 +189,11 @@ typedef enum {
     CSS_KEYWORDS_LIST_STYLE_POSITION,
     CSS_KEYWORDS_BASELINE_SOURCE,
     CSS_KEYWORDS_ALIGNMENT_BASELINE,
-    CSS_KEYWORDS_OVERFLOW
+    CSS_KEYWORDS_OVERFLOW,
+    CSS_KEYWORDS_SELF_POSITION,
+    CSS_KEYWORDS_CONTENT_POSITION,
+    CSS_KEYWORDS_CONTENT_DISTRIBUTION,
+    CSS_KEYWORDS_OVERFLOW_POSITION
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

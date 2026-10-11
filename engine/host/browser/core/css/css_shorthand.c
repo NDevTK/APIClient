@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/css/css_align.h"
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
@@ -268,66 +269,46 @@ static const char *sh_overflow_keyword(const char *w, size_t n)
     return css_word_is(w, n, "overlay") ? "auto" : css_sh_keyword_in(CSS_KEYWORDS_OVERFLOW, w, n);
 }
 
-/* css-align-3 §7.3 "Default Alignment Shorthand: the place-items property"' and css-align-3 §6.3
-   "Self-Alignment Shorthand: the place-self property"' COMPONENT GRAMMARS. THE FIRST COMPONENT IS THIS ENGINE'S `align-items`
-   RATHER THAN css-align-3's, AND THAT IS THE SHORTHAND'S OWN DEFINITION RATHER THAN A NARROWING OF IT: both
-   are stated BY REFERENCE — `<'align-items'> <'justify-items'>?` and `<'align-self'> <'justify-self'>?` — so
-   the first component is whatever THIS engine's longhand admits, and lexbor's registry answers that.
-   `lxb_css_property_state_align_items` takes ONE IDENT and switches over
-   `flex-start | flex-end | center | baseline | stretch`, with a registry initial of
-   `LXB_CSS_ALIGN_ITEMS_STRETCH` — which is css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and
-   align-self properties"' `Value:` and `Initial:` lines exactly. A list written from css-align-3 §7.2's wider
-   grammar would put `normal`, or a two-word `safe center`, into the cascade under a longhand whose own parser
-   refuses both — the shorthand claiming a value the longhand cannot hold.
-   NAMED RESIDUAL: css-align-3 §7.2 "Block-Axis (or Cross-Axis) Default Alignment: the align-items property"
-   and css-align-3 §6.2 "Block-Axis (or Cross-Axis) Self-Alignment: the align-self property" supersede
-   css-flexbox-1 §8.3, and this engine implements css-flexbox-1 §8.3. WHAT IS NOT COVERED is every value of
-   css-align-3 §7.2's `Value:` line outside css-flexbox-1 §8.3's five — `normal`, the `first`/`last`
-   baseline pair, and any `safe`/`unsafe` prefix. WHAT THE NEXT DIFF BUILDS is css-align-3 §7.2's and
-   css-align-3 §6.2's `Value:` lines in lexbor's own `align-items` and `align-self` parsers, after which
-   these two lists are READ FROM that parser rather than restated here.
-   HOW ITS ABSENCE WOULD SHOW: a declaration naming one of those values is dropped as invalid, so the property
-   reads its initial value on an element that declared one.
-   THE `justify-*` LISTS ARE css-align-3's OWN, because lexbor's registry carries NEITHER property — there is
-   no parser to read them from and css-align-3 §7.1's and css-align-3 §6.1's `Value:` lines are the only source. They are the
-   SINGLE-KEYWORD forms of those lines: `<self-position>` is
-   `center | start | end | self-start | self-end | flex-start | flex-end`, `<baseline-position>` is
-   `[ first | last ]? && baseline` whose bare arm is the one word below, and `<overflow-position>?` and
-   `legacy &&` are two-word forms dropped for the same reason the residual above names. */
-static const char *const ALIGN_ITEMS_KEYWORDS[] = {
-    "flex-start", "flex-end", "center", "baseline", "stretch"
-};
-/* css-flexbox-1 §8.3's `align-self` is its `align-items` plus the one keyword meaning "take the container's", which is why
-   this is a second list rather than a shared one: they differ by exactly `auto`, and sharing would make
-   `align-items: auto` legal — a value css-flexbox-1 §8.3 gives only to `align-self`. */
-static const char *const ALIGN_SELF_KEYWORDS[] = {
-    "auto", "flex-start", "flex-end", "center", "baseline", "stretch"
-};
-static const char *const JUSTIFY_ITEMS_KEYWORDS[] = {
-    "normal", "stretch", "baseline", "legacy", "center", "start", "end",
-    "self-start", "self-end", "flex-start", "flex-end", "left", "right"
-};
-/* css-align-3 §6.1's `justify-self` is css-align-3 §7.1's `justify-items` with `auto` in place of `legacy`: those are the two
-   properties' `Initial:` lines and each keyword is on only its own property's `Value:` line. */
-static const char *const JUSTIFY_SELF_KEYWORDS[] = {
-    "auto", "normal", "stretch", "baseline", "center", "start", "end",
-    "self-start", "self-end", "flex-start", "flex-end", "left", "right"
-};
+/* css-align-3 §5.2 "Content-Distribution Shorthand: the place-content property", §6.3 "Self-Alignment
+   Shorthand: the place-self property" and §7.3 "Default Alignment Shorthand: the place-items property":
+   `<'align-X'> <'justify-X'>?`. The first component is the longest leading run of words `first`'s grammar
+   admits, the rest is the second. An omitted second is copied from the first, except §5.2's: "unless that
+   value is a <baseline-position> in which case it is defaulted to start". `axis` 0 answers the first longhand,
+   1 the second. OWNED; NULL for a value outside the grammar. */
+static char *place_component(const char *value, CssPropertyId first, CssPropertyId second, int axis)
+{
+    const char *w[6];
+    size_t wl[6];
+    CssAlign a, j;
+    char *text;
+    int n = css_shorthand_components(value, w, wl, 6), k;
+    bool ok = false;
 
-/* css-align-3 §5.2 "Content-Distribution Shorthand: the place-content property"' components, `<'align-content'>
-   <'justify-content'>?`, stated by reference, so each is this engine's longhand grammar: lexbor registers both
-   and parses css-flexbox-1 §8.4's `align-content` and §8.2's `justify-content` keyword sets, read off
-   `lxb_css_property_state_align_content` and `_justify_content`.
-   Named residual. Not covered: css-align-3's wider `align-content`/`justify-content` values (`normal`,
-   `space-evenly`, `start`, `end`, baselines, `safe`/`unsafe`), and so a copied `stretch`, which this engine's
-   `justify-content` refuses. Next: css-align-3's `Value:` lines in lexbor's two parsers, read here from them.
-   Absence shows as `place-content: stretch` or `place-content: space-evenly` dropped as invalid. */
-static const char *const ALIGN_CONTENT_KEYWORDS[] = {
-    "flex-start", "flex-end", "center", "space-between", "space-around", "stretch"
-};
-static const char *const JUSTIFY_CONTENT_KEYWORDS[] = {
-    "flex-start", "flex-end", "center", "space-between", "space-around"
-};
+    for (k = n; k >= 1 && !ok; k--) {
+        text = css_sh_dupn(w[0], (size_t)(w[k - 1] + wl[k - 1] - w[0]));
+        ok = css_align_parse(first, text, &a);
+        free(text);
+    }
+    if (!ok) return NULL;
+    k++;
+    if (k < n) {
+        text = css_sh_dupn(w[k], (size_t)(w[n - 1] + wl[n - 1] - w[k]));
+        ok = css_align_parse(second, text, &j);
+        free(text);
+        if (!ok) return NULL;
+    } else {
+        j = a;
+        if (first == CSS_PROPERTY_ALIGN_CONTENT && a.value == CSS_KEYWORD_BASELINE) {
+            j.value = CSS_KEYWORD_START;
+            j.baseline = CSS_KEYWORD_INVALID;
+        }
+        text = css_align_serialize(j);
+        ok = css_align_parse(second, text, &j);
+        free(text);
+        DCHECKF(ok, "row %u: a copied first component is outside the second longhand's grammar", (unsigned)second);
+    }
+    return css_align_serialize(axis == 0 ? a : j);
+}
 
 /* A KEYWORD row of core/css/css_property_id.h's table that lexbor's registry does not parse: its declarations
    reach the cascade as raw `__CUSTOM` tokens, and its `Value:` line is one keyword of the row's set, so this
@@ -1364,53 +1345,21 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
         return css_sh_dupn(t[term].p, t[term].n);
     }
 
-    /* ---- css-align-3 §7.3's `place-items` and §6.3's `place-self` -----------------------------------------
-       ONE RULE FOR BOTH, AND IT IS `overflow`'s. css-align-3 §7.3 states it as "The first value is assigned to
-       align-items. The second value is assigned to justify-items; if omitted, it is copied from the first
-       value", and css-align-3 §6.3 states the identical sentence over `align-self` and `justify-self` — which is
-       css-overflow §3.1's `{1,2}` exactly, and is why CSS_SH_TWO_AXIS is these two rows' kind as well.
-       THE TWO COMPONENTS TAKE DIFFERENT KEYWORD SETS, AND THAT IS THE GRAMMAR RATHER THAN AN ASYMMETRY: the
-       first is `<'align-items'>`/`<'align-self'>` and the second `<'justify-items'>`/`<'justify-self'>`, four
-       different `Value:` lines — so a keyword legal in the second position and not the first (`left`,
-       `start`, `normal`) is an INVALID DECLARATION when written first, which is what a per-position lookup
-       answers and a shared list could not.
-       A COPIED FIRST VALUE IS RE-VALIDATED AGAINST THE SECOND LIST, because css-align-3 §7.3's copy is of the VALUE and
-       not of its legality. Every keyword this engine's `align-items` admits is also a css-align-3 §7.1 `justify-items`
-       value — its `<self-position>` carries `flex-start`, `flex-end` and `center`, its `<baseline-position>`
-       carries `baseline`, and `stretch` is on its own `Value:` line — so the test passes for all five today
-       and is asked anyway: it is the one line that would catch a widening of one list and not the other. */
-    /* css-align-3 §5.2's `place-content` states the same rule — "The second value is assigned to
-       justify-content; if omitted, it is copied from the first value, unless that value is a
-       <baseline-position> in which case it is defaulted to start" — and this engine's `align-content` has no
-       `<baseline-position>`, so the exception has no member here. */
+    /* ---- css-align-3 §5.2's `place-content`, §6.3's `place-self` and §7.3's `place-items` ---------------- */
     if (strcmp(shorthand, "place-items") == 0 || strcmp(shorthand, "place-self") == 0 ||
         strcmp(shorthand, "place-content") == 0) {
         bool items = strcmp(shorthand, "place-items") == 0, content = strcmp(shorthand, "place-content") == 0;
-        const char *const *first =
-            content ? ALIGN_CONTENT_KEYWORDS : items ? ALIGN_ITEMS_KEYWORDS : ALIGN_SELF_KEYWORDS;
-        const char *const *second =
-            content ? JUSTIFY_CONTENT_KEYWORDS : items ? JUSTIFY_ITEMS_KEYWORDS : JUSTIFY_SELF_KEYWORDS;
-        unsigned nf = content ? CSS_SH_N(ALIGN_CONTENT_KEYWORDS)
-                    : items   ? CSS_SH_N(ALIGN_ITEMS_KEYWORDS) : CSS_SH_N(ALIGN_SELF_KEYWORDS);
-        unsigned ns = content ? CSS_SH_N(JUSTIFY_CONTENT_KEYWORDS)
-                    : items   ? CSS_SH_N(JUSTIFY_ITEMS_KEYWORDS) : CSS_SH_N(JUSTIFY_SELF_KEYWORDS);
-        const char *align = content ? "align-content" : items ? "align-items" : "align-self";
-        const char *justify = content ? "justify-content" : items ? "justify-items" : "justify-self";
+        CssPropertyId first = content ? CSS_PROPERTY_ALIGN_CONTENT
+                            : items   ? CSS_PROPERTY_ALIGN_ITEMS : CSS_PROPERTY_ALIGN_SELF;
+        CssPropertyId second = content ? CSS_PROPERTY_JUSTIFY_CONTENT
+                             : items   ? CSS_PROPERTY_JUSTIFY_ITEMS : CSS_PROPERTY_JUSTIFY_SELF;
 
-        if (strcmp(longhand, align) == 0) axis = 0;
-        else if (strcmp(longhand, justify) == 0) axis = 1;
+        if (strcmp(longhand, css_property_name(first)) == 0) axis = 0;
+        else if (strcmp(longhand, css_property_name(second)) == 0) axis = 1;
         else return NULL;
-        /* CSS Cascade §7.3's keywords are the ENTIRE value for every property in CSS and set BOTH longhands
-           to themselves, so they precede CSS Cascade §7.3's own grammar, in which neither is a term. */
+        /* css-cascade-5 §3's CSS-wide keyword is the entire value and sets both longhands to itself. */
         if (css_wide_keyword(value)) return css_sh_strdup(value);
-        /* Two components and no multiplier over either, so a third is an invalid declaration. */
-        n = css_shorthand_components(value, w, wl, 2);
-        if (n < 1 || n > 2) return NULL;
-        kw[0] = css_sh_keyword(first, nf, w[0], wl[0]);
-        if (kw[0] == NULL) return NULL;
-        kw[1] = css_sh_keyword(second, ns, (n > 1) ? w[1] : w[0], (n > 1) ? wl[1] : wl[0]);
-        if (kw[1] == NULL) return NULL;
-        return css_sh_strdup(kw[axis]);
+        return place_component(value, first, second, axis);
     }
 
     if (strcmp(shorthand, "overflow") != 0) return NULL;
@@ -1487,13 +1436,10 @@ bool css_shorthand_validates_longhand(const char *longhand)
        lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
        and the grammar behind it are one statement in one file. */
     if (css_background_shorthand_validates_longhand(longhand)) return true;
-    /* css-align-3 §7.1's `justify-items` and css-align-3 §6.1's `justify-self`, whose registry gap is the §17 table's
-       and needs the same sentence: lexbor carries NEITHER, so a `justify-items: center` reaches the cascade
-       as a `__CUSTOM` holding the name and the RAW TOKENS, with nothing having validated them and nothing
-       having lower-cased them. THEIR `align-*` PARTNERS ARE DELIBERATELY NOT HERE — lexbor types both of
-       those, and a second grammar standing beside its parser is the `border-*-color` mistake one property
-       along, where the registry speaks and this component must not answer over it. */
-    if (strcmp(longhand, "justify-items") == 0 || strcmp(longhand, "justify-self") == 0) return true;
+    /* css-align-3's six alignment longhands, whose grammar is core/css/css_align.h's. Lexbor carries no
+       `justify-items` or `justify-self`, and parses css-flexbox-1 §8's narrower lines for the other four, so
+       core/css/css_style_declaration.c asks this grammar ahead of lexbor's for all six. */
+    if (css_align_property(css_property_id_of(longhand))) return true;
     /* css-lists-3 §3.6's THREE, whose registry gap is the §17 table's and is the one these rows' own initial
        values in core/css/css_style_declaration.c are recorded under: lexbor's property registry carries NO
        `list-style` anything, so each of the three reaches the cascade as a `__CUSTOM` holding the name and the
@@ -1545,15 +1491,10 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     /* css-lists-3 §3.6's three, AFTER §7.3's keywords, because `list-style-type: inherit` is not a
        `<counter-style>` and a `<counter-style-name>` is an ident sequence that would admit it. */
     if (list_style_owns(longhand)) return list_style_longhand_value(longhand, value);
-    /* css-align-3 §7.1's and css-align-3 §6.1's single-keyword forms, over the two lists this component owns because
-       lexbor types neither property. One component value and no multiplier, so a second is invalid. */
-    if (strcmp(longhand, "justify-items") == 0 || strcmp(longhand, "justify-self") == 0) {
-        bool it = strcmp(longhand, "justify-items") == 0;
+    if (css_align_property(css_property_id_of(longhand))) {
+        CssAlign a;
 
-        if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
-        kw = it ? css_sh_keyword(JUSTIFY_ITEMS_KEYWORDS, CSS_SH_N(JUSTIFY_ITEMS_KEYWORDS), w[0], wl[0])
-                : css_sh_keyword(JUSTIFY_SELF_KEYWORDS, CSS_SH_N(JUSTIFY_SELF_KEYWORDS), w[0], wl[0]);
-        return kw ? css_sh_strdup(kw) : NULL;
+        return css_align_parse(css_property_id_of(longhand), value, &a) ? css_align_serialize(a) : NULL;
     }
     /* `<line-width>` is ONE component value — no multiplier — so a second one is an invalid declaration, which
        the split reports by refusing to write past `max`. The four `<line-style>` longhands are keyword rows

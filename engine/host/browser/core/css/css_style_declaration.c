@@ -1071,6 +1071,20 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text
         *pvalue = value;
         return true;
     }
+    /* css-align-3's six alignment longhands, ahead of lexbor for the `font-family` arm's reason: lexbor parses
+       css-flexbox-1 §8's one-keyword lines for four of them and refuses `normal`, `start`, `safe center` and
+       `first baseline`, and carries no `justify-items` or `justify-self`. The source slice is asked, and
+       core/css/css_shorthand.c's longhand grammar (core/css/css_align.h) answers the canonical value. */
+    if (css_align_property(css_property_id_of(name))) {
+        char *raw = cssd_decl_source_value(d, text, len);
+
+        value = raw ? css_shorthand_longhand_value(name, raw) : NULL;
+        free(raw);
+        if (!value) { free(name); return false; }
+        *pname = name;
+        *pvalue = value;
+        return true;
+    }
     if (d->type == LXB_CSS_PROPERTY__UNDEF) {
         value = cssd_decl_value(d);
         if (value && cssd_undef_is_declaration(name, value)) {
@@ -2973,6 +2987,12 @@ static void cssd_initial_unregistered_check(void)
    definition of itself with no base case. */
 static const struct { const char *name; const char *initial; const char *registry; } CSSD_INITIAL_WRONG[] = {
     { "color", "canvastext", "currentcolor" },
+    /* css-align-3 §5.1 "The justify-content and align-content Properties" and css-align-3 §7.2 "Block-Axis
+       (or Cross-Axis) Default Alignment: the align-items property" give all three an `Initial:` of `normal`; lexbor answers
+       css-flexbox-1 §8's. */
+    { "align-content", "normal", "stretch" },
+    { "align-items", "normal", "stretch" },
+    { "justify-content", "normal", "flex-start" },
 };
 
 /* CSS Cascade §7.1's INITIAL VALUE, straight out of Lexbor's registry, which is where the spec's own initial
