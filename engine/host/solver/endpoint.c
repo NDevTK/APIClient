@@ -5,7 +5,7 @@
 #include "solver/metrics.h"   /* the edge rows, declared in solver/metrics/{fetch,xhr}_edge.def */
 #include "core/mime/mime_type.h"
 #include "solver/concolic.h"
-#include "solver/engine.h"    /* the provenance's ONE wire spelling — this surface prints the same three words */
+#include "solver/engine.h"    /* the provenance's one wire spelling; this surface prints the same three words */
 #include "solver/flow.h"
 #include "solver/pending.h"   /* …and PROV_*, the vocabulary those words spell */
 #include "check.h"
@@ -13,157 +13,93 @@
 #include <string.h>
 #include <stdio.h>
 
-/* WHERE THE VALUE LANDED IN THE REQUEST. A reviewer replays a path param by substituting it into the address,
-   a query param by appending it and a body param by encoding it into the payload, so this is not a label on a
-   param — it is half of what the param IS, and two params of the same name in two places are two params. */
+/* Where the value landed in the request. A reviewer replays a path param by substituting it into the address, a
+   query param by appending it and a body param by encoding it into the payload, so the location is half of what a
+   param is: two params of one name in two places are two params. */
 typedef enum { EP_QUERY = 0, EP_PATH, EP_BODY } EpLoc;
 static const char *const ep_loc_name[] = { "query", "path", "body" };
 
-/* A PARAM STATES TWO FACTS AND THEY MERGE BY OPPOSITE RULES, which is the whole reason they are two fields.
-   `vals` is PROVENANCE-and-example — each entry is a value the code COMPUTED on some path, so the merge is a
-   UNION: another path computing another value adds knowledge and takes none away.
-   `excl` is DOMAIN — each entry is a token some flow's own equality gate PROVED this hole is not, so the
-   merge is an INTERSECTION: the record's claim is about the ENDPOINT, and only a constraint every observed
-   path to it obeyed is true of the endpoint. Unioning them would state, of one request, a constraint that no
-   single run of the program ever satisfied.
-   `bnd` IS THE SAME KIND OF FACT AS `excl` OVER AN ORDERED DOMAIN, AND ITS MERGE IS THE SAME CLAIM SPELLED FOR
-   AN INTERVAL: the record may state a bound only where EVERY observed path obeyed it, so a second sighting
-   WIDENS to the interval hull rather than narrowing to the overlap. Two paths that reached one endpoint with
-   `x >= 5` and `x >= 10` leave `x >= 5` — the weaker bound is the one both obeyed; two that reached it with
-   `x >= 5` and `x <= 3` leave NO lower and NO upper bound, because neither claim survives the other path.
-   That is exactly what intersecting the exclusion sets does over an unordered domain — the complement of the
-   union of the two domains — and it is the same sentence, not a second rule. A sighting that observed NO
-   bound on a side therefore ERASES that side: a path allowed to reach the request without obeying the claim
-   is a path that disproves it.
-   WITHIN ONE FLOW THE OPPOSITE HOLDS AND IT IS NOT A CONTRADICTION: `if (x > 5 && x < 100)` conjoins, because
-   both gates are on ONE path. concolic.c owns that half; this file owns the across-paths half. */
-/* `pred` IS THE SAME KIND OF FACT AS `excl` AND `bnd` OVER A DOMAIN NEITHER OF THEM CAN STATE — what this
-   endpoint's own METHOD-CALL gates proved, `path.startsWith("/api")` being the shape §@H names. An equality
-   determines a value, an ordering an interval, and a call neither, so it is a third field for the reason the
-   first two are two. ITS MERGE IS THE SAME CLAIM AS THEIRS AND THEREFORE AN INTERSECTION: a predicate belongs
-   on the record only where EVERY observed path obeyed it, so a sighting that reached the request without
-   testing it is a path that DISPROVES it and the claim goes. There is no hull here and no widening — the
-   domain is unordered, so intersecting the sets IS the rule, exactly as it is for `excl`. */
-/* `has_hole` IS NOT A FIFTH DOMAIN AND ITS MERGE IS NEITHER OF THE TWO ABOVE. The four fields above are
-   CLAIMS ABOUT THE VALUE, so a path that reached the request without obeying one disproves it and they
-   intersect. This says whether this param's value NAMED A HOLE at the read — whether `kv_add` was able to ask
-   the flow anything at all — which is a fact about the OBSERVATION and not a constraint on the value, so a
-   sighting that had no hole disproves nothing. It therefore merges as a UNION, for `vals`' reason exactly:
-   another path minting this param from an unknown adds knowledge and takes none away.
-   THE DIRECTION IS ALSO THE ONLY SOUND ONE, WHICH IS WHY THIS IS NOT A PREFERENCE. Intersecting would answer
-   `concrete` for a param one observed path DID mint from a hole, and a consumer computing "parameters whose
-   domain could have been narrowed" would then drop a row that genuinely could — a coverage fraction reading
-   HIGHER than the truth, which is the flattering direction CLAUDE.md forbids. The union errs the other way:
-   it counts a row whose every later sighting was concrete, which widens the denominator and understates
-   coverage.
-   IT CANNOT BE RE-DERIVED DOWNSTREAM, which is the whole reason it is carried rather than left to a reader.
-   `kv_pairs` emits the aligned EXAMPLE where the shape held a hole, so a param minted from `{location.hash}`
-   renders `validValues:["abc"]` — the same bytes as a param the code computed — and the one spelling that
-   would have betrayed the hole is exactly the one the example replaced. */
+/* A param states several facts that merge across sightings by different rules.
+ *
+ * `vals` is provenance and example: each entry is a value the code computed on some path, so the merge is a union;
+ * another path computing another value adds knowledge and takes none away.
+ *
+ * `excl`, `bnd` and `pred` are domain. An exclusion is a token some flow's own equality gate proved this hole is
+ * not, a bound an ordering gate's interval, and a predicate a method-call gate (`path.startsWith("/api")`, the
+ * shape @H names), which determines neither a value nor an interval. The record's claim is about the endpoint, so
+ * only a constraint every observed path obeyed is true of it: the sets intersect, and a bound widens to the
+ * interval hull (two paths with `x >= 5` and `x >= 10` leave `x >= 5`; with `x >= 5` and `x <= 3`, no bound on
+ * either side). A sighting that observed no bound or predicate erases it, since a path that reached the request
+ * without obeying the claim disproves it. Within one flow gates conjoin instead (`if (x > 5 && x < 100)`);
+ * concolic.c owns that half and this file the across-paths half.
+ *
+ * `has_hole` says whether this param's value named a hole at the read, that is whether `kv_add` could ask the flow
+ * anything: a fact about the observation rather than a constraint on the value, so it unions as `vals` does.
+ * Intersecting would answer `concrete` for a param one path did mint from a hole and make a coverage fraction read
+ * higher than the truth; the union errs toward understating coverage. It cannot be re-derived downstream:
+ * `kv_pairs` emits the aligned example where the shape held a hole, so a param minted from `{location.hash}`
+ * renders `validValues:["abc"]`, the same bytes as a computed one. */
 typedef struct { int has_lo, has_hi; double lo, hi; int lo_incl, hi_incl; char *lo_txt, *hi_txt; } ParamBound;
 typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
                  char **excl; int nexcl; ParamBound bnd;
                  ConcolicPred *pred; int npred;
                  ConcolicLooseEq *leq; int nleq; int has_hole; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
-/* `is_asset` IS WHAT THE RESOURCE AT THIS ADDRESS TURNED OUT TO BE, and it can only be written after the
-   record exists. §Attacker sources: "Static assets are NEVER endpoints (magic-byte + content-type, not URL
-   suffix) but still drive the code path" — the parenthetical is a rule about BYTES, and bytes arrive on a
-   reply, while a request is recorded before its policy check for the reason endpoint_record's own call sites
-   state (a request a policy refuses is still a request the bundle can make). So the two facts are learned at
-   two times and the flag is the join between them; there is no request-time test that could stand in for it
-   without either guessing from a suffix or losing every blocked request. */
-/* `prov` IS WHAT THIS RECORD IS EVIDENCE OF and it is part of the record's IDENTITY rather than a label on it
-   — see endpoint.h for why the pending line's most-observed fold is right there and wrong here. The one
-   consequence to keep in view while reading the merges below: every value, exclusion, bound and predicate on
-   a record was observed at ONE grade, because a sighting at another grade cannot reach it. */
-/* `pre_program` IS WHETHER THIS INSTANCE HAD RUN A LINE OF ANY PROGRAM WHEN THIS RECORD WAS MINTED, and it is
-   the one fact about a sighting that `prov` structurally cannot carry — see endpoint.h's census contract and
-   solver/engine.h's `engine_any_program_started` for why the provenance is the wrong field to ask.
-   IT IS A PROPERTY OF THE MINT AND NOT OF THE ADDRESS, which is what makes it answer the question it is for.
-   A later sighting of an address already on this surface teaches the surface nothing new — the record exists,
-   the WFQ was credited for it once, and the merge below adds structure rather than an endpoint — so what a
-   reader wants to know is whether the SIGHTING THAT CREATED THE RECORD needed the page's code to run. A flag
-   re-armed on every merge would answer a different question and would answer it about the last sighting. */
+/* `is_asset` is what the resource at this address turned out to be, written after the record exists. Whether a
+   static asset is an endpoint is decided by bytes (magic bytes and content type, not a URL suffix), which arrive on
+   a reply, while a request is recorded before its policy check (a request a policy refuses is still one the bundle
+   can make), so the flag joins two facts learned at two times. */
+/* `prov` is what this record is evidence of, part of its identity rather than a label (endpoint.h has why the
+   pending line's most-observed fold is right there and wrong here): every value, exclusion, bound and predicate on
+   a record was observed at one grade, because a sighting at another grade cannot reach it. */
+/* `pre_program` is whether this instance had run a line of any program when this record was minted, the one fact
+   about a sighting `prov` cannot carry (endpoint.h's census contract; solver/engine.h's
+   `engine_any_program_started`). A property of the mint, not of the address: a later sighting of a recorded
+   address teaches the surface no new endpoint, so the question is whether the sighting that created the record
+   needed the page's code to run, and a flag re-armed on every merge would answer it about the last sighting. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; int is_asset; int prov; int pre_program; int door;
-                 /* `addr_class` IS WHETHER THE RUN HAD DETERMINED THE ADDRESS WHEN IT RECORDED IT — see
-                    endpoint.h's ENDPOINT_ADDRESS_CLASSES for what each word claims and for why it is a
-                    FLOOR under the hard bar rather than a boolean about parses. It is the ONE field on
-                    this record no producer states: it is read off the `url` VALUE's own concolic
-                    provenance at the door, so there is nobody to forget it. AND IT IS UNIONED ON A
-                    MERGE, unlike `door` and `pre_program` one field back, which are properties of the
-                    MINT and are never re-armed — this is a fact about whether SOME observed path
-                    composed the address out of a value it had not determined, and at the top of the list
-                    about whether some path's unknown was one somebody OUTSIDE this engine supplied; a
-                    later sighting that proved LESS cannot take either back. It is `has_hole`'s rule one
-                    grain out, and it is why the whose fact needed no field of its own: the list's ORDER
-                    carries that disjunction and this one `if` carries the whole merge. */
+                 /* `addr_class` is whether the run had determined the address when it recorded it (endpoint.h's
+                    ENDPOINT_ADDRESS_CLASSES has each word's claim and why it is a floor under the hard bar). No
+                    producer states it: it is read off the `url` value's own concolic provenance at the door.
+                    Merged by a max over the list's order, unlike `door` and `pre_program`, which are properties of
+                    the mint: that some observed path composed the address from a value it had not determined
+                    (and, at the top of the list, that some path's unknown was supplied from outside this engine)
+                    is not taken back by a later sighting that proved less. */
                  int addr_class;
-                 /* `witness_class` IS WHETHER THIS ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE — see
-                    endpoint.h's ENDPOINT_WITNESS_CLASSES for what each word claims and for why it is the
-                    NECESSARY CONDITION under the razor rather than an operand of it. Like `addr_class` it is
-                    merged and not re-armed and the merge is a MAX over the list's ORDER: a sighting that
-                    could ASK outranks one that could not, and a path that HAD chosen a witness cannot be
-                    taken back by a later path that had not.
-                    THAT READ "unlike it the merge is a MAX over three members rather than a union over two",
-                    AND IT IS RETIRED RATHER THAN DELETED because a reader who re-derives it from the SHAPE of
-                    the two `if`s below will write it again: `addr_class` grew past two members and is a MAX
-                    too, so what distinguishes these two fields is what each one's ORDER MEANS and never the
-                    spelling of its merge. */
+                 /* `witness_class` is whether this address may rest on a witness this engine chose (endpoint.h's
+                    ENDPOINT_WITNESS_CLASSES: the necessary condition under the razor). Merged like `addr_class`,
+                    by a max over its list's order: a sighting that could ask outranks one that could not, and a
+                    path that had chosen a witness is not taken back by a later one that had not. The two fields
+                    differ in what each order means, not in the shape of the merge. */
                  int witness_class;
-                 /* WHICH SOURCES THE ADDRESS VALUE'S BYTES ENTERED THROUGH, as solver/concolic.h's
-                    `concolic_root_c` spells them — the DELIVERY PROVENANCE of the address, which is the one
-                    operand of CLAUDE.md §What-the-tool-produces' hard bar that `addr_class` reads and no
-                    consumer can see. It is a DIAGNOSTIC and never an operand of that bar, and that is
-                    UNCHANGED now that the bar reads WHOSE the unknown is: `address_class_of` asks
-                    concolic.h's `concolic_root_whose_any` of the VALUE, which is a fact a MINT stated and
-                    every derivation carried, while a classification keyed on the SPELLING of this string
-                    would be the count of a spelling §RUN-DON'T-MATCH forbids.
-                    THAT SENTENCE READ "whose unknown a root names is a question concolic.h's `src` cannot
-                    answer today (see `address_class_of`'s residual, whose next diff is the mint stating it)",
-                    AND IT IS RETIRED RATHER THAN DELETED: the mint states it, the classifier reads it, and
-                    what a reader re-derives — meeting this column and wanting whose — is to reach for THIS
-                    STRING, which is the axis that residual refutes in both directions.
-                    IT IS THE ROOT OF THE SIGHTING WHOSE CLASS THIS RECORD CARRIES, which is one rule and not
-                    a merge of its own. `addr_class` is a MAX over sightings, so a root taken from the FIRST
-                    sighting would pair a class one sighting proved with a provenance another one held — two
-                    moments in one row, which is §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE at the grain
-                    of a record. It is therefore written at the mint and REPLACED on exactly the line that
-                    raises the class, so the pair is always one sighting's and a reader may read them together.
-                    NULL IS A POSITIVE STATEMENT AND IS TWO OF THEM, WHICH IS WHY THE EMIT SPELLS IT IN TWO
-                    JSON TYPES RATHER THAN ONE. `concolic_root_c` answers NULL both for a value that is not
-                    this engine's concolic at all and for one whose bytes entered through nothing this engine
-                    minted as a source; the first is `addr_class == EPA_CONCRETE` and the second is not, so the
-                    discriminator is the class on the same row and never the absence of this string. */
+                 /* Which sources the address value's bytes entered through, as concolic.h's `concolic_root_c`
+                    spells them: the delivery provenance of the address. A diagnostic, never an operand of the hard
+                    bar: `address_class_of` asks concolic.h's `concolic_root_whose_any` of the value, a fact the
+                    mint stated and every derivation carried, and a classification keyed on this string's spelling
+                    would be a match rather than a run. It is the root of the sighting whose class the record
+                    carries, written at the mint and replaced on the line that raises the class, so class and root
+                    are always one sighting's. NULL is two positive statements: a value that is not this engine's
+                    concolic at all, or one whose bytes entered through nothing minted as a source. The first is
+                    `addr_class == EPA_CONCRETE` and the second is not, so the class on the same row tells them
+                    apart, which is why the emit spells NULL in two JSON types. */
                  char *addr_root;
-                 /* THE BODY THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
-                    `body_params` named NOTHING, so it is never a second spelling of fields already on
-                    `params`, and never overwritten once set: a request body is ONE example, not a set.
-                    TWO FIELDS BECAUSE THEY ARE TWO FACTS, AND EXACTLY ONE IS EVER SET. `body_b64` is bytes
-                    the request SENDS, which is a replay claim; `body_shape` is the display spelling of a body
-                    built out of unknown external input, which names the SOURCE that composes it and is not
-                    replayable. Carrying both in one field is what published a hole as a payload. A consumer
-                    that had to guess which it held would be making the same mistake one layer out, so the
-                    key it is emitted under is the answer.
-                    AND A THIRD, WHICH IS NOT A THIRD RENDERING OF THE SAME BODY BUT A DIFFERENT CLAIM ABOUT A
-                    DIFFERENT ONE. `body_example_b64` is the bytes of a body whose unknown RANGES are named on
-                    `params`, and it is the only one of the three that is set BESIDE named fields rather than
-                    instead of them: the span params say WHERE a reviewer edits, these bytes say what stands
-                    there now, and neither is the other's better answer. It makes no replay claim — some of
-                    these bytes are an unknown's example and some are bytes nobody wrote — which is why it
-                    cannot share `body_b64`'s key however the two are spelled. */
+                 /* The body this engine had no field reader for (endpoint.h): set only where `body_params` named
+                    nothing, so never a second spelling of `params`' fields, and never overwritten, since a request
+                    body is one example. Exactly one of two fields is set: `body_b64` is bytes the request sends, a
+                    replay claim; `body_shape` is the display spelling of a body built from unknown external input,
+                    naming the source and not replayable. The key each is emitted under tells a consumer which.
+                    `body_example_b64` is a different claim about a different body: the bytes of a body whose
+                    unknown ranges are named on `params`, set beside named fields (the span params say where a
+                    reviewer edits, these bytes what stands there now). It makes no replay claim, since some bytes
+                    are an unknown's example, so it cannot share `body_b64`'s key. */
                  char *body_mime, *body_b64, *body_shape, *body_example_b64; } Endpoint;
 
-/* See endpoint.h. THE SWITCH IS GENERATED FROM THE SAME LIST THE ENUM IS, so the two cannot part: a door
-   added to `ENDPOINT_DOORS` gains its arm here in the same expansion, and one added anywhere else does not
-   compile. That is the difference between this and `ep_loc_name` one screen down, whose three-entry table is
-   hand-kept beside its enum and which needs a `CHECK` at every subscript to say so.
-   THE FALLTHROUGH IS A `CHECK` AND NOT A `DCHECK` — `engine_provenance_token`'s reason exactly, and the same
-   severity for the same hazard: this runs once per emitted row in EVERY build, so a release build reaching it
-   would put whatever the register held into a JSON string and publish a plausible mechanism name on an @H
-   record. A zero arrives here only in release, where the mint's own DCHECK is compiled out, which is why the
-   arm that catches a producer who never stated a door has to be the one that ships. */
+/* See endpoint.h. The switch is generated from the list the enum is, so a door added to `ENDPOINT_DOORS` gains its
+   arm in the same expansion, unlike `ep_loc_name`'s hand-kept table, which needs a `CHECK` at every subscript. The
+   fallthrough is a CHECK, as in `engine_provenance_token`: this runs once per emitted row in every build, a zero
+   arrives here only in release (where the mint's DCHECK is compiled out), and a plausible mechanism name published
+   on an @H record is worse than a crash. */
 const char *endpoint_door_token(int door) {
     switch (door) {
 #define ENDPOINT_DOOR_ARM(id, token, reach, bytes) case id: return token;
@@ -177,13 +113,10 @@ const char *endpoint_door_token(int door) {
                 door);
 }
 
-/* See endpoint.h. GENERATED FROM THE SAME LIST AS `endpoint_door_token`, so a door added without a reach does
-   not compile and a reach stated in a second place does not exist. That is the whole of why the reach is a
-   COLUMN and not a table beside the enum: `ep_loc_name` is the hand-kept form in this same file and needs a
-   `CHECK` at every subscript to say so.
-   THE FALLTHROUGH IS A `CHECK` FOR `endpoint_door_token`'s REASON AND WITH ITS SEVERITY — this runs once per
-   emitted @H record in the reach census, in EVERY build, and a release build reaching it would classify a
-   record under whatever the register held, which is a plausible razor reading rather than a missing one. */
+/* See endpoint.h. Generated from the same list as `endpoint_door_token`, so a door added without a reach does not
+   compile and the reach is stated in one place, a column rather than a table beside the enum. The fallthrough is a
+   CHECK for `endpoint_door_token`'s reason: this runs once per emitted @H record in the reach census in every
+   build, and a release build would classify a record under whatever the register held. */
 int endpoint_door_reach(int door) {
     switch (door) {
 #define ENDPOINT_DOOR_REACH_ARM(id, token, reach, bytes) case id: return reach;
@@ -211,12 +144,10 @@ const char *endpoint_reach_token(int reach) {
                 reach);
 }
 
-/* See endpoint.h. `endpoint_reach_token`'s construct and its severity, one list over — and with a sharper
-   reason for the severity here than either of those two have: this runs once per EMITTED ROW as well as once
-   per census row, so a release build falling through would write whatever the register held into the one key
-   on an @H record that states the product's own hard bar, which is a plausible verdict rather than a missing
-   one. There is no `EPA_UNSTATED` arm to catch because there is no producer who could forget: the class is
-   derived at the door from the address value itself (see `address_class_of`). */
+/* See endpoint.h. `endpoint_reach_token`'s construct and severity, with a sharper reason: this runs once per
+   emitted row too, so a release fallthrough would write whatever the register held into the key that states the
+   product's own hard bar. There is no `EPA_UNSTATED` arm, because no producer can forget: the class is derived at
+   the door from the address value (`address_class_of`). */
 const char *endpoint_address_class_token(int cls) {
     switch (cls) {
 #define ENDPOINT_ADDRESS_CLASS_ARM(id, token) case id: return token;
@@ -232,13 +163,11 @@ const char *endpoint_address_class_token(int cls) {
                 cls);
 }
 
-/* See endpoint.h. GENERATED FROM THE SAME LIST AS `endpoint_door_reach`, one column over, so a door added
-   without stating whose bytes it hands this surface does not compile — which is the whole point, because the
-   direction a forgotten door would err in is the SAFE one (`EPB_DOCUMENT` proves nothing) and CLAUDE.md
-   §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates that as the direction nobody discovers.
-   THE FALLTHROUGH IS A `CHECK` FOR `endpoint_door_reach`'s REASON AND WITH ITS SEVERITY — this runs once per
-   emitted @H record in EVERY build, and a release build reaching it would hand the razor composer whatever the
-   register held, which publishes a plausible answer to the product's own bar rather than a missing one. */
+/* See endpoint.h. Generated from the same list as `endpoint_door_reach`, one column over, so a door added without
+   stating whose bytes it hands this surface does not compile; a forgotten door would err in the safe direction
+   (`EPB_DOCUMENT` proves nothing), the under-claim nobody discovers. The fallthrough is a CHECK for
+   `endpoint_door_reach`'s reason: once per emitted @H record in every build, it would otherwise hand the razor
+   composer a plausible answer. */
 int endpoint_door_bytes(int door) {
     switch (door) {
 #define ENDPOINT_DOOR_BYTES_ARM(id, token, reach, bytes) case id: return bytes;
@@ -252,9 +181,8 @@ int endpoint_door_bytes(int door) {
                 door);
 }
 
-/* See endpoint.h. `endpoint_reach_token`'s construct and its severity, one list over — and with the sharper
-   reason `endpoint_address_class_token` has: this runs once per EMITTED ROW in every build, on the one key of
-   an @H record that states the product's own hard bar. */
+/* See endpoint.h. `endpoint_reach_token`'s construct and severity, with `endpoint_address_class_token`'s sharper
+   reason: it runs once per emitted row in every build, on the key that states the product's hard bar. */
 const char *endpoint_razor_class_token(int cls) {
     switch (cls) {
 #define ENDPOINT_RAZOR_CLASS_ARM(id, token) case id: return token;
@@ -269,13 +197,10 @@ const char *endpoint_razor_class_token(int cls) {
                 cls);
 }
 
-/* See endpoint.h. `endpoint_address_class_token`'s construct and its severity, one list over, and with the
-   extra reason that list's own banner gives: this word is the only published bound on the one population the
-   razor's `unproven` holds whose BYTES THIS ENGINE CHOSE, so a release build publishing a word nothing
-   decided would put a measurement under a figure nobody took. (That clause read "really is past every parse"
-   until endpoint.h's banner measured the claim and retired it — a pin's bytes are a literal the page's own
-   predicate spelled, so the population is held CORRECTLY by `unproven` and what this word bounds is
-   REPRODUCIBILITY. The severity is unchanged and so is the class.) */
+/* See endpoint.h. `endpoint_address_class_token`'s construct and severity, with that list's banner's extra reason:
+   this word is the only published bound on the part of the razor's `unproven` whose bytes this engine chose (a
+   pin's bytes are a literal the page's own predicate spelled, so what it bounds is reproducibility), and a release
+   build publishing a word nothing decided would put a measurement under a figure nobody took. */
 const char *endpoint_witness_class_token(int cls) {
     switch (cls) {
 #define ENDPOINT_WITNESS_CLASS_ARM(id, token) case id: return token;
@@ -289,54 +214,42 @@ const char *endpoint_witness_class_token(int cls) {
                 cls);
 }
 
-/* WHAT THE RUNNING PATH HAS CHOSEN, ASKED ONLY WHERE THERE IS A PATH TO ASK — see endpoint.h for what each
-   member claims. The gate is not defensive: `engine_pinned_of_running_path` DCHECKs that a flow stands and
-   says why in its own words, and a record minted while this instance had started no program at all is a real
-   and ordinary population (`pre_program` counts it, and on one real page it is 98 of 190), so asking
-   unconditionally would abort a dev build on the commonest document shape there is. The third member is what
-   makes the gate a STATEMENT rather than a default: `unasked` says the question was not asked, which is a
-   different fact from `no-witness` and is the one a reader must not have folded into it. */
+/* What the running path has chosen, asked only where there is a path to ask (endpoint.h has each member's claim).
+   The gate is not defensive: `engine_pinned_of_running_path` DCHECKs that a flow stands, and a record minted before
+   this instance started any program is an ordinary population (`pre_program` counts it), so asking unconditionally
+   would abort on the commonest document shape. `unasked` makes the gate a statement: the question was not asked,
+   a different fact from `no-witness`. */
 static int witness_class_now(void) {
     if (flow_running() == NULL) return EPW_UNASKED;
     return engine_pinned_of_running_path() ? EPW_MAY_REST_ON : EPW_NO_WITNESS;
 }
 
-/* See endpoint.h. THE UNION, AND IT IS A UNION RATHER THAN AN INTERSECTION FOR THE REASON THE ADDRESS CLASS'S
-   OWN MERGE IS ONE: each operand is a POSITIVE statement that the address exists only at run time, so an
-   intersection would answer `unproven` for a row one of the two already proved and make the floor read LOWER
-   than what the run established.
-   NO ASSERT ON EITHER OPERAND AND THAT IS NOT AN OMISSION. Both arrive through generated switches whose
-   fallthrough is a `CHECK` in every build, so each is a member of its list or the program has already
-   stopped; an assert here could not fail, and CLAUDE.md §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE rates a
-   non-check wearing a check's syntax as worse than none.
-   IT ANSWERS THE TWO OPERANDS IN THIS ORDER AND THE ORDER IS NOT LOAD-BEARING, which is worth saying because
-   the two `if`s look like a precedence: they cannot disagree, since both arms return the same member. */
+/* See endpoint.h. A union rather than an intersection, for the address class's own merge's reason: each operand is
+   a positive statement that the address exists only at run time, so an intersection would answer `unproven` for a
+   row one of them proved and make the floor read lower than the run established. No assert on either operand:
+   both arrive through generated switches whose fallthrough is a CHECK in every build, so an assert here could not
+   fail. The two `if`s are not a precedence: both return the same member. */
 int endpoint_razor_class_of(int door, int addr_class) {
-    /* `== EPA_UNKNOWN` AND NOT `!= EPA_CONCRETE`, WHICH IS WHY THIS LINE IS BYTE-IDENTICAL AT BOTH OF THAT
-       LIST'S WIDENINGS. Every member added to `ENDPOINT_ADDRESS_CLASSES` has gone in BELOW the one this bar
-       reads, so each carved a population OUT of this claim without a character changing here — which is the
-       whole of why that list is where a narrowing of the bar goes and no operand of this function is.
-       `EPA_SOURCE_DETERMINED` is an address THIS FLOW determined out of a source, and a pin's bytes are the
-       equality's other operand — a literal the page's own text spells — so such an address does NOT exist
-       only at run time and this bar may not claim it. `EPA_UNKNOWN_UNPROVEN` is one the run did NOT determine
-       and whose every root this engine minted, or the served document spells, or no mint could speak for, so
-       the bar's own sentence is either FALSE of it or UNPROVEN about it. `!= EPA_CONCRETE` is the spelling
-       that would claim both, and it is the over-claim endpoint.h's banner measures: it reads as the more
-       natural complement precisely because both members sit on the concolic side of `url_display`'s branch.
-       Each is published as its own census row so the population that LEFT this class is countable rather than
-       folded into `unproven` unseen. */
+    /* `== EPA_UNKNOWN`, not `!= EPA_CONCRETE`: every member added to `ENDPOINT_ADDRESS_CLASSES` goes below the one
+       this bar reads, carving a population out of the claim without a character changing here, which is why that
+       list is where a narrowing of the bar goes. `EPA_SOURCE_DETERMINED` is an address this flow determined out of
+       a source, whose pin's bytes are a literal the page's own text spells, so it does not exist only at run time.
+       `EPA_UNKNOWN_UNPROVEN` is one the run did not determine and whose every root this engine minted, or the
+       served document spells, or no mint could speak for, so the bar is false of it or unproven about it.
+       `!= EPA_CONCRETE` would claim both, the over-claim endpoint.h's banner measures; it reads as the natural
+       complement because both members sit on the concolic side of `url_display`'s branch. Each is its own census
+       row, so the population that left this class is countable. */
     if (addr_class == EPA_UNKNOWN) return EPZ_RUNTIME_ONLY;
     if (endpoint_door_bytes(door) == EPB_OFF_DOCUMENT) return EPZ_RUNTIME_ONLY;
     return EPZ_UNPROVEN;
 }
 
-/* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
-   real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
-   is exactly what a param's example values already do. */
+/* A value carrying a `{hole}` is a shape, an unknown the code did not compute, and a hole-free one is the real
+   thing; a concrete value supersedes a shape for the same header, as a param's example values do. */
 static int header_is_shape(const char *v) { return strchr(v, '{') != NULL; }
 
-/* Returns HOW MANY HEADER NAMES THIS ENDPOINT DID NOT HAVE BEFORE — the caller credits the WFQ with it, and
-   that is the whole reason this is not `void` any more. See the merge site. */
+/* Returns how many header names this endpoint did not have before; the caller credits the WFQ with it (see the
+   merge site). */
 static int endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int nhdrs) {
     int gained = 0;
     for (int i = 0; i < nhdrs; i++) {
@@ -370,190 +283,116 @@ static int endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int n
 
 static Endpoint *g_eps = NULL;
 static int g_eps_n = 0, g_eps_cap = 0;
-static int g_suppress = 0;   /* a candidate/verify re-run's requests are @S artifacts, NOT real @H */
+static int g_suppress = 0;   /* a candidate/verify re-run's requests are @S artifacts, not real @H */
 
-/* THE ASK, WHICH THE FOUR NUMBERS BESIDE THE SURFACE STRUCTURALLY CANNOT CARRY. endpoint_surface_census walks
-   the RECORD ARRAY, so every figure it produces is a count of OUTCOMES — and CLAUDE.md
-   §AN-INVARIANT-OVER-A-GATED-OPERATION names exactly what that costs: a census of what LANDED cannot tell a
-   component that never asked from one whose ask a gate correctly refused, and the repair is to record at the
-   CALL rather than to relocate the outcome. These are that recording. endpoint_record is the one door every
-   HTTP-shaped edge in this engine passes through (endpoint.h's own funnel note and the derivation beside it),
-   so a count taken at its entry is the number of times this engine COMPOSED a request and offered its address
-   to this surface, which is a question about this engine's execution and not about its surface.
-   THAT CLAUSE READ `the number of times a network call site was REACHED` AND THE INFERENCE IS INVALID — see
-   endpoint.h's retirement of it, which names the five Fetch §5.4 stages standing in front of this door and the
-   residual for the count that would make the stronger sentence true. It is rewritten rather than deleted
-   because the premise above it is correct and a reader who re-derives the conclusion from it will re-add it.
-   WHAT THE OUTCOME ROWS CANNOT SAY, AND IT IS THE PRODUCT'S OWN QUESTION. `emitted - preProgram` is documented
-   in endpoint.h as a CEILING on what forced execution contributed, and a zero there has at least two readings
-   that take opposite work: no arm ever composed a request at all, or arms composed one and every address they
-   built was already on the surface. The second is invisible to every row the census has,
-   because a repeat sighting MERGES — the record exists, its `pre_program` was decided at ITS mint and is
-   deliberately not re-armed (see the struct), and nothing anywhere moves. `asks - preProgram` reads nonzero in
-   the second case and zero in the first, which is the separation it is offered as — and it is a CEILING on
-   that reading rather than the reading itself, because it is nonzero for a post-program ask that MINTED and
-   for one that merged into a record post-program code had itself minted. `merged_pre_program` below is the
-   reading stated exactly.
-   SIX ROWS, TWO PARTITIONS AND A CUT, OVER ONE EVENT. By OUTCOME, `suppressed + merged + minted == asks`,
-   asserted where all four are in one hand; by PROGRAM STATE, `preProgram <= asks`, a containment rather than a
-   second partition for `endpoint_surface_census`'s reason exactly — the complement is what a reader computes
-   and a stored complement is a second raise free to drift from the first. The sixth is a CUT INSIDE the
-   merged arm and is summed with nothing; its own two containments are asserted at the accessor.
-   EVERY ONE IS A LIFETIME COUNT AND NONE IS A GAUGE, which is stated here because CLAUDE.md §Testing records
-   this tree being misled by that twice: they may be differenced across samples and they may be accumulated,
-   they cannot decrease, and a sample lower than its predecessor is this file and not the run. Their SCOPE is
-   the SURFACE's, not the process's — they are reset in endpoint_init and again in endpoint_free beside
-   `g_eps_n`, because one process runs many sessions (solver/engine.c's teardown makes that argument for the
-   counters it resets there) and a count left standing would report a previous document's asks under this
-   document's name, in the direction that looks healthy.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no ask is refused because of one, and no
-   arm is narrowed by one. The only consumers are the identities below. */
+/* The ask, which the outcome figures beside the surface cannot carry. endpoint_surface_census walks the record
+ * array, so every figure it produces counts outcomes, and a census of what landed cannot tell a component that
+ * never asked from one whose ask a gate correctly refused; the repair is to record at the call. endpoint_record
+ * is the one door every HTTP-shaped edge passes through (endpoint.h's funnel note), so a count at its entry is the
+ * number of times this engine composed a request and offered its address to this surface. It is not the number of
+ * times a network call site was reached: five Fetch §5.4 stages stand in front of this door (endpoint.h, with the
+ * residual for that count).
+ *
+ * `emitted - preProgram` is a ceiling on what forced execution contributed (endpoint.h), and its zero has two
+ * readings that take opposite work: no arm composed a request, or arms composed requests whose addresses were
+ * already on the surface. A repeat sighting merges and moves nothing (the record's `pre_program` was decided at
+ * its mint), so the second is invisible to every outcome row. `asks - preProgram` is nonzero in the second case
+ * and zero in the first, a ceiling on that reading (it is also nonzero for a post-program ask that minted, and
+ * for one that merged into a record post-program code minted); `merged_pre_program` below states it exactly.
+ *
+ * Six rows, two partitions and a cut over one event. By outcome, `suppressed + merged + minted == asks`, asserted
+ * where all four are in hand; by program state, `preProgram <= asks`, a containment, since a stored complement
+ * would be a second raise free to drift. The sixth is a cut inside the merged arm, summed with nothing, its
+ * containments asserted at the accessor. Every one is a lifetime count, never a gauge: it may be differenced or
+ * accumulated and never decreases, so a sample below its predecessor is this file and not the run. Their scope is
+ * the surface's, not the process's: reset in endpoint_init and endpoint_free beside `g_eps_n`, because one process
+ * runs many sessions and a standing count would report a previous document's asks under this one's name. A
+ * report, never a bound: nothing branches on one. */
 static long g_asks;             /* every call that reached the door, counted before the gate */
 static long g_asks_pre_program; /* …of those, the ones asked before this instance had started any program */
 static long g_ask_suppressed;   /* declined AT the gate: a candidate/verify re-fire is an @S artifact */
 static long g_ask_merged;       /* reached a record this surface already held — the invisible arm */
 static long g_ask_minted;       /* created a record — the arm, and the only one, that moves `epMinted` */
-/* AND THE ONE CUT OF THE MERGED ARM THAT ANSWERS THE RAZOR'S OWN SENTENCE, WHICH `asks - preProgram` STATES
-   AND DOES NOT MEASURE. endpoint.h names two readings of a zero `emitted - preProgram` and offers that
-   subtraction as the separation between them; it is nonzero in the arm it names (an ask made after a program
-   started, reaching an address the surface already held) and ALSO in two arms it does not — a post-program ask
-   that MINTED, and a post-program ask that merged into a record post-program code had itself minted. So the
-   subtraction bounds the "reached and already known" reading from above and never states it. This is that
-   reading: the ask was made with a program running AND the record it reached was minted before any program
-   had run, which is running code composing an address the MARKUP had already named. Nothing else in either
-   census can be that, because a merge moves no figure on the surface at all.
-   IT IS A CUT AND NOT A FOURTH ARM. The three arms partition the door's exits; this selects inside one of
-   them on a fact about the RECORD, so it is contained in `merged` and contained in `asks - preProgram`, and
-   both containments are asserted in endpoint_ask_census where every term is in one hand. A stored complement
-   would be a second raise free to drift from the first, which is the reason `preProgram` has none either.
-   ITS ZERO IS FOUR STATES AND THE OTHER ROWS SEPARATE THEM, which is what makes it worth publishing rather
-   than a fifth number nobody can read: no post-program ask was made at all (`asks == preProgram`); they were
-   made and SUPPRESSED; they were made and MINTED, which `emitted - preProgram` then shows unless the reply
-   classified them as files; or they merged only into records post-program code had minted itself. A NONZERO
-   is one statement and one only. */
+/* The cut of the merged arm that answers the razor's own sentence, which `asks - preProgram` bounds from above and
+ * never states: the ask was made with a program running and the record it reached was minted before any program
+ * had run, running code composing an address the markup had already named. Nothing else in either census can be
+ * that, since a merge moves no surface figure. A cut, not a fourth arm: it selects inside `merged` on a fact
+ * about the record, so it is contained in `merged` and in `asks - preProgram`, both asserted in
+ * endpoint_ask_census. Its zero is four states the other rows separate: no post-program ask (`asks ==
+ * preProgram`); asks suppressed; asks minted (shown by `emitted - preProgram` unless the reply classified them as
+ * files); or merges only into records post-program code minted. A nonzero is one statement. */
 static long g_ask_merged_pre_program;
-/* AND WHETHER THE BOUNDARY THE TWO PROGRAM-STATE ROWS ARE GRADED AGAINST WAS ALREADY PAST WHEN THIS SURFACE'S
-   COUNTERS WERE LAST RESET — a latch, because the disagreement it catches is between two SCOPES and neither
-   census can see a scope from inside itself.
-   THE ARM IS IN A CALLEE AND NO COUNT OF WHAT IS WRITTEN AT THE RAISE SITE CAN REACH IT (CLAUDE.md
-   §COUNT-THE-ARMS-THAT-CAN-PRODUCE-THE-VALUE). `engine_any_program_started` reads `g_prog_starts`, which
-   solver/engine.c's session teardown NAMES ON ITS NOT-RESET LIST and never assigns anywhere: it is the
-   INSTANCE's total, monotone for the life of the process, and it is deliberately so because it partitions
-   against two siblings that would break their identity if some of them were zeroed. Every counter in THIS
-   file is reset at `endpoint_free`, because one process runs many sessions and a count left standing would
-   report a previous document's asks under this document's name. Those two scopes are not the same scope.
-   WHAT A SECOND SESSION THEREFORE READS IS THE RAZOR AT ITS MAXIMUM AND ITS WHOLE VALUE IS WRONG. The @H
-   counters restart at zero and the program bit does not, so EVERY ask of the second document — including
-   every `<script src>` and `<link>` of a `<head>` that had not run a line — grades POST-program:
-   `preProgram` reads 0, `emitted - preProgram` reads the whole surface, and a number CLAUDE.md
-   §What-the-tool-produces calls the product's own razor reports the markup door as forced execution's entire
-   contribution. It is the flattering direction, it is silent, and it is invisible to both censuses' own
-   identities, every one of which holds perfectly while it happens.
-   IT IS A LATCH AND NOT A COMPARISON AT THE CENSUS, because by the census the damage is already in the
-   records: `pre_program` is decided at each MINT and never re-armed, so a run that graded wrongly cannot be
-   detected from the figures it produced — they are internally consistent. The only instant at which the two
-   scopes are distinguishable is the one where this file's scope restarts and the engine's has not, which is
-   what this records.
-   A REPORT AND NEVER A BOUND: nothing branches on it but the assert, no ask is refused because of it, and it
-   is compiled out of release with the assert that reads it. */
+/* Whether the boundary the two program-state rows are graded against was already past when this surface's
+ * counters were last reset: a latch, because the disagreement it catches is between two scopes, which neither
+ * census can see from inside itself. `engine_any_program_started` reads `g_prog_starts`, which solver/engine.c's
+ * session teardown keeps on its not-reset list (the instance's total, monotone for the process), while every
+ * counter here is reset at endpoint_free. So a second session's @H counters restart at zero and the program bit
+ * does not, and every ask of the second document, including every `<script src>` and `<link>` of a `<head>` that
+ * had not run a line, grades post-program: `preProgram` reads 0 and `emitted - preProgram` the whole surface, the
+ * markup door reported as forced execution's whole contribution, silently and with every census identity holding.
+ * A latch rather than a census-time comparison, because `pre_program` is decided at each mint and the wrong
+ * grading leaves internally consistent figures; the one instant the scopes are distinguishable is where this
+ * file's restarts and the engine's has not. Compiled out of release with the assert that reads it. */
 static int g_boundary_spent;
 
-/* THE HOST EDGES' OWN ENTRIES — endpoint.h states both contracts in full. These live HERE and not in
-   core/fetch/fetch.c and core/xhr/xml_http_request.c for two reasons, and the second is the one that could
-   not be got any other way.
-   THEIR SCOPE HAS TO BE THIS FILE'S. They are read against the ask rows above, and the whole of what
-   `g_boundary_spent` exists to catch is a counter graded against a boundary whose scope is not its own. Reset
-   beside `g_asks` in endpoint_init and endpoint_free, the disagreement is not asserted away, it is
-   unreachable.
-   AND ONE OF THE IDENTITIES SPANS THE TWO. `offered <= asks` is the relation that makes an edge's share of
-   this surface's ask population readable, and it is checkable only where both terms are in one hand — which
-   is here and nowhere else. The alternative was each edge holding its own counters and this file reading them
-   back, which is the same number in two places with a call between them.
-   THE LABELS ARE EACH MACHINE'S AND ARE HANDED OVER RATHER THAN COPIED. The `steps` field below is
-   core/fetch's own `js_fetch_steps[]` or core/xhr's own `SEND_STEPS` — static tables of string literals, so
-   they outlive every document and this file may key on them — and `stage_n` is derived from the NULL
-   terminator. A stage added to either X-list adds a row here with no edit at all; a second list spelled here
-   would be the drifting copy §AN-AUDITOR-DERIVES-THE-RULE forbids, and it would drift silently, because a
-   missing row reads as a stage nothing died at. */
-/* ONE STRUCT AND TWO INSTANCES, NOT TWO SETS OF STATICS. There are two host edges with this shape — core/
-   fetch's request construction and core/xhr's `send()` — and the arithmetic over them is IDENTICAL: a
-   partition over one teardown and a containment against the ask that preceded it. Spelling it twice would be
-   two implementations of one mechanism with the identities in two places, which is the second copy
-   §AN-AUDITOR-DERIVES-THE-RULE forbids and which drifts in the direction nobody sees, since a census that
-   asserts less still publishes numbers.
-   WHAT IS PER-EDGE AND STAYS PER-EDGE IS THE ROW NAMES. `json_buf_key` takes a STRING LITERAL and the
-   compiler enforces it (core/json_buf.h states why), so a shared emitter could not compose `epFetch…` or
-   `epXhr…` at all — and that is the property that makes every field name this seam publishes readable off
-   this source. So the STATE and the ARITHMETIC are shared and the KEYS are written out per edge.
-   `reached` IS THE FIELD EACH EDGE NAMES FOR ITSELF. For core/fetch it is the OFFER — the construction got to
-   §5.6 step 12 and handed this surface an address. For core/xhr it is the PLACEMENT — the construction got to
-   §3.5.6 step 12/13 and handed the request to the lifecycle machine, which is one machine away from the door
-   and cannot be a fact about the send state that is already gone. Both are "the construction completed", the
-   partition is over whichever it is, and each edge's rows spell which in their own names.
-   EVERY COUNT IS A LIFETIME COUNT AND NONE IS A GAUGE — they may be differenced and accumulated, they cannot
-   decrease, and a sample below its predecessor is this file and not the run. A REPORT AND NEVER A BOUND. */
+/* The host edges' own entries (endpoint.h states both contracts). They live here rather than in core/fetch/fetch.c
+   and core/xhr/xml_http_request.c because their scope must be this file's: they are read against the ask rows
+   above, and reset beside `g_asks` in endpoint_init and endpoint_free, the scope disagreement `g_boundary_spent`
+   catches is unreachable. `offered <= asks`, which makes an edge's share of this surface's ask population
+   readable, is checkable only with both terms in one hand. The labels are each machine's, handed over rather than
+   copied: `steps` is core/fetch's `js_fetch_steps[]` or core/xhr's `SEND_STEPS`, static string-literal tables that
+   outlive every document, and `stage_n` comes from the NULL terminator, so a stage added to either X-list adds a
+   row here with no edit, where a second list spelled here would drift silently (a missing row reads as a stage
+   nothing died at). */
+/* One struct and two instances: the two host edges (core/fetch's request construction, core/xhr's `send()`) have
+   identical arithmetic, a partition over one teardown and a containment against the preceding ask. The row names
+   stay per edge, because `json_buf_key` takes a string literal (core/json_buf.h), which keeps every published
+   field name readable off this source; so state and arithmetic are shared and keys are written out per edge.
+   `reached` is what each edge names for itself: for core/fetch the offer (the construction reached §5.6 step 12 and
+   handed this surface an address), for core/xhr the placement (§3.5.6 step 12/13 handed the request to the
+   lifecycle machine, one machine away from the door). Both mean "the construction completed". Lifetime counts,
+   never gauges; a report, never a bound. */
 typedef struct {
     const char *const *steps;   /* the edge's own stage labels, borrowed from its X-list — never a copy */
     long *died;                 /* one per stage, sized at the declare from the table above */
     int   stage_n;              /* how many, from that table's NULL terminator */
     int   stage_first;          /* the stage number `steps[0]` is — the edge states it, this file never assumes */
-    /* THE FREE GLOBAL IDENTIFIER A PROGRAM MUST SPELL TO REACH THIS EDGE — `fetch`, `XMLHttpRequest` — and it
-       is the EDGE's to state beside its stage table, for `stage_first`'s reason exactly: which name a component
-       installs itself under is that component's own fact, and a table of them here would be the drifting second
-       copy §AN-AUDITOR-DERIVES-THE-RULE forbids. It would drift in the SILENT direction, which is why it is not
-       a convenience: a name that stopped matching reads as a program that never spelled it, and that reading is
-       indistinguishable from the finding the rows below exist to publish. Borrowed and never copied — a literal
-       with static storage at the declaring site, as `steps` is. */
+    /* The free global identifier a program must spell to reach this edge (`fetch`, `XMLHttpRequest`), stated by
+       the edge beside its stage table, for `stage_first`'s reason: which name a component installs itself under is
+       its own fact, and a table here would drift silently (a name that stopped matching reads as a program that
+       never spelled it). Borrowed: a literal with static storage at the declaring site. */
     const char *entry;
-    /* ASK, ONE FRAME FURTHER OUT AGAIN, AND THE ONLY PAIR IN THIS STRUCT THAT IS NOT A FACT ABOUT A FLOW.
-       Every other row here is raised from a live frame, so every one of them is a fact about a site some flow
-       REACHED. That left the whole census structurally unable to say the one thing a reader of a zero most
-       needs: an occurrence nobody reached has no frame, no operand and no moment, so there is no runtime edge
-       that could report it and — the sharper half — no assert that could stand on it either. The only invariant
-       that would have fired is `this document asked for something`, whose operand is a count derived from the
-       PAGE'S OWN BYTES, and §WHOSE-BYTES-STATE-THE-VALUE forbids exactly that: a page does not have to be
-       hostile to hold an abort switch, it only has to ship no `fetch`. So the artifact is a ROW WITH A
-       DENOMINATOR and never a `DCHECK`, and this is the denominator.
-       WHERE IT IS RAISED IS WHAT MAKES IT ONE: quickjs's own `resolve_scope_var` reports every free identifier
-       it resolves against the global object, which is the last instant at which this engine knows what a
-       program NAMES independently of what any flow RAN. §AN-INVARIANT-OVER-A-GATED-OPERATION says to census the
-       ASK rather than the OUTCOME; REACH is an arm that declines, so the recording point has to sit upstream of
-       reach, and the only point upstream of reach is COMPILATION.
-       WHAT THE PAIR TURNS A ZERO INTO. `called == 0` stood for three states that take opposite work — the
-       program names no such call, a flow never reached one it does make, or the hook is not wired. With
-       `named == 0` beside it the first is separated from the second, which is the whole diff; `named > 0 &&
-       called == 0` is the second, and it is the state CLAUDE.md §What-the-tool-produces is about, since every
-       address behind such a site is a surface a parse of the same bytes recovers and this engine did not.
-       IT IS A FLOOR OVER ONE SPELLING AND NO CONTAINMENT WITH `called` MAY BE ASSERTED IN EITHER DIRECTION,
-       which is not a caution but the reason there is no `DCHECKF` under these two rows where there is one under
-       every other pair in this file. `called > named` is ORDINARY: `window.fetch(u)` is a property read and
-       `(function (fetch) {…})(self.fetch)` is a local slot, and neither reaches a global resolution at all.
-       `named > called` is ordinary too, and for a second reason on top of the finding: a program is recompiled
-       by every flow that replays it, so this counts COMPILER RESOLUTIONS and never source sites — it is read as
-       a BIT and never as a magnitude, and its name says `Named` rather than `Sites` so that nobody reads it
-       against a static per-bundle site count and finds two populations under one number.
-       `named_typeof` IS THE DISCRIMINATOR THAT KEEPS THE FINDING HONEST and is named for the OPERATOR rather
-       than for a category. The unary parser patches an ordinary read into the non-throwing form only for
-       `typeof` (ECMAScript §13.5.3 "The typeof Operator" step 2.a answers an unresolvable reference without
-       throwing), so a bundle that merely PROBES for `fetch` and uses something else raises this row and not the
-       one above it — §AND-THAT-FORCING-FUNCTION-FIRES-ONLY-ON-UNGUARDED-USE's split, arriving at the compiler.
-       It is NOT every guard shape and must not be read as one: `window.fetch` and `"fetch" in self` are
-       property reads and reach neither row. */
+    /* The ask one frame further out, and the only pair here that is not a fact about a flow. Every other row is
+     * raised from a live frame, about a site some flow reached, so the census could not say what a reader of a
+     * zero most needs: an occurrence nobody reached has no frame, no operand and no moment, so no runtime edge can
+     * report it and no assert stand on it (the only invariant, "this document asked for something", has an operand
+     * derived from the page's own bytes, which may not be asserted on; a page need only ship no `fetch`). So the
+     * artifact is a row with a denominator, and this is the denominator. It is raised where quickjs's
+     * `resolve_scope_var` reports every free identifier it resolves against the global object, the last instant
+     * this engine knows what a program names independently of what any flow ran: upstream of reach, compilation is
+     * the only recording point.
+     *
+     * With `named` beside it, `called == 0` separates "the program names no such call" from "a flow never reached
+     * one it makes" (`named > 0 && called == 0`, the state the runtime-only razor is about, since every address
+     * behind such a site is one a parse of the bytes recovers and this engine did not) and "the hook is not
+     * wired". A floor over one spelling, with no containment against `called` in either direction: `called >
+     * named` is ordinary (`window.fetch(u)` is a property read, `(function (fetch) {…})(self.fetch)` a local
+     * slot), and so is `named > called`, also because every flow that replays a program recompiles it, so this
+     * counts compiler resolutions, never source sites: a bit, not a magnitude, named `Named` rather than `Sites`.
+     *
+     * `named_typeof` is named for the operator: the unary parser patches an ordinary read into the non-throwing
+     * form only for `typeof` (ECMAScript §13.5.3 "The typeof Operator" step 2.a answers an unresolvable reference
+     * without throwing), so a bundle that only probes for `fetch` raises this row and not the one above. It is not
+     * every guard shape: `window.fetch` and `"fetch" in self` are property reads and reach neither row. */
     long  named;
     long  named_typeof;
-    /* …AND THE PROPERTY SPELLING OF THE SAME ENTRY, WHICH IS A SECOND FACT ABOUT ONE OCCURRENCE AND NOT A
-       SECOND OCCURRENCE. `globalThis.fetch(u)` names this edge's entry and resolves no scope for it: the
-       member is a FIELD GET and only the BASE is a free identifier, so the row above is structurally blind
-       to it. It is a row of ITS OWN and is never summed into `named`, because the `typeof` SPLIT CANNOT BE
-       REPRODUCED for a property — ECMAScript §13.5.3 "The typeof Operator" step 2.a needs a non-throwing
-       read only for an unresolvable REFERENCE, and a property of an object is `undefined` when absent, so
-       `typeof globalThis.fetch` emits the same field get as a use and merging would put feature detection
-       into the population a reader takes for uses.
-       MEASURED, which is why this row exists at all rather than as a widening of the one above: on
-       app.gitpod.io the property spelling is TWO occurrences against 33 bare ones — and both are
-       `await (e.fetch ?? globalThis.fetch)(r.url, …)` inside connect-es's transport, which is every one of
-       that application's 131 protobuf RPC methods. A thin population is not a small one when it is the only
-       door an app's whole API goes through. */
+    /* And the property spelling of the same entry, a second fact about one occurrence. `globalThis.fetch(u)`
+       resolves no scope for `fetch`: the member is a field get and only the base is a free identifier, so the row
+       above is blind to it. Its own row, never summed into `named`, because the `typeof` split cannot be
+       reproduced for a property (ECMAScript §13.5.3 "The typeof Operator" step 2.a needs a non-throwing read only
+       for an unresolvable reference, and an absent property is `undefined`), so `typeof globalThis.fetch` emits
+       the same field get as a use. A thin population can be the only door an app's API goes through, as with
+       connect-es's `await (e.fetch ?? globalThis.fetch)(r.url, …)`. */
     long  named_prop;
     /* `called` is raised at the hosting machine's stage 0, one frame before `began` (raised at the member's
        first stage, IDL_STEP_FIRST). Stages 0 and 1 are the argument-count check and the ES-to-IDL conversions,
@@ -565,42 +404,41 @@ typedef struct {
        a page getter the conversion runs) leaves stage 0 behind and gives each sibling its own begin against
        one call. So `called >= began` holds only where conversions cannot fork, and the fetch edge asserts
        only that a begin implies some call. */
-    long  called;               /* ASK: calls that entered the HOSTING machine's prologue (stage 0) */
-    long  began;                /* ASK: constructions that began (the machine's one-time capture) */
-    long  reached;              /* ASK: …of those, the ones whose construction COMPLETED (see above) */
-    long  freed;                /* OUTCOME: states torn down after a construction began */
-    long  freed_reached;        /* OUTCOME: …of those, the ones that had completed */
+    long  called;               /* ask: calls that entered the hosting machine's prologue (stage 0) */
+    long  began;                /* ask: constructions that began (the machine's one-time capture) */
+    long  reached;              /* ask: …of those, the ones whose construction completed (see above) */
+    long  freed;                /* outcome: states torn down after a construction began */
+    long  freed_reached;        /* outcome: …of those, the ones that had completed */
 } EndpointEdge;
 
 static EndpointEdge g_fetch_edge;
 static EndpointEdge g_xhr_edge;
-/* AND THE ONE ROW THAT IS NOT A FACT ABOUT ANY SEND STATE. core/xhr records from its LIFECYCLE machine, which
-   the send state may already have been torn down before, so the edge's offer to this surface cannot live in
-   the struct above beside a partition it does not belong to. It is the row that carries the `offered <= asks`
-   containment for that edge, and endpoint.h states why no relation between it and `reached` may be asserted. */
+/* And the one row that is not a fact about any send state: core/xhr records from its lifecycle machine, after which
+   the send state may be gone, so the edge's offer to this surface cannot sit in the struct above beside a partition
+   it does not belong to. It carries the `offered <= asks` containment for that edge; endpoint.h states why no
+   relation between it and `reached` may be asserted. */
 static long  g_xhr_offered;
 
-/* THE COUNTERS BACK TO ZERO, THE ALLOCATION LEFT ALONE. endpoint_init asserts the array ABSENT rather than
-   zeroing it — see its own comment — so this resets what a new session owns and touches nothing it does not. */
+/* The counters back to zero, the allocation left alone: endpoint_init asserts the array absent rather than zeroing
+   it (see its comment), so this resets what a new session owns and nothing else. */
 static void edge_reset(EndpointEdge *e) {
     e->named = e->named_typeof = e->named_prop = 0;
     e->called = e->began = e->reached = e->freed = e->freed_reached = 0;
 }
 
-/* …AND THE ARRAY GIVEN BACK AND THE TABLE LET GO, in that order and both of them, because the next session's
-   edge declares itself again at its own init: keeping the array would be a session's allocation outliving the
-   session, and keeping the pointer while freeing the array would leave the next declare taking its early
-   return and every teardown indexing a freed block. */
+/* And the array given back and the table let go, in that order and both, because the next session's edge declares
+   itself again at its own init: keeping the array would let a session's allocation outlive the session, and keeping
+   the pointer while freeing the array would leave the next declare taking its early return and every teardown
+   indexing a freed block. */
 static void edge_release(EndpointEdge *e) {
     edge_reset(e);
     free(e->died);
     e->died = NULL;
     e->steps = NULL;
-    /* AND THE ENTRY NAME WITH THE TABLE, which is what scopes the compile report to the session: nothing
-       matches an edge that has not declared, so a program compiled before this session opened or after it
-       closed raises no row into it. The `g_boundary_spent` defect one field over is a counter graded against a
-       boundary that is not its own, and this is the same boundary answered by construction rather than by an
-       assert — a compile is the one event this file receives that a host can perform outside a session. */
+    /* And the entry name with the table, which scopes the compile report to the session: nothing matches an edge
+       that has not declared, so a program compiled before this session opened or after it closed raises no row
+       into it. A compile is the one event this file receives that a host can perform outside a session, so this is
+       `g_boundary_spent`'s scope question answered by construction. */
     e->entry = NULL;
     e->stage_n = 0;
     e->stage_first = 0;
@@ -611,13 +449,9 @@ void endpoint_init(void) {
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
     g_ask_merged_pre_program = 0;
     g_boundary_spent = 0;
-    /* THE EDGE'S ROWS BESIDE THE ASK ROWS THEY ARE READ AGAINST, which is the whole argument for their living
-       in this file.
-       THE PARTITION ARRAY IS NOT ZEROED HERE, IT IS ASSERTED ABSENT — which is a different statement and the
-       stronger one. endpoint_free gives the array back and lets the table go, so a session opening with one
-       in hand has not had its predecessor torn down, and every stage row it is about to raise would be filed
-       under a table whose lifetime this file no longer owns. Zeroing it instead would make that state produce
-       a plausible census, which is the one outcome worse than a crash. */
+    /* The edge's rows beside the ask rows they are read against. The partition array is asserted absent rather
+       than zeroed: endpoint_free gives it back and lets the table go, so a session opening with one in hand has
+       not had its predecessor torn down, and zeroing it would make that state produce a plausible census. */
     DCHECK(g_fetch_edge.died == NULL && g_fetch_edge.steps == NULL &&
            g_xhr_edge.died == NULL && g_xhr_edge.steps == NULL,
            "a session opened with the previous session's host edge table still in hand — endpoint_free is "
@@ -630,67 +464,31 @@ void endpoint_init(void) {
 }
 void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
 
-/* THE ADDRESS AS THE SURFACE PRINTS IT — a concolic's SHAPE, a concrete URL's own bytes.
-   THE `s ? s : "{}"` THAT STOOD HERE WAS A MASK OVER AN IMPOSSIBLE STATE, and it is the exact shape §Fix-the-
-   ROOT forbids: concolic_alloc copies a shape for every value it mints and CHECKs the copy, so a live concolic
-   ALWAYS has one and this branch could never run. What it would have done if it ever did is the reason it must
-   not be a `?:` — `{}` is the unnameable hole path_scan mints nothing for, so a URL that had lost its display
-   form would be emitted as a literal address with no param under it and read as a perfectly ordinary endpoint.
-   That is the silent wrong answer this surface is most dangerous for, so it aborts at the read instead. */
-/* AND THIS `if` IS THE WHOLE OF WHAT DECIDES WHETHER ANY PARAM ON THIS RECORD CAN CARRY A DOMAIN, which is
-   not readable from anywhere on the path it feeds. A PATH param exists only where the string this returns
-   holds a nameable brace, and a QUERY param exists either way but carries a HOLE only where its VALUE does —
-   so `valueClass`, the four domain reads it gates, and everything the trusted zone builds on them are all
-   downstream of this one test. What can put a hole back is NOT the templated-path reconcile there, which
-   dissolves a concrete address INTO a template and cannot create one — it is lib/learn.js's live-traffic path
-   walk, which mints a `{path_*}` where TWO observed addresses of one record differ at one segment. That
-   producer needs a SECOND sighting and writes no `_astInferred`, so its hole carries no domain and cannot
-   become the drop-down these reads feed. The only hole a FIRST sighting can have is the one decided here.
-   SO "WHY DID THIS PAGE MINT NO HOLE" IS A QUESTION ABOUT HOW THE PAGE COMPOSED THE ADDRESS, and `concolic_is`
-   at this line is the whole answer. Three addresses reach the concrete branch and a reader must not read them
-   as one fact:
-     - COMPOSED OF LITERALS. A bundler's chunk and module addresses are the entire population of a run that
-       loaded a document and reached none of its API code, and no engine change mints a hole in one.
-     - COMPOSED OF THE DOCUMENT'S OWN ADDRESS. core/dom/document.c's DocAddress holds a plain JS string where
-       a response was fetched from it, and core/frame/location.c's loc_of_address returns early on a concrete
-       one — so HTML §7.2.4 "The Location interface"'s `origin`, `protocol`, `host`, `pathname` and `href` are
-       CONCRETE for the document this engine loaded, and concolic only after a route the run itself
-       computed out of an unknown.
-     - PINNED AND RE-READ. §Solver-half's concretize-on-pin makes a source a flow has proved re-mint as the
-       REAL value: concolic_new's and concolic_exotic_get's pin arms RETURN pin_of's result, and pin_mint
-       answers a plain primitive. So the true arm of `if (s.tier === 'silver') fetch('/api/' + s.tier)`
-       composes an ordinary string and is INDISTINGUISHABLE here from an address that was never symbolic.
-       That is CORRECT and is not a hole this surface lost: §@H emits a value the run DETERMINED, and spelling
-       a determined value as an unknown is the invention it calls a wrong report rather than a partial one.
-   AND A PIN ERASES A HOLE ONLY ON A RE-READ, WHICH IS THE CLAUSE BOTH READINGS OF THIS MECHANISM DROP. There
-   are two kinds of pin read and they have opposite RETURN TYPES: the two MINTS above hand back a primitive and
-   the value is gone, while concolic_example asks the same question of a value ALREADY IN HAND and leaves the
-   record untouched — so `var role = q("role"); if (role === "admin") fetch("...?role=" + role)` still holds
-   the concolic, this returns the SHAPE, the param IS minted, and the pinned bytes arrive as its EXAMPLE.
-   concolic.h states the split in its own last clause, which is the half a reader of that paragraph stops one
-   line short of: a pin reaches `a value the page materialised before the gate and therefore never re-minted`.
-   testing/corpus/control/gated-hole.js is SHAPED by the other half, putting its equality rung's fetch on the
-   `else` because the true arm would mint no hole to look a domain up under. Read either half alone and you get a rule that is exactly backwards for the other: measured, two
-   readers reached the two opposite wrong answers about this in one session. One equality, two spellings, two
-   different records, and which one a bundle writes is the bundle's choice and not the gate's.
-   AND THE MINT HALF ALONE HAS NOW REACHED A DISPATCHED BRIEF, WHICH IS WORSE THAN A READER GETTING IT WRONG
-   ALONE AND IS WHY THE COUNT ABOVE IS NOT THE WHOLE RECORD. A reader holding only the mint half concludes
-   that every address a page builds out of a pinned source grades `concrete`, that the product's own bar is
-   therefore DEPRESSED by the pin, and that the remedy is to grade such an address `unknown` — which
-   `endpoint_razor_class_of`'s own banner measures as the OVER-claim, since a pin's bytes are the equality's
-   OTHER operand and `concolic_cmp` spells a token only where that operand is NOT concolic, so they are text
-   the page's own source states. Read once and relayed rather than opened, that becomes a brief, and
-   CLAUDE.md §A-BRIEF-WRITTEN-OUT-OF-A-CRASH-MESSAGE's multiplier applies: the claim is read by somebody who
-   will not open this file and is then dispatched to readers who act on it. The receiving lane refuted it from
-   this banner and from the address list's own macro, which is the mechanism working and cost one reading.
-   RETIREMENT: this record goes when the two pin reads answer through ONE accessor that states WHICH half it
-   took, because a reader cannot then hold the mint half without the other. MEASURED ABSENT with the command,
-   so this condition is not born met: over solver/concolic.h,
-   `grep -cE 'concolic_pin_half|pin_read_kind|concolic_example_which'` answers 0 against
-   `grep -c 'concolic_example_state'` answering 1 as the armed control.
-   RETIREMENT: this record goes when the concrete branch below can state whether the address it is spelling
-   ever held a determined unknown, because the three cases are then told apart at this line instead of
-   re-derived from the page that wrote it. */
+/* The address as the surface prints it: a concolic's shape, or a concrete URL's own bytes. A live concolic always
+ * has a shape (concolic_alloc copies one for every value it mints and CHECKs the copy), so a missing one is
+ * asserted: a fallback `{}` would be the unnameable hole path_scan mints nothing for, emitting a literal address
+ * with no param under it.
+ *
+ * This `if` decides whether any param on the record can carry a domain. A path param exists only where the
+ * returned string holds a nameable brace, and a query param carries a hole only where its value does, so
+ * `valueClass`, the four domain reads it gates and what the trusted zone builds on them are all downstream of it.
+ * lib/learn.js's live-traffic path walk can mint a `{path_*}` where two observed addresses of one record differ
+ * at one segment, but it needs a second sighting and writes no `_astInferred`, so its hole carries no domain; the
+ * only hole a first sighting can have is decided here. Three kinds of address reach the concrete branch:
+ *   - composed of literals: a bundler's chunk and module addresses, in which no engine change mints a hole;
+ *   - composed of the document's own address: core/dom/document.c's DocAddress holds a plain string where a
+ *     response was fetched from it and core/frame/location.c's loc_of_address returns early on a concrete one, so
+ *     HTML §7.2.4 "The Location interface"'s `origin`, `protocol`, `host`, `pathname` and `href` are concrete for
+ *     the document this engine loaded, and concolic only after a route the run computed out of an unknown;
+ *   - pinned and re-read: concretize-on-pin re-mints a proved source as the real value (concolic_new's and
+ *     concolic_exotic_get's pin arms return pin_of's result, and pin_mint answers a primitive), so the true arm of
+ *     `if (s.tier === 'silver') fetch('/api/' + s.tier)` composes an ordinary string. That is correct: @H emits a
+ *     value the run determined.
+ * A pin erases a hole only on a re-read. concolic_example asks of a value already in hand and leaves the record
+ * untouched, so `var role = q("role"); if (role === "admin") fetch("...?role=" + role)` still holds the concolic:
+ * this returns the shape, the param is minted, and the pinned bytes arrive as its example (concolic.h's last
+ * clause). testing/corpus/control/gated-hole.js puts its equality rung's fetch on the `else` for this reason.
+ * Which of the two a bundle writes is the bundle's choice, not the gate's. */
 static char *url_display(JSContext *ctx, JSValueConst url) {
     if (concolic_is(url)) {
         const char *s = concolic_shape_c(url);
@@ -706,435 +504,61 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
     return r;
 }
 
-/* WHETHER THE RUN HAD DETERMINED THIS ADDRESS — CLAUDE.md §What-the-tool-produces' HARD BAR, read off the one
-   test `url_display` above already makes and NOT off a second question. §Every-value-is-CONCOLIC: the triple
-   rides the value the interpreter computed, so a concolic `url` at this line IS an address some segment of
-   which entered the program at a source and which therefore stands in no served byte. That is the whole
-   derivation; there is no parser consulted, no table of statable shapes, and nothing about this address's TEXT
-   examined.
-   IT STILL ANSWERS `url_display`'s QUESTION WITH `url_display`'s PREDICATE, AND THE TIE THAT PARAGRAPH
-   PROTECTS IS PRESERVED RATHER THAN BROKEN. That banner forbids "refining it here (a root test, a brace test,
-   a shape test)" on the ground that it would be two answers to one question in one file, and the forbidden
-   thing is a second answer to `url_display`'s OWN question — IS THIS VALUE SYMBOLIC, which decides whether
-   the address prints as a SHAPE. The refinement below is not that: both of its concolic members are the
-   concolic branch, so `cls != EPA_CONCRETE` is still exactly `concolic_is(url)` and still exactly "this row
-   printed a shape". The two cannot disagree about which addresses are undetermined, which is the whole of
-   what that tie was for. What the refinement adds is the answer to a DIFFERENT question — did THIS FLOW
-   determine the symbolic value it was holding — which `url_display` does not ask and whose answer changes no
-   branch of it.
-   THE PIN IS ASKED THROUGH `concolic_example_state` AND NEVER THROUGH A SPELLING, which is the one way this
-   classifier could have been written wrong. That accessor is concolic.h's single decision, read by
-   `concolic_example` to MINT the pinned bytes and by this line to REPORT that there are some, so the value
-   and the fact about it come out of ONE lookup and cannot disagree. It is documented side-effect-free and
-   allocation-free. A prefix test over the shape would have been a count of a spelling.
-   IT IS GATED ON A FLOW STANDING, AND THE GATE ERRS TOWARD CLAIMING ON THE BAR RATHER THAN AWAY FROM IT —
-   THE OPPOSITE OF WHAT THIS PARAGRAPH SAID, AND THE RETIRED WORDING IS KEPT BELOW THE VERDICT BECAUSE A
-   READER WHO RE-DERIVES IT FROM "a proof needs evidence" WILL WRITE IT AGAIN. The gate is RIGHT and its
-   stated DIRECTION was wrong. The pin is read out of THE RUNNING FLOW'S constraint chain and with no flow
-   standing the chain is whatever the last switched-away state left installed, which is the real hazard; but
-   `endpoint_razor_class_of` maps `EPA_UNKNOWN` to `runtime-only` and leaves `EPA_SOURCE_DETERMINED` at
-   `unproven` unless the DOOR carries it, so `source-determined` claims LESS on the bar and this gate's
-   no-flow fallback to `unknown` claims MORE. What makes the gate correct is therefore not a direction at all
-   but that a stale chain would assert a DETERMINATION NO FLOW MADE — a false positive claim about a PROOF,
-   which is wrong whichever way it moves a figure. The retired wording read: a stale pin "would answer
-   `source-determined` for an address no live path determined — the permissive direction, on the product's own
-   bar", and a reader who believes that reads this gate as PROTECTING the bar when it is what raises it.
-   AND ITS CITED POPULATION IS BORROWED FROM THAT SIBLING AND DOES NOT REACH HERE, which is the same clause
-   failing one step over. `witness_class_now` is asked at EVERY record, so its pre-program citation (98 of 190
-   on one real page) is load-bearing THERE; this gate sits behind `if (!concolic_is(url))`, and a record
-   minted before any program started holds an address no page code composed, so it returns at that FIRST line
-   and never reaches this question. The population this gate does decide is `unasked` AND concolic, which that
-   sibling's own class bounds from above — read off a census with testing/corpus's stated derivation rather
-   than off this file, because a figure here would be a claim competing with a command.
-   RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS THE
-   DIRECTION ARGUMENT AND NOT THE ASSERT. The condition read: this record goes when the no-flow answer's
-   direction is ASSERTED where both are in one hand — a check that `address_class_of`'s flow-less member is
-   the one `endpoint_razor_class_of` maps to `runtime-only` — because the direction is then read off an
-   exercised assertion instead of off prose. The assert is at the ONE call site, because the mapping takes a
-   DOOR and only a caller holds one; the member's mapping is door-independent (it is that function's FIRST
-   line) so it passes for every door, which is the fact it pins. WHAT A DELETION WOULD COST is the retired
-   wording above it: a reader who re-derives the direction from "a proof needs evidence" writes the INVERTED
-   version, which reads this gate as PROTECTING the bar when it is what raises it.
-   AND THE CONDITION'S OWN COMMAND STILL ANSWERS ZERO AGAINST THE LANDED ASSERT, WHICH IS A FINDING ABOUT THE
-   COMMAND AND IS RECORDED RATHER THAN QUIETLY REPLACED. It read
-   `grep -cE 'DCHECK.*address_class_of|address_class_of.*EPZ_RUNTIME_ONLY'`, and a `DCHECK` whose condition
-   and whose message are on TWO LINES matches neither alternative: the condition line does not name
-   `address_class_of` and the line that does is the message's. `grep -c` counts LINES, so a construct split
-   across two of them is invisible to any pattern that wants both halves — CLAUDE.md's count-of-a-spelling
-   defect arriving inside a retirement condition, where its zero would have read as the condition being
-   UNMET and invited a second assert beside a working one. The command that reads the CONSTRUCT answers:
-   `grep -c 'endpoint_razor_class_of(door, EPA_UNKNOWN) == EPZ_RUNTIME_ONLY'` is 1, against
-   `grep -c 'endpoint_razor_class_of(door, EPA_ZZNONE)'` answering 0 as the invented control. So a
-   MEASURED-ABSENT clause states a pattern that can match the thing it is waiting for, and one that wants two
-   halves of a wrapped construct cannot.
-   RETIREMENT: this record goes when `endpoint_razor_class_of` cannot be given a door arm in front of its
-   `EPA_UNKNOWN` line at all — a list whose razor mapping is DECLARED per address class rather than computed
-   — because the direction is then unspellable-wrongly instead of asserted.
-   THE ROOT IS STILL NOT ASKED, AND THE REASON HAS CHANGED FROM "IT CANNOT MATTER" TO "IT CANNOT BE SPELLED".
-   The retired reason is kept because it is what a reader re-derives: a root test "would narrow this class by a
-   population that mint has refused, which is a conjunct that cannot change an answer", `concolic_alloc`
-   already asserting that a value with a provenance has one. That is true of WHETHER there is a root and says
-   nothing about WHOSE it is, which is the residual below.
-   AND NOTHING IS ASSERTED ABOUT THIS OPERAND, WHICH IS A RULE AND NOT A GAP — unchanged, and the refinement
-   does not weaken it. The address is composed of bytes a PAGE wrote — §WHOSE-BYTES-STATE-THE-VALUE — so a
-   DCHECK over its shape, its root or its class would hand any document an abort switch on the engine by
-   writing an address the guard did not expect. Nor is one asserted over the pin: a page chooses whether to
-   re-read a source, so BOTH answers here are legitimate page shapes and neither is this engine's own logic
-   to be wrong about. What IS this codebase's own is the threading of provenance through a derivation, and
-   that is asserted where both halves are in one hand (concolic_alloc) rather than restated here.
-
-   RETIRED RESIDUAL — MET BY A CONSTRUCTION, AND `unknown` NOW ASKS WHOSE UNKNOWN IT IS: `address_class_of`
-   reads `concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)` and a row that answers NO is
-   `EPA_UNKNOWN_UNPROVEN`, which the bar refuses. THE WHOLE RECORD IS KEPT BELOW THE VERDICT RATHER THAN
-   DELETED, because what a reader re-derives from the word `unknown` is the OVER-CLAIM — the retired bar
-   operand is spelled out at `ENDPOINT_RAZOR_CLASSES`' banner — and because its three REFUTED ROUTES leave no
-   trace anywhere once abandoned. The measurement below is what established the over-claim and is the reason
-   this landed at all; the verdict at the tail of this record is this one, stated here too.
-   THE RETIRED CLAIM: "`unknown` DOES NOT ASK WHOSE UNKNOWN IT IS, AND ON A REAL SITE EVERY ROW CLEARING THE
-   BAR IS THIS ENGINE'S OWN INSTRUMENT."
-   THAT SENTENCE WAS A HYPOTHESIS ABOUT THIS TREE AND IS NOW MEASURED, WHICH IS THE ONE THING A NOT-COVERED
-   CLAUSE OF THIS KIND IS OWED. CLAUDE.md grades such a clause by its SUBJECT: about a fetchable document it
-   is evidence, and about THIS TREE it is "a hypothesis wearing the one grammatical position this file grades
-   as evidence". This one is about this tree, so it was owed a derivation, and the derivation is COMMITTED as
-   `testing/corpus/holewhose.mjs` — run BARE, which derives its own population rather than taking a filename.
-   WHAT IT ANSWERED, AND THE FIGURES ARE HANDED OVER AS THE COMMAND BECAUSE THE CENSUSES ARE UNTRACKED BY
-   DESIGN: of the scorable passes — scorable meaning BOTH histograms sum to the capture's own `endpoints`,
-   which is the free arithmetic that bands a pre-key capture as NOT SCORABLE rather than averaging its absent
-   histogram in as zeroes — the ones with a NONZERO razor split by whose hole they hold, and EVERY real-site
-   pass in that group held only holes this engine minted while every page hole in the whole corpus was on a
-   `127.0.0.1` fixture. SIX real sites cleared the bar ZERO times and held no hole of any kind.
-   THAT FIGURE READ `FOUR` AND THE RETIRED NUMBER IS KEPT BECAUSE WHAT A READER RE-DERIVES IS THE UNIT THAT
-   PRODUCED IT: a directory of `census-*.jsonl` invites one file = one capture, and a census file holds one
-   record PER SITE. The first reading was taken at the FILE unit, so it took `url` from a file's FIRST record
-   and the histograms from its LAST — publishing one site's address with another's count, omitting every site
-   that was not a file's last record, and MANUFACTURING one `a page hole while the razor reads zero` finding
-   that the record unit does not produce. THREE OF THE FOUR SITES THE RETIRED FIGURE NAMED HAD NEVER BEEN
-   SCORED AT ALL, which is the direction CLAUDE.md rates worst for an instrument: a site absent from every row
-   reads as a site that answered zero. Re-derived per record, the headline is 88 scorable of 147 records over
-   138 files — 88 + 59 EXCLUDED = 147, the free arithmetic that says the unit closes — with 33 of 88 nonzero
-   and 4 page-hole passes where the file unit read 82 of 138, 32, and 3. THE CENTRAL CLAIM SURVIVED THE
-   RE-DERIVATION AND IS WHY THE RESIDUAL STANDS: every one of the 29 engine-only passes is still gitpod and
-   every one of the 4 page holes is still a `127.0.0.1` fixture, so the measurement was wrong about WHICH
-   ROWS and right about WHOSE HOLE.
-   THE READER STATES ITS OWN TWO UNITS AND REFUSES THE DIFFERENCE, which is a defect its first form had: the
-   razor count's row is an EMITTED RECORD and the hole count's row is a DISTINCT ADDRESS SPELLING, so they
-   print on one line and read 136 against 135 on one site — §AND-TWO-INSTRUMENTS-CAN-DISAGREE arriving inside
-   one reader. The discriminating claim is therefore asked PER PASS, where a pass is one row on both sides.
-   AND IT READS THE BRACES RATHER THAN THE ROOT, WHICH IS THE AXIS THIS RESIDUAL REFUTES, so the reader prints
-   per site how many of its hole-bearing addresses are WHOLLY ONE BRACE — the case where the composed identity
-   IS the single root and the two axes cannot disagree. On the real site every one of them is. No capture on
-   disk carries the per-record `addressRoot` as a row (`grep -l addressRoot census-*.jsonl` answers five files
-   and in each it is a NOTE somebody wrote), which is why the braces are the only route against the artifacts
-   that exist and is what the fallback clause below already says of itself.
-   WHAT IS NOT COVERED: a value `engine_orphan_call` MINTED so that a drive
-   of a never-called function could happen at all is a concolic whose own `src` and `root` are both
-   `{orphan<hex>.argN}` — an unknown nobody supplied, standing in no served byte because it was never in any
-   byte — so it answers `unknown` here and the bar answers `runtime-only` for it. The bar is then true of the
-   row and the product's claim is false of it: nothing was LEARNED, because the hole is ours. A server-injected
-   unknown the PAGE read, narrowed by the PAGE's own predicate and composed into a path the PAGE wrote, is the
-   population the bar exists for and is indistinguishable here.
-   WHAT THE NEXT DIFF BUILDS: the mint stating WHOSE SOURCE it is, and this line reading that fact. THE SCOPE
-   IS NOT THE TWO FILES THIS CLAUSE USED TO NAME, and the retired wording is kept because a reader who
-   re-derives it from "the mint is in solver/engine.c" will write it again. It read: "a MINT-SIDE statement and
-   a CLASSIFIER-SIDE read, which §A-CROSS-BOUNDARY-DIFF makes ONE landing spanning `solver/engine.c`". Both
-   halves of that are true and the file list is SHORT, because the fact has to RIDE THE VALUE and the value's
-   record is solver/concolic.c's.
-   THE TWO SENTENCES BELOW ARE THE SCOPE ARGUMENT AND BOTH ARE NOW DISCHARGED, WHICH IS SAID HERE RATHER THAN
-   ONLY AT THE RETIREMENT EIGHTY LINES DOWN: each is written in the PRESENT TENSE about what cannot be done,
-   so a reader who stops at either one reads a standing claim the tree has answered, and a record's verdict
-   belongs where its claim is rather than at its tail. Leg (1) is discharged by the walk being paid AT THE
-   JOIN (`derived_root_whose` beside `derived_root_join`), so no consumer needs `root_member`; leg (2) by the
-   fact being a parameter of `concolic_new` evaluated PAST both arms, so no caller stamps a record that does
-   not exist. They are kept in their own words because they are the reasons the three refuted routes below are
-   refuted, and a reader who re-derives the scope question without them re-derives those routes with it.
-   TWO THINGS DECIDE IT AND NEITHER IS A PREFERENCE. (1) The question is a
-   DISJUNCTION OVER THE ROOT SET, since one page root is enough to clear the bar however many instrument roots
-   stand beside it — and `concolic_root_c` may name a SET whose walk `root_member` and whose one speller
-   `derived_root_join` are both STATIC to that file, so no sound form of the question is spellable from here.
-   Recovering the members by parsing the join is the matching §RUN-DON'T-MATCH forbids, and is what that file's
-   own `conj` field records as the banned move. (2) `concolic_new` RETURNS BEFORE IT MINTS on two arms its own
-   site names — a pinned source and an @S candidate re-fire — so what comes back there is a bare primitive with
-   nowhere for a mark to live, which rules out stating the fact from the CALLER after the call as firmly as the
-   walk rules out reading it here. So the statement is a parameter of the mint, evaluated past that arm, carried
-   beside `root` and unioned where the root already is. AND THE CODE DELTA IS NOT THE DIFF: a fourth member
-   falsifies every prose site in this file that states how many members this list has, which is the
-   §A-FIX-THAT-RETIRES-AN-ARGUMENT obligation and is handed over as a DERIVATION because a count of them
-   moves on any commit that writes one — `git grep -ni 'exactly three member\|three members' -- <this file>
-   <this file's header>`, of which the one naming `witness_class_now` is a DIFFERENT list and stays.
-   AND THREE CHEAPER ROUTES ARE REFUTED RATHER THAN UNTRIED, each recorded because each is what a reader
-   reaches for first and none leaves a trace once it is abandoned. `concolic_src_c` is PUBLIC and answers ONE
-   string, which is the whole of its appeal, and a derivation inherits its FIRST UNKNOWN OPERAND's `src` — so
-   `<an orphan argument> + <a page unknown>` answers the orphan's and that row would be DEMOTED, which is
-   §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT on the one number this product is judged by. Keying on whether
-   the DRIVING FLOW is an orphan drive is wrong for the product's best case: a drive that reaches
-   `fetch("/api/" + <a page unknown>)` has learned exactly what this tool exists to learn, and the drive is how
-   it got there rather than what the address is made of. And a registry of minted identities held in
-   solver/engine.c can only match a WHOLE root string, there being no walk, so it is silent about every joined
-   root AND it is engine state rather than a fact on the value — a resumed flow finds it empty, so one address
-   grades two ways in two sessions and the census stops being a fact about the document.
-   It is NOT a prefix match on `{orphan`: that is a count of a spelling, which this subsystem has already been
-   bitten by, and it would answer for whatever a later diff renames the identifier to.
-   AND THE DISCRIMINATOR IS THE SOURCE IDENTITY AND NOT THE COMPOSITION, which is worth stating because
-   composition is the reading the emitted rows invite and it is wrong in BOTH directions. `is there
-   page-written literal text around the hole` separates today's two populations correctly and fails on two
-   ordinary shapes: `fetch(cfg.url)` emits `{__CFG.url}` with no page literal in it and is entirely the
-   page's, while `origin + "/" + <an orphan argument>` is a page-composed string around an engine mint. Whose
-   unknown it is, is a fact about the ROOT; where the literals fall is a fact about the page's syntax.
-   HOW ITS ABSENCE WOULD SHOW: a run whose razor reads `runtime-only` for rows whose `addressRoot` names a
-   source no document and no server supplied — the emitted ROW carries the root now (see the emit), which is
-   the axis the paragraph above argues the question is on, and that is where this observation is made.
-   THE CLAUSE BELOW READS THE `url`'S BRACES INSTEAD AND IS KEPT RATHER THAN REPLACED, for two reasons. It is
-   the ONLY route available against an artifact older than that key, which is the ordinary case for every
-   capture already on disk. And it reads the COMPOSED IDENTITY rather than the ROOT, which the paragraph above
-   names as wrong in BOTH directions — `fetch(cfg.url)` emits `{__CFG.url}` with no page literal in it and is
-   entirely the page's, while `origin + "/" + <an orphan argument>` is a page-composed string around an engine
-   mint — so a reader who takes it for the discriminator rather than for the pre-key proxy is reading the axis
-   this residual refutes. It said `wholly a brace naming a source no document and no server supplied`, which is
-   a COMPOSITION test wearing a provenance test's words, and that is the sentence to distrust rather than the
-   command: the DERIVATION rather than a figure, because the
-   censuses are untracked and a count here would be a claim competing with a command — from `testing/corpus`,
-   read the terminal `endpointRazorClass` of a census beside the hole-bearing addresses that census emitted
-   (`grep -o '"[A-Z]* [^"]*{[^"]*"' <census> | sort -u`), and compare a real-site capture against a
-   `127.0.0.1` fixture: the fixtures are the controlled half and their holes are the page's own. THE COMPARISON
-   IS THE EVIDENCE AND IT IS A COMMAND RATHER THAN A SPLIT SOMEBODY REMEMBERS — from `testing/corpus`, run that
-   same `grep -o` over EVERY census and read its hole-bearing rows beside the `"url"` the census names, because
-   which captures are real sites moves as captures are taken and a reader who inherits a hand-named pair
-   inherits whichever two were in front of its author.
-   AND THAT COMMAND HAS A TRAP ITS OWN AUTHOR FELL INTO, WHICH IS WHY IT IS RECORDED BESIDE IT RATHER THAN
-   LEFT FOR THE NEXT READER: a capture older than these rows carries NO `endpointAddressClass` and NO
-   `endpointRazorClass` at all, so a reader who takes an absent histogram for a row of zeroes scores it as a
-   capture whose razor claimed nothing — the §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES pairing, arriving in the
-   derivation this residual hands over. Band such a capture as NOT SCORABLE ON THIS AXIS and never average it
-   in; what it can still answer is the grep alone, which is a statement about its hole-bearing addresses and
-   not about what the bar did with them. The arithmetic that says a capture IS scorable is free and is in the
-   document: both histograms SUM to its own `endpoints`.
-   RETIREMENT — MET BY A CONSTRUCTION, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER
-   RE-DERIVES IS THE SCOPE ARGUMENT AND NOT THE PREDICATE. solver/concolic.h publishes
-   `concolic_root_whose_any` and `concolic_root_whose_all` — a DISJUNCTION and a UNIVERSAL over a value's whole
-   root set, over a `ConcolicRootWhose` the MINT states and `derived_root_whose` unions wherever
-   `derived_root_join` unions the names. So both legs of the scope argument are discharged: the walk is paid at
-   the JOIN, so no consumer needs `root_member`, and the fact is a parameter of `concolic_new` evaluated PAST
-   the pin and candidate arms, so no caller has to stamp a record that does not exist. What a deletion would
-   cost is the retired wording below it, because a reader who re-derives the scope question will re-derive the
-   refuted answers with it — a `{orphan` prefix test, a registry in solver/engine.c, and `concolic_src_c`'s
-   FIRST unknown operand.
-   AND THE CONDITION'S OWN COMMAND STILL ANSWERS ZERO AGAINST THE LANDED CAPABILITY, WHICH IS A FINDING ABOUT
-   THE COMMAND AND IS RECORDED RATHER THAN QUIETLY REPLACED — THE SECOND TIME THIS FILE HAS MET IT, THE FIRST
-   BEING THE WRAPPED `DCHECK` ONE RESIDUAL UP. It named five spellings, and the capability is spelled as
-   neither: re-run over that header, `concolic_root_all`, `concolic_roots_all`, `concolic_root_every`,
-   `concolic_root_walk` and `concolic_root_member` each answer **0** with `concolic_root_c` answering **7** as
-   the armed control, while `grep -cE '^int +concolic_root_whose_(any|all)\(JSValueConst'` answers **2** and an
-   invented sibling answers 0. A MEASURED-ABSENT CLAUSE THAT ENUMERATES CANDIDATE NAMES IS A GUESS AT WHAT THE
-   NEXT AUTHOR WILL CALL THE THING, so it can only see the capability if that author picked one of its guesses
-   — and its zero then reads as the condition being UNMET, which invites a second predicate beside a working
-   one. The clause that works keys on the CONSTRUCT the capability must be: a DEFINITION line, not a token, so
-   prose naming the mechanism cannot satisfy it either.
-   THE RETIRED WORDING: this record goes when solver/concolic.h publishes a predicate answering a property over
-   a value's whole ROOT SET, because the classifier is then spellable from here and the scope argument above
-   has nothing left to decide.
-   RETIREMENT — MET BY A CONSTRUCTION, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER
-   RE-DERIVES IS THE OVER-CLAIM AND THE THREE REFUTED ROUTES, NEVER THE PREDICATE. `address_class_of` asks
-   `concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)` and answers `EPA_UNKNOWN_UNPROVEN` where it is NO, so
-   the member CLAUDE.md §What-the-tool-produces' bar keys on is narrowed by WHOSE unknown the address rests on
-   and no longer by whether there is one. The over-claim is GONE rather than merely answerable: a hole
-   `engine_orphan_call` minted for a drive reads `unknown-unproven` and the bar reads `unproven` for it.
-   AND THE ENDPOINT-SIDE SHAPE IS THE FOURTH MEMBER THE SCOPE ARGUMENT ABOVE NAMED, WHICH IS WORTH SAYING
-   BECAUSE A READER WILL REACH FOR A THIRD OPERAND OF `endpoint_razor_class_of` INSTEAD. That route needs a
-   whose field ON the record, a fourth merge rule for it, and the field ON THE WIRE — because that function's
-   own banner makes it "a function of exactly what the wire carries" so a consumer can check its answer — and
-   it buys nothing a member does not: the record's merge is ALREADY a MAX over this list, so the ORDER carries
-   the disjunction and `endpoint_razor_class_of` is BYTE-IDENTICAL at this widening exactly as it was at the
-   last. The one precedent in the header points the other way and its reason does not reach here:
-   `ENDPOINT_WITNESS_CLASSES` is "a third list rather than a third operand" BECAUSE it is a MAY that must
-   never be unioned INTO the bar, and this is a conjunct that RESTRICTS it.
-   THE RETIRED WORDING: this record goes when `address_class_of` below ASKS that property — the member that
-   clears §What-the-tool-produces' bar narrowed by WHOSE unknown the address rests on rather than by whether
-   there is one — because the over-claim this residual is about is then gone rather than merely answerable.
-   MEASURED ABSENT with the command, keyed on the CALL CONSTRUCT and never on the predicate's name:
-   `grep -cE 'concolic_root_whose_(any|all)\([A-Za-z_]' engine/host/solver/endpoint.c` answers **0**, against
-   the same shape over the file where such calls DO stand
-   (`grep -cE 'root_whose_of\([A-Za-z_]' engine/host/solver/concolic.c`) answering **13** as the armed control
-   and an invented sibling answering 0. IT WORKED AS A MEASURED-ABSENT CLAIM AND FAILED THE MOMENT IT WAS MET,
-   WHICH IS THE FOURTH TIME THIS ONE FILE'S RESIDUALS HAVE MET THIS DEFECT AND IS THE REASON THE RESIDUAL
-   BELOW KEYS ITS OWN CLAUSE ON A DIFFERENT FILE. It really did answer **0** at `7414a0b`, verified against
-   that revision rather than inferred — keying on a CALL WITH AN ARGUMENT is what the three siblings got wrong
-   and is what kept the announcing paragraph from satisfying it. What it cannot do is COUNT the construction
-   it was waiting for: the landing makes it answer **3**, of which exactly ONE is the call and TWO are this
-   tree's own convention QUOTING that call in backticks — at this paragraph and at the member comment in
-   endpoint.h. So a call-construct clause is immune to prose that NAMES the thing and is NOT immune to prose
-   that QUOTES THE CALL, and §Browser-half's backtick convention guarantees such prose exists the instant the
-   thing is built. THE DURABLE FORM IS ALREADY IN CLAUDE.md FOR A SIBLING INSTRUMENT AND DID NOT FIRE HERE
-   because it is written about a different artifact: §AND-THE-HALF-THE-CONDITION-DID-NOT-ASK-FOR records that
-   a `@WHY`'s cond "is compared against the COMMENT-STRIPPED text or it is compared against nothing", for
-   exactly this reason one register over. A clause is therefore read as a BEFORE/AFTER against the parent
-   revision, where its 0 is a fact, and never as a count at the tip.
-   AND THE CLAUSE THAT STOOD HERE WAS SATISFIED BY ITS OWN ANNOUNCEMENT, WHICH IS RECORDED RATHER THAN QUIETLY
-   REPLACED BECAUSE IT IS THE THIRD TIME THIS ONE FILE'S RESIDUALS HAVE MET THIS DEFECT AND THAT MAKES IT A
-   CATEGORY RATHER THAN A SLIP. It read: "keyed on the published predicate's own name so prose naming the
-   question cannot satisfy it: `grep -c 'concolic_root_whose' engine/host/solver/endpoint.c` answers **0**" —
-   and keying on the NAME is the thing that LETS prose satisfy it, so the sentence asserted the opposite of
-   what its own command did. It answered 0 when it was measured and **3** in the commit that wrote it, all
-   three hits being this very paragraph naming the two predicates and quoting a grep. The two siblings are one
-   residual up (a `DCHECK` whose condition and message wrap across two lines, which no pattern wanting both
-   halves can see) and in the verdict above (five GUESSED spellings, none of them what the capability was
-   called). The three fail three different ways and share one cause: A MEASURED-ABSENT CLAUSE IS A CLAIM ABOUT
-   SOURCE TEXT THAT THE CLAUSE ITSELF BECOMES PART OF, so it may only ever key on a CONSTRUCT the prose around
-   it cannot accidentally be — a call with an argument, a definition line — and never on an identifier, which
-   the announcement is obliged to contain.
-
-   RETIRED RESIDUAL — MET BY THE SAME ONE READ, AND BY THE MEMBER IT PREDICTED. `address_class_of` asks
-   `concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)`, and `CONCOLIC_WHOSE_SERVED` answers NO to it exactly
-   as `CONCOLIC_WHOSE_INSTRUMENT` does — so both of this file's address residuals were ONE question and are
-   closed by ONE predicate, which is what the spent dependency clause below predicted in those words. The
-   record is kept rather than deleted because the population is what a reader re-derives: a value whose bytes
-   STAND IN THE DOCUMENT and which is minted unknown anyway reads as an unknown like any other, and the
-   reading that puts it back on the bar is "an unknown is an unknown".
-   THE RETIRED CLAIM: a second population "is OVER-CLAIMED FOR A DIFFERENT REASON, WHICH IS A SIBLING AND NOT
-   A SMALLER CASE OF THE ONE ABOVE" — true of WHY the two populations fail the bar and wrong about what it
-   takes to refuse them, which is one conjunct for both. WHAT WAS NOT COVERED: a value whose bytes STAND IN THE SERVED DOCUMENT and which is minted
-   unknown anyway, deliberately and correctly, so that a gate over it FORKS rather than being decided for the
-   whole run — HTML §4.12.1's data block, whose own component says "the bytes sit in the document", and an
-   injected global an inline script WROTE, which solver/absent.c's present arm mints carrying the real value as
-   its example. A parse of the bytes this engine was SERVED states such a value, so the clause the bar's own
-   sentence turns on — "because it exists only at run time" — is false of an address composed from one, and
-   `runtime-only` over-claims there exactly as it does for the hole above. The two are opposite in WHOSE the
-   unknown is and identical in what the bar does with it.
-   IT IS NOT ANSWERED BY THE EXAMPLE, which is the route to refute before it is reached for: concolic.h grades
-   HELD as "an example a document or a SERVER supplied", so a reply field is HELD and its bytes are off-document
-   while an ABSENT injected global is NONE exactly as the instrument hole above is. One accessor, two questions.
-   WHAT THE NEXT DIFF BUILDS: THE CLAUSE THAT STOOD HERE IS SPENT AND IS REWRITTEN RATHER THAN DELETED,
-   because a reader who re-derives the dependency will write it again. It read "nothing of its own until the
-   landing above lands, because both are the same question asked of the ROOT and the second is then a MEMBER
-   beside the first rather than a second mechanism" — and that landing HAS landed, with the member it
-   predicted: `CONCOLIC_WHOSE_SERVED`, which core/loader/data_block.c states for §4.12.1's block and
-   solver/absent.c states on its PRESENT arm, those being the two populations this clause names. So the
-   prediction held exactly and there is no second mechanism owed. What WAS owed was the same ONE read the
-   residual above was waiting on, and it has landed: `address_class_of` asks a property over the root set, and
-   it answers both clauses at once because ONE predicate separates all three of the NON-`WORLD` whose members
-   from the bar — `SERVED`, `INSTRUMENT` and `UNSTATED` each answer NO to `_any(WORLD)`, which is why the two
-   populations these residuals name share one address class rather than needing one each. A reader standing
-   here must not build a second one — that would be the two-answers-to-one-question shape `url_display`'s
-   banner forbids, reached by reading a spent dependency as an open one.
-   HOW ITS ABSENCE WOULD HAVE SHOWN: a run whose razor reads `runtime-only` for a row whose hole names an
-   element or a global the served markup itself spells. It is kept in the conditional because it is the
-   observation that would REOPEN this: a row of that description today says a mint stated `WORLD` for bytes
-   the document spells, which is a finding about that mint and not about this line.
-
-   NAMED RESIDUAL — THE BAR IS NOW ONLY AS GOOD AS WHAT THE MINTS STATED, AND ONE PATH LOSES THE STATEMENT.
-   WHAT IS NOT COVERED: a value somebody outside this engine really did supply, whose whose-mask was lost on
-   the way here, reads `EPA_UNKNOWN_UNPROVEN` and the bar refuses a row it should claim — an UNDER-claim,
-   which is the direction CLAUDE.md §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates as the invisible one,
-   and the price this narrowing pays for being conservative. concolic.h names TWO producers of `UNSTATED` and
-   only one of them is a real path: §2.7.8 StructuredDeserialize's REBUILD, which has the shape and the
-   source in the record and not the third word, so a page unknown posted through §2.7 comes back unattributed;
-   the other is a derivation none of whose operands carried a root, which concolic.c says may never be taken
-   and does not assert to be non-empty.
-   WHAT THE NEXT DIFF BUILDS: NOTHING AT THIS LINE, AND THAT IS THE WHOLE POINT OF RECORDING IT HERE. The gap
-   is OWNED where the fact is lost — `engine/host/browser/core/structured_clone.c`'s own named residual at its
-   `CONCOLIC_WHOSE_UNSTATED` mint, which already carries all three clauses and whose next diff is the word as
-   a FIELD of that record written by the serializer beside the shape and the source it already writes. This
-   line reads it for free the day it lands. A second mechanism here would be the drifting restatement
-   §AN-AUDITOR-DERIVES-THE-RULE forbids, and a DEFAULT here would be the §A-FIELD-A-CONSUMER-DEFAULTS defect
-   on the product's own bar: guessing `WORLD` for an unattributed value would put a rebuilt orphan argument
-   back on it on the strength of nothing, which is the sentence that mint's own comment already gives.
-   HOW ITS ABSENCE WOULD SHOW: an `unknown-unproven` row whose `addressRoot` names a component that carries
-   bytes a DOCUMENT or a SERVER sent — read per row out of the emitted records, which is where the root is,
-   and never off a histogram, because the two columns are marginals and this is a claim about one row.
-   RETIREMENT: this record goes when that rebuild's mint takes a whose it READ rather than the literal it
-   concedes, because the only population this record is about is then empty. MEASURED ABSENT with the
-   command, keyed on the CALL CONSTRUCT and on a DIFFERENT FILE from the one this clause is written in — which
-   is the one thing that makes it immune to its own announcement, this file's residuals having now met that
-   defect FOUR times: over `engine/host/browser/core/structured_clone.c`,
-   `grep -cE 'concolic_new\(ctx, shape, csrc, [a-z]'` answers **0** (a lowercase fourth argument is a value
-   read from the record) against `grep -cE 'concolic_new\(ctx, shape, csrc, [A-Z]'` answering **1** as the
-   armed control (the conceded macro) and an invented callee answering 0. WHAT IT CANNOT SEE is a rename of
-   that site's two locals, which is a limit of keying on a call's argument POSITION and is stated rather than
-   left to be discovered. */
-/* AND THE `flow_running() != NULL` CONJUNCT THAT STOOD ON THE DETERMINED TEST IS GONE, BECAUSE IT WAS NOT A
-   PRECONDITION OF ANYTHING AND COULD ONLY EVER MIS-CLASSIFY. It is recorded rather than quietly removed
-   because the reading that put it there is the one a reader re-derives: a pin is per-flow state, so asking
-   about one outside a flow LOOKS like reading a stranger's delta. The chain refutes it at every link, read
-   rather than argued. `concolic_example_state` is a plain `JS_GetOpaque` plus `example_state_of`, whose
-   DETERMINED arm is `cons_lookup(c->src)`, which is a plain read of `g_pins` and its inherited `g_pins_base`
-   chain with no flow dependency and no assert — and THREE OF ITS FOUR CALLERS ask it unguarded
-   (`console_label.c`, `idb_key.c`, `decide.c`), this being the only site that did not. The `NULL` case is not
-   a stranger's delta either: CLAUDE.md records that the scheduler DELIBERATELY leaves the running stamp UP
-   across the host boundary because a yielded flow's delta is still applied, so a NULL stamp means NO delta is
-   applied and the read is of BASELINE, which is the sound answer for a record minted before any program ran.
-   THE DIRECTION OF THE REMOVAL IS THE CONSERVATIVE ONE AND THAT IS WHY IT IS SAFE TO MAKE WITHOUT A DRIVE: the
-   conjunct could only hold a row OUT of `EPA_SOURCE_DETERMINED` and therefore IN `EPA_UNKNOWN`, which is the
-   member §What-the-tool-produces' hard bar reads as a positive claim — so every row it ever decided was the
-   bar OVER-claiming, and deleting it can move rows OFF the bar and never onto it.
-   AND THE CONJUNCT IS NOT WHY THE MEMBER IT GUARDS READS ZERO — AND THE EVIDENCE THIS RECORD GAVE FOR THAT IS
-   WITHDRAWN, BECAUSE ITS STATED ARMED CONTROL IS A NON-CHECK AND ITS FIGURES NAME A SMALLER POPULATION THAN
-   THE SENTENCE AROUND THEM. The CONCLUSION stands and is strengthened below; what goes is the reading that
-   produced it. The two histograms do NOT partition one set of rows across the corpus — `endpointAddressClass`
-   is stated by more records than `endpointWitnessClass` is, the difference being captures older than the
-   witness key — and a walk that sums both over the records holding BOTH gets its identity FOR FREE, since the
-   two partition one record's own `fetchCallSites` and can only be equal there: equal over the intersection,
-   equal over one record, equal over none. That is §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE arriving inside a
-   record's own control, and the figures it certified are the intersection's rather than the corpus's. THE
-   DERIVATION, because every figure here moves as captures are taken: from `testing/corpus`, walk every
-   `census-*.jsonl` RECORD and sum each histogram SEPARATELY, printing the RECORD COUNT per key beside its
-   total — two different record counts is the finding the identity cannot express.
-   WHAT REPLACES IT IS ONE ROW UPSTREAM OF THIS CLASSIFIER, WHICH IS WHY EVERY MECHANISM IN THIS FILE IS A
-   NARROWING AND NOT THE CAUSE. `decide.c`'s `g_fork_over_pinned` is `forked && concolic_src_pinned(src)`,
-   which tests `e && e->val` over the same chain `example_state_of` reads while asking NOTHING about
-   `src_self` and nothing about whether the address was DERIVED — the same underlying fact with strictly fewer
-   conjuncts — and it reads **ZERO** in every record that states it, against its own sibling `forks` arm in the
-   tens of thousands as the armed control. A pin does NOT prune (concolic.c states it: the value stays CONCOLIC
-   and every later branch over it still forks), so a pinned source any later gate touched would raise it. So no
-   capture evidences a §7.2.14 IsStrictlyEqual ( x, y ) arm ever writing a pin VALUE at all, which is upstream
-   of this member and of all three narrowings below it. `g_pin_any` has no census row, so that is a BOUND.
-   THE THREE NARROWINGS ARE REAL AND EACH IS READ AT ITS SITE, so a reader who closes the row above still must
-   not expect this member to fill. A pinned source RE-READ is a BARE PRIMITIVE, `pin_of` going through
-   `pin_mint` whose every arm mints a primitive — so `concolic_is` is false and the FIRST line here answers
-   `EPA_CONCRETE` without ever asking the state. `src_self` is written at exactly the two mints that read a pin
-   and never by `concolic_derived`, which concolic.c argues as deliberate, so EVERY COMPOSED address answers
-   not-DETERMINED however its operand was pinned. And §7.2.13 IsLooselyEqual ( x, y )'s holding arm writes
-   `pinned_root` WITHOUT a value, so a loosely-pinned source has an entry and no determination. Together they
-   leave ONE shape: a source or member read held in a page VARIABLE before its own strict gate and passed
-   BARE — endpoint.h's worked example, whose `fetch(u)` is bare by NECESSITY rather than for brevity.
-   THE RETIRED CONTROL IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO SUMS TWO HISTOGRAMS OVER THEIR
-   INTERSECTION RE-DERIVES IT: "with the two histograms' own conservation identity as the armed control — both
-   sum to 9489, so they are over the SAME rows". Its arithmetic was right and its SUBJECT was wrong.
-   THE PAIRING THAT WOULD PRICE THE `unasked` BOUND IS STILL NOT DERIVABLE FROM MARGINALS, and is now moot for
-   the ZERO, which the row above answers without it: the per-ENDPOINT row carries `addressClass` and
-   `witnessClass` ADJACENTLY and the join is exact there; what no capture holds is that document.
-   HOW ITS ABSENCE WOULD SHOW: an `endpointAddressClass` whose `source-determined` arm is still zero on a run
-   whose `forkOverPinned` is NONZERO — which would say the pin-to-address path failed for a reason inside this
-   file, where today's zero says no pin was ever taken. THE CLAUSE THAT STOOD HERE IS SPENT AND IS RE-KEYED
-   RATHER THAN DELETED, because a reader who re-derives it from the two emitted arms will write it again: it
-   read "still zero on a run that emitted a nonzero `unknown`", and EVERY record in the corpus that emits a
-   nonzero `unknown` already reads `source-determined` zero — so it was satisfied on every capture that could
-   ask it and could never have fired.
-   RETIREMENT: this record goes when the census publishes the ADDRESS CLASS JOINED WITH THE WITNESS CLASS as
-   one keyed row, the way `testing/corpus/site.mjs` already keys `door|witnessClass`, because the bound above
-   is then a count rather than an inequality. MEASURED ABSENT with the command, keyed on the emitted KEY so
-   prose naming the join cannot satisfy it:
-   `grep -cE '"epAddressWitness"|addressClass\|witnessClass' engine/host/solver/result.c` answers 0, against
-   `grep -c 'epAddressClass' engine/host/solver/result.c` answering 5 as the armed control and an invented key
-   answering 0. */
+/* Whether the run had determined this address: the product's hard bar, read off the test `url_display` makes. A
+ * concolic `url` is an address some segment of which entered the program at a source and which therefore stands in
+ * no served byte. No parser, no table of statable shapes, and nothing about the address's text is consulted.
+ * Both concolic members are url_display's concolic branch, so `cls != EPA_CONCRETE` is exactly `concolic_is(url)`
+ * and exactly "this row printed a shape"; the refinement answers a different question (did this flow determine
+ * the symbolic value it holds, and whose unknown does it rest on) and changes no branch of url_display.
+ *
+ * The pin is asked through `concolic_example_state`, concolic.h's single decision, which `concolic_example` also
+ * reads to mint the pinned bytes, so the value and the fact come out of one lookup; it is side-effect-free and
+ * allocation-free, and it needs no running flow (it reads `g_pins` and its inherited chain, so with no flow
+ * standing it reads the baseline, the sound answer for a record minted before any program ran). Three narrowings
+ * keep `EPA_SOURCE_DETERMINED` rare: a pinned source re-read is a bare primitive, so the first line answers
+ * `EPA_CONCRETE`; `src_self` is written only at the two mints that read a pin and never by `concolic_derived`, so
+ * every composed address answers not-determined however its operand was pinned; and the holding arm of §7.2.13
+ * IsLooselyEqual ( x, y ) writes `pinned_root` without a value. What remains is a source held in a page variable
+ * before its own strict gate and passed bare, endpoint.h's worked example.
+ *
+ * Whose unknown it is (concolic.h's `concolic_root_whose_any`, a disjunction over the root set the mint states and
+ * `derived_root_whose` unions at every join) separates three populations from the bar with one predicate: a hole
+ * `engine_orphan_call` minted so a drive could happen at all (`{orphan<hex>.argN}`, an unknown nobody supplied);
+ * a value whose bytes stand in the served document and is minted unknown so a gate over it forks (HTML §4.12.1's
+ * data block, an injected global an inline script wrote: CONCOLIC_WHOSE_SERVED, stated by core/loader/data_block.c
+ * and solver/absent.c's present arm); and one no mint could speak for. Each reads `EPA_UNKNOWN_UNPROVEN`. The
+ * discriminator is the source identity, not the composition: `fetch(cfg.url)` emits `{__CFG.url}` with no page
+ * literal and is entirely the page's, while `origin + "/" + <an orphan argument>` is page text around an engine
+ * mint. The cheaper routes are wrong: `concolic_src_c` answers the first unknown operand's source, demoting a row
+ * that mixes an orphan argument with a page unknown; keying on whether the driving flow is an orphan drive is wrong
+ * for the product's best case (a drive that reaches `fetch("/api/" + <a page unknown>)` learned what the tool exists
+ * to learn); a registry of minted identities in solver/engine.c matches only whole roots and is engine state a
+ * resumed flow finds empty; a `{orphan` prefix test is a spelling. The example does not answer it either:
+ * concolic.h grades a reply field HELD and an absent injected global NONE.
+ *
+ * Nothing is asserted about this operand: the address is composed of bytes a page wrote, so a DCHECK over its
+ * shape, root or class would hand any document an abort switch, and whether a page re-reads a source is the
+ * page's choice. Provenance threading is asserted at `concolic_alloc`.
+ *
+ * The bar is as good as what the mints stated, and one path loses the statement: a value somebody outside this
+ * engine supplied whose whose-mask was lost reads `EPA_UNKNOWN_UNPROVEN`, an under-claim. The real path is §2.7.8
+ * StructuredDeserialize's rebuild, which has the shape and source but mints CONCOLIC_WHOSE_UNSTATED; the gap is
+ * owned by core/structured_clone.c's named residual at that mint, and this line reads the fix for free. Guessing
+ * WORLD here instead would put a rebuilt orphan argument back on the bar.
+ * Named residual. Not covered: the census publishes the address class and the witness class as two histograms, so
+ * how many concolic rows were `unasked` is an inequality between marginals; the per-endpoint row carries both
+ * adjacently, but no census joins them. Next diff builds: one keyed census row joining the two, as
+ * testing/corpus/site.mjs keys `door|witnessClass`. Absence shows as: a census reader bounding the `unasked`
+ * concolic population from two histograms instead of reading it. */
 static int address_class_of(JSValueConst url) {
     if (!concolic_is(url)) return EPA_CONCRETE;
     if (concolic_example_state(url) == CONCOLIC_EX_DETERMINED) return EPA_SOURCE_DETERMINED;
-    /* AND WHOSE UNKNOWN IT RESTS ON, WHICH IS THE LINE THE TWO RESIDUALS ABOVE WERE WAITING ON. `_any` and
-       never `_all`: one root somebody outside this engine supplied is enough, however many holes this engine
-       minted stand beside it, because the address genuinely rests on something no parse of the served bytes
-       can state. `_all` would answer NO for every mixed set and refuse an address the run really did prove,
-       which is the direction §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates as the invisible one — and
-       `concolic_root_whose_all(url, CONCOLIC_WHOSE_WORLD)` is additionally the WRONG shape here even where
-       the set is pure, since it is a UNIVERSAL whose own banner says so.
-       IT IS ONE READ AND NOT THREE, which is why the three populations this refuses share one member: the
-       question is "is any root the WORLD's", so a hole this engine minted, a value whose bytes stand in the
-       served document, and one no mint could speak for are separated from the bar by the same predicate. A
-       second read beside this one would be the two-answers-to-one-question shape `url_display`'s banner
-       forbids, and the residual above says in as many words that a reader standing here must not build it.
-       NOTHING IS ASSERTED ABOUT THE ANSWER, FOR THE REASON THE BANNER ABOVE ALREADY GIVES ONE OPERAND BACK:
-       the pair `!!root == !!root_whose` is this codebase's own and is asserted at `concolic_alloc`, where
-       both halves are in one hand; restating it here would be the second copy §AN-AUDITOR-DERIVES-THE-RULE
-       forbids and would be weaker than the original. What this line's own answer is asserted about is its
-       MAPPING, at the one call site, where a door is in hand. */
+    /* And whose unknown it rests on: `_any`, never `_all`, since one root somebody outside this engine supplied is
+       enough however many engine-minted holes stand beside it, and `_all` would refuse a mixed set the run did
+       prove, an invisible under-claim. One read separates all three non-WORLD populations, so a second read beside
+       it would be two answers to one question. Nothing is asserted about the answer: the pair
+       `!!root == !!root_whose` is asserted at `concolic_alloc`, and this answer's mapping is asserted at the one
+       call site, where a door is in hand. */
     if (!concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)) return EPA_UNKNOWN_UNPROVEN;
     return EPA_UNKNOWN;
 }
