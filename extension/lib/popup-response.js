@@ -32,21 +32,28 @@ function renderResponse(result) {
   const container = document.getElementById("send-response");
   container.style.display = "block";
 
-  // Restore child structure if a previous error replaced it via innerHTML
+  // Restore the panel's child structure if it is missing.
   if (!document.getElementById("send-response-status")) {
-    container.innerHTML =
-      '<div class="section-header">Manual Send Result</div>' +
-      '<div id="send-response-status"></div>' +
-      '<details id="send-response-headers-section"><summary>Response Headers</summary>' +
-      '<table id="send-response-headers" class="auth-table"></table></details>' +
-      '<div id="send-response-body"></div>';
+    domReplaceChildren(container, [
+      domElement("div", { class: "section-header" }, ["Manual Send Result"]),
+      domElement("div", { id: "send-response-status" }),
+      domElement("details", { id: "send-response-headers-section" }, [
+        domElement("summary", {}, ["Response Headers"]),
+        domElement("table", { id: "send-response-headers", class: "auth-table" }),
+      ]),
+      domElement("div", { id: "send-response-body" }),
+    ]);
   }
 
   if (result.error) {
-    document.getElementById("send-response-status").innerHTML = "";
-    document.getElementById("send-response-headers").innerHTML = "";
-    document.getElementById("send-response-body").innerHTML =
-      `<div class="card"><div class="card-label">Error</div><div class="card-value">${esc(result.error)}</div></div>`;
+    document.getElementById("send-response-status").replaceChildren();
+    document.getElementById("send-response-headers").replaceChildren();
+    domReplaceChildren(document.getElementById("send-response-body"), [
+      domElement("div", { class: "card" }, [
+        domElement("div", { class: "card-label" }, ["Error"]),
+        domElement("div", { class: "card-value" }, [result.error]),
+      ]),
+    ]);
     return;
   }
 
@@ -57,19 +64,20 @@ function renderResponse(result) {
      predicate written out beside the field that already states it, and its only reachable effect was to
      answer for an ABSENT `ok`. There is no absent `ok` here; the assert at the top says so. */
   const statusClass = result.ok ? "resp-status-ok" : "resp-status-error";
-  statusEl.innerHTML =
-    `<span class="${statusClass}">${esc(String(result.status))} ${esc(result.statusText)}</span>` +
-    ` <span class="resp-timing">${esc(String(result.timing))}ms</span>` +
-    ` <span class="resp-size">${esc(String(result.body.size))} bytes</span>`;
+  domReplaceChildren(statusEl, [
+    domElement("span", { class: statusClass }, [String(result.status) + " " + result.statusText]),
+    " ", domElement("span", { class: "resp-timing" }, [String(result.timing) + "ms"]),
+    " ", domElement("span", { class: "resp-size" }, [String(result.body.size) + " bytes"]),
+  ]);
 
+  /* The rows go in a <tbody>, the tree the HTML parser builds for a row in a table (HTML §13.2.6.4.9 The
+     "in table" insertion mode, a start tag whose tag name is one of "td", "th", "tr"). */
   const headersTable = document.getElementById("send-response-headers");
-  headersTable.innerHTML = "";
-  for (const [k, v] of Object.entries(result.headers)) {
-    headersTable.innerHTML += `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`;
-  }
+  domReplaceChildren(headersTable, [domElement("tbody", {}, Object.entries(result.headers).map(([k, v]) =>
+    domElement("tr", {}, [domElement("td", {}, [k]), domElement("td", {}, [String(v)])])))]);
 
   const bodyEl = document.getElementById("send-response-body");
-  bodyEl.innerHTML = renderResultBody(result);
+  domReplaceChildren(bodyEl, renderResultBody(result));
 
   const dlBtn = document.getElementById("btn-download-response");
   if (dlBtn) {
@@ -188,8 +196,8 @@ function renderResultBody(result) {
 
   // GraphQL: enhanced display with data/errors/extensions sections
   if (isGraphQLUrl(currentRequestUrl) && result.body.format === "json") {
-    const gqlHtml = renderGraphQLResponse(rawBody, respSchema, responseSchemaId, doc);
-    if (gqlHtml) return gqlHtml;
+    const gqlNodes = renderGraphQLResponse(rawBody, respSchema, responseSchemaId, doc);
+    if (gqlNodes) return gqlNodes;
   }
 
   // batchexecute: detect by content (wrb.fr markers), not just URL
@@ -205,26 +213,23 @@ function renderResultBody(result) {
     const ct = result.body.contentType || "application/octet-stream";
     const sizeKB = (result.body.size / 1024).toFixed(1);
     const ext = mimeToExt(ct);
-    return `<div class="card card-compact">
-      <div class="card-label">Binary Response</div>
-      <div class="card-value">${esc(ct)} — ${sizeKB} KB</div>
-      <button class="btn-action" id="btn-download-response">Save As${ext ? " (." + ext + ")" : ""}</button>
-    </div>`;
+    return [domElement("div", { class: "card card-compact" }, [
+      domElement("div", { class: "card-label" }, ["Binary Response"]),
+      domElement("div", { class: "card-value" }, [String(ct) + " — " + sizeKB + " KB"]),
+      domElement("button", { class: "btn-action", id: "btn-download-response" },
+                 ["Save As" + (ext ? " (." + ext + ")" : "")]),
+    ])];
   }
 
   if (result.body.format === "json") {
     const nodes = jsonToTree(result.body.parsed);
-    return (
-      `<div class="card-label">Decoded JSON</div>` +
-      renderPbTree(nodes, respSchema, responseSchemaId, doc)
-    );
+    return [domElement("div", { class: "card-label" }, ["Decoded JSON"]),
+            renderPbTree(nodes, respSchema, responseSchemaId, doc)];
   } else if (result.body.format === "protobuf_tree") {
-    return (
-      `<div class="card-label">Decoded Protobuf</div>` +
-      renderPbTree(result.body.parsed, respSchema, responseSchemaId, doc)
-    );
+    return [domElement("div", { class: "card-label" }, ["Decoded Protobuf"]),
+            renderPbTree(result.body.parsed, respSchema, responseSchemaId, doc)];
   } else {
-    return `<pre class="resp-body">${esc(result.body.raw || "")}</pre>`;
+    return [domElement("pre", { class: "resp-body" }, [result.body.raw || ""])];
   }
 }
 
@@ -457,41 +462,31 @@ function esc(s) {
   return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/`/g, "&#96;");
 }
 
+/* renderPbTree — a decoded body as a `.pb-tree` element. Iterative: the stack holds one job per field node,
+   each carrying the element it renders into, so a deeply nested message renders without growing the JS
+   call stack. Jobs of one container are pushed contiguously and in reverse, and a job's nested jobs are
+   pushed above its siblings', so every container receives its children in order. */
 function renderPbTree(rootNodes, rootSchema = null, rootFallbackSchemaId = "", rootDoc = null) {
-  // Iterative HTML builder. The stack holds work items processed LIFO;
-  // each is either a "literal" string fragment or a "render" job for
-  // (nodes, schema, fallback) which emits one node and pushes nested
-  // children/items as further jobs interleaved with their wrapper
-  // open/close fragments. Replaces self-recursion so deeply-nested
-  // protobuf trees render without growing the JS call stack.
-  if (!rootNodes || rootNodes.length === 0) return '<div class="pb-empty">Empty body</div>';
-
-  const out = [];
+  if (!rootNodes || rootNodes.length === 0) return domElement("div", { class: "pb-empty" }, ["Empty body"]);
+  const tree = domElement("div", { class: "pb-tree" });
   const stack = [];
-  // Push initial scope: open pb-tree, render each node, close pb-tree.
-  // Pushed in REVERSE so LIFO pop yields correct visual order.
-  function pushNodes(nodes, schema, fallbackSchemaId, doc) {
-    if (schema && schema.request) schema = schema.request;
-    let fieldMap = null;
-    if (schema) {
-      if (schema.properties) fieldMap = schema.properties;
-      else if (schema.parameters) fieldMap = schema.parameters;
-      else fieldMap = schema;
-    }
-    stack.push({ kind: "literal", text: '</div>' });
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      stack.push({ kind: "node", node: nodes[i], schema, fieldMap, fallbackSchemaId, doc });
-    }
-    stack.push({ kind: "literal", text: '<div class="pb-tree">' });
-  }
-  pushNodes(rootNodes, rootSchema, rootFallbackSchemaId, rootDoc);
+  _pbPushNodes(stack, tree, rootNodes, rootSchema, rootFallbackSchemaId, rootDoc);
+  while (stack.length > 0) _renderPbNode(stack.pop(), stack);
+  return tree;
+}
 
-  while (stack.length > 0) {
-    const item = stack.pop();
-    if (item.kind === "literal") { out.push(item.text); continue; }
-    _renderPbNode(item, out, stack);
+// Pushes one job per node of `nodes`, rendering into `parent`, with the field map `schema` resolves to.
+function _pbPushNodes(stack, parent, nodes, schema, fallbackSchemaId, doc) {
+  if (schema && schema.request) schema = schema.request;
+  let fieldMap = null;
+  if (schema) {
+    if (schema.properties) fieldMap = schema.properties;
+    else if (schema.parameters) fieldMap = schema.parameters;
+    else fieldMap = schema;
   }
-  return out.join("");
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    stack.push({ parent, node: nodes[i], schema, fieldMap, fallbackSchemaId, doc });
+  }
 }
 
 /* A WIRE ADDRESS AS TEXT, OR NOTHING — AND AN ABSENCE MUST NEVER BECOME TEXT A DOCUMENT CAN SPELL.
@@ -576,12 +571,9 @@ function _pbFindDocument(propMap, wire) {
   return null;
 }
 
-// Render one pb-tree node into `out` and push any nested children/items
-// onto the stack as interleaved literal+node entries. The original
-// recursive form returned a string per call; here we stream fragments
-// into `out` and defer nested expansion to the outer driver loop.
-function _renderPbNode(item, out, stack) {
-  const { node, schema, fieldMap, fallbackSchemaId, doc } = item;
+// Renders one pb-tree node into its job's parent and pushes the jobs for any nested children.
+function _renderPbNode(item, stack) {
+  const { parent, node, schema, fieldMap, fallbackSchemaId, doc } = item;
   /* ONE VARIABLE, TWO RECORD KINDS, AND NO SINGLE TREATMENT IS RIGHT FOR BOTH — which is why the identity
      resolution is split rather than shared. `Array.isArray(fieldMap)` is a FACT about which producer built
      the map (CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS: the bit stays one bit and each kind gets
@@ -625,12 +617,13 @@ function _renderPbNode(item, out, stack) {
   }
   let typeLabel;
   if (typeText !== null && typeText !== "") {
-    typeLabel = `<span class="pb-type-badge">${esc(typeText)}</span>`;
+    typeLabel = domElement("span", { class: "pb-type-badge" }, [typeText]);
   } else if (node.isJson) {
     const jsType = node.jsType || (node.string != null ? "string" : typeof node.value);
-    typeLabel = `<span class="pb-type-badge">${esc(jsType)}</span>`;
+    typeLabel = domElement("span", { class: "pb-type-badge" }, [String(jsType)]);
   } else {
-    typeLabel = `<span class="pb-wire-badge">${node.wire === 0 ? "varint" : node.wire === 1 ? "64bit" : node.wire === 2 ? "len" : "32bit"}</span>`;
+    typeLabel = domElement("span", { class: "pb-wire-badge" },
+                           [node.wire === 0 ? "varint" : node.wire === 1 ? "64bit" : node.wire === 2 ? "len" : "32bit"]);
   }
   /* THE MATCHED FIELD'S OTHER THREE CLAIMS, RESOLVED ONCE, WHILE THE KIND IS STILL IN VIEW. `fieldDef` is
      `null` when NO field in this map carries this node's address, and that is a POSITIVE STATEMENT — the
@@ -654,47 +647,23 @@ function _renderPbNode(item, out, stack) {
      reader that does not exist, the write side of the same broken contract this function's `f.id` read was
      the read side of. What it claimed is still stated where a reader could use it: an unmatched node's
      `data-key` is the server's own key rather than a schema address. */
-  const renameAttr = `data-schema="${esc(currentSchemaId)}" data-key="${esc(fieldDef ? renameKey : node.field)}"`;
-  const renameBtn = currentSchemaId ? ` <span class="btn-rename" title="Rename field" ${renameAttr}>✎</span>` : "";
+  const renameBtn = currentSchemaId
+    ? [" ", domElement("span", { class: "btn-rename", title: "Rename field", "data-schema": String(currentSchemaId),
+                                 "data-key": String(fieldDef ? renameKey : node.field) }, ["✎"])]
+    : [];
 
-  out.push(`<div class="pb-node">
-      <span class="pb-field">${esc(fieldName)}</span>${renameBtn}
-      ${typeLabel}: `);
+  const pbNode = domElement("div", { class: "pb-node" }, [
+    domElement("span", { class: "pb-field" }, [fieldName]), renameBtn, " ", typeLabel, ": ",
+  ]);
+  parent.appendChild(pbNode);
 
-  // Build the per-node inner HTML. Nested-tree fragments push themselves
-  // onto the stack (followed by their wrapper close), and the node-close
-  // fragment is queued LIFO so it lands last.
-  // Pushed in REVERSE order: closing div, then nested content, then any
-  // pre-content (none here — all the literal HTML before nested calls is
-  // emitted via out.push directly above).
-  // To preserve original ordering: the parent's closing </div> goes
-  // LAST in output, so it's pushed FIRST onto the stack.
-  // Helper: push a render job for child nodes inside a wrapper div.
-  // Order on output: <wrapperOpen>...<child rendering>...</wrapper>
-  function pushNestedTree(wrapperOpen, wrapperClose, childNodes, childSchema, childFallback) {
-    // Stack pops LIFO; to get [wrapperOpen, child*, wrapperClose] in
-    // output, push them in REVERSE: close, child*, open.
-    // Children themselves expand to multiple frames each; push them in
-    // reverse too so they pop in original order.
-    stack.push({ kind: "literal", text: wrapperClose });
-    // Resolve fieldMap for childSchema right here (matches pushNodes).
-    let cs = childSchema;
-    if (cs && cs.request) cs = cs.request;
-    let cfm = null;
-    if (cs) {
-      if (cs.properties) cfm = cs.properties;
-      else if (cs.parameters) cfm = cs.parameters;
-      else cfm = cs;
-    }
-    for (let i = childNodes.length - 1; i >= 0; i--) {
-      stack.push({ kind: "node", node: childNodes[i], schema: cs, fieldMap: cfm, fallbackSchemaId: childFallback, doc });
-    }
-    stack.push({ kind: "literal", text: wrapperOpen });
+  // A nested tree: `<outerClass><div class="pb-tree">` appended to `into`, its nodes pushed as jobs.
+  function pushNestedTree(into, outerClass, childNodes, childSchema, childFallback) {
+    const inner = domElement("div", { class: "pb-tree" });
+    into.appendChild(domElement("div", { class: outerClass }, [inner]));
+    _pbPushNodes(stack, inner, childNodes, childSchema, childFallback, doc);
   }
-
-  // The closing </div> for the current pb-node. Push BEFORE any nested
-  // content so it lands at the bottom of this node's output.
-  stack.push({ kind: "literal", text: "</div>" });
+  const leaf = (cls, text) => pbNode.appendChild(domElement("span", { class: cls }, [text]));
 
   if (node.message) {
     let childrenSchema = childMap;
@@ -702,51 +671,37 @@ function _renderPbNode(item, out, stack) {
     if (childrenSchema === null && childFallback && doc?.schemas?.[childFallback]) {
       childrenSchema = doc.schemas[childFallback];
     }
-    pushNestedTree('<div class="pb-nested"><div class="pb-tree">', '</div></div>',
-      node.message, childrenSchema, childFallback);
+    pushNestedTree(pbNode, "pb-nested", node.message, childrenSchema, childFallback);
   } else if (node.packed) {
-    let frag = '<div class="pb-repeated">';
-    for (const val of node.packed) {
-      frag += `<span class="pb-scalar-item">${esc(String(val))}</span> `;
-    }
-    frag += "</div>";
-    stack.push({ kind: "literal", text: frag });
+    pbNode.appendChild(domElement("div", { class: "pb-repeated" }, node.packed.map((val) =>
+      [domElement("span", { class: "pb-scalar-item" }, [String(val)]), " "])));
   } else if (node.isRepeatedScalar && Array.isArray(node.value)) {
-    let frag = '<div class="pb-repeated">';
-    for (const val of node.value) {
-      if (val === null || val === undefined) continue;
-      frag += `<span class="pb-scalar-item">${esc(JSON.stringify(val))}</span> `;
-    }
-    frag += "</div>";
-    stack.push({ kind: "literal", text: frag });
+    pbNode.appendChild(domElement("div", { class: "pb-repeated" },
+      node.value.filter((val) => val !== null && val !== undefined).map((val) =>
+        [domElement("span", { class: "pb-scalar-item" }, [JSON.stringify(val)]), " "])));
   } else if (Array.isArray(node.value) && node.isJspb) {
     if (isRepeated) {
-      // Sequence: <div class="pb-repeated">[items]</div>
-      stack.push({ kind: "literal", text: "</div>" });
-      // Items in REVERSE so they pop in original order.
-      for (let vi = node.value.length - 1; vi >= 0; vi--) {
-        const itemv = node.value[vi];
+      const seq = domElement("div", { class: "pb-repeated" });
+      pbNode.appendChild(seq);
+      for (const itemv of node.value) {
         if (itemv === null || itemv === undefined) continue;
         if (isMessage && Array.isArray(itemv)) {
           const itemNodes = jspbToTree(itemv);
           const childFallback = currentSchemaId ? `${currentSchemaId}.${node.field}` : "";
-          pushNestedTree('<div class="pb-nested-item"><div class="pb-tree">', '</div></div>',
-            itemNodes, childMap, childFallback);
+          pushNestedTree(seq, "pb-nested-item", itemNodes, childMap, childFallback);
         } else {
-          stack.push({ kind: "literal", text: `<span class="pb-scalar-item">${esc(JSON.stringify(itemv))}</span>` });
+          seq.appendChild(domElement("span", { class: "pb-scalar-item" }, [JSON.stringify(itemv)]));
         }
       }
-      stack.push({ kind: "literal", text: '<div class="pb-repeated">' });
     } else if (isMessage) {
       const nestedNodes = jspbToTree(node.value);
       const childFallback = currentSchemaId ? `${currentSchemaId}.${node.field}` : "";
-      pushNestedTree('<div class="pb-nested"><div class="pb-tree">', '</div></div>',
-        nestedNodes, childMap, childFallback);
+      pushNestedTree(pbNode, "pb-nested", nestedNodes, childMap, childFallback);
     } else {
-      stack.push({ kind: "literal", text: `<span class="pb-string">${esc(JSON.stringify(node.value))}</span>` });
+      leaf("pb-string", JSON.stringify(node.value));
     }
   } else if (node.string !== undefined) {
-    stack.push({ kind: "literal", text: `<span class="pb-string">"${esc(node.string)}"</span>` });
+    leaf("pb-string", '"' + String(node.string) + '"');
   } else if (node.value !== undefined) {
     if (typeof node.value === "object" && node.value !== null) {
       const childNodes = jsonToTree(node.value);
@@ -755,15 +710,14 @@ function _renderPbNode(item, out, stack) {
       if (childrenSchema === null && childFallback && doc?.schemas?.[childFallback]) {
         childrenSchema = doc.schemas[childFallback];
       }
-      pushNestedTree('<div class="pb-nested"><div class="pb-tree">', '</div></div>',
-        childNodes, childrenSchema, childFallback);
+      pushNestedTree(pbNode, "pb-nested", childNodes, childrenSchema, childFallback);
     } else {
-      stack.push({ kind: "literal", text: `<span class="pb-number">${esc(String(node.value))}</span>` });
+      leaf("pb-number", String(node.value));
     }
   } else if (node.hex) {
-    stack.push({ kind: "literal", text: `<span class="pb-hex">0x${esc(node.hex)}</span>` });
+    leaf("pb-hex", "0x" + String(node.hex));
   } else if (node.asFloat !== undefined) {
-    stack.push({ kind: "literal", text: `<span class="pb-number">${node.asFloat.toFixed(4)}</span>` });
+    leaf("pb-number", node.asFloat.toFixed(4));
   }
 }
 
