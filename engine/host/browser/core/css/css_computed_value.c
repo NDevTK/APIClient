@@ -2027,6 +2027,10 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        keyword`, over the same one-ident grammar; §9.4's step 9 reads `stretch` off a multi-line container.
        css-align-3 §5.2's `place-content` sets it too (core/css/css_shorthand.c). */
     case CSS_PROPERTY_ALIGN_CONTENT:
+    /* css-flexbox-1 §8.2 "Axis Alignment: the justify-content property", `Computed value: specified keyword`,
+       over the same one-ident grammar; core/layout/flex_position.c reads it for §9.5's main-axis placement.
+       css-align-3 §5.2's `place-content` sets it too (core/css/css_shorthand.c). */
+    case CSS_PROPERTY_JUSTIFY_CONTENT:
     /* css-display-3 §3 "Display Order: the order property", `Computed value: specified integer`, an
        `<integer>` carried as text; core/layout/flex_line.c parses it for order-modified document order. */
     case CSS_PROPERTY_ORDER:

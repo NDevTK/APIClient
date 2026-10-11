@@ -116,6 +116,7 @@ typedef enum {
     X(ALIGN_ITEMS,         "align-items",         LXB_CSS_PROPERTY_ALIGN_ITEMS,    TEXT, ALL, UNTYPED)            \
     X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     TEXT, ALL, UNTYPED)            \
     X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  TEXT, ALL, UNTYPED)            \
+    X(JUSTIFY_CONTENT,     "justify-content",     LXB_CSS_PROPERTY_JUSTIFY_CONTENT, TEXT, ALL, UNTYPED)           \
     X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT, ALL, UNTYPED)            \
     X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
