@@ -858,6 +858,11 @@ static void detect_sink(JSValueConst arg, int cls) {
            "a JS-context arrival was recorded for a value ECMAScript §19.2.1.1 PerformEval step 2 hands back "
            "unevaluated — no program is compiled and there is no §12 lexical state for a breakout to escape "
            "from, so this would raise `reached` for a call that is not a code-execution sink at all");
+    /* A witness verification re-runs the document to see one request, not to search: a sink it reaches with
+       another source's taint is reached by the ordinary flows too, and a search opened here would freeze a path
+       whose substituted source no seeded candidate carries. Declined before the census, which counts
+       exploration. */
+    { const Flow *f = flow_running(); if (f && f->cand_vfy) return; }
     METRIC_ADD(sink_reached, 1);
     if (!concolic_is(arg)) return;
     METRIC_ADD(sink_tainted, 1);
@@ -1742,6 +1747,14 @@ static void observe_runway(Cand *e, const Flow *f) {
 void solve_flow_begin(Flow *f) {
     concolic_set_candidate(f ? f->cand_src : NULL, f ? f->cand_payload : NULL);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
+    /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
+       take the exploration arm, which detect_sink then declines. */
+    if (f && f->cand_vfy) {
+        DCHECK(f->cand_src && !f->cand_sink,
+               "a witness verification flow carries no substitution, or a sink class besides its key");
+        f->cand_verifying = 0;
+        return;
+    }
     if (f && f->cand_src) {
         f->cand_verifying = 1;
         /* The search is given a turn, counted at the one point a candidate of it is about to execute. Beside
@@ -1781,7 +1794,7 @@ void solve_flow_begin(Flow *f) {
    flow's state, and clearing in two places is how an asymmetry gets in. This file no longer sets
    Flow.cand_fired, so engine.c's sibling copy of it and cold.c's drop of it carry nothing. */
 void solve_flow_end(Flow *f) {
-    if (!f || !f->cand_src) return;
+    if (!f || !f->cand_src || f->cand_vfy) return;   /* a verification is no search's; see solve_flow_begin */
     /* The last runway reading this candidate will offer, which switch-in sampling cannot take for a flow that
        holds the thread from its final switch-in to its end. Taken before `cand_verifying` is cleared. */
     Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));

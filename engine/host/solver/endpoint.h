@@ -381,8 +381,9 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
    composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
 /* `witness`: one element per distinct sighting witness, never a union of two (it would state a combination no
-   flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else the
-   minting flow's assumptions at the act, sorted by kind then text: `{source, value, kind}` per pin (the source
+   flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else
+   `{assumed, verification}`, `assumed` being the minting flow's assumptions at the act, sorted by kind then
+   text: `{source, value, kind}` per pin (the source
    path, the ToString of the operand its `===` determined, that operand's type), whether or not an observation
    agreed; `{decision, taken}` per branch arm that pinned nothing and that no observation established (its
    example contradicts it, or there is none), as the condition's shape and its ToBoolean; `{decision,
@@ -391,7 +392,12 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    Named residual. Not covered: an assumed arm whose predicate has no spellable identity, a declined request's
    failure arm and a modelled close request mark the path forced and file no decision. Next diff: a decision
    row for each, keyed by the act's own name. How its absence shows: a `forced` row whose every witness
-   element is an empty array. */
+   element has an empty `assumed`. */
+/* `verification` is what firing the witness established (solver/witness_verify.h): `verified` when a run with
+   its value delivered through the source's real transform reached this method and path assuming nothing of
+   its own; `candidate` when such a run was minted and has not; `no-candidate` when firing cannot check it
+   (endpoint.c's witness_payload names what that covers). Neither unverified word is a verdict that the
+   witness is infeasible. */
 /* Each param: `name`; `location` (`path`|`query`|`body`, which is what the reviewer replays it with);
    `valueClass`; `validValues`; and the optional domain keys below. `valueClass` is `unknown` when some
    observed path minted the param from a value the code did not compute, else `concrete` (the address's two

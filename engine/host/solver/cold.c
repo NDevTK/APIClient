@@ -7,6 +7,7 @@
 #include "solver/concolic.h"
 #include "solver/world.h"
 #include "solver/solve.h"     /* …and the @S sink table a parked candidate's class is re-bound through */
+#include "solver/witness_verify.h"   /* …and the queue a rebuilt witness verification registers its key in */
 #include "solver/pending.h"   /* the session's context, which a flow's JS-valued queues are read through */
 #include "solver/dyn_body.h"  /* …and the program text, which is SHARED and so is counted once, not per flow */
 #include "solver/engine.h"    /* the one entry a rebuilt routed delivery goes back through — see the 'm' arm */
@@ -215,6 +216,7 @@ void cold_census(ColdCensus *out)
         out->misc_bytes += (long)sizeof(Flow);
         if (f->cand_src) out->misc_bytes += (long)strlen(f->cand_src) + 1;
         if (f->cand_payload) out->misc_bytes += (long)strlen(f->cand_payload) + 1;
+        if (f->cand_vfy) out->misc_bytes += (long)strlen(f->cand_vfy) + 1;
         /* THE ROUTED DELIVERIES ARE NOT COUNTED HERE, and the two `strlen` rows that were are gone with the
            two `char *` they measured. The queue is a JS Array of [record, senderOrigin] pairs now, so its
            bytes are quickjs's and its strings are shared with everything else that names them — the same
@@ -579,6 +581,27 @@ static void park_rec_cand(const Flow *f, long id)
     park_hex(f->cand_payload);
 }
 
+/* A witness verification (solver/witness_verify.h): `v<seg>,<reward>,<hex src>,<hex key>,<hex payload>`. Its
+   substitution crosses as bytes for park_rec_cand's reason, its key as hex because it is length-prefixed text
+   holding a page's path, and the payload stays last for the same reason it does there. It carries no sink and
+   no root: it is no search's, and the delivery root is the source itself (endpoint.c's eligibility). */
+static void park_rec_vfy(const Flow *f, long id)
+{
+    char head[96];
+
+    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->cand_vfy && !f->cand_sink,
+           "a witness verification was parked missing its substitution or its key, or carrying a sink class");
+    if (id < 0) snprintf(head, sizeof head, "v-,%.17g,", flow_reward(f));
+    else        snprintf(head, sizeof head, "v%ld,%.17g,", id, flow_reward(f));
+    park_open_rec();
+    park_str(head);
+    park_hex(f->cand_src);
+    park_str(",");
+    park_hex(f->cand_vfy);
+    park_str(",");
+    park_hex(f->cand_payload);
+}
+
 /* A FOREIGN WORLD'S SEGMENT — the one record in this document that names nothing of this frontier. See cold.h
    for the grammar and solver/world.h for why a VECTOR is the whole of such a segment's recipe. It is written
    like park_rec_cand's text fields and not through park_rec: a world vector holds the colons and commas
@@ -847,10 +870,11 @@ static long park_emit_chain(const void *seg)
    (extension/lib/discovery-probe.js), so there is no such flow to write and the letter is gone from BOTH ends
    of the round trip — a grammar that can still emit a kind it can no longer parse fails only on a resume in a
    later session. */
-typedef enum { PARK_KIND_CAND, PARK_KIND_FLOW } ParkKind;
+typedef enum { PARK_KIND_CAND, PARK_KIND_VFY, PARK_KIND_FLOW } ParkKind;
 
 static ParkKind park_kind_of(const Flow *f)
 {
+    if (f->cand_vfy) return PARK_KIND_VFY;
     if (f->cand_src) return PARK_KIND_CAND;
     return PARK_KIND_FLOW;
 }
@@ -944,6 +968,9 @@ void cold_park_preview(ColdPreview *out)
 
         switch (park_kind_of(f)) {
         case PARK_KIND_CAND:  out->cands++;  if (deep) out->deepcands++;  break;
+        /* A witness verification is a candidate session (it carries a substitution), so it is counted with
+           them; only its record letter differs. */
+        case PARK_KIND_VFY:   out->cands++;  if (deep) out->deepcands++;  break;
         case PARK_KIND_FLOW:  out->flows++;  break;
         }
         if (deep) out->deep++;
@@ -1218,6 +1245,10 @@ void cold_park_flow(Flow *f)
         /* AN @S CANDIDATE PARKS AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand. */
         park_rec_cand(f, id);
         g_parked_census.cands++;
+        break;
+    case PARK_KIND_VFY:
+        park_rec_vfy(f, id);
+        g_parked_census.cands++;   /* a candidate session, as the preview counts it */
         break;
     case PARK_KIND_FLOW:
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", flow_reward(f));
@@ -2032,6 +2063,39 @@ void cold_resume(JSContext *ctx, const char *recipes)
             last_flow->orphan_hash = hash;
             last_flow->orphan_want = 1;
             g_resumed.orphans++;
+        } else if (kind == 'v') {
+            /* A WITNESS VERIFICATION COMES BACK AS ITS SUBSTITUTION, ITS KEY AND ITS PATH — park_rec_vfy's
+               fields, rebuilt as a 'c' record's flow is. It needs no re-binding: it is no search's, and its key
+               is registered so this session mints no second run for the same witness. */
+            long sid;
+            double val;
+            Flow *fl;
+            const char *xb, *kb;
+
+            sid = park_ordinal(q, &ep); q = ep;
+            q = park_comma(q);
+            val = park_reward(q, &ep); q = ep;
+            q = park_comma(q);
+            for (xb = q; q < end && *q != ','; q++)
+                ;
+            CHECK(sid < seg_n,
+                  "engine: a parked witness verification stands on a decision segment this document never wrote "
+                  "— the ordinal is a subscript into the rebuild's segment table in every build");
+            fl = park_flow_add(ctx, val, before, flows);
+            fl->cand_src = park_unhex(xb, q);
+            q = park_comma(q);
+            for (kb = q; q < end && *q != ','; q++)
+                ;
+            fl->cand_vfy = park_unhex(kb, q);
+            q = park_comma(q);
+            fl->cand_payload = park_unhex(q, end);
+            witness_verify_resumed(fl->cand_vfy);
+            g_resumed.cands++;
+            fl->started = 1;
+            fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
+            fl->pin_blob = concolic_pins_blob_empty();
+            flows++;
+            last_flow = fl;
         } else if (kind == 'c') {
             /* AN @S CANDIDATE SESSION COMES BACK AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand for what
                crosses and, just as load-bearing, which two candidate fields deliberately do not. Everything the
@@ -2173,6 +2237,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
                told the document is corrupt. */
             DFAIL("a park record names a kind this grammar does not have — the recipe holds a GENERATION ('g'), "
                   "FOREIGN WORLD SEGMENTS ('w'), SEGMENTS ('s'), FLOWS ('f'), @S CANDIDATE SESSIONS ('c'), "
+                  "WITNESS VERIFICATIONS ('v'), "
                   "ORPHAN FUNCTION LOCATORS ('o'), SENDING-TIMELINE COMMITMENTS ('r') and "
                   "UNMADE ROUTED DELIVERIES ('m') and nothing else. A 'd' record "
                   "is a DISCOVERY PROBE written by a session in which the engine seeded its own document "

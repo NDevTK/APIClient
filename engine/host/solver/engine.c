@@ -15,6 +15,7 @@
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */
 #include "solver/result.h"
 #include "solver/solve.h"
+#include "solver/witness_verify.h"
 #include "solver/flow.h"
 #include "solver/dyn_body.h"  /* a queued program's source text — one buffer, every timeline that holds it */
 #include "solver/decide.h"
@@ -4628,13 +4629,18 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        branch is both timelines'; record_sink dedups), unlike at the cold tier; `cand_verifying` does not, since
        solve_flow_begin re-derives it from `cand_src` at every switch-in. */
     if (parent->cand_src) {
-        DCHECK(parent->cand_payload && parent->cand_sink,
+        DCHECK(parent->cand_payload && !parent->cand_sink != !parent->cand_vfy,
                "a candidate session forked holding only part of its substitution — the source, the payload and "
-               "the sink class are one identity and the arm would inject nothing or be unable to say what fired");
+               "exactly one of a sink class or a witness verification key are one identity, and the arm would "
+               "inject nothing or be unable to say what it was trying");
         sib->cand_src = strdup(parent->cand_src);
         sib->cand_payload = strdup(parent->cand_payload);
         CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
         sib->cand_sink = parent->cand_sink;   /* solve.c's static table text: not owned, not copied */
+        if (parent->cand_vfy) {
+            sib->cand_vfy = strdup(parent->cand_vfy);
+            CHECK(sib->cand_vfy, "engine: OOM forking a witness verification's key");
+        }
         sib->cand_fired = parent->cand_fired;
         /* Where the payload came from is a fact about the bytes, so both arms have it; an arm without it would
            claim to be seeded from this session's search list with no row there, which solve.c's arrival assert
@@ -4657,6 +4663,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        new one is visible, and this checks they arrived. */
     DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
            (sib->cand_sink != NULL) == (parent->cand_sink != NULL) &&
+           (sib->cand_vfy != NULL) == (parent->cand_vfy != NULL) &&
            sib->cand_resumed == parent->cand_resumed,
            "an arm of an @S candidate session left the fork without the substitution or its provenance — both are "
            "copied with the arm, which is the payload's flow continued");
@@ -9994,6 +10001,7 @@ static int engine_sched_slice(void) {
            every slice (run_scheduler below, main.c's qjs_step at the ABI), so a flow suspended inside a read is
            answered at the next slice. */
         solve_seed_candidates(ctx);
+        witness_verify_seed(ctx);   /* the same for an endpoint witness's verification (witness_verify.h) */
         /* WFQ: highest value of information among the members that can still make progress; a fresh fork (UCB)
            can preempt. The members waiting on the host are taken out of the pick only; they keep their weight,
            place and every work item (flow.h). The flow holding the thread is passed in, which makes this a
@@ -11269,6 +11277,7 @@ void solver_frontier_free(JSContext *ctx)
        releases at its own release and the holder asserts it did. Nothing in the frontier's teardown reads the
        search store (flow_release does not call solve_flow_end; the scheduler does). */
     solve_free();
+    witness_verify_free();
     flow_registry_free(ctx);
     g_frontier_released = 1;
 }

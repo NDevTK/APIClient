@@ -2261,11 +2261,14 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            concolic_clear_pins when a restarted candidate replays from the baseline, so solve.c's sinks see 0.
            The rung is the comparator and monotone; flow_observe_rung's early return makes re-delivery free. */
         flow_observe_rung(f, FLOW_RUNG_DELIVERED);
+        DCHECK(!f->cand_sink != !f->cand_vfy,
+               "an @S substitution is being delivered for a flow that is neither a sink candidate nor a witness "
+               "verification, or claims to be both");
         /* The same event counted on the search, the one unit a reader sees; it orders nothing and outlives the
            flows. It lets a parked report tell "bytes never entered" from "entered and reached no sink" and from
            "sinks ran carrying none", which otherwise all read `turns:N,reached:0,survived:0`. Not a credit:
            solve.c raises a counter and moves no ordering. */
-        solve_observe_substitution(f);
+        if (f->cand_sink) solve_observe_substitution(f);   /* a verification is no search's (solve_flow_begin) */
     }
     for (i = 0; i < g_srcs_n; i++)
         if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }

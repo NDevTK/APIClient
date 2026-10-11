@@ -8,6 +8,7 @@
 #include "solver/engine.h"    /* the provenance's one wire spelling; this surface prints the same three words */
 #include "solver/flow.h"
 #include "solver/pending.h"   /* …and PROV_*, the vocabulary those words spell */
+#include "solver/witness_verify.h"   /* the queue an eligible witness is verified through */
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -51,9 +52,14 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    since their union would state a combination no flow assumed. `asked` is 0 where no flow stood, so the
    question was not asked; an empty asked witness is the flow having assumed nothing. Entries are sorted, so
    two witnesses compare by their members and not by the order the constraint chain held them in. */
+/* `verify` is what firing it established, in the order a merge may only raise (endpoint.h's `verification`):
+   no candidate could be minted for it, a verification run was minted and has not yet observed it, or such a
+   run reached its request assuming nothing of its own. `canon` is its identity as text, the verification key's
+   third field; both are written when a record files it. */
 typedef enum { WIT_PIN = 0, WIT_BRANCH, WIT_OUTCOME } WitWhat;
+typedef enum { WIT_VERIFY_NO_CANDIDATE = 0, WIT_VERIFY_CANDIDATE, WIT_VERIFY_VERIFIED } WitVerify;
 typedef struct { WitWhat what; char *subject; char *value; ConcolicLit kind; int taken; } WitEntry;
-typedef struct { int asked; WitEntry *e; int n, cap; } Witness;
+typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *canon; } Witness;
 /* `is_asset` is what the resource at this address turned out to be, written after the record exists. Whether a
    static asset is an endpoint is decided by bytes (magic bytes and content type, not a URL suffix), which arrive on
    a reply, while a request is recorded before its policy check (a request a policy refuses is still one the bundle
@@ -277,7 +283,7 @@ static int wit_entry_cmp(const void *pa, const void *pb) {
 /* The running flow's witness, read at the act: its pin store and its assumed decisions. Two decision keys whose
    spellings and arms agree state one assumption, so a repeat is kept once. */
 static Witness witness_now(void) {
-    Witness w = { 0, NULL, 0, 0 };
+    Witness w = { 0, NULL, 0, 0, WIT_VERIFY_NO_CANDIDATE, NULL };
     int i, u;
 
     if (flow_running() == NULL) return w;
@@ -307,13 +313,14 @@ static int witness_same(const Witness *a, const Witness *b) {
 static void witness_free(Witness *w) {
     for (int i = 0; i < w->n; i++) { free(w->e[i].subject); free(w->e[i].value); }
     free(w->e);
-    w->e = NULL; w->n = w->cap = 0;
+    free(w->canon);
+    w->e = NULL; w->n = w->cap = 0; w->canon = NULL;
 }
 
-/* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same
-   statement and is freed, anything else is one more. `*w` is empty afterwards either way. */
+static const char *const wit_verify_token[] = { "no-candidate", "candidate", "verified" };
+
 /* One record's `witness` value (endpoint.h): an array with one element per distinct sighting witness, `null`
-   for a sighting no flow stood at, else the array of its entries. */
+   for a sighting no flow stood at, else `{assumed, verification}`. */
 static void witness_json(JsonBuf *b, const Endpoint *e) {
     DCHECK(e->nwit >= 1, "an @H record carries no sighting witness — every mint and merge files one");
     json_buf_raw(b, "[");
@@ -325,6 +332,10 @@ static void witness_json(JsonBuf *b, const Endpoint *e) {
             json_buf_raw(b, "null");
             continue;
         }
+        CHECK(w->verify >= WIT_VERIFY_NO_CANDIDATE && w->verify <= WIT_VERIFY_VERIFIED,
+              "endpoint: a sighting witness states a verification outside its three states");
+        json_buf_raw(b, "{"); json_buf_key(b, "verification"); json_buf_str(b, wit_verify_token[w->verify]);
+        json_buf_raw(b, ","); json_buf_key(b, "assumed");
         json_buf_raw(b, "[");
         for (int j = 0; j < w->n; j++) {
             const WitEntry *x = &w->e[j];
@@ -351,14 +362,90 @@ static void witness_json(JsonBuf *b, const Endpoint *e) {
             }
             json_buf_raw(b, "}");
         }
-        json_buf_raw(b, "]");
+        json_buf_raw(b, "]}");
     }
     json_buf_raw(b, "]");
 }
 
+/* The witness's identity as text: each entry's fields composed, then the entries, with concolic_ident_compose's
+   length-prefixed encoding, so two witnesses share a canon exactly when witness_same says they are one. */
+static char *witness_canon(const Witness *w) {
+    const char **ents = malloc((size_t)(w->n ? w->n : 1) * sizeof *ents);
+    char *out;
+
+    CHECK(ents, "endpoint: OOM spelling a witness");
+    for (int i = 0; i < w->n; i++) {
+        static const char *const tag[] = { "p", "b", "o" };
+        char taken[16];
+        const char *f[5];
+        snprintf(taken, sizeof taken, "%d", w->e[i].taken);
+        f[0] = tag[w->e[i].what]; f[1] = w->e[i].subject; f[2] = w->e[i].value ? w->e[i].value : "";
+        f[3] = w->e[i].what == WIT_PIN ? concolic_lit_report_name(w->e[i].kind) : ""; f[4] = taken;
+        ents[i] = concolic_ident_compose("e", f, 5);
+        CHECK(ents[i], "endpoint: OOM spelling a witness entry");
+    }
+    out = concolic_ident_compose("w", ents, w->n);
+    CHECK(out, "endpoint: OOM spelling a witness");
+    for (int i = 0; i < w->n; i++) free((char *)ents[i]);
+    free(ents);
+    return out;
+}
+
+/* The verification keys a run of this session has observed (endpoint_verify_observe). A witness filed after its
+   key was observed is verified at the filing. */
+static char **g_verified;
+static int g_verified_n, g_verified_cap;
+
+static int verified_key(const char *key) {
+    for (int i = 0; i < g_verified_n; i++) if (!strcmp(g_verified[i], key)) return 1;
+    return 0;
+}
+
+/* WHETHER FIRING CAN CHECK THIS WITNESS, and with which value: every entry a String pin on one source, all to
+   one value, the source a declared root delivered through the victim's own address, and the value one the
+   address can carry (it begins with the component's prefix and holds something after it). The payload is the
+   value past the prefix, which concolic_deliver puts back with the component's encoding.
+   Named residual. Not covered: a witness holding a decision, a pin on a derived value (the beta row's
+   `{location.hash}.slice(1)`), a non-String pin, more than one source, a source delivered by plant, referring
+   address, user file or message, and a root no attacker delivers (a server reply field). Next diff: the @S
+   solver composing a root value from the entries, and the delivery mechanisms beyond the address. How its
+   absence shows: rows whose every witness reads `no-candidate` on a page whose gates test transformed or
+   reply-borne values. */
+static char *witness_payload(const Witness *w, const char **src) {
+    const char *kind;
+    char prefix = 0;
+
+    if (!w->asked || w->n == 0) return NULL;
+    for (int i = 0; i < w->n; i++)
+        if (w->e[i].what != WIT_PIN || w->e[i].kind != CONCOLIC_LIT_STRING ||
+            strcmp(w->e[i].subject, w->e[0].subject) || strcmp(w->e[i].value, w->e[0].value)) return NULL;
+    if (!concolic_source_delivery(w->e[0].subject, &kind, &prefix) || strcmp(kind, "address") || !prefix)
+        return NULL;
+    if (w->e[0].value[0] != prefix || !w->e[0].value[1]) return NULL;
+    *src = w->e[0].subject;
+    return strdup(w->e[0].value + 1);
+}
+
+/* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same
+   statement and is freed, anything else is one more, and is queued for verification when firing can check it.
+   `*w` is empty afterwards either way. */
 static void endpoint_witness_add(Endpoint *e, Witness *w) {
     for (int i = 0; i < e->nwit; i++)
         if (witness_same(&e->wit[i], w)) { witness_free(w); w->asked = 0; return; }
+    DCHECK(w->canon == NULL && w->verify == WIT_VERIFY_NO_CANDIDATE,
+           "a sighting witness reached its record already spelled or verified — both are written here");
+    if (w->asked) {
+        const char *src = NULL;
+        char *payload = witness_payload(w, &src);
+        w->canon = witness_canon(w);
+        if (payload) {
+            char *key = witness_verify_key(e->method, e->path, w->canon);
+            witness_verify_queue(key, src, payload);
+            w->verify = verified_key(key) ? WIT_VERIFY_VERIFIED : WIT_VERIFY_CANDIDATE;
+            free(key);
+            free(payload);
+        }
+    }
     if (e->nwit >= e->witcap) {
         int nc = e->witcap ? e->witcap * 2 : 2;
         Witness *nw = realloc(e->wit, (size_t)nc * sizeof *nw);
@@ -366,7 +453,7 @@ static void endpoint_witness_add(Endpoint *e, Witness *w) {
         e->wit = nw; e->witcap = nc;
     }
     e->wit[e->nwit++] = *w;
-    w->e = NULL; w->n = w->cap = 0; w->asked = 0;
+    w->e = NULL; w->n = w->cap = 0; w->asked = 0; w->canon = NULL; w->verify = WIT_VERIFY_NO_CANDIDATE;
 }
 
 /* See endpoint.h. A union rather than an intersection, for the address class's own merge's reason: each operand is
@@ -1776,6 +1863,57 @@ static int same_identity(Endpoint *e, const char *method, const char *path, int 
     return 1;
 }
 
+/* The address's path, re-spelled by path_scan, and its path and query params into `kvb`: the one speller of a
+   request's address for the record and for a verification's observation. Returns the path, owned. */
+static char *address_scan(JSContext *ctx, JSValueConst url, KvBuf *kvb) {
+    char *disp = url_display(ctx, url);
+    char *ex = url_example(ctx, url);
+    char *shape_path = url_path_of(disp);
+    char *expath = ex ? url_path_of(ex) : NULL;
+    char *path = path_scan(kvb, shape_path, expath);
+    { const char *q = strchr(disp, '?'), *eq = ex ? strchr(ex, '?') : NULL;
+      if (q && q[1]) kv_pairs(kvb, q + 1, (eq && eq[1]) ? eq + 1 : NULL, EP_QUERY); }
+    free(disp); free(ex); free(expath); free(shape_path);
+    return path;
+}
+
+/* A witness verification's own observation, made at its request (endpoint_record's suppressed arm): the run
+   reached the witnessed method and path, and its own witness is empty, so the delivered value alone reached
+   it. Every filed witness with that key is raised to verified, and the key is kept for one filed later. */
+static void endpoint_verify_observe(JSContext *ctx, const char *key, const char *method, JSValueConst url) {
+    char *vm, *vp, *vc, *path;
+    KvBuf kvb = { 0 };
+    Witness own;
+
+    witness_verify_key_split(key, &vm, &vp, &vc);
+    if (strcmp(vm, method)) { free(vm); free(vp); free(vc); return; }
+    path = address_scan(ctx, url, &kvb);
+    kv_free(&kvb);
+    own = witness_now();
+    DCHECK(own.asked, "a witness verification observed a request with no flow standing");
+    if (!strcmp(path, vp) && own.n == 0) {
+        if (!verified_key(key)) {
+            if (g_verified_n >= g_verified_cap) {
+                int nc = g_verified_cap ? g_verified_cap * 2 : 8;
+                char **nv = realloc(g_verified, (size_t)nc * sizeof *nv);
+                CHECK(nv, "endpoint: OOM recording a verified witness");
+                g_verified = nv; g_verified_cap = nc;
+            }
+            g_verified[g_verified_n] = strdup(key);
+            CHECK(g_verified[g_verified_n], "endpoint: OOM recording a verified witness");
+            g_verified_n++;
+        }
+        for (int i = 0; i < g_eps_n; i++) {
+            if (strcmp(g_eps[i].method, vm) || strcmp(g_eps[i].path, vp)) continue;
+            for (int j = 0; j < g_eps[i].nwit; j++)
+                if (g_eps[i].wit[j].canon && !strcmp(g_eps[i].wit[j].canon, vc))
+                    g_eps[i].wit[j].verify = WIT_VERIFY_VERIFIED;
+        }
+    }
+    witness_free(&own);
+    free(path); free(vm); free(vp); free(vc);
+}
+
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                      const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int door) {
     /* What this sighting is evidence of, asserted at the mint for `kv_add`'s reason: every site that records an
@@ -1846,7 +1984,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
            "`pre_program` would grade this whole document's markup as post-program");
     g_asks++;
     if (ask_pre_program) g_asks_pre_program++;
-    if (g_suppress) { g_ask_suppressed++; return; }   /* candidate/verify run: not a real @H endpoint */
+    if (g_suppress) {                       /* candidate/verify run: not a real @H endpoint */
+        const Flow *f = flow_running();
+        g_ask_suppressed++;
+        if (f && f->cand_vfy) endpoint_verify_observe(ctx, f->cand_vfy, method, url);
+        return;
+    }
     /* Whether this sighting's address was one the run had determined, read once here from the value the display
        spelling is taken from: the merge arm and the mint both need it, the value is borrowed for this call, and
        nothing below holds the JSValue. */
@@ -1888,10 +2031,6 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                CHECK(aroot, "endpoint: OOM copying an address's delivery root — the record would carry a "
                             "class derived from a provenance it cannot name, and this surface's own reader "
                             "would report the address as one this engine attributed to nothing"); } }
-    char *disp = url_display(ctx, url);
-    char *ex = url_example(ctx, url);
-    char *shape_path = url_path_of(disp);
-    char *expath = ex ? url_path_of(ex) : NULL;
     /* Path, then query, then body: the order a request is written in and the identity compares in. The path is
        re-spelled by the scan (see path_scan), and the re-spelled one becomes the endpoint's `url`, because the
        params are named in its grammar. The example is aligned against both halves of the address, so a hole in a
@@ -1901,13 +2040,10 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        spells its holes and the JSON arm reads them, and a byte-by-byte body is named off its span record
        (body_params' residual has what is still missing). */
     KvBuf kvb = { 0 };
-    char *path = path_scan(&kvb, shape_path, expath);
-    { const char *q = strchr(disp, '?'), *eq = ex ? strchr(ex, '?') : NULL;
-      if (q && q[1]) kv_pairs(&kvb, q + 1, (eq && eq[1]) ? eq + 1 : NULL, EP_QUERY); }
+    char *path = address_scan(ctx, url, &kvb);
     /* Named fields first; the raw bytes only where there are none: a body this engine reads is better described by
        its fields, and both would put one fact on the record twice. */
     int body_named = body_params(ctx, &kvb, body);
-    free(disp); free(ex); free(expath); free(shape_path);
 
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
         if (same_identity(&g_eps[i], method, path, prov, &kvb)) {
@@ -3026,6 +3162,8 @@ void endpoint_free(void) {
         free(g_eps[i].wit);
     }
     free(g_eps); g_eps = NULL; g_eps_n = g_eps_cap = 0;
+    for (int i = 0; i < g_verified_n; i++) free(g_verified[i]);
+    free(g_verified); g_verified = NULL; g_verified_n = g_verified_cap = 0;
     /* And the ask counters beside the array they are a fact about. One process runs many sessions and this is the
        per-session teardown (solver/engine.c resets its own per-session rows on the line that calls this), so a
        standing count would report a previous document's asks under this one's name, in the flattering direction
