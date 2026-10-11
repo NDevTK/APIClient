@@ -1,37 +1,18 @@
-/* THE WEB-PLATFORM-TESTS RUNNER — the browser half's correctness gate.
+/* Web-platform-tests runner: the browser half's correctness gate.
  *
- * WHY IT EXISTS. test262 is the JS half's oracle and it is a good one: every file carries its own asserts, so a
- * wrong answer is a wrong answer with no interpretation needed. The BROWSER half had nothing of the kind. Its
- * only checks were the IDL audit — which measures COVERAGE, not correctness, and can only ever say what is
- * ABSENT — and a fixture of probes written by whoever wrote the component, which tests what that person already
- * thought of. Both of those missed the same things twice in one sitting: the audit had no row for Headers at
- * all, and then reported it COMPLETE while four of its members were missing.
+ * test262 is the JS half's oracle because every file carries its own asserts. WPT is the browser half's: the real
+ * corpus and the real testharness.js at a pinned revision. A spec-conformance claim about the browser half means
+ * "wpt passes"; the IDL audit measures coverage, not correctness, and a component's own fixture tests only what
+ * its author thought of.
  *
- * WPT is the established answer, so it is the one used: the real corpus, the real testharness.js, at a pinned
- * revision. A spec-conformance claim about the browser half means "wpt passes", not "our fixture passes".
+ * It runs the feature engine and the product's execution model. Both documents this binary runs (the test
+ * document and the child document it re-executes itself for) are on the one scheduler: engine_sched_begin seeds
+ * the document's programs on the frontier, engine_sched_step is the only entry into JS, engine_route attaches a
+ * delivery to every live timeline, and engine_perform makes a peer's operation a program of each. Preemption is
+ * therefore the scheduler's policy (the value yield and the cooperative quantum), as in the extension.
  *
- * IT RUNS THE FEATURE ENGINE, for the same reason test262 does. There is no non-feature mode in this project, so
- * a conformance pass over a plain JS_Eval would test something that never runs.
- *
- * AND THE EXECUTION MODEL IT RUNS IS THE PRODUCT'S, WHICH IS THE STRONGER STATEMENT AND IS NOW TRUE OF THE
- * WHOLE FILE. Parking a frame is not the same thing as being scheduled: a `while (JS_FlowResume)` exercises the
- * park-and-rebuild machinery while the SCHEDULER never runs, so a gate built on one measures a model the
- * product does not have. Both documents this binary runs — the TEST document and the CHILD document it
- * re-executes itself for — are on the one scheduler: engine_sched_begin seeds the document's programs on the
- * frontier, engine_sched_step is the only thing that enters JS, engine_route attaches a delivery to every live
- * timeline, and engine_perform makes a peer's operation a program of each of them. What that deleted was a
- * `while (JS_FlowResume)` per program, a fabricated flow standing in for the scheduler's state, and a
- * `while (JS_ExecutePendingJob)` job drain beside a frontier whose flows own their own queues.
- *
- * WHAT PREEMPTS IS THEREFORE THE SCHEDULER'S POLICY AND NO LONGER THIS FILE'S. It used to force a yield at
- * every back-edge and hand it straight back at the next loop iteration, which exercised the suspend/rebuild
- * path and nothing else; that coverage is test262's, which measures ENGAGEMENT (§Testing) and is the harness
- * built for it. Here the value yield and the cooperative quantum decide, exactly as they decide in the
- * extension, because that is what this gate is for.
- *
- * The files are given in load order: resources/testharness.js, the test, then an epilogue this runner supplies
- * that registers a completion callback and calls done(). Results come out as one @WPT line per subtest, which
- * the driver reads. */
+ * The programs load in order: resources/testharness.js, this runner's report (WPT_REPORT), the test, and for the
+ * script arm an epilogue (WPT_EPILOGUE). Results come out as one @WPT line per subtest, which the driver reads. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,10 +26,10 @@
 #include "core/fetch/fetch.h"
 #include "core/mime/mime_type.h"   /* §4.2's essence: what this host states it served */
 #include "core/url/url.h"
-#include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
-#include "core/loader/document_load_type.h"  /* §7.4.5: WHICH document a response loads as, and its computed type */
+#include "core/html/html_parse.h"   /* the one place a Document is parsed; that header owns the token bytes */
+#include "core/loader/document_load_type.h"  /* §7.4.5: which document a response loads as, and its computed type */
 #include "core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection that arm runs */
-#include "core/loader/document_load_decode.h" /* §13.2.3.2: WHICH DECODER that response's bytes need */
+#include "core/loader/document_load_decode.h" /* §13.2.3.2: which decoder that response's bytes need */
 #include "core/frame/navigation_params.h"
 #include "core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
 #include "core/frame/secure_context.h"
@@ -114,24 +95,21 @@
 #include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
 #include "core/idl_async_iter.h"
-#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
+#include "core/dom/node_interface.h"   /* the one place a Document is made; see that header */
 
-/* testharness.js reports through a callback; the callback reports through this. One line per subtest, so the
-   driver never has to parse prose. */
-/* WHERE A DIAGNOSTIC GOES, and why it is not always stdout. In the parent, stdout carries the test results the
-   driver parses. In a CHILD DOCUMENT, stdout IS THE ANSWER PIPE — one line per question — so a `print()` from
-   the page or an @WPTERR from a failed read would be read by the parent as the answer to its question, and the
-   protocol desynchronises from there: the next answer is one line behind, and the run hangs at teardown on a
-   read that will never come. A child has no results to report, so its diagnostics go to stderr, which the
-   driver already merges into the file's output. */
+/* Where a diagnostic goes. testharness.js reports through a callback and the callback through this, one line per
+   subtest. In the parent, stdout carries the results the driver parses. In a child document stdout is the answer
+   pipe, one line per question, so a page `print()` or an @WPTERR there would be read as an answer and every later
+   answer would be one line behind, hanging teardown on a read that never comes. A child has no results, so its
+   diagnostics go to stderr, which the driver merges into the file's output. */
 static FILE *g_report;
 static FILE *report_out(void) { return g_report ? g_report : stdout; }
 
-/* THE MEASUREMENT IS OVER WHEN THE HARNESS SAYS IT IS — see js_wpt_test_complete and the loop in main. */
+/* Set when the harness ends the measurement (js_wpt_test_complete); read by the loop in main. */
 static int g_test_complete;
-/* …AND THIS RUN HAS ASKED THE ENGINE TO WRITE ITS FRONTIER OUT. File scope because the notice router reads it:
-   a park announces worlds, and whether such an announcement is expected is exactly the question "is this run
-   ending?". See the loop in main. */
+/* Set once this run has asked the engine to write its frontier out. File scope because the notice router reads
+   it: a park announces worlds, and such an announcement is expected only while the run is ending. See the loop in
+   main. */
 static int g_parking;
 
 static JSValue js_wpt_gc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -156,58 +134,29 @@ static JSValue js_wpt_print(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-/* THE END OF THE MEASUREMENT, STATED BY THE HARNESS ITSELF — the vendor half of testharness's completion.
+/* The harness ends the measurement: the vendor half of testharness's completion, called from WPT_REPORT.
  *
- * WHAT IT IS FOR. `done()` ENDS A WPT TEST: testharness sets its phase to COMPLETE, runs the completion
- * callbacks and reports nothing afterwards. WPT's own model is that the runner then takes the browsing context
- * away — HTML §7.3.1.6 "Navigable destruction"'s destroy-a-top-level-traversable, whose own note is that a
- * user agent "may destroy a top-level traversable at any time (typically, in response to user requests)". The
- * DESTROY is the right one of that section's algorithms and close/definitely-close is not: close fires
- * `beforeunload` over the subtree and unloads it, which is more of the page's program, and this page's program
- * has already been measured.
+ * `done()` ends a WPT test: testharness sets its phase to COMPLETE, runs the completion callbacks and reports
+ * nothing afterwards. WPT's model is that the runner then takes the browsing context away, which is HTML §7.3.1.6
+ * "Navigable destruction"'s destroy a top-level traversable ("may destroy a top-level traversable at any time").
+ * Destroy, not close: close fires `beforeunload` over the subtree and unloads it, which runs more of a program
+ * that has already been measured.
  *
- * IT IS NOT A BOUND, and the distinction is the whole of §NO BOUNDS rather than a nicety. A bound TRUNCATES
- * work that was still going to produce something — a step cap, a deadline, an idle counter — and cannot know
- * that it did. This truncates nothing that is measured: every subtest has a result, the file-level verdict has
- * been printed, and testharness will not accept another. What ran on past it was a poll loop waiting on a
- * remote context that never came up, which is a flow parked on a reply nobody was going to send, and the
- * SESSION ending is what that flow's snapshot is for.
- *
- * IT IS A CALL AND NOT A LINE OF OUTPUT ON PURPOSE. The @WPTDONE line is the DRIVER'S report and stdout is the
- * driver's channel; this host learning the same fact by reading back what it printed would be one fact with
- * two spellings, and the one it reads would be the one that can be forged by a test that calls `print`. The
- * report hook is registered where WPT puts the vendor hook (see WPT_REPORT), so a call out of its completion
- * callback is exactly the integration point testharnessreport.js exists to be. */
+ * It is not a bound: every subtest has a result and the verdict is printed, so nothing measured is truncated.
+ * What runs past it is a flow parked on a reply nobody will send, which is what the session's snapshot is for.
+ * It is a call rather than a read of the printed @WPTDONE line because stdout is the driver's channel and a test
+ * can forge a line with `print`. */
 static JSValue js_wpt_test_complete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)ctx; (void)this_val; (void)argc; (void)argv;
     DCHECK(g_report == NULL, "a CHILD document declared the measurement over — the file under test is the one "
                              "this process was started to run, and a child navigable's own harness ending "
                              "would take the parent's session down with a verdict nobody printed");
-    /* IT IS IDEMPOTENT, AND THE ASSERT THAT SAID IT COULD NOT BE WAS A CONFIDENT WRONG DIAGNOSIS.
-     *
-     * A DCHECK stood here reading "a second arrival is a second harness in this process claiming to end a
-     * measurement that is not its own". MEASURED, on `xhr/open-url-worker-simple.htm`: this process installs
-     * the report hook exactly ONCE — wpt_insert_report runs once per run and `break`s on the first program
-     * named `/resources/testharness.js`, of which a document has one — and the run printed TWO byte-identical
-     * `@WPTDONE` lines carrying the same `count`, with the second emitting no `@WPT` because the hook's own
-     * `reported` closure had already marked that subtest. One harness, one registered callback, called twice.
-     * The assert's sentence was false about the only thing it ever caught.
-     *
-     * AND EXACTLY-ONCE IS NOT A CONTRACT testharness OFFERS. `Tests.prototype.complete()` returns early only on
-     * `phase === COMPLETE`, and it assigns that phase inside `all_complete`, at the END of an ASYNCHRONOUS path
-     * (`all_async` over the tests still incomplete, each of which is driven through `Test.prototype.cleanup`).
-     * A second `complete()` inside that window passes the entry guard, runs its own `all_async`, and reaches
-     * its own `all_complete` — so `notify_complete` runs twice and every entry of `all_done_callbacks` with it.
-     * That is upstream code at the pinned corpus revision; a vendor hook may not assert a guarantee the harness
-     * does not make.
-     *
-     * WHAT IT COST IS THE POINT. The file's actual finding was `Worker is not defined` — an honestly absent
-     * capability, already printed on its own `@WPTERR` line, and exactly the work item this gate exists to
-     * surface. The assert converted that into an ABORT filed under `gap` whose message sent the reader looking
-     * for a second harness that does not exist. A duplicate NOTIFICATION is the notifier's business; ending an
-     * already-ended measurement is a no-op and is written as one. What is NOT a no-op — a second completion
-     * carrying a DIFFERENT verdict — is named by WPT_REPORT, which is where the verdict lives. */
+    /* Idempotent, because testharness does not promise one completion. `Tests.prototype.complete()` returns early
+       only on `phase === COMPLETE`, which `all_complete` assigns at the end of an asynchronous path (`all_async`
+       over the incomplete tests, each through `Test.prototype.cleanup`). A second `complete()` inside that window
+       reaches its own `all_complete`, so `notify_complete` and every completion callback run twice. A second
+       completion with a different verdict is a finding, and WPT_REPORT reports it. */
     g_test_complete = 1;
     return JS_UNDEFINED;
 }
@@ -230,15 +179,11 @@ static char *read_file(const char *path, size_t *plen)
     return buf;
 }
 
-/* THE PROLOGUE — the `.any.js` wrapper WPT's server generates around every such file, and which a runner that
-   loads the file directly has to supply itself. `self` IS the global (the one spelling a window and a worker
-   share) and `GLOBAL` names WHICH global scope this is; a file's `// META: global=` line lists the variants it
-   is written for, and each variant runs with GLOBAL answering for itself.
-   This runner declares the WORKER variant, because that is what it accurately IS: a global carrying fetch and
-   Headers with no document under it. Claiming `window` would make files run their document-dependent arms
-   against a runner that has no document — a wrong answer dressed as coverage — and the choice is not a way to
-   skip work, since every variant runs the whole file minus the arms upstream itself marks window-only. When
-   this runner grows a document, the variant becomes `window` and those arms start running. */
+/* The prologue: the `.any.js` wrapper WPT's server generates, which a runner loading the file directly supplies
+   itself. `self` is the global and `GLOBAL` names which global scope this is; a file's `// META: global=` line
+   lists the variants it is written for. The script arm declares the worker variant because that is what it is: a
+   global with fetch and Headers and no document under it. Declaring `window` would run document-dependent arms
+   against no document. Every variant runs the whole file except the arms upstream marks window-only. */
 static const char WPT_PROLOGUE[] =
     "self.GLOBAL = {\n"
     "  isWindow: function () { return false; },\n"
@@ -247,41 +192,21 @@ static const char WPT_PROLOGUE[] =
     "};\n";
 
 
-/* THE REPORT — WPT'S OWN VENDOR HOOK, AT WPT'S OWN POSITION, and both halves of that are the fix.
+/* The report, installed as WPT's vendor hook at WPT's position.
  *
- * WHAT WAS WRONG. The whole report hung off ONE completion callback appended at the END of the run, after the
- * test and after every `// META: script=` the test names. testharness.js's notify_complete is a bare
- * `forEach(this.all_done_callbacks, callback)` with no containment, so the FIRST of those callbacks that throws
- * takes every later one with it — and `phase` is already COMPLETE by then, so nothing retries. A corpus helper
- * that registers a completion callback therefore DELETED this gate's entire report for the file: no @WPT lines,
- * no @WPTDONE, a clean exit, and a driver that could only say "0 reported subtest(s)".
- * It is not hypothetical and it is not one file. `IndexedDB/resources/support.js` opens with an
- * add_completion_callback that closes each test's database and calls `indexedDB.deleteDatabase` — which is
- * honestly ABSENT in this engine (core/indexeddb/indexed_db.c says so by name), so it is a TypeError. Nineteen
- * IndexedDB files were destroyed exactly that way: the fifteen `idbcursor*` files that use `createdb`, plus
- * cursor-overloads, value, abort-in-initial-upgradeneeded and close-in-upgradeneeded — every IDB file whose
- * open succeeded far enough for support.js to record a `db` on the test. Those files RAN, their subtests had
- * real results naming real gaps, the harness COMPLETED, and the last statement of the run threw the answer away.
- * AND THE THROW ITSELF WAS INVISIBLE, which is why the file exited clean with no @WPTERR either: the completion
- * runs inside an event listener, and DOM §2.9 "Dispatching events" step 2.11 of inner invoke REPORTS a
- * listener's exception rather than propagating it (core/events/event_target.c hands it to report_exception_run,
- * which fires an ErrorEvent), while HTML §8.1.4.6 "Runtime script errors" step 7.3 — report it to a developer
- * console — has no console in this build. So nothing this driver reads ever saw it. The gate now reports the
- * harness's own status, which catches the case where that ErrorEvent lands BEFORE completion; a reported
- * exception reaching this host at all is step 7.3's, and belongs to that component.
+ * Every testharness document loads `/resources/testharnessreport.js` right after `/resources/testharness.js`, for
+ * "vendors to implement code needed to integrate testharness.js tests with their own test systems". Registered
+ * there, these callbacks are first in every list, which matters because notify_complete is a bare
+ * `forEach(this.all_done_callbacks, callback)`: the first callback that throws skips every later one, and phase
+ * is already COMPLETE. A corpus helper's completion callback can throw (IndexedDB/resources/support.js calls
+ * `indexedDB.deleteDatabase`, which this engine does not have), and the throw is invisible: DOM §2.9 "Dispatching
+ * events"' inner invoke reports a listener's exception instead of propagating it, and HTML §8.1.4.6 "Runtime
+ * script errors"' developer console does not exist in this build.
  *
- * SO THE REPORT GOES WHERE WPT PUTS IT. Every testharness document loads `/resources/testharnessreport.js`
- * immediately after `/resources/testharness.js`, and that file exists for exactly this — "vendors to implement
- * code needed to integrate testharness.js tests with their own test systems", via add_result_callback and
- * add_completion_callback. Registered there, this runner's callbacks are FIRST in every list, so no helper the
- * test loads can reach them, and the position is the corpus's own convention rather than this file's guess.
- *
- * AND IT STREAMS, for the reason the driver's own area rows stream: a report that exists only at completion is a
- * report you do not get from a file that never completes. A subtest is printed when its RESULT is known, and a
- * subtest is announced when it is REGISTERED — so "0 subtests reported" and "0 subtests existing" stop being the
- * same output. What the completion callback still owns is the ones the harness forced COMPLETE without a result
- * (its own timeout path does that) and the file-level verdict. `i` is the harness's own `tests` index, which is
- * what makes a re-announced or re-reported subtest one fact rather than two. */
+ * It streams: a subtest is announced when registered (@WPTSTART) and printed when its result is known (@WPT), so
+ * a file that never completes still reports, and "none reported" differs from "none exist". The completion
+ * callback prints the subtests the harness forced COMPLETE without a result (its timeout path) and the verdict.
+ * `i` is the harness's `tests` index, so a re-announced or re-reported subtest is one fact. */
 static const char WPT_REPORT[] =
     "(function () {\n"
     "  var announced = [], reported = [], verdict = null;\n"
@@ -290,8 +215,8 @@ static const char WPT_REPORT[] =
     "    print('@WPT ' + JSON.stringify({ i: t.index, name: t.name, status: t.status, message: t.message }));\n"
     "  }\n"
     "  add_test_state_callback(function (t) {\n"
-    /* The harness notifies test state at PUSH and again when the test STARTS. One line per subtest, because a
-       corpus file can hold ninety thousand of them and this output is read through a fixed buffer. */
+    /* The harness notifies test state at push and again at start. One line per subtest, because a corpus file
+       can hold ninety thousand of them and this output is read through a fixed buffer. */
     "    if (announced[t.index]) return;\n"
     "    announced[t.index] = 1;\n"
     "    print('@WPTSTART ' + JSON.stringify({ i: t.index, name: t.name }));\n"
@@ -301,88 +226,61 @@ static const char WPT_REPORT[] =
     "    for (var i = 0; i < tests.length; i++) if (!reported[tests[i].index]) emit(tests[i]);\n"
     "    var v = JSON.stringify({ status: status.status, message: status.message, count: tests.length });\n"
     "    print('@WPTDONE ' + v);\n"
-    /* A SECOND COMPLETION IS THE HARNESS RE-NOTIFYING AND IS NOT ITSELF A FINDING — see
-       js_wpt_test_complete for why `Tests.prototype.complete()` can be re-entered. What IS a finding is a
-       second completion whose VERDICT DISAGREES with the one already printed, because the driver reads the
-       PRESENCE of @WPTDONE and would then be holding two answers to one question with nothing to say so. Every
-       line is printed either way: the duplicate is the harness's own behaviour and hiding it would put two
-       states behind one output. */
+    /* A second completion is the harness re-notifying (see js_wpt_test_complete) and is not a finding. One with a
+       different verdict is, because the driver reads the presence of @WPTDONE and would hold two answers with
+       nothing saying so. Every line is printed either way. */
     "    if (verdict !== null && verdict !== v)\n"
     "      print('@WPTERR the harness completed again with a DIFFERENT verdict than the one already printed: '\n"
     "            + verdict);\n"
     "    verdict = v;\n"
-    /* AND THE MEASUREMENT ENDS HERE, after the verdict is out — see js_wpt_test_complete. */
+    /* The measurement ends after the verdict is printed. */
     "    wptTestComplete();\n"
     "  });\n"
     "})();\n";
 
-/* THE EPILOGUE — AND IT BELONGS TO THE SCRIPT ARM ALONE, because it is a line WPT'S OWN WRAPPER writes and
- * WPT writes it around exactly one of the two shapes this runner runs.
+/* The epilogue: the last line of WPT's worker wrapper, and so the script arm's alone.
  *
- * The corpus's own wrappers are in `tools/serve/serve.py` and they disagree on exactly this line.
- * `ClassicWorkerHandler` — the `.any.worker.js` wrapper — is the GLOBAL shim above, then
- * `importScripts("/resources/testharness.js")`, then the test, then `done();`: a worker has no load event, so
- * the harness has to be TOLD. `AnyHtmlHandler` and `WindowHandler`, which wrap the same `.js` files in a
- * DOCUMENT, carry no such line and neither does a hand-written `.html` test — the window's `load` event fires,
- * testharness's WindowTestEnvironment sets `all_loaded` from inside a `setTimeout(…, 0)` on it, and
- * `Tests.all_done()` completes the file. This runner's script arm declares `GLOBAL.isWorker` (WPT_PROLOGUE), so
- * it IS `ClassicWorkerHandler`'s shape and this is its own last line.
+ * In `tools/serve/serve.py`, `ClassicWorkerHandler` (the `.any.worker.js` wrapper) is the GLOBAL shim, then
+ * `importScripts("/resources/testharness.js")`, the test and `done();`, because a worker has no load event. The
+ * script arm declares `GLOBAL.isWorker` (WPT_PROLOGUE), so it is that shape. `AnyHtmlHandler`, `WindowHandler` and
+ * hand-written `.html` tests have no such line: the window's `load` event sets testharness's `all_loaded` from a
+ * `setTimeout(…, 0)`, and `Tests.all_done()` completes the file.
  *
- * GIVEN TO A DOCUMENT IT DESTROYS THE FILE, and it destroyed it three different ways — none of which is a
- * missing capability, and all of which read as one. `done()` runs as the LAST PROGRAM, which is before the
- * load event and before any timer, so:
- *
- *   - A document whose tests are created ASYNCHRONOUSLY holds none of them yet, and `done()`'s first branch is
- *     `if (tests.tests.length === 0)` — it stamps the harness ERROR "done() was called without first defining
- *     any tests" and calls `tests.complete()`. The phase is COMPLETE from then on, so every result the file
- *     went on to produce was refused. `open-features-non-integer-height.html` creates all fourteen of its
- *     `promise_test`s from a message the window it opened sends back; measured, it reported zero subtests and
- *     one generic error row, and no engine capability decided any part of that.
- *   - A document that opted into `explicit_done` had `wait_for_finish` cleared under it, so the harness
- *     completed at load rather than at the page's own `done()` — every later subtest NOTRUN.
- *   - A `single_test` document is `file_is_test`, and `done()`'s second branch calls `tests.tests[0].done()`:
- *     the file's one test was stamped with whatever status it held at epilogue time, BEFORE its asynchronous
- *     work ran. That is a fabricated verdict, and it can only ever have been fabricated in the PASS direction.
- *
- * So the epilogue is the script arm's, the document arm has none, and a document that never completes is now
- * a fact about the engine rather than about this runner. */
+ * A document must not get it. Run as the last program, `done()` precedes the load event and every timer, and:
+ *   - with no tests yet (they are created asynchronously) it stamps the harness error "done() was called without
+ *     first defining any tests" and completes, so every later result is refused;
+ *   - under `explicit_done` it completes at load instead of at the page's own `done()`, so later subtests NOTRUN;
+ *   - under `single_test` it calls `tests.tests[0].done()` before the test's asynchronous work, a made-up verdict.
+ * A document that never completes is therefore a fact about the engine. */
 static const char WPT_EPILOGUE[] =
     "done();\n";
 
-/* ---- THE CORPUS AS THIS HOST'S NETWORK ------------------------------------------------------------------
+/* ---- The corpus as this host's network ------------------------------------------------------------------
  *
- * A wpt test that needs data FETCHES it — url-constructor reads its ~700 cases out of
- * resources/urltestdata.json — and WPT's own server answers those requests off the checked-out tree. This
- * host's network does the same, which is why it is the real fetch component and not a stand-in: the request
- * goes through §5.5, §5.3's Request and §5.1's guards exactly as a page's would, and what differs is only who
- * satisfies it.
+ * A wpt test that needs data fetches it (url-constructor reads its ~700 cases out of resources/urltestdata.json),
+ * and WPT's own server answers off the checked-out tree. This host does the same through the real fetch
+ * component: the request goes through §5.5, §5.3's Request and §5.1's guards as a page's would, and only who
+ * satisfies it differs.
  *
- * IT IS DRAINED FROM THE PUMP, not from `owe`. Calling the deliver closure inside `owe` would be a JS_Call
- * from C with no flow base under it — the drive-to-completion this engine aborts on — so the owed reply is
- * recorded and satisfied where the runner already re-enters JS. That is also what the trusted zone does. */
+ * Replies are delivered from the pump, not from `owe`: calling the deliver closure inside `owe` would be a JS_Call
+ * from C with no flow base under it, which this engine aborts on. The owed reply is recorded and satisfied where
+ * the runner already re-enters JS, as the trusted zone does. */
 /* The corpus root, derived from the harness path the driver passes — the runner is handed
    `<root>/resources/testharness.js` as its first argument, so the root is what precedes it. */
 static char g_wpt_root[512];
 
 
-/* THE REQUEST THE FRONTIER'S OWN REGISTER CANNOT HAND BACK — this file's half of the reply seam, and the exact
- * shape of the capability that is still missing rather than a convenience.
+/* This host's copy of each owed request, because the reply seam does not carry the whole request.
  *
- * A `fetch()` PARKS the flow that issued it (engine_pending_fetch_url): the flow keeps its snapshot, reports
- * itself host-owed, and its continuation resumes with the reply. That register records the WHOLE request —
- * method, headers and body — and the seam the HOST is offered names the method and the URL among the fields
- * of engine_pending_fetches' line, and engine_provide delivers against its identity. The corpus still asks for
- * POSTs whose answer depends on the BODY sent (`echo-content.py`) and for probes whose answer is the HEADERS it
- * was given (`inspect-headers.py`), and neither is on the line.
- *
- * SO THE HOST STILL KEEPS ITS OWN COPY, keyed by the pair the seam does name, and CRASHES where that key is not
- * enough: two outstanding requests with one method and one URL that differ in BODY are two questions the seam
- * cannot tell apart, and answering either with the other's reply is a wrong answer with nothing to say so. The
- * method half of that assert is GONE because the seam carries it — it is the identity now, not a collision.
- * What remains is the body (and the headers it rides with), and the same argument that moved the method moves
- * them: the line grows an identity for the whole request, and this table deletes with it.
- * The strings are this runner's copies, because the request the component built is gone by the time the
- * scheduler stalls on it. */
+ * A `fetch()` parks its flow (engine_pending_fetch_url), which reports itself host-owed and resumes with the reply.
+ * The register records method, headers and body, but engine_pending_fetches' line names only the method and the
+ * URL, and engine_provide delivers against that pair. The corpus asks for POSTs answered by their body
+ * (`echo-content.py`) and probes answered by their headers (`inspect-headers.py`), so this table keeps both,
+ * keyed by the pair.
+ * Named residual. Not covered: two outstanding requests with one method and URL that differ in body, which the
+ * seam cannot tell apart. Next diff builds: an identity for the whole request on the line, and deletes this table.
+ * Absence shows as: wpt_owe's body DCHECK firing. The strings are this runner's copies, because the component's
+ * request is gone by the time the scheduler stalls on it. */
 #define WPT_OWED_MAX 64
 static struct {
     char   *method, *url, *body;
@@ -405,9 +303,8 @@ static void wpt_owed_forget(int i)
 
 static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req)
 {
-    /* BOTH HALVES ARE THE COMPONENT'S TO STATE, and this host used to fill in either. `"GET"` for an unstated
-       method was a real value belonging to some other request — the exact hole the pair seam was built to
-       close — and `""` for an unstated URL parks a flow on an address no host can ever answer. */
+    /* Both halves are the component's to state and this host fills in neither: a default method would be a real
+       value belonging to some other request, and an empty URL would park a flow on an address no host answers. */
     const char *method = req->method;
     const char *url = req->url;
     int i;
@@ -418,20 +315,19 @@ static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, co
            "delivered. The component that built it must state both");
 
     for (i = 0; i < g_owed_n; i++) {
-        /* THE TABLE IS KEYED ON WHAT THE SEAM IS KEYED ON — the pair. A GET and a POST to one address are two
-           rows here because they are two lines on the join and two deliveries at the provide. */
+        /* Keyed like the seam, on the pair: a GET and a POST to one address are two lines on the join and two
+           deliveries at the provide. */
         if (strcmp(g_owed[i].url, url) || strcmp(g_owed[i].method, method)) continue;
-        /* THE SAME REQUEST FROM ANOTHER FLOW is the ordinary case — a candidate re-fire re-runs the fetches the
-           exploring flow made, and the frontier answers all of them with one reply. A DIFFERENT BODY under one
-           (method, url) is the seam's remaining limit above, and it is fatal rather than first-come-first-served. */
+        /* The same request from another flow is ordinary: a candidate re-fire repeats the exploring flow's
+           fetches, and the frontier answers all of them with one reply. A different body under one (method, url)
+           is the residual above, and it is fatal rather than first come, first served. */
         DCHECK(g_owed[i].body_len == req->body_len &&
                (req->body_len == 0 || (g_owed[i].body && req->body &&
                                        !memcmp(g_owed[i].body, req->body, req->body_len))),
                "two outstanding requests share one (method, url) and differ in BODY — the reply seam names the "
                "pair and not the body, so whichever is answered first answers both and one flow resumes with "
                "the reply to a question it never asked. Put the whole request's identity on the line");
-        /* AND THE PARK, which is what this provider does with the flow: it waits on its own register, exactly
-           as it does in the extension. */
+        /* Park the flow on its own register, as the extension does. */
         engine_pending_fetch_url(ctx, deliver, value, req);
         return;
     }
@@ -454,35 +350,18 @@ static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, co
     engine_pending_fetch_url(ctx, deliver, value, req);
 }
 
-/* Resolve one owed URL against the running file's address and read it out of the corpus. NULL when the corpus
-   has no such file, which is a real 404 and is reported as one rather than as an empty body. */
-/* THE CORPUS IS SERVED BY WPT'S OWN SERVER, over a socket, exactly as a browser gets it.
- *
- * It was read off disk here, and that was wrong in a way the numbers hid: a `.py` path is a wptserve HANDLER,
- * which the server imports and calls, and answering with the handler's SOURCE made nine files compare their
- * upload against a Python file and report the ENGINE as wrong. Reporting them as a gate limitation was honest
- * about the number and wrong about the cause — the handlers are in the corpus and their dependencies are
- * vendored, so the server runs (engine/wptserve.py) and this speaks HTTP to it.
- *
- * Serving EVERYTHING through it rather than only the handlers is the point: the rewrites, the directory
- * listings and the content types are then wptserve's own, and engine/wpt.mjs's hand-copied rewrite table
- * deletes. The Host header carries the URL's own authority while the socket goes to the loopback port, which is
- * exactly what a hosts-file mapping does for a real browser. */
+/* The corpus is served by WPT's own server over a socket (engine/wptserve.py), as a browser gets it. A `.py` path
+   is a wptserve handler that the server imports and calls, so reading the file off disk would answer with the
+   handler's source. Serving everything through it makes the rewrites, directory listings and content types
+   wptserve's own. The Host header carries the URL's own authority while the socket goes to the loopback port, as
+   a hosts-file mapping does for a real browser. */
 static char g_server[64];   /* "127.0.0.1:PORT", from the driver */
-/* AND WHAT THE CORPUS IS SERVED *AS*, which is a DIFFERENT fact from the address above and arrives separately.
-   This host's top-level document is installed with this origin, and this host STAMPS it on a message it routes
-   out of that document, so it is also the authority every test resolves its own URLs against.
-   IT CANNOT BE A LITERAL, AND IT WAS ONE: `#define WPT_TOP_ORIGIN "http://web-platform.test"`, which states a
-   fact that VARIES PER RUN as a constant. engine/wptserve.py reserves an EPHEMERAL port and substitutes it into
-   every `.sub` document it serves — wptserve's `sub` pipe reads `{{host}}` and `{{ports[http][0]}}` off the
-   server's own config — so a document written against `{{host}}:{{ports[http][0]}}` asserted its resolved URLs
-   against an authority carrying a port while this runner believed it was at one carrying none. Measured:
-   domparsing/innerhtml-mxss.sub.html reported 32 failures, every one of the form `expected
-   "http://web-platform.test:42795/…" but got "http://web-platform.test/…"`, in a file whose 30 `innerHTML`
-   subtests all pass — a number about HOW the run was configured, reported as a defect in WHAT ran, in every
-   area holding a `.sub` document that asserts a URL. So the origin comes FROM THE SERVER that served the
-   documents (WPT_TOP_ORIGIN in the environment, beside WPT_SERVER), and a run that cannot establish it has no
-   literal to fall back to — a fallback here is precisely what let a wrong number stand across every area. */
+/* The origin the corpus is served as, a separate fact from the address above. The top-level document is installed
+   with it, this host stamps it on a message it routes out of that document, and every test resolves its own URLs
+   against it. It varies per run: engine/wptserve.py reserves an ephemeral port, and wptserve's `sub` pipe
+   substitutes `{{host}}` and `{{ports[http][0]}}` into every `.sub` document from the server's config. So the
+   origin comes from the server (WPT_TOP_ORIGIN in the environment, beside WPT_SERVER), and a run that cannot
+   establish it has no literal to fall back to. */
 static char g_top_origin[128];
 
 static void wpt_send_all(int fd, const char *p, size_t n)
@@ -494,12 +373,10 @@ static void wpt_send_all(int fd, const char *p, size_t n)
     }
 }
 
-/* WHAT THIS HOST COMPUTED THE RESOURCE TO BE (core/fetch/fetch.h). This runner IS the network side for the
-   corpus — it holds the socket and reads the bytes — so it is the zone entitled to answer, exactly as
-   `extension/lib/safe-fetch.js` is in the extension. wptserve serves the checked-out corpus with real types
-   and states them, so the answer is §4.2's ESSENCE of the `Content-Type` it sent; a response that named none
-   answers the EMPTY string, which is §5.1's "the supplied MIME type is undefined" and a value rather than a
-   hole. Malloc'd; the caller frees. */
+/* What this host computed the resource to be (core/fetch/fetch.h). This runner is the corpus's network side, holding
+   the socket and the bytes, so it is the zone entitled to answer, as `extension/lib/safe-fetch.js` is in the
+   extension. The answer is §4.2's essence of the `Content-Type` wptserve sent; a response that named none answers
+   the empty string, §5.1's "the supplied MIME type is undefined". Malloc'd; the caller frees. */
 static char *wpt_computed_type(const HeaderList *rh)
 {
     MimeType m;
