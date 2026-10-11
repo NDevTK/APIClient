@@ -131,6 +131,7 @@ Which extension context can open a connection at all is enforced by CSP in all b
 |------|------------------|----------------|
 | closed option set: an option `safeFetch` does not read (`method`, `body`, `as`, …) is refused, not dropped | `_refuseUnreadOptions` (DCHECK) | throws in dev; in release the option is dropped, which always lands on the GET this file sends |
 | facts every caller must state | `_destinationOf`, `_provenanceOf`, `_docOf`, `_pinnedOf`, `_actorOf`, `_credentialedOf` (CHECK) | throws in dev and release |
+| a URL the URL Standard §6.1 "URL class" constructor refuses is no request, as in a browser | `safeFetch`, `safeFetchOperator` | `bad-url`, graded `network` |
 | GET only: `init.method` is the literal `"GET"` | `safeFetch`; callers ask `safeFetchMethodRefusal` first | `blocked-method:<M>` |
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
 | no userinfo in the URL | `safeFetch` | `blocked-url-credentials` |
