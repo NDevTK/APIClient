@@ -218,8 +218,11 @@ function endpointParamItem(name, p, where, bodyLocation) {
            "parameter " + JSON.stringify(name) + "'s " + field + " is not a non-empty list of strings (" +
            where + ") — lib/learn.js writes the pool only when it holds a value, and every value as a string");
     for (const v of p[field]) {
+      /* An offered value only this tool's drives computed is marked (lib/learn.js's `_astDrivenValues`). */
+      const driven = grade !== "forced" && Array.isArray(p._astDrivenValues) && p._astDrivenValues.indexOf(v) >= 0;
+      const label = driven ? grade + ", driven" : grade;
       values.push(domElement("span", { class: "ep-value ep-value-" + (grade === "forced" ? "forced" : "offered"),
-                                       title: grade }, [domElement("code", {}, [v]), " " + grade]));
+                                       title: label }, [domElement("code", {}, [v]), " " + label]));
     }
   }
   const head = [domElement("code", { class: "ep-param-name" }, [name]),

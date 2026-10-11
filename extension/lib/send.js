@@ -276,6 +276,8 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                and one nothing ever learned render with identical bytes, which is §@H's wrong report rather
                than a thin one. */
             _astForcedValues: fdDocList(pd._astForcedValues),
+            /* …and the drive mark over the offerable pool: the values only this tool's drives computed. */
+            _astDrivenValues: fdDocList(pd._astDrivenValues),
             /* AND THE OTHER HALF OF THE SHAPE. A param's two facts are PROVENANCE-and-example (above) and
                DOMAIN — what the forced execution's own equality gates proved this value is NOT. A projection
                that carried only the first would put the popup back where the engine was before it emitted
@@ -591,7 +593,7 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                                _excludedValues: _hd.excludes, _bounds: _hd.bounds,
                                _predicates: _hd.predicates, _looselyEquals: _hd.looselyEquals,
                                _astForcedValues: null,
-                               _astValidValues: null };
+                               _astValidValues: null, _astDrivenValues: null };
       DCHECK(cur && typeof cur === "object",
              "the resolved schema declares `" + _hn + "` as something that is not a parameter record — " +
              "resolveEndpointSchema builds this map out of parameter declarations, so a non-object here is " +
@@ -609,8 +611,10 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          inside out: not a hole silently filled, but a legitimate value refused. The record now says `null`
          from both producers, so `undefined` here means a producer stopped writing the field. */
       const priorVals = cur._astValidValues, priorForced = cur._astForcedValues;
+      const priorDriven = cur._astDrivenValues;
       DCHECK((priorVals === null || Array.isArray(priorVals)) &&
-             (priorForced === null || Array.isArray(priorForced)),
+             (priorForced === null || Array.isArray(priorForced)) &&
+             (priorDriven === null || Array.isArray(priorDriven)),
              "a parameter's `_astValidValues`/`_astForcedValues` is neither null nor an array — " +
              "resolveEndpointSchema's two parameter literals both write both (null when nothing was observed, " +
              "the pool otherwise), so a third spelling is one of them broken and the panel would render a " +
@@ -621,14 +625,22 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          can legitimately disagree about a value's grade. Unioning each pool into its namesake would then put
          the same string in both, which lib/field-def.js's own disjointness DCHECK rejects at makeFieldDef and
          which the panel would render as one value offered as the app's and labelled as no client's. */
+      /* The flat record's holes carry no drive mark, so they clear none and mark none: a value the schema
+         marked keeps its mark, and one only the flat record offers arrives unmarked.
+         Named residual. Not covered: the flat endpoint record (`pathParams`, lib/endpoint-record.js) has no
+         drive mark of its own. Next diff: `pathParamsDriven` beside `pathParamsForced`, projected by
+         lib/merge.js's `_astPathParamPool` and folded at its record merge. Its absence shows as a Send-panel
+         example of a hole the resolved schema does not declare, computed only by a drive, rendered unmarked. */
       const _f = foldValuePools(priorVals === null ? [] : priorVals,
-                                priorForced === null ? [] : priorForced, _hp.valid, _hp.forced);
+                                priorForced === null ? [] : priorForced, _hp.valid, _hp.forced,
+                                priorDriven === null ? [] : priorDriven, null);
       /* AN EMPTY POOL IS WRITTEN `null`, WHICH IS THIS MAP'S ONE SPELLING OF "nothing was learned at this
          grade" — the same one both literals above declare. A forced-only hole therefore leaves
          `_astValidValues: null` rather than `[]`, and there is nothing for the prefill below to take, which
          is exactly right: §@H permits a domain-annotated shape with no example and forbids inventing one. */
       cur._astValidValues = _f.valid.length ? _f.valid : null;
       cur._astForcedValues = _f.forced.length ? _f.forced : null;
+      cur._astDrivenValues = _f.driven.length ? _f.driven : null;
       /* THE PREFILL IS THE PAIR, AND IT IS WRITTEN ONLY WHERE BOTH HALVES ARE TRUE. `fdCanStateExample`
          (lib/field-def.js) is the same question `pickExampleValue` asks of its own two list tiers: a pool
          member of `null` written here would land as `_exampleValue: null` — the record's own spelling of

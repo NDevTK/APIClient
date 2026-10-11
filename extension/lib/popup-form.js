@@ -235,6 +235,9 @@ function buildFormFields(schema, initialData = null) {
                surfaces where a value is used without being read. `undefined` and `null` are one statement
                here for the reason they are one on the domain lines below. */
             _astForcedValues: param._astForcedValues === undefined ? null : param._astForcedValues,
+            /* …and which offered values only this tool's drives computed (lib/learn.js omits the key when
+               none did), marked on their chips below. */
+            _astDrivenValues: param._astDrivenValues === undefined ? null : param._astDrivenValues,
             /* NO `_astValueSource`. lib/send.js stopped projecting it (its only writer wrote it onto its own
                path-param entries, and nothing ever rendered it), so this line carried undefined into the
                field def and no reader looked. */
@@ -781,14 +784,25 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   if (fieldDef._astValidValues !== null && fieldDef._astValidValues.length > 0 && fieldDef.enum === null) {
     const valHint = domElement("div", { class: "field-ast-values" });
     domAppendChildren(valHint, [domElement("span", { class: "ast-values-label" }, ["Values found in JS:"]), " ",
-      fieldDef._astValidValues.map((v, i) => [i === 0 ? "" : " ",
-                                              domElement("span", { class: "ast-value-chip" }, [String(v)])])]);
+      fieldDef._astValidValues.map((v, i) => [i === 0 ? "" : " ", _astValueChip(fieldDef, v)])]);
     valHint.addEventListener("click", function(e) {
       if (!e.target.classList.contains("ast-value-chip")) return;
       var input = wrapper.querySelector(".form-input");
       if (input) { input.value = e.target.textContent; input.dispatchEvent(new Event("input")); }
     });
     wrapper.appendChild(valHint);
+  }
+
+  /* A chip for an offered value. One only this tool's drives computed (`_astDrivenValues`) is still offered,
+     since its drive forced nothing and computed it from real inputs, but it says so: no path the page itself
+     ran was seen computing it. */
+  /* The mark sits beside the chip, never in it: a click copies the chip's text into the input. */
+  function _astValueChip(fd, v) {
+    const chip = domElement("span", { class: "ast-value-chip" }, [String(v)]);
+    if (fd._astDrivenValues === null || fd._astDrivenValues.indexOf(v) < 0) return chip;
+    return [chip, " ", domElement("span", { class: "ast-driven-mark",
+                                            title: "computed only inside this tool's drive of code the page " +
+                                                   "never called" }, ["(driven)"])];
   }
 
   /* THE VALUES THIS RUN COULD ONLY REACH BY FORCING A GATE — ON THEIR OWN ROW, SAYING SO, AND NOWHERE ELSE

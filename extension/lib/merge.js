@@ -585,12 +585,16 @@ function _mergeParamInto(ep, np) {
     Array.isArray(ep._astValidValues) ? ep._astValidValues : [],
     Array.isArray(ep._astForcedValues) ? ep._astForcedValues : [],
     Array.isArray(np._astValidValues) ? np._astValidValues : [],
-    Array.isArray(np._astForcedValues) ? np._astForcedValues : []);
+    Array.isArray(np._astForcedValues) ? np._astForcedValues : [],
+    Array.isArray(ep._astDrivenValues) ? ep._astDrivenValues : [],
+    Array.isArray(np._astDrivenValues) ? np._astDrivenValues : []);
   if (_folded.valid.length) ep._astValidValues = _folded.valid;
   /* AN EMPTIED FORCED POOL IS DELETED RATHER THAN LEFT AS `[]` — the last promotion out of it is exactly
      where the key would otherwise survive as an empty list, which is a third statement no reader has. */
   if (_folded.forced.length) ep._astForcedValues = _folded.forced;
   else if (Array.isArray(ep._astForcedValues)) delete ep._astForcedValues;
+  if (_folded.driven.length) ep._astDrivenValues = _folded.driven;
+  else if (Array.isArray(ep._astDrivenValues)) delete ep._astDrivenValues;
   /* THE EXAMPLE IS A COMPUTED VALUE AND ITS ABSENCE IS A STATEMENT (§RUN, DON'T MATCH: a param known only to
      satisfy a range gate has a SHAPE and no example). So an existing example is never overwritten and an
      absent one is filled from the other page — and the SOURCE label travels with it, because a value whose
@@ -895,7 +899,8 @@ function _foldEndpointRecordInto(into, from, key) {
   for (const name of new Set([..._a.keys(), ..._b.keys()])) {
     const x = _a.has(name) ? _a.get(name) : _NO_HOLE_POOLS;
     const y = _b.has(name) ? _b.get(name) : _NO_HOLE_POOLS;
-    _folded.set(name, foldValuePools(x.valid, x.forced, y.valid, y.forced));
+    /* The flat record carries no drive mark (the residual at lib/send.js's schema fold), so neither side states one. */
+    _folded.set(name, foldValuePools(x.valid, x.forced, y.valid, y.forced, null, null));
   }
   /* THE FOLD DOES NOT TRUNCATE, AND `PATH_PARAM_EXAMPLE_CAP` DOES NOT BELONG HERE — the cap's own stated
      defence has no instance at this seam. It reads, at its declaration, "a cap over what this record COPIES

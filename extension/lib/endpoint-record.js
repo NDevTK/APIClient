@@ -431,24 +431,42 @@ function provenanceOffersExample(p) {
    IT RETURNS RATHER THAN MUTATES, because the three record shapes spell an EMPTY pool differently — a method
    parameter omits the key, a FieldDef writes `null`, this record writes `null` — and that spelling belongs to
    the record, not to the fold. Each caller writes its own absence; none of them decides the membership. */
-function foldValuePools(valid, forced, inValid, inForced) {
+/* `driven` and `inDriven` are the drive marks beside the offerable pools: the subset of each `valid` list that
+   only sightings inside this tool's own drives (the @H record's `driven`) computed. The same one-way law holds:
+   a value one page sighting computed is the page's, so an undriven incoming value clears its mark, and a value
+   enters the mark only when a drive is the first to offer it. `null` is a side that states no mark (a record
+   that does not carry one): it marks nothing new and clears nothing. The answer's `driven` is `null` only when
+   neither side states one. */
+function foldValuePools(valid, forced, inValid, inForced, driven, inDriven) {
   DCHECK(Array.isArray(valid) && Array.isArray(forced) && Array.isArray(inValid) && Array.isArray(inForced),
          "the value-pool fold was handed something that is not a pool — every caller normalises its record's " +
          "own spelling of an empty pool (an omitted key, `null`, an absent field) to `[]` BEFORE this point, " +
          "because deciding what an absence means is the record's job and not the fold's, and a fold that " +
          "guessed would answer for a producer that had gone silent");
+  DCHECK((driven === null || (Array.isArray(driven) && driven.every((x) => valid.indexOf(x) >= 0))) &&
+         (inDriven === null || (Array.isArray(inDriven) && inDriven.every((x) => inValid.indexOf(x) >= 0))),
+         "the value-pool fold was handed a drive mark that is neither a stated absence nor a subset of its own " +
+         "offerable pool — a mark names offered values whose every sighting was a drive, so a member outside " +
+         "the pool is a value marked that nothing offers");
   const v = valid.slice(), f = forced.slice();
+  const d = driven === null && inDriven === null ? null : (driven === null ? [] : driven.slice());
   for (const x of inValid) {
     const at = f.indexOf(x);
+    const fresh = v.indexOf(x) < 0;
     if (at >= 0) f.splice(at, 1);          // THE FOLD: most-observed wins, and it wins by MOVING.
-    if (v.indexOf(x) < 0) v.push(x);
+    if (fresh) v.push(x);
+    if (inDriven !== null) {
+      const di = d.indexOf(x);
+      if (inDriven.indexOf(x) < 0) { if (di >= 0) d.splice(di, 1); }   // a page sighting: the page's value
+      else if (fresh) d.push(x);                                        // first offered by a drive
+    }
   }
   /* AND THE OTHER DIRECTION IS NOT SYMMETRIC. An incoming FORCED value joins the forced pool only where no
      pool already holds it: if the offerable pool has it, some path computed it unforced and the fold has
      already been decided in that direction. Appending it anyway is how a value comes to sit in both, which
      renders the same bytes twice under two contradictory claims. */
   for (const x of inForced) if (v.indexOf(x) < 0 && f.indexOf(x) < 0) f.push(x);
-  return { valid: v, forced: f };
+  return { valid: v, forced: f, driven: d };
 }
 
 /* THE PER-HEADER FOLD — the SET of headers the bundle was observed attaching to ONE address, met wherever

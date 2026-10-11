@@ -233,6 +233,7 @@ const FIELD_DEF_ABSENT = Object.freeze({
                             // rather than an entry in the one above (lib/endpoint-record.js's
                             // `provenanceOffersExample` states why the line is a FIELD NAME and not a grade
                             // each reader must remember to consult). null = none; `[]` never reaches here.
+  _astDrivenValues: null,
   _detectedEnum: false,     // the `enum` above was inferred from observations, not declared.
   _defaultValue: null,      // an observed default; null = none.
   _defaultConfidence: null, // how often that default held; null = not measured.
@@ -327,7 +328,8 @@ function makeFieldDef(parts, where) {
          "so anything else here is that refusal bypassed");
   DCHECK(_fdNullOrList(fd.children) && _fdNullOrList(fd.enum) && _fdNullOrList(fd.enumDescriptions) &&
          _fdNullOrList(fd._excludedValues) && _fdNullOrList(fd._astValidValues) &&
-         _fdNullOrList(fd._astForcedValues) && _fdNullOrList(fd._predicates) &&
+         _fdNullOrList(fd._astForcedValues) && _fdNullOrList(fd._astDrivenValues) &&
+         _fdNullOrList(fd._predicates) &&
          _fdNullOrList(fd._looselyEquals),
          "a FieldDef carries a list-or-nothing in a third form (" + where + ") — `children: null` means NOT " +
          "a message and `children: []` means a message with no fields, and a consumer that cannot tell them " +
@@ -344,6 +346,13 @@ function makeFieldDef(parts, where) {
          ") — membership of one pool or the other IS this record's spelling of the per-value grade fold, so " +
          "a value in both is a producer that appended where it had to promote, and the panel would offer the " +
          "value as one the app computes and label it as one no client sends");
+  /* `_astDrivenValues` is the subset of `_astValidValues` only this tool's own drives computed (the @H record's
+     `driven`): offered, and marked; null = none. Every member is therefore in the offerable pool. */
+  DCHECK(fd._astDrivenValues === null ||
+         (fd._astValidValues !== null && fd._astDrivenValues.every((v) => fd._astValidValues.indexOf(v) >= 0)),
+         "a FieldDef marks a value as computed only by this tool's drives that its offerable pool does not hold (" +
+         where + ") — the mark is a subset of `_astValidValues`, so a member outside it is a value marked that " +
+         "nothing offers");
   /* AND WHICH OF TWO SENTENCES THE FOUR DOMAIN ABSENCES ABOVE ARE — asserted as a MEMBERSHIP, because a
      third spelling would render as neither word and the panel would fall back to the silence this key exists
      to end. `null` is the third state and is legal: an engine that predates the key, or a producer that

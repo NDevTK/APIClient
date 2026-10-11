@@ -565,11 +565,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     m._astProvenance = mostObservedProvenance(_prev, callSite.provenance);
     /* …and whose act the sightings were, folded beside it (lib/endpoint-record.js's `drivenJoin`): a method
        stays `driven` only while no sighting was the page's own. It decides no pool — the values below are
-       pooled by provenance alone, so a drive that forced nothing offers its values marked by this field.
-       Named residual. Not covered: a value only a drive computed, under a method a page sighting folded to
-       `false`, is offered unmarked. Next diff: a per-value drive mark beside the two pools, promoted one way
-       as the forced pool is. Its absence shows as a Send-panel example the page's own code never computed
-       on a method that shows no drive mark. */
+       pooled by provenance alone, and each offered value carries its own drive mark (`_astDrivenValues`). */
     m._astDriven = m._astDriven === undefined ? callSite.driven : drivenJoin(m._astDriven, callSite.driven);
   }
   /* …and what this sighting proved about the address against the product's bar, collected as a set
@@ -663,10 +659,16 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // a form-scan-created param whose initial pickExampleValue ran BEFORE
   // any AST values were added would stay frozen at "type-default" even
   // though tier-3 (ast-constraint) is now satisfied.
-  const _mergeAstValues = (target, validValues, prov) => {
+  /* `driven` is the sighting's drive mark (the @H record's `driven`), required for the grade's reason: an
+     offered value only drives computed is kept in `_astDrivenValues`, the subset of `_astValidValues` the
+     panel marks, until a page sighting computes it too. */
+  const _mergeAstValues = (target, validValues, prov, driven) => {
     /* `provenanceOffersExample` ASSERTS THE VOCABULARY, so there is no second check of it here: a grade
        outside the three words crashes inside it, at the one place the words are declared. */
     const _offerable = provenanceOffersExample(prov);
+    DCHECK(typeof driven === "boolean",
+           "a sighting's values were merged with the drive mark " + JSON.stringify(driven) + " — every caller " +
+           "states the @H record's `driven`, which lib/merge.js asserts is a boolean at the boundary");
     let merged = false;
     if (Array.isArray(validValues) && validValues.length) {
       /* `undefined`-or-array IS THIS RECORD'S VOCABULARY AND NOT A DEFAULT. A method parameter is a raw
@@ -688,7 +690,9 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       const _f = foldValuePools(
         Array.isArray(target._astValidValues) ? target._astValidValues : [],
         Array.isArray(target._astForcedValues) ? target._astForcedValues : [],
-        _offerable ? _in : [], _offerable ? [] : _in);
+        _offerable ? _in : [], _offerable ? [] : _in,
+        Array.isArray(target._astDrivenValues) ? target._astDrivenValues : [],
+        _offerable && driven ? _in : []);
       const valid = _f.valid;
       if (valid.length > _before) merged = true;
       if (valid.length) target._astValidValues = valid;
@@ -697,6 +701,9 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          a THIRD statement beside "no forced value was observed" and "these were", which no reader has. */
       if (_f.forced.length) target._astForcedValues = _f.forced;
       else if (Array.isArray(target._astForcedValues)) delete target._astForcedValues;
+      /* …and the drive mark, written the same way: omitted when no offered value is a drive's alone. */
+      if (_f.driven.length) target._astDrivenValues = _f.driven;
+      else if (Array.isArray(target._astDrivenValues)) delete target._astDrivenValues;
       // (No `customEnum` test: nothing writes that flag — see _applyStatsToField.)
       /* AND THE MEMBERSHIP IS PROMOTED OUT OF THE OFFERABLE POOL ALONE. An `enum` is a CLAIM about what this
          API accepts, rendered as a `<select>` the reviewer picks from and exported into the OpenAPI document
@@ -939,7 +946,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
        some OTHER call site supports — which is the merge this pool split exists to stop, performed one line
        after it. `callSite.provenance` is what THIS row was reached at, asserted at lib/merge.js's boundary
        before it arrives. */
-    _mergeAstValues(m.parameters[p.name], p.validValues, callSite.provenance);
+    _mergeAstValues(m.parameters[p.name], p.validValues, callSite.provenance, callSite.driven);
     /* BEFORE THE FOUR DOMAIN MERGES, because it is what says which of two sentences their silence is. */
     _mergeValueClass(m.parameters[p.name], p);
     _mergeExcludes(m.parameters[p.name], p);
@@ -1019,7 +1026,10 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
               if (!_hole) continue;   // generic {} hole -> the ENGINE's shape/concrete collapse owns its path-param
                                       // example (arg{i}); creating m.parameters[""] here made a duplicate empty-name @path param.
               if (!m.parameters[_hole]) m.parameters[_hole] = { type: "string", location: "path", required: true, description: "Learned (concrete value from live traffic)" };
-              _mergeAstValues(m.parameters[_hole], [_val], _segProv);
+              /* …and the segment's drive mark the same way: the record's own fold over its sightings, and
+                 `false` for one the wire produced. */
+              _mergeAstValues(m.parameters[_hole], [_val], _segProv,
+                              _cmProv === null ? false : methodDriven(_cm, "lib/learn.js templated-path reconcile"));
             }
           }
           if (_cm.parameters) for (const _pn in _cm.parameters) { if (!m.parameters[_pn]) m.parameters[_pn] = _cm.parameters[_pn]; }
@@ -1082,7 +1092,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       }
       /* AT THIS SIGHTING'S GRADE, for the reason the query params carry it: a body field the page POSTs is
          learned on the same path the address was, so it is worth exactly what that path is worth. */
-      _mergeAstValues(schema.properties[bp.name], bp.validValues, callSite.provenance);
+      _mergeAstValues(schema.properties[bp.name], bp.validValues, callSite.provenance, callSite.driven);
       /* …AND THE KEY THAT SAYS WHICH OF TWO SENTENCES THOSE FOUR SILENCES ARE, WHICH USED TO BE DELIBERATELY
          ABSENT HERE AND IS THE ONE THING ON THIS HALF OF THE RECORD THAT NOTHING COULD READ. The refusal was
          correct and its reason is kept because a reader who re-derives it will re-apply it: the four leave

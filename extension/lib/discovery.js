@@ -308,6 +308,8 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
        things in two halves of one record — the same argument the three domain fields below carry, and the
        same one lib/send.js makes for the query side. */
     _astForcedValues: fdDocList(prop._astForcedValues),
+    /* …and the drive mark over the offerable pool, which lib/learn.js writes on a body field the same way. */
+    _astDrivenValues: fdDocList(prop._astDrivenValues),
     /* THE BODY FIELD'S DOMAIN. endpoint.c mints a param per request-body field and learn.js merges its
        `excludes` onto the schema property, so a gate over a value the page POSTS is observed exactly as one
        over a value it appends to the query is — and a projection that dropped it here would make the popup's
