@@ -30,6 +30,7 @@
 #include "solver/solve.h"      /* the @S URL class's ONE detector — §4.6.5 step 4 is an arrival at it */
 #include "solver/concolic.h"   /* href is a slot a SOURCE can be stashed in — the members keep its provenance */
 #include "core/html/hyperlink.h"
+#include "core/html/referrer_policy_attribute.h"   /* §4.6.5 step 11's hyperlink referrer policy */
 #include "core/html/html_base_element.h"   /* §4.2.3's get an element's target — see §4.6.5 step 3 below */
 #include "core/dom/element.h"
 #include "core/dom/document.h"
@@ -414,7 +415,7 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        urlString for step 11 to navigate to — see the arrival below for why that ends the algorithm rather
        than picking a destination. */
     const bool href_is_unknown = concolic_is(hrefv) != 0;
-    const char *href, *tv;
+    const char *href, *tv, *referrer_policy;
     size_t tlen = 0;
     char *target;
     WindowFeatures feat = { false, false, false };
@@ -503,7 +504,11 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        same question of a `form` and used to be unable to, which is what a substring test written into this
        caller costs. It is asked AFTER the target because step 2 compares that target against `_blank`. */
     feat.noopener = hyperlink_element_noopener(ctx, el, target, tlen);
-    r = navigable_open(ctx, href, target, &feat, node_of(el), &window_type);
+    /* §4.6.5 step 11's subject's hyperlink referrer policy: "no-referrer" for the `noreferrer` link type,
+       otherwise the current state of the `referrerpolicy` attribute. */
+    referrer_policy = feat.noreferrer ? "no-referrer"
+                                      : referrer_policy_attribute_keyword(lxb_dom_interface_element(node_of(el)));
+    r = navigable_open(ctx, href, target, &feat, node_of(el), &window_type, referrer_policy);
     /* §4.6.5 STEP 11: "Navigate targetNavigable to urlString using subject's node document, with referrerPolicy
        set to subject's hyperlink referrer policy, userInvolvement set to userInvolvement, and sourceElement set
        to subject." THE NUMBER WAS 9 HERE AND 11 EIGHT LINES ABOVE, IN ONE FUNCTION. Step 9 is "let urlString be
@@ -542,7 +547,7 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     if (window_type == WINDOW_TYPE_EXISTING_OR_NONE && window_proxy_is(r) && href != NULL) {
         /* NO §7.4.2.2 `documentResource`: §4.6.5's follow the hyperlink states none, and the string arm of
            that argument is §4.8.5's `srcdoc` alone. */
-        JSValue nav = navigable_navigate(ctx, r, href, /*documentResource*/ NULL);
+        JSValue nav = navigable_navigate(ctx, r, href, /*documentResource*/ NULL, referrer_policy);
         JS_FreeValue(ctx, r);
         r = nav;
     }

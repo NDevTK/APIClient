@@ -593,7 +593,8 @@ static bool loc_navigate_begin(JSContext *ctx, SessionHistoryFragmentNav *w, con
        and this one is a SERIALIZATION of a record the parser produced, so a failure here is this file's bug. */
     /* NO §7.4.2.2 `documentResource`: the `Location` members reach that algorithm with a URL and state none —
        the string arm of that argument belongs to §4.8.5's `srcdoc` and to nothing a page can reach here. */
-    r = navigable_navigate(ctx, document_window_proxy(ctx), addr, /*documentResource*/ NULL);
+    /* §7.2.4's Location-object navigate states no referrerPolicy, so §7.4.2.2's default, the empty string. */
+    r = navigable_navigate(ctx, document_window_proxy(ctx), addr, /*documentResource*/ NULL, "");
     free(addr);
     CHECK(!JS_IsUndefined(r),
           "§7.4.2.2's navigate refused a URL this component serialized out of a parsed record — a serialized "

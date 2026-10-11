@@ -5356,8 +5356,9 @@ static int hostreq_answer_all(JSContext *ctx)
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
-                /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` — the ADDRESS IS THE
-                   REMAINDER, past the FOURTH tab. This fixture reads the three marks nowhere: it stands in
+                /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer
+                   policy><TAB><url>` — the ADDRESS IS THE REMAINDER, past the SIXTH tab. This fixture reads the
+                   five fields before it nowhere: it stands in
                    for a trusted zone's network and has no session to spend. Skipping them is not optional —
                    the response-URL write below would make a glued token part of that Document's ORIGIN. */
                 const char *prov_end = memchr(tab + 1 + 15, '\t', (size_t)(end - (tab + 1 + 15)));
@@ -5365,7 +5366,12 @@ static int hostreq_answer_all(JSContext *ctx)
                                                : NULL;
                 const char *pin_end = drv_end ? memchr(drv_end + 1, '\t', (size_t)(end - (drv_end + 1)))
                                               : NULL;
-                const char *asked = pin_end ? pin_end + 1 : end;
+                /* …and past the destination and referrer policy the job writes after them. */
+                const char *dest_end = pin_end ? memchr(pin_end + 1, '\t', (size_t)(end - (pin_end + 1)))
+                                               : NULL;
+                const char *rp_end = dest_end ? memchr(dest_end + 1, '\t', (size_t)(end - (dest_end + 1)))
+                                              : NULL;
+                const char *asked = rp_end ? rp_end + 1 : end;
 
                 v = JS_NewObject(ctx);
                 /* FETCH §2.2.6 "Responses"' RESPONSE URL, WHICH THIS FIXTURE SERVES OUT OF A LITERAL AND
@@ -5374,9 +5380,10 @@ static int hostreq_answer_all(JSContext *ctx)
                    satisfy a reader. HTML §7.4.5 determines the loaded Document's ORIGIN over this string, so a
                    host that DID redirect would put a different one here and the Document would belong to
                    another agent cluster. */
-                DCHECK(pin_end != NULL && asked < end,
-                       "a document.fetch request carried no address after its provenance and two marks — the "
-                       "load job writes `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` "
+                DCHECK(rp_end != NULL && asked < end,
+                       "a document.fetch request carried no address after its provenance, two marks, destination "
+                       "and referrer policy — the load job writes `document.fetch<TAB><provenance><TAB><driven>"
+                       "<TAB><pinned><TAB><destination><TAB><referrer policy><TAB><url>` "
                        "(core/frame/navigable.c), so a missing tab or an empty tail is that record's two ends "
                        "disagreeing rather than a page navigating to nothing");
                 if ((size_t)(end - asked) >= sizeof FIXTURE_CROSS_SITE - 1 &&

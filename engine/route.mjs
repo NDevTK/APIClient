@@ -581,19 +581,23 @@ async function service(e) {
        redirect, so the response's URL is the ADDRESS THAT WAS ASKED FOR; stating it is a fact about this
        driver's own network rather than a field copied to satisfy a reader, and a host that DOES follow a
        redirect reports a different string in the same slot.
-       `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` — ADDRESS LAST, past the third
-       tab after the verb. This driver reads the provenance and marks nowhere: it serves one literal document
-       out of memory and spends no network. What it must not do is take the line's tail for a URL. */
+       `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB>
+       <url>` — ADDRESS LAST, past the sixth tab after the verb. This driver reads the fields before it nowhere:
+       it serves one literal document out of memory and spends no network. What it must not do is take the
+       line's tail for a URL. */
     const fetchArgs = op.slice('document.fetch\t'.length);
     const fetchTab = fetchArgs.indexOf('\t');
     const drivenTab = fetchTab > 0 ? fetchArgs.indexOf('\t', fetchTab + 1) : -1;
     const pinnedTab = drivenTab > 0 ? fetchArgs.indexOf('\t', drivenTab + 1) : -1;
-    if (fetchTab <= 0 || drivenTab <= fetchTab + 1 || pinnedTab <= drivenTab + 1 ||
-        pinnedTab >= fetchArgs.length - 1)
+    const destTab = pinnedTab > 0 ? fetchArgs.indexOf('\t', pinnedTab + 1) : -1;
+    const policyTab = destTab > 0 ? fetchArgs.indexOf('\t', destTab + 1) : -1;
+    if (fetchTab <= 0 || drivenTab <= fetchTab + 1 || pinnedTab <= drivenTab + 1 || destTab <= pinnedTab + 1 ||
+        policyTab <= destTab || policyTab >= fetchArgs.length - 1)
       fail('a document.fetch request is not ' +
-           `\`document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>\`: ${op} — ` +
-           'core/frame/navigable.c writes all four fields non-empty on every path');
-    e.answer(id, { url: fetchArgs.slice(pinnedTab + 1), headers: "" }, HTML_B);
+           `\`document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy>` +
+           `<TAB><url>\`: ${op} — core/frame/navigable.c writes all seven fields on every path, the policy ` +
+           'possibly empty');
+    e.answer(id, { url: fetchArgs.slice(policyTab + 1), headers: "" }, HTML_B);
     paid++;
   }
   return { step: r, paid };

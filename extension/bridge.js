@@ -1437,7 +1437,8 @@ async function frontierRederive(e) {
                                                   identity: navigationCarriesSession(e.sourceUrl, e.origin)
                                                     ? navigationIdentity({ identity: engineIdentity(e.origin, e.sourceUrl),
                                                                            referrer: "none", policy: null },
-                                                                         e.sourceUrl) : null }); }
+                                                                         e.sourceUrl, DOCUMENT_REQUEST_UNSTATED)
+                                                    : null }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
   const landed = r && Array.isArray(r.urlList) && r.urlList.length ? r.urlList[r.urlList.length - 1] : null;
@@ -1897,13 +1898,10 @@ function navigationCarriesSession(absUrl, principalOrigin) {
 /* The facts a credentialed document load of `absUrl` speaks with as `speaker`: HTML §7.4.5's request, credentials
    mode `include` and mode `navigate`, with the speaker's client as the request's, so its Cookie, Referer and
    Sec-Fetch-Site are that client's. The document that reads the reply is the caller's principal, a second fact.
-   Named residual. Not covered: a child navigable's destination, one of Fetch §2.2.5's navigation request
-   destinations `iframe`, `frame`, `object` and `embed`; the load states `document`. No chrome.* fact names
-   the container's element kind: webNavigation states `frameType: "sub_frame"` and `transitionType:
-   "auto_subframe"` whatever the element, so a seed keeps `document`. The next diff has the engine state its
-   container element's kind on the `document.fetch` record of a navigable it created. Its absence shows as
-   Sec-Fetch-Dest `document` where the browser's own load of that frame sent the container's kind. */
-function navigationIdentity(speaker, absUrl) {
+   `request` is the request's own facts as its composer states them (DOCUMENT_REQUEST_UNSTATED or a
+   `document.fetch` record): where it states a referrer policy, Fetch §4.1 Main fetch has already put the policy
+   container's in place of "", so the speaker's policy is not read. */
+function navigationIdentity(speaker, absUrl, request) {
   DCHECK(!!speaker && !!speaker.identity && typeof speaker.identity.origin === "string" &&
          !!speaker.identity.partitionKey && (speaker.referrer === "client" || speaker.referrer === "none"),
          "a credentialed document load was handed no {identity, referrer} to speak as");
@@ -1911,11 +1909,26 @@ function navigationIdentity(speaker, absUrl) {
          "a document load's speaker states the client policy " + JSON.stringify(speaker.policy) +
          ", which is neither null (none held) nor a Referrer Policy §3 policy");
   /* Referrer Policy §3.9 The empty string: a container stating none falls back to the default referrer policy. */
-  const policy = speaker.policy === null || speaker.policy === "" ? "strict-origin-when-cross-origin" : speaker.policy;
+  const policy = request.referrerPolicy !== null || speaker.policy === null || speaker.policy === ""
+    ? "strict-origin-when-cross-origin" : speaker.policy;
   return identityFor(speaker.identity, { url: absUrl, requestInit: { credentials: "include", mode: "navigate",
-                                         referrer: speaker.referrer === "client" ? null : "", referrerPolicy: null } },
+                                         referrer: speaker.referrer === "client" ? null : "",
+                                         referrerPolicy: request.referrerPolicy } },
                      policy);
 }
+
+/* A document load's own request facts, {destination, referrerPolicy}, for a composer that states neither: Fetch
+   §2.2.5's `document`, and no referrer policy, so the speaker's client policy applies.
+   Named residual. Not covered: a seed's and a peer-provisioning notice's destination and request referrer policy.
+   No chrome.* fact names a seed's container: webNavigation states `frameType: "sub_frame"` and `transitionType:
+   "auto_subframe"` whatever the element. The `navigable.create` and `navigable.swap` notices do not carry the
+   facts the `document.fetch` record does. The next diff writes the two fields onto those notices from the same
+   load job. Their absence shows as Sec-Fetch-Dest `document` where the browser's own load of that frame sent the
+   container's kind. */
+const DOCUMENT_REQUEST_UNSTATED = Object.freeze({ destination: "document", referrerPolicy: null });
+
+/* Fetch §2.2.5 Requests' navigation request destinations, the values a document load's request may state. */
+const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "iframe", "object"]);
 
 /* ─── The one document-load path ────────────────────────────────────────────────────────────────────
    HTML §7.4 Navigation and session history's load, as this host performs it: an address goes in and a §7.4.5
@@ -1950,7 +1963,13 @@ const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
    credential carries, or null when it has none, which loads without the session. */
 async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
-                              actor, driven, pinned, speakerOf) {
+                              actor, driven, pinned, request, speakerOf) {
+  DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
+         (request.referrerPolicy === null || request.referrerPolicy === "" ||
+          REFERRER_POLICIES.indexOf(request.referrerPolicy) >= 0),
+         "a §7.4 navigation was loaded with request facts " + JSON.stringify(request) + " — a navigation " +
+         "request's destination is one of Fetch §2.2.5's navigation destinations and its referrer policy is a " +
+         "Referrer Policy §3 policy or null for none stated");
   /* `refusalArm` is required; an unstated word takes the refusing arm, exactly as `none` does. */
   DCHECK(DOC_REFUSAL_ARMS.indexOf(refusalArm) >= 0,
          "a §7.4 navigation was loaded stating the refusal arm " + JSON.stringify(refusalArm) + ", which " +
@@ -2012,7 +2031,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      refusal comes back as the chokepoint's `blocked-signal:` reply record. */
   const speaker = navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
   const credentialed = speaker !== null;
-  const identity = credentialed ? navigationIdentity(speaker, abs) : null;
+  const identity = credentialed ? navigationIdentity(speaker, abs, request) : null;
   try {
     // Never `as: "script"`: these bytes are parsed as a document, not run as code.
     /* The session is carried where a browser's navigation would carry it; the chokepoint re-decides on the
@@ -2020,8 +2039,8 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        is refused there. Asking for cookies arms the destructive-path deny list, which safe-fetch.js scopes to
        `credentialed && provenance !== "observed"`: a document whose address carries a listed token is loaded
        when the person's browser navigated to it and refused when this tool derived or forced the address. */
-    /* Fetch §2.2.5 Requests' `document` destination, the navigate algorithm's own fetch (HTML §7.4.5). Not
-       script-like, so no CORB: the HTML parser reads these bytes. */
+    /* Fetch §2.2.5 Requests' destination as the request states it: `document`, or HTML §7.4.5's container local
+       name. Not script-like, so no CORB: the HTML parser reads these bytes. */
     /* `provenance` is the caller's statement of who named this address, relayed verbatim; the chokepoint owns
        the firing decision. */
     /* `credentials: "include"` is the navigation's own credentials mode (HTML §7.4.5 Populating a session
@@ -2034,7 +2053,8 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
     /* `mode: "navigate"`: HTML §7.4.5's fetch is the navigate algorithm's, whose reader is the instance the
        document becomes, not the page that named it. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
-                                          destination: "document", mode: "navigate", provenance: provenance,
+                                          destination: request.destination, mode: "navigate",
+                                          provenance: provenance,
                                           docReach: fromReach, actor: actor, driven: driven,
                                           pinned: pinned,
                                           credentials: "include", credentialed, identity });
@@ -2742,7 +2762,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
      be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
      gains such an arm widens this list deliberately. */
-  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm) => {
+  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request) => {
     DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
            "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
            ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
@@ -2751,7 +2771,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
-                                   refusalArm, /*actor*/"page", driven, pinned, documentSpeaker(msg));
+                                   refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg));
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
     DCHECK(refusalArm === "rendezvous" || r.declined === null,
@@ -3578,7 +3598,8 @@ async function hostNotice(eng, line) {
        18 its witness mark; navigationLoad and the chokepoint decide on them, and this arm passes them through. */
     /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
-    const loaded = await eng.fetchedDocument(f[3], f[15], f[17], f[18], /*refusalArm*/"none");
+    const loaded = await eng.fetchedDocument(f[3], f[15], f[17], f[18], /*refusalArm*/"none",
+                                             DOCUMENT_REQUEST_UNSTATED);
     /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
        this zone followed), not the notice's f[4]: SECURITY.md makes routing and the origin stamped on a
        delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
@@ -3773,7 +3794,8 @@ async function hostNotice(eng, line) {
        an address this zone declined at `document.fetch`. */
     /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
        an empty Uint8Array. */
-    const swapped = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none");
+    const swapped = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none",
+                                              DOCUMENT_REQUEST_UNSTATED);
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -3829,7 +3851,8 @@ async function hostNotice(eng, line) {
     DCHECK(!hostHolderOf(f[1]),
            "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
-    const navd = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none");
+    const navd = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none",
+                                           DOCUMENT_REQUEST_UNSTATED);
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
@@ -4129,28 +4152,36 @@ async function engineServiceHostRequests(eng) {
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
-    /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>`, split at the first three tabs
-       after the verb so the address is the remainder. A URL cannot contain a tab (URL Standard §4.4 URL parsing
-       strips them), and the three tokens are lowercase words. Indexed rather than split on every tab, which
-       would silently take the tail of a malformed record. */
+    /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB>
+       <url>`, split at the first six tabs after the verb so the address is the remainder. A URL cannot contain a
+       tab (URL Standard §4.4 URL parsing strips them), the first four tokens are lowercase words, and the
+       referrer policy is a Referrer Policy §3 policy or "" (core/frame/navigable.c's HTML §7.4.5 request after
+       Fetch §4.1 Main fetch). Indexed rather than split on every tab, which would silently take the tail of a
+       malformed record. */
     const fetchArgs = op.slice("document.fetch\t".length);
     const fetchTab = fetchArgs.indexOf("\t");
     const drivenTab = fetchTab > 0 ? fetchArgs.indexOf("\t", fetchTab + 1) : -1;
     const pinnedTab = drivenTab > 0 ? fetchArgs.indexOf("\t", drivenTab + 1) : -1;
-    DCHECK(fetchTab > 0 && drivenTab > fetchTab + 1 && pinnedTab > drivenTab + 1 &&
-           pinnedTab < fetchArgs.length - 1,
+    const destTab = pinnedTab > 0 ? fetchArgs.indexOf("\t", pinnedTab + 1) : -1;
+    const policyTab = destTab > 0 ? fetchArgs.indexOf("\t", destTab + 1) : -1;
+    DCHECK(fetchTab > 0 && drivenTab > fetchTab + 1 && pinnedTab > drivenTab + 1 && destTab > pinnedTab + 1 &&
+           policyTab > destTab && policyTab < fetchArgs.length - 1,
            "a document.fetch request is not `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB>" +
-           "<url>`: `" + op + "` — core/frame/navigable.c writes all four fields non-empty on every path, so " +
-           "this zone and that job no longer share a grammar, and the address read out of it would be a token");
+           "<destination><TAB><referrer policy><TAB><url>`: `" + op + "` — core/frame/navigable.c writes all " +
+           "seven fields on every path, the policy possibly empty, so this zone and that job no longer share a " +
+           "grammar, and the address read out of it would be a token");
+    const fetchRequest = { destination: fetchArgs.slice(pinnedTab + 1, destTab),
+                           referrerPolicy: fetchArgs.slice(destTab + 1, policyTab) };
     /* Issued, not awaited, for the XHR seam's reason (a page states a document load with `location.href` or an
        `iframe src`, and its body may never end), keyed on the request id. The asking navigable stays parked on
        its load; every other flow keeps running. */
     did += engineIssue(eng, "doc\n" + id,
       /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
          parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
-      () => eng.fetchedDocument(fetchArgs.slice(pinnedTab + 1), fetchArgs.slice(0, fetchTab),
+      () => eng.fetchedDocument(fetchArgs.slice(policyTab + 1), fetchArgs.slice(0, fetchTab),
                                 fetchArgs.slice(fetchTab + 1, drivenTab),
-                                fetchArgs.slice(drivenTab + 1, pinnedTab), /*refusalArm*/"rendezvous"),
+                                fetchArgs.slice(drivenTab + 1, pinnedTab), /*refusalArm*/"rendezvous",
+                                fetchRequest),
       (r) => engineDeliverDocument(eng, id, r));
     continue;
   }
@@ -5176,10 +5207,10 @@ const _hostOps = {
                                            /* `page`: HTML §7.4.4's steps ran in the analysed document, so
                                               its own code composed the address; the declaration's drive
                                               mark says whether a drive of uncalled code ran them. */
-                                           /*actor*/"page", seed.driven, seed.pinned,
+                                           /*actor*/"page", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
                                            async () => ({ identity: engineIdentity(seed.principalOrigin, seed.principalUrl),
-                                                          referrer: "none" })));
+                                                          referrer: "none", policy: null })));
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -5731,7 +5762,7 @@ self.astDispatch = async function astDispatch(msg) {
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
-                                        seedSpeaker(msg));
+                                        DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg));
     const unavailable = seedUnavailable(loaded, originOf(msg.sourceUrl));
     /* The outcome is reported the instant the load settles, so a person opening the popup over an empty panel
        can tell "failed" from "nothing yet" while the analysis runs. */

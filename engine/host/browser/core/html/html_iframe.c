@@ -404,14 +404,18 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        handed over rather than looked up, because the container link the create makes is a link back to it and
        §7.2.2.4's `frameElement` is the read that follows it. The slot written below is the same link's other
        half; they are one step of one algorithm and both are written here. */
-    proxy = navigable_create(ctx, src, name, true, NULL, iframe_flags, wrap, resource);
+    /* §4.8.5's navigate an iframe or frame takes the element's `referrerpolicy` state, which §7.1.6's iframe
+       element referrer policy answers for an `iframe`. */
+    proxy = navigable_create(ctx, src, name, true, NULL, iframe_flags, wrap, resource,
+                             iframe_element_referrer_policy(wrap));
     /* §4.8.5 has no "did not parse" branch the way §7.4 does: an `<iframe src="::">` still has a navigable,
        holding the initial about:blank it was created with.
        NO RESOURCE ON THE RETRY, and that is a statement rather than a loss: this arm is reached only when the
        destination did not parse, and step 1's destination is the four literal words `about:srcdoc`. A resource
        here would ride an `about:blank` address, which the enqueue asserts against by name. */
     if (JS_IsUndefined(proxy))
-        proxy = navigable_create(ctx, NULL, name, true, NULL, iframe_flags, wrap, /*documentResource*/ NULL);
+        proxy = navigable_create(ctx, NULL, name, true, NULL, iframe_flags, wrap, /*documentResource*/ NULL,
+                                 iframe_element_referrer_policy(wrap));
     free(resource);
     free(src);
     free(name);
@@ -598,7 +602,8 @@ void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_i
                                          "HTML §4.8.5 \"The `iframe` element\"'s process the iframe attributes "
                                          "step 1, \"navigate to the srcdoc resource\"");
         nav = iframe_navigable(ctx, wrap);
-        JS_FreeValue(ctx, navigable_navigate(ctx, nav, "about:srcdoc", resource));
+        JS_FreeValue(ctx, navigable_navigate(ctx, nav, "about:srcdoc", resource,
+                                             iframe_element_referrer_policy(wrap)));
         JS_FreeValue(ctx, nav);
         free(resource);
         return;
@@ -624,7 +629,8 @@ void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_i
         /* NO DOCUMENT RESOURCE ON THIS ARM: §4.8.5's step 1 above owns the one navigation that has one, and
            this is its `Otherwise` — the frame has no `srcdoc` specified at all, which the branch above just
            established. */
-        JS_FreeValue(ctx, navigable_navigate(ctx, nav, url, /*documentResource*/ NULL));
+        JS_FreeValue(ctx, navigable_navigate(ctx, nav, url, /*documentResource*/ NULL,
+                                             iframe_element_referrer_policy(wrap)));
         JS_FreeValue(ctx, nav);
     }
     free(url);

@@ -1351,8 +1351,63 @@ enum {
     NAV_LOAD_ARG_INTEGRITY,                    /* SRI §3.8's item of that container */
     NAV_LOAD_ARG_REFERRER_POLICY,              /* …its referrer policy item, or JS_NULL for none stated */
     NAV_LOAD_ARG_DOCUMENT_RESOURCE,            /* §7.4.2.2's documentResource: §4.8.5's srcdoc text, or JS_NULL */
+    NAV_LOAD_ARG_REQUEST_REFERRER_POLICY,      /* §7.4.2.2's referrerPolicy: the document state's request one */
     NAV_LOAD_ARG_COUNT
 };
+
+/* HTML §7.4.5 "Populating a session history entry"'s create navigation params by fetching: the request's
+ * destination is "document", set to "navigable's container's local name" when the navigable has a container,
+ * read at the fetch because §7.3.1.3's container relation is per flow. Owned. */
+static char *nav_request_destination(JSContext *ctx, JSValueConst proxy)
+{
+    JSValue container = window_proxy_container(ctx, proxy);
+    char *dest;
+
+    if (JS_IsNull(container)) {
+        dest = strdup("document");
+    } else {
+        lxb_dom_node_t *n = node_of(container);
+        const lxb_char_t *name;
+        size_t len = 0;
+
+        DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "§7.3.1.3's container of a navigable is not an element — the create that records it is handed "
+               "the element itself");
+        name = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
+        dest = strndup((const char *)name, len);
+    }
+    JS_FreeValue(ctx, container);
+    CHECK(dest != NULL, "navigable: OOM spelling §7.4.5's request destination");
+    DCHECK(fetch_is_destination_type(dest),
+           "§7.4.5 set a navigation request's destination to a container local name that Fetch §2.2.5 does not "
+           "enumerate — a navigable container is an iframe, frame, object or embed element");
+    return dest;
+}
+
+/* The same request's referrer policy as Fetch §4.1 "Main fetch" leaves it: the entry's document state's request
+ * referrer policy (§7.4.2.2's referrerPolicy, on the job), replaced when it is "" by the request's policy
+ * container's, which §7.4.5 makes sourceSnapshotParams's source policy container: the initiator's clone this job
+ * carries. That container's item is null when it was created from no response, which §7.1.7 gives the default
+ * referrer policy. The result may be "", a container stating none. Owned. */
+static char *nav_request_referrer_policy(JSContext *ctx, const NavLoadState *s)
+{
+    JSValueConst req = step_arg(&s->hdr, NAV_LOAD_ARG_REQUEST_REFERRER_POLICY);
+    JSValueConst item = step_arg(&s->hdr, NAV_LOAD_ARG_REFERRER_POLICY);
+    const char *r, *c = NULL;
+    char *out;
+
+    DCHECK(JS_IsString(req), "a document load carried no request referrer policy — navigable_load_enqueue "
+                             "puts §7.4.2.2's referrerPolicy on every job");
+    r = JS_ToCString(ctx, req);
+    CHECK(r != NULL, "navigable: OOM taking §7.4.2.2's referrer policy off the load job");
+    if (*r == '\0' && JS_IsString(item)) c = JS_ToCString(ctx, item);
+    out = strdup(*r ? r : c ? c : "strict-origin-when-cross-origin");
+    CHECK(out != NULL, "navigable: OOM spelling §7.4.5's request referrer policy");
+    if (c) JS_FreeCString(ctx, c);
+    JS_FreeCString(ctx, r);
+    DCHECK(fetch_is_referrer_policy(out), "§7.4.5's request referrer policy is not a Referrer Policy §3 policy");
+    return out;
+}
 
 /* HTML §7.1.4.2 "Embedder policy checks"' STEPS 1 AND 2 — the half of check-a-navigation-response's-adherence-
  * to-its-embedder-policy that is about the NAVIGABLE — and then the check itself, which is §7.1.4's
@@ -1641,15 +1696,19 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
         const char *drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
         const char *pin = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PINNED));
+        char *dest = nav_request_destination(ctx, proxy);
+        char *refpol = nav_request_referrer_policy(ctx, s);
         char *op;
 
         CHECK(prov != NULL && drv != NULL && pin != NULL,
               "navigable: OOM taking §7.4.5's provenance off the load job");
-        op = malloc(strlen(addr) + strlen(prov) + strlen(drv) + strlen(pin) + 20);
+        op = malloc(strlen(addr) + strlen(prov) + strlen(drv) + strlen(pin) + strlen(dest) + strlen(refpol) + 24);
         CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
-        sprintf(op, "document.fetch\t%s\t%s\t%s\t%s", prov, drv, pin, addr);
+        sprintf(op, "document.fetch\t%s\t%s\t%s\t%s\t%s\t%s", prov, drv, pin, dest, refpol, addr);
         s->req = engine_host_request(ctx, op);
         free(op);
+        free(refpol);
+        free(dest);
         JS_FreeCString(ctx, pin);
         JS_FreeCString(ctx, drv);
         JS_FreeCString(ctx, prov);
@@ -2529,14 +2588,14 @@ static int g_nav_load_stepid = -1;
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
                                    SerializedPolicyContainer inherit_policy, const char *about_base,
                                    const char *document_resource, const char *provenance, const char *driven,
-                                   const char *pinned)
+                                   const char *pinned, const char *request_referrer_policy)
 {
     /* THE SIZE IS THE SLOT LIST'S LAST MEMBER AND EVERY ASSIGNMENT BELOW NAMES ITS SLOT — see the enum beside
        NAV_LOAD_STEPS for the incident that cost, and for why a hand-written extent standing beside a
        hand-written enumeration is two copies of one number with only one of them ever read. */
     JSValueConst argv[NAV_LOAD_ARG_COUNT];
     JSValue fn, url, org, csp, self, about, prov, drv, pin, res;
-    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol;
+    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol, reqpol;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
@@ -2699,6 +2758,13 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
        that way — `JS_ToCString(JS_NULL)` answers "null", which is four bytes of document. */
     res = document_resource ? JS_NewString(ctx, document_resource) : JS_NULL;
     CHECK(!JS_IsException(res), "the document-load job's document resource could not be allocated");
+    /* §7.4.2.2's referrerPolicy, which becomes the entry's document state's request referrer policy: read off
+       the operation (the container's `referrerpolicy`, a hyperlink's, `noreferrer`) when it is enqueued. */
+    DCHECK(request_referrer_policy != NULL && fetch_is_referrer_policy(request_referrer_policy),
+           "a document load was enqueued with no §7.4.2.2 referrer policy, or with a token Referrer Policy §3 does "
+           "not define — every caller states its operation's, the empty string included");
+    reqpol = JS_NewString(ctx, request_referrer_policy);
+    CHECK(!JS_IsException(reqpol), "the document-load job's request referrer policy could not be allocated");
     argv[NAV_LOAD_ARG_PROXY] = proxy;
     argv[NAV_LOAD_ARG_URL] = url;
     argv[NAV_LOAD_ARG_INITIATOR_ORIGIN] = org;
@@ -2715,8 +2781,10 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[NAV_LOAD_ARG_INTEGRITY] = integ;
     argv[NAV_LOAD_ARG_REFERRER_POLICY] = refpol;
     argv[NAV_LOAD_ARG_DOCUMENT_RESOURCE] = res;
+    argv[NAV_LOAD_ARG_REQUEST_REFERRER_POLICY] = reqpol;
     JS_EnqueueCallTask(ctx, fn, COUNTOF(argv), argv,
                        TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.2.2 step 21 */
+    JS_FreeValue(ctx, reqpol);
     JS_FreeValue(ctx, res);
     JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, refpol);
@@ -2750,7 +2818,8 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
  * above is resolved by: §4.8.5's *navigate an iframe or frame* passes "the value of element's srcdoc attribute"
  * off the ELEMENT in the initiating flow's DOM delta, and by the time the job runs the only document this
  * function could ask is the one being replaced. */
-JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, const char *document_resource)
+JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, const char *document_resource,
+                           const char *referrer_policy)
 {
     char *addr = NULL;
     const Origin *origin = NULL;
@@ -2985,7 +3054,7 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, 
                               the only one that states it and every other navigation states null. */
                            document_resource,
                            engine_provenance_token(prov), engine_driven_token(driven),
-                           engine_navigation_pinned_token());
+                           engine_navigation_pinned_token(), referrer_policy);
     free(addr);
     return JS_DupValue(ctx, proxy);
 }
@@ -3187,7 +3256,14 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
                                resource,
                                engine_provenance_of_running_path(),
                                engine_driven_token(engine_driven_of_running_path()),
-                               engine_navigation_pinned_token());
+                               engine_navigation_pinned_token(),
+                               /* Named residual. Not covered: the entry's document state's request referrer
+                                  policy, which §7.4.3's reload re-populates the entry with; core/frame/
+                                  session_history.c's document state holds no such member, so a reload states
+                                  "" and takes this document's container policy. The next diff adds the member
+                                  beside the resource above and reads it here. Its absence shows as a reloaded
+                                  frame whose `referrerpolicy` or link `noreferrer` stops narrowing its Referer. */
+                               "");
         if (resource) JS_FreeCString(ctx, resource);
         JS_FreeValue(ctx, entry_resource);
     }
@@ -3608,7 +3684,7 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
                          const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
-                         JSValueConst container, const char *document_resource)
+                         JSValueConst container, const char *document_resource, const char *referrer_policy)
 {
     const PolicyContainer *creator_container = document_policy(ctx);
     /* §7.1.7's CLONE OF THE CREATOR'S CONTAINER, in the form it travels — the ONE value this whole function
@@ -3922,7 +3998,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                than recomputed: one operation, one answer. */
             navigable_load_enqueue(ctx, proxy, addr, origin, creator_policy,
                                    strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
-                                   document_resource, provenance, driven, pinned);
+                                   document_resource, provenance, driven, pinned, referrer_policy);
     } else {
         /* AND A SRCDOC FRAME CAN REACH THIS ARM, WHICH IS A CAPABILITY AND NOT A CONTRADICTION. §7.3.2.1's
            determine the origin answers a srcdoc destination with the SOURCE origin — step 3, "if url is
@@ -4500,7 +4576,7 @@ void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const c
  * say this. Only this block and the header's are corrected; a sweep of the file's other citations would be a
  * diff nobody can check. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
-                       lxb_dom_node_t *source_element, WindowType *out_window_type)
+                       lxb_dom_node_t *source_element, WindowType *out_window_type, const char *referrer_policy)
 {
     const char *name = target ? target : "";
     const bool noopener = feat && feat->noopener;
@@ -4660,7 +4736,7 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
        and the string arm of that argument is §4.8.5's srcdoc alone — an auxiliary navigable has no element for
        one to come off. */
     return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0, JS_NULL,
-                            /*documentResource*/ NULL);
+                            /*documentResource*/ NULL, referrer_policy);
 }
 
 /* HTML §7.2.2.1 "Opening and closing windows" — `window.open`'s WINDOW OPEN STEPS, AS A STEP MACHINE, and it is
@@ -4807,7 +4883,10 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            "an unknown destination was converted to bytes on its way into §7.2.2.1 step 13's choose — the "
            "address the created navigable would then carry is a fabricated string with no source identity and "
            "no domain left on it");
-    s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat, NULL, &window_type);
+    /* §7.2.2.1: "Let referrerPolicy be the empty string. If noreferrer is true, then set noopener to true and
+       set referrerPolicy to \"no-referrer\"." Both navigates of the window open steps take it. */
+    s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat, NULL, &window_type,
+                               feat.noreferrer ? "no-referrer" : "");
     if (features) JS_FreeCString(ctx, features);
     /* §7.2.2.1 step 4: "If urlRecord is failure, then throw a \"SyntaxError\" DOMException" — the PAGE's
        mistake, and the one this algorithm hands back rather than swallowing. */
@@ -4841,7 +4920,8 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            reachable ONLY through `window.open(tainted)` contributes no @H endpoints from exploration and is
            seen only when an @S candidate run substitutes real bytes at the source. */
         if (!url_is_null && !url_is_unknown) {
-            JSValue r = navigable_navigate(ctx, s->result, url, /*documentResource*/ NULL);
+            JSValue r = navigable_navigate(ctx, s->result, url, /*documentResource*/ NULL,
+                                           feat.noreferrer ? "no-referrer" : "");
             JS_FreeValue(ctx, s->result);
             s->result = r;
         }

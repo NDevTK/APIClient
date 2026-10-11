@@ -1950,25 +1950,29 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                to it or run the flow that would. The answer is built at completion (wpt_request_finish's DOCUMENT
                arm), where the response's header list and bytes arrive together. */
             if (!wpt_request_asked_id(id)) {
-                /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>`: the address is the
-                   remainder past the fourth tab. The provenance and marks are read nowhere here, for the router's
-                   reason (a corpus fetch at wptserve spends no session), but must be skipped. */
+                /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer
+                   policy><TAB><url>`: the address is the remainder past the sixth tab. The provenance, marks and
+                   referrer policy are read nowhere here, for the router's reason (a corpus fetch at wptserve
+                   spends no session, so no firing decision and no Referer), but must be skipped. The destination
+                   is the request's. */
                 char *prov_at = strchr(op, '\t');
                 char *drv_at = prov_at ? strchr(prov_at + 1, '\t') : NULL;
                 char *pin_at = drv_at ? strchr(drv_at + 1, '\t') : NULL;
-                char *url_at = pin_at ? strchr(pin_at + 1, '\t') : NULL;
+                char *dest_at = pin_at ? strchr(pin_at + 1, '\t') : NULL;
+                char *rp_at = dest_at ? strchr(dest_at + 1, '\t') : NULL;
+                char *url_at = rp_at ? strchr(rp_at + 1, '\t') : NULL;
 
                 DCHECK(url_at != NULL && url_at[1],
-                       "a document.fetch request carried no ADDRESS after its provenance and two marks — the "
-                       "load job writes `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` "
-                       "(core/frame/navigable.c), so a missing tab means this host and that job no longer share "
-                       "a grammar");
+                       "a document.fetch request carried no ADDRESS after its provenance, two marks, destination "
+                       "and referrer policy — the load job writes `document.fetch<TAB><provenance><TAB><driven>"
+                       "<TAB><pinned><TAB><destination><TAB><referrer policy><TAB><url>` (core/frame/navigable.c), "
+                       "so a missing tab means this host and that job no longer share a grammar");
                 req.method = "GET";
                 req.url = url_at + 1;
-                /* §7.4.5's navigation request, whose destination is Fetch §2.2.5's `document`: HTML's navigate
-                   algorithm is the `document` row of §2.2.5's initiator/destination table. It is not script-like,
-                   which is what a consumer reads it for. */
-                req.destination = "document";
+                /* §7.4.5's navigation request's destination, as the job stated it: `document`, or the
+                   navigable's container's local name. Terminated in this host's own copy of the record. */
+                *rp_at = '\0';
+                req.destination = dest_at + 1;
                 /* A navigation's mode is `navigate`: Fetch §2.2.5 "Requests" enumerates it and HTML §7.4.5's
                    create navigation params by fetching creates its request with that mode. */
                 req.mode = FETCH_MODE_NAVIGATE;

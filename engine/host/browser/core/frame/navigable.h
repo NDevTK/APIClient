@@ -299,7 +299,8 @@ JSValue navigable_tree_order(JSContext *ctx);
  * that carried its own bytes would make every reader of a destination — the fetch, §7.1.7's determine step,
  * §7.3.2.1's determine-the-origin, §2.4.3's base URL — parse a document out of a URL to answer a question
  * about a URL. */
-JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, const char *document_resource);
+JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, const char *document_resource,
+                           const char *referrer_policy);
 
 /* HTML §7.4.3 "Reloading and traversing"'s RELOAD, over the navigable whose ACTIVE DOCUMENT is this realm's.
  *
@@ -449,7 +450,7 @@ typedef enum {
    Answers the chosen navigable's WindowProxy (owned), or JS_UNDEFINED when the url does not parse — which
    §7.2.2.1 turns into a SyntaxError and §4.6.5 discards, because a click is not a place a page can catch one. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
-                       lxb_dom_node_t *source_element, WindowType *out_window_type);
+                       lxb_dom_node_t *source_element, WindowType *out_window_type, const char *referrer_policy);
 void navigable_free(JSContext *ctx);
 
 /* HOW MANY CHILD REALMS ARE LIVE — the working set child_document's OOM `CHECK` names, asked of the only
@@ -673,7 +674,7 @@ int navigable_realm_ref_sites(NavigableRealmRefSite *out, int cap, long *release
    just the scheme. */
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
                          const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
-                         JSValueConst container, const char *document_resource);
+                         JSValueConst container, const char *document_resource, const char *referrer_policy);
 
 /* THE NAVIGABLE AN INSTANCE IS ROOTED IN — the one navigable_create above did NOT make, because it was made in
  * another instance or by the browser itself — together with HTML §7.1.4.2 "Embedder policy checks" for the

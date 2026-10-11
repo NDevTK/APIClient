@@ -1696,7 +1696,8 @@ async function main() {
       if (op.startsWith('windowproxy.') || op.startsWith('object.')) {
         askOperation(e, id, op);
       } else if (op.startsWith('document.fetch\t')) {
-        /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` — §7.4.5's load for a document THIS instance holds,
+        /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB><url>` —
+           §7.4.5's load for a document THIS instance holds,
            answered here rather than routed, because routing a same-origin load to a peer would be answering
            it out of another agent.
            THE RECORD STATES ITS PROVENANCE NOW AND THIS ARM USED TO PASS `null` FOR IT — `navigate`'s own word
@@ -1705,20 +1706,24 @@ async function main() {
            names the same word its cross-agent twin above carries, taken off the same load job, so the two
            callers reach one decision from one fact: the agent boundary decides WHERE a document is built and
            never WHETHER this zone may spend the network on it.
-           SPLIT AT THE FIRST THREE TABS AFTER THE VERB, ADDRESS LAST — a URL cannot contain a tab (URL Standard
-           §4.4 "URL parsing" strips every ASCII tab from its input) and the three tokens in front of it are
-           ASCII lowercase words. */
+           SPLIT AT THE FIRST SIX TABS AFTER THE VERB, ADDRESS LAST — a URL cannot contain a tab (URL Standard
+           §4.4 "URL parsing" strips every ASCII tab from its input), the four tokens in front of the policy are
+           ASCII lowercase words, and the policy is a Referrer Policy §3 policy or "". This host composes no
+           Referer for a document load and reads the destination and policy nowhere. */
         track(e, key, (async () => {
           const args = op.slice('document.fetch\t'.length);
           const t = args.indexOf('\t');
           const u = t > 0 ? args.indexOf('\t', t + 1) : -1;
           const w = u > 0 ? args.indexOf('\t', u + 1) : -1;
-          if (t <= 0 || u <= t + 1 || w <= u + 1 || w >= args.length - 1)
+          const d = w > 0 ? args.indexOf('\t', w + 1) : -1;
+          const q = d > 0 ? args.indexOf('\t', d + 1) : -1;
+          if (t <= 0 || u <= t + 1 || w <= u + 1 || d <= w + 1 || q <= d || q >= args.length - 1)
             throw new Error('a document.fetch request is not ' +
-                            `\`document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>\`: ${op} — ` +
-                            'core/frame/navigable.c writes all four fields non-empty on every path, so this ' +
-                            'zone and that job no longer share a grammar');
-          const loaded = await navigate(args.slice(w + 1), e.docUrl, 'document.fetch', args.slice(0, t),
+                            '`document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB>' +
+                            `<referrer policy><TAB><url>\`: ${op} — core/frame/navigable.c writes all seven ` +
+                            'fields on every path, the policy possibly empty, so this zone and that job no ' +
+                            'longer share a grammar');
+          const loaded = await navigate(args.slice(q + 1), e.docUrl, 'document.fetch', args.slice(0, t),
                                         args.slice(t + 1, u), args.slice(u + 1, w), e.docReach);
           if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
