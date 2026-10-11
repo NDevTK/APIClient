@@ -86,6 +86,9 @@ function serializeApiKeyEntry(v) {
          "an API-key entry carries no requestCount — lib/keys.js initialises it to 0 and every merge path " +
          "keeps a number there, so a missing one is a producer that stopped writing it and would serialize " +
          "as a real zero");
+  DCHECK(Array.isArray(v.positions) && v.positions.every((p) => (p.in === "header" || p.in === "query") &&
+                                                       typeof p.name === "string"),
+         "an API-key entry's positions are not a list of {in, name} — lib/keys.js and mergeToGlobal build it");
   for (const _f of ["services", "hosts", "endpoints", "pageUrls"]) {
     DCHECK(v[_f] instanceof Set,
            "an API-key entry's `" + _f + "` is not a Set — the three producers (lib/keys.js, mergeToGlobal, " +
@@ -110,6 +113,7 @@ function serializeApiKeyEntry(v) {
     hosts: [...v.hosts],
     endpoints: [...v.endpoints],
     pageUrls: [...v.pageUrls],
+    positions: v.positions.map((p) => ({ in: p.in, name: p.name })),
   };
 }
 

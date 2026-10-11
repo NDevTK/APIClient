@@ -748,24 +748,12 @@ function loadSendRequestInit(req) {
 
 // ─── API keys, offered where they were seen sent ─────────────────────────────
 
-/* Where a learned key was seen sent, from its record (lib/keys.js): the request header its context names
-   (`header:<name>`), or each query parameter of the request URL it was seen in (`referer`) whose value is the
-   key. A key found only in a response body has no position.
-   Named residual. Not covered: a key's later sightings, as lib/keys.js records the first one's context only.
-   Next diff records every position a key is seen sent at on its entry. Its absence shows as a key offered
-   at one position while requests the page sent carried it at another. */
-function apiKeyPositions(key, entry) {
-  DCHECK(typeof entry.source === "string",
-         "an API-key entry carries no source — lib/keys.js records the context it was found in on every entry");
-  if (entry.source.startsWith("header:")) return [{ in: "header", name: entry.source.slice("header:".length) }];
-  if (entry.source !== "url") return [];
-  DCHECK(typeof entry.referer === "string" && URL.canParse(entry.referer),
-         "an API-key entry found in a URL carries no URL — lib/keys.js records the one it scanned as `referer`");
-  var out = [];
-  new URL(entry.referer).searchParams.forEach(function (v, n) {
-    if (v === key && !out.some(function (p) { return p.name === n; })) out.push({ in: "query", name: n });
-  });
-  return out;
+/* Where a learned key was seen sent: every position its record holds (lib/keys.js keySentPositions, unioned
+   across documents and sessions by lib/merge.js), as [{in, name}]. A key found only in a response has none. */
+function apiKeyPositions(entry) {
+  DCHECK(Array.isArray(entry.positions),
+         "an API-key entry reached the popup with no positions — lib/serialize.js projects them on every entry");
+  return entry.positions;
 }
 
 /* The learned keys for this panel's request, seen with its service or host (collectKeysForService's rule),
@@ -788,7 +776,7 @@ function sendPanelKeyPositions() {
   Object.keys(tabData.apiKeys).forEach(function (k) {
     var kd = tabData.apiKeys[k];
     if (kd.services.indexOf(svc) < 0 && kd.hosts.indexOf(host) < 0) return;
-    var ps = apiKeyPositions(k, kd);
+    var ps = apiKeyPositions(kd);
     if (ps.length === 0) unplaced.push({ key: k, seen: "response", context: kd.source });
     ps.forEach(function (p) { at(p).offers.push({ key: k, seen: "sent", context: kd.source }); });
   });
@@ -869,6 +857,8 @@ function prefillKeyPositions() {
     _keyPrefilled.push({ pos: pos, value: sent.key, row: row,
                          template: _keyPositionField(pos).kind === "template" ? currentRequestUrl : null });
   });
+  // Each template value is written into the one address this prefill leaves, the later ones included.
+  _keyPrefilled.forEach(function (p) { if (p.template !== null) p.template = currentRequestUrl; });
 }
 
 /* The key lines under the headers: per position, its state (derived, in the request as the replayed record

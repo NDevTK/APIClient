@@ -1062,8 +1062,12 @@ function mergeToGlobal(tab) {
              "a tab's API-key entry's `" + _f + "` is not a Set — lib/keys.js builds all four, and what this " +
              "key was seen against is the whole of what the moat knows about it");
     }
+    DCHECK(Array.isArray(v.positions), "a tab's API-key entry carries no positions list — lib/keys.js mints one");
     const existing = globalStore.apiKeys.get(k);
     if (existing) {
+      // Every position the key was seen sent at, in either entry.
+      for (const p of v.positions)
+        if (!existing.positions.some((q) => q.in === p.in && q.name === p.name)) existing.positions.push(p);
       existing.lastSeen = v.lastSeen;
       // The pattern that matched is a function of the key text, so the tab's answer is authoritative and
       // an entry stored before this field travelled heals on the next sighting.
@@ -1102,6 +1106,7 @@ function mergeToGlobal(tab) {
         hosts: new Set(v.hosts),
         endpoints: new Set(v.endpoints),
         pageUrls: new Set(v.pageUrls),
+        positions: v.positions.slice(),
       });
     }
   }

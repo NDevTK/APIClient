@@ -19,6 +19,17 @@ const KEY_PATTERNS = [
   { name: "Stripe Key", re: /[sk|pk]_(?:test|live)_[0-9a-zA-Z]{24}/g },
 ];
 
+/* Where a sighting saw a key sent, as [{in, name}]: the request header a `header:<name>` context names
+   (lower case), or each query parameter of the request URL a `url` context scanned whose value is the key.
+   Any other context is a response or a decoded blob, which sends nothing. */
+function keySentPositions(key, context, url) {
+  if (context.startsWith("header:")) return [{ in: "header", name: context.slice("header:".length) }];
+  if (context !== "url" || url === null) return [];
+  const out = [];
+  url.searchParams.forEach((v, n) => { if (v === key && !out.some((p) => p.name === n)) out.push({ in: "query", name: n }); });
+  return out;
+}
+
 function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
   if (!text) return;
   const tab = _docForLearning(documentId);
@@ -64,6 +75,7 @@ function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
             hosts: new Set(),
             endpoints: new Set(),
             pageUrls: new Set(),
+            positions: [],
             requestCount: 0,
           });
         }
@@ -75,6 +87,8 @@ function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
            back to the size of the ENDPOINT set — so it displayed a real number about the wrong thing. This is
            the one place a key is observed in a request, so it is the one place that can count. */
         keyData.requestCount++;
+        for (const pos of keySentPositions(key, context, url))
+          if (!keyData.positions.some((p) => p.in === pos.in && p.name === pos.name)) keyData.positions.push(pos);
         if (url) {
           keyData.services.add(service);
           keyData.hosts.add(url.hostname);

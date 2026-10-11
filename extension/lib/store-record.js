@@ -61,6 +61,11 @@ function _srObjOrNull(x) { return x === null || _srObj(x); }
 function _srArr(x) { return Array.isArray(x); }
 function _srArrOrNull(x) { return x === null || Array.isArray(x); }
 function _srArrOfStr(x) { return Array.isArray(x) && x.every((e) => _srStr(e)); }
+/* Where an API key was seen sent (lib/keys.js keySentPositions): a list of {in: header or query, name}. */
+function _srKeyPositions(x) {
+  return Array.isArray(x) && x.every((p) => !!p && (p.in === "header" || p.in === "query") && _srStr(p.name) &&
+                                         Object.keys(p).length === 2);
+}
 function _srNonEmptyArrOfStr(x) { return _srArrOfStr(x) && x.length > 0; }
 
 /* A RECORD SHAPE: the names it STATES (a producer that cannot state one has nothing to register) and the names
@@ -99,6 +104,7 @@ const _SR_APIKEY = _srRecord(
   {
     name: _srStr, source: _srStr, firstSeen: _srNum, lastSeen: _srNum, requestCount: _srCount,
     services: _srArrOfStr, hosts: _srArrOfStr, endpoints: _srArrOfStr, pageUrls: _srArrOfStr,
+    positions: _srKeyPositions,
   },
   { referer: _srStrOrNull });
 
@@ -314,7 +320,9 @@ const _SR_DRIFT_HISTORY = _srList("a service's API-drift history", "an API-drift
    five maps entire before the stamp existed. ───────────────────────────────────────────────────────────── */
 const STORE_RECORD_KINDS = Object.freeze({
   apiKeys: Object.freeze({
-    statedFrom: 2, shape: () => _SR_APIKEY,
+    /* 10 for `positions`, raised with lib/persistence.js's `_STORE_SHAPE`: an older store's key carries none,
+       and "stored before positions were recorded" and "never seen sent" are two facts, so it is asked. */
+    statedFrom: 10, shape: () => _SR_APIKEY,
     /* THE DOCUMENT THAT SCANS THIS KEY OUT OF THE TRAFFIC AGAIN. lib/keys.js adds the page's own address to
        `pageUrls` on every sighting, so re-visiting one re-mints the entry — §OOM/paging's re-derivable third
        category, exactly as `endpointRecordRecipe` is `pageUrl` one map along. An entry with an empty list was

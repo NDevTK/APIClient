@@ -182,7 +182,8 @@ function scheduleSave() {
    carries no such key, and "stored by an older build" and "no hole value is a drive's alone" are two facts,
    so those stores are ASKED and their endpoints shed against `pageUrl` or stranded and named, never read as
    unmarked. The bump is not optional for either name, for the reason above. */
-const _STORE_SHAPE = 9;
+/* 10 for an API-key entry's `positions` (lib/store-record.js's `apiKeys` kind is raised with it). */
+const _STORE_SHAPE = 10;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap
