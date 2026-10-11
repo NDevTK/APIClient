@@ -7621,263 +7621,99 @@ static int flow_step(JSContext *ctx, Flow *f) {
                flow to do nothing (see there). Never both; neither means the cursor is past the last row. */
             int seq_compiles = 0;
             int seq_awaits = 0;
-            /* THE PARSER'S OWN `<link>` ELEMENTS, AHEAD OF EVERYTHING ELSE THIS FLOW COULD DO — HTML §4.6.8.20
-               Link type "preload"'s "when the external resource link's link element becomes browsing-context
-               connected", for the elements a parse produced. THE POSITION IS THE SPEC AND NOT A PREFERENCE: a
-               browser connects those elements during TREE CONSTRUCTION, so their requests are issued before
-               any script of that document runs and before any task the parse queued — and a lexbor parse has
-               no per-token seam, so the trigger has to be performed by the first thing that HAS a flow, which
-               is this. Running it after the programs would put a chunk preload's request after the bundle that
-               waits on its `load`, which is a different page.
-               ONE ELEMENT PER CALL, like every other unit of work in this function: the hook returns 1 having
-               served one and the step returns, so the scheduler re-ranks between them and a document that
-               ships seventy of them is seventy work items rather than one stretch with no suspend point on it.
-               IT IS ASKED EVERY STEP AND COSTS ONE INTEGER READ ONCE DRAINED (core/html/html_link.c keeps the
-               cursor, per flow, over an inventory that holds only documents still owing a request), which is
-               what lets a document installed LATER — a child navigable's — be served by the timeline that
-               created it without this arm having to be told that one appeared. */
-            /* AND NOT A SECOND TASK IN ONE ITERATION OF §8.1.7.3 "Processing model" STEP 2. This arm and the
-               two below it each produce a TASK, and the turn continuation at the reply delivery may bring the
-               flow back around to them with its task already performed — at which point step 2.8's checkpoint
-               is the only thing left that may run. `turn_task_done` is 0 on every ENTRY to flow_step, so on a
-               pass that has not continued these three conjuncts are constant-true and the ladder is the one
-               that stood here; they can only ever refuse on a pass this file's own `continue` created. */
+            /* The parser's own `<link>` elements, ahead of everything else this flow could do: HTML §4.6.8.20 Link
+               type "preload"'s "when the external resource link's link element becomes browsing-context connected",
+               for elements a parse produced. A browser connects them during tree construction, before any script
+               of the document runs, and a lexbor parse has no per-token seam, so the first thing that has a flow
+               performs the trigger; after the programs, a chunk preload would follow the bundle waiting on its
+               `load`. One element per call, so seventy links are seventy work items. Asked every step, one integer
+               read once drained (core/html/html_link.c keeps a per-flow cursor over documents still owing a
+               request), so a child navigable installed later is served by the timeline that created it.
+               This arm and the two below each produce a task, so each is guarded by `turn_task_done`: on a pass
+               the turn continuation created the task is done and only step 2.8's checkpoint may run. On an entry
+               the guards are constant true. */
             if (!turn_task_done && g_link_connected_hook && g_link_connected_hook(ctx)) {
                 g_step_unit = STEP_UNIT_LINK_CONNECTED; return 0; }
-            /* THE ROUTED DELIVERIES THIS FLOW HAS BEEN HANDED, and they are first because the task each one
-               enqueues is what every branch below then finds on the queue. ONE PER STEP, oldest first: each
-               becomes a §9.3.3 task at the receiving Window and the step returns, so the tasks are enqueued in
-               the order the messages were posted and the scheduler re-ranks between them. The queue empties as
-               they are taken, so a flow with none left falls through to its jobs. */
+            /* The routed deliveries this flow was handed, before the arms that find their tasks on the queue. One
+               per step, oldest first: each becomes a §9.3.3 task at the receiving Window, so tasks are enqueued in
+               post order and the scheduler re-ranks between them. */
             if (!turn_task_done && flow_deliver_pending(f)) {
                 g_step_unit = STEP_UNIT_ROUTED_DELIVERY; flow_deliver(ctx, f); return 0; }
-            /* AND THE OPERATION A PEER IS PARKED ON, before this flow's own programs for the reason the
-               delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
-               flow's programs — after which the loop below runs it like any other. */
+            /* The operation a peer is parked on, before this flow's own programs for the delivery's reason: another
+               agent's flow is suspended at it, and it becomes one of this flow's programs. */
             if (!turn_task_done && flow_perform_pending(f)) {
                 g_step_unit = STEP_UNIT_CROSS_AGENT_OP; flow_perform(ctx, f); return 0; }
-            /* THE MICROTASK CHECKPOINT, BEFORE THE NEXT PROGRAM AND NOT AFTER THE LAST ONE — HTML §8.1.4.4
-               "Calling scripts" step 3 of clean up after running script, decided by flow_checkpoint_due above.
-               It is the FIRST thing the flow does with an empty stack because that is what the sentence says:
-               the checkpoint belongs to the program that just finished, so nothing the sequence still holds
-               may run in front of it. Everything below this line is a task.
-               A JOB CAN PARK, and until this was reported the park was invisible to the scheduler. A queued
-               step machine that suspends on a synchronous host request is parked by reaction_flow_step
-               and this returned PROGRESS — so the flow was resumed, parked again, resumed again,
-               forever, and never reported host-owed. The host was therefore never asked, and the answer that
-               would have let it finish could not arrive: a livelock that looks exactly like slowness, because
-               every turn is "progress". It is the same rule the mid-frame yield already keeps: a blocked flow
-               has no work, whatever it just did. OWED is the register the scheduler already has for
-               waiting-not-finished. */
+            /* The microtask checkpoint, before the next program and not after the last one: HTML §8.1.4.4 Calling
+               scripts' clean up after running script step 3, decided by flow_checkpoint_due. The checkpoint belongs
+               to the program that just finished, so nothing the sequence holds may run in front of it; everything
+               below is a task. A job can park (reaction_flow_step parks a step machine suspended on a synchronous
+               host request), so a blocked flow reports OWED rather than progress: reporting progress would resume
+               and re-park it for ever without the host being asked. */
             if (flow_checkpoint_due(f)) {
-                /* THE STEP IS NAMED AFTER ITS TASK, AND THE CHECKPOINT IS NOT ONE. A step that delivered a
-                   reply and then drained the reactions that delivery enqueued did ONE unit of work — §8.1.7.3
-                   step 2's iteration — and `g_step_unit` is what the census reports it as, so assigning
-                   unconditionally here would rename every such step `microtask-checkpoint` and leave
-                   `deliver-one-reply` counting only the deliveries whose turn happened to be cut short by the
-                   policy. That is exactly the `compile-program` mislabelling one block below: two arms that
-                   take opposite work summed into the row of whichever ran last, and the pair of readings the
-                   histogram exists to separate destroyed. A step that runs microtasks and NO task is still
-                   named for them, which is the case this arm is the unit of. */
+                /* The step is named after its task, and the checkpoint is not one: a step that delivered a reply
+                   and then drained the reactions it enqueued did one unit, §8.1.7.3 step 2's iteration, and renaming
+                   it `microtask-checkpoint` would leave `deliver-one-reply` counting only deliveries whose turn the
+                   policy cut short. A step that runs microtasks and no task is named for them. */
                 if (!turn_task_done) g_step_unit = STEP_UNIT_MICROTASK;
                 flow_run_one_job(ctx, f);
                 if (flow_blocked(f)) return FLOW_STEP_OWED;
-                /* …AND THE CHECKPOINT IS A LOOP, WHICH IS THE STANDARD'S OWN WORD. §8.1.7.3 "Processing model"'
-                   perform a microtask checkpoint runs "While the event loop's microtask queue is not empty",
-                   AND THE SECTION NUMBER WAS §8.1.7.1 "Definitions" AT THIS SITE AND AT THE `turn_continues`
-                   BANNER, WHICH IS A MIS-AIMED CITATION AND NOT A FABRICATION — the 9-word run quoted here is
-                   VERBATIM and the subsection it was hung on does not define the algorithm. That is the one
-                   axis a quotation channel cannot see by construction: it asks whether the words occur where
-                   the citation says, never whether that passage governs. MEASURED two ways rather than argued.
-                   Against the committed corpus the citation audit judges with (specUpdated 3 October 2026,
-                   lowercased and punctuation-stripped): `implementation defined manner` occurs ONCE and only
-                   in §8.1.7.3, `not starving other task queues` ONCE and only in §8.1.7.1, and an invented
-                   control occurs in neither. Against the fetched maintained edition, with the four subsection
-                   anchors armed at 444408 / 455691 / 466157 / 526254, the dfn `id=perform-a-microtask-checkpoint`
-                   sits at 508556 — inside §8.1.7.3 "Processing model". §8.1.7.1 mentions the term because it
-                   is where the queues are DEFINED; the `While` loop is §8.1.7.3's.
-                   IT IS THE CERTIFIED-SURVIVOR SHAPE AND NOT A FRESH SLIP: six sites in this tree already said
-                   §8.1.7.3 (engine.c's three, engine.h, flow.h, step_unit.h) and two in THIS file were left
-                   behind, which is what a repaired cluster looks like from the inside — nobody re-reads an area
-                   somebody has just fixed. The sibling diff that found it also found the step number at the
-                   §8.1.7.3 note below wrong in the same way: `in an implementation-defined manner` is step 2.1,
-                   the FIRST item of step 2's nested list, where step 1 is "Let oldestTask and taskStartTime be
-                   null" — in range, so the step-range channel is blind to it, and six sites already said 2.1.
-                   so one job is a sub-step of the checkpoint and not a unit the event loop rests at. Offering
-                   here and continuing is that `While`; the offer is the scheduler's (turn_continues), so the
-                   flow still yields the instant a parked flow outranks it, its quantum is spent, or it becomes
-                   blocked — and a refusal returns to exactly the state a return here always left, with the
-                   checkpoint arm taking the next job on the flow's next pick because it stands above every
-                   task arm. This is where 1 + N picks per event-loop turn became 1. */
+                /* The checkpoint is a loop: §8.1.7.3 Processing model's perform a microtask checkpoint runs "While
+                   the event loop's microtask queue is not empty", so one job is a sub-step, not a unit the event
+                   loop rests at. Offering here and continuing is that `While`; the offer is the scheduler's
+                   (turn_continues), so the flow still yields when outranked, out of quantum or blocked, and a
+                   refusal leaves the state a return always left, with the checkpoint arm taking the next job on the
+                   next pick. */
                 if (turn_continues()) continue;
                 return 0;
             }
-            /* AND ONE ITERATION OF §8.1.7.3 "Processing model" STEP 2 ENDS HERE. The flow performed its task
-               (2.6) and the checkpoint above has drained (2.8, whose `While` the arm above is), so the next
-               thing this flow could do is a SECOND task — which is the next iteration of step 2 and therefore
-               the next step. Returning is what makes the scheduler's unit the standard's unit rather than one
-               rung of a ladder, and it is the line that stops the continuation below from becoming a drain:
-               there is exactly one task per call of flow_step, before this line as after it. */
+            /* One iteration of §8.1.7.3 Processing model step 2 ends here: the task is done (2.6) and the
+               checkpoint above has drained (2.8), so the next task is the next iteration and the next step. This
+               return keeps the continuation from becoming a drain: one task per call of flow_step. */
             if (turn_task_done) return 0;
-            /* THE NETWORKING TASK SOURCE, AND IT IS A RUNG OF THIS LADDER RATHER THAN THE FLOOR OF IT.
+            /* The networking task source: a rung of this ladder, not its floor. Fetch §2 Infrastructure's queue a
+             * fetch task ends "Otherwise, queue a global task on the networking task source with taskDestination
+             * and algorithm", and both kinds of reply this register holds (a `fetch()`, and an external script's
+             * bytes via HTML §8.1.4.2 Fetching scripts) arrive that way, so one delivery serves both. Within one
+             * source, HTML §8.1.7.1 Definitions ("For each event loop, every task source must be associated with a
+             * specific task queue") and §8.1.7.3 step 2.3 ("Set oldestTask to the first runnable task in taskQueue,
+             * and remove it from taskQueue") make order arrival order; which answered entry is taken is
+             * flow_deliver_one_reply's residual. Only which queue is implementation-defined (step 2.1, "chosen in
+             * an implementation-defined manner"), a preference and not an exclusion: §8.1.7.1's example prefers
+             * input "three-quarters of the time, keeping the interface responsive but not starving other task
+             * queues".
              *
-             * A COMPLETED FETCH IS DELIVERED BY A TASK ON ONE NAMED SOURCE. Fetch §2 Infrastructure's queue a
-             * fetch task ends "Otherwise, queue a global task on the networking task source with
-             * taskDestination and algorithm", and BOTH kinds of reply this register holds arrive that way — a
-             * `fetch()` and an external script's bytes, whose url HTML §8.1.4.2 "Fetching scripts" hands to
-             * that same algorithm. That is why ONE delivery serves both, and why flow_deliver_one_reply takes one
-             * ANSWERED entry rather than choosing between the two kinds: HTML §8.1.7.1 Definitions says "For
-             * each event loop, every task source must be associated with a specific task queue" and §8.1.7.3
-             * Processing model step 2.3 says "Set oldestTask to the first runnable task in taskQueue, and remove
-             * it from taskQueue", so order WITHIN this source is arrival order and is not implementation-defined
-             * at all. (The step number is a sub-number because step 2 — "If the event loop has a task queue with
-             * at least one runnable task" — holds exactly one nested list, and it stood here as a bare `step 3`,
-             * which is that list's third item counted as a peer of the outer one.)
-             * WHICH ANSWERED ENTRY THIS ARM TAKES IS NOT YET THAT ORDER, and the sentence that used to claim it
-             * was is corrected at flow_deliver_one_reply's own header, with the ordinal that would make it true
-             * and the gate schedule its absence shows up in. What the citation above settles is the arm's
-             * POSITION in this ladder, which is what the rest of this paragraph is about, and that argument does
-             * not depend on the choice within the source.
+             * The arm stands above the sequence because the sequence is a set page code extends (chunks, injected
+             * scripts, `javascript:` URLs, operations), so "the sequence is exhausted" could stay false for ever
+             * and exclude replies with no counter; a fixed order over an extensible set is a permanent exclusion.
+             * Its guard is §8.1.4.4's: a task may not begin while the execution context stack is non-empty
+             * (flow_stack_empty, also read by the checkpoint arm). The delivery and the reactions it triggers are
+             * one turn: the step continues into the checkpoint and ends when it drains, still one reply per call
+             * and never two settles without a checkpoint between them.
              *
-             * WHAT IS IMPLEMENTATION-DEFINED IS ONLY WHICH QUEUE, AND IT DOES NOT REACH AS FAR AS THIS ARM USED
-             * TO SIT. §8.1.7.3 step 2.1 is "Let taskQueue be one such task queue, chosen in an
-             * implementation-defined manner", over the queues that have at least one runnable task, and
-             * §8.1.7.5 Dealing with the event loop from other specifications states what that choice is FOR:
-             * "you must choose a task source when queuing a global task; this governs the relative order of
-             * your steps versus others". It is a PREFERENCE and not an exclusion — §8.1.7.1's own worked
-             * example gives keyboard and mouse events "preference over other tasks three-quarters of the time,
-             * keeping the interface responsive but not starving other task queues".
+             * It is ordered against this flow's queued tasks by arrival: `pending_next_deliverable` names the reply
+             * the delivery will take and `flow_pending_ready_next_seq` its stamp, and flow_task_precedes compares
+             * it against the oldest task on the same clock (solver/flow.c's g_work_seq), declining to a strictly
+             * older task. The register can extend itself (a delivery runs page code, which issues the next request,
+             * as in every bundler's chunk waterfall), so delivery-first would starve tasks for ever. Declining is
+             * an order, not a bound: the tasks older than a given reply are fixed at its birth and finite. It
+             * defers to older tasks only, not rows: a task is runnable wherever this comparison is asked, while a
+             * row at the cursor may be a DYN_SCRIPT_SRC parked on its own reply, so deferring to it could deadlock;
+             * `seq_compiles`, which would separate those, is computed below this arm (the row half is the residual
+             * at `g_task_held_deliv`). This is the one delivery in the ladder.
              *
-             * SO THE STANDARD PERMITS EITHER STRICT ORDER AND EXACTLY ONE OF THEM MAY BE TAKEN. This arm stood
-             * BELOW the flow's program sequence and its job queue, reachable only with `script_i >= dyn_n` and
-             * zero queued jobs — and a flow's sequence is not a fixed set: a running program APPENDS rows (a
-             * lazy chunk, an injected `<script>`, a `javascript:` URL, a peer's operation), so "the sequence is
-             * exhausted" is a condition the page's own code can keep false, and the exclusion is then permanent
-             * with no counter anywhere for anybody to read. Networking-first cannot fail the same way, and that
-             * asymmetry is the whole of the decision rather than a taste: the answered set GROWS only when this
-             * flow issues requests and it issues them by running its programs, while every delivery strictly
-             * CONSUMES one entry — so the sequence below is deferred by at most what this flow itself asked
-             * for, and never by an amount the page can extend. §scheduler's razor is what settles which of the
-             * two the engine may take: "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP,
-             * banned".
-             *
-             * AND "WHAT THIS FLOW ITSELF ASKED FOR" IS THIS REGISTER'S LENGTH AND NOT THE FRONTIER'S DEBT,
-             * which is the one reading of the sentence above that a fork could refute and does not. A fork
-             * COPIES an undelivered backlog — engine_sibling_assemble's `pending_fork` — so the naming count
-             * SUMMED OVER THE LIVE FRONTIER is multiplied by branching and is bounded by nothing of the sort,
-             * which is what the paragraph at turn_continues states and what solver/pending.h means by counting
-             * NAMINGS rather than RECORDS. NEITHER OF THOSE IS THIS ARM'S DEFERRAL. What defers the sequence is
-             * the length of THIS register, and a fork duplicates a register instead of lengthening one: the
-             * arm's array is the parent's entry for entry (asserted in engine_sibling_assemble), and every
-             * naming in it was pushed by the prefix the two arms SHARE — the `pending_push(&f->pending, …)`
-             * sites are all this flow's own execution issuing a request, and an arm is its parent's timeline
-             * continued, so an inherited entry IS one this flow's own path asked for. The bound is exactly as
-             * stated above.
-             *
-             * WHICH LEAVES THE ASYMMETRY WHERE IT WAS, ONE STEP MORE PRECISELY. A sequence row is appended for
-             * FREE by a program and no arm above consumes it, so one row keeps `script_i < dyn_n` true and the
-             * exclusion is permanent. A unit of delivery deferral costs the page a request it issued AND a
-             * host answer for it, and THIS arm consumes that entry: `pending_ready` is answered-and-not-a-
-             * synchronous-rendezvous (solver/pending.h), so a page that only ASKS defers nothing here at all.
-             *
-             * AND A PER-MEMBER RATE OVER `live` IS NOT A MEASUREMENT OF EITHER POPULATION: this whole task
-             * ladder is inside `if (!f->frame)`, so a FRAMED member's steps never reach this line and a
-             * backlog divided by the live count is a fraction of a population most of which no ordering could
-             * serve. The split that can be read is solver/flow.h's `deliv_ready`/`deliv_framed`/`deliv_owed`,
-             * argued there and deliberately not restated here.
-             *
-             * AND THE GUARD IS §8.1.4.4 "Calling scripts"'S, NOT A PRIORITY OF ITS OWN. A task may not begin
-             * while the JavaScript execution context stack is non-empty, and a DYN_POS_IMMEDIATE row at the
-             * cursor is exactly that — flow_stack_empty is the one statement of it, read here and by the
-             * checkpoint directly above, so the two arms cannot come to disagree about when a turn may start.
-             * ONE PER STEP, like every other unit of work in this function — and the STEP is now the standard's
-             * unit rather than this ladder's rung. §8.1.7.3 step 2.6 performs the task's steps and step 2.8
-             * performs a microtask checkpoint, in ONE iteration of step 2, so the delivery and the reactions it
-             * triggers are one turn and the step ends when the checkpoint has drained. It used to end HERE, at
-             * 2.6, with 2.8 spread one job per subsequent pick: one iteration of step 2 cost 1 + N picks of a
-             * frontier that shares its picks among every member, which is the arithmetic that made the delivery
-             * debt unpayable rather than merely large. What is NOT changed is which entry is taken or how many:
-             * still exactly one reply per call, still never two settles without a checkpoint between them —
-             * that ordering is flow_deliver_one_reply's own invariant and this continuation is what carries the
-             * flow to the checkpoint that discharges it, in front of any second delivery. */
-            /* AND THIS ARM IS NOT WHY THE DOCUMENT'S LATER PROGRAMS DO NOT RUN, WHICH IS THE READING A
-             * READER OF `deepest` ARRIVES AT AND THE ONE THIS PARAGRAPH INVITES. Standing above the sequence,
-             * it is the visible candidate for a frontier whose `deepest` freezes, and the per-arm LIFETIME
-             * step histogram refutes it outright rather than by argument: measured on two smoke runs at
-             * stamped artifacts, `resume-program` takes 1250 of 1435 steps in one and 643 of 763 in the
-             * other, this arm takes 101 and ZERO, and `deepest` reads the SAME in both — so the run in which
-             * this arm never executed at all had identical reach. Read `stepUnitRuns` beside @COLD's
-             * `live`/`framed` before spending a lane here: those two converge to within ten members at every
-             * census of every run measured, and the whole ladder below `if (!f->frame)` is unreachable for the
-             * population they name, so no ordering of the arms inside it can be its first cause.
-             * AND THE BOUND THE PARAGRAPH ABOVE RESTS ON IS COUNTED IN ENTRIES AND PAID IN DISPATCHES, which
-             * is a correction to the argument and not to the position. "Deferred by at most what this flow
-             * itself asked for" is exact about the ENTRIES: a fork duplicates a register rather than
-             * lengthening one, and an inherited naming was pushed by the prefix the arms share. What it does
-             * not say is that the deferral is spent one entry per DISPATCH, while a fork also duplicates the
-             * member that has to spend them — so a branching frontier divides one shared pick budget among
-             * every arm, and a register whose length exceeds a member's whole lifetime dispatch count defers
-             * the sequence for that member's entire life. The bound holds and does not bind. */
-            /* WHEN THE REPLY THIS ARM WOULD TAKE WAS ASKED FOR, AND WHETHER ANY TASK THIS FLOW HOLDS IS
-               OLDER — the reply register joining the arrival order that already holds this flow's program
-               sequence and its job queue. flow_task_precedes is asked with the REPLY'S stamp rather than a
-               row's, which is the same comparison the sequence arm below makes against the same clock, so
-               there is one ordering here and not two.
-               AND IT IS THE REPLY THE DELIVERY WILL ACTUALLY TAKE, WHICH THIS LINE FIRST GOT WRONG. It read
-               THE OLDEST REPLY THIS FLOW CAN TAKE, and the reader behind it walked the deliverable set for the
-               MINIMUM stamp while flow_deliver_one_reply took the FIRST by index — two answers to `which reply
-               is next`, which `pending_remove` being a swap-remove makes DIFFERENT answers after any
-               mid-register removal, so the arm ordered on one reply and the settle took another. Both now read
-               ONE selector, `pending_next_deliverable`; solver/pending.c carries the measurement and the
-               retired reasoning, and the assert that stood on the imagined ordering is deleted there because
-               the state it fired on is one the register's own removal routinely produces.
-               WHY THIS ARM NEEDED IT. The arm ran on `stack empty && a reply is ready` and nothing else, and
-               a register entry carried no stamp, so a delivery preceded every row and every queued callback
-               of the flow whatever their ages — stated at `g_task_held_deliv` as the NOT COVERED clause of
-               the arrival chain, "a flow whose reply register is never empty runs no task and starts no
-               program of its own however old either is". A real application page's register is never empty:
-               it answers one reply by asking for the next. MEASURED over the 57 corpus census rows at
-               5357ffa, `deliver-one-reply` runs 99-596 steps against `run-a-task` 0-4 on every attributed
-               real-site row, while the local fixture — whose register empties — runs 40.7% of its steps in
-               the task arm with `jobsReady` 0. The product consequence is `epXhrAskOfferedLife` ZERO against
-               379 `send()` calls on one such page: the address of every request the page made was recorded by
-               a closure enqueued as a TASK, and no task ran.
-               AND IT REFUTES THE ARGUMENT RECORDED FOR THE OLD ORDER, which is rewritten at the deleted
-               bottom arm below rather than deleted (§A-FIX-THAT-RETIRES-AN-ARGUMENT). That argument was that
-               delivery-first is free of permanent exclusion because a flow's sequence is a set its own
-               programs extend and its answered set is one every delivery consumes — a draining set cannot
-               starve a growing one. The premise holds for the SEQUENCE and fails for the REGISTER: a delivery
-               runs page code, and page code pushes pending entries, so the answered set is extended by the
-               very deliveries that consume it. That is the chunk waterfall of every bundler there is.
-               IT IS THE TASK QUEUE AND DELIBERATELY NOT THE SEQUENCE, and the reason is a DEADLOCK rather
-               than a preference. A task is runnable wherever this comparison is asked — flow_task_precedes
-               answers 0 under a non-empty stack and under an outstanding microtask, and within those the task
-               arm takes it unconditionally — so deferring to an older task always makes progress. A ROW at
-               the cursor need not be runnable: a DYN_SCRIPT_SRC row is parked on its OWN reply, so an arm
-               that deferred to an older row could defer to a row waiting for a delivery that this arm had
-               just declined to make, with a different, younger reply the only ready one. `seq_compiles` is
-               the predicate that would separate those and it is computed two hundred lines BELOW this arm,
-               which is why the row half is a NAMED RESIDUAL and not an omission — stated after the arm.
-               NO SECOND SITE, which is the one thing the bottom arm's own note forbids by name: this is the
-               ONE delivery in the ladder and it keeps its position above the sequence. What changed is that
-               it now DECLINES to a strictly older task and falls through, which is an ORDER and not a bound —
-               nothing is capped, counted down or decided against, and the set of tasks older than a given
-               reply is fixed at that reply's birth and finite, so every reply is delivered after a bounded
-               amount of work that already existed when it was asked for (§NO BOUNDS, and solver/flow.c's
-               `g_work_seq` banner states the same argument for the two carriers it already ordered). */
+             * The deferral it imposes on the sequence is bounded by this register's length, not the frontier's
+             * debt: a fork duplicates a register (asserted in engine_sibling_assemble), so every inherited naming
+             * was pushed by the prefix both arms share. That bound is in entries and is spent one per dispatch,
+             * while a fork also divides the dispatch budget among arms, so it holds without binding a member's
+             * whole life. A per-member rate over `live` measures neither population (framed members never reach
+             * this ladder); read solver/flow.h's `deliv_ready`/`deliv_framed`/`deliv_owed`, and `stepUnitRuns`
+             * beside @COLD's `live`/`framed`, before blaming this arm for a frozen `deepest`. */
             uint64_t deliv_seq = flow_stack_empty(f) ? flow_pending_ready_next_seq(f) : 0;
             if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
-                /* …AND WHETHER THIS ARM JUST TOOK A STEP THE FLOW'S OWN TASK QUEUE COULD HAVE HAD — see
-                   `g_task_held_deliv`, whose block states why a non-empty queue at this line is a TASK and
-                   what the row is the size of. RAISED BEFORE THE DELIVERY, because the settle below enqueues
-                   this reply's reactions and a read taken after it would count a queue this arm had just
-                   lengthened. The microtask half is ASSERTED and not assumed: the checkpoint arm's guard is
-                   exactly `flow_job_microtask && flow_stack_empty` and it stands above this line, so with the
-                   stack empty here a queued job is a task.
-                   THE ROW IT COUNTS IS NOW A NARROWER POPULATION AND ITS LEGEND SAYS SO: a queue standing
-                   here holds no task OLDER than this delivery, because the arm's own condition excluded one.
-                   What it still sizes is the arm going in front of a YOUNGER task, which is the arrival order
-                   working rather than the exclusion it used to measure. */
+                /* Whether this arm took a step the flow's task queue could have had (`g_task_held_deliv`), raised
+                   before the delivery, whose settle lengthens the queue. With the stack empty a queued job is a task:
+                   the checkpoint arm above is guarded by exactly `flow_job_microtask && flow_stack_empty`, asserted.
+                   Since the condition excluded an older task, this counts the arm going ahead of a younger one. */
                 DCHECK(!flow_job_microtask(f),
                        "the reply-delivery arm was reached with an empty execution context stack and a "
                        "microtask outstanding — the checkpoint arm's guard is exactly those two facts and it "
@@ -7886,62 +7722,37 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 if (flow_job_pending(f) > 0) g_task_held_deliv++;
                 g_step_unit = STEP_UNIT_DELIVER_REPLY;
                 flow_deliver_one_reply(ctx, f);   /* §8.1.7.3 step 2.6 */
-                /* …AND ITS CHECKPOINT, IN THE SAME TURN. The settle enqueued this reply's reaction jobs, which
-                   are step 2.8's, and the checkpoint arm stands above every task arm — so continuing runs them
-                   and nothing else, and the `turn_task_done` return above ends the step when they are gone.
-                   A settle that PARKED is not carried across: the resume arm at the top of the loop takes it
-                   and returns, which is the same suspension it has always been. */
+                /* And its checkpoint, in the same turn: the settle enqueued this reply's reactions (step 2.8's), the
+                   checkpoint arm stands above every task arm, and the `turn_task_done` return ends the step when they
+                   are gone. A settle that parked is taken by the resume arm at the top of the loop, which returns. */
                 turn_task_done = 1;
                 if (turn_continues()) continue;
                 return 0;
             }
-            /* THE FLOW'S SEQUENCE, AND THERE IS ONLY ONE OF THEM. Two arms stood here: the SESSION document's
-               static scripts, read out of a borrowed `bodies` array at `script_i`, and then this flow's own
-               rows at `script_i - n`. They differed in nothing a program cares about — both are HTML §4.12.1.1
-               positions of some document of this agent, both can be inline or external, both carry a type and
-               an address — and the split cost this engine the one position §4.12.1.1's "immediately execute the
-               script element" needs (engine_queue_into). One arm now, over one table. */
+            /* The flow's sequence, one table: every row is an HTML §4.12.1.1 position of some document of this agent,
+               inline or external, with a type and an address, so §4.12.1.1's immediate interposition has a position
+               (engine_queue_into). */
             if (f->script_i < f->dyn_n) {
                 body = dyn_body_text(f->dyn[f->script_i]);
                 body_n = dyn_body_len(f->dyn[f->script_i]);
                 kind = flow_dyn_kind(f);
-                /* THE SEQUENCE HOLDS ONLY EXECUTABLE SCRIPTS — engine_queue_into asserts it at the one site
-                   that creates a row, and this is the read that would otherwise have to pick an algorithm for a
-                   program that has none. */
+                /* The sequence holds only executable scripts (engine_queue_into asserts it where rows are made). */
                 DCHECK(script_type_executes(stype),
                        "a row of this flow's script sequence carries a type that does not execute — every row "
                        "is CLASSIC or MODULE, so a third answer means the type column was never written");
                 if (kind == DYN_SCRIPT_SRC) {
-                    /* AN EXTERNAL SCRIPT OF SOME DOCUMENT OF THIS AGENT, AT ITS POSITION. The entry holds its
-                       ADDRESS — §4.12.1.1's encoding-parsed url, never the raw markup attribute, because the
-                       host is a different zone with a different base and would resolve a relative `src` against
-                       its own — so the flow WAITS here: HTML §4.12.1.1 fixes this script's position against the scripts
-                       written around it, and running what comes after a bundle before the bundle is a different
-                       program. The reply REPLACES this entry and the next pass compiles it.
-                       WHAT THIS ARM NO LONGER DOES IS ISSUE THE FETCH. HTML §4.12.1.1 "Processing model" step
-                       33 fetches when the element is PREPARED and step 35 only decides where the result runs,
-                       so the request went out when the row was created (engine_queue_into) and this arm is now
-                       purely HTML §4.12.1.1's ORDER: every external script of this document is already on the wire,
-                       and the flow stops here because THIS row's bytes have not come back.
-                       A REPLY THAT HAD ALREADY ARRIVED WAS DELIVERED BEFORE THIS ROW WAS EVEN READ, so the
-                       second delivery that stood here is gone rather than moved. It existed because this arm
-                       was one of only two places a reply could be taken, and it guarded against parking for
-                       ever on a URL the host had answered; the networking task source's arm now runs above the
-                       whole sequence, for every position of it and not only for a flow standing at an external
-                       row, and reaching this line is therefore already the statement that nothing is
-                       deliverable. Asserted rather than assumed, because the two guards are the same question
-                       asked at two rungs and a change to either one would otherwise re-open that park
-                       silently. */
+                    /* An external script of some document of this agent, at its position. The row holds its address
+                       (§4.12.1.1's encoding-parsed url, never the raw attribute, which the host would resolve
+                       against its own base), and the flow runs no program of its own here: §4.12.1.1 fixes this
+                       script's position against the scripts around it. The request went out when the row was created
+                       (step 33 fetches at prepare; step 35 only decides where the result runs), and an answered reply
+                       would already have been delivered by the networking arm above, which the dev block asserts. */
 #if APICLIENT_DEV
                     {
-                        /* READ OUTSIDE THE CONDITION AND UNDER THE DEV GUARD: pending_ready reads the
-                           register's `length`, which INTERNS AN ATOM, and check.h forbids a side effect inside
-                           a DCHECK — the same rule and the same shape as engine_host_take's
-                           pending_extra_count. flow_stack_empty is asked beside it because it is the other
-                           half of the arm above's conjunction: a DYN_SCRIPT_SRC row is queued DYN_POS_APPEND
-                           at both of the two sites that create one, so an IMMEDIATE row can never be the way
-                           this line was reached, and if it ever is the assert says so here rather than the
-                           flow parking on a paid request. */
+                        /* Read outside the condition, under the dev guard: pending_ready reads the register's
+                           `length`, which interns an atom. flow_stack_empty is the other half of the networking
+                           arm's conjunction; a DYN_SCRIPT_SRC row is queued DYN_POS_APPEND at both sites that
+                           create one, so an immediate row cannot be how this line was reached. */
                         int ready = flow_pending_ready(f);
                         DCHECK(flow_stack_empty(f) && !ready,
                                "a flow reached an external script row holding an answered reply — the "
@@ -7949,14 +7760,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                                "entry standing here means that arm's guard and this row's have stopped being "
                                "the same question, and this flow is about to report itself owed a reply the "
                                "host has already paid");
-                        /* AND THE REQUEST §4.12.1.1 STEP 33 OWED FOR THIS ROW IS OUTSTANDING, WHICH IS THE
-                           WHOLE OF WHAT PREPARE-TIME FETCHING BUYS AND THE ONE THING THIS ARM CAN STILL CHECK.
-                           The park is made at the row's creation and the entry names the row by `dyn_id`, so a
-                           flow standing here with no entry naming this row is a flow that will report itself
-                           HOST-OWED over a request no join can list and no host will ever be shown — the
-                           §7.5.10 removal walk taking an entry without its row, or a row reaching this
-                           sequence by some route that is not engine_queue_into. It is a walk and it is dev
-                           only, for the reason the read above is. */
+                        /* The request step 33 owed for this row is outstanding: the park is made at the row's
+                           creation and names the row by `dyn_id`, so a flow here with no entry naming the row would
+                           report itself host-owed over a request nobody can list (a §7.5.10 removal that took the
+                           entry without the row, or a row from some route other than engine_queue_into). A dev-only
+                           walk. */
                         int parked = 0;
                         for (int j = 0, m = pending_count(f->pending); j < m; j++) {
                             JSValue pe = pending_entry(f->pending, j);
@@ -7974,220 +7782,90 @@ static int flow_step(JSContext *ctx, Flow *f) {
                                "reply the host is never asked for");
                     }
 #endif
-                    /* AND THE FLOW DOES NOT STOP HERE — IT SPINS THE EVENT LOOP, which is the whole of this
-                       diff and is the opposite of what this arm used to do.
-                       A PARSER-BLOCKING SCRIPT BLOCKS THE TOKENIZER AND NOTHING ELSE. HTML §13.2.6.4.8 "The 'text' insertion mode" says
-                       it in one sentence: "Block the tokenizer for this instance of the HTML parser, such
-                       that the event loop will not run tasks that invoke the tokenizer." Every task that
-                       does NOT invoke the tokenizer still runs — a queued callback, a delivered message, a
-                       `setTimeout(f, 0)` an earlier script of this same document set, a rendering
-                       opportunity — and the same section reaches that state by spinning the event loop,
-                       whose expansion HTML §8.1.7.3 "Processing model" gives in its own steps and ends:
-                       "This causes the event loop's main set of steps or the perform a microtask checkpoint
-                       algorithm to continue." XML says the identical thing for its own parser at HTML §14.2
-                       "Parsing XML documents" — block it "such that the event loop will not run tasks that
-                       invoke it" — so this is one rule with two statements of it and not a parsing quirk.
-                       AND THIS FILE ALREADY SAID SO, AT THE DECLARATION OF THE VERY ROW THIS ARM STANDS ON.
-                       DYN_SCRIPT_SRC's own entry in the DynKind documentation states the rule correctly and
-                       in the standard's words, cites the same section, and then — in the next clause of the
-                       same paragraph — says "the flow WAITS at it (flow_step below)". The declaration was
-                       right and the enforcement four thousand lines down did the opposite of what the
-                       declaration describes: it did not block the tokenizer, it stopped the event loop.
-                       THAT IS THE ONE FAILURE NO INSTRUMENT HERE CAN SEE. The citation resolves, the title
-                       matches, the quotation is verbatim — every channel of the citation auditor reads clean,
-                       because the prose is not wrong about the STANDARD, it is wrong about what the code
-                       beneath it does. §A-FILE-MAY-NOT-BE-ITS-OWN-AUDITOR names the shape and names the tell,
-                       which held exactly: the paragraph is unusually good, so scrutiny stopped at it. The
-                       reading to carry is that a well-argued declaration is a CLAIM ABOUT THIS TREE and is
-                       checked by reading the enforcement, never by re-reading the argument.
-                       WHAT THIS ARM USED TO DO WAS `return FLOW_STEP_OWED` AT THIS LINE, WHICH STOPPED THE
-                       DOCUMENT'S EVENT LOOP. A flow IS this document's timeline, and the OWED verdict takes
-                       a member out of the pick until a HOST EVENT clears it — so one `<script src>` in the
-                       air excluded this document's queued tasks, its lifecycle stages, its due timers, its
-                       rendering opportunities and the orphan surface for as long as the bytes took, and a
-                       document that keeps arranging subresource loads is excluded for as long as it does
-                       that. §scheduler's razor names what that is: a flow that is starved or forgotten is a CAP, and it
-                       is banned — quoted verbatim four times in this file already, and once is enough.
-                       The exclusion was not a preference between
-                       task sources that HTML §8.1.7.3 "Processing model" step 2.1 leaves open — it was a source being unreachable,
-                       which HTML §8.1.7.1 "Definitions" — its own worked example rules out in the same breath as it
-                       grants the freedom, "keeping the interface responsive but not starving other task
-                       queues".
-                       SO THE ROW IS RECORDED AS A WAIT AND THE LADDER BELOW IS ASKED. The flow still runs no
-                       program of its own: HTML §4.12.1.1 "Processing model" fixes this script's position against the scripts written
-                       around it, `seq_compiles` stays 0, and the cursor does not move. If every source below
-                       answers no, the OWED arm reports the flow host-owed — the same rest this line used to
-                       reach directly, and the same verdict.
-                       AND THE RECORD THE HOST REALLY DOES OWE STILL NAMES ITSELF, one rung down rather than
-                       here. The argument for naming it has not changed and is why `seq_awaits` is carried
-                       instead of being recomputed: a step that performs no work used to leave the PREVIOUS
-                       arm's name standing, so the census reported a member parked on a fetch under
-                       `run-a-task` or `microtask-checkpoint`, which is the one attribution an instrument
-                       separating waiting from working must not get wrong. What changed is only WHERE the
-                       name is set, because this line no longer decides that the flow rests. */
+                    /* And the flow does not stop here; it spins the event loop. A parser-blocking script blocks the
+                       tokenizer and nothing else: HTML §13.2.6.4.8 The "text" insertion mode, "Block the tokenizer
+                       for this instance of the HTML parser, such that the event loop will not run tasks that invoke
+                       the tokenizer", reached by spinning the event loop, whose expansion in §8.1.7.3 ends "This
+                       causes the event loop's main set of steps or the perform a microtask checkpoint algorithm to
+                       continue" (HTML §14.2 Parsing XML documents says the same for XML). Queued callbacks,
+                       delivered messages, due timers and rendering opportunities still run. So the row is recorded
+                       as a wait (`seq_awaits`), `seq_compiles` stays 0, the cursor stays, and the ladder below is
+                       asked; if every source declines, the OWED arm reports the flow host-owed. `seq_awaits` also
+                       carries the step's name to that arm, so a member parked on a fetch is not reported under the
+                       previous arm's name. */
                     seq_awaits = 1;
                 }
-                /* HTML §4.12.1.1 "Processing model", "execute the script element" STEP 4 — "If el's result is
-                   null, then fire an event named error at el, and return". This row IS an element whose result
-                   is null (flow_deliver_one_reply's null arm made it one), and reaching it is this engine's
-                   "execute the script element" for that element's position: the cursor advances, the switch on
-                   el's type in step 6 is never reached, and NOTHING RUNS. HTML §4.12.1.1's order is kept because the
-                   position is kept — an element that failed to load still holds its place against the scripts
-                   written around it, which is the whole reason the failure is a row.
-                   THE FIRE IS A QUEUED ELEMENT TASK AND THE STANDARD'S STEP 4 IS A BARE SYNCHRONOUS FIRE, AND
-                   THAT DIFFERENCE IS NAMED RATHER THAN HIDDEN. §4.12.1.1 queues an element task on the DOM
-                   manipulation task source at its three `src`-branch sites and NOT here — step 4 fires
-                   directly, because `onComplete` already runs from the networking task. This engine cannot
-                   fire directly from a C seam: the listener list is the PAGE's, so the dispatch runs the
-                   page's code and must have a flow base under it (core/html/html_script.h), and a task is how
-                   a C seam gets one. WHAT IS NOT COVERED is therefore the ORDER between this `error` and
-                   anything else queued in the same turn: the standard delivers it inside this execution and
-                   this delivers it as the next task. WHAT THE NEXT DIFF BUILDS is a step-machine entry to
-                   `execute the script element` that flow_step DRIVES at the row rather than queues, so step 4
-                   and step 8's `load` are both bare fires of the machine that is executing — which is the same
-                   thing §4.12.1.1's step 8 already needs and this engine does not have either. HOW ITS ABSENCE
-                   SHOWS: a page that queues a task from the same turn the load failed in — `setTimeout(f,0)`
-                   beside a failing `<script src>` — observes `f` before `onerror` where a browser runs
-                   `onerror` first. */
+                /* HTML §4.12.1.1 Processing model, "execute the script element" step 4: "If el's result is null, then
+                   fire an event named error at el, and return". This row is an element whose result is null
+                   (flow_deliver_one_reply's null arm), so the cursor advances, step 6's switch is never reached and
+                   nothing runs; the failed element keeps its place against the scripts around it.
+                   Named residual. Not covered: step 4 fires synchronously, but this queues an element task (the
+                   listener list is the page's, so the dispatch needs a flow base, core/html/html_script.h), so the
+                   order between this `error` and anything queued in the same turn differs. Next diff builds: a
+                   step-machine entry to "execute the script element" that flow_step drives at the row, making step 4
+                   and step 8's `load` bare fires. Absence shows as: a page with `setTimeout(f,0)` beside a failing
+                   `<script src>` observing `f` before `onerror`, where a browser runs `onerror` first. */
                 if (kind == DYN_SCRIPT_FAILED) {
                     DCHECK(f->dyn_el[f->script_i] != NULL,
                            "a failed-load row carries no element — the row is created only by the null arm of "
                            "flow_deliver_one_reply, which asserts the element on both of its two paths, and "
                            "§4.12.1.1's step 4 fires `error` AT el");
-                    /* THE ELEMENT'S OWN DOCUMENT'S REALM, never the flow's ambient one. The task's callee is a
-                       C function and a C function runs in the realm that DEFINED it, so a task minted in the
-                       wrong realm fires this document's `error` against another document's global — and an
-                       instance is an ORIGIN-KEYED AGENT CLUSTER, so a child navigable's script element is an
+                    /* The element's own document's realm, never the flow's ambient one: the task's callee is a C
+                       function running in the realm that defined it, and a child navigable's script element is an
                        ordinary row of this same sequence. */
                     html_script_queue_error(doc_realm(f->dyn_doc[f->script_i]), f->dyn_el[f->script_i]);
                     g_step_unit = STEP_UNIT_SCRIPT_LOAD_FAILED;
-                    /* AND THIS IS THE ONE ARM OF THE FIVE THAT LEAVES A ROW NO COMPILE EVER SAW, which is
-                       why `g_deepest_left` exists and is raised here rather than at the compile: step 4 ran
-                       this row's whole algorithm and started nothing, so the document has REACHED index
-                       `script_i` and STARTED nothing at it. See g_deepest_left. */
+                    /* The one arm of the five that leaves a row no compile saw: step 4 ran the row's whole algorithm
+                       and started nothing, which is what `g_deepest_left` exists to record. */
                     ENGINE_LEAVE_ROW(f);
                     return 0;
                 }
-                /* AND A ROW THAT REACHES THE COMPILE HOLDS A PROGRAM, not an address. TWO branches above are
-                   what make that true and this is what says so, because a body that is still a URL would be
-                   compiled as one: a DYN_SCRIPT_SRC row holds the flow until its reply arrives, and a
-                   DYN_SCRIPT_FAILED row — whose body is that same address, kept as the account of what did not
-                   load — takes §4.12.1.1's step 4 and never reaches a compile at all.
-                   THE FIRST OF THOSE TWO NO LONGER RETURNS, so what used to be a property of the control flow
-                   is now a read: `seq_awaits` is the SRC branch's whole effect, and this test is the one place
-                   the difference between the two branches above has to be spelled out rather than inherited.
-                   The condition is also what carries the assertion's own premise — a body that is an ADDRESS
-                   is non-NULL, so without the guard this DCHECK would PASS on the row it is written about. */
+                /* A row that reaches the compile holds a program, not an address: a DYN_SCRIPT_SRC row only sets
+                   `seq_awaits`, and a DYN_SCRIPT_FAILED row (whose body is its address, the account of what failed)
+                   took step 4 above. The guard also carries the assertion's premise: an address body is non-NULL, so
+                   without it the DCHECK would pass on the row it is written about. */
                 if (!seq_awaits) {
                     DCHECK(body != NULL,
                            "a row of this flow's sequence reached the compile with no body — a row is created "
                            "with one (engine_queue_into asserts it) and the two kinds whose body is an ADDRESS "
                            "rather than a program are both taken by the branches directly above this line");
-                    /* AND THIS IS THE ONE STATE THAT FALLS THROUGH TO THE COMPILE, which used to be said by
-                       the absence of a `return` and is now said by a value the ladder below reads. */
+                    /* The one state that falls through to the compile, recorded as a value the ladder below reads. */
                     seq_compiles = 1;
                 }
             }
-            /* THE LADDER, AND WHAT IT IS ASKED ON — the correction this diff exists for.
+            /* The ladder and what it is asked on. The arms are bound to `seq_compiles` ("a program of this flow's
+             * own sequence starts on this step"), not to `f->script_i < f->dyn_n`: the sequence is a set page code
+             * extends (a lazy chunk, an injected `<script>`, a `javascript:` URL, a peer's operation), so "the
+             * cursor is past the last row" could stay false for ever and exclude every source below with no
+             * counter. A step that starts a program has done its unit (HTML §8.1.7.3 Processing model step 2 runs
+             * one task per iteration), and every arm below returns, so one step cannot both run a task and compile.
              *
-             * IT USED TO BE `else if` AGAINST `f->script_i < f->dyn_n`, so every arm below inherited a
-             * precondition written for the arm above them: a flow ran a queued TASK, reached DOMContentLoaded
-             * or `load`, fired a due timer, took a rendering opportunity, seeded an orphan drive or finished
-             * ONLY with its cursor past the last row of its own sequence. That `else` was never an ordering
-             * decision anybody made — the sequence arm hands `body`/`body_n`/`kind` to the compile two
-             * hundred lines below and therefore may not return, and the `else` is what stops the arms below
-             * from consuming the step on the way there. Ten arms inherited a precondition written for one.
+             * Which of the two carriers goes first is decided by arrival. §8.1.7.3 step 2.1 chooses a queue "in an
+             * implementation-defined manner", and §8.1.7.1 Definitions bounds that freedom in its own example
+             * ("keeping the interface responsive but not starving other task queues"). Each carrier extends the
+             * other (a task runs page code that appends rows; a program enqueues tasks), so either strict order
+             * could exclude one for ever; arrival order cannot, since an item's stamp never changes and the set
+             * ahead of it is fixed at its birth and finite. An order, not a bound. The stamps are one clock's
+             * (solver/flow.c's g_work_seq: a row's `dyn_run`, a callback's written at flow_job_push), which also
+             * discharges §8.1.7.1's one-source-one-queue rule for sources that reach both carriers (NETWORKING,
+             * NAVIGATION_AND_TRAVERSAL), since within one source arrival order is queue order;
+             * core/timing/task_source.h records the narrower repair.
              *
-             * AND THE SEQUENCE IS A SET THE PAGE'S OWN CODE EXTENDS — a lazy chunk, an injected `<script>`, a
-             * `javascript:` URL, a peer's operation — so "the cursor is past the last row" is a condition page
-             * code can hold false for the rest of the session, and every source below was then excluded with
-             * no counter anywhere for anybody to read. §scheduler's razor is what a permanent exclusion is:
-             * "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP, banned".
-             *
-             * WHAT REPLACES IT IS ONE READING RATHER THAN A REORDER: the arms are in the SAME order, each one
-             * keeps its own position argument at its own site, and the only thing that changed is the question
-             * the chain is asked on. `seq_compiles` is `a program of this flow's own sequence STARTS on this
-             * step`, and a step that starts one has done its unit of work — HTML §8.1.7.3 "Processing model"
-             * step 2 runs ONE task per iteration — so the arms below rightly do not also run. HOLDING a row
-             * the flow cannot run is not that, and it is the state the old condition could not tell apart.
-             *
-             * AND THAT ARGUMENT IS ABOUT ONE STEP AND WAS BEING SPENT ON THE ORDER, WHICH IS THE CORRECTION
-             * THIS DIFF EXISTS FOR. "Step 2 runs ONE task per iteration" says a step that starts a program may
-             * not also run a task; it says NOTHING about which of the two a step should start, and the `else`
-             * chain was answering both — one construct, two questions, which is the shape that hides an
-             * exclusion. The one-unit-per-step half needs no `else` at all: every arm below RETURNS, so a step
-             * that runs a task cannot also compile. What the `else` was doing on its own account was fixing a
-             * total order, and a fixed order over a set the page EXTENDS is a permanent exclusion.
-             *
-             * SO THE CHAIN NOW BINDS TO ARRIVAL, WHICH IS §8.1.7.3 STEP 2.1's CHOICE MADE SO IT CANNOT STARVE.
-             * HTML §8.1.7.3 "Processing model" step 2.1 chooses a task queue "in an implementation-defined
-             * manner" among those with at least one runnable task, and HTML §8.1.7.1 "Definitions" says where
-             * that freedom stops in its own worked example: a user agent may prefer a source "three-quarters
-             * of the time, keeping the interface responsive but not starving other task queues". Both of
-             * this flow's carriers are extended by the other — a task runs page code and page code appends
-             * rows; a program enqueues tasks — so NEITHER strict order is free of permanent exclusion and
-             * picking the other one would have moved the defect rather than ended it. Arrival order is free of
-             * it by construction: a work item's stamp never changes, so the set of items in front of it is
-             * fixed at its birth and finite, and nothing the page appends afterwards can get ahead of it.
-             * Nothing here is capped, counted down or decided against, which is §NO BOUNDS' own line between an
-             * ORDER and a BOUND.
-             * THE STAMPS ARE ONE CLOCK'S (solver/flow.c's g_work_seq): a row's is its `dyn_id` and a queued
-             * callback's is written at flow_job_push. That also discharges §8.1.7.1's one-source-one-queue rule
-             * for a source that reaches BOTH carriers — NETWORKING and NAVIGATION_AND_TRAVERSAL do, which is a
-             * grep for the enumerator and not a claim here — because within one source arrival order IS queue
-             * order however each item is carried. core/timing/task_source.h states the repair as "a source is
-             * in ONE queue"; that is one repair, it is narrower than this one, and its own text is where the
-             * difference is recorded.
-             *
-             * WHAT THIS DOES NOT REACH IS THE ARM ABOVE THE SEQUENCE, AND SAYING SO IS PART OF LANDING IT.
-             * MET IN PART, AND THE RETIRED WORDING IS KEPT BECAUSE A READER WHO MEETS THE ARM WILL RE-DERIVE
-             * THE WHOLE OF IT: it said the delivery arm stands above this whole ladder and is not in
-             * the arrival race -- a reply register entry carries no stamp, so a delivery still precedes
-             * every row and every job of the flow whatever their ages -- that its position rested on a bound
-             * about the SEQUENCE which says nothing about the job queue, which a delivery EXTENDS; NOT
-             * COVERED, a flow whose reply register is never empty runs no task and starts no program of its
-             * own however old either is; and WHAT THE NEXT DIFF BUILDS, the same stamp on a `pending` entry
-             * at the push (solver/pending.h), so all three carriers are one arrival order. UNQUOTED
-             * DELIBERATELY, and it is the reason to copy rather than a style note: this is THIS TREE's own
-             * retired wording, and a double-quoted run standing after a spec citation enters that citation's
-             * quotation channel and is judged against the STANDARD, so quoting our own prose there reports
-             * as a fabricated spec quotation.
-             * THE STAMP IS BUILT AND THE CLAUSE IS NOW HALF TRUE, which is the honest state and is why the
-             * words stay: PEND_WORK_SEQ is minted from this same clock at every one of the six pushes, and
-             * the delivery arm asks flow_task_precedes with the REPLY'S stamp — so such a flow DOES run a
-             * task that arrived first, and the `runs no task` half is false. The `starts no program` half
-             * STANDS: the arm still precedes every row of the sequence whatever its age.
-             * AND THE ROW HALF IS NOT AN OMISSION, IT IS A DEADLOCK — stated at the arm and repeated here
-             * because this is where a reader looking for the missing third carrier arrives. A task is
-             * runnable wherever the comparison is asked; a DYN_SCRIPT_SRC row at the cursor is parked on its
-             * OWN reply, so an arm that yielded to an older row could yield to a row waiting on a delivery
-             * it had just declined, with a younger reply the only ready one and nothing able to move.
-             * `seq_compiles` is the predicate that separates a row the flow HOLDS from one it can RUN, and it
-             * is established two hundred lines below the arm.
-             * WHAT THE NEXT DIFF BUILDS: the oldest-runnable-row stamp computed ABOVE the delivery arm —
-             * which means hoisting the kind walk that sets `seq_compiles`, not duplicating it, since a second
-             * spelling of "can this row start" is the two-implementations seam §C-stack names. HOW ITS
-             * ABSENCE SHOWS: a census whose `taskHeldDelivLifetime` is near zero (the task half working)
-             * while `deliver-one-reply` is still most of a member's steps and `programCursors` does not
-             * advance — the arm no longer taking the step a task owned and still taking the one a row did. */
-            /* WHICH OF THE TWO CARRIERS HOLDS THE OLDER WORK ITEM, asked ONCE and only where there is a row to
-               compare against: `seq_compiles` is what established that the cursor names a row this step could
-               start, and it is the caller's to establish because flow_task_precedes has no way to know that a
-               row the flow is merely HOLDING is not one it can run. Every refusal inside that predicate is a
-               rule of the standard rather than a guard, and each is argued at its definition. */
-            /* THE ROW'S ARRIVAL AS A RUNNABLE WORK ITEM, NEVER ITS NAME — `dyn_run` and not `dyn_id`, which is
-               the correction this line exists for and the one the NOT COVERED clause above did not reach. A
-               root `<script src>` is inserted by the seed before any program runs, so its NAME is one of the
-               document's lowest numbers while its READINESS is whenever the network answered; asked by name,
-               `s < row_seq` was NO for every job of the flow for as long as any seed row stood at the cursor,
-               and the arrival order argued at this ladder's head reproduced for the seed's own rows exactly the
-               permanent exclusion it was landed to end. Measured: a real application page ran 5254 steps with
-               `run-a-task` and `microtask-checkpoint` at ZERO and 35 root programs, while a one-root-row page on
-               the same artifact exhausted its cursor and ran its tasks. See flow.h's `dyn_run`.
-               ZERO IS NO STAMP AND IS A PLUMBING HOLE RATHER THAN A ROW — the clock starts at 1, so a live row
-               reaching the cursor with 0 means one of the ten columns was grown, forked, shifted or compacted
-               without this one, which is the only way this change can go wrong and is not a state any input can
-               reach. Asserted HERE because this is where a missed site first decides something. */
+             * The delivery arm above the sequence joins the order for tasks (PEND_WORK_SEQ, minted at every push,
+             * and flow_task_precedes asked with the reply's stamp), so a flow whose register never empties still
+             * runs a task that arrived first. It still precedes every row, because a row at the cursor may be a
+             * DYN_SCRIPT_SRC parked on its own reply (deferring to it could deadlock) and `seq_compiles` is
+             * computed only below that arm; the residual is at `g_task_held_deliv`. Its next diff hoists the kind
+             * walk that sets `seq_compiles` rather than spelling "can this row start" twice. Absence shows as: a
+             * census with `taskHeldDelivLifetime` near zero while `deliver-one-reply` is most of a member's steps
+             * and `programCursors` does not advance. */
+            /* Which carrier holds the older work item, asked only when there is a row this step could start
+               (`seq_compiles`, which flow_task_precedes cannot establish itself); each refusal inside that predicate
+               is a rule of the standard, argued at its definition. The row's arrival as a runnable item, `dyn_run`,
+               not its name `dyn_id`: a root `<script src>` is named by the seed before any program runs but becomes
+               runnable when the network answers, and ordering by name would put every job behind any seed row at the
+               cursor (flow.h's `dyn_run`). Zero is no stamp (the clock starts at 1), so a live row with 0 is a column
+               grown, forked, shifted or compacted without this one; asserted where a missed site first decides. */
             DCHECK(!seq_compiles || f->dyn_run[f->script_i] != 0,
                    "the row at this flow's cursor can start and carries NO arrival stamp — `dyn_run` is minted "
                    "with the row and re-minted where a delivery takes it out of DYN_SCRIPT_SRC, so a zero is a "
@@ -8195,516 +7873,171 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    "and this step would order a program against this flow's queued callbacks by a number no "
                    "clock issued");
             int job_precedes = seq_compiles && flow_task_precedes(f, f->dyn_run[f->script_i]);
-            /* THE QUEUE'S LENGTH, READ ONCE FOR BOTH ARMS OF THE CHOICE — see `g_task_held_seq`. Read here
-               rather than inside either arm because BOTH read it, and two reads of one queue across a choice
-               is the shape that lets a raise and the dispatch it is about talk about different states. Nothing
-               between this line and the arms below touches the queue. */
+            /* The queue's length, read once for both arms of the choice (`g_task_held_seq`), so a raise and the
+               dispatch it is about read one state; nothing between here and the arms touches the queue. */
             int jobs_here = flow_job_pending(f);
             if (seq_compiles && !job_precedes) {
-                /* NO WORK HERE, AND THE ABSENCE OF IT IS THE FALL-THROUGH MADE EXPLICIT. This arm's work is the
-                   compile ~200 lines below; its body performs none because the only thing it has to do is
-                   decline every arm beneath it and let control reach that compile. It used to be spelled as the
-                   absence of a `return` at the bottom of a two-hundred-line block, which is the same fact and
-                   is invisible to a reader who does not walk the block. There is still exactly ONE compile.
-                   THE ONE STATEMENT IT DOES HOLD IS A REPORT AND NOT WORK — see `g_task_held_seq`. This is the
-                   arm on which the arrival comparison answered NO, so a task standing on the queue here is one
-                   the sequence just went in front of, and that is the whole of what the row counts. Nothing
-                   branches on it. */
+                /* No work here: this arm's work is the compile below, and its body only declines every arm beneath
+                   so control reaches that one compile. The one statement is a report (`g_task_held_seq`): the arrival
+                   comparison answered no, so a task on the queue here is one the sequence went in front of. */
                 if (jobs_here > 0) g_task_held_seq++;
             }
             else if (jobs_here > 0) {
-                /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 2, whose
-                   2.3 takes "the first runnable task in taskQueue" and whose 2.6 performs its steps. (Step 1
-                   stood here and is the one that initialises oldestTask to null; the same section's step 2.1
-                   is the choice of queue this file cites correctly one rung up, which is how the two numbers
-                   came to disagree inside one algorithm.)
-                   The checkpoint above is the only thing that consumes a microtask and it
-                   runs before every program, so a microtask on the queue at this point is one it declined to
-                   run, and the only reason it declines is the immediate row that the arm above this one would
-                   have compiled, which is flow_stack_empty's second half.
-                   THE REASON THERE IS NO SUCH ROW HERE IS NOW A READ AND NOT THE CURSOR. This arm used to be
-                   reachable only with the cursor past the last row, so "no immediate row" followed from
-                   "no row at all"; it is now reachable with a DYN_SCRIPT_SRC row at the cursor, and that is
-                   the ONE other row a flow can stand on without compiling it. A SRC row is queued
-                   DYN_POS_APPEND at both of the two sites that create one — engine_queue_into asserts it, and
-                   the SRC branch above re-asserts flow_stack_empty at the row — so it is never IMMEDIATE, the
-                   checkpoint above did not decline for it, and this stays an assertion rather than becoming a
-                   second pick rule. The two arms ask one question through one function, which is what keeps
-                   them from coming to disagree about when a turn may start.
+                /* What is left on the queue is a task (HTML §8.1.7.3 Processing model step 2, whose 2.3 takes "the
+                 * first runnable task in taskQueue" and 2.6 performs its steps). The checkpoint above consumes every
+                 * microtask before any program and declines only for an immediate row (flow_stack_empty's second
+                 * half), which would have set `seq_compiles`. A DYN_SCRIPT_SRC row at the cursor (the other row a
+                 * flow can stand on without compiling) is queued DYN_POS_APPEND at both creating sites, so it is
+                 * never immediate, and the assert below holds.
                  *
-                 * AND THE ARM'S REACHABILITY IS NO LONGER `f->script_i < f->dyn_n`'S `else`, WHICH IS A
-                 * CORRECTION TO THIS PARAGRAPH AND NOT TO ITS ARGUMENT. It used to bind there, so a flow ran a
-                 * queued TASK only with its cursor PAST THE LAST ROW — the same shape the networking task
-                 * source's arm above the sequence was hoisted out of, one rung over — and the sequence is a
-                 * set the page's own programs EXTEND (an injected `<script>`, a `javascript:` URL, a lazy
-                 * chunk), so "the sequence is exhausted" is a condition page code can hold false and this
-                 * flow's timer callbacks and delivered messages were excluded for as long as it did. The
-                 * chain now binds to `seq_compiles` — `a program STARTS on this step` — so the exclusion
-                 * survives only for the step that actually runs one, which is HTML §8.1.7.3 step 2's one task per
-                 * iteration and not a precondition at all.
-                 * WHAT THAT DID NOT SETTLE WAS THIS ARM'S POSITION, AND THE PARAGRAPHS BELOW ARE REWRITTEN
-                 * RATHER THAN DELETED FOR IT — the sentence that stood here said a page which keeps appending
-                 * rows the flow CAN run still takes this arm's turn every step, because the sequence arm
-                 * stands above it, and called that a preference between two carriers that one queue per
-                 * source fixes. The first half was exactly right and was MEASURED right; the second named the
-                 * wrong repair. The chain binds to ARRIVAL now (see its head), so the sequence arm is above
-                 * this one only for a row that was QUEUED FIRST, and a row the page appends later cannot get
-                 * in front of a task already waiting.
+                 * The two queues partition by carrier (`dyn` holds programs, `jobs` C callbacks), while HTML §8.1.7.1
+                 * Definitions partitions by source ("For each event loop, every task source must be associated with
+                 * a specific task queue"; "the user agent would never process events from any one task source out of
+                 * order"). Each row producer states its source, and engine_queue_into asserts it, so which sources
+                 * reach `dyn` is a grep for the enumerator: NOT_A_TASK, SOLVER_CANDIDATE, NETWORKING and
+                 * NAVIGATION_AND_TRAVERSAL (§7.4.2.3.2's `javascript:` URL; §7.4.2.2 step 21 queues that navigation
+                 * on the navigation and traversal source while the same section's document load reaches `jobs`, so
+                 * one source has two carriers, as `iframe.src =` and `location.href = "javascript:…"` show). The
+                 * timer source reaches only `jobs` (§8.7 Timers runs a string handler's script inside step 9's task,
+                 * substeps 9.8.7-9.8.8, in core/timing/timer.c). Arrival order discharges both the per-source order
+                 * and the starvation; a queue per source would discharge only the first.
                  *
-                 * THE ARGUMENT THAT DECIDED THE REPLY CASE DOES NOT TRANSFER, AND SAYING SO IS THE POINT. There
-                 * the two sides were ASYMMETRIC: the answered set grows only when the flow issues requests, and
-                 * it issues them by running its programs, while every delivery strictly CONSUMES one entry — so
-                 * networking-first deferred the sequence by at most what the flow itself asked for, and exactly
-                 * one of the two strict orders was free of permanent exclusion. Here BOTH sides are extended by
-                 * the other. A task runs page code, and that code appends rows (engine_queue_javascript_url,
-                 * engine_queue_element_script for an injected element); a program
-                 * enqueues tasks (§8.7's expiry through JS_EnqueueCallTask, a routed delivery through
-                 * flow_deliver). Neither strict order is free of permanent exclusion, so §scheduler's razor —
-                 * "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP, banned" — rules BOTH out
-                 * rather than selecting one, and the reply case's procedure returns nothing at this rung.
-                 *
-                 * AND THE ARM'S POSITION IS THE SECOND QUESTION, BECAUSE THE TWO QUEUES DO NOT PARTITION BY
-                 * TASK SOURCE — THEY PARTITION BY CARRIER. `dyn` holds PROGRAMS and `jobs` holds C CALLBACKS,
-                 * while HTML §8.1.7.1 "Definitions" partitions by source and requires it: "For each event loop,
-                 * every task source must be associated with a specific task queue", and the same section states
-                 * what that buys — "Note that in this setup, the processing model still enforces that the user
-                 * agent would never process events from any one task source out of order."
-                 * THE TIMER TASK SOURCE WAS IN BOTH OF THIS FLOW'S QUEUES AND IS NOT ANY MORE, which retires
-                 * the example this paragraph was written around. §8.7 Timers' step 9 task reached `jobs`
-                 * through JS_EnqueueCallTask for a Function handler while a STRING handler reached `dyn` as a
-                 * DYN_POS_APPEND row, so
-                 *     setTimeout(f, 0); setTimeout("s()", 0);      must run f then s
-                 *     setTimeout("s()", 0); setTimeout(f, 0);      must run s then f
-                 * and no ordering of two arms could produce both: whichever arm was above decided BOTH the same
-                 * way. §8.7 creates and runs a string handler's classic script INSIDE step 9's task (substeps
-                 * 9.8.7-9.8.8), and core/timing/timer.c does that now — every entry of a global's map queues
-                 * exactly one step-9 task through JS_EnqueueCallTask, and that file queues no row at all, which
-                 * is what a grep of it for `engine_queue` answers.
-                 * AND THE QUESTION THAT GATED THE REPAIR — WHICH OTHER TASK SOURCE STILL REACHES `dyn` — IS
-                 * ANSWERED, AND IT IS ANSWERED AS A VALUE RATHER THAN AS THIS PARAGRAPH. Every producer of a
-                 * row states its §8.1.7.1 source at its own entry and engine_queue_into asserts it, so the
-                 * answer is a grep for the enumerator and cannot go stale behind a producer added later: this
-                 * carrier serves NOT_A_TASK (a document's seeded scripts, an element's inline program, a held
-                 * external-script slot, a cross-agent operation's answer), SOLVER_CANDIDATE (an @S re-fire,
-                 * which no algorithm of the standard queued), NETWORKING (a program a response produced) and
-                 * NAVIGATION_AND_TRAVERSAL (§7.4.2.3.2's `javascript:` URL).
-                 * THE LAST OF THOSE IS THE TIMER DEFECT ARRIVING THROUGH A SECOND SECTION. §7.4.2.2 step 21
-                 * queues the `javascript:` navigation on the navigation and traversal task source and its row
-                 * is here, while the document load of the same section queues on that source through
-                 * JS_EnqueueCallTask and lands in `jobs` — one source, two carriers, exactly the pair of
-                 * orderings above with `iframe.src =` and `location.href = "javascript:…"` in place of the two
-                 * timers. So this arm's order is STILL not the thing to decide first, and the reason has
-                 * changed from "nobody has established the enumeration" to a named, greppable second split.
-                 * THE POSITION IS SETTLED AND IT IS NOT BY A QUEUE PER SOURCE, WHICH IS A CORRECTION TO THE
-                 * CLAUSE THAT STOOD HERE RATHER THAN TO ITS EVIDENCE. It read: what is left is the ordering, a
-                 * page that keeps appending rows the flow CAN run still takes this arm's turn on every step
-                 * because the sequence arm is above it, that is the same two-carriers-one-source defect, it
-                 * needs one queue per source, and that needs the source on a `jobs` entry as it is now on a
-                 * row. The DIAGNOSIS was exact. The REMEDY was one repair of two and the narrower one: moving
-                 * a producer so a source is in one queue discharges §8.1.7.1 "Definitions" for THAT source and
-                 * leaves the next author of a producer to get it right again, and it does not touch the
-                 * starvation at all — two queues, one source each, still leave whichever arm is above feeding
-                 * on a set the page extends. What the chain binds to now is ARRIVAL, which discharges both at
-                 * once: within one source arrival order IS queue order, and across sources the set of items in
-                 * front of any one item is fixed at its birth. The `jobs` entry does carry a stamp now
-                 * (flow.h's job-record bullet), so the plumbing half of the old clause is built and the
-                 * per-source-queue half is superseded rather than done.
-                 * AND THE EXCLUSION WAS NOT AN OCCASIONAL PREFERENCE, IT WAS THE ORDINARY STATE OF A REAL
-                 * DOCUMENT, WHICH WAS MEASURED RATHER THAN ARGUED AND IS WHY THE DIAGNOSIS ABOVE IS KEPT.
-                 * Three runs of two real pages through one artifact stamped 18550a41 with a clean cone, 146
-                 * censuses: `run-a-task` is 0 over 78, 78 and 736 steps, so THIS ARM HAD NEVER ONCE BEEN
-                 * ENTERED, while the same runs carried jobs pending at every census and handed the thread to a
-                 * member holding them (`unframedPicksLifetime` 4, 5 and 280 against `picksLifetime` 9, 10 and
-                 * 619). The sequence arm took every such step. A later drive of a real application named the
-                 * same shape one row more precisely — `readyPicksLifetime` 243 against `_jobsRun` 0,
-                 * `jobsReadyTask` 104 and `run-a-task` 0 — which is the reading flow.c's `ready_picks_lifetime`
-                 * enumeration calls the LADDER's rather than the order's, and is what this diff is built to.
-                 * AND THE TWO KINDS OF JOB ARE ON OPPOSITE SIDES OF THE SEQUENCE, which is the half a reader
-                 * of `jobsReady` cannot see. A MICROTASK is taken by the checkpoint arm, which stands ABOVE
-                 * the sequence, so it runs on the holder's next step; a TASK is THIS arm, so it runs only on a
-                 * step that starts no program. In those three runs every job that ran — 8 of them — went
-                 * through the checkpoint on a turn continuation and is counted under `deliver-one-reply`
-                 * (`microtask-checkpoint` reads 0, for the reason the paragraph at turn_continues gives), and
-                 * every job that did not run was standing behind this arm — two of them for 443 steps on the
-                 * site whose microtasks were draining normally the whole time.
-                 * THE RESIDUAL THAT STOOD HERE IS SPENT AND ITS ROW IS `jobsReadyTask`/`jobsReadyMicro`,
-                 * raised in flow_wfq_census's own ready arm and published beside `jobWGap`. It said the census
-                 * splits the backlog by WHAT A JOB WAITS ON and never by WHICH ARM CAN TAKE IT, so a reader
-                 * meeting `jobsReady` above zero with `_jobsRun` at zero could not say whether the checkpoint
-                 * declined or the sequence did — two arms of this function taking opposite work. Establishing
-                 * it once cost a lifetime step histogram and an inference; it is now one comparison, and the
-                 * legend for it is at `jobs_ready_task` in solver/flow.h rather than here, beside the gauge,
-                 * where a reader holding the digit will be. WHAT THE PAIR DOES NOT DECIDE IS THIS ARM'S
-                 * POSITION — a census names WHICH ARM declined and never WHAT THE ORDER SHOULD BE, which is a
-                 * question about the standard and was settled from it (the chain's head).
-                 * AND THE NAIVE REPAIR IS STILL WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
-                 * above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the cursor —
-                 * the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here holding
-                 * a microtask and the assert says so. The reorder cannot be made silently, and the `seq_compiles`
-                 * change is not that reorder: an IMMEDIATE row sets `seq_compiles`, so it takes the arm above
-                 * this one exactly as it always did.
-                 * NOR IS THE ARRIVAL CHANGE, AND IT IS WORTH SAYING BECAUSE IT IS THE ONE THAT MAKES THIS ARM
-                 * REACHABLE WITH A ROW AT THE CURSOR. flow_task_precedes answers 0 outright when
-                 * flow_stack_empty is false and again when the flow holds a microtask — the same two facts
-                 * this assert is about, asked through the same predicates the checkpoint arm calls, so the arm
-                 * is still unreachable in exactly the states that would fire it. The assert therefore stays
-                 * armed against the hoist rather than being satisfied by an accident of the new condition. */
+                 * A microtask is taken by the checkpoint arm above the sequence (on the holder's next step), a task
+                 * only by this arm (on a step that starts no program); `jobsReadyTask`/`jobsReadyMicro` (flow.h's
+                 * `jobs_ready_task`) say which arm declined a backlog, not what the order should be. The DCHECK
+                 * below catches the naive repair of hoisting this arm above the sequence, which would reach it with
+                 * an immediate row at the cursor holding a microtask; flow_task_precedes answers 0 under a non-empty
+                 * stack and under an outstanding microtask, so the arrival comparison keeps those states out of
+                 * this arm. */
                 DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence, so reaching a task with one outstanding means a "
                        "program ran in front of the checkpoint it owed");
-                /* …AND WHICH OF THE ARM'S TWO REASONS THIS STEP TOOK IT FOR — see `g_task_arm_older`. The
-                   two are not shades of one fact: `job_precedes` is the arrival comparison answering YES,
-                   which is a document whose remaining rows are YOUNGER than what its own code queued, and
-                   `seq_compiles` 0 is a member with no row left at all, which is a different population and a
-                   different diff. Their sum is asserted against this arm's own step count at the accessor. */
+                /* Which of the arm's two reasons this step took it for (`g_task_arm_older`): `job_precedes` is the
+                   arrival comparison answering yes (the remaining rows are younger than a queued task),
+                   `seq_compiles` 0 is a member with no row left. Different populations; their sum is asserted at
+                   the accessor. */
                 if (job_precedes) g_task_arm_older++; else g_task_arm_no_row++;
                 g_step_unit = STEP_UNIT_RUN_TASK;
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
-            /* NO THIRD DELIVERY STOOD HERE AND THE ONE THAT DID IS DELETED RATHER THAN MOVED, which is worth
-               the space because it is the defect this ladder is now shaped against and its reasoning was
-               written down at this line as a reason to leave it alone.
-               IT WAS A FETCH-AWAIT ARM — this flow's programs done, its microtasks run, a suspended async body
-               awaiting a live fetch — and its REACHABILITY was the conjunction of every `else` above it: no
-               live frame, PAST THE END of the program sequence (`script_i >= dyn_n`), and ZERO queued jobs. So
-               a flow that called `fetch()` and still held one program row or one job did not take its reply on
-               that turn, and on a forking document it never took it at all. Measured on the wasm smoke at
-               74eb1d62 (build-full.log): over 5857 steps and 13 censuses this arm and the external-script one
-               ran ZERO times between them — `deliver-one-reply` in the never-run list — while the host
-               answered every record at every slice (run_scheduler's post-payment `engine_pending_fetches()`
-               empty assert armed at `-DAPICLIENT_DEV=1` and silent throughout). 299306 register entries, all
-               answered and none taken, 55% of the frontier's per-flow memory, and the reply-dependent probe
-               rows (`fetch`, `then-chain`, `clone-body`, `body-bytes`, `body-iso`) all 0 — §Learning-from-
-               replies' whole surface, from a run that was paid in full.
-               WHAT THE NOTE HERE DECLINED TO DECIDE IS DECIDED, and where: §8.1.7.3 "Processing model" step 2.1
-               does choose among task queues "in an implementation-defined manner", so that sentence alone
-               never settled the order and the note was right to refuse it — but it is not the only sentence,
-               and the arm above the sequence carries the reading that settles it. The freedom is a PREFERENCE
-               between queues (§8.1.7.1 Definitions' own example, "not starving other task queues").
-               AND THE ARGUMENT THAT FOLLOWED IS REFUTED BY MEASUREMENT AND IS REWRITTEN RATHER THAN DELETED,
-               because it is the argument a reader re-derives from the shape of the two sets. It said that of
-               the two strict orders only one is free of permanent exclusion, because a flow's sequence is a
-               set its own programs extend and its answered set is one every delivery consumes — a draining
-               set cannot starve a growing one, so delivery-first was safe by construction.
-               THE PREMISE IS TRUE OF THE SEQUENCE AND FALSE OF THE REGISTER, which is the whole of it. A
-               delivery CONSUMES one entry and then RUNS PAGE CODE, and page code pushes entries: a `then`
-               that fetches the next chunk, a module body that imports, a resource that pulls another. The
-               answered set is extended by the very deliveries that consume it, so it does not drain, and the
-               arm's unconditional position was a permanent exclusion of the queue beneath it rather than a
-               bounded preference. MEASURED over the 57 corpus census rows at 5357ffa: `deliver-one-reply`
-               runs 99-596 steps against `run-a-task` 0-4 on every attributed real-site row, with one page
-               answering 560 of 561 replies while its task arm took 112 steps of 759 — a register that was
-               answered continuously and never empty. The local fixture, whose register DOES drain, runs
-               40.7% of its steps in the task arm with `jobsReady` 0, which is the premise holding on the one
-               population it is true of (§A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM, landing on an ARM).
-               SO NEITHER STRICT ORDER IS FREE OF EXCLUSION AND THE ANSWER IS NEITHER OF THEM: arrival order,
-               which flow_task_precedes' banner already argues for the two carriers it ordered and which the
-               arm above now asks the register to join.
-               A REGISTER IS NOT A TASK QUEUE THIS LADDER MAY REACH TWICE. One site delivers now, above the
-               sequence; a second here would be the two-implementations seam §C-stack names, with the fork
-               order and the microtask ordering of solver/engine.c's flow_deliver_one_reply header split
-               across it. */
-            /* NOTHING QUEUED. What follows is what becomes due when the flow has
-               nothing else, in the order it becomes due: first the load lifecycle, which is already due (a
-               parser finishing waits on no clock), and only then the two CLOCK-DRIVEN sources — and by the
-               time control reaches here everything that was already due (this flow's jobs above, a reply that
-               has arrived) has been offered a turn.
+            /* There is no third delivery here: the one delivery sits above the sequence, and a second would be two
+               implementations of one register's order. Delivery-first is not safe by construction: a delivery
+               consumes one entry and then runs page code, which pushes the next (a `then` fetching the next chunk, a
+               module importing), so on a real page the answered set does not drain. Arrival order is the answer,
+               which the arm above asks the register to join. */
+            /* Nothing queued. What follows becomes due when the flow has nothing else, in the order it becomes due:
+               the load lifecycle (already due; a finished parse waits on no clock), then the clock-driven sources.
              *
-             * AND THE LINE THROUGH THE MIDDLE OF THIS LADDER IS "DUE NOW" VERSUS "FINISHED", WHICH IS WHERE THE
-             * HOST-OWED RETURN BELONGS AND NOT ONE RUNG HIGHER. Everything from here down to that return is
-             * work HTML §8.1.7.3 "Processing model" would run on this turn whatever else is in flight — its
-             * step 2 asks only "If the event loop has a task queue with at least one runnable task", and a
-             * `fetch()` is not on a task queue at all until it completes and queues its own task. Everything
-             * BELOW that return is the opposite kind of claim: that no handler will ever be attached to a
-             * rejection, that nothing ever called a function. An outstanding reply is exactly what can still
-             * falsify those two and cannot falsify anything above them, so it gates them and nothing else. */
-            /* A FLOW SUSPENDED MID-EXPRESSION RUNS NOTHING ELSE OF ITS OWN, AND THAT IS ASKED ONCE, HERE, FOR
-               EVERYTHING BELOW IT. flow_blocked is an unanswered synchronous cross-instance read (a HOSTREQ):
-               the flow is parked AT that operand, so a `load` listener, a rendering opportunity or a timer
-               callback run now would interleave two program points of one flow — which is not a scheduling
-               preference but the same thing as resuming a generator into the middle of its own frame.
-               IT USED TO BE TRUE BY ACCIDENT BELOW THIS ARM, and an accident is not an invariant. Only the
-               lifecycle arm asked it; the clock-driven arms were protected because the host-owed return sat in
-               front of them and a blocked flow always has an unanswered entry, so the two conditions coincided
-               without either one meaning the other. Moving that return down to where it belongs would have
-               taken the protection with it silently — which is the shape of every route that goes missing —
-               so the question is stated positively at the one place that owes the answer, and an arm added
-               below inherits it instead of having to remember it.
-               IT RETURNS OWED because only the host can change it: the peer's answer arrives through
-               engine_host_answer and nothing this flow does can produce it. */
+             * The host-owed return sits between "due now" and "finished". Everything above it is work §8.1.7.3
+             * would run on this turn whatever is in flight (step 2 asks only whether a task queue has a runnable
+             * task, and a `fetch()` is on no queue until it completes); the two arms below it claim the run is
+             * finished (no handler will be attached to a rejection, nothing called a function), which an
+             * outstanding reply can still falsify, so it gates only them. */
+            /* A flow suspended mid-expression runs nothing else of its own, asked once here for every arm below.
+               flow_blocked is an unanswered synchronous cross-instance read: the flow is parked at that operand, and
+               running a `load` listener, rendering opportunity or timer callback now would interleave two program
+               points of one flow. Stated positively so an arm added below inherits it. OWED, because only the host
+               can change it (engine_host_answer). */
             else if (flow_blocked(f)) {
                 g_step_unit = STEP_UNIT_HOST_BLOCKED;   /* suspended mid-expression on a synchronous request */
                 return FLOW_STEP_OWED;
             }
-            /* A DOCUMENT FINISHED LOADING, in this flow's world — DOMContentLoaded across the agent's
-               documents in tree order, then `load` innermost-first, one per turn. It comes BEFORE the two
-               clock-driven sources and that is the spec's order rather than a preference: the parser
-               completing is not a timer and not a frame, it is already due, and everything that is due runs
-               before the clock may move. It used to sit AFTER them, so a `setTimeout(f, 0)` a parse-time
-               script set ran before DOMContentLoaded — which no browser does — and a rendering opportunity
-               would have preceded it too. A page's real work is behind these events: the half of a bundle
-               that touches the DOM and calls the API runs here.
-             *
-             * AND IT NOW COMES BEFORE THE FLOW PARKS ON WHAT THE HOST STILL OWES, which is the half that was
-             * wrong. The OWED return used to sit ABOVE this arm, so the lifecycle was reachable only by a flow
-             * with NOTHING outstanding — quiescence standing in for HTML §13.2.7 "The end" step 8, "spin the
-             * event loop until there is nothing that DELAYS THE LOAD EVENT in the Document". Those are not the
-             * same condition and the difference is not academic: nothing in HTML makes a `fetch()` or a
-             * dynamic `import()` delay the load event, so a bundle with ONE request still in the air when its
-             * parse ended never reached `load` — nor even DOMContentLoaded, since the same return gated stage 0
-             * too — and every listener behind those events never ran. That is the majority of a real
-             * application page (an SPA bootstrap, a router, a lazy-loader, an analytics beacon all hang off
-             * `load`), and it is measurable as a page that parses, learns some endpoints and then finishes
-             * having run none of the code that was waiting to be told the document was ready.
-             * AND THE IDENTICAL SUBSTITUTION WAS STILL STANDING ONE CONJUNCT OVER, WHICH THIS PARAGRAPH DID
-             * NOT SEE BECAUSE IT WAS ARGUING ABOUT ITS OWN POSITION. Moving the OWED return below this arm
-             * fixed the conjunct the paragraph is about and left UNTOUCHED the one that governed whether this
-             * arm was asked at all: the chain's head was `if (f->script_i < f->dyn_n)`, so this arm — and
-             * every arm beneath it — inherited `the cursor is past the last row of this flow's own sequence`
-             * as a silent precondition. That is quiescence standing in for HTML §13.2.7 "The end" step 8 a second
-             * time, in the same ladder, one conjunct over, and it is the WIDER of the two: a sequence is a
-             * set the page's own code extends, so where an outstanding `fetch()` merely delayed this arm, an
-             * unrun row excluded it for as long as the page kept appending. The chain binds to `seq_compiles`
-             * now, which is `a program STARTS on this step` and is true of no step that reaches this line.
-             * THE READING TO KEEP IS THE METHOD AND NOT THE INCIDENT: this arm's own text enumerated what
-             * holds the flow POSITIVELY, per kind, from the spec — and a condition inherited from an `else`
-             * two hundred lines up appears in no such enumeration, because nobody writing one thinks to ask
-             * what the chain above them is testing. Read the head of a chain before trusting the list of
-             * preconditions written at one of its arms.
-             * WHAT STILL HOLDS THE FLOW HERE IS STATED POSITIVELY, per kind, from the spec:
-             *   - A `<script src>` DOES delay it, both the document's own (DOCSCRIPT — and this conjunct is
-             *     now the ONLY thing that holds the flow for it, where the sequence arm far above used to
-             *     return before this line was reached) and one a script INJECTED (SCRIPT) — §4.12.1.1
-             *     "Processing model": "Whenever a script element el's delaying the load event is true, the
-             *     user agent must delay the load event of el's preparation-time document." The DOCSCRIPT
-             *     conjunct is now the standard's flag rather than a proxy for it: step 33 says "Set el's
-             *     delaying the load event to true." in the same breath as it fetches, and the entry this
-             *     reads is created at exactly that moment (engine_queue_into), so the two are set and
-             *     cleared together instead of the entry appearing only once the cursor had walked to the row.
-             *   - A HOSTREQ is not a delay source at all and is a stronger thing — the flow is SUSPENDED
-             *     mid-expression — so it is not this condition's business: the arm directly above answers it
-             *     for this arm and for every arm below, which is why flow_blocked no longer appears here.
-             *   - A `fetch()` (RESOLVE) and a dynamic `import()` (MODULE) delay nothing, and are exactly what
-             *     this arm now runs in front of.
-             * The remaining sources of step 8 are per-ELEMENT flags — `img`, the media elements, `script` — and
-             * they belong to those components rather than to this register; core/dom/document.c's
-             * document_load_event_delayed names them at the gate they are missing from. */
+            /* A document finished loading, in this flow's world: DOMContentLoaded across the agent's documents in
+             * tree order, then `load` innermost-first, one per turn. Before the clock-driven sources, because a
+             * finished parse is already due and everything due runs before the clock may move (a parse-time
+             * `setTimeout(f, 0)` runs after DOMContentLoaded). Above the owed return, because HTML §13.2.7 The end
+             * step 8 waits until "there is nothing that delays the load event in the Document", not for quiescence:
+             * a `fetch()` or a dynamic `import()` delays nothing, and an SPA's bootstrap, router and lazy loaders
+             * hang off `load`. What still holds it, per kind:
+             *  - A `<script src>`, the document's own (DOCSCRIPT) or an injected one (SCRIPT): §4.12.1.1 "Whenever
+             *    a script element el's delaying the load event is true, the user agent must delay the load event of
+             *    el's preparation-time document", set by step 33 ("Set el's delaying the load event to true.") as
+             *    it fetches, which is when the entry this reads is created (engine_queue_into).
+             *  - A HOSTREQ is not a delay source; the flow is suspended, answered by the arm above.
+             *  - A `fetch()` (RESOLVE) and a dynamic `import()` (MODULE) delay nothing, and this runs in front of
+             *    them.
+             * The other step 8 sources are per-element flags (`img`, the media elements, `script`), owned by those
+             * components; core/dom/document.c's document_load_event_delayed names them at the gate. */
             else if (!pending_outstanding_kind(f->pending, FLOW_PENDING_SCRIPT) &&
                      !pending_outstanding_kind(f->pending, FLOW_PENDING_DOCSCRIPT) &&
                      g_docdone_hook && g_docdone_hook(ctx)) {
                 g_step_unit = STEP_UNIT_LIFECYCLE; return 0; }
-            /* THE FLOW'S OWN RECORDED DRIVE, WHICH IS THE HALF OF THE ORPHAN SURFACE THAT STAYS ABOVE THE
-               CLOCK. The line between it and the seed below the clock is WHOSE WORK THE STEP IS, and that is
-               the distinction this rung used to make against the ladder's EXIT and now makes against the
-               page's own arranged work.
-               A RESUME IS THIS FLOW'S OWN IDENTITY. The member was recorded in a previous session as the
-               drive of ONE body; it carries the path and the arms that made that body reachable, and until a
-               take hands it that body it can do nothing else and will never do anything else — it is a
-               member that can only ever answer "nothing". It is not periodic and it is not manufactured on
-               this step: it is the recipe §Time-travel writes, arriving to be consumed. So it is this flow's
-               own work in exactly the sense every arm above this line is, and it stays where the flow's own
-               work has always been. Below an unbounded source it could never build its call at all, and the
-               cold tier's whole round trip would be writing `fn` for a reader nothing can reach.
-               A SEED IS THE OPPOSITE AND IS NOW BELOW THE THREE CLOCK-DRIVEN SOURCES: it MANUFACTURES a
-               member on this step out of a body nothing asked for. That rung carries the whole of that
-               argument and what it retires.
-               AND THE EXIT'S `orphan_want` ASSERT DEPENDS ON THIS ARM BEING HERE rather than on it being
-               adjacent to the seed — it reads "engine_orphan_resume's rung … stands above every clock-driven
-               source", which is a claim about THIS line and is unchanged by the seed moving.
-               AND THE REFERENCED DOCUMENT IS SERVED TOO, which the ladder's exit could not do:
-               engine_set_referenced stops a last timeline FINISHING and says nothing about whether it may
-               drive uncalled code, so a peer-held instance used to be excluded from this surface by a gate
-               that was never about it.
-               WHAT STANDS ABOVE THIS RUNG IS THE WHOLE OF THE REMAINING PRECONDITION, so it is worth stating
-               as the conjunction it is rather than leaving each arm to imply it. THE ZEROTH CONJUNCT IS NOT
-               AN ARM AND IS THE ONE A READER OF THIS LADDER MISSES: the member has to be DISPATCHED at all.
-               Every condition below is asked inside flow_step, so a member the pick never reaches asks
-               nothing, satisfies none of them, and is invisible in every one of them — and a frontier can be
-               mostly such members while every arm here looks healthy. solver/cold.h's `step_units` histogram
-               carries them as its own row (solver/step_unit.h's `NONE`, "a member that has never been handed
-               the thread", which pairs with the @WFQ census's `unrun`); ask that BEFORE reading anything
-               below as the holder. Then, dispatched, a flow reaches here with: no live frame at all (the
-               `!f->frame` block is skipped otherwise, and a member grinding inside a program never asks); NO
-               PROGRAM OF ITS OWN SEQUENCE IT CAN RUN; no queued job; not blocked on a cross-instance read;
-               and no document-lifecycle stage left. That last one TERMINATES and is not a periodic source,
-               which is worth knowing because it is grouped with the clock-driven ones in at least one
-               reader's prose: core/dom/document.c's document_lifecycle_step advances a readiness 0 -> 1 -> 2,
-               one stage per call, DCHECKs at BOTH stages that the readiness moved (its own message calls a
-               re-fire "a live-lock the scheduler cannot tell from progress"), and answers 0 once every
-               document of the agent is at 2. */
+            /* The flow's own recorded drive: the half of the orphan surface that stays above the clock. A resume is
+               this flow's own identity (recorded in a previous session as the drive of one body, carrying the path
+               that made it reachable, and able to do nothing else until handed that body), so it stays where the
+               flow's own work is; below an unbounded source it might never build its call. A seed manufactures a
+               member from a body nothing asked for, so it sits below the clock-driven sources. The exit's
+               `orphan_want` assert depends on this rung standing above every clock-driven source. A referenced
+               document is served too (engine_set_referenced stops a last timeline finishing, not driving uncalled
+               code). To reach here a member must first be dispatched (a member the pick never reaches asks nothing;
+               solver/cold.h's `step_units` row `NONE`, paired with @WFQ's `unrun`, counts those), and then have: no
+               live frame; no program of its own sequence it can run; no queued job; no block on a cross-instance
+               read; and no document-lifecycle stage left. That last terminates: document_lifecycle_step advances
+               readiness 0 -> 1 -> 2, one stage per call, asserting it moved, and answers 0 once every document is
+               at 2. */
             else if ((orphan_step = engine_orphan_resume(ctx, f)) != 0) {
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
-            /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
-               that can defer: it compares the next rendering opportunity with the earliest timer expiry and
-               yields when the timer is earlier. Without a rendering opportunity there is no
-               requestAnimationFrame, no ResizeObserver delivery, no IntersectionObserver task, no
-               scroll/resize/pagereveal and no Web Animations microtask checkpoint — a large fraction of a real
-               page's code hangs off exactly those. */
+            /* §8.1.7.3's in-parallel half, the first clock-driven source because it can defer: it compares the next
+               rendering opportunity with the earliest timer expiry and yields to an earlier timer. Without it there
+               is no requestAnimationFrame, ResizeObserver or IntersectionObserver delivery, no
+               scroll/resize/pagereveal and no Web Animations microtask checkpoint. */
             else if (engine_clock_render_asked(ctx)) {
                 g_step_unit = STEP_UNIT_RENDERING; return 0; }
-            /* AND THE TIMER TASK SOURCE — §8.7 "Timers"'s timer initialization steps end by "queues a global
-               task on the timer task source given global to run task", so a due timer IS a runnable task and
-               §8.1.7.3 step 2 runs it. */
+            /* The timer task source: §8.7 Timers' timer initialization steps end by queueing "a global task on the
+               timer task source given global to run task", so a due timer is a runnable task (§8.1.7.3 step 2). */
             else if (engine_clock_timer_asked(ctx)) { g_step_unit = STEP_UNIT_TIMER; return 0; }
-            /* AND THE IDLE RUNG — Cooperative Scheduling of Background Tasks §5.1 Start an idle period
-               algorithm, whose note says it "is called by the event loop processing model when it determines
-               that the event loop is otherwise idle". THIS LINE IS WHERE THAT SENTENCE IS TRUE: every source
-               above has been asked and answered no, so the loop is otherwise idle by construction rather than
-               by a clock reading nobody could take on this host. One step per visit — a period started, or one
-               callback queued — because §5.1 step 6 and §5.2 step 3.4 both QUEUE a task rather than looping,
-               and this rung being reached again IS that task being run. */
+            /* The idle rung: Cooperative Scheduling of Background Tasks §5.1 Start an idle period algorithm,
+               "called by the event loop processing model when it determines that the event loop is otherwise idle".
+               Here every source above has answered no, so the loop is otherwise idle by construction. One step per
+               visit (a period started or one callback queued), because §5.1 step 6 and §5.2 step 3.4 queue a task
+               rather than loop. */
             else if (engine_clock_idle_asked(ctx)) { g_step_unit = STEP_UNIT_IDLE_PERIOD; return 0; }
-            /* THE FORCED SURFACE, BELOW EVERY SOURCE THE PAGE ITSELF ARRANGED — which is the project owner's
-               decision and is stated here as the rule rather than as an inference, because the reasoning it
-               replaces is sound and a reader who re-derives it will re-introduce the old order.
-               THE RULE: the three rungs above are work THE PAGE ARRANGED — a `setTimeout` the bundle
-               scheduled, a `requestAnimationFrame` it registered, a ResizeObserver it created — and a seed is
-               work THE ENGINE FORCES, out of a body nothing has asked for. §What-the-tool-produces is about
-               "what the bundle CAN do but didn't", and a boot-path `setTimeout(…, 0)` is something the bundle
-               DOES do. The page's own clock therefore runs in front of the engine's own forcing.
-               THE ARGUMENT THIS RETIRES IS REWRITTEN AND NOT DELETED. It read: "DRIVING EARLY IS NOT DRIVING
-               WRONGLY … What being early costs is a drive of a body the page was about to call anyway … and
-               which §Solver settles outright — 'Err toward MORE exploration (the WFQ starves the unproductive
-               arm)'. A drive that learns nothing is outranked and paged; a surface never served is lost for
-               the session." Every clause of that is TRUE and it is not what decides the order, because it
-               argues against the ladder's EXIT — where the flow has declared its timeline OVER, which on a
-               document that renders is never — and says nothing about the three rungs it was placed above.
-               Against THEM it is symmetric and therefore settles nothing: a rendering opportunity never
-               served is lost for the session in exactly the same words, and "err toward MORE exploration"
-               reads as an argument for the clock the moment you notice the clock's surface is the page's own
-               code rather than the engine's guess. What breaks the symmetry is not how much either surface
-               explores but WHOSE WORK IT IS, which is the rule above.
-               WHAT IS NOT CLAIMED, because it was measured and is smaller than it looks. The boundary the
-               clock triple now occupies had ZERO arrivals, and that is not a reading of its three outcome
-               rows — it is exact, from the partition: solver/step_unit.h is complete, the convergence point
-               asserts no recorded step is `none`, and at the native smoke's terminal census EVERY unit at or
-               below the old boundary read 0 while `steps` reconciled to the digit (1618 above the orphan
-               rungs + 30 at the seed = 1648). A dispatch that had reached the rendering rung and been
-               declined by all three hooks would have had to name one of the units below, and every one of
-               them is zero. So exactly 30 of 1648 dispatches (1.8%; 10 of 1750 on the wasm smoke) ever
-               reached this boundary at all, and this reorder hands the clock AT MOST those — the other 98.2%
-               are absorbed by the arms ABOVE the orphan rungs (`deliver-one-reply` 927, `run-a-task` 333,
-               `resume-program` 153, `start-ended-its-frame` 103). THE HOLDER OF THE CLOCK SURFACE IS
-               THEREFORE NOT THIS SEAM, and a reader who sees the three outcome rows still small after this
-               diff should read the histogram's head rather than this rung.
-               AND THE SYMMETRY IS MEASURED TOO, WHICH IS WHY THIS IS A PRIORITY CHOICE AND NOT A CAP. A seed
-               below an unbounded source would be a bound if the seed's own surface terminated and the clock's
-               did not; on both smokes it does not. All 30 asks TOOK (the clock's zero arrivals mean no ask
-               fell past this rung, so the memo and empty-walk arms fired never), because every closure the
-               run creates bumps the orphan generation and refills the walk. Two non-terminating sources, one
-               ladder, and the ordering is which of them the engine serves first. Nothing becomes unreachable:
-               this rung is reached whenever the three hooks decline — no fully-active navigable, or a frame
-               strictly ahead with a reply still in the air (`event_loop_may_advance`), with no due timer and
-               no idle work — which is measurably non-empty, since the close-request arm BELOW this one is
-               reached on the solvergate fixtures.
-               AND THE EXIT'S TWO INVARIANTS STILL HOLD BY POSITION, which is why the seed lands HERE and not
-               below the owed return: `g_orphan_claims_unmet` means what it says only if "reaching the exit
-               means the seed's rung answered 0 on this same pass", and the retirement arm's deleted
-               `flow_count() > 1` assert is unreachable-by-construction for the same reason. Both are claims
-               about this rung being above the exit, and it is.
-               RETIREMENT: this record goes when the clock triple's arrivals and this rung's are published
-               beside each other per run, because which surface the ladder is actually serving is then read
-               off the census instead of argued here. */
+            /* The forced surface, below every source the page arranged (the project's decision, stated as the
+               rule): the three rungs above are work the page arranged (a `setTimeout`, a `requestAnimationFrame`, a
+               ResizeObserver), and a seed is work the engine forces from a body nothing asked for. "What the bundle
+               CAN do but didn't" does not include a boot-path `setTimeout(…, 0)` the bundle does do, so the page's
+               clock runs first. "Drive early, the WFQ starves the unproductive" argues against the ladder's exit,
+               not against these rungs, where it is symmetric; what breaks the symmetry is whose work it is. It is a
+               priority, not a cap: both the clock and the seed's surface keep refilling (every closure bumps the
+               orphan generation), and this rung is reached whenever the three hooks decline (no fully-active
+               navigable, or a frame strictly ahead with a reply in the air per `event_loop_may_advance`, and no due
+               timer or idle work); the close-request arm below is reached on the solvergate fixtures. Few
+               dispatches reach this boundary at all, so the holder of the clock surface is the histogram's head,
+               not this rung. The exit's two invariants hold by position: `g_orphan_claims_unmet` needs the seed's
+               rung to have answered 0 on the pass that reaches the exit. */
             else if ((orphan_step = engine_orphan_seed(ctx, f)) != 0) {
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
-            /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished.
+            /* Only host-owed replies, an awaited script row or a refusal remain: no progress, and not finished.
              *
-             * BELOW THE TWO CLOCK-DRIVEN SOURCES, which is the same sentence the lifecycle arm makes one rung
-             * up, said about the clock instead of about `load`: a debt no task source waits on must not decide
-             * when a task source runs. §8.1.7.3 step 2 conditions the whole loop on "a task queue with at
-             * least one runnable task" and on nothing else; a `fetch()` runs in parallel and is not on a queue
-             * until it completes.
-             * AND THAT SENTENCE IS ABOUT RUNNABILITY, NOT ABOUT DUENESS — a distinction it did not have to
-             * make while the clock jumped unconditionally, and the one place a debt legitimately does decide.
-             * Whether a task source's task is DUE is a question about the clock, and this engine has no real
-             * time, so it substitutes a JUMP for the wait HTML §8.1.7.3 and §8.7 Timers both state in words.
-             * A jump forward past an outstanding reply does not model that wait, it decides it — always for
-             * the deadline, however long. So the two hooks above ask core/timing/event_loop.h's
-             * event_loop_may_advance before moving the clock and answer 0 where it does not hold: no source
-             * became due, which is exactly what this arm is then reporting. A DUE task still runs ahead of
-             * this return, unchanged, which is what the sentence above protects.
-             * Held ABOVE them, ONE request in the air took a flow out of the pick — a
-             * marked flow is not picked again until a HOST EVENT clears it — and with it went every due timer,
-             * every rendering opportunity, and therefore every requestAnimationFrame and observer delivery,
-             * for the rest of the session.
-             * THE SHAPE IT PRODUCED IS THE ONE THAT NAMES IT. testharness.js sets `all_loaded` inside a
-             * `setTimeout(…, 0)` queued from its own `load` handler, so a document could run every one of its
-             * subtests, pass every one, fire `load`, run the handler — and then never get the zero-delay timer
-             * that is the last thing between it and `Tests.all_done()`. Every subtest reported, `num_pending`
-             * 0, completion never. A flow that keeps its work and is never picked again is STARVED, and
-             * §scheduler's razor makes no distinction there: "drops, starves, skips, reorders, or forgets ANY
-             * flow — it is a CAP, banned".
-             * AND IT IS STILL ABOVE THE TWO ARMS BELOW, for the reason the preamble gives: those two claim the
-             * run is FINISHED (no handler will ever be attached; nothing ever called this function) and an
-             * outstanding reply's continuation can still attach the handler and still make the call. */
-            /* AND IT ASKS `pending_outstanding`, NOT `pending_count`, WHICH IS THE SAME QUESTION THE MARK IT
-             * LEADS TO ALREADY ASSERTS. This arm SELECTS the OWED verdict and the mark's own DCHECK
-             * stands over the same register, so a count here made the selecting predicate strictly weaker than
-             * the asserting one two seams later — and pending.h says in its own
-             * words what the count cannot answer: "A register holding one ANSWERED entry has a non-zero count
-             * while nothing is outstanding at all, so a flow stuck on such an entry passes a count test and is
-             * marked 'waiting on the host' forever: the mark is cleared only by a host event, and no host event
-             * is coming." A deliverable answered entry is taken by the delivery arm above this one, so what
-             * reached here on a count was an entry the host had already settled and nothing would settle again.
-             * THE FAILURE IS ASYMMETRIC ACROSS BUILDS, which is why it survived: in dev the DCHECK at the mark
-             * fires, so the crash lands one seam away from the wrong predicate and reads as a bad mark rather
-             * than as a bad selection; in release that check is compiled out and the flow is simply never
-             * picked again, which §scheduler's razor calls a CAP. */
-            /* …AND IT IS NOW ONE BIT LOOSER THAN THE ASSERT IT LEADS TO, DELIBERATELY, WHICH IS THE OPPOSITE
-             * OF THE DEFECT THE PARAGRAPH ABOVE DESCRIBES AND HAS TO BE SAID WHERE THE READER STANDS. That one
-             * is about a SELECTING predicate weaker than the asserting one by ACCIDENT, which hides a state.
-             * This is `pend_owed` selecting and `pending_entry_host_owed` asserting, and the gap between them is exactly
-             * the DECLINED entry — a flow the trusted zone has refused, which is still WAITING (so this arm is
-             * right to keep it out of the two FINISHED arms below, and pending.h's own paragraph says a
-             * predicate answering otherwise would tear its timeline down) and is owed NOTHING by any host (so
-             * the mark below is a lie and the assert says so). The looseness is therefore the FORCING FUNCTION
-             * and not the bug: FLOW_STEP_OWED is the only resting verdict there is, this arm has to reach for
-             * it, and the crash names the state that has no verdict of its own. Narrowing this test to the host
-             * question would send a refused flow to a FINISHED arm, which is the drop §NO BOUNDS forbids.
-             * AND THE FOURTH VERDICT THAT NOTE ASKED FOR IS NOT THE DIFF, WHICH IS RECORDED HERE RATHER THAN
-             * DELETED BECAUSE IT IS THE READING THE NEXT PERSON RE-DERIVES. It said a flow owed nothing needs
-             * "a resting state of its own". A VERDICT SELECTS AN ACTION, and flow_step has exactly three to
-             * select between — tear the timeline down (DONE), take the member out of the pick (OWED), keep
-             * stepping (MORE). A refused flow wants the SECOND, unchanged: it can convert no slice into work,
-             * and `flow_set_host_owed` neither removes it from the frontier nor touches any term of its
-             * weight, so the mark is rank-neutral by construction and the flow keeps its snapshot, its delta,
-             * its rank and every work item it holds. A fourth verdict would be a second name for that one arm,
-             * which is two right answers to one question and is the shape that drifts.
-             * WHAT WAS ACTUALLY SHORT BY ONE WAS NOT THE VERDICT SET BUT THE TWO ASSERTS THAT READ THE MARK,
-             * and one MECHANISM behind them. The mark is a bit meaning INELIGIBLE, the asserts read it as a
-             * claim about the host's DEBT, and they enumerate the reasons a mark may rest on something —
-             * a reply the host can still send, a peer holding a reference — with the refusal missing. The
-             * mechanism is the one the note's own third clause named and mis-read: "session may close over
-             * it" is not a capability to build, it is what already happens, and what it does is DROP the
-             * survivors. engine_sched_slice's tail now writes them to the cold tier before it closes.
-             * THE UNIT SPLITS AND THE VERDICT DOES NOT, WHICH IS THE WHOLE OF THE CORRECTION. What a census
-             * could not say is which of two opposite facts a resting member holds — a debt to bill, or a
-             * residue to carry — and that is a question about attribution, which is what step_unit.h is for.
-             * `pending_host_outstanding` is the same predicate the mark's own assert asks two seams later, so
-             * the row and the assert cannot disagree about which member is which. */
-            /* AND A FLOW STANDING ON AN EXTERNAL SCRIPT ROW RESTS HERE, WHICH IS WHY `seq_awaits` IS A
-             * DISJUNCT OF THIS ARM AND NOT AN ASSERTION BELOW IT. The sequence arm no longer returns at such
-             * a row, so the two arms beneath this one — a close request, and the exit that declares the
-             * timeline OVER — became reachable by a flow holding a row it has not run. Both claim the run is
-             * FINISHED, and a row whose bytes are still in the air falsifies that outright: the reply is
-             * coming, it REPLACES the row, and the next pass compiles it.
-             * IT IS A CONDITION RATHER THAN A `DCHECK` FOR §Fix-the-ROOT'S REASON. The register makes this
-             * true already — engine_queue_into parks an entry naming the row at the moment the row is created,
-             * and the SRC branch's own dev walk asserts that entry is still there — so a DCHECK here would
-             * hold in dev and the state would be impossible only while that walk is compiled in. In release
-             * the flow would reach the exit, the DCHECK that a flow may not finish holding work reads `jobs`
-             * and not `dyn`, and the row would be DROPPED with the timeline. Making the disjunct part of the
-             * SELECTING predicate is what makes the state impossible in both builds, and it costs one read of
-             * a local the block above already computed.
-             * AND IT IS THE STRONGER STATEMENT OF WHY THIS FLOW RESTS, which is why it also decides the name:
-             * "the cursor is at a row whose bytes have not come back" is a fact about this flow's own
-             * sequence, where the other two rows are facts about its register. */
+             * Below the clock-driven sources, as the lifecycle arm is: a debt no task source waits on must not
+             * decide when a task source runs (§8.1.7.3 step 2 conditions on runnable tasks only). Whether a task is
+             * due is a question about the clock, and this engine substitutes a jump for the wait §8.1.7.3 and §8.7
+             * state, so the hooks above ask core/timing/event_loop.h's event_loop_may_advance before moving the
+             * clock and answer 0 where it fails; a due task still runs ahead of this return. Placed above them, one
+             * request in the air would take the flow out of the pick until a host event, losing every due timer and
+             * rendering opportunity (testharness.js sets `all_loaded` in a `setTimeout(…, 0)` from its `load`
+             * handler and would never complete). It stays above the two arms below, which claim the run is
+             * finished.
+             *
+             * It asks `pending_outstanding`, not `pending_count`: a register holding one answered entry has a non-
+             * zero count with nothing outstanding (pending.h), and a deliverable answered entry was taken by the
+             * delivery arm above, so a count would mark a flow waiting for a host event that is not coming. It is
+             * one bit looser than the mark's assert (`pending_entry_host_owed`) on purpose: the gap is the declined
+             * entry, a flow still waiting (so not finished) that no host owes anything. FLOW_STEP_OWED is the only
+             * resting verdict (the three are DONE, OWED, MORE), and the mark is rank-neutral (`flow_set_host_owed`
+             * neither removes the flow nor touches its weight), so a refused flow rests under OWED with its own
+             * unit name; engine_sched_slice's tail writes such survivors to the cold tier before it closes.
+             *
+             * `seq_awaits` is a disjunct, not an assertion below: a flow at an external script row has a reply
+             * coming that replaces the row, so it must not reach the two finished arms. Part of the selecting
+             * predicate, so the state is impossible in release too, where the exit's no-held-work DCHECK is
+             * compiled out and reads `jobs` rather than `dyn`. It also decides the name, being a fact about the
+             * flow's own sequence. */
             else if (seq_awaits || pending_outstanding(f->pending)) {
-                /* every task source is empty; a row or a reply is not — and the three rows are the three
-                   answers to "what is this flow waiting for", asked of the cursor and then of the register
-                   this flow is parked on. */
+                /* Every task source is empty and a row or a reply is not; the three names answer what the flow is
+                   waiting for, asked of the cursor and then of the register. */
                 g_step_unit = seq_awaits
                             ? STEP_UNIT_AWAIT_FETCH_RECORD
                             : pending_host_outstanding(f->pending)
@@ -8712,35 +8045,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                             : STEP_UNIT_AWAIT_DECLINED;
                 return FLOW_STEP_OWED;
             }
-            /* HTML §8.1.4.7 "Unhandled promise rejections"'S "notify about rejected promises" IS NOT AN ARM OF
-               THIS LADDER, and the arm that stood here is DELETED rather than moved down or guarded. It read
-               "the flow has nothing left to run, so every rejection still on its list is one no handler will
-               ever be attached to" — which is the shape §scheduler names outright: a justification RESTING ON A
-               DRAIN is not a guarantee, and "on a frontier that grows it is the same starvation with a reason
-               attached". Everything above this line has to be empty before a flow gets here, so on any page
-               that keeps queueing work the notify never ran at all and every unhandled rejection of the run was
-               silent.
-               WHERE IT WENT IS WHERE HTML PUTS IT: "perform a microtask checkpoint" runs the queue to empty and
-               then, as its own next step, notifies about rejected promises for every settings object of the
-               event loop. engine_sched_slice already asks that exact emptying (no live frame, no parked
-               continuation, no microtask) for the consumer registered one step LATER in the same algorithm, so
-               the notify is called there, in front of it. It is not a scheduler step any more, so it costs no
-               pick and no arm — which is why STEP_UNIT_REJECTION is gone from solver/step_unit.h with it. */
-            /* AND THE ARRIVAL NOTHING PERFORMED — HTML §6.10.1 "Close requests"' potential close request,
-               MODELLED. It is the weakest act of the ladder — work NOBODY did — and the last thing this flow
-               tries before it declares itself finished. The drive ordering the note here used to give (`a
-               driven orphan can new CloseWatcher()`, so take the drive first) still holds and is still held by
-               POSITION rather than by adjacency — but the position is no longer the one this sentence named.
-               IT SAID "BOTH ORPHAN ARMS STAND ABOVE THE TWO CLOCK-DRIVEN SOURCES", and the SEED rung moved
-               below all three of them; what the ordering needs is only that both stand above THIS rung, and
-               both still do. A RESUMED drive has built its call several rungs before this one is asked, and a
-               SEEDED drive is a SIBLING whose watcher lands in the sibling's own delta and never in this
-               flow's — so neither half of the argument was ever about the clock, which is why the claim went
-               stale without the conclusion moving. RETIREMENT: this record goes when the ordering it depends on
-               is asserted rather than described, which for two rungs of one `else if` chain means the
-               boundary-sum assert in engine_frontier_census naming which side each is written on.
-               See engine_close_request_fork for why this flow takes it rather than a sibling, for what ends it
-               without a counter, and for why everything past it is graded FORCED. */
+            /* HTML §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is not an arm of this
+               ladder: perform a microtask checkpoint runs the queue to empty and then notifies for every settings
+               object of the event loop, and engine_sched_slice performs that emptying test, so the notify is called
+               there. A ladder arm reachable only when everything above is empty would never run on a page that
+               keeps queueing work. */
+            /* A modelled potential close request (HTML §6.10.1 Close requests), the weakest act of the ladder, work
+               nobody did, and the last thing tried before the flow declares itself finished. Both orphan rungs stand
+               above it, which is all the ordering needs: a resumed drive has built its call several rungs up, and a
+               seeded drive is a sibling whose watcher lands in its own delta. See engine_close_request_fork for why
+               this flow takes it, what ends it, and why everything past it is forced. */
             else if (engine_close_request_fork(ctx, f)) {
                 g_step_unit = STEP_UNIT_CLOSE_REQUEST; return 0; }
             else {
