@@ -1367,25 +1367,33 @@ JSValue element_view_client_rects(lxb_dom_element_t *el)
     return ev_client_rects(t.rctx, &t);
 }
 
+/* One axis of the enclosing box (`o` 0 for x, 1 for y): its low edge and its extent. When one rectangle
+   supplies both extremes, its own extent is the answer: `(y + h) - y` need not be `h` in IEEE arithmetic, and a
+   browser's fixed-point layout returns `h`. The difference's facts are folded in at a zero example. */
+static void ev_enclosing_axis(const CssPx (*r)[4], size_t n, size_t o, CssPx *lo, CssPx *extent)
+{
+    CssPx min = css_px(0.0), max = css_px(0.0), span;
+    size_t i, imin = 0, imax = 0;
+
+    for (i = 0; i < n; i++) {
+        CssPx a = r[i][o], b = css_px_add(r[i][o], r[i][o + 2]);
+        CssPx elo = css_px_min(a, b), ehi = css_px_max(a, b);
+
+        if (i == 0 || elo.px < min.px) imin = i;
+        if (i == 0 || ehi.px > max.px) imax = i;
+        min = i == 0 ? elo : css_px_min(min, elo);
+        max = i == 0 ? ehi : css_px_max(max, ehi);
+    }
+    span = css_px_sub(max, min);
+    *lo = min;
+    *extent = imin == imax && r[imin][o + 2].px >= 0.0 ? css_px_add(r[imin][o + 2], css_px_sub(span, span)) : span;
+}
+
 void element_view_enclosing_box_px(const CssPx (*r)[4], size_t n, CssPx out[4])
 {
-    CssPx l = css_px(0.0), tp = css_px(0.0), rt = css_px(0.0), bt = css_px(0.0);
-    size_t i;
-
     DCHECK(r != NULL && n > 0, "the smallest rectangle enclosing a list was asked of an empty list");
-    for (i = 0; i < n; i++) {
-        CssPx x0 = r[i][0], y0 = r[i][1], x1 = css_px_add(r[i][0], r[i][2]), y1 = css_px_add(r[i][1], r[i][3]);
-        CssPx il = css_px_min(x0, x1), it = css_px_min(y0, y1), ir = css_px_max(x0, x1), ib = css_px_max(y0, y1);
-
-        l = i == 0 ? il : css_px_min(l, il);
-        tp = i == 0 ? it : css_px_min(tp, it);
-        rt = i == 0 ? ir : css_px_max(rt, ir);
-        bt = i == 0 ? ib : css_px_max(bt, ib);
-    }
-    out[0] = l;
-    out[1] = tp;
-    out[2] = css_px_sub(rt, l);
-    out[3] = css_px_sub(bt, tp);
+    ev_enclosing_axis(r, n, 0, &out[0], &out[2]);
+    ev_enclosing_axis(r, n, 1, &out[1], &out[3]);
 }
 
 /* §6's get the bounding box, steps 3 and 4, over a list of `n` > 0 client rectangles: "If all rectangles in
