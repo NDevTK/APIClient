@@ -2198,7 +2198,7 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
    scheduler. Naming that function here made this primitive depend on the dispatch loop, and through it on the
    whole DOM, so nothing could take the COW delta without taking the browser too. It is a parameter now, which
    is what it always was. */
-void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
+void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*timeline)(void))
 {
     static JSTimeTravelHooks HOOKS = {
         .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
@@ -2211,5 +2211,7 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
            "the time-travel hooks were installed with no generator-fork handler — a concolic branch inside a "
            "generator body would fork a sibling that shares the parent's execution state");
     HOOKS.gen_fork = gen_fork;
+    DCHECK(timeline != NULL, "the time-travel hooks were installed with no timeline reader");
+    HOOKS.timeline = timeline;
     JS_SetTimeTravelHooks(&HOOKS);
 }

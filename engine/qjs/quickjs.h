@@ -2220,6 +2220,9 @@ typedef struct JSTimeTravelHooks {
        silent one) and not a separate case. Raised here, the ordering stops mattering, because the mutation
        cannot happen without passing this. */
     void (*buf_state)(JSContext *ctx, JSValueConst abuf);
+    /* The running flow's timeline (its world: a fork mints a fresh one for each arm), or 0 outside a flow. Read by
+       the dev assert that a continuation the clone gate reads as private was minted in the timeline resuming it. */
+    uint64_t (*timeline)(void);
 } JSTimeTravelHooks;
 /* A BUFFER'S WHOLE STORAGE STATE, as an opaque owned blob — the buffer twin of JS_ObjStateSave, and engine-owned
    for the same reason: two of the things it holds are engine-internal and one of them is a REFERENCE.

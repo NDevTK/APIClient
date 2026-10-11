@@ -4666,6 +4666,13 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
     return 1;
 }
 
+uint64_t engine_flow_timeline(void) {
+    Flow *f = flow_running();
+
+    if (!f) return 0;
+    return ((uint64_t)f->world.session << 48) ^ ((uint64_t)f->world.doc << 32) ^ (uint64_t)f->world.serial;
+}
+
 /* Generator-state fork stash: clone_deep_flow calls gen_fork for each generator body frame it clones (during
    JS_FlowClone), before engine_fork_finalize has the sibling's delta. Appended here; the finalize drains them onto
    the new sibling's delta and resets. Filled and fully drained within one fork. */

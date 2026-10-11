@@ -858,6 +858,9 @@ int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason);
    the flow, and clone_deep_flow built a per-flow gen_data clone. Stash the swap; engine_fork_finalize drains it
    onto the new sibling's COW delta (so the shared generator object resolves per-flow). */
 void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
+/* Install as JSTimeTravelHooks.timeline: the running flow's world (solver/world.h) packed, or 0 when no flow runs.
+   A fork mints a fresh world for each arm, so two readings are equal only inside one timeline since its last fork. */
+uint64_t engine_flow_timeline(void);
 
 /* How many times the dispatch loop context-switched between flows, reported because an interleaving scheduler
    and a FIFO one agree on easy pages, so the interleave has to be observable on its own. Then the jobs queued

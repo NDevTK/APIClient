@@ -1850,6 +1850,7 @@ typedef struct JSAsyncFunctionData {
        slot early. What is dev-only is the READ. */
     uint8_t claim_arm;         /* JSAsyncClaimArm — 0 (NEVER-CLAIMED) until a resume claims it */
     uint32_t claim_fork_gen;   /* the claiming flow's fork generation at the instant of the claim */
+    uint64_t mint_timeline;    /* the timeline its latest await continuation was minted in (written in dev) */
     JSAsyncFunctionState func_state;
 } JSAsyncFunctionData;
 
@@ -55286,6 +55287,9 @@ static JSValue js_async_function_resolve_one(JSContext *ctx, JSAsyncFunctionData
            "that still aliases its slots. Record the owner where the activation is created");
     JS_REF_COUNT(s)++;
     JS_VALUE_GET_OBJ(f)->u.async_function_data = s;
+#if APICLIENT_DEV
+    if (g_time_travel.timeline) s->mint_timeline = g_time_travel.timeline();
+#endif
     return f;
 }
 
@@ -55756,6 +55760,14 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
            and not the gate’s answer — see the residual above. */
         return s;
     } else if (!JS_IsFlowShared(func_obj)) {
+        /* A closure created after this flow's last fork was minted by this flow, in the timeline it is running
+           now (a fork mints a fresh timeline for each arm), so its activation is no other flow's. */
+        DCHECKF(!g_time_travel.timeline || s->mint_timeline == g_time_travel.timeline(),
+                "an await continuation the clone gate reads as private (closureGen=%u > forkGen=%u) was minted in "
+                "timeline %llx and is being resumed in timeline %llx — another flow's continuation reached this "
+                "one, so skipping the clone consumes an activation that flow still holds",
+                (unsigned)JS_ObjFlowGen(func_obj), (unsigned)g_flow_fork_gen,
+                (unsigned long long)s->mint_timeline, (unsigned long long)g_time_travel.timeline());
         arm = JS_ASYNC_CLAIM_SKIPPED_PRIVATE;
     } else {
         JSAsyncFunctionData *c = js_async_frame_clone(ctx, s);
