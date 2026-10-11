@@ -1309,7 +1309,10 @@ static size_t ev_client_rects_px(const EvTarget *t, CssPx (**out)[4])
         return n;
     }
     /* Step 3's second constraint: the table box and the caption boxes `ev_table_fragments` names, each through
-       the one border-area derivation. */
+       the one border-area derivation. Known interop divergence: Chrome answers one rectangle for a captioned
+       table, the table wrapper box's border box (captions and their margins included), for getClientRects()
+       and getBoundingClientRect() alike; §6 step 3 says to include "both the table box and the caption box,
+       if any, but not the anonymous container box", which this follows. */
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE) {
         lxb_dom_element_t **frags = NULL;
 
