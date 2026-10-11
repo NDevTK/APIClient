@@ -886,7 +886,11 @@ function clusterKeyOf(msg) {
          "a document reached the pool naming no browsing-context group — an instance IS its (group, origin) " +
          "agent cluster, so a document with no group would share one cluster (and one heap, and one principal) " +
          "with every document of its origin in every tab the user has open");
-  return String(msg && msg.groupId) + "\u0000" + String((msg && msg.origin) || "");
+  DCHECK(typeof msg.origin === "string",
+         "a document reached the pool with origin " + String(msg.origin) + " — the origin half is the " +
+         "principal `_senderOrigin` or the record stated, a string even when empty (a cold recipe's), and a " +
+         "missing one would key with every empty principal of its group");
+  return String(msg.groupId) + "\u0000" + msg.origin;
 }
 /* The frontier key is the document's address plus its program: `address + "|" + bundle`, with the bundle id
    computed by the engine (qjs_bundle_id, a Lexbor <script> scan of the external src set, whose content-hashed
@@ -2520,9 +2524,9 @@ function engineReserve(cluster, docId, msg, referenced) {
      own; both are written by engineRoot and engineJoin only. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
                 doc: null, records: new Map(),
-                groupId: msg && msg.groupId, _resumed: null, referenced,
+                groupId: msg.groupId, _resumed: null, referenced,
                 _coldLookup: null, _coldOther: null, _bundleId: null,
-                origin: (msg && msg.origin) || "", _resolvers: [], _remoteAsked: new Set(),
+                origin: msg.origin, _resolvers: [], _remoteAsked: new Set(),
                 /* The requests this zone has asked for and not yet answered to the engine, keyed as the
                    answering seam is keyed. The engine re-lists a request with neither value nor refusal every
                    round (solver/engine.c's `skip` is `!u || PEND_HAVE_VALUE || declined`), so a door that issues
