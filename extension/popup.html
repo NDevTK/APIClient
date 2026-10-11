@@ -5,8 +5,11 @@
     <!-- Trusted Types with no policy (Trusted Types §4.2.1 require-trusted-types-for directive, §4.2.2
          trusted-types directive): every HTML sink (innerHTML, outerHTML, insertAdjacentHTML, DOMParser,
          document.write) throws a TypeError when handed a string, so page-derived text reaches this document
-         only as text nodes and attribute values built by lib/dom-builder.js. -->
-    <meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types 'none'" />
+         only as text nodes and attribute values built by lib/dom-builder.js.
+         `connect-src 'none'` (CSP3 §6.1.2 connect-src): this document reaches the network only by messaging the
+         offscreen document's safeFetch. A meta policy combines with the manifest's and can only narrow it, so
+         a fetch from here is refused by the browser rather than by convention. -->
+    <meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types 'none'; connect-src 'none'" />
     <title>API Security Researcher</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
