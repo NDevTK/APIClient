@@ -203,17 +203,37 @@ typedef unsigned CssEnvSet;
 #define CSS_ENV_BIT(f)   (((CssEnvSet)1u) << (f))
 #define CSS_ENV_ALL      ((CssEnvSet)((1u << CSS_ENV_FACT_COUNT) - 1u))
 
+/* The affine form of a length over its facts: `px = c + Σ k[f]·fact_f` in every world, with `val[f]` fact f's
+   value in this realm. It is a normal form of the function and not a record of the operations: two
+   derivations of one function compose the same coefficients. Sums, differences and determined scalings keep
+   it; any other operation over a fact (a product of two facts, a snap, a math function) leaves an opaque
+   function of the same set (`affine` false). Read only where `env` is non-empty, since a determined length is
+   its own constant; `k[f]` is non-zero only for f in `env`, and `val[f]` is written wherever `k[f]` is. It is
+   what lets core/frame/viewport.h say two lengths differ by a constant in every world. */
+typedef struct {
+    bool   affine;
+    double c;
+    double k[CSS_ENV_FACT_COUNT];
+    double val[CSS_ENV_FACT_COUNT];
+} CssPxForm;
+
 typedef struct {
     double      px;      /* THE EXAMPLE — the modelled number, always present, and what C compares */
     CssEnvSet   env;
     JSContext  *realm;   /* the realm whose environment `env` names; NULL exactly when `env` is CSS_ENV_NONE */
+    CssPxForm   form;    /* see CssPxForm; a writer of `px` outside this file goes through css_px_opaque */
 } CssPx;
 
 /* A length the cascade and the layout determined. */
 CssPx css_px(double px);
-/* A length derived from ONE fact in `realm`, carrying `px` as its example — the only way a fact enters a
-   length, so the set below is only ever assembled by the arithmetic. */
+/* A length derived from ONE fact in `realm` by a function this component does not state, carrying `px` as its
+   example (a snapped border width). Its form is opaque. */
 CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px);
+/* The fact itself: `value` is fact `fact`'s value in `realm`, and the length's form is `1·fact`. */
+CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value);
+/* An opaque function of `of`'s facts with example `px` — the one way to replace a length's number outside the
+   arithmetic below (a math function, a rounding, a clamp written by hand). */
+CssPx css_px_opaque(CssPx of, double px);
 
 /* ARITHMETIC OVER THE EXAMPLE, PROPAGATING THE SET. The sum of a determined length and a derived one is
    derived; the sum of two lengths derived from the SAME fact is derived from that one fact (a percentage margin
@@ -231,7 +251,10 @@ CssPx css_px_scale(CssPx a, double k);
    Deciding WHICH is larger on the modelled viewport is media_query.h's layering — §4 answers
    `(max-width: 768px)` against the same modelled number — and the result carries the UNION of the two operands'
    facts, because the operand that lost at this viewport is the one that wins at another. That is why `100vmin`
-   is a function of both viewport axes and not of whichever one is smaller at 1280 x 720. */
+   is a function of both viewport axes and not of whichever one is smaller at 1280 x 720.
+   Where both operands are affine and the facts' ranges put their difference on one side of zero in every
+   world, the winner is the same at every viewport, and the result keeps the winner's form (the set is still
+   the union). Otherwise the form is opaque. */
 CssPx css_px_max(CssPx a, CssPx b);
 CssPx css_px_min(CssPx a, CssPx b);
 /* A PRODUCT AND A QUOTIENT OF TWO OPERANDS, each carrying BOTH their facts. What a `CssPx` carries is a NUMBER

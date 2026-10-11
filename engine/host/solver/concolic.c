@@ -35,6 +35,19 @@
 /* Marks a predicate that is not an equality. It is not a JSConcolicEqOp: reusing LOOSE's zero would make
    `x < 700` claim the page wrote `==`, and a negative value cannot collide with a future member of that enum. */
 enum { CMP_ALGO_NONE = -1 };
+/* The affine facet of a numeric value: `value = c + Σ k[i]·T(term[i])` in every world, where each term is an
+   integer-valued unknown named by its identity, bounded by AFF_TERM_MAX, and the whole is bounded by
+   AFF_EXACT_MAX. Within that bound every value the form takes is an integer a double holds exactly, so the
+   engine's real IEEE operation on the example and the form's arithmetic agree in every world, and a form
+   whose terms cancel is the constant `c`. It is a domain fact about the value and is never inverted to
+   determine a term. `term` is strcmp-sorted and distinct, `k` holds non-zero integers, `c` is an integer, and
+   `n >= 1`: a form with no terms is a concrete number and never stored. */
+typedef struct {
+    int     n;
+    char  **term;
+    double *k;
+    double  c;
+} ConcolicAffine;
 typedef struct {
     char *shape;        /* @H/@S display form */
     char *src;          /* injection identity: the source an @S candidate substitutes at */
@@ -134,6 +147,8 @@ typedef struct {
        Owned and freed at concolic_finalizer. The record has one mint (concolic_alloc, through reclaim_calloc,
        so the never-purchased state is the zero) and no field-by-field clone. */
     char *key_atom;
+    /* The affine facet, or NULL. Written once, at the mint, by aff_attach; owned. */
+    ConcolicAffine *aff;
 } Concolic;
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
@@ -1508,6 +1523,141 @@ static unsigned root_whose_or_unstated(unsigned m)
     return m ? m : (1u << CONCOLIC_WHOSE_UNSTATED);
 }
 
+/* ---- the affine facet (ConcolicAffine) ---------------------------------------------------------------------- */
+
+/* A term is at most 2^32 in magnitude: every term is minted from a Web IDL `long` (2^31) less an integer the
+   mint asserts is within 2^31. A form whose bound exceeds 2^53 leaves the integers a double holds exactly. */
+#define AFF_TERM_MAX  4294967296.0
+#define AFF_EXACT_MAX 9007199254740992.0
+
+static void aff_free(ConcolicAffine *a)
+{
+    int i;
+
+    if (!a) return;
+    for (i = 0; i < a->n; i++) free(a->term[i]);
+    free(a->term);
+    free(a->k);
+    free(a);
+}
+
+static const ConcolicAffine *aff_of(JSValueConst v)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    return c ? c->aff : NULL;
+}
+
+/* One operand of an affine combination: a value carrying the facet, or a concrete Number that is an integer
+   the bound admits. Anything else (a String, a concolic with no facet, a fraction) has no affine form.
+   No value with a form is ever -0, which is what makes a cancelled form exactly `c`: §6.1.6.1.7 Number::add
+   gives -0 only for two -0 operands and Number::subtract only for -0 less +0. So -0 is no operand here, and
+   the operators that turn +0 into -0 (negation, a product by a negative number) leave no form. */
+typedef struct { const ConcolicAffine *form; double c; } AffOperand;
+
+static int aff_operand(JSContext *ctx, JSValueConst v, AffOperand *o)
+{
+    double d = 0.0;
+
+    o->form = NULL;
+    o->c = 0.0;
+    if (concolic_is(v)) return (o->form = aff_of(v)) != NULL;
+    if (!JS_IsNumber(v) || JS_ToFloat64(ctx, &d, v) != 0) return 0;
+    if (!isfinite(d) || d != trunc(d) || fabs(d) > AFF_EXACT_MAX || (d == 0.0 && signbit(d))) return 0;
+    o->c = d;
+    return 1;
+}
+
+/* `ka·a + kb·b`, both integers. Returns 1 with `*out` set to the new form, 0 with `*out` NULL and `*konst` set
+   when every term cancels, and -1 when the result leaves the bound. The term lists are sorted, so this is a
+   merge. */
+static int aff_lin(const AffOperand *a, double ka, const AffOperand *b, double kb, ConcolicAffine **out,
+                   double *konst)
+{
+    int na = a->form ? a->form->n : 0, nb = b->form ? b->form->n : 0, i = 0, j = 0, n = 0;
+    double c = ka * (a->form ? a->form->c : a->c) + kb * (b->form ? b->form->c : b->c), bound;
+    ConcolicAffine *r;
+
+    DCHECK(ka == trunc(ka) && kb == trunc(kb), "an affine combination was asked for a fractional coefficient");
+    *out = NULL;
+    *konst = 0.0;
+    bound = fabs(c);
+    r = reclaim_calloc(1, sizeof *r);
+    CHECK(r, "concolic: OOM composing an affine form");
+    r->term = reclaim_malloc((size_t)(na + nb + 1) * sizeof *r->term);
+    r->k = reclaim_malloc((size_t)(na + nb + 1) * sizeof *r->k);
+    CHECK(r->term && r->k, "concolic: OOM composing an affine form's terms");
+    while (i < na || j < nb) {
+        int cmp = i >= na ? 1 : j >= nb ? -1 : strcmp(a->form->term[i], b->form->term[j]);
+        const char *t = cmp <= 0 ? a->form->term[i] : b->form->term[j];
+        double k = (cmp <= 0 ? ka * a->form->k[i++] : 0.0) + (cmp >= 0 ? kb * b->form->k[j++] : 0.0);
+
+        if (k == 0.0) continue;
+        r->term[n] = strdup(t);
+        CHECK(r->term[n], "concolic: OOM copying an affine term");
+        r->k[n++] = k;
+        bound += fabs(k) * AFF_TERM_MAX;
+    }
+    r->n = n;
+    r->c = c;
+    if (bound > AFF_EXACT_MAX) { aff_free(r); return -1; }
+    if (n == 0) { aff_free(r); *konst = c; return 0; }
+    *out = r;
+    return 1;
+}
+
+/* The identity of a value with a form: the form itself, so two derivations of one function name one value.
+   Heap string the caller owns. */
+static char *aff_ident(const ConcolicAffine *a)
+{
+    const char **f = reclaim_malloc((size_t)(2 * a->n + 1) * sizeof *f);
+    char **owned = reclaim_malloc((size_t)(a->n + 1) * sizeof *owned);
+    char *id;
+    int i;
+
+    CHECK(f && owned, "concolic: OOM naming an affine form");
+    owned[a->n] = shapef("%.17g", a->c);
+    f[0] = owned[a->n];
+    for (i = 0; i < a->n; i++) {
+        owned[i] = shapef("%.17g", a->k[i]);
+        f[1 + 2 * i] = a->term[i];
+        f[2 + 2 * i] = owned[i];
+    }
+    id = concolic_ident_compose("aff", f, 2 * a->n + 1);
+    for (i = 0; i <= a->n; i++) free(owned[i]);
+    free(owned);
+    free(f);
+    return id;
+}
+
+/* Hang `a` on `v`'s record, consumed. `v` may be a plain value — a candidate re-fire delivers one — and the form
+   is then dropped with nothing to describe. */
+static void aff_attach(JSValueConst v, ConcolicAffine *a)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    if (!c) { aff_free(a); return; }
+    DCHECK(c->aff == NULL, "an affine form was attached twice to one value — the facet is written at the mint");
+    c->aff = a;
+}
+
+/* The concrete Number a cancelled form stands for. `example`, when the operands carried one, is the real
+   operation the engine ran, and it must be that constant: the operands' forms say so for every world. */
+static JSValue aff_constant(JSContext *ctx, double konst, JSValueConst example, const char *op)
+{
+    double ex = 0.0;
+
+    if (!JS_IsUndefined(example)) {
+        int ok = JS_ToFloat64(ctx, &ex, example) == 0;
+
+        DCHECKF(ok && ex == konst,
+                "the operands of `%s` carry affine forms whose terms cancel to %.17g, and the operation run on "
+                "their examples gave %.17g — one operand's form is not the function its example was computed by",
+                op, konst, ex);
+    }
+    return JS_NewInt64(ctx, (int64_t)konst);
+}
+
 /* Mark that this value's `src` names this value (`src_self`). Called only from the two mints that read a pin
    under `src`: a source read (through concolic_derived) and a member read (through concolic_alloc). A function
    because a candidate re-fire makes the mint return the attacker's bytes from concolic_deliver, not a concolic,
@@ -1700,6 +1850,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->sp_subj);
     ident_list_free(c->conj, c->conj_n);
     free(c->key_atom);
+    aff_free(c->aff);
     JS_FreeValueRT(rt, c->example);
     /* The second owned JSValue on this record. A field added to the struct is an obligation here and at
        concolic_gc_mark together. JS_UNINITIALIZED is not refcounted, so the never-asked case needs no test. */
@@ -3115,6 +3266,29 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     JSValue res;
 
     if (!ca && !cb) return 0;
+    /* Two Numbers whose forms differ by a constant are equal in every world or in none: §7.2.13 step 1 hands two
+       Numbers to §7.2.14, which compares them by Number::equal, so both algorithms answer `a - b === 0`. */
+    {
+        AffOperand oa, ob;
+        ConcolicAffine *d = NULL;
+        double konst = 0.0;
+
+        if (ca && cb && aff_operand(ctx, a, &oa) && aff_operand(ctx, b, &ob) &&
+            aff_lin(&oa, 1.0, &ob, -1.0, &d, &konst) == 0) {
+            JSValue ex = cmp_example(ctx, a, b, ca, cb, is_neq, op);
+            int holds = (konst == 0.0) ^ (is_neq != 0);
+
+            DCHECKF(JS_IsUndefined(ex) || JS_ToBool(ctx, ex) == holds,
+                    "two values whose affine forms differ by the constant %.17g gave the opposite answer to "
+                    "`%s` on their examples — one operand's form is not the function its example was computed "
+                    "by", konst, is_neq ? "!=" : "==");
+            JS_FreeValue(ctx, ex);
+            JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+            sp[-2] = JS_NewBool(ctx, holds);
+            return 1;
+        }
+        aff_free(d);
+    }
     opq = ca ? a : b; other = ca ? b : a;
     src = concolic_src_c(opq);
     root = concolic_root_c(opq);   /* the same operand, or concolic_alloc's assert sees two facts about two values */
@@ -3295,6 +3469,35 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     w = snprintf(opid, sizeof opid, "rel%d", op);
     DCHECK(w > 0 && (size_t)w < sizeof opid, "a relational operator's id did not fit its own buffer");
     (void)w;
+    /* Two Numbers whose forms differ by a constant are ordered the same way in every world: §7.2.12 IsLessThan
+       compares two Numbers by Number::lessThan, so the relation is the constant's against zero. */
+    {
+        AffOperand oa, ob;
+        ConcolicAffine *d = NULL;
+        double konst = 0.0;
+
+        if (ca && cb && aff_operand(ctx, a, &oa) && aff_operand(ctx, b, &ob) &&
+            aff_lin(&oa, 1.0, &ob, -1.0, &d, &konst) == 0) {
+            int holds = rel == REL_LT ? konst < 0.0 : rel == REL_LE ? konst <= 0.0
+                      : rel == REL_GT ? konst > 0.0 : konst >= 0.0;
+#if APICLIENT_DEV
+            JSValue exa = concolic_example(ctx, a), exb = concolic_example(ctx, b);
+            double da = 0.0, db = 0.0;
+
+            if (!JS_IsUndefined(exa) && !JS_IsUndefined(exb) && JS_ToFloat64(ctx, &da, exa) == 0 &&
+                JS_ToFloat64(ctx, &db, exb) == 0)
+                DCHECKF(da - db == konst,
+                        "two values whose affine forms differ by the constant %.17g have examples %.17g and "
+                        "%.17g — one operand's form is not the function its example was computed by", konst,
+                        da, db);
+            JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
+#endif
+            JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+            sp[-2] = JS_NewBool(ctx, holds);
+            return 1;
+        }
+        aff_free(d);
+    }
     {
         JSValueConst opq = ca ? a : b, other = ca ? b : a;
         char *sa = derived_operand_shape(ctx, a), *sb = derived_operand_shape(ctx, b);
@@ -3441,6 +3644,31 @@ static int carith_apply32(JSContext *ctx, int op, JSValueConst exa, JSValueConst
     return 1;
 }
 
+/* The affine form of `a op b` (aff_lin's three answers; -1 also for an operator that has none). §6.1.6.1's
+   unary plus, increment and decrement keep the operand's form; a difference combines two; a product keeps one
+   only when the other operand is a positive integer, since a product by 0 is ±0 by the sign of the unknown and
+   one by a negative number turns +0 into -0. */
+static int aff_arith(JSContext *ctx, int op, int nops, JSValueConst a, JSValueConst b, ConcolicAffine **out,
+                     double *konst)
+{
+    AffOperand oa, ob, one = { NULL, 1.0 };
+
+    *out = NULL;
+    *konst = 0.0;
+    if (!aff_operand(ctx, a, &oa) || (nops == 2 && !aff_operand(ctx, b, &ob))) return -1;
+    switch (op) {
+    case JS_CARITH_PLUS: return aff_lin(&oa, 1.0, &one, 0.0, out, konst);
+    case JS_CARITH_INC:  return aff_lin(&oa, 1.0, &one, 1.0, out, konst);
+    case JS_CARITH_DEC:  return aff_lin(&oa, 1.0, &one, -1.0, out, konst);
+    case JS_CARITH_SUB:  return aff_lin(&oa, 1.0, &ob, -1.0, out, konst);
+    case JS_CARITH_MUL:
+        if (!oa.form && ob.form && oa.c > 0.0) return aff_lin(&ob, oa.c, &one, 0.0, out, konst);
+        if (oa.form && !ob.form && ob.c > 0.0) return aff_lin(&oa, ob.c, &one, 0.0, out, konst);
+        return -1;
+    default: return -1;
+    }
+}
+
 int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     JSValue a = sp[-nops], b = nops == 2 ? sp[-1] : JS_UNDEFINED;
     int ca = concolic_is(a), cb = nops == 2 && concolic_is(b);
@@ -3528,8 +3756,28 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
         JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     }
 
-    res = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
-                           root_whose_or_unstated(derived_root_whose(ops, nops)), ident, example);
+    /* The affine facet: a sum, a difference or a product by a positive integer of values with forms has one,
+       and one whose terms cancel is the constant they cancel to in every world. */
+    {
+        ConcolicAffine *af = NULL;
+        double konst = 0.0;
+        int got = aff_arith(ctx, op, nops, a, b, &af, &konst);
+
+        if (got == 0) {
+            JSValue k = aff_constant(ctx, konst, example, name);
+
+            JS_FreeValue(ctx, example);
+            free(shape); free(root); free(ident);
+            JS_FreeValue(ctx, sp[-nops]);
+            if (nops == 2) JS_FreeValue(ctx, sp[-1]);
+            sp[-nops] = k;
+            return 1;
+        }
+        if (got == 1) { free(ident); ident = aff_ident(af); }
+        res = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
+                               root_whose_or_unstated(derived_root_whose(ops, nops)), ident, example);
+        if (af) aff_attach(res, af);
+    }
     free(shape);
     free(root);
     JS_FreeValue(ctx, sp[-nops]);
@@ -5040,8 +5288,31 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     { const char *f[2]; char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
       f[0] = ia; f[1] = ib; ident = concolic_ident_compose("+", f, 2); free(ia); free(ib); }
 
+    /* §13.15.3's numeric arm over two values with affine forms (aff_operand admits Numbers only, so step 1.c's
+       String test is false for both): the forms add, and a sum whose terms cancel is that constant. */
+    ConcolicAffine *af = NULL;
+    double konst = 0.0;
+    int got = -1;
+    {
+        AffOperand oa, ob;
+
+        if (op == JS_CONCOLIC_ADD_PLUS && aff_operand(ctx, a, &oa) && aff_operand(ctx, b, &ob))
+            got = aff_lin(&oa, 1.0, &ob, 1.0, &af, &konst);
+    }
+    if (got == 0) {
+        JSValue k = aff_constant(ctx, konst, example, "+");
+
+        JS_FreeValue(ctx, example);
+        free(ident); free(sha); free(shb); free(shape); free(root);
+        JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+        sp[-2] = k;
+        return 1;
+    }
+    if (got == 1) { free(ident); ident = aff_ident(af); }
+
     JSValue result = concolic_derived(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example);
                                                               /* consumes example and ident */
+    if (af) aff_attach(result, af);
     free(sha); free(shb); free(shape); free(root);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;
@@ -5297,20 +5568,16 @@ static char *concolic_joint_join(const char *const *parts, const int *order, int
     return out;
 }
 
-JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
-                                   int n, JSValue computed)
+/* The joint shape and provenance of a fact set, composed in the set's canonical order (owned by the caller). */
+static void joint_compose(const char *const *shapes, const char *const *srcs, int n, char **shape, char **src)
 {
     int *order;
-    char *shape, *src;
-    JSValue out;
     int i;
 
     DCHECK(n >= 1 && shapes != NULL && srcs != NULL,
            "a joint domain was minted over NO members — a value derived from nothing is one the cascade and "
            "the layout determined, and its caller must hand back the computed value rather than ask for a "
            "domain over an empty set");
-    if (!g_source_overlay)
-        return computed;
     for (i = 0; i < n; i++) {
         DCHECK(shapes[i] != NULL && srcs[i] != NULL,
                "a member of a joint domain arrived with no display shape or no source identity — every member "
@@ -5330,9 +5597,60 @@ JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, co
                "would count how many times the arithmetic touched a fact rather than name which facts the "
                "value is a function of — and the same dependence assembled by a different route would carry a "
                "different identity and fork a predicate this flow has already decided");
-    shape = concolic_joint_join(shapes, order, n);
-    src = concolic_joint_join(srcs, order, n);
+    *shape = concolic_joint_join(shapes, order, n);
+    *src = concolic_joint_join(srcs, order, n);
+    free(order);
+}
+
+JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
+                                   int n, JSValue computed)
+{
+    char *shape, *src;
+    JSValue out;
+
+    if (!g_source_overlay)
+        return computed;
+    joint_compose(shapes, srcs, n, &shape, &src);
     out = concolic_source_wrap(ctx, shape, src, computed);
-    free(order); free(shape); free(src);
+    free(shape); free(src);
+    return out;
+}
+
+/* See concolic.h. The value is derived from the facts rather than read as one, so it is minted beside the
+   source mint and not through it: a pin this flow holds on a fact names the fact, never this function of it. */
+JSValue concolic_source_wrap_joint_affine(JSContext *ctx, const char *const *shapes, const char *const *srcs,
+                                          int n, const char *term, double c, JSValue computed)
+{
+    ConcolicAffine *af;
+    char *shape, *src;
+    double ex = 0.0;
+    JSValue out;
+
+    DCHECK(g_source_overlay != SOURCE_OVERLAY_UNDECLARED,
+           "a browser component minted an environment-derived value before this host said whether it "
+           "EXPLORES — see concolic_source_wrap");
+    if (g_source_overlay != SOURCE_OVERLAY_EXPLORING)
+        return computed;
+    DCHECK(term != NULL && JS_IsNumber(computed),
+           "an affine environment value was minted with no term or with an example that is not a Number");
+    JS_ToFloat64(ctx, &ex, computed);
+    DCHECKF(c == trunc(c) && fabs(c) <= AFF_TERM_MAX / 2 && ex == trunc(ex) && fabs(ex) <= AFF_TERM_MAX / 2,
+            "an affine environment value `%.17g + T` with example %.17g: the constant and the example must be "
+            "integers within 2^31, so the term is an integer within 2^32 (AFF_TERM_MAX)", c, ex);
+    METRIC_ADD(source_reads, 1);
+    joint_compose(shapes, srcs, n, &shape, &src);
+    af = reclaim_calloc(1, sizeof *af);
+    CHECK(af, "concolic: OOM recording an affine form");
+    af->n = 1;
+    af->term = reclaim_malloc(sizeof *af->term);
+    af->k = reclaim_malloc(sizeof *af->k);
+    CHECK(af->term && af->k, "concolic: OOM recording an affine term");
+    af->term[0] = strdup(term);
+    CHECK(af->term[0], "concolic: OOM copying an affine term");
+    af->k[0] = 1.0;
+    af->c = c;
+    out = concolic_derived(ctx, shape, src, src, 1u << CONCOLIC_WHOSE_WORLD, aff_ident(af), computed);
+    aff_attach(out, af);
+    free(shape); free(src);
     return out;
 }

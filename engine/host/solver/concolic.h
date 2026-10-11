@@ -470,6 +470,17 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
  * `computed` is CONSUMED and becomes the joint value's example. */
 JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
                                    int n, JSValue computed);
+/* …AND THE SAME JOINT DOMAIN FOR A VALUE WHOSE AFFINE FORM THE COMPONENT KNOWS: `computed` is `c + T`, where
+ * `T` is an integer-valued function of the facts named by `term`, an identity the caller composes canonically
+ * so that two values over one function of the facts name one term. Provenance and display are the joint's.
+ * The value carries an affine facet (concolic.c's ConcolicAffine), so a difference of two such values over one
+ * term is the constant between them in every world, and a comparison between them is decided.
+ * IT IS A DERIVATION AND NOT A SOURCE READ: the value is a function of the facts, so a pin this flow holds on a
+ * fact is never read back as this value, and its identity is its form rather than the facts' own key.
+ * `c` and `computed` are integers within 2^31 (a Web IDL `long` and the integer part of its constant), which
+ * bounds the term within 2^32. `computed` is CONSUMED. */
+JSValue concolic_source_wrap_joint_affine(JSContext *ctx, const char *const *shapes, const char *const *srcs,
+                                          int n, const char *term, double c, JSValue computed);
 
 /* Propagation through a CONCATENATION — installed as JSConcolicHooks.add (JS_SetConcolicHooks). `op` names
    which spec algorithm the caller is performing, because 13.15.3's `+` has a numeric arm and 22.1.3.5's

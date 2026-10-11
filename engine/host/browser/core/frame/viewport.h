@@ -195,6 +195,13 @@ bool viewport_canvas_region(JSContext *ctx, CssPx out[4]);
    resolved value, §6's `long` for a client extent) and is CONSUMED. A length whose `env` is CSS_ENV_NONE is
    handed back unchanged — that is the positive statement css_length.h describes, not a missing domain. */
 JSValue viewport_env_derived(CssPx len, JSValue computed);
+/* …FOR A LENGTH THAT CROSSES AS A WEB IDL `long`, where `computed` is `len` rounded to the nearest integer
+   (core/dom/element_view.h). Where `len`'s form is affine (css_length.h's CssPxForm, `c + L(facts)`), the
+   rounding is `floor(c) + round(L + frac(c))`, so the value is minted with an affine facet over that rounded
+   term: two lengths over one linear part and one fractional constant differ by an integer in every world, and
+   the page's own subtraction of them is that integer. An opaque length crosses as viewport_env_derived does.
+   CONSUMES `computed`. */
+JSValue viewport_env_derived_long(CssPx len, JSValue computed);
 
 /* CSSOM VIEW §4's `scrollX`/`scrollY` — "the x-coordinate, relative to the initial containing block origin, of
    the left of the viewport". STORED, not derived: CSSOM VIEW §3.1 "Scrolling"'s perform a scroll writes it

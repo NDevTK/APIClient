@@ -75,7 +75,7 @@ CssPx css_default_font_size(JSContext *realm)
            "agent applying these guidelines should avoid creating. The fix is the PICKED number, not a clamp: "
            "clamping the table would make its two smallest keywords compute the same length and stop it being "
            "eight ratios of one value. Raise the default, or state why this user agent departs from §2.5.1");
-    return css_px_env(CSS_ENV_DEFAULT_FONT_SIZE, realm, CSS_DEFAULT_FONT_SIZE_PX);
+    return css_px_fact(CSS_ENV_DEFAULT_FONT_SIZE, realm, CSS_DEFAULT_FONT_SIZE_PX);
 }
 
 bool css_absolute_size_keyword(const char *kw, size_t n)

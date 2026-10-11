@@ -126,12 +126,12 @@ double viewport_device_pixel_ratio(JSContext *ctx)
 /* CSS 2.1 §10.1: the initial containing block "has the dimensions of the viewport". */
 CssPx viewport_icb_width(JSContext *ctx)
 {
-    return css_px_env(CSS_ENV_ICB_WIDTH, ctx, viewport_width(ctx));
+    return css_px_fact(CSS_ENV_ICB_WIDTH, ctx, viewport_width(ctx));
 }
 
 CssPx viewport_icb_height(JSContext *ctx)
 {
-    return css_px_env(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
+    return css_px_fact(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
 }
 
 /* css-values-4 §6.1.2.1: the SMALL viewport size is "the viewport sized assuming any UA interfaces that are
@@ -141,22 +141,22 @@ CssPx viewport_icb_height(JSContext *ctx)
    shared is the FACT each carries, so a page comparing two families forks rather than being answered. */
 CssPx viewport_small_width(JSContext *ctx)
 {
-    return css_px_env(CSS_ENV_SMALL_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
+    return css_px_fact(CSS_ENV_SMALL_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
 }
 
 CssPx viewport_small_height(JSContext *ctx)
 {
-    return css_px_env(CSS_ENV_SMALL_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
+    return css_px_fact(CSS_ENV_SMALL_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
 }
 
 CssPx viewport_dynamic_width(JSContext *ctx)
 {
-    return css_px_env(CSS_ENV_DYNAMIC_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
+    return css_px_fact(CSS_ENV_DYNAMIC_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
 }
 
 CssPx viewport_dynamic_height(JSContext *ctx)
 {
-    return css_px_env(CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
+    return css_px_fact(CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
 }
 
 bool viewport_canvas_region(JSContext *ctx, CssPx out[4])
@@ -233,21 +233,22 @@ static void viewport_src_key(JSContext *ctx, const char *member, char *out, size
 /* See viewport.h: the one place a length's fact SET becomes a domain a page can fork on. Every fact in the set
    contributes one member of solver/concolic.h's JOINT identity, in the table's own order — which the solver
    canonicalizes, so the identity is the set's and not this loop's. */
-JSValue viewport_env_derived(CssPx len, JSValue computed)
-{
+/* One member per fact in `len`'s set, in the table's order: `key[i]` the per-realm source key, `hole[i]` its
+   braced shape, `fact[i]` the fact. Answers the count. */
+typedef struct {
     const char *shapes[CSS_ENV_FACT_COUNT];
     const char *srcs[CSS_ENV_FACT_COUNT];
-    char key[CSS_ENV_FACT_COUNT][VIEWPORT_SRC_MAX];
-    char hole[CSS_ENV_FACT_COUNT][VIEWPORT_SRC_MAX];
+    CssEnvFact  fact[CSS_ENV_FACT_COUNT];
+    char        key[CSS_ENV_FACT_COUNT][VIEWPORT_SRC_MAX];
+    char        hole[CSS_ENV_FACT_COUNT][VIEWPORT_SRC_MAX];
+} ViewportEnvMembers;
+
+static int viewport_env_members(CssPx len, ViewportEnvMembers *m)
+{
+    char (*key)[VIEWPORT_SRC_MAX] = m->key, (*hole)[VIEWPORT_SRC_MAX] = m->hole;
+    const char **shapes = m->shapes, **srcs = m->srcs;
     int f, n = 0;
 
-    if (len.env == CSS_ENV_NONE) {
-        DCHECK(len.realm == NULL,
-               "a length that derives from NO environment fact carried a realm anyway — the two are written "
-               "together by css_px_env and by nothing else, so one without the other is a length assembled "
-               "field-by-field past that entry");
-        return computed;
-    }
     DCHECK(len.realm != NULL,
            "a length that is a function of an environment fact reached the boundary with no realm to answer it "
            "per — a child navigable's ICB is 300 CSS pixels wide and the top-level traversable's is 1280, so "
@@ -283,10 +284,74 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
         snprintf(hole[n], sizeof hole[n], "{%s}", VIEWPORT_FACT[f].member);
         shapes[n] = hole[n];
         srcs[n] = key[n];
+        m->fact[n] = (CssEnvFact)f;
         n++;
     }
     DCHECK(n >= 1, "a non-empty fact set named no facts — the set and the table have come apart");
-    return concolic_source_wrap_joint(len.realm, shapes, srcs, n, computed);
+    return n;
+}
+
+JSValue viewport_env_derived(CssPx len, JSValue computed)
+{
+    ViewportEnvMembers m;
+    int n;
+
+    if (len.env == CSS_ENV_NONE) {
+        DCHECK(len.realm == NULL,
+               "a length that derives from NO environment fact carried a realm anyway — the two are written "
+               "together by css_px_env and by nothing else, so one without the other is a length assembled "
+               "field-by-field past that entry");
+        return computed;
+    }
+    n = viewport_env_members(len, &m);
+    return concolic_source_wrap_joint(len.realm, m.shapes, m.srcs, n, computed);
+}
+
+/* See viewport.h. The term is named by its linear part over the facts' per-realm keys, in the table's order,
+   and by the fractional constant: `round(L + r)` is one function of the facts for one (L, r). */
+JSValue viewport_env_derived_long(CssPx len, JSValue computed)
+{
+    ViewportEnvMembers m;
+    const char *fields[2 * CSS_ENV_FACT_COUNT + 1];
+    char spelled[CSS_ENV_FACT_COUNT + 1][32];
+    double at = 0.0, n_int, r, ex = 0.0;
+    int n, i, nf = 0;
+    char *term;
+    JSValue out;
+
+    if (len.env == CSS_ENV_NONE || !len.form.affine) return viewport_env_derived(len, computed);
+    n = viewport_env_members(len, &m);
+    /* The form evaluated at this realm's facts is the example the layout computed: a writer that replaced the
+       number and kept the form would fail here (css_px_opaque is the route that drops it). */
+    at = len.form.c;
+    for (i = 0; i < n; i++) at += len.form.k[m.fact[i]] * len.form.val[m.fact[i]];
+    DCHECKF(fabs(at - len.px) <= 1e-9 * fmax(1.0, fabs(len.px)),
+            "a length of %.17g CSS px carries an affine form that evaluates to %.17g at its own facts — its "
+            "number was replaced past css_px_opaque, or its form was composed from a different operation than "
+            "its example", len.px, at);
+    JS_ToFloat64(len.realm, &ex, computed);
+    n_int = floor(len.form.c);
+    r = len.form.c - n_int;
+    snprintf(spelled[0], sizeof spelled[0], "%.17g", r);
+    fields[nf++] = spelled[0];
+    for (i = 0; i < n; i++) {
+        double k = len.form.k[m.fact[i]];
+
+        if (k == 0.0) continue;
+        snprintf(spelled[i + 1], sizeof spelled[i + 1], "%.17g", k);
+        fields[nf++] = m.srcs[i];
+        fields[nf++] = spelled[i + 1];
+    }
+    /* No fact moves the length: it is `round(c)` in every world, which is the example. */
+    if (nf == 1) {
+        DCHECKF(ex == floor(len.form.c + 0.5),
+                "a length whose form is the constant %.17g crossed as the `long` %.17g", len.form.c, ex);
+        return computed;
+    }
+    term = concolic_ident_compose("cssom-long-round", fields, nf);
+    out = concolic_source_wrap_joint_affine(len.realm, m.shapes, m.srcs, n, term, n_int, computed);
+    free(term);
+    return out;
 }
 
 /* See viewport.h: the one seam, and the one speller of the key.

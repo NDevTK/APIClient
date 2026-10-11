@@ -213,7 +213,7 @@ JSValue element_view_length_long(JSContext *ctx, CssPx px)
            "a CSSOM VIEW length member declared `long` was handed a length that is not FINITE — every operand "
            "of every used value in this engine is a finite number of CSS pixels, so an infinity or a NaN here "
            "is a derivation that lost an operand rather than a value to convert");
-    return viewport_env_derived(px, ev_long(ctx, floor(px.px + 0.5)));
+    return viewport_env_derived_long(px, ev_long(ctx, floor(px.px + 0.5)));
 }
 
 static JSValue ev_length_long(JSContext *ctx, CssPx px)

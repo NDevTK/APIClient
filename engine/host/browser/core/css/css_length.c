@@ -24,8 +24,10 @@ static char *css_len_strdup(const char *s)
 
 CssPx css_px(double px)
 {
-    CssPx out = { px, CSS_ENV_NONE, NULL };
+    CssPx out;
 
+    memset(&out, 0, sizeof out);
+    out.px = px;
     return out;
 }
 
@@ -44,16 +46,37 @@ CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px)
     return out;
 }
 
+CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value)
+{
+    CssPx out = css_px_env(fact, realm, value);
+
+    DCHECK(isfinite(value), "an environment fact's own value is not finite — every fact is a picked size or "
+                            "ratio of the modelled device, and a NaN or an infinity has no affine form");
+    out.form.affine = true;
+    out.form.k[fact] = 1.0;
+    out.form.val[fact] = value;
+    return out;
+}
+
+CssPx css_px_opaque(CssPx of, double px)
+{
+    CssPx out = css_px(px);
+
+    if (of.env == CSS_ENV_NONE) return out;
+    out.env = of.env;
+    out.realm = of.realm;
+    return out;
+}
+
 /* THE UNION, WHICH IS THE WHOLE OF THE PROPAGATION — a length is a joint function of every fact either operand
-   was a function of, and nothing here records WHICH function it is (that would be the transform-expression
-   §Re-execution forbids; the example is right because the caller's real arithmetic produced `px`).
+   was a function of. The result's form is opaque; the affine operations below restore it where they can.
    THE REALM IS ONE, and it is asserted rather than merged: §10.1's containing-block chain and §6's snap are
    stated over one document, so two realms meeting in one length would mean a layout spanning documents — at
    which point the SET would have to carry a realm per fact, since `{viewport#3}` and `{viewport#7}` are two
    different questions with the same member name. */
 static CssPx css_px_combine(CssPx a, CssPx b, double px)
 {
-    CssPx out = { px, a.env | b.env, a.realm ? a.realm : b.realm };
+    CssPx out = css_px(px);
 
     DCHECK((a.env == CSS_ENV_NONE) == (a.realm == NULL) && (b.env == CSS_ENV_NONE) == (b.realm == NULL),
            "a length reached the arithmetic carrying facts without a realm, or a realm without facts — the two "
@@ -65,49 +88,176 @@ static CssPx css_px_combine(CssPx a, CssPx b, double px)
            "facts are different questions under one member name — and §10.1's containing-block chain walks one "
            "document, so this is arithmetic spanning two. BUILD the realm into the fact set (a realm per member "
            "rather than one per length) at the point a length is allowed to cross a document boundary");
+    out.env = a.env | b.env;
+    out.realm = a.realm ? a.realm : b.realm;
     return out;
 }
 
-CssPx css_px_add(CssPx a, CssPx b)   { return css_px_combine(a, b, a.px + b.px); }
-CssPx css_px_sub(CssPx a, CssPx b)   { return css_px_combine(a, b, a.px - b.px); }
+/* ---- the affine form (css_length.h's CssPxForm) ----------------------------------------------------------- */
 
+static bool css_px_is_affine(CssPx a)
+{
+    return a.env == CSS_ENV_NONE || a.form.affine;
+}
+
+/* `a`'s constant term: a determined length is its own constant. */
+static double css_px_form_c(CssPx a)
+{
+    return a.env == CSS_ENV_NONE ? a.px : a.form.c;
+}
+
+/* `out`'s form becomes `ka·a + kb·b`, over operands that are both affine. A fact both carry has one value,
+   because a fact is one number per realm. */
+static void css_px_form_lin(CssPx *out, CssPx a, double ka, CssPx b, double kb)
+{
+    int f;
+
+    DCHECK(css_px_is_affine(a) && css_px_is_affine(b), "a linear combination was formed over an opaque length");
+    out->form.affine = out->env != CSS_ENV_NONE;
+    out->form.c = ka * css_px_form_c(a) + kb * css_px_form_c(b);
+    for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
+        double fa = a.env != CSS_ENV_NONE ? a.form.k[f] : 0.0, fb = b.env != CSS_ENV_NONE ? b.form.k[f] : 0.0;
+
+        DCHECKF(fa == 0.0 || fb == 0.0 || a.form.val[f] == b.form.val[f],
+                "fact %d entered two lengths of one realm with two values, %g and %g — a fact is one number "
+                "per realm, so one of the two was minted from something other than the fact", f,
+                a.form.val[f], b.form.val[f]);
+        out->form.k[f] = ka * fa + kb * fb;
+        out->form.val[f] = fa != 0.0 ? a.form.val[f] : fb != 0.0 ? b.form.val[f] : 0.0;
+    }
+}
+
+CssPx css_px_add(CssPx a, CssPx b)
+{
+    CssPx out = css_px_combine(a, b, a.px + b.px);
+
+    if (css_px_is_affine(a) && css_px_is_affine(b)) css_px_form_lin(&out, a, 1.0, b, 1.0);
+    return out;
+}
+
+CssPx css_px_sub(CssPx a, CssPx b)
+{
+    CssPx out = css_px_combine(a, b, a.px - b.px);
+
+    if (css_px_is_affine(a) && css_px_is_affine(b)) css_px_form_lin(&out, a, 1.0, b, -1.0);
+    return out;
+}
+
+/* `k` is a pure ratio — a percentage divided by 100 — so it changes no fact and scales the form. */
 CssPx css_px_scale(CssPx a, double k)
 {
     CssPx out = a;
 
     out.px = a.px * k;
+    if (a.env != CSS_ENV_NONE && a.form.affine) css_px_form_lin(&out, a, k, css_px(0.0), 0.0);
     return out;
 }
 
-/* THE LARGER (AND THE SMALLER) EXAMPLE, CARRYING BOTH OPERANDS' FACTS — which is why these are `css_px_combine`
+/* The range each fact takes over every world this user agent can be in, which is what decides an extreme for
+   every world at once. A fact whose standard states no range is unbounded. Indexed by the fact. */
+static const struct { double lo, hi; } CSS_ENV_RANGE[CSS_ENV_FACT_COUNT] = {
+    /* CSS 2.2 §10.1 Definition of "containing block": the initial containing block "has the dimensions of the
+       viewport", and css-values-4 §6.1.2.1's small and dynamic sizes are that viewport sized twice more. */
+    [CSS_ENV_ICB_WIDTH]               = { 0.0, INFINITY },
+    [CSS_ENV_ICB_HEIGHT]              = { 0.0, INFINITY },
+    [CSS_ENV_SMALL_VIEWPORT_WIDTH]    = { 0.0, INFINITY },
+    [CSS_ENV_SMALL_VIEWPORT_HEIGHT]   = { 0.0, INFINITY },
+    [CSS_ENV_DYNAMIC_VIEWPORT_WIDTH]  = { 0.0, INFINITY },
+    [CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT] = { 0.0, INFINITY },
+    /* CSSOM VIEW §4 Extensions to the Window Interface: "the result of dividing CSS pixel size by device pixel
+       size", a ratio of two sizes. */
+    [CSS_ENV_DEVICE_PIXEL_RATIO]      = { 0.0, INFINITY },
+    /* css-fonts-4 §2.5 Font size: the font-size property: `<length-percentage [0,∞]>`, and "Negative lengths
+       are invalid". */
+    [CSS_ENV_DEFAULT_FONT_SIZE]       = { 0.0, INFINITY },
+    /* CSS 2.2 §10.8.1 Leading and half-leading: "a characteristic height above the baseline and a depth below
+       it". */
+    [CSS_ENV_FONT_ASCENT]             = { 0.0, INFINITY },
+    [CSS_ENV_FONT_DESCENT]            = { 0.0, INFINITY },
+};
+
+/* The bounds of `a - b` over every world, both operands affine. */
+static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
+{
+    CssPx d = css_px_sub(a, b);
+    int f;
+
+    *lo = *hi = css_px_form_c(d);
+    if (d.env == CSS_ENV_NONE) return;
+    for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
+        double k = d.form.k[f];
+
+        if (k == 0.0) continue;
+        *lo += k > 0.0 ? k * CSS_ENV_RANGE[f].lo : k * CSS_ENV_RANGE[f].hi;
+        *hi += k > 0.0 ? k * CSS_ENV_RANGE[f].hi : k * CSS_ENV_RANGE[f].lo;
+    }
+}
+
+/* THE LARGER (AND THE SMALLER) EXAMPLE, CARRYING BOTH OPERANDS' FACTS — which is why this is `css_px_combine`
    and not `a.px > b.px ? a : b`. Returning the winner whole would drop the loser's fact, and the loser is the
    arm the OTHER viewport takes: css-sizing §5's floor picks the declared length at 1280 and the four-term
    surround at 320, so a result that kept only the winner would report a length as environment-independent in
    exactly the world where it is not. Over-reporting the dependence forks a world the page might not have
-   needed; under-reporting it deletes one it did, and CLAUDE.md's §Headless errs toward the first. */
+   needed; under-reporting it deletes one it did, and CLAUDE.md's §Headless errs toward the first.
+   The form survives only where the ranges decide the winner for every world, and the examples must agree
+   with that decision, which is what makes it falsifiable here. `want_hi` picks the larger. */
+static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
+{
+    CssPx out = css_px_combine(a, b, want_hi ? (a.px > b.px ? a.px : b.px) : (a.px < b.px ? a.px : b.px));
+    const CssPx *win = NULL;
+    double lo, hi, tol;
+
+    if (!css_px_is_affine(a) || !css_px_is_affine(b)) return out;
+    css_px_diff_range(a, b, &lo, &hi);
+    if (lo >= 0.0) win = want_hi ? &a : &b;
+    else if (hi <= 0.0) win = want_hi ? &b : &a;
+    if (win == NULL) return out;
+    tol = 1e-9 * fmax(1.0, fmax(fabs(a.px), fabs(b.px)));
+    DCHECKF(fabs(out.px - win->px) <= tol,
+            "an extreme over %g and %g was decided for every world by the facts' ranges (a - b in [%g, %g]) "
+            "and the examples disagree with that decision — one operand's affine form is not the function "
+            "its example was computed by", a.px, b.px, lo, hi);
+    out.px = win->px;
+    css_px_form_lin(&out, *win, 1.0, css_px(0.0), 0.0);
+    return out;
+}
+
 CssPx css_px_max(CssPx a, CssPx b)
 {
-    return css_px_combine(a, b, a.px > b.px ? a.px : b.px);
+    return css_px_extreme(a, b, true);
 }
 
 CssPx css_px_min(CssPx a, CssPx b)
 {
-    return css_px_combine(a, b, a.px < b.px ? a.px : b.px);
+    return css_px_extreme(a, b, false);
 }
 
+/* A product or a quotient by a DETERMINED operand is a scaling and keeps the form; one between two derived
+   lengths is opaque. */
 CssPx css_px_mul(CssPx a, CssPx b)
 {
-    return css_px_combine(a, b, a.px * b.px);
+    CssPx out = css_px_combine(a, b, a.px * b.px);
+
+    if (b.env == CSS_ENV_NONE && a.env != CSS_ENV_NONE && a.form.affine)
+        css_px_form_lin(&out, a, b.px, css_px(0.0), 0.0);
+    else if (a.env == CSS_ENV_NONE && b.env != CSS_ENV_NONE && b.form.affine)
+        css_px_form_lin(&out, b, a.px, css_px(0.0), 0.0);
+    return out;
 }
 
 CssPx css_px_div(CssPx a, CssPx b)
 {
+    CssPx out;
+
     DCHECK(b.px != 0.0,
            "a quotient of two lengths was taken with a ZERO divisor. Every algorithm that divides here states "
            "the non-zero branch itself — Intersection Observer §3.2.10 step 12 divides only 'if targetArea is "
            "non-zero' and answers 1 or 0 otherwise — so a zero arriving means the caller skipped its own "
            "branch rather than that this operation needs one");
-    return css_px_combine(a, b, a.px / b.px);
+    out = css_px_combine(a, b, a.px / b.px);
+    if (b.env == CSS_ENV_NONE && a.env != CSS_ENV_NONE && a.form.affine)
+        css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
+    return out;
 }
 
 /* CSS Values §6.2's ABSOLUTE UNITS, each as the spec's own definition of it in CSS pixels: "1in = 96px" is the

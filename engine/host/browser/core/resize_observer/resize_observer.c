@@ -269,8 +269,8 @@ static CssPx ro_box_length(JSContext *rctx, lxb_dom_element_t *el, RoBoxOption b
            joint function of the content extent and the ratio, so the fact set is what it was and only the
            example is snapped to the integer RESIZE OBSERVER §2.1 requires. */
         len = css_px_mul(used_value_content_px(el, vertical),
-                         css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, rctx, viewport_device_pixel_ratio(rctx)));
-        len.px = floor(len.px + 0.5);
+                         css_px_fact(CSS_ENV_DEVICE_PIXEL_RATIO, rctx, viewport_device_pixel_ratio(rctx)));
+        len = css_px_opaque(len, floor(len.px + 0.5));
         return len;
     case RO_BOX_COUNT:
         break;
