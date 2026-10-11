@@ -26611,6 +26611,42 @@ static void pin_kind_selftest(JSContext *ctx)
     concolic_clear_pins();
 }
 
+/* ─── THE PIN STORE ENUMERATES ONCE PER SOURCE, AT ITS NEAREST COPY ────────────────────────────────────────
+ * concolic_pins_each walks the head and every frozen segment. A pin re-taken after a freeze is copied up into
+ * the head, so the segment's older entry for the same source is shadowed and must not be visited. */
+typedef struct { int n; int a_seen; int b_seen; int c_seen; const char *a_val; } PinsEachTally;
+static void pins_each_count(const char *src, ConcolicLit kind, const char *val, void *ud)
+{
+    PinsEachTally *t = ud;
+
+    CHECK(kind == CONCOLIC_LIT_STRING, "the pin enumeration handed back a kind no pin in this fixture holds");
+    t->n++;
+    if (!strcmp(src, "{pinseach.a}")) { t->a_seen++; t->a_val = val; }
+    else if (!strcmp(src, "{pinseach.b}")) t->b_seen++;
+    else if (!strcmp(src, "{pinseach.c}")) t->c_seen++;
+}
+
+static void pins_each_selftest(void)
+{
+    PinsEachTally t = { 0, 0, 0, 0, NULL };
+    void *frozen;
+
+    concolic_clear_pins();
+    concolic_pin("{pinseach.a}", "{pinseach.a}", CONCOLIC_LIT_STRING, "one", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin("{pinseach.b}", "{pinseach.b}", CONCOLIC_LIT_STRING, "two", JS_CONCOLIC_EQ_STRICT);
+    frozen = concolic_pins_suspend();   /* the head becomes a frozen segment the flow keeps standing on */
+    concolic_pin("{pinseach.a}", "{pinseach.a}", CONCOLIC_LIT_STRING, "uno", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin("{pinseach.c}", "{pinseach.c}", CONCOLIC_LIT_STRING, "three", JS_CONCOLIC_EQ_STRICT);
+    concolic_pins_each(pins_each_count, &t);
+    CHECK(t.n == 3 && t.a_seen == 1 && t.b_seen == 1 && t.c_seen == 1,
+          "the pin enumeration did not visit each pinned source exactly once across a frozen segment — a "
+          "shadowed copy was visited, or a segment was skipped");
+    CHECK(t.a_val && !strcmp(t.a_val, "uno"),
+          "the pin enumeration answered a source with the value a nearer copy shadows");
+    concolic_clear_pins();
+    concolic_pins_blob_free(frozen);
+}
+
 /* ─── A LOOSE EQUALITY BOUNDS THE OPERAND AND DOES NOT DETERMINE IT ────────────────────────────────────────
  * The fixture above asks whether a pinned source reads back as the VALUE rather than as its spelling. This
  * one asks the question one level before that: whether the arm was entitled to pin at all.
@@ -29061,7 +29097,8 @@ int main(int argc, char **argv) {
     /* AT THE BASELINE, where no flow has narrowed anything — the pins it writes are cleared after each one,
        for the reason the §9.3.3 block above states. */
     pin_kind_selftest(ctx);      /* a pin is a VALUE and not its §7.1.19 spelling */
-    pin_algo_selftest(ctx);      /* …and only §7.2.14's arm determines one; §7.2.13's leaves a SET */
+    pins_each_selftest();        /* …and the store enumerates each pinned source once, at its nearest copy */
+    pin_algo_selftest(ctx);     /* …and only §7.2.14's arm determines one; §7.2.13's leaves a SET */
     looseeq_selftest();          /* …and that SET is a real narrowing, filed as the predicate that held */
     tree_construction_write_selftest();   /* §13.2.6's DOM writes, and the character merge's bytes */
 

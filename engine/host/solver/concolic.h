@@ -944,6 +944,18 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    produces one; the fork census names the predicate. */
 void        concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val,
                          JSConcolicEqOp algo);
+/* One pin of the running flow, as concolic_pins_each hands it over: `src` is the source path the pin is keyed
+   under (what a later read concretizes through), `val` the §7.1.19 ToString ( argument ) spelling of the
+   operand the page's equality wrote, and `kind` what that spelling denotes. All three are borrowed from the
+   constraint chain for the length of the visit. */
+typedef void (*ConcolicPinVisit)(const char *src, ConcolicLit kind, const char *val, void *ud);
+/* Visits every pin the running flow's constraint holds, once per source: the head and every frozen segment
+   under it, where an entry a nearer copy of its key shadows is visited only as that copy. The order is the
+   chain's and is not a fact about the page, so a consumer comparing two enumerations orders them itself.
+   Asserts the store's own invariants on every entry it reads (a pin's value and kind are one fact, the store
+   holds no kind it refuses, a key is unique in its segment, and a copy-up never drops a pin). The visitor
+   must not write the constraint. */
+void concolic_pins_each(ConcolicPinVisit visit, void *ud);
 /* THE HOLE A REPORT PRINTS, SPELLED ONCE — the joint between a constraint recorded at a BRANCH and a domain
    emitted at a REQUEST, which are the two ends §Solver-half's two-facts rule has to connect.
    A shape is what the @H surface renders where the code computed no value, and the BRACES DO NOT SIT IN THE

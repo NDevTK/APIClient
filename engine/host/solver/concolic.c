@@ -1524,6 +1524,45 @@ int concolic_src_pinned(const char *src) {
     return (e && e->val) ? 1 : 0;
 }
 
+/* One entry of the enumeration (concolic.h). `e` is entry `i` of the segment whose index is `hash`; the head is
+   one such segment. The visible copy of a key is the one cons_lookup answers, so a shadowed entry is skipped
+   and its key is visited where the nearer copy stands. */
+static void pins_each_entry(const Cons *seg, int i, const int *hash, int cap, ConcolicPinVisit visit, void *ud) {
+    const Cons *e = &seg[i];
+    const Cons *seen;
+
+    DCHECK(e->key != NULL, "a constraint entry holds no key — cons_entry writes the key before anything else");
+    DCHECKF(cons_index_find(seg, hash, cap, e->key) == i,
+            "the constraint key `%s` is not the entry its own segment's index answers — a key held twice in one "
+            "segment is two facts about one value, and a lookup answers whichever the probe reaches first",
+            e->key);
+    DCHECKF(!e->val == (e->valkind == (signed char)CONCOLIC_LIT_NONE),
+            "the pin under `%s` and its kind disagree about whether a value is pinned — concolic_pin writes the "
+            "two together and cons_entry copies them up together", e->key);
+    DCHECKF(e->valkind != (signed char)CONCOLIC_LIT_BIGINT,
+            "the store holds a BigInt pin under `%s`, a kind concolic_pin refuses because pin_mint cannot mint "
+            "it back", e->key);
+    DCHECK(!e->val || g_pin_any, "a pin is stored while the agent's pin latch says no flow ever pinned one");
+    seen = cons_lookup(e->key);
+    if (seen != e) {
+        DCHECKF(!e->val || (seen && seen->val),
+                "a nearer copy of `%s` dropped the pin the entry under it holds — cons_entry's copy-up carries "
+                "the value, and nothing clears one", e->key);
+        return;
+    }
+    if (e->val) visit(e->key, (ConcolicLit)e->valkind, e->val, ud);
+}
+
+void concolic_pins_each(ConcolicPinVisit visit, void *ud) {
+    const ConsSeg *s;
+    int i;
+
+    DCHECK(visit != NULL, "the pin store was enumerated with no visitor");
+    for (i = 0; i < g_pins_n; i++) pins_each_entry(g_pins, i, g_pins_hash, g_pins_hash_cap, visit, ud);
+    for (s = g_pins_base; s; s = s->base)
+        for (i = 0; i < s->n; i++) pins_each_entry(s->e, i, s->hash, s->hash_cap, visit, ud);
+}
+
 static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     Concolic *c = JS_GetOpaque(val, g_concolic_class);
     if (!c) return;
