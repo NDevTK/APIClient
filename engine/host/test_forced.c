@@ -8050,11 +8050,12 @@ typedef struct {
                          decided and where the containment every reader below rests on is asserted */
 } EmittedRec;
 
-/* solver/pending.h defines exactly three provenance grades, and `same_identity` makes the grade part of a
-   record's identity, so ONE address stands for at most three records. A fourth is the same defect the
-   distinctness check below names, caught one step earlier and with the caller's array at stake — which is
-   why it is a CHECK and not a DCHECK: writing past that array must not proceed in a release build either. */
-#define EMITTED_REC_MAX 3
+/* solver/pending.h defines exactly three provenance grades and solver/endpoint.c's `same_identity` makes the
+   grade and the drive mark part of a record's identity, so ONE address stands for at most six records. A
+   seventh is the same defect the distinctness check below names, caught one step earlier and with the caller's
+   array at stake — which is why it is a CHECK and not a DCHECK: writing past that array must not proceed in a
+   release build either. */
+#define EMITTED_REC_MAX 6
 
 /* ─── ONE RECORD'S OWN LAST BYTE — A NESTING SCAN, BECAUSE THE NEXT RECORD'S FIRST BYTES ARE NOT THIS ONE'S EDGE
  *
@@ -8175,7 +8176,7 @@ static int emitted_records_by(const char *js, const char *pat, size_t k, Emitted
     DCHECK(out != NULL && cap > 0, "an endpoint statement was located with nowhere to put its records");
     while ((e = strstr(e, pat)) != NULL) {
         CHECKF(n < cap,
-               "the address pattern `%s` matched more endpoint records than there are provenance grades for "
+               "the address pattern `%s` matched more endpoint records than there are (grade, drive mark) pairs for "
                "one statement to be evidence at, so this walk would write past the caller's array. The "
                "surplus records differ by METHOD or by PARAM SET and are OTHER REQUESTS, which no row asking "
                "this address may be answered by — ask them apart", pat);
@@ -8218,6 +8219,21 @@ static const char *emitted_rec_grade(const EmittedRec *r, size_t *n) {
     return g;
 }
 
+/* …and whose act the record is, the `driven` boolean endpoint_json_array writes right after the grade: 1 or 0.
+   The second half of what tells one statement's records apart (a drive and the page reach one statement). */
+static int emitted_rec_driven(const EmittedRec *r) {
+    static const char key[] = ",\"driven\":";
+    const char *d = strstr(r->at, key);
+
+    CHECK(d != NULL && d < r->b + r->n,
+          "an endpoint record carries no `driven` inside its OWN extent — endpoint_json_array writes it "
+          "unconditionally after the provenance");
+    d += sizeof key - 1;
+    CHECK(!strncmp(d, "true", 4) || !strncmp(d, "false", 5),
+          "an endpoint record's `driven` is not a JSON boolean");
+    return *d == 't';
+}
+
 /* THESE RECORDS ARE ONE STATEMENT'S ARMS AND NOT SEVERAL REQUESTS — the assert that makes a set answerable.
    `what` is the address or prefix the row named, so the crash has an object rather than a remedy with none. */
 static void emitted_recs_one_statement(const EmittedRec *r, int n, const char *what) {
@@ -8228,12 +8244,13 @@ static void emitted_recs_one_statement(const EmittedRec *r, int n, const char *w
             size_t an, bn;
             const char *ga = emitted_rec_grade(&r[i], &an), *gb = emitted_rec_grade(&r[j], &bn);
 
-            DCHECKF(an != bn || memcmp(ga, gb, an) != 0,
-                    "two endpoint records at `%s` carry the SAME provenance grade `%.*s`, so that address "
-                    "names a SET OF REQUESTS rather than one statement's arms — every question asked through "
-                    "it would be answered by whichever member carries the bytes. solver/endpoint.c's "
-                    "same_identity tells one statement's records apart BY GRADE, so a repeat means these two "
-                    "differ by METHOD or by PARAM SET: ask them apart", what, (int)an, ga);
+            DCHECKF(an != bn || memcmp(ga, gb, an) != 0 || emitted_rec_driven(&r[i]) != emitted_rec_driven(&r[j]),
+                    "two endpoint records at `%s` carry the SAME provenance grade `%.*s` and the same drive mark, "
+                    "so that address names a SET OF REQUESTS rather than one statement's arms — every question "
+                    "asked through it would be answered by whichever member carries the bytes. "
+                    "solver/endpoint.c's same_identity tells one statement's records apart BY GRADE AND DRIVE "
+                    "MARK, so a repeat means these two differ by METHOD or by PARAM SET: ask them apart", what,
+                    (int)an, ga);
         }
 }
 
