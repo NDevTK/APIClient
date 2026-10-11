@@ -24,6 +24,43 @@
    Type sniffing lives here and nowhere else in the extension. What a flow needs mid-execution belongs in the
    engine; this is a decision the trusted zone makes once about a reply it fetched, and `computedType` states
    it to the renderer, so no zone downstream sniffs or re-parses a raw header for a type of its own. */
+/* This file holds its realm's network. It takes the platform's `fetch` at load, and leaves in its place, and
+   in place of every other network constructor the realm has, a function that crashes, so a request from any
+   other script in the zone fails at its call rather than skipping the checks above. The one read let through
+   is of this extension's own package (renderer-host.js builds each renderer from package files), which
+   reaches no other party. A realm given no `fetch` holds nothing, and `_wire` asserts before spending on it. */
+var _wire = (function () {
+  var platformFetch = globalThis.fetch;
+  var packageOrigin = typeof globalThis.location === "object" && globalThis.location !== null
+    ? globalThis.location.origin : null;
+  function seal(name, value) {
+    Object.defineProperty(globalThis, name, { value: value, writable: false, configurable: false });
+  }
+  seal("fetch", function fetch(input, init) {
+    CHECK(packageOrigin !== null && typeof input === "string" &&
+          new URL(input, globalThis.location.href).href.indexOf(packageOrigin + "/") === 0,
+          "a script in the trusted zone called fetch(" + JSON.stringify(String(input)) + ") — the only network " +
+          "in this realm is safeFetch's, and the only read outside it is of this extension's own package");
+    return platformFetch.call(globalThis, input, init);
+  });
+  ["XMLHttpRequest", "WebSocket", "EventSource", "WebTransport"].forEach(function (name) {
+    if (name in globalThis) seal(name, function () {
+      CHECK_FAIL("a script in the trusted zone constructed " + name + " — the only network in this realm is " +
+                 "safeFetch's");
+    });
+  });
+  if (typeof globalThis.navigator === "object" && typeof globalThis.navigator.sendBeacon === "function")
+    Object.defineProperty(globalThis.navigator, "sendBeacon", { writable: false, configurable: false,
+      value: function () { CHECK_FAIL("a script in the trusted zone called sendBeacon — the only network in " +
+                                      "this realm is safeFetch's"); } });
+  return function _wire(href, init) {
+    CHECK(typeof platformFetch === "function",
+          "safeFetch spent a request in a realm that was given no fetch — a policy-only host loads this file " +
+          "to read its decisions, and reaching the wire there means a decision it asked about fired");
+    return platformFetch.call(globalThis, href, init);
+  };
+})();
+
 /* A tuple origin (scheme://host[:port]) is usable for same-origin and CORS. An opaque origin reports "null",
    or this zone's minted "null:<uuid>" token, and is unique, so it is same-origin with nothing, not even
    another "null". Only a tuple origin contains "://", so this one test separates them. */
@@ -1304,7 +1341,7 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
      fetch cannot set; the OPTIONS rule speakAsPreflightHeaders composes (lib/speak-as.js) supplies both. */
   var init = { method: "OPTIONS", headers: [["Accept", "*/*"]], credentials: "omit", redirect: "manual" };
   if (signal) init.signal = signal;
-  var resp = await fetch(href, init);
+  var resp = await _wire(href, init);
   var headers = {};
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
   if (resp.body) {
@@ -1822,7 +1859,7 @@ async function safeFetch(url, opts) {
       if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + parsed.origin,
                                           [parsed.href], {}) };
     }
-    return { resp: await fetch(parsed.href, init) };
+    return { resp: await _wire(parsed.href, init) };
   });
   if (_sent.refusal) return _sent.refusal;
   var resp = _sent.resp;
@@ -2140,7 +2177,7 @@ async function safeFetchOperator(url, opts) {
         if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + parsed.origin,
                                            [parsed.href], {}) };
       }
-      return { resp: await fetch(parsed.href, init) };
+      return { resp: await _wire(parsed.href, init) };
     } catch (e) {
       RETHROW_FATAL(e);
       return { refusal: _refused("network", "network-error:" + ((e && e.message) || String(e)), [parsed.href], {}) };
