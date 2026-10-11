@@ -207,8 +207,8 @@ typedef unsigned CssEnvSet;
    function of the facts the form cannot state, named by `atom` and valued `aval` in this realm. A monomial
    holds at most one atom and names an atom or a fact. An atom is named by its definition, the operation over
    its operands' forms, so every derivation of one function names one atom and a sum that adds it and takes it
-   away again cancels it. The name is interned per process; what another session shares is the definition,
-   which core/frame/viewport.c spells at the `long` boundary (css_px_atom_definition). */
+   away again cancels it. The name is interned in the realm's table, beside its forms; what another session
+   shares is the definition, which core/frame/viewport.c spells at the `long` boundary (css_px_atom_definition). */
 #define CSS_PX_FORM_MAX 8
 typedef struct {
     unsigned      atom;
@@ -265,9 +265,9 @@ CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px);
 /* One operand of an atom's definition: a determined length `px`, or the polynomial `c + Σ m[0..n)` over facts by
    index, whose monomials may name further atoms. */
 typedef struct { bool determined; double px; double c; int n; const CssPxMonomial *m; } CssPxAtomArg;
-/* The definition `atom` was interned with: its operation, and `*nargs` operands into `*args`, all owned by this
-   component for the process. */
-const char *css_px_atom_definition(unsigned atom, int *nargs, const CssPxAtomArg **args);
+/* The definition `atom` was interned with in `realm`: its operation, and `*nargs` operands into `*args`, all owned
+   by the realm's table. */
+const char *css_px_atom_definition(JSContext *realm, unsigned atom, int *nargs, const CssPxAtomArg **args);
 /* The form, evaluated at its own facts' values: the number the layout computed, up to rounding. Asserts the
    form is known. */
 double css_px_form_eval(CssPx a);

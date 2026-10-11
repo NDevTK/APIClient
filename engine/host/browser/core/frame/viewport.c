@@ -329,12 +329,12 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
     return concolic_source_wrap_joint(len.realm, m.shapes, m.srcs, n, computed);
 }
 
-static char *ve_spell_atom(unsigned atom, const char *const *keys);
+static char *ve_spell_atom(JSContext *realm, unsigned atom, const char *const *keys);
 
 /* A monomial's spelling over `keys`, the per-realm source key of each fact (NULL for a fact not in the length's
    set): its facts as `key^e` joined by `*`, and, around them, the atom it holds as that atom's definition.
    Owned. */
-static char *ve_spell_mono(const CssPxMonomial *mono, const char *const *keys)
+static char *ve_spell_mono(JSContext *realm, const CssPxMonomial *mono, const char *const *keys)
 {
     char *facts = NULL, *atom, *out;
     const char *fields[2];
@@ -355,7 +355,7 @@ static char *ve_spell_mono(const CssPxMonomial *mono, const char *const *keys)
         DCHECK(any, "a monomial of a length's form names neither a fact nor an atom");
         return facts;
     }
-    atom = ve_spell_atom(mono->atom, keys);
+    atom = ve_spell_atom(realm, mono->atom, keys);
     fields[0] = atom;
     fields[1] = facts;
     out = concolic_ident_compose("atom", fields, 2);
@@ -365,7 +365,8 @@ static char *ve_spell_mono(const CssPxMonomial *mono, const char *const *keys)
 }
 
 /* `c + Σ k·m` spelled over `keys`: the constant, then each monomial and its coefficient. Owned. */
-static char *ve_spell_poly(const char *tag, double c, const CssPxMonomial *m, int n, const char *const *keys)
+static char *ve_spell_poly(JSContext *realm, const char *tag, double c, const CssPxMonomial *m, int n,
+                           const char *const *keys)
 {
     char **monos = calloc((size_t)n + 1, sizeof *monos);
     char (*coeff)[32] = calloc((size_t)n + 1, sizeof *coeff);
@@ -377,7 +378,7 @@ static char *ve_spell_poly(const char *tag, double c, const CssPxMonomial *m, in
     snprintf(coeff[n], sizeof coeff[n], "%.17g", c);
     fields[nf++] = coeff[n];
     for (j = 0; j < n; j++) {
-        monos[j] = ve_spell_mono(&m[j], keys);
+        monos[j] = ve_spell_mono(realm, &m[j], keys);
         snprintf(coeff[j], sizeof coeff[j], "%.17g", m[j].k);
         fields[nf++] = monos[j];
         fields[nf++] = coeff[j];
@@ -392,12 +393,12 @@ static char *ve_spell_poly(const char *tag, double c, const CssPxMonomial *m, in
 
 /* An atom spelled by its definition (core/css/css_length.h's css_px_atom_definition): its operation over its
    operands, each a determined number or a form spelled over `keys`. A definition is the function's, so the
-   spelling is one every session shares, where the atom's number is this process's. Owned. */
-static char *ve_spell_atom(unsigned atom, const char *const *keys)
+   spelling is one every session shares, where the atom's number is its realm's. Owned. */
+static char *ve_spell_atom(JSContext *realm, unsigned atom, const char *const *keys)
 {
     const CssPxAtomArg *args;
     int nargs, a;
-    const char *op = css_px_atom_definition(atom, &nargs, &args);
+    const char *op = css_px_atom_definition(realm, atom, &nargs, &args);
     char **sp = calloc((size_t)nargs + 1, sizeof *sp);
     char *out;
 
@@ -408,7 +409,7 @@ static char *ve_spell_atom(unsigned atom, const char *const *keys)
             CHECK(sp[a], "viewport: OOM spelling an atom");
             snprintf(sp[a], 32, "%.17g", args[a].px);
         } else {
-            sp[a] = ve_spell_poly("form", args[a].c, args[a].m, args[a].n, keys);
+            sp[a] = ve_spell_poly(realm, "form", args[a].c, args[a].m, args[a].n, keys);
         }
     }
     out = concolic_ident_compose(op, (const char *const *)sp, nargs);
@@ -448,7 +449,7 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
     n_int = floor(len.form->c);
     r = len.form->c - n_int;
     for (i = 0; i < n; i++) keys[m.fact[i]] = m.srcs[i];
-    term = ve_spell_poly("cssom-long-round", r, len.form->m, len.form->n, keys);
+    term = ve_spell_poly(len.realm, "cssom-long-round", r, len.form->m, len.form->n, keys);
     out = concolic_source_wrap_joint_affine(len.realm, m.shapes, m.srcs, n, term, n_int, computed);
     free(term);
     return out;

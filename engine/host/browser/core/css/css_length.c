@@ -29,9 +29,17 @@ static char *css_len_strdup(const char *s)
    are immutable, so a form one flow interns is shared with its forked siblings, and a discarded flow's forms
    live until their realm is torn down: reclamation bounded by the realm's lifetime, since the forms a run makes
    are not bounded by the program's expressions (their constants are numbers the layout computes). */
+/* An atom's name, interned under its key; and its definition, indexed by the name minus one. */
+typedef struct { char *key; unsigned id; } CssPxAtomSlot;
+typedef struct { char *op; int nargs; CssPxAtomArg *args; } CssPxAtomDef;
+
 typedef struct {
-    CssPxForm **slot;   /* open-addressed, a power of two long, at most half full; NULL is empty; each OWNED */
-    size_t      cap, n;
+    CssPxForm    **slot;        /* open-addressed, a power of two long, at most half full; NULL is empty; OWNED */
+    size_t         cap, n;
+    CssPxAtomSlot *atoms;       /* the same shape over atom keys; each key OWNED */
+    size_t         atoms_cap;
+    unsigned       atoms_n;
+    CssPxAtomDef  *atom_defs;   /* `atoms_n` of them, each OWNED */
 } CssPxFormTable;
 
 static JSClassID g_css_px_form_table_class;
@@ -49,6 +57,16 @@ static void css_px_form_table_finalizer(JSRuntime *rt, JSValue v)
     if (t == NULL) return;
     for (i = 0; i < t->cap; i++) free(t->slot[i]);
     free(t->slot);
+    for (i = 0; i < t->atoms_cap; i++) free(t->atoms[i].key);
+    free(t->atoms);
+    for (i = 0; i < t->atoms_n; i++) {
+        int a;
+
+        for (a = 0; a < t->atom_defs[i].nargs; a++) free((void *)t->atom_defs[i].args[a].m);
+        free(t->atom_defs[i].args);
+        free(t->atom_defs[i].op);
+    }
+    free(t->atom_defs);
     free(t);
 }
 
@@ -129,18 +147,28 @@ static bool css_px_form_equal(const CssPxForm *a, const CssPxForm *b)
     return true;
 }
 
-/* `realm`'s one copy of the known form `f`. */
-static const CssPxForm *css_px_form_intern(JSContext *realm, const CssPxForm *f)
+/* `realm`'s table of forms and atoms. */
+static CssPxFormTable *css_px_realm_table(JSContext *realm)
 {
     JSValue obj;
     CssPxFormTable *t;
-    size_t i;
 
-    DCHECK(realm != NULL && f->known, "a form was interned with no realm to own it, or opaque");
+    DCHECK(realm != NULL, "a realm's form table was asked of no realm");
     obj = realm_value_get(realm, g_css_px_form_table_slot);
     t = JS_GetOpaque(obj, g_css_px_form_table_class);
     JS_FreeValue(realm, obj);
     CHECK(t != NULL, "css_length: a realm's form table is missing — its install runs at every realm's creation");
+    return t;
+}
+
+/* `realm`'s one copy of the known form `f`. */
+static const CssPxForm *css_px_form_intern(JSContext *realm, const CssPxForm *f)
+{
+    CssPxFormTable *t;
+    size_t i;
+
+    DCHECK(realm != NULL && f->known, "a form was interned with no realm to own it, or opaque");
+    t = css_px_realm_table(realm);
     if (2 * (t->n + 1) > t->cap) {
         size_t cap = t->cap ? 2 * t->cap : 64, j;
         CssPxForm **grown = calloc(cap, sizeof *grown);
@@ -286,16 +314,9 @@ static int css_px_mono_cmp(const void *x, const void *y)
 /* THE ATOM'S NAME IS ITS DEFINITION: the operation and the forms of its operands, which are normal forms (sorted
    and merged), so two derivations of one function compose one key and one name wherever they run, and two
    different functions never share one. A fact enters a key as its index and never as its value, so the name is
-   of the function and not of this realm's number. Interned for the process; the number is this process's, and
-   the definition it was interned with (css_px_atom_definition) is what a spelling another session shares names. */
-typedef struct { char *key; unsigned id; } CssPxAtomSlot;
-static CssPxAtomSlot *g_css_px_atoms;
-static size_t g_css_px_atoms_cap;
-static unsigned g_css_px_atoms_n;
-/* Each atom's definition, indexed by its name minus one, owned for the process. */
-typedef struct { char *op; int nargs; CssPxAtomArg *args; } CssPxAtomDef;
-static CssPxAtomDef *g_css_px_atom_defs;
-
+   of the function and not of this realm's number. Interned in the realm's table, since its operands are forms
+   over that realm's facts; the number is the realm's, and the definition it was interned with
+   (css_px_atom_definition) is what a spelling another session shares names. */
 static size_t css_px_atom_hash(const char *k)
 {
     size_t h = 1469598103934665603u;
@@ -304,41 +325,41 @@ static size_t css_px_atom_hash(const char *k)
     return h;
 }
 
-/* The name `key` (owned, consumed) is interned under; a new name records `op` over `args` (borrowed, copied) as
-   its definition. */
-static unsigned css_px_atom_intern(char *key, const char *op, const CssPxAtomArg *args, int nargs)
+/* The name `key` (owned, consumed) is interned under in `realm`'s table; a new name records `op` over `args`
+   (borrowed, copied) as its definition. */
+static unsigned css_px_atom_intern(JSContext *realm, char *key, const char *op, const CssPxAtomArg *args, int nargs)
 {
+    CssPxFormTable *t = css_px_realm_table(realm);
     CssPxAtomDef *d;
     int a;
 
     size_t i;
 
-    if (2 * (g_css_px_atoms_n + 1) > g_css_px_atoms_cap) {
-        size_t cap = g_css_px_atoms_cap ? 2 * g_css_px_atoms_cap : 64, j;
-        CssPxAtomSlot *t = calloc(cap, sizeof *t);
+    if (2 * ((size_t)t->atoms_n + 1) > t->atoms_cap) {
+        size_t cap = t->atoms_cap ? 2 * t->atoms_cap : 64, j;
+        CssPxAtomSlot *grown = calloc(cap, sizeof *grown);
 
-        CHECK(t, "css_length: OOM growing the atom table");
-        for (j = 0; j < g_css_px_atoms_cap; j++) {
-            if (!g_css_px_atoms[j].key) continue;
-            for (i = css_px_atom_hash(g_css_px_atoms[j].key) & (cap - 1); t[i].key; i = (i + 1) & (cap - 1)) {}
-            t[i] = g_css_px_atoms[j];
+        CHECK(grown, "css_length: OOM growing a realm's atom table");
+        for (j = 0; j < t->atoms_cap; j++) {
+            if (!t->atoms[j].key) continue;
+            for (i = css_px_atom_hash(t->atoms[j].key) & (cap - 1); grown[i].key; i = (i + 1) & (cap - 1)) {}
+            grown[i] = t->atoms[j];
         }
-        free(g_css_px_atoms);
-        g_css_px_atoms = t;
-        g_css_px_atoms_cap = cap;
+        free(t->atoms);
+        t->atoms = grown;
+        t->atoms_cap = cap;
     }
-    for (i = css_px_atom_hash(key) & (g_css_px_atoms_cap - 1); g_css_px_atoms[i].key;
-         i = (i + 1) & (g_css_px_atoms_cap - 1))
-        if (!strcmp(g_css_px_atoms[i].key, key)) {
+    for (i = css_px_atom_hash(key) & (t->atoms_cap - 1); t->atoms[i].key; i = (i + 1) & (t->atoms_cap - 1))
+        if (!strcmp(t->atoms[i].key, key)) {
             free(key);
-            return g_css_px_atoms[i].id;
+            return t->atoms[i].id;
         }
-    DCHECK(g_css_px_atoms_n != UINT_MAX, "the atom table ran out of names");
-    g_css_px_atoms[i].key = key;
-    g_css_px_atoms[i].id = ++g_css_px_atoms_n;
-    g_css_px_atom_defs = realloc(g_css_px_atom_defs, (size_t)g_css_px_atoms_n * sizeof *g_css_px_atom_defs);
-    CHECK(g_css_px_atom_defs, "css_length: OOM recording an atom's definition");
-    d = &g_css_px_atom_defs[g_css_px_atoms_n - 1];
+    DCHECK(t->atoms_n != UINT_MAX, "a realm's atom table ran out of names");
+    t->atoms[i].key = key;
+    t->atoms[i].id = ++t->atoms_n;
+    t->atom_defs = realloc(t->atom_defs, (size_t)t->atoms_n * sizeof *t->atom_defs);
+    CHECK(t->atom_defs, "css_length: OOM recording an atom's definition");
+    d = &t->atom_defs[t->atoms_n - 1];
     d->op = strdup(op);
     d->nargs = nargs;
     d->args = calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *d->args);
@@ -354,16 +375,18 @@ static unsigned css_px_atom_intern(char *key, const char *op, const CssPxAtomArg
         }
         d->args[a].m = m;
     }
-    return g_css_px_atoms[i].id;
+    return t->atoms[i].id;
 }
 
-const char *css_px_atom_definition(unsigned atom, int *nargs, const CssPxAtomArg **args)
+const char *css_px_atom_definition(JSContext *realm, unsigned atom, int *nargs, const CssPxAtomArg **args)
 {
-    DCHECKF(atom >= 1 && atom <= g_css_px_atoms_n, "atom %u was asked for its definition and no atom has that name",
-            atom);
-    *nargs = g_css_px_atom_defs[atom - 1].nargs;
-    *args = g_css_px_atom_defs[atom - 1].args;
-    return g_css_px_atom_defs[atom - 1].op;
+    CssPxFormTable *t = css_px_realm_table(realm);
+
+    DCHECKF(atom >= 1 && atom <= t->atoms_n, "atom %u was asked for its definition and no atom of this realm has "
+            "that name", atom);
+    *nargs = t->atom_defs[atom - 1].nargs;
+    *args = t->atom_defs[atom - 1].args;
+    return t->atom_defs[atom - 1].op;
 }
 
 /* One polynomial into a key: the constant and every monomial's atom, exponents and coefficient, doubles in `%a`
@@ -395,7 +418,7 @@ static void css_px_form_atom_named(CssPx *out, char *key, const char *op, const 
     memset(&f, 0, sizeof f);
     f.known = true;
     f.n = 1;
-    f.m[0].atom = css_px_atom_intern(key, op, args, nargs);
+    f.m[0].atom = css_px_atom_intern(out->realm, key, op, args, nargs);
     f.m[0].k = 1.0;
     f.m[0].aval = out->px;
     out->form = css_px_form_intern(out->realm, &f);
