@@ -13,7 +13,8 @@
    `frames[0].Window.prototype !== Window.prototype` in a browser. */
 void window_init(JSContext *ctx);
 
-void window_install(JSContext *ctx, JSValueConst global, const char *url);
+/* `origin` is the realm's settings object's origin, serialized (§8.2's `origin` getter answers it). */
+void window_install(JSContext *ctx, JSValueConst global, const char *origin);
 
 /* IS THIS A `Window` OBJECT — the class brand, which the global carries from window_install. DOM §2.9's event
    path walk (step 6.9.6) is the caller: a Window is the one entry of a propagation path that is not a node, and

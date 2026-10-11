@@ -1050,7 +1050,7 @@ void window_init(JSContext *ctx)
                    "registered with this runtime");
 }
 
-void window_install(JSContext *ctx, JSValueConst global, const char *url)
+void window_install(JSContext *ctx, JSValueConst global, const char *origin)
 {
     JSValue g = (JSValue)global, gp, props, etp;
 
@@ -1169,21 +1169,13 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     selection_install_window_members(ctx, g);
     idl_install_method(ctx, g, "stop", g_id_stop);
 
-    /* The Window's origin, serialized — the principal, concrete for the same reason Location's is: a bundle
-       compares it and builds URLs out of it, and a shape there loses every endpoint behind the comparison.
-       IT IS §4.7's SERIALIZATION, not a substring of the address. The scan that stood here took everything
-       before the first `/?#` after `://`, which is not an origin: it kept a default port that §4.7 drops, kept
-       userinfo that an origin never has, and had no answer at all for a scheme with an OPAQUE origin — a
-       `data:` document's `origin` is the string "null", and this gave it nothing. */
-    if (url && *url) {
-        UrlRecord rec;
-        if (url_parse(&rec, url, strlen(url), NULL)) {
-            char *origin = url_serialize_origin(&rec);
-            idl_install_replaceable_value(ctx, g, "origin", JS_NewString(ctx, origin));
-            free(origin);
-        }
-        url_record_free(&rec);
-    }
+    /* HTML §8.2 The WindowOrWorkerGlobalScope mixin's `origin` getter returns "this's relevant settings object's
+       origin, serialized": the origin this realm was installed with, which is "null" for a document whose
+       creation sandboxing flags carry the sandboxed origin flag (§7.3.2.1's determine the origin) and the
+       inherited one for about:blank and srcdoc. Never re-derived from the address, which would answer a
+       sandboxed document with its server's origin. */
+    DCHECK(origin != NULL && *origin, "window_install was given no origin for the realm it installs");
+    idl_install_replaceable_value(ctx, g, "origin", JS_NewString(ctx, origin));
 
     /* HTML §8.2 The WindowOrWorkerGlobalScope mixin's other answer about this environment, beside `origin`
        because the two are the pair a page reads together — §8.2's own note tells developers to prefer

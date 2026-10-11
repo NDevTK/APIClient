@@ -563,7 +563,7 @@ static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 
 /* The address, not the origin: `window.origin` is §4.7's serialization of the address, so a Window given an origin
    would re-derive its own `origin` from a string that already is one. */
-static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->url); }
+static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->origin); }
 static void i_current_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; current_event_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
