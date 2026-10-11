@@ -2814,10 +2814,9 @@ static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, in
                       : tree_walker_new(ctx, root, what, filter);
 }
 
-/* §4.5 `[NewObject] Range createRange()` — "a new live range with (this, 0) as its start an end", which is
-   the standard's own spelling. It is the
-   same construction `new Range()` performs, and it is the Document's rather than the current global's: a page
-   that calls `otherDoc.createRange()` gets a range rooted in THAT document. */
+/* §4.5 `[NewObject] Range createRange()`: "a new live range with (this, 0) as its start an end" (the standard's
+   spelling). The construction `new Range()` performs, rooted in the receiver: `otherDoc.createRange()` gets a range
+   in that document. */
 static JSValue js_doc_create_range(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic)
 {
@@ -2828,9 +2827,9 @@ static JSValue js_doc_create_range(JSContext *ctx, JSValueConst this_val, int ar
     return range_new_at(ctx, this_val);
 }
 
-/* §4.5 `[NewObject] Event createEvent(DOMString interface)` — the legacy factory. The TABLE and the
-   construction belong to the events component; what is Document's is the member and the realm whose interfaces
-   the exposure check asks about, which is this document's global. */
+/* §4.5 `[NewObject] Event createEvent(DOMString interface)`, the legacy factory. The table and construction belong to
+   the events component; the Document supplies the member and the realm whose interfaces the exposure check asks
+   about, this document's global. */
 static JSValue js_doc_create_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic)
 {
@@ -2847,63 +2846,46 @@ static JSValue js_doc_create_event(JSContext *ctx, JSValueConst this_val, int ar
     return r;
 }
 
-/* The Document METHODS — on Document.prototype, so there is one of each rather than one per install, and so
-   `Document.prototype.querySelector` is a thing that exists. */
-/* THE DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S — the IDL pool is sealed after agent init, so
-   a declaration minted from a per-realm install trips idl_declared_before_seal on the SECOND realm. */
+/* The Document methods, on Document.prototype, so there is one of each and `Document.prototype.querySelector`
+   exists. The declarations are the agent's and the installs the realm's: the IDL pool is sealed after agent init,
+   so a declaration minted from a per-realm install trips idl_declared_before_seal on the second realm. */
 static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
-/* DOM §4.5 "Interface Document"'s OTHER INTERFACE, verbatim: `[Exposed=Window] interface XMLDocument : Document
-   {};`. A SECOND PROTOTYPE SLOT AND NOT A SECOND COMPONENT, and the reason is that the interface has no members
-   of its own to be a component about — its entire content is WHICH OBJECT a Document's wrapper wears, which is
-   DOM §4.5's "create a document that implements an interface" and is this file's subject. §4.5 declares both in one
-   section for the same reason.
-   IT IS A CLASS ID USED PURELY AS A PER-REALM PROTOTYPE SLOT — quickjs's JS_SetClassProto/JS_GetClassProto,
-   which is how core/html/html_element.c holds one slot per HTML element interface. No wrapper is branded with
-   it: every DOM node wrapper is core/dom/node.c's ONE node class, and it is the PROTOTYPE that differs, which
-   is exactly what DOM §4.5's own sentence asks for ("Return a new node that implements interface, in realm").
-   PER REALM, NOT A MODULE STATIC: a member reached through this prototype runs in the realm that DEFINED it, so
-   a second same-origin document sharing the first realm's XMLDocument.prototype would answer every inherited
-   Document member out of the wrong global. */
+/* DOM §4.5 "Interface Document"'s other interface: `[Exposed=Window] interface XMLDocument : Document {};`. A second
+   prototype slot, not a second component: its whole content is which prototype a Document's wrapper wears (§4.5's
+   "create a document that implements an interface"). A class id used purely as a per-realm prototype slot
+   (JS_SetClassProto/JS_GetClassProto, as core/html/html_element.c does per HTML element interface): every node
+   wrapper is core/dom/node.c's one node class, and only the prototype differs ("Return a new node that implements
+   interface, in realm"). Per realm, since a member runs in the realm that defined it. */
 static JSClassID g_xml_document_class;
-/* THE RUNTIME THIS COMPONENT DECLARED INTO, AND THE DECLARATION LATCH — one static answering both, the shape
-   core/dom/element.c's `g_element_rt` states for the group this one is declared beside. `document_init` had no
-   double-declaration assert at all, which is the defect core/agent_state.h records for window_message: a second
-   declaration in one process would have re-minted the class every existing wrapper is branded with, re-declared
-   fifteen members into a sealed pool, and left the first agent's sub-components holding handles nobody freed.
-   It is also what the release below is checked against — every atom and every value the cascade gives back is
-   freed against a runtime, and JS_FreeValueRT reports nothing at all when it is the wrong one. */
+/* The runtime this component declared into, which is also the declaration latch (as core/dom/element.c's
+   `g_element_rt`): a second declaration in one process would re-mint the class every wrapper is branded with and
+   re-declare members into a sealed pool. The release is checked against it, since JS_FreeValueRT reports nothing
+   against the wrong runtime. */
 static JSRuntime *g_document_rt;
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
            g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1,
            g_id_title_set = -1, g_id_dir_set = -1, g_id_location_set = -1, g_id_by_element_name = -1, g_id_import_node = -1;
-/* THE SAME FOUR TOUCH HANDLERS core/html/html_element.c excludes, and for the same reason — this interface
-   includes the same `GlobalEventHandlers`, so §Touch Events Level 2's "this mixin must not be implemented"
-   reaches it too. The list is stated HERE rather than shared from there because idl_members_excluded reads the
-   interface name as a literal at the call and resolves its table per file; one list named from three sites is
-   not expressible, and html_element.c says so where it declares its own. */
+/* The four touch handlers core/html/html_element.c excludes, for the same reason: this interface includes the same
+   `GlobalEventHandlers`, and Touch Events Level 2 says "this mixin must not be implemented". Stated here because
+   idl_members_excluded reads the interface name as a literal and resolves its table per file. */
 static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel" };
 
 
 static void document_declare_members(JSContext *ctx)
 {
-    /* §4.5's `[CEReactions, NewObject] Element createElement(DOMString localName,
-       optional (DOMString or ElementCreationOptions) options = {})` — a STEP because §4.9 step 5.1.4.1
-       constructs the page's custom element class synchronously inside it.
-       THE OPTIONS ARGUMENT IS DECLARED, not read by the body: §3.2.25's union and the dictionary's two members
-       are conversions, and every one of them is a rest point — a page accessor on `customElementRegistry` is
-       its code, and a body reaching for it with JS_GetPropertyStr would run that inside a C activation. */
+    /* §4.5's `[CEReactions, NewObject] Element createElement(DOMString localName, optional (DOMString or
+       ElementCreationOptions) options = {})`, a step because §4.9 step 5.1.4.1 constructs the page's custom element
+       class synchronously inside it. The options are declared, not read by the body: §3.2.25's union and the
+       dictionary's members are conversions, each a rest point, since a page accessor on `customElementRegistry` is
+       its code. */
     {
         static const IdlArgType CREATE_EL[2] = { IDL_DOMSTRING, IDL_STRING_OR_DICT };
-        /* §4.5's `dictionary ElementCreationOptions { CustomElementRegistry? customElementRegistry;
-           DOMString is; }`, in the IDL's own order because that is the order Web IDL reads them in. The
-           registry crosses UNCONVERTED and is brand-tested by flatten_creation_options — and the reason
-           recorded here for that — the class being custom_elements.c's own, and this component not being
-           able to name it — is RETIRED: a §3.2.15 brand is no longer only a JSClassID, since IdlDictMember carries `iface_is`
-           plus `iface_name` for the interfaces no class id names, and `custom_elements_is_registry` is one.
-           What holds the member at IDL_ANY is an unwritten diff, and core/dom/shadow_root.c's identical
-           member carries the residual that states it once for both. */
+        /* §4.5's `dictionary ElementCreationOptions { CustomElementRegistry? customElementRegistry; DOMString is;
+           }`, in the IDL's order, which is the order Web IDL reads them. The registry crosses unconverted (IDL_ANY)
+           and is brand-tested by flatten_creation_options; the named residual there and core/dom/shadow_root.c's
+           state the declaration that replaces it. */
         static const IdlDictMember ELEMENT_CREATION_OPTIONS[] = {
             { "customElementRegistry", IDL_ANY,       false, NULL, 0 },
             { "is",                    IDL_DOMSTRING, false, NULL, 0 },
@@ -2918,21 +2900,20 @@ static void document_declare_members(JSContext *ctx)
     g_id_create_comment = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0);
     g_id_create_cdata = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_xml_node, 0);
     g_id_create_pi = idl_method_id(ctx, IDL_2STR, 2, js_doc_create_xml_node, 1);
-    /* §4.5's `[Exposed=Window] interface Document { constructor(); }` — the interface object is CONSTRUCTIBLE,
-       which it was not, and `new Document()` is how a page gets an XML document without DOMImplementation. */
+    /* §4.5's `[Exposed=Window] interface Document { constructor(); }`: the interface object is constructible, and
+       `new Document()` is how a page gets an XML document without DOMImplementation. */
     g_id_doc_ctor = idl_method_id(ctx, NULL, 0, js_doc_ctor, 0);
     g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
     idl_this_iface(document_is, "Document");
-    /* HTML §3.1.7's `NodeList getElementsByName(DOMString elementName)`. The receiver's brand is declared
-       rather than tested in the body, because Web IDL §3.7.7 "Operations" throws for a foreign receiver
-       BEFORE the argument conversion — and the argument here is a DOMString, so a body-side test would run a page's
-       `toString` first and only then throw, which is observable. */
+    /* HTML §3.1.7's `NodeList getElementsByName(DOMString elementName)`. The receiver's brand is declared, because
+       Web IDL §3.7.7 "Operations" throws for a foreign receiver before converting the DOMString argument, and a body
+       test would run the page's `toString` first. */
     g_id_by_element_name = idl_method_id(ctx, IDL_1STR, 1, js_doc_by_element_name, 0);
     idl_this_iface(document_is, "Document");
     g_id_create_element_ns = idl_method_id(ctx, IDL_NSSTR_STR, 2, js_doc_create_element_ns, 0);
     {
-        /* §4.5: `(Node root, optional unsigned long whatToShow = 0xFFFFFFFF, optional NodeFilter? filter =
-           null)`, twice. */
+        /* §4.5: `(Node root, optional unsigned long whatToShow = 0xFFFFFFFF, optional NodeFilter? filter = null)`,
+           twice. */
         static const IdlArgType TRAVERSER[3] = { IDL_INTERFACE, IDL_UNSIGNED_LONG,
                                                  IDL_CALLBACK_INTERFACE_NULLABLE };
         g_id_create_iterator = idl_method_id(ctx, TRAVERSER, 3, js_doc_create_traverser, 0);
@@ -2948,22 +2929,16 @@ static void document_declare_members(JSContext *ctx)
     idl_this_iface(document_is, "Document");
     g_id_create_event = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_event, 0);
     {
-        /* §4.5's `[CEReactions, NewObject] Node importNode(Node node,
-           optional (boolean or ImportNodeOptions) options = false)` — a STEP because §4.4's `clone a node` is
-           one: the walk rests at every node of the page's subtree.
-           THE UNION IS THE DECLARATION'S, and `= false` is stated with idl_arg_default because the DEFAULT IS
-           THE BOOLEAN ARM. Every other union-with-dictionary position in the platform's IDL defaults to `{}`
-           and is therefore expressed by letting §3.2.17 convert the position's `undefined`; this one is the
-           single exception in the whole corpus, and without the explicit default `document.importNode(n)`
-           would take the dictionary arm and deep-copy the subtree — `selfOnly`'s own default is false and
-           step 5.1 negates it. */
+        /* §4.5's `[CEReactions, NewObject] Node importNode(Node node, optional (boolean or ImportNodeOptions) options
+           = false)`, a step because §4.4's `clone a node` rests at every node. The union is the declaration's, and
+           `= false` is stated with idl_arg_default because the default is the boolean arm: every other
+           union-with-dictionary position in the platform's IDL defaults to `{}`, and without it
+           `document.importNode(n)` would take the dictionary arm and copy deep (step 5.1 negates `selfOnly`). */
         static const IdlArgType IMPORT_NODE[2] = { IDL_INTERFACE, IDL_BOOL_OR_DICT };
-        /* §4.5's `dictionary ImportNodeOptions { CustomElementRegistry customElementRegistry;
-           boolean selfOnly = false; }`, in the IDL's own order because that is the order Web IDL reads them
-           in. The registry crosses UNCONVERTED and is brand-tested by doc_import_options, for the reason
-           ElementCreationOptions' identical member states above and core/dom/shadow_root.c's residual names
-           once for all three. `selfOnly` is a declared boolean, so §3.2.17's member loop FORKS an unknown one
-           and the body reads a real truth value. */
+        /* §4.5's `dictionary ImportNodeOptions { CustomElementRegistry customElementRegistry; boolean selfOnly =
+           false; }`, in the IDL's order. The registry crosses unconverted and is brand-tested by doc_import_options,
+           as for ElementCreationOptions; `selfOnly` is a declared boolean, so §3.2.17's member loop forks an unknown
+           one and the body reads a real truth value. */
         static const IdlDictMember IMPORT_NODE_OPTIONS[] = {
             { "customElementRegistry", IDL_ANY,     false, NULL, 0 },
             { "selfOnly",              IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE, NULL },
@@ -2978,29 +2953,24 @@ static void document_declare_members(JSContext *ctx)
         idl_this_iface(document_is, "Document");
     }
     {
-        /* §4.5's `[CEReactions] Node adoptNode(Node node)`. The argument is an INTERFACE type, so the
-           declaration brands it and a non-Node is a TypeError before the member's step 1; the `[CEReactions]`
-           half is the machine's own epilogue, which drains the adoptedCallback reactions adopt enqueued before
-           the member's value is returned. */
+        /* §4.5's `[CEReactions] Node adoptNode(Node node)`. The argument is an interface type, so a non-Node is a
+           TypeError before step 1; `[CEReactions]` is the machine's epilogue, which drains the adoptedCallback
+           reactions adopt enqueued before the value returns. */
         static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
         g_id_adopt_node = idl_method_id(ctx, ONE_NODE, 1, js_doc_adopt_node, 0);
         idl_iface_brand(node_class_id());
     }
-    /* §3.1.1's `[CEReactions] attribute DOMString title` and `[CEReactions] attribute DOMString dir`. The
-       `[CEReactions]` half is the args machine's own epilogue, which drains the reactions the element creation
-       and the insertions below enqueue before the setter returns. */
+    /* §3.1.1's `[CEReactions] attribute DOMString title` and `[CEReactions] attribute DOMString dir`; the args
+       machine's epilogue drains the reactions the element creation and insertions enqueue. */
     g_id_title_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_TITLE);
     g_id_dir_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_DIR);
-    /* HTML §3.1.1 The Document object's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
-       location` — the SECOND carrier of the same extended attribute, and the reason the forwarding is Web IDL's
-       and not location.c's: `document.location = url` and `window.location = url` are ONE binding rule read off
-       two IDL lines, and a component-local copy would make one spelling of the same assignment answer
-       differently from the other. The pair is (`location`, `href`) exactly as §7.2.2's is. */
+    /* HTML §3.1.1 "The Document object"'s `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
+       location`: the forwarding is Web IDL's, not location.c's, so `document.location = url` and `window.location
+       = url` are one binding rule read off two IDL lines, the pair (`location`, `href`) as §7.2.2's. */
     g_id_location_set = idl_setter_id_put_forwards(ctx, "location", "href");
-    /* EACH POOL ENTRY IS AGENT-LIFETIME STATE, DECLARED BESIDE THE LINE THAT MINTS IT (core/agent_state.h). A
-       release that gives the pool back and keeps these numbers is exactly what fetch_free did — the next agent's
-       `_init` reads one to decide it need not run, and every member then answers out of a pool a dead runtime
-       issued. They are declared here rather than at the end of document_init because here is where they are set. */
+    /* Each pool entry is agent-lifetime state, declared beside the line that mints it (core/agent_state.h), so a
+       release that gave the pool back and kept these numbers would be caught: the next agent's `_init` would read
+       one as a latch. */
     agent_state_id("document", &g_id_create_element, "§4.5's createElement machine");
     agent_state_id("document", &g_id_create_text, "§4.5's createTextNode");
     agent_state_id("document", &g_id_create_comment, "§4.5's createComment");
@@ -3031,51 +3001,37 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createDocumentFragment", g_id_create_fragment);
     idl_install_method(ctx, proto, "getElementsByName", g_id_by_element_name);
     {
-        /* §3.1.7's five element shortcuts, each a LIVE HTMLCollection over the document. */
+        /* §3.1.7's five element shortcuts, each a live HTMLCollection over the document. */
         static const char *const NAMES[] = { "forms", "images", "scripts", "embeds", "links" };
         unsigned k;
         for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
     idl_install_method(ctx, proto, "createElementNS", g_id_create_element_ns);
-    /* §4.5's importNode AND adoptNode, the two members stated over another document's node. They are NOT the
-       same operation and the difference is whether the original moves: an import COPIES (§4.4's `clone a
-       node`, so the source keeps its tree) and an adopt MOVES (§4.5's `adopt a node`, which rewrites the
-       node's own node document). A page reaching for one when it wants the other is the ordinary bug this
-       pair exists to make expressible, which is why both are here rather than one standing for both.
-       THE COMMENT THAT STOOD HERE CALLED importNode HONESTLY ABSENT, on the ground that node.c's clone machine
-       took neither §4.4's `document` argument nor its `fallbackRegistry`. The first half is what this diff
-       built — node_clone_start now takes the document, which is the one argument the member IS — and the
-       second half survives as the named residual at the member's own step 7 rather than as an absence: a
-       registry the clone does not thread makes a copy UNCUSTOMIZED, which is what §4.4's cloneNode already
-       produces and what §4.13's upgrade reaction answers on insertion. It is kept in its own words because a
-       reader who re-derives the absence from `fallbackRegistry` alone would conclude the member cannot land. */
+    /* §4.5's importNode and adoptNode, the two members stated over another document's node: an import copies
+       (§4.4's `clone a node`, the source keeps its tree) and an adopt moves (§4.5's `adopt a node` rewrites the
+       node's node document). importNode's registry is the named residual at its step 7. */
     idl_install_method(ctx, proto, "importNode", g_id_import_node);
     idl_install_method(ctx, proto, "adoptNode", g_id_adopt_node);
-    /* §4.5's two ATTRIBUTE factories, declared beside the interface they build (attr.c) — "create an attribute"
-       is §4.9.2's algorithm and belongs to the attribute component, not to a second copy of it here. */
+    /* §4.5's two attribute factories, declared beside the interface they build (attr.c): "create an attribute" is
+       §4.9.2's algorithm and belongs to the attribute component. */
     attr_install_document_members(ctx, proto);
     idl_install_method(ctx, proto, "createNodeIterator", g_id_create_iterator);
     idl_install_method(ctx, proto, "createTreeWalker", g_id_create_walker);
     idl_install_method(ctx, proto, "createRange", g_id_create_range);
     idl_install_method(ctx, proto, "createEvent", g_id_create_event);
-    /* §3.1.1 The Document object's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
-       location`, with the FORWARDING half — Web IDL §3.7.6's, the same declaration §7.2.2's `location` carries,
-       so `document.location = url` and `window.location = url` are the one algorithm ending in the `href`
-       setter's navigation.
-       WHAT THIS INSTALL IS STILL NARROWER THAN is the OTHER extended attribute on that line. §3.4.10
-       [LegacyUnforgeable] puts an attribute on EVERY OBJECT THAT IMPLEMENTS THE INTERFACE, non-configurable,
-       and this is on the interface prototype object and configurable — which is what every other member of
-       this prototype is and what none of them should be if the IDL says otherwise. The next diff is the
-       per-instance unforgeable install for a Document, which is what idl_install_accessor_unforgeable already
-       does for §7.2.2's `location` on the global; it needs a hook at document creation, since a Document is
-       built per navigation rather than once per realm. ITS ABSENCE SHOWS as
-       `Object.getOwnPropertyDescriptor(document, "location")` answering undefined where a browser answers a
-       non-configurable accessor, and as `delete Document.prototype.location` succeeding. */
+    /* §3.1.1 "The Document object"'s `[PutForwards=href, LegacyUnforgeable] readonly attribute Location? location`,
+       with the forwarding half (Web IDL §3.7.6, as on §7.2.2's `location`), so `document.location = url` ends in the
+       `href` setter's navigation.
+       Named residual. Not covered: §3.4.10 [LegacyUnforgeable] puts the attribute on every implementing object,
+       non-configurable; this is on the interface prototype object and configurable. Next diff builds: the
+       per-instance unforgeable install for a Document, as idl_install_accessor_unforgeable does for §7.2.2's
+       `location` on the global, with a hook at document creation (a Document is built per navigation). How its
+       absence shows: `Object.getOwnPropertyDescriptor(document, "location")` answers undefined where a browser
+       answers a non-configurable accessor, and `delete Document.prototype.location` succeeds. */
     idl_install_accessor(ctx, proto, "location", js_doc_location, 0, g_id_location_set);
-    /* §3.1.1's TREE ENTRY POINTS and §4.5's per-document strings. They were data properties latched onto ONE
-       document object at install — wrong in time (each is a lookup in the tree as it IS) and wrong in subject
-       (a value stored on one object cannot answer for a second document). */
+    /* §3.1.1's tree entry points and §4.5's per-document strings, accessors because each is a lookup in the tree as
+       it is and a fact about the receiver. */
     idl_install_accessor(ctx, proto, "documentElement", js_doc_tree, 0, -1);
     idl_install_accessor(ctx, proto, "body",           js_doc_tree, 1, -1);
     idl_install_accessor(ctx, proto, "head",           js_doc_tree, 2, -1);
@@ -3088,66 +3044,47 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "charset",        js_doc_strings, 3, -1);
     idl_install_accessor(ctx, proto, "inputEncoding",  js_doc_strings, 3, -1);
     idl_install_accessor(ctx, proto, "implementation", js_doc_implementation, 0, -1);
-    /* §3.1.7's `title`, §3.2.6.4's `dir` and §7.2.2's `defaultView` — the first two READ-WRITE, which is what
-       makes them accessors rather than a value: `title` was a string latched at install with no setter at all,
-       so `document.title = "x"` stored a property where the standard creates a `<title>` element. */
+    /* §3.1.7's `title`, §3.2.6.4's `dir` and §7.2.2's `defaultView`; the first two are read-write, and `title`'s
+       setter creates a `<title>` element. */
     idl_install_accessor(ctx, proto, "title",       js_doc_html_members, DOC_TITLE, g_id_title_set);
     idl_install_accessor(ctx, proto, "dir",         js_doc_html_members, DOC_DIR,   g_id_dir_set);
     idl_install_accessor(ctx, proto, "defaultView", js_doc_html_members, DOC_DEFAULT_VIEW, -1);
-    /* §3.1.4's resource metadata members and §3.1.5's `readyState` — their own component, because `cookie` and
-       `referrer` are ATTACKER SOURCES with their own browser delivery and a cookie store behind them. */
+    /* §3.1.4's resource metadata members and §3.1.5's `readyState`, their own component, because `cookie` and
+       `referrer` are attacker sources with their own browser delivery and a cookie store behind them. */
     document_metadata_install(ctx, proto);
-    /* §7.1.1.2's `domain`, the fifth member of that partial interface — see document_domain.h for why the
-       origin-mutating one is not in the component that reads the resource's metadata. */
+    /* §7.1.1.2's `domain`, the fifth member of that partial interface (see document_domain.h for why the
+       origin-mutating one is separate from the metadata reader). */
     document_domain_install(ctx, proto);
-    /* §8.4 Dynamic markup insertion's `write`, `writeln` and `close`. A THIRD problem again: every member
-       above answers a question about this tree, and these three drive the parser that builds it — and
-       `document.write` is a top-three DOM-XSS sink whose absence meant no @S search was ever opened for it. */
+    /* §8.4 "Dynamic markup insertion"'s `write`, `writeln` and `close`, which drive the parser rather than read the
+       tree; `document.write` is a top-three DOM-XSS sink. */
     document_write_install(ctx, proto);
-    /* CSSOM §6.2.3's `styleSheets`, one of the two members its `partial interface mixin DocumentOrShadowRoot`
-       adds. ShadowRoot gets the same call from its own component, because a `<style>` in a shadow tree is in
-       THAT tree's collection and not in this one. `adoptedStyleSheets`, the mixin's other member, is an
-       `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is ABSENT FOR ITS OWN REASON, which used to be
-       the constructor's: CSSOM §6.1 CSS Style Sheets' create a constructed CSSStyleSheet is BUILT
-       (core/css/css_style_sheet.c), so what is missing is Web IDL's observable array type — a backing list with
-       set-an-indexed-value and delete-an-indexed-value algorithms, not a plain Array — together with the steps
-       that refuse a sheet whose Constructor document is not this one. */
+    /* CSSOM §6.2.3's `styleSheets`, one of the two members its `partial interface mixin DocumentOrShadowRoot` adds;
+       ShadowRoot gets the same call from its own component, since a shadow tree's `<style>` is in that tree's
+       collection.
+       Named residual. Not covered: `adoptedStyleSheets`, an `ObservableArray<CSSStyleSheet>` of constructed sheets
+       (CSSOM §6.1's constructed CSSStyleSheet is built in core/css/css_style_sheet.c). Next diff builds: Web IDL's
+       observable array type (a backing list with set-an-indexed-value and delete-an-indexed-value algorithms) and
+       the steps refusing a sheet whose constructor document is not this one. How its absence shows:
+       `document.adoptedStyleSheets` is undefined. */
     style_sheet_list_install_mixin(ctx, proto);
-    /* DOM §4.2.5 "Mixin DocumentOrShadowRoot"'s OWN member — `readonly attribute CustomElementRegistry?
-       customElementRegistry;` — of which `Document includes DocumentOrShadowRoot` makes this one of the two
-       hosts; ShadowRoot gets the identical call from its own component. Its steps branch on the receiver only
-       to reach the same field twice ("If this is a document, then return this's custom element registry.
-       Assert: this is a ShadowRoot node. Return this's custom element registry."), which is why one getter in
-       core/html/custom_elements.c serves both and why neither host writes one of its own. */
+    /* DOM §4.2.5 "Mixin DocumentOrShadowRoot"'s own member, `readonly attribute CustomElementRegistry?
+       customElementRegistry;`, whose steps reach the same field for either host ("If this is a document, then return
+       this's custom element registry. Assert: this is a ShadowRoot node. Return this's custom element registry."),
+       so one getter in core/html/custom_elements.c serves both. */
     custom_elements_install_document_or_shadow_root_member(ctx, proto);
 }
 
-/* HTML §7.1.7 "Policy containers"' container for THIS document, from BOTH halves of the policy list.
-   `csp` IS WHAT THE DOCUMENT WAS CREATED WITH — the response's `Content-Security-Policy` header, or §7.4's
-   clone of the creator's for a document that came from no response — and it used to arrive nowhere: the
-   trusted zone captured the header, handed it to the engine, and the engine's entry point cast it to `(void)`.
-   So every document was judged against its `<meta>` policies alone, and a sink that the page's real policy
-   kills was reported as a working exploit — the exact false PoC §@S exists to never emit.
-   The meta half is a REAL LEXBOR WALK, not a regex over the source: a `content` attribute is parsed markup by
-   the time it is here, so entity decoding and quoting are the parser's answer rather than a second one — the
-   same reason the bundle id is a `<script>` scan.
-   WHAT A `<meta>` DELIVERS IS §4.2.5.3's ANSWER AND NOT THIS WALK'S. The walk used to read `http-equiv` and
-   `content` itself and merge the raw attribute value, which is not HTML §4.2.5.3 "Pragma directives"' content
-   security policy state: that algorithm REFUSES a `meta` outside `head` (step 1) and REMOVES `report-uri`,
-   `frame-ancestors` and `sandbox` from what is left (step 4). Both refusals make a browser enforce LESS than
-   the markup says, so performing neither judged pages under policies no browser applies — and for this engine
-   that suppresses REAL findings, since §@S measures every breakout against the document's policy. It is
-   core/html/html_meta_csp.h's now, asked once per node.
-   AND THIS WALK IS THE INVERSION, NAMED. §7.5.1 "Shared document creation infrastructure" creates the
-   Document and §7.5.2 "Loading HTML documents" then feeds a parser into it, so in the standard step 5's
-   "enforce the policy" appends to a list that already exists; this engine parses first and builds the record
-   afterwards, so the append is this batch instead. The question each `<meta>` is asked is identical either
-   way, which is why only the CALLER moves when the record is created before the parse.
-   THIS BATCH IS THE PARSER'S HALF AND NOT THE WHOLE ALGORITHM. §4.2.5.3 runs at every INSERTION, and a
-   `<meta>` a script installs afterwards is one this walk cannot reach — that one goes through DOM §4.2.3's
-   insertion steps to document_meta_csp_inserted below, which performs step 5 as CSP §2.2's own APPEND to the
-   list this function built. Reading the batch as the whole delivery is what left the scripted policy
-   unenforced, and a Document judged under a more permissive list than the real page has. */
+/* HTML §7.1.7 "Policy containers"' container for this document, from both halves of the policy list. `csp` is what
+   the document was created with: the response's `Content-Security-Policy` header, or §7.4's clone of the creator's
+   for a document from no response. The `<meta>` half is a Lexbor walk asking core/html/html_meta_csp.h, per node,
+   HTML §4.2.5.3 "Pragma directives"' content security policy state, which refuses a `meta` outside `head` (step 1)
+   and removes `report-uri`, `frame-ancestors` and `sandbox` (step 4), since §@S measures every breakout against the
+   policy a browser would apply.
+   This batch is an inversion: §7.5.1 "Shared document creation infrastructure" creates the Document and §7.5.2
+   "Loading HTML documents" feeds a parser into it, so step 5's "enforce the policy" appends to an existing list;
+   here the record is built after the parse, so the parser's `<meta>`s are appended as one batch. A `<meta>` a
+   script inserts later goes through DOM §4.2.3's insertion steps to document_meta_csp_inserted below, which performs
+   step 5 as CSP §2.2's append. */
 PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
                                      SerializedEmbedderPolicy embedder, const char *integrity_policy)
 {
@@ -3155,9 +3092,8 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
     char *acc = NULL;
     size_t acc_len = 0;
 
-    /* THE CREATED-WITH POLICIES COME FIRST, because they were delivered first; every policy in a list is
-       enforced so the order changes no verdict, but a container that reports its own text should report it in
-       the order the document received it. */
+    /* The created-with policies first, since they were delivered first; every policy in a list is enforced, so the
+       order changes no verdict, but the container reports its text in the order received. */
     if (csp && *csp) {
         acc_len = strlen(csp);
         acc = malloc(acc_len + 1);
@@ -3165,21 +3101,16 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
         memcpy(acc, csp, acc_len + 1);
     }
 
-    /* No guard for a missing tree: document_install has already asserted there is one, and a second, softer
-       answer here would be the defensive branch that hides the case the assert exists to catch.
-       EVERY NODE IS ASKED AND NONE IS FILTERED HERE, because §4.2.5.3's selection — is this a `meta`, is it in
-       the content security policy state, is it a child of `head` — IS the algorithm's own first three acts and
-       a filter here would be a second reading of them. */
+    /* No guard for a missing tree: document_install asserted there is one. Every node is asked and none is filtered
+       here, because §4.2.5.3's selection (a `meta`, in the content security policy state, a child of `head`) is the
+       algorithm's own first acts. */
     for (cur = lxb_dom_interface_node(dom)->first_child; cur; ) {
         char *delivered = html_meta_csp_policy(cur);
 
         if (delivered) {
-            /* §4.2.5.3 STEP 5, "enforce the policy policy" — which for a Document whose list is a serialized
-               one is an append to that text.
-               SEVERAL META POLICIES ALL APPLY, and they are joined with a COMMA because that is CSP §2.2's
-               serialization of a policy LIST. A ';' join would have made them one policy, where a repeated
-               directive is ignored and `script-src` overrides `default-src` — so the narrowing second policy
-               would have silently vanished. */
+            /* §4.2.5.3 step 5, "enforce the policy policy", an append to this serialized list. Several meta policies
+               all apply, joined with a comma, CSP §2.2's serialization of a policy list; a `;` join would make them
+               one policy, in which a repeated directive is ignored. */
             size_t dl = strlen(delivered);
             size_t add = dl + (acc_len ? 1 : 0);
             char *g = realloc(acc, acc_len + add + 1);
@@ -3195,13 +3126,9 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
         while (cur && !cur->next) cur = cur->parent;
         if (cur) cur = cur->next;
     }
-    /* AND THE `sandbox` INVARIANT §7.1.5 RESTS ON IS NOW ESTABLISHED RATHER THAN DETECTED. A DCHECK stood at
-       the merge above saying a meta-delivered policy must declare no `sandbox` directive — true, and it was a
-       report of a gap rather than the fix: CSP §3.3 "The <meta> element" makes `sandbox` meaningless there,
-       this container carries no per-policy source that could tell a meta policy from a header one, and
-       §7.1.5's CSP-derived sandboxing flags would therefore have read it as the server's. §4.2.5.3 step 4
-       REMOVES it, so the state that assert existed to catch cannot arise; the check that survives is over the
-       WHOLE merged list and is the one that would fire if it ever did. */
+    /* The `sandbox` invariant §7.1.5 rests on: CSP §3.3 "The <meta> element" makes `sandbox` meaningless there, and
+       §4.2.5.3 step 4 removes it, so merging the meta policies cannot change §7.1.5's CSP-derived sandboxing flags;
+       this asserts it over the whole merged list. */
     DCHECK(!acc || policy_csp_derived_sandboxing_flags(acc, acc_len) ==
                    (csp && *csp ? policy_csp_derived_sandboxing_flags(csp, strlen(csp)) : 0),
            "merging this document's `<meta>` policies changed §7.1.5's CSP-derived sandboxing flags — only a "
@@ -3209,13 +3136,9 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
            "every meta-delivered policy, so a difference here is a policy that reached this list without "
            "going through that step");
     {
-        /* THE MERGED LIST TAKES ONE SELF-ORIGIN, and it is the created-with policy's rather than a second one
-           derived for the `<meta>` half. CSP §3.3 delivers a meta policy INSIDE the response this document
-           came from, so §2.2.2's "response's URL's origin" is the same origin for both halves; the two are one
-           list precisely because they belong to one response.
-           AND §7.1.4'S ITEM PASSES THROUGH UNTOUCHED, which is a statement about CSP §3.3 rather than a
-           shortcut: a `<meta http-equiv>` can deliver a CSP policy and nothing else, so there is no second
-           half of the embedder policy for this walk to find and no merge for it to perform. */
+        /* The merged list takes one self-origin, the created-with policy's: CSP §3.3 delivers a meta policy inside
+           the response this document came from, so §2.2.2's "response's URL's origin" is the same for both halves.
+           §7.1.4's item passes through untouched, since a `<meta http-equiv>` delivers only a CSP policy. */
         PolicyContainer *p = policy_container_new(acc, self_origin, NULL, embedder, integrity_policy);
         free(acc);
         return p;
@@ -3224,10 +3147,10 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
 
 const PolicyContainer *document_policy(JSContext *ctx) { return doc_here(ctx)->policy; }
 
-/* THE SAME CONTAINER AS A FACT ABOUT ONE DOCUMENT — CSP §6.3.1.1 step 1 is stated that way ("let CSP list be
-   DOCUMENT's global object's csp list"), and §4.2.3's freeze runs for an element whose node document is
-   routinely not the running realm's active one (a DOMParser tree, a second Document of this agent). NULL for a
-   document with no browsing context, which is the same answer as a list of zero policies. */
+/* The same container as a fact about one document: CSP §6.3.1.1 step 1 states it that way ("let CSP list be
+   document's global object's csp list"), and §4.2.3's freeze runs for elements whose node document is often not the
+   realm's active one (a DOMParser tree). NULL for a document with no browsing context, the same answer as a list of
+   zero policies. */
 const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom)
 {
     const Document *d = doc_rec(dom);
@@ -3236,30 +3159,16 @@ const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom)
     return d->policy;
 }
 
-/* HTML §4.2.5.3 "Pragma directives"' content security policy state, FOR AN ELEMENT A FLOW INSERTED — the
- * second caller of a component that always had two, and the one that was missing.
- *
- * WHY IT EXISTS: A `<meta>` THIS DOCUMENT WAS NOT PARSED WITH STILL DELIVERS A POLICY. The walk in
- * document_policy_new above collects the `<meta>` elements the parser already put in the tree, once, while the
- * Document is being built. §4.2.5.3 is not a parse-time algorithm — HTML runs it at the INSERTION and says so
- * in its own words beside the steps: "At the time of inserting the meta element to the document, it is
- * possible that some resources have already been fetched. For example, images might be stored in the list of
- * available images prior to dynamically inserting a meta element with an http-equiv attribute in the Content
- * security policy state." A policy a script inserts is enforced by every browser, and the batch walk cannot
- * see it because the batch ran before the script did. What that cost is exactly the report §@S must not
- * produce: the Document was judged under a MORE PERMISSIVE list than the real page has, so a breakout the real
- * policy kills came back as a working exploit, with the policy that kills it never quoted anywhere.
- *
- * IT IS THE ELEMENT'S OWN NODE DOCUMENT AND NEVER THE RUNNING REALM'S ACTIVE ONE. A realm holds several
- * Documents — `createHTMLDocument`, a `DOMParser` parse, an XHR `responseXML` — and a script that inserts a
- * `<meta http-equiv=Content-Security-Policy>` into one of those has said nothing whatever about the page. §4.2.5.3
- * enforces "upon the current document", which DOM §4.4 makes the element's node document; reading `doc_here`
- * here would put a scratch tree's markup in charge of the real page's CSP list, which is the direction that
- * SUPPRESSES every finding on the page at once.
- *
- * `el` IS EVERY INSERTED ELEMENT AND NOT A PRE-SELECTED `meta`, because §4.2.5.3's first act is the pragma
- * SELECTION and core/html/html_meta_csp.h owns it — a filter here would be a second reading of the same three
- * refusals (is this a `meta`, is it in the content security policy state, is it a child of `head`). */
+/* HTML §4.2.5.3 "Pragma directives"' content security policy state for an element a flow inserted: the second caller
+ * of html_meta_csp, beside document_policy_new's parse-time batch. §4.2.5.3 runs at insertion ("At the time of
+ * inserting the meta element to the document, it is possible that some resources have already been fetched. For
+ * example, images might be stored in the list of available images prior to dynamically inserting a meta element with
+ * an http-equiv attribute in the Content security policy state."), so a policy a script inserts is enforced, and
+ * the Document is not judged under a more permissive list than the real page has.
+ * The element's own node document is the one enforced on ("upon the current document", which DOM §4.4 makes the
+ * node document), never the running realm's active one: a script inserting a CSP `<meta>` into a
+ * `createHTMLDocument`, DOMParser or `responseXML` tree says nothing about the page. `el` is every inserted element,
+ * since §4.2.5.3's pragma selection is core/html/html_meta_csp.h's. */
 void document_meta_csp_inserted(lxb_dom_element_t *el)
 {
     const lxb_dom_node_t *n;
@@ -3274,21 +3183,16 @@ void document_meta_csp_inserted(lxb_dom_element_t *el)
            "§4.2.5.3's content security policy state ran in a document with no record — the insertion seam has "
            "already asserted a realm for this node's document, and a realm is a record, so an absence here is "
            "a node inserted into a tree nothing owns");
-    /* STEPS 1-4, plus the pragma selection. NULL is the answer for every node that delivers no policy, which is
-       nearly all of them, and for a `<meta>` whose whole content step 4 removed. */
+    /* Steps 1-4 and the pragma selection. NULL for every node that delivers no policy, and for a `<meta>` whose whole
+       content step 4 removed. */
     delivered = html_meta_csp_policy(n);
     if (!delivered)
         return;
     if (!d->policy) {
-        /* A DOCUMENT THIS ENGINE GAVE NO §7.1.7 CONTAINER, WHICH IS A POSITIVE STATEMENT AND NOT A HOLE.
-           document_install builds one for every Document with a browsing context; the second-document family
-           built by document_new (DOMParser, createHTMLDocument, responseXML) gets none, and every CSP question
-           asked of one already answers "allowed" because document_policy_of returns NULL for it. So there is no
-           list here for step 5 to append to, IN EITHER DIRECTION — what is missing is the container itself,
-           which HTML §7.1.7 "Policy containers" gives EVERY Document, and not this step. The DCHECK is
-           what keeps the two apart: a Document that IS some realm's active document has a container, so if one
-           ever reaches here the absence is a creation path that skipped document_install rather than this
-           family. */
+        /* A document with no §7.1.7 container, a positive statement: document_install builds one for every Document
+           with a browsing context, while document_new's family (DOMParser, createHTMLDocument, responseXML) gets
+           none and document_policy_of answers NULL ("allowed") for it, so there is no list for step 5 to append to.
+           The DCHECK separates that family from a realm's active document created without document_install. */
         DCHECK(document_active_realm_of((const lxb_dom_node_t *)n->owner_document) == NULL,
                "a `<meta>` delivered a policy to a Document that is a realm's ACTIVE document and holds no "
                "§7.1.7 policy container — every such Document gets one at document_install, so this is a "
@@ -3297,9 +3201,8 @@ void document_meta_csp_inserted(lxb_dom_element_t *el)
         free(delivered);
         return;
     }
-    /* STEP 5, "Enforce the policy policy" — CSP §2.2's list GROWS BY ONE. The container asserts that at its
-       origin (core/frame/policy_container.h), which is where the rule that every delivery appends and none replaces is
-       checkable rather than described. */
+    /* Step 5, "Enforce the policy policy": CSP §2.2's list grows by one, which the container asserts at its origin
+       (core/frame/policy_container.h). */
     policy_container_enforce_policy(d->policy, delivered);
     free(delivered);
 }
@@ -3332,88 +3235,31 @@ SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx
 
 const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return doc_here(ctx)->permissions_policy; }
 
-/* HTML §3.1.3 "Ancestor origins" — the INTERNAL ANCESTOR ORIGIN OBJECTS LIST CREATION STEPS, "given a
- * `Document` object document and a referrer policy referrerPolicy". §7.3.2.1 "Creating browsing contexts" is
- * the one caller and it runs them together with the ANCESTOR ORIGINS LIST CREATION STEPS beside them ("set
- * document's internal ancestor origin objects list to the result of running the internal ancestor origin
- * objects list creation steps given document and iframeReferrerPolicy" then "set document's ancestor origins
- * list to the result of running the ancestor origins list creation steps given document").
- *
- * IT IS CALLED AT THE CREATION AND NOWHERE ELSE, which is the whole content of the member: §7.2.4's
- * `ancestorOrigins` is a SNAPSHOT of the tree this Document was created in. Reading it by walking parents at
- * the getter would answer with the tree as it is NOW, so a page that removed and re-inserted a frame would be
- * told about ancestors this document never had.
- *
- * THE THREE INPUTS ARE PASSED RATHER THAN DERIVED FROM THE CHILD'S NAVIGABLE, and that is what lets the ONE
- * implementation serve both sides of an instance boundary. §7.3.1.3's create-a-new-child-navigable holds all
- * three in the CREATOR's heap — the parent navigable is "element's node navigable", the container is the
- * element, the child's origin is what that create just computed — so for a child whose Document will be built
- * in a PEER INSTANCE the creator runs these steps and the RESULT crosses, exactly as Permissions Policy §9.5's
- * result does on the same record. Deriving the inputs from the child's own proxy instead would tie the
- * composition to a navigable whose Document is in another heap, which is the one arrangement it cannot have.
- *
- * `masked` IS THE REFERRER POLICY'S DOING and the two arms are step 8's: "no-referrer" masks unconditionally,
- * and "same-origin" masks only when the parent is cross-origin with this document. Masking replaces an origin
- * with A NEW OPAQUE ORIGIN rather than dropping it, so the list's LENGTH still reports the depth of the frame
- * tree — which is why the corpus asserts `['null']` and not `[]`.
- *
- * THE POLICY IS READ OFF THE CONTAINER ELEMENT AT THIS MOMENT, AND FOR A NAVIGATION THAT IS THE WRONG MOMENT.
- * This paragraph used to claim the read WAS the standard's snapshot and cited §7.4.2's beginning-navigation
- * step 16 for it. All three parts were wrong: the section is §7.4.2.2 "Beginning navigation", its step 16 is
- * the is-delaying-load-events one, and the snapshot is its STEP 17 — "let targetSnapshotParams be the result of
- * snapshotting target snapshot params given navigable". §7.4.2.1 "Supporting concepts" defines that struct as
- * exactly two items, "sandboxing flags" and "IFRAME ELEMENT REFERRER POLICY", and says it "is snapshotted at
- * the beginning of a navigation and used throughout the navigation's lifetime"; the second item is "the result
- * of determining the iframe element referrer policy given targetNavigable's container", which is §7.1.6 — the
- * function core/html/html_iframe.c now owns.
- *
- * SO THE VALUE IS CAPTURED WHEN THE NAVIGATION STARTS AND CONSUMED WHEN THE DOCUMENT IS CREATED, AND THOSE ARE
- * DIFFERENT INSTANTS. Reading the element here is correct for the INITIAL about:blank, whose creation is not
- * preceded by a navigation at all — there is no earlier moment for it to have been snapshotted at. It is wrong
- * for every Document a navigation produces: a page that writes `referrerpolicy` after starting the navigation
- * and before the load completes is answered with the NEW value, where the standard answers with the one that
- * was live when the navigation began. That is observable and the corpus observes it — an ancestor origin comes
- * back unmasked because the attribute was cleared while the response was still in flight.
- *
- * WHAT CLOSES IT IS THE STRUCT, AND THE STRUCT DOES NOT EXIST — an earlier version of this paragraph said this
- * engine already carried target snapshot params for the sandboxing flags and that the referrer policy was
- * simply "the struct's OTHER field". That was false about this tree and it was written without grepping for the
- * type: every occurrence of `targetSnapshotParams` here is PROSE inside a comment, naming the spec's struct to
- * describe a computation done without it. A reader who trusted it would have gone looking for a record to add a
- * field to and found nothing, which is the stale-DFAIL failure mode with the coordinates pointing at a struct
- * rather than at a file.
- *
- * WHAT IS ACTUALLY THERE is a different mechanism for the OTHER half. §7.4.5's final sandboxing flag set is
- * built as `window_proxy_creation_sandbox_flags(proxy) | csp_flags`, so the sandboxing half is a LATCH ON THE
- * WINDOWPROXY, written when the navigable is created and read at §7.4.5. That is a snapshot — just not the
- * standard's struct, and not at the standard's instant, since §7.4.2.1 takes it at the start of the NAVIGATION
- * and the latch is taken at the creation of the NAVIGABLE. Whether those two instants are observably different
- * for the `sandbox` attribute is NOT established here and must not be assumed in either direction; the referrer
- * policy's are observably different, which is why only this half has a corpus failure behind it.
- *
- * SO THE WORK IS TO BUILD §7.4.2.1's TARGET SNAPSHOT PARAMS as a real record, snapshotted at §7.4.2.2 step 17,
- * carrying both of the two items that section lists — this one, whose value is §7.1.6's answer, and the
- * sandboxing flags, whose existing latch then moves onto it and gets taken at the right instant by
- * construction. Once the navigation carries the record, this function takes the policy as an argument the way
- * §7.3.2.1 already passes `iframeReferrerPolicy`, and stops touching the container element for a navigated
- * Document. Reading the attribute earlier and stashing it on the element would be the same defect moved: the
- * operation must carry its inputs, not re-derive them from the object it acts on (CLAUDE.md, §scheduler).
- *
- * THE POLICY IS §7.1.6's ANSWER AND NOT THE RAW ATTRIBUTE, which is what §7.3.2.1 "Creating browsing contexts"
- * passes as `iframeReferrerPolicy` and is a different function from reading the element. HTML §7.1.6 "iframe
- * element referrer policy" is "if embedder is an `iframe` element, then return embedder's `referrerpolicy`
- * attribute's STATE's corresponding keyword; return the empty string" — a STATE, so §2.5.5's enumerated
- * attribute resolved by §2.3.3's ASCII case-insensitive match with an invalid value default of the empty string
- * state, and the empty string for a container that is not an `iframe` at all. This site used to compare the raw
- * bytes with `strcmp`, which failed to mask for `referrerpolicy="No-Referrer"` and would have honoured the
- * attribute on an `<object>`; core/html/html_iframe.c owns §7.1.6 now and this asks it, so the two questions
- * ("which state" and "does it mask") are answered in the two places the standard answers them.
- *
- * THE MASKED SAME-ORIGIN COMPARISON ASKS THE PARENT'S ORIGIN RECORD, NOT ITS TEXT. Step 12.1's condition is
- * "ancestorOrigin is same origin with parentDoc's origin", and §7.1.1's same origin is FALSE for two opaque
- * origins — while both serialize to the same three bytes `null`. Comparing the stored text alone would
- * therefore mask an entry that is not the parent's whenever the parent is itself opaque, so the text
- * comparison is admitted only once the parent's origin is known to be a tuple. */
+/* HTML §3.1.3 "Ancestor origins"' internal ancestor origin objects list creation steps, "given a `Document` object
+ * document and a referrer policy referrerPolicy". §7.3.2.1 "Creating browsing contexts" is the one caller, and runs
+ * them with the ancestor origins list creation steps. They run at creation only: §7.2.4's `ancestorOrigins` is a
+ * snapshot of the tree the Document was created in. The three inputs are passed, not derived from the child's
+ * navigable: §7.3.1.3's create holds all three in the creator's heap (the parent navigable, the container element,
+ * the child's origin), so for a child built in a peer instance the creator runs these steps and the result crosses,
+ * as Permissions Policy §9.5's does.
+ * `masked` follows step 8: "no-referrer" masks unconditionally, "same-origin" when the parent is cross-origin with
+ * this document. Masking appends a new opaque origin rather than dropping one, so the length reports the frame
+ * depth (the corpus asserts `['null']`, not `[]`). The policy is HTML §7.1.6 "iframe element referrer policy"'s
+ * answer, the `referrerpolicy` attribute's state keyword (an enumerated attribute, ASCII case-insensitive, invalid
+ * value default the empty string) for an `iframe` and the empty string otherwise, owned by core/html/html_iframe.c.
+ * Step 12.1's "ancestorOrigin is same origin with parentDoc's origin" is false for two opaque origins though both
+ * serialize to `null`, so the text comparison is admitted only once the parent's origin is a tuple. */
+/* Named residual: the referrer policy is read off the container element at this moment. Not covered: a Document a
+ * navigation produces should use §7.4.2.1 "Supporting concepts"' target snapshot params, "snapshotted at the
+ * beginning of a navigation and used throughout the navigation's lifetime", whose two items are the sandboxing flags
+ * and the iframe element referrer policy, taken at §7.4.2.2 "Beginning navigation" step 17; so a page that changes
+ * `referrerpolicy` while the response is in flight is answered with the new value (the corpus observes an ancestor
+ * origin coming back unmasked). The initial about:blank, which no navigation precedes, is correct. The sandboxing
+ * half is a latch on the WindowProxy taken at navigable creation (`window_proxy_creation_sandbox_flags`), a
+ * different instant whose observability for `sandbox` is not established. Next diff builds: target snapshot params
+ * as a record taken at step 17 with both items, the sandboxing latch moved onto it, and this function taking
+ * the policy as an argument, as §7.3.2.1 passes `iframeReferrerPolicy`. How its absence shows: the corpus failure
+ * above. */
 static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_nav, JSValueConst container,
                                             const Origin *child_origin)
 {
@@ -3424,7 +3270,7 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
     const Origin *porigin;
     const char *pser;
     bool masked = false, popaque;
-    const char *rp;   /* §7.1.6's keyword — borrowed from its own table, so there is nothing to free */
+    const char *rp;   /* §7.1.6's keyword, borrowed from its own table */
     JSValue len;
 
     CHECK(!JS_IsException(out), "§3.1.3's ancestor origins list could not be allocated");
@@ -3433,7 +3279,7 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
            "this instance does not hold — step 5 reads the parent Document's own list and steps 9, 11 and 12.1 read "
            "its ORIGIN RECORD, and neither exists in this heap for a peer's navigable. The composition belongs in "
            "the instance that holds the ancestors and its RESULT crosses as text");
-    /* STEP 5: "let ancestorOrigins be parentDoc's internal ancestor origin objects list." */
+    /* Step 5: "let ancestorOrigins be parentDoc's internal ancestor origin objects list." */
     prealm = window_proxy_realm(ctx, parent_nav);
     pd = doc_here(prealm);
     DCHECK(pd != NULL && JS_IsArray(pd->ancestor_origin_strings),
@@ -3444,28 +3290,26 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
     DCHECK(porigin != NULL, "§3.1.3's step 11 needs the parent Document's origin and its navigable has none");
     popaque = origin_is_opaque(porigin);
     pser = origin_serialized(porigin);
-    /* STEPS 6-9: the container element, `masked`, and the referrer policy's two masking arms. The keyword §7.1.6 returns is already
-       canonical, so the two comparisons below are against the standard's own spellings and are exact by
-       construction — the case-insensitivity lives once, inside §2.3.3's match, and not at every consumer. */
+    /* Steps 6-9: the container element, `masked`, and the referrer policy's two masking arms. §7.1.6's keyword is
+       canonical, so the comparisons below are exact; the case-insensitivity lives once, inside §2.3.3's match. */
     rp = iframe_element_referrer_policy(container);
     DCHECK(rp != NULL, "§7.1.6 answered with no keyword — its two arms both return one (a state's corresponding "
                        "keyword, or the empty string), so a NULL is an arm that returned nothing at all and "
                        "steps 8-9 would read it as 'no policy' rather than crashing");
     if (!strcmp(rp, "no-referrer")) {
-        masked = true;                                                              /* STEP 8 */
-    } else if (!strcmp(rp, "same-origin")) {                                        /* STEP 9 */
+        masked = true;                                                              /* step 8 */
+    } else if (!strcmp(rp, "same-origin")) {                                        /* step 9 */
         DCHECK(child_origin != NULL,
                "§3.1.3's step 9 compares this Document's origin against its parent's and the navigable being "
                "created has none — every navigable is created with the origin its Document will have, so an "
                "absent one is a create that had not computed it yet rather than a Document without one");
         masked = !origin_same(porigin, child_origin);
     }
-    /* STEPS 10-11: "if masked is true, then append a new opaque origin to output"; "otherwise, append
-       parentDoc's origin to output." Two numbered steps in the standard and one statement here, because
-       exactly one of them runs. */
+    /* Steps 10-11: "if masked is true, then append a new opaque origin to output"; "otherwise, append parentDoc's
+       origin to output." Exactly one runs, so one statement. */
     JS_SetPropertyUint32(ctx, out, nout++,
                          JS_NewString(ctx, masked ? "null" : (pser ? pser : "null")));
-    /* STEP 12: the parent's own ancestors, each masked when it is the parent's origin again (its step 12.1). */
+    /* Step 12: the parent's own ancestors, each masked when it is the parent's origin again (step 12.1). */
     len = JS_GetPropertyStr(ctx, pd->ancestor_origin_strings, "length");
     JS_ToUint32(ctx, &n, len);
     JS_FreeValue(ctx, len);
@@ -3476,48 +3320,39 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
         if (masked && !popaque && s && pser && !strcmp(s, pser)) {
             JS_SetPropertyUint32(ctx, out, nout++, JS_NewString(ctx, "null"));
         } else {
-            /* "Append ancestorOrigin to output AND SET MASKED TO FALSE." Masking is not a mode that runs to
-               the end of the list: it stops at the first ancestor that is not the parent's own origin, and the
-               standard attaches a note saying why that is not a leak — those further ancestors "might have
-               been previously masked when an ancestor document ran these steps", and what this list holds is
-               whatever the PARENT's list already recorded. Reading the loop without this line gives an answer
-               that is wrong only for a frame three deep, which is exactly the shape nothing shallower tests. */
+            /* "Append ancestorOrigin to output and set masked to false." Masking stops at the first ancestor that is
+               not the parent's origin; the standard's note says the further ones "might have been previously masked
+               when an ancestor document ran these steps", and this list holds what the parent's list recorded. Only
+               a frame three deep shows the difference. */
             JS_SetPropertyUint32(ctx, out, nout++, JS_DupValue(ctx, a));
             masked = false;
         }
         JS_FreeCString(ctx, s);
         JS_FreeValue(ctx, a);
     }
-    /* STEPS 10-11 APPENDED ONE BEFORE THE LOOP COULD APPEND NONE, so a list composed for a navigable that HAS a
-       parent is never empty. That is the invariant the record crossing an instance boundary is checked
-       against at both ends: the empty list means "no container document", which means "no parent". */
+    /* Steps 10-11 appended one before the loop, so a list for a navigable with a parent is never empty, the invariant
+       a record crossing an instance boundary is checked against at both ends (empty means no parent). */
     DCHECK(nout >= 1, "§3.1.3's steps returned an EMPTY list for a navigable that has a parent — steps 10-11 "
                       "append unconditionally (exactly one of the two runs), so an empty output is these steps having skipped it and the "
                       "child would report itself top-level");
     return out;
 }
 
-/* §3.1.3's TWO LISTS FOR THE DOCUMENT BEING INSTALLED, from whichever of the three states its navigable is in.
- *
- * THE THIRD STATE IS THE ONE THAT MAKES THIS A DISPATCH RATHER THAN A CALL, and it is the same third state
- * §9.5's own creator has: a navigable whose PARENT lives in another WASM instance. §Security makes a
- * cross-instance read a SUSPEND POINT and a Document's install has no flow base under it to take one, so the
- * answer is one the creating instance already composed and put on the record that provisioned this instance.
- * It is read back here rather than recomputed, for the reason document_create_permissions_policy states one
- * function along: shipping the INPUTS would be a second site running one algorithm, and here it would be a
- * second site running it WRONG — step 12.1's same-origin comparison needs the parent's origin RECORD, which is
- * exactly the thing a serialization cannot carry. */
+/* §3.1.3's two lists for the document being installed, from whichever of three states its navigable is in. The third
+ * is a navigable whose parent is in another WASM instance: §Security makes a cross-instance read a suspend point, and
+ * an install has no flow base to take one, so the answer is the one the creating instance composed and put on the
+ * provisioning record. It is read back rather than recomputed, as for document_create_permissions_policy; step
+ * 12.1's comparison needs the parent's origin record, which a serialization cannot carry. */
 static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueConst nav_proxy)
 {
     JSValue parent_nav, container, out;
 
-    /* A DOCUMENT WITH NO BROWSING CONTEXT HAS NEITHER LIST, and that is a state §7.2.4 already answers: its
-       first step finds no relevant Document and returns the LOCATION's own empty list. Leaving both fields
-       UNDEFINED is what says so; an empty list here would be the positive claim that this Document sits at the
-       top of a tree, which is a different fact from having no tree at all. */
+    /* A document with no browsing context has neither list: §7.2.4's first step finds no relevant Document and
+       returns the Location's own empty list. UNDEFINED says so; an empty list would claim this Document is at the
+       top of a tree. */
     if (!window_proxy_is(nav_proxy)) return;
-    /* STEPS 2-3: "let parentDoc be document's container document; if parentDoc is null, then return output." A
-       top-level traversable has no container, and its list is empty for ever. */
+    /* Steps 2-3: "let parentDoc be document's container document; if parentDoc is null, then return output." A
+       top-level traversable has no container, and its list is empty. */
     parent_nav = window_proxy_parent_navigable(ctx, nav_proxy);
     if (!window_proxy_is(parent_nav)) {
         out = JS_NewArray(ctx);
@@ -3548,12 +3383,12 @@ static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueCons
     }
     JS_FreeValue(ctx, parent_nav);
     d->ancestor_origin_strings = out;
-    /* THE ANCESTOR ORIGINS LIST CREATION STEPS, whose whole content is "append the SERIALIZATION of origin to
-       output" over the list above — which is what that list already holds, for the reason its field says. */
+    /* The ancestor origins list creation steps, "append the serialization of origin to output" over the list above,
+       which already holds serializations (see its field). */
     d->ancestor_origins = dom_string_list_new(ctx, JS_DupValue(ctx, out));
 }
 
-/* §7.2.4's `ancestorOrigins` answers with THIS — the list built at this Document's creation, [SameObject]. */
+/* §7.2.4's `ancestorOrigins` answers with this: the list built at this Document's creation, [SameObject]. */
 JSValue document_ancestor_origins(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
@@ -3565,8 +3400,8 @@ JSValue document_ancestor_origins(JSContext *ctx)
     return JS_DupValue(ctx, d->ancestor_origins);
 }
 
-/* §3.1.3's INTERNAL LIST IN THE FORM IT CROSSES AN INSTANCE BOUNDARY — see document.h for the grammar and for
- * why a SPACE is the separator rather than a character somebody liked the look of. */
+/* §3.1.3's internal list in the form it crosses an instance boundary (see document.h for the grammar and why a space
+ * is the separator). */
 char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list)
 {
     uint32_t n = 0, i;
@@ -3581,10 +3416,8 @@ char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list)
     len = JS_GetPropertyStr(ctx, list, "length");
     JS_ToUint32(ctx, &n, len);
     JS_FreeValue(ctx, len);
-    /* THE EMPTY LIST IS A WORD AND NOT AN EMPTY FIELD, which is the same rule §9.5's answer beside it follows
-       and for the same reason: a host that STOPPED WRITING the field and a navigable with no ancestors are two
-       different facts, and only one of them is a bug. An empty field would make them one, and the bug is the
-       silent kind — a cross-origin frame reporting itself top-level. */
+    /* The empty list is a word, not an empty field, as for §9.5's answer beside it: a host that stopped writing the
+       field and a navigable with no ancestors are different facts, and only the first is a bug. */
     if (n == 0) {
         out = strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
         CHECK(out != NULL, "document: OOM stating §3.1.3's empty ancestor list to a peer instance");
@@ -3607,13 +3440,10 @@ char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list)
         const char *s = JS_ToCString(ctx, a);
 
         CHECK(s != NULL, "document: OOM reading §3.1.3's list to serialize it for a peer instance");
-        /* THE SEPARATOR CANNOT OCCUR IN AN ENTRY AND THAT IS A THEOREM, NOT AN OBSERVATION OF TODAY'S DATA.
-           §7.1.1's serialization of an origin is either the three bytes `null` or scheme, "://", host and an
-           optional ":" and port; a scheme is ASCII alphanumeric with "+", "-" and ".", a port is digits, and
-           URL §3.2 "Host miscellaneous" makes U+0020 SPACE a FORBIDDEN HOST CODE POINT — so a host containing
-           one fails to parse and never reaches an origin record. It is asserted anyway, because the value that
-           would break this record is exactly the value nothing else would notice: an entry carrying a space
-           would arrive at the peer as two ancestors. */
+        /* The separator cannot occur in an entry: §7.1.1's serialization of an origin is `null` or scheme, "://",
+           host and an optional ":" and port, a scheme is ASCII alphanumeric with "+", "-" and ".", a port is
+           digits, and URL §3.2 "Host miscellaneous" makes U+0020 a forbidden host code point. Asserted anyway,
+           because an entry carrying a space would reach the peer as two ancestors and nothing else would notice. */
         DCHECK(strchr(s, ' ') == NULL,
                "§7.1.1's serialization of an origin contains a SPACE and this record is space-separated — URL "
                "§3.2 \"Host miscellaneous\" makes SPACE a forbidden host code point, so a byte that reached "
@@ -3633,10 +3463,9 @@ char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list)
 
 bool document_ancestor_origins_serialized_has_ancestors(const char *text)
 {
-    /* A `CHECK` FOR THE REASON THE DESERIALIZER'S ARE, and it is the same judgement permissions_policy.c makes
-       one field along: this is a field's presence read off a record that crossed an INSTANCE boundary, and
-       SECURITY.md makes the instance on the other side of it UNTRUSTED. It is also the only guard between a
-       host that stated nothing and a `strcmp` on NULL, which a DCHECK would leave standing in release. */
+    /* A CHECK, as for the deserializer, and as permissions_policy.c judges the field beside it: this is a field's
+       presence on a record that crossed an instance boundary from an untrusted instance (SECURITY.md), and the only
+       guard before a `strcmp` on NULL in release. */
     CHECK(text != NULL && *text != '\0',
           "§3.1.3's internal ancestor origin objects list was read off a record that states NOTHING for it — "
           "an empty list and a list of ancestors are both answers a provisioning record makes, so an absent "
@@ -3651,9 +3480,8 @@ JSValue document_ancestor_origins_deserialize(JSContext *ctx, const char *text)
     uint32_t nout = 0;
     const char *p;
 
-    /* EVERY REFUSAL HERE IS A `CHECK`, for permissions_policy_deserialize's reason: the bytes come from
-       another instance, so a malformed record is check.h's security-boundary case rather than this engine's
-       own logic being wrong, and a DCHECK would be compiled out of the build that faces it. */
+    /* Every refusal here is a CHECK, as in permissions_policy_deserialize: the bytes come from another instance, so a
+       malformed record is check.h's security-boundary case, and a DCHECK would be compiled out where it matters. */
     CHECK(document_ancestor_origins_serialized_has_ancestors(text),
           "§3.1.3's list was rebuilt from a record that says there are NO ancestors — the empty list is a "
           "decision the READER of this record takes (a navigable with no parent has no container document, so "
@@ -3672,9 +3500,8 @@ JSValue document_ancestor_origins_deserialize(JSContext *ctx, const char *text)
         JS_SetPropertyUint32(ctx, out, nout++, JS_NewStringLen(ctx, p, n));
         p = end ? end + 1 : p + n;
     }
-    /* THE SAME INVARIANT THE COMPOSER ASSERTS, READ FROM THE OTHER END. A record that says there are ancestors
-       and yields none is a grammar whose two ends have come apart, and the failure it would produce — a frame
-       silently reporting itself top-level — is the one this whole field exists to prevent. */
+    /* The composer's invariant read from the other end: a record saying there are ancestors that yields none is a
+       grammar whose ends came apart, and would make a frame silently report itself top-level. */
     CHECK(nout >= 1,
           "§3.1.3's list arrived from a peer instance stating that there ARE ancestors and parsed to none — "
           "the two ends of this record disagree about its grammar, and the answer it would install is the "
@@ -3682,11 +3509,11 @@ JSValue document_ancestor_origins_deserialize(JSContext *ctx, const char *text)
     return out;
 }
 
-/* §3.1.3's LIST FOR A CHILD NAVIGABLE WHOSE DOCUMENT WILL BE BUILT IN A PEER INSTANCE — see document.h. */
+/* §3.1.3's list for a child navigable whose document will be built in a peer instance (see document.h). */
 char *document_ancestor_origins_for_child(JSContext *ctx, JSValueConst container, const Origin *child_origin)
 {
-    /* BORROWED, like every read of it — see document.h. §7.3.1.3's "let parentNavigable be element's node
-       navigable" runs in the EMBEDDER's realm, which is this one, so this is that navigable. */
+    /* Borrowed (see document.h). §7.3.1.3's "let parentNavigable be element's node navigable" runs in the embedder's
+       realm, this one, so this is that navigable. */
     JSValueConst parent_nav = document_window_proxy(ctx);
     JSValue list;
     char *text;
@@ -3701,33 +3528,20 @@ char *document_ancestor_origins_for_child(JSContext *ctx, JSValueConst container
     return text;
 }
 
-/* PERMISSIONS POLICY §7.2 "The permissionsPolicy object"'s DECLARED ORIGIN OF AN ELEMENT — "the origin of the
- * document which the embedding page INTENDS to load into a frame", which is §9.4 step 2's third argument and
- * therefore what the `allow` attribute's `'src'` keyword resolves to.
- *
- * IT IS AN INTENTION AND NOT AN OUTCOME, which is why it is computed from the ELEMENT rather than read off the
- * navigable's Document. The two differ exactly where a real page differs from what its author wrote: a frame
- * that redirected cross-origin, one that has not loaded yet and is still on the initial `about:blank`, one
- * whose `src` was rewritten after creation. The standard checks the created Document's own origin against this
- * one (§4.7 step 3), so a frame that went somewhere else does NOT get the delegation — the keyword means what
- * it says.
- *
- * ITS TWO OPAQUE ARMS EACH MINT A FRESH ORIGIN, and that is the whole of their effect. §7.1.1's opaque origin
- * is same origin-domain with nothing but ITSELF, and the Document created in a sandboxed frame gets its own
- * separate opaque origin from §7.3.2.1's determine-the-origin — so a `'src'` allowlist on a sandboxed frame
- * matches nothing, which is the answer, and reusing one record for both would make it match everything.
- *
+/* Permissions Policy §7.2 "The permissionsPolicy object"'s declared origin of an element: "the origin of the document
+ * which the embedding page intends to load into a frame", §9.4 step 2's third argument, which the `allow`
+ * attribute's `'src'` keyword resolves to. An intention, computed from the element: §4.7 step 3 checks the created
+ * Document's own origin against it, so a frame that redirected cross-origin does not get the delegation. Each opaque
+ * arm mints a fresh origin (§7.1.1: same origin-domain only with itself, and §7.3.2.1 gives the sandboxed Document
+ * its own), so a `'src'` allowlist on a sandboxed frame matches nothing.
  *   1. "If node's node document's sandboxed origin browsing context flag is set, then return a new opaque
- *      origin."  §7.1.5's flag, read off the CONTAINER DOCUMENT's active sandboxing flag set.
+ *      origin."  §7.1.5's flag on the container document's active sandboxing flag set.
  *   2. "If node's `sandbox` attribute is set, and does not contain the `allow-same-origin` keyword, then
- *      return a new opaque origin."  Asked through §7.1.5's own parse rather than by a second token scan:
- *      parse-a-sandboxing-directive sets the sandboxed origin flag for exactly the token lists that lack that
- *      keyword, so `sandbox_parse_directive`'s answer IS this condition and the keyword's spelling lives in
- *      one place.
+ *      return a new opaque origin."  Asked through §7.1.5's own parse: `sandbox_parse_directive` sets the
+ *      sandboxed origin flag for exactly the token lists lacking that keyword.
  *   3. "If node's `srcdoc` attribute is set, then return node's node document's origin."
  *   4. "If node's `src` attribute is set: let url be the result of parsing node's `src` attribute, relative to
- *      node's node document. If url is not failure, return url's origin."  A `src` that does NOT parse falls
- *      through to step 5, which is the spec's own structure and not a repair.
+ *      node's node document. If url is not failure, return url's origin."  An unparseable `src` falls to step 5.
  *   5. "Return node's node document's origin." */
 static const Origin *doc_declared_origin(lxb_dom_node_t *el, SandboxFlags document_flags,
                                          const Origin *document_origin)
@@ -3740,11 +3554,9 @@ static const Origin *doc_declared_origin(lxb_dom_node_t *el, SandboxFlags docume
     bool               have_base;
     const Origin      *o;
 
-    /* "IS SET" IS A PRESENCE TEST AND NOT A VALUE TEST, at every one of the three attributes below. Lexbor
-       answers NULL from get_attribute for an attribute that IS present with an EMPTY value, so asking for the
-       value would read `<iframe sandbox>` — the most restrictive spelling there is — as an unsandboxed frame,
-       and `<iframe srcdoc>` as one that loads its `src`. The same distinction core/html/html_iframe.c draws
-       over `srcdoc`. */
+    /* "Is set" is a presence test at all three attributes: Lexbor's get_attribute answers NULL for a present empty
+       value, which would read `<iframe sandbox>` (the most restrictive spelling) as unsandboxed and `<iframe
+       srcdoc>` as loading its `src`, as core/html/html_iframe.c also distinguishes. */
     if (document_flags & SANDBOX_ORIGIN)                                    /* step 1 */
         return origin_opaque_new();
     if (lxb_dom_element_has_attribute(e, (const lxb_char_t *)"sandbox", 7)) {
@@ -3758,45 +3570,31 @@ static const Origin *doc_declared_origin(lxb_dom_node_t *el, SandboxFlags docume
         return document_origin;                                             /* step 5 */
     n = 0;
     v = lxb_dom_element_get_attribute(e, (const lxb_char_t *)"src", 3, &n);
-    /* `<iframe src="">` IS PARSED AND NOT SHORT-CIRCUITED. The empty string resolves to the BASE URL, which a
-       `<base href>` can have moved off the document's own origin — so step 4 and step 5 legitimately differ
-       here, and answering step 5 for it would be this function deciding a case the standard already decides. */
+    /* `<iframe src="">` is parsed: the empty string resolves to the base URL, which a `<base href>` can move off the
+       document's origin, so steps 4 and 5 can differ here. */
     base_url = document_base_url_of(el->owner_document);
     url_record_init(&base);
     have_base = base_url && *base_url && url_parse(&base, base_url, strlen(base_url), NULL);
     o = url_parse(&url, v ? (const char *)v : "", v ? n : 0, have_base ? &base : NULL)   /* step 4 */
-        ? origin_of_url(&url) : document_origin;                            /* … or step 5 on a failure */
+        ? origin_of_url(&url) : document_origin;                            /* or step 5 on a failure */
     url_record_free(&url);
     url_record_free(&base);
     return o;
 }
 
-/* WHAT PERMISSIONS POLICY §9.7 READS OFF A NAVIGABLE CONTAINER, gathered for the navigable this Document is
- * being created in. §9.5 takes "null or an element (container)" and §9.7 reads four things off it: "container's
- * node document"'s permissions policy (its steps 2 and 3), that document's ORIGIN (its step 7 — and §9.4 step
- * 2's second argument, which `'self'` resolves to), the `allow` attribute, and the element's §7.2 DECLARED
- * ORIGIN, which §9.4 step 2 hands §9.3 as its target origin.
- *
- * §9.4 STEP 1 IS PERFORMED HERE — "if element is not an `iframe` element, then return an empty policy
- * directive". It is a question about what an element IS, which is this file's knowledge and not the policy
- * component's, and the answer travels as the ABSENCE of both attribute-derived arguments: an `<object>`,
- * `<embed>` or `<frame>` container reaches §9.7 with no container policy, exactly as an `<iframe>` carrying no
- * `allow` attribute does. Reading the attribute off every element instead would honour an `allow` HTML does not
- * define on it, which is a feature GRANTED by a spelling no standard gives meaning to.
- *
- * THE CONTAINER IS HTML §7.3.1.3 "Child navigables"' CONTAINER OF A NAVIGABLE — "the navigable container whose
- * content navigable is navigable, or null if there is no such element" — asked of the navigable rather than
- * derived from the parent, because that definition is what §9.5's argument IS and because the two differ in
- * cases the standard has answers for. Everything §9.7 needs then comes from the ELEMENT's node document, which
- * is the document that holds the `<iframe>`, and never from a separate walk that could disagree with it.
- *
- * A NULL CONTAINER HAS THREE CAUSES AND ONLY TWO OF THEM ARE §9.7 STEP 1. A top-level traversable (and every
- * auxiliary browsing context `window.open` creates) has no container at all, and §7.3.1.6's
- * destroy-a-child-navigable severs the relation so §7.3.1.3 answers null for a detached frame — for both of
- * those "container is null, return `Enabled`" is literally the standard's answer. The third is a container that
- * exists in ANOTHER WASM INSTANCE, which is not a null container and must not be read as one: taking step 1 for
- * it would grant a cross-origin child every feature its embedder holds. It is told apart by the PARENT being a
- * remote WindowProxy, and it is answered from the record that provisioned this instance — see below. */
+/* What Permissions Policy §9.7 reads off a navigable container, for the navigable this Document is created in. §9.5
+ * takes "null or an element (container)", and §9.7 reads its node document's permissions policy (steps 2 and 3),
+ * that document's origin (step 7, and §9.4 step 2's second argument, which `'self'` resolves to), the `allow`
+ * attribute, and the element's §7.2 declared origin (§9.4 step 2's target origin).
+ * §9.4 step 1, "if element is not an `iframe` element, then return an empty policy directive", is performed here,
+ * since what an element is is this file's knowledge; `<object>`, `<embed>` and `<frame>` reach §9.7 with no container
+ * policy, so an `allow` HTML does not define on them grants nothing. The container is HTML §7.3.1.3 "Child
+ * navigables"' container of a navigable ("the navigable container whose content navigable is navigable, or null if
+ * there is no such element"), and everything else comes from its node document.
+ * A null container is §9.7 step 1's "return `Enabled`" for a top-level traversable or auxiliary browsing context and
+ * for a frame §7.3.1.6 detached. A container in another WASM instance is not null, and reading it as null would grant
+ * a cross-origin child every feature its embedder holds; it is told apart by a remote parent WindowProxy and answered
+ * from the provisioning record (see below). */
 PermissionsPolicy *document_permissions_policy_for_container(JSValueConst container, const Origin *origin)
 {
     const PermissionsPolicy *container_doc_policy = NULL;
@@ -3825,24 +3623,19 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
                "§9.7's \"container's node document\" holds no permissions policy while holding a navigable — "
                "§9.5 runs for every Document a navigable is given, so a container document without one was "
                "installed past it and its own inheritance is unknown rather than empty");
-        /* §9.4 step 1, then its step 2's "the value of element's allow attribute" and "element's declared
-           origin". An `<iframe>` carrying no `allow` attribute yields NULL for the value, which §9.4 turns into
-           an empty policy directive — a positive statement that this container declared nothing, and not an
-           input the walk failed to find. The DECLARED ORIGIN is computed for it either way, because §9.3 step
-           2.9.1 reads it for a directive whose target list is empty and cannot be handed it later. */
+        /* §9.4 step 1, then step 2's "the value of element's allow attribute" and "element's declared origin". No
+           `allow` attribute yields NULL, which §9.4 turns into an empty policy directive, a positive statement. The
+           declared origin is computed either way, since §9.3 step 2.9.1 reads it for a directive with an empty
+           target list. */
         if (lxb_html_tree_node_is(el, LXB_TAG_IFRAME)) {
             allow = lxb_dom_element_get_attribute((lxb_dom_element_t *)el, (const lxb_char_t *)"allow", 5,
                                                   &allow_len);
-            /* §9.4 step 3's first conjunct: "if element's `allowfullscreen` attribute is SPECIFIED". It is a
-               boolean content attribute (HTML §2.3.2 "Boolean attributes": "The presence of a boolean attribute
-               on an element represents the true value, and the absence of the attribute represents the false
-               value"), so what crosses is PRESENCE and never a value — `allowfullscreen="false"` specifies it.
-               ASKED WITH `has_attribute` AND NOT BY TESTING THE VALUE POINTER, because an attribute present
-               with an EMPTY value is the conforming spelling and `lxb_dom_element_get_attribute` answers NULL
-               for it, which would read the most common form of the attribute as absent.
-               INSIDE THE `iframe` GUARD because §9.4 step 1 returns an empty policy directive for anything
-               else, and because HTML declares `allowfullscreen` on `iframe` alone: an `<object allowfullscreen>`
-               carries a content attribute no algorithm reads. */
+            /* §9.4 step 3's first conjunct: "if element's `allowfullscreen` attribute is specified". A boolean
+               content attribute (HTML §2.3.2 "Boolean attributes": "The presence of a boolean attribute on an
+               element represents the true value, and the absence of the attribute represents the false value"), so
+               presence is what counts (`allowfullscreen="false"` specifies it), asked with `has_attribute` since a
+               present empty value reads as NULL. Inside the `iframe` guard because §9.4 step 1 returns early
+               otherwise and HTML declares `allowfullscreen` on `iframe` alone. */
             allowfullscreen = lxb_dom_element_has_attribute((lxb_dom_element_t *)el,
                                                            (const lxb_char_t *)"allowfullscreen", 15);
             container_declared_origin = doc_declared_origin(el, cd->sandbox_flags, container_doc_origin);
@@ -3852,35 +3645,18 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
                                      allow_len, allowfullscreen, container_declared_origin, origin);
 }
 
-/* §9.6 "Create a Permissions Policy for a navigable from response" FOR THE NAVIGABLE A DOCUMENT IS BEING
- * CREATED IN — §9.5 asked of the navigable rather than of an element (which is what routes its three container
- * cases), and then the response's own declared policy applied over it.
- *
- * ITS STEP 1 HAS TWO IMPLEMENTATIONS HERE AND STEPS 2-4 HAVE ONE, which is exactly the split
- * core/permissions_policy/permissions_policy.h argues for. Step 1 is a question about the CONTAINER — an
- * element in this heap, or a peer instance's already-computed answer read back off the provisioning record —
- * and steps 2-4 are a question about the RESPONSE, which is this document's own however its container was
- * reached. So the two arms below rejoin at one permissions_policy_apply_response.
- *
- * `header_value` IS ONE OF THE TWO AND THE CALLER PICKS, which is §9.1 step 1: HTML §7.5.1 runs this with the
- * `Permissions-Policy` value and §10.1 "Changes to the HTML specification" runs it AGAIN with the
- * `Permissions-Policy-Report-Only` value for the Document's REPORT-ONLY permissions policy. They are two
- * SEPARATE policies and not a flag on one — §9.10 checks the same feature against both and compares the two
- * answers, which a single policy carrying a report-only bit could not express at all.
- *
- * THE CROSS-INSTANCE ARM IS ANSWERED FROM A CARRIED RESULT, NOT FROM CARRIED INPUTS, and the two are not
- * interchangeable. §9.5's arguments are the container ELEMENT and the origin of the Document being created,
- * and BOTH of them belong to the instance that created this navigable: the element is in its tree and the
- * child's origin is what its create computed. So the creator runs §9.5 — the function directly above, its one
- * implementation — and its ANSWER crosses on the `navigable.create` notice; this side reads it back.
- * The alternative, shipping §9.7's inputs and re-running it here, is a SECOND site evaluating one algorithm,
- * and it would have to ship the container document's whole permissions policy (its §9.8 steps read the
- * DECLARED allowlists too, at two different origins), its origin and the `allow` attribute's bytes.
- *
- * IT IS ASKED OF THE PARENT, AND THAT IS THE ASSERT. A navigable whose parent is a REMOTE WindowProxy is a
- * child navigable by §7.3.1.3's own definition, so it HAS a container; the record that provisioned this
- * instance either stated what that container answered or it did not, and the second is a host that owes a
- * call rather than a navigable with no container. */
+/* §9.6 "Create a Permissions Policy for a navigable from response" for the navigable a Document is created in: §9.5
+ * asked of the navigable (which routes its three container cases), then the response's declared policy over it.
+ * Step 1 has two implementations here and steps 2-4 one, as core/permissions_policy/permissions_policy.h argues: step
+ * 1 is about the container (an element in this heap, or a peer's computed answer read off the provisioning record),
+ * steps 2-4 about this document's response, so both arms rejoin at permissions_policy_apply_response.
+ * `header_value` is the caller's pick (§9.1 step 1): HTML §7.5.1 passes `Permissions-Policy` and §10.1 "Changes to
+ * the HTML specification" passes `Permissions-Policy-Report-Only` for the Document's report-only policy, two separate
+ * policies that §9.10 compares.
+ * The cross-instance arm reads a carried result, not carried inputs: §9.5's arguments (the container element and
+ * the new Document's origin) belong to the creating instance, so the creator runs §9.5 (the function above) and its
+ * answer crosses on the `navigable.create` notice. A navigable whose parent is a remote WindowProxy is a child
+ * navigable by §7.3.1.3's definition, so a record stating nothing about its container is a host that owes a call. */
 static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSValueConst nav_proxy,
                                                              const char *header_value)
 {
@@ -3910,9 +3686,9 @@ static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSV
                    "non-null and gives it a container element, so the two statements on that record "
                    "contradict each other and one of them is about a different navigable");
             JS_FreeValue(ctx, container);
-            /* §9.6 step 1, cross-instance arm: §9.5 ran in the instance that HELD the container element and
-               its answer crossed. Steps 2-4 are below, over THIS document's response — which is the whole
-               reason the record carries §9.5's result and not §9.6's. */
+            /* §9.6 step 1, cross-instance arm: §9.5 ran in the instance holding the container element and its answer
+               crossed. Steps 2-4 run below over this document's response, which is why the record carries §9.5's
+               result and not §9.6's. */
             policy = permissions_policy_deserialize(carried);
             permissions_policy_apply_response(policy, header_value, window_proxy_origin(nav_proxy));
             return policy;
@@ -3922,30 +3698,27 @@ static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSV
     policy = document_permissions_policy_for_container(container, window_proxy_origin(nav_proxy));
     JS_FreeValue(ctx, container);
     /* §9.6 steps 2-4: "let d be the result of running Process response policy given response, origin and
-       report-only", then copy each declaration the INHERITED policy still permits. The origin is §9.2's — the
-       origin of the Document being created in this navigable, which is the same one §9.5 was given one line
-       up, because both algorithms take navigationParams's origin. */
+       report-only", then copy each declaration the inherited policy still permits. The origin is §9.2's, the new
+       Document's, the same one §9.5 was given above (both take navigationParams's origin). */
     permissions_policy_apply_response(policy, header_value, window_proxy_origin(nav_proxy));
     return policy;
 }
 
-/* HTML §4.8.5 "The `iframe` element"'s ALLOWED TO USE — see document.h for the steps and for why they are here
-   rather than in the policy component. */
+/* HTML §4.8.5 "The `iframe` element"'s allowed to use (see document.h for the steps and why they are here). */
 bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature)
 {
     Document *d = doc_here(ctx);
 
-    /* Step 1: "If document's browsing context is null, then return false." A Document with no browsing context
-       is one §9.5 never ran for, which is exactly the absence of a policy on this record. */
+    /* Step 1: "If document's browsing context is null, then return false." §9.5 never ran for such a Document, so it
+       has no policy on this record. */
     if (d->permissions_policy == NULL)
         return false;
-    /* Step 2: "If document is not fully active, then return false." §7.3.3's walk, asked and not remembered —
-       removing an ancestor `<iframe>` stops this document being fully active with nothing done to its own
-       navigable. */
+    /* Step 2: "If document is not fully active, then return false." §7.3.3's walk, asked rather than remembered:
+       removing an ancestor `<iframe>` stops this document being fully active with nothing done to its navigable. */
     if (!document_fully_active(ctx))
         return false;
-    /* Step 3: §9.10 "on feature, document, and document's origin" — so §9.10's `origin` argument IS this
-       document's own origin, and its `report` takes the default True. Step 4 is the other answer. */
+    /* Step 3: §9.10 "on feature, document, and document's origin", so §9.10's `origin` is this document's own, and
+       `report` takes the default true. Step 4 is the other answer. */
     {
         const Origin *origin = window_proxy_origin(d->proxy);
 
@@ -3963,30 +3736,21 @@ JSValueConst document_window_proxy(JSContext *ctx)
     return d->proxy;
 }
 
-/* HTML §7.3.3 "Fully active documents": a Document is fully active when it is the active document of a
- * navigable, and
- * that navigable is either a top-level traversable or its container document is itself fully active.
- *
- * WHY IT IS ITS OWN QUESTION AND NOT `!closed`. The two differ exactly where it matters: removing an
- * `<iframe>` destroys THAT navigable, and every document nested inside it stops being fully active without
- * anything having been done to its own navigable. So the answer is the WALK the definition states — this
- * navigable and every one containing it — and it is asked, not remembered, because the tree it walks is
- * per-flow: one arm of a fork removed the frame and its sibling did not.
- *
- * WHO ASKS. Every algorithm the standards guard with it, and there is a family of them: the Observable
- * standard opens §2.1's next/error/complete/addTeardown, §2.2.1's subscribe and §3's when() with this exact
- * sentence, and §2.1's close-a-subscription RE-asks it before every teardown because "each teardown could
- * result in the above Document becoming inactive". A detached document must silently do nothing rather than
- * push values into a realm the user agent has discarded. */
+/* HTML §7.3.3 "Fully active documents": a Document is fully active when it is the active document of a navigable
+ * that is a top-level traversable or whose container document is itself fully active. It is not `!closed`: removing
+ * an `<iframe>` destroys that navigable, and every document nested in it stops being fully active with nothing done
+ * to its own navigable, so the answer is the definition's walk, asked rather than remembered because the tree is per
+ * flow. The Observable standard asks it to open §2.1's next/error/complete/addTeardown, §2.2.1's subscribe and §3's
+ * when(), and re-asks it in §2.1's close-a-subscription before every teardown, since "each teardown could result in
+ * the above Document becoming inactive". */
 bool document_fully_active(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
     JSValue cur;
     bool ok = true;
 
-    /* A Document with no navigable at all — `new Document()`, a DOMParser result — has no browsing context, so
-       the guard's own premise ("the relevant global object is a Window") is false and the algorithm proceeds.
-       The realm this runs in is a Window's, and this realm's proxy is minted with it. */
+    /* A Document with no navigable (`new Document()`, a DOMParser result) has no browsing context, so the guard's
+       premise ("the relevant global object is a Window") is false and the algorithm proceeds. */
     if (!window_proxy_is(d->proxy))
         return true;
     cur = JS_DupValue(ctx, d->proxy);
@@ -3994,9 +3758,9 @@ bool document_fully_active(JSContext *ctx)
         JSValue parent;
         if (window_proxy_closed(ctx, cur)) { ok = false; break; }
         parent = window_proxy_parent(ctx, cur);
-        /* §7.3.3's base case is a TOP-LEVEL traversable, and §7.2.2.4's `parent` of one is the navigable ITSELF —
-           so the walk ends when the answer stops moving, or when it is not a navigable's proxy at all (a
-           cross-instance parent this agent cannot walk into, which is answered by its own instance). */
+        /* §7.3.3's base case is a top-level traversable, whose §7.2.2.4 `parent` is itself, so the walk ends when the
+           answer stops moving, or at something that is not a navigable's proxy (a cross-instance parent, answered by
+           its own instance). */
         if (!window_proxy_is(parent) ||
             JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(cur)) {
             JS_FreeValue(ctx, parent);
@@ -4013,17 +3777,16 @@ uint32_t document_doc(JSContext *ctx) { return doc_here(ctx)->doc; }
 
 JSValueConst document_object(JSContext *ctx) { return doc_here(ctx)->doc_obj; }
 
-/* SELECTION API §4.1's getSelection — see document.h. The RECEIVER decides which document, because a realm can
-   hold several and only the active one has a browsing context. */
+/* Selection API §4.1's getSelection (see document.h). The receiver decides which document: a realm can hold several
+   and only the active one has a browsing context. */
 JSValue document_selection(JSContext *ctx, JSValueConst doc)
 {
     Document *d = doc_receiver(ctx, doc);
 
     if (!d) return JS_EXCEPTION;
     /* "…if this has an associated browsing context, and it must return null otherwise." The record states the
-       browsing context as the presence of the Window it was installed with, and the selection is built by the
-       same line — so the two can never disagree, which this asserts rather than testing one and trusting the
-       other. */
+       browsing context as the Window it was installed with, and document_install builds the selection with it, so
+       the two cannot disagree, which this asserts. */
     DCHECK(JS_IsUndefined(d->selection) == JS_IsUndefined(d->win_obj),
            "a Document has a browsing context and no selection, or a selection and no browsing context — "
            "Selection API §2 gives one to exactly the documents that have one, and document_install is the "
@@ -4032,21 +3795,12 @@ JSValue document_selection(JSContext *ctx, JSValueConst doc)
     return JS_DupValue(ctx, d->selection);
 }
 
-/* SELECTION API §2's REPLACEMENT — "A document's selection is a singleton object associated with that
-   document, so it gets replaced with a new object when Document.open() is called." The note names ONE writer
-   besides the install, and this is it.
-   IT IS HERE AND NOT IN THE OPEN STEPS because `selection` is this record's field: core/dom/selection.c mints
-   the object and core/html/document_open.c runs the algorithm, and neither owns the slot. A replacement
-   written at either of those would be a second component reaching into a record whose invariant is asserted
-   one screen up — that a Document has a selection exactly when it has a browsing context.
-   THAT INVARIANT IS WHY THE UNDEFINED ARM RETURNS RATHER THAN MINTING. `implementation.createHTMLDocument("")`
-   has no browsing context and therefore no selection, and §8.4.1's steps are reachable on such a document;
-   minting one here would give it a selection its `getSelection()` must answer null for, which is the pair
-   `document_selection` asserts can never disagree. The absent case stays absent and the present case is
-   replaced — two arms of one fact, never a default filling a hole.
-   THE OLD OBJECT IS FREED RATHER THAN DETACHED. §2 makes the selection a singleton PER DOCUMENT, so this
-   engine holds the only reference; a page that kept its own keeps a live object that is no longer the
-   document's, which is what "replaced with a new object" means for the page as well. */
+/* Selection API §2's replacement: "A document's selection is a singleton object associated with that document, so it
+   gets replaced with a new object when Document.open() is called." Here, because `selection` is this record's field
+   (core/dom/selection.c mints the object and core/html/document_open.c runs the algorithm). With no browsing context
+   it returns rather than minting: `implementation.createHTMLDocument("")` has no selection and §8.4.1 is reachable on
+   it, and its `getSelection()` must stay null. The old object is freed: the engine holds the only reference, and a
+   page that kept its own keeps an object that is no longer the document's, which "replaced" means. */
 void document_replace_selection(JSContext *ctx, JSValueConst doc)
 {
     Document *d = doc_receiver(ctx, doc);
@@ -4063,17 +3817,11 @@ void document_replace_selection(JSContext *ctx, JSValueConst doc)
     d->selection = fresh;
 }
 
-/* DOCUMENT.PROTOTYPE, and the Document as a real NODE. §4.4 `interface Document : Node`, and it was neither —
-   a plain JS_NewObject with the members copied onto it. So `document.nodeType` was undefined,
-   `document.appendChild` was not a function, `document.contains(el)` (which is how a page asks whether a node
-   is still in the tree) was absent, and `document.body.parentNode.parentNode === document` compared a node
-   wrapper against something that was not one. It is a node_wrap of the document node now, so it is in the ONE
-   identity table with everything else and its members come from a prototype chained to Node.prototype rather
-   than being installed per object.
-   IT IS THE AGENT'S HALF, with every other prototype: a member is DECLARED once and a declaration builds one
-   pool entry, so building this inside the per-document install declared the whole of Document a second time
-   for a second realm — which is the shape the pool's seal exists to catch. Web IDL wants the PROTOTYPE per
-   realm too; that is the gap this split makes visible, and it is the same one every DOM component has. */
+/* Document.prototype, and the Document as a real node: §4.4 `interface Document : Node`, so the document object is a
+   node_wrap of the document node, in the one identity table, with members on a prototype chained to Node.prototype
+   (`document.nodeType`, `document.contains(el)`, `document.body.parentNode.parentNode === document`). This is the
+   agent's half: a member is declared once and builds one pool entry, so declaring per document would declare
+   Document again for a second realm, which the pool's seal catches. */
 void document_init(JSContext *ctx)
 {
     JSClassDef d = { "Document" };
@@ -4087,82 +3835,61 @@ void document_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
     {
-        /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};` — its per-realm prototype slot. It
-           does NOT claim the DOCUMENT node type: node_claim_type asserts ONE claimant per type, which is
-           right, because the type does not decide between these two — the document's own record does, and
-           document_interface_proto is where it is asked. */
+        /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};`, its per-realm prototype slot. It does
+           not claim the document node type (node_claim_type asserts one claimant per type), since the record, not
+           the type, decides between the two, at document_interface_proto. */
         JSClassDef xd = { "XMLDocument" };
         JS_NewClassID(JS_GetRuntime(ctx), &g_xml_document_class);
         JS_NewClass(JS_GetRuntime(ctx), g_xml_document_class, &xd);
     }
-    /* HOW THIS COMPONENT'S RECORD REACHES THE COLLECTOR. Declared with the AGENT and for the RUNTIME, beside the
-       class it belongs to and before any record can exist — doc_rec_new asserts that order from the other side,
-       at the birth of each record. It is the mirror of the realm-teardown hook navigable.c declares: that one
-       says when a record dies, this one says what it holds while it lives, and a record with only the first is
-       a record that never gets to use it. */
+    /* How this component's records reach the collector, declared with the agent before any record exists
+       (doc_rec_new asserts that order at each record's birth). It mirrors the realm-teardown hook navigable.c
+       declares: that one says when a record dies, this one what it holds while it lives. */
     JS_SetContextMarkHook(JS_GetRuntime(ctx), document_realm_mark);
     g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
-    /* §7.5.9's page showing is the readiness's twin — one Document's state, written by the same two algorithms
-       that move the readiness ("the end" sets it, unloading clears it) — so it is declared beside it. */
+    /* §7.5.9's page showing, the readiness's twin (written by "the end" and by unloading), declared beside it. */
     g_showing_slot = realm_value_declare(ctx, "HTML §7.5.9 page showing");
     document_declare_members(ctx);
-    /* §3.1.4's resource metadata members declare their own setter and their own per-realm cookie store, and
-       document_metadata_install runs from document_install_proto below — so the declaration is paired with it
-       HERE for the reason page_visibility_init's is, rather than copied into each host's own init list. */
+    /* §3.1.4's resource metadata members declare their own setter and per-realm cookie store;
+       document_metadata_install runs from document_install_proto below, so the declaration is paired here, not in
+       each host's init list. */
     document_metadata_init(ctx);
-    /* §7.1.1.2's `domain` is the fifth member of that same partial interface and a different PROBLEM — the one
-       operation in the platform that mutates an origin — so it is its own component, declared here beside the
-       other four for the reason document_metadata_init's line gives. */
+    /* §7.1.1.2's `domain`, the fifth member of that partial interface, is its own component because it is the one
+       operation in the platform that mutates an origin; declared here for the same pairing. */
     document_domain_init(ctx);
-    /* §8.4's `write`, `writeln` and `close` — declared here beside the others for the reason
-       document_metadata_init's line gives, and because `write`/`writeln` are VARIADIC DOMString members whose
-       declaration is what converts every argument the page passed (and suspends on the page's own toString)
-       before the algorithm sees one. */
+    /* §8.4's `write`, `writeln` and `close`, declared here for the same pairing; `write`/`writeln` are variadic
+       DOMString members whose declaration converts every argument (suspending on the page's own toString) before the
+       algorithm sees one. */
     document_write_init(ctx);
-    /* §3.1.7's `currentScript` is a sixth member of that partial interface and a THIRD problem: its getter is
-       one line and everything about it is the §4.12.1.1 bracket that WRITES it, which is a per-flow slot rather
-       than a fact about this tree. Declared here for the reason the two above are — its install runs from
-       document_install_proto below, so a host cannot be the place that remembers it. */
+    /* §3.1.7's `currentScript`, a sixth member of that partial interface: its getter is one line, and its substance
+       is the §4.12.1.1 bracket that writes a per-flow slot. Its install runs from document_install_proto below. */
     document_current_script_init(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
     document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
     dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
-    /* SELECTION API §3, whose §2 state every document's record builds one of, and whose §4.1 `getSelection` is
-       installed from document_install_proto below — so its declaration is paired with it HERE for the reason
-       page_visibility_init's and focus_init's are. AFTER element_init's row of core/platform.c's list, which
-       is what declares §5.5's class this brands `addRange` against; selection_init asserts that from its own
-       side rather than trusting the row order. */
+    /* Selection API §3, whose §2 state every document's record builds and whose §4.1 `getSelection` is installed from
+       document_install_proto below, paired here. It follows element_init's row of core/platform.c's list, which
+       declares §5.5's class `addRange` brands against; selection_init asserts that. */
     selection_init(ctx);
-    /* §6.2's visibility state is a DOCUMENT's, and page_visibility_install already runs from
-       document_install_proto below — so its declaration is paired with it HERE rather than copied into each
-       host's own init list, which is the hand-picked list CLAUDE.md warns about: three hosts each declaring
-       their own is three places for the next component to be missing from one of. */
+    /* §6.2's visibility state is a document's, and page_visibility_install runs from document_install_proto below,
+       so its declaration is paired here rather than in each host's init list. */
     page_visibility_init(ctx);
-    /* HTML §6.6's FOCUSED AREA is a Document's state too, and focus_install_document_members runs from
-       document_install_proto below for the same reason page_visibility_install does — so its declaration is
-       paired with it here rather than copied into each host's own init list. */
+    /* HTML §6.6's focused area is a Document's state too, and focus_install_document_members runs from
+       document_install_proto below, so its declaration is paired here. */
     focus_init(ctx);
-    /* HTML §6.6.7's AUTOFOCUS CANDIDATES and its processed flag are a Document's state too, filled by the
-       insertion steps and drained by §8.1.7.3's step 7 — declared here with the focused area they end up
-       designating, and for the same reason. */
+    /* HTML §6.6.7's autofocus candidates and processed flag, filled by the insertion steps and drained by §8.1.7.3's
+       step 7, declared with the focused area they designate. */
     autofocus_init(ctx);
-    /* FULLSCREEN §2 "Model"'s per-element FULLSCREEN FLAG is a slot key, and both of the members stated over it
-       — `fullscreen` on this prototype and `fullscreenElement` on this one AND on ShadowRoot's, which
-       shadow_root_init above builds — are installed from an install that runs off this component's list. So the
-       declaration is paired with them HERE for the reason page_visibility_init's and focus_init's are, rather
-       than copied into each host's own init list. */
+    /* Fullscreen §2 "Model"'s per-element fullscreen flag is a slot key, and both members stated over it
+       (`fullscreen` on this prototype, `fullscreenElement` on this one and on ShadowRoot's) install from this
+       component's list, so the declaration is paired here. */
     fullscreen_init(ctx);
     realm_declare_intrinsic(document_install_proto);
-    /* §13.2.7 "THE END" IS AN AGENT FACT AND WAS BEING STATED PER DOCUMENT. This line was the last statement of
-       document_install — the per-DOCUMENT half — so a page with one <iframe> claimed the ONE frontier's single
-       document-lifecycle slot twice, and nothing ever gave it back. That is §per-realm-fact read backwards, the
-       identical shape core/timing/timer.c's §8.1.7 timer step was in until its own line moved here: one agent
-       fact answered from as many places as there are documents. There is one such slot per agent because
-       document_lifecycle_step walks navigable_tree_order and answers for EVERY document of this agent in one
-       call — it never needed a per-document claim to reach a per-document answer. Claimed once, here, and given
-       back once, at document_agent_free; the setter asserts both halves now that it can. */
+    /* §13.2.7 "The end" is an agent fact: document_lifecycle_step walks navigable_tree_order and answers for every
+       document of this agent in one call, so the frontier's single document-lifecycle slot is claimed once, here,
+       and given back once at document_agent_free (the setter asserts both). */
     engine_set_document_done_hook(document_lifecycle_step);
     agent_state_ptr("document", &g_document_rt,
                     "the runtime §4.5's interface and its ten sub-components declared into, and the latch");
@@ -4173,7 +3900,7 @@ void document_init(JSContext *ctx)
     agent_state_realm_slot("document", &g_showing_slot, "the per-realm slot §7.5.9's page showing lives in");
 }
 
-/* §3.1.1's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+/* §3.1.1's interface prototype object, for one realm. */
 void document_install_proto(JSContext *ctx)
 {
     JSValue proto, base, prev;
@@ -4195,40 +3922,34 @@ void document_install_proto(JSContext *ctx)
                          "agents where expose legacy touch event APIs is false, this mixin must not be "
                          "implemented.\" This agent's `expose legacy touch event APIs` is false — TouchEvent, "
                          "Touch and TouchList are absent, so a touch handler would have nothing to be handed");
-    /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
-       from — and `NonElementParentNode`, the same getElementById DocumentFragment includes. */
+    /* §4.5: `Document includes ParentNode` (not ChildNode, since a document has no parent) and
+       `NonElementParentNode`, the same getElementById DocumentFragment includes. */
     node_install_parent_mixin(ctx, proto);
     node_install_nonelement_parent_mixin(ctx, proto);
-    /* HTML §6.2's `visibilityState` and `hidden` — one source and the comparison the spec defines over it. */
+    /* HTML §6.2's `visibilityState` and `hidden`: one source and the comparison the spec defines over it. */
     page_visibility_install(ctx, proto);
-    /* HTML §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()`, and this realm's INITIAL FOCUSED
-       AREA — the viewport, built with the realm so it is baseline rather than whichever flow read first. */
+    /* HTML §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()`, and this realm's initial focused area,
+       the viewport, built with the realm so it is baseline. */
     focus_install_document_members(ctx, proto);
-    /* SELECTION API §4.1's `Selection? getSelection()`. Installed by the component that owns the algorithm and
-       the state, exactly as §6.6's two members above are. */
+    /* Selection API §4.1's `Selection? getSelection()`, installed by the component that owns the algorithm and
+       state. */
     selection_install_document_members(ctx, proto);
-    /* FULLSCREEN §3 API's `fullscreenEnabled`, whose answer is §7's `fullscreen` permissions-policy feature
-       conjoined with §2's "fullscreen is supported" — installed by the component that owns both, and there is
-       no init line paired with it above because a readonly accessor with no setter id declares nothing at the
-       agent (core/fullscreen/fullscreen.h). */
+    /* Fullscreen §3 "API"'s `fullscreenEnabled` (§7's `fullscreen` permissions-policy feature conjoined with §2's
+       "fullscreen is supported"); a readonly accessor declares nothing at the agent, so it has no init line above
+       (core/fullscreen/fullscreen.h). */
     fullscreen_install_document_members(ctx, proto);
-    /* HTML §3.1.7's `currentScript`, and this realm's BASELINE record holding §3.1.7's initial null — built
-       with the realm for the reason the readiness record below is, and installed by the component that owns
-       §4.12.1.1's bracket rather than reflected into a member beside it. */
+    /* HTML §3.1.7's `currentScript` and this realm's baseline record holding its initial null, installed by the
+       component that owns §4.12.1.1's bracket. */
     document_current_script_install(ctx, proto);
-    /* HTML §6.6.7's per-document autofocus candidates and processed flag, built with the realm so an element
-       inserted by the FIRST flow to run does not find a list that flow created. */
+    /* HTML §6.6.7's per-document autofocus candidates and processed flag, built with the realm so an element the
+       first flow inserts does not find a list that flow created. */
     autofocus_install_document(ctx);
     {
-        /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};` — Web IDL §3.7.3 "Interface prototype
-           object" for an interface that declares NO members, so the object is EMPTY and everything a page reads
-           off an XMLDocument comes through the link below. It is created OVER Document.prototype rather than
-           created bare and re-parented, which is §3.7.3's own order ("Let proto be … the interface prototype
-           object in realm of that inherited interface", then OrdinaryObjectCreate(proto)) and is what
-           idl_interface_tag's inheritance assert reads one link up.
-           IT IS BUILT BEFORE THE JS_SetClassProto BELOW BECAUSE THAT CALL CONSUMES `proto`: quickjs's
-           JS_SetClassProto is a set_value into the realm's class_proto slot, so the local is no longer this
-           frame's to read after it. */
+        /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};`: Web IDL §3.7.3 "Interface prototype
+           object" for an interface with no members, so it is empty and everything comes through Document.prototype.
+           Created over it, §3.7.3's order ("Let proto be … the interface prototype object in realm of that inherited
+           interface", then OrdinaryObjectCreate(proto)), which idl_interface_tag's inheritance assert reads. Built
+           before the JS_SetClassProto below, which consumes `proto`. */
         JSValue xproto = JS_NewObjectProto(ctx, proto);
 
         CHECK(!JS_IsException(xproto), "XMLDocument.prototype could not be allocated");
@@ -4236,19 +3957,17 @@ void document_install_proto(JSContext *ctx)
         JS_SetClassProto(ctx, g_xml_document_class, xproto);
     }
     JS_SetClassProto(ctx, g_document_class, proto);
-    /* THIS REALM'S DOCUMENT READINESS, built with the realm so it belongs to the pre-boot BASELINE — the same
-       reason §8.12 Animation frames's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,
-       which is right: "loading" is what a Document that has not been installed yet would answer anyway, and
-       the lifecycle walk only ever reaches a realm through its materialized navigable. */
+    /* This realm's document readiness, built with the realm so it is baseline, as §8.12 "Animation frames"'s map and
+       §7.4.6.3's flag are. It exists before the realm has a Document; "loading" is what an uninstalled Document
+       would answer, and the lifecycle walk reaches a realm only through its materialized navigable. */
     {
         JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(rec), "this realm's document-readiness record could not be allocated");
         JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, 0));
         realm_value_set(ctx, g_ready_slot, rec);
     }
-    /* §7.5.9: page showing is "initially false", and it is built HERE for the reason the readiness is — a
-       record made on first touch would be made inside whichever flow happened to read first, and would then be
-       that flow's document rather than the baseline every flow forks from. */
+    /* §7.5.9: page showing is "initially false", built here so it is baseline rather than created inside whichever
+       flow read first. */
     {
         JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(rec), "this realm's §7.5.9 page-showing record could not be allocated");
@@ -4257,11 +3976,9 @@ void document_install_proto(JSContext *ctx)
     }
 }
 
-/* DOM §4.5's TWO CREATION FACTS, BUILT — see document.h for why they are one value and why neither derives
-   the other. The assertions are here rather than at the copy into the record because THIS is where a caller's
-   answer arrives: a type that is empty or does not fit is a caller that has not run an algorithm producing
-   one, and letting it through would put bytes in the record that no standard emitted and that every later
-   read reports as this document's own. */
+/* DOM §4.5's two creation facts, built (see document.h for why they are one value and neither derives the other).
+   Asserted here, where a caller's answer arrives: an empty or oversized type is a caller that ran no algorithm
+   producing one. */
 DocumentKind document_kind(bool is_xml, const char *content_type)
 {
     DocumentKind k;
@@ -4280,19 +3997,16 @@ DocumentKind document_kind(bool is_xml, const char *content_type)
     return k;
 }
 
-/* HTML §7.3.2.1 "Creating browsing contexts": "Let document be a new Document, with: type `html`, content
-   type `text/html`, …" — the Document created with no response at all. */
+/* HTML §7.3.2.1 "Creating browsing contexts": "Let document be a new Document, with: type `html`, content type
+   `text/html`, …", the Document created with no response. */
 DocumentKind document_kind_initial_about_blank(void)
 {
     return document_kind(/*is_xml*/false, "text/html");
 }
 
-/* A DOCUMENT'S RECORD, AND THE ONE PLACE THE (document -> record) ANSWER IS ESTABLISHED.
- *
- * It lives on the Lexbor document's own `user` slot, which lexbor keeps for its embedder and never reads. That
- * slot used to hold the REALM pointer, which was already the (document -> realm) answer §4.2.3 needs; holding
- * the record instead answers that question and every other per-document one through one indirection, with no
- * registry to keep in step — a registry is a second list of documents whose failure mode is a stale row. */
+/* A document's record, and the one place the document-to-record answer is established: the Lexbor document's
+ * `user` slot, which lexbor keeps for its embedder and never reads. One indirection answers every per-document
+ * question with no registry to keep in step (a registry's failure mode is a stale row). */
 static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, DocumentInterface iface,
                              DocumentKind kind, const char *about_base_url, bool is_iframe_srcdoc)
 {
@@ -4301,22 +4015,18 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     const char *type = kind.content_type;
 
     DCHECK(dom != NULL, "a document record was built for no document");
-    /* §4.5 GIVES EVERY DOCUMENT A CONTENT TYPE, so this is a required argument and not a defaulted one — the
-       address may legitimately be absent (a document with no browsing context has none to speak of), the type
-       may not, and §4.4's clone reads it back off the record it is copying. */
+    /* §4.5 gives every document a content type, so it is required: the address may be absent (a document with no
+       browsing context has none), the type may not, and §4.4's clone reads it back off the record. */
     DCHECK(type != NULL && type[0] != '\0',
            "a document record was built with no content type — §4.5's `contentType` is state every document "
            "has, and a record that never received one would answer for its document with an empty string that "
            "no parse, no createDocument and no clone could have produced");
     DCHECK(dd->user == NULL, "a second record was built for one Lexbor document — the first would be leaked and "
                              "every node of the tree would answer through whichever won");
-    /* THE ORIGIN OF THE UNCOLLECTABLE REALM, ASKED AT THE BIRTH OF THE RECORD THAT CAUSES IT. Four counted
-       references are about to hang off malloc'd C, and two of them point back INTO this realm — so from this
-       line on, a collector that has not been told how to read this record can never collect the realm, and
-       nothing says so until JS_FreeRuntime's gc_obj_list walk reports a whole page with no owner named. That is
-       the worst possible place to learn it, so it is asked here, where it is still a fact about ONE record.
-       It is asked of every record and not only of a realm's active one, because a second Document (§4.5.1's
-       three factories, DOMParser, XHR's responseXML) holds the same references through the same list. */
+    /* The cause of an uncollectable realm, asked at the birth of the record: its counted references hang off malloc'd
+       C, two of them pointing back into this realm, so a collector not told how to read the record could never
+       collect the realm, which JS_FreeRuntime's gc_obj_list walk would report with no owner named. Asked of every
+       record, since second Documents (§4.5.1's factories, DOMParser, responseXML) hold the same references. */
     DCHECK(JS_GetContextMarkHook(JS_GetRuntime(ctx)) == document_realm_mark,
            "a Document record was built in a runtime that does not report this component's records to the "
            "collector — document_init declares document_realm_mark, and without it every reference the record "
@@ -4330,50 +4040,31 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     d->win_obj = JS_UNDEFINED;
     d->proxy = JS_UNDEFINED;
     d->impl = JS_UNDEFINED;
-    /* Selection API §2 gives a selection to a document WITH A BROWSING CONTEXT, so it is document_install that
-       builds one and every other document keeps this — which §4.1's getSelection reads as its "must return
-       null otherwise" rather than as a hole a first read would fill. */
+    /* Selection API §2 gives a selection to a document with a browsing context, so document_install builds it; every
+       other document keeps UNDEFINED, which §4.1's getSelection reads as its "must return null otherwise". */
     d->selection = JS_UNDEFINED;
-    /* §3.1.1's ancestor-origins pair. UNDEFINED is the state of a Document with NO browsing context — a
-       §4.5 createDocument, a DOMParser's — which is exactly the case §7.2.4's first step answers with the
-       Location's own empty list, so an absent list here is never read as an empty ancestry. */
+    /* §3.1.1's ancestor-origins pair. UNDEFINED is a Document with no browsing context (a §4.5 createDocument, a
+       DOMParser's), which §7.2.4's first step answers with the Location's own empty list. */
     d->ancestor_origins = JS_UNDEFINED;
     d->ancestor_origin_strings = JS_UNDEFINED;
-    /* THE ADDRESS'S VALUE IS UNDEFINED BEFORE IT IS ANYTHING ELSE. A zeroed JSValue is the INTEGER 0 (JS_TAG_INT
-       is 0), so a field doc_rec_refs walks before the line below has written it would hand the collector — and
-       document_url_value's own assert — a real value nothing produced. */
+    /* The address's value is UNDEFINED first: a zeroed JSValue is the integer 0 (JS_TAG_INT is 0), which
+       doc_rec_refs or document_url_value's assert would read as a real value. */
     d->addr.value = JS_UNDEFINED;
-    /* THE RECORD'S FIRST ADDRESS. A NULL one is a Document install that has no address to give — the empty
-       string is what this engine's readers test for, so it is stored as one rather than left NULL.
-       AND ITS VALUE IS A PLAIN STRING, WHICH IS A POSITIVE STATEMENT AND NOT AN INITIAL VALUE WAITING TO BE
-       OVERWRITTEN: a Document is created FROM a response, so the address it is created with is a concrete fact
-       — bytes a server answered at — and `concolic_is` on it is false for exactly that reason. A Document
-       whose address the run COMPUTED acquires it through document_set_url, which is §7.4.4 step 8. */
+    /* The record's first address. A NULL one is stored as the empty string, which readers test for. Its value is a
+       plain string: a Document is created from a response, so its address is a concrete fact and `concolic_is` is
+       false for it. A Document whose address the run computed acquires it through document_set_url (§7.4.4 step
+       8). */
     d->addr.bytes = doc_addr_intern(d, url ? url : "");
     d->addr.value = JS_NewString(ctx, url ? url : "");
     CHECK(!JS_IsException(d->addr.value), "document: OOM naming a document's address");
     doc_addr_assert_agrees(ctx, d);
-    /* HTML §7.4's ABOUT BASE URL, WRITTEN AT THE BIRTH OF THE RECORD AND NOT AFTERWARDS. §7.5.1 "Shared
-       document creation infrastructure"'s create-and-initialize-a-Document-object gives it as ONE ROW of the
-       same table that gives the address two lines up — the row beside `URL`, `policy container` and `final
-       sandboxing flag set` — so it is a CREATION item in the standard's own structure and not a field a later
-       caller fills in.
-       IT USED TO BE A SETTER CALLED AFTER THE REALM WAS BUILT, and that is rewritten here rather than deleted
-       because the argument for it was sound about OWNERSHIP and wrong about ORDER, and a reader who re-derives
-       the ownership half will re-propose the setter. The argument was that whose base URL a created Document
-       inherits is a fact about the OPERATION §7.4 "Navigation and session history" is performing, which
-       core/frame/navigable.c owns, so it must not be answered by the host's realm builder. That is exactly
-       right and is UNCHANGED: the value still comes from that component and the host still answers nothing —
-       it CARRIES it, which is what it already does for the address, for §7.1.7 "Policy containers"' container
-       and for §7.1.5's sandboxing flags, every one of them a fact about the operation that the builder is TOLD.
-       What the argument got wrong is that a fact cannot be written onto a record that does not exist yet: the
-       record is built HERE, inside the builder, and document_install's parsed walks run before the builder
-       returns — so a write afterwards is a write after §4.2.3's freeze and after §4.8.5's iframe walk have
-       already asked §2.4.3 "Document base URLs" for a fallback base URL this Document did not have. For an
-       IFRAME SRCDOC DOCUMENT that is §2.4.3 step 1's own assert, firing on ordinary markup.
-       NO COW CAPTURE, and that is the ordering being load-bearing rather than an omission: a capture exists so
-       that a flow that overwrites a field can put the old one back, and at this line the record has no
-       `document` object for a delta to hang off and no flow has ever been able to read the field. */
+    /* HTML §7.4's about base URL, written at the record's birth: §7.5.1 "Shared document creation infrastructure"'s
+       create-and-initialize-a-Document-object gives it as one row of the table that gives the address, beside `URL`,
+       `policy container` and `final sandboxing flag set`. The value is a fact about §7.4's operation, which
+       core/frame/navigable.c owns and the host builder carries, as it carries the address, §7.1.7's container and
+       §7.1.5's flags. It must exist before document_install's parsed walks run inside the builder (§4.2.3's freeze
+       and §4.8.5's iframe walk ask §2.4.3 for a fallback base URL), or an iframe srcdoc document fires §2.4.3 step
+       1's assert. No COW capture: no flow can yet read the field and there is no `document` object for a delta. */
     DCHECK(about_base_url == NULL || about_base_url[0] != '\0',
            "§7.4's about base URL was stated as the EMPTY STRING at a Document's creation — a null one is the "
            "ABSENCE of the fact, which is what every Document created from a response has, and §2.4.3 "
@@ -4381,16 +4072,11 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
            "would be returned as this Document's fallback base URL and every relative URL in it would resolve "
            "against nothing");
     if (about_base_url) d->base.about = doc_addr_intern(d, about_base_url);
-    /* HTML §4.8.5's CLASS, AND ITS PAIRING WITH THE FIELD ABOVE ASSERTED AT THE BIRTH OF THE RECORD THAT
-       HOLDS BOTH. §2.4.3 step 1's own assert is "document's about base URL is non-null" FOR THIS CLASS, and
-       the read that performs it is arbitrarily far from here — the first relative URL anything in the
-       document resolves, which for a `<base href>` is inside document_install's own parsed walk and for a
-       page's own `fetch("/x")` is whenever that line runs. Asked HERE it is a fact about ONE creation with
-       both operands in hand, which is what makes the message able to name the caller rather than the read.
-       IT IS THE SAME INVARIANT core/frame/navigable.c ASSERTS AT ITS ENQUEUE AND NOT A SECOND COPY OF IT:
-       that one is over §7.4.2.2's DOCUMENT RESOURCE, which is the operand §4.8.5's arm carries, and this one
-       is over the CLASS that arm confers — one hop apart, with every host's realm builder in between, which
-       is precisely the span a caller can drop a field across. */
+    /* HTML §4.8.5's class, and its pairing with the field above, asserted at the birth of the record holding both:
+       §2.4.3 step 1 asserts "document's about base URL is non-null" for this class, at a read arbitrarily far away
+       (the first relative URL anything resolves), while here both operands are in hand and the message can name the
+       caller. core/frame/navigable.c asserts the same invariant over §7.4.2.2's document resource at its enqueue,
+       one hop earlier, with the realm builders between. */
     DCHECK(!is_iframe_srcdoc || about_base_url != NULL,
            "an IFRAME SRCDOC DOCUMENT was created with no about base URL. HTML §4.8.5 \"The `iframe` "
            "element\"'s process-the-iframe-attributes step 1 confers this class on the Document its srcdoc "
@@ -4402,38 +4088,35 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
            "resource reads the body AND the about base URL off the same entry), and a creation carrying one "
            "of them is half of it");
     d->is_iframe_srcdoc = is_iframe_srcdoc;
-    /* BOTH OF §4.5's CREATION FACTS, FROM THE ONE VALUE THAT CARRIES THEM. `document_kind` has already
-       asserted the content type is non-empty and fits, so this copy cannot be the one that truncates. */
+    /* Both of §4.5's creation facts from the one value carrying them; `document_kind` asserted the content type is
+       non-empty and fits, so this copy cannot truncate. */
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
     d->is_xml = kind.is_xml;
-    /* …AND DOM §4.5's THIRD, which the caller's own algorithm named: "create a document that implements an
-       interface interface". Stored beside the pair above and never derived from `is_xml` — see document.h. */
+    /* And DOM §4.5's third, "create a document that implements an interface interface", stored and never derived
+       from `is_xml` (see document.h). */
     d->iface = iface;
-    /* DOM §4.5's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
-       and one decode of them — so this is the real answer rather than an initial value waiting to be
-       overwritten, and it is asked of the REGISTRY rather than written as a table index so that the set of
-       encodings has exactly one authority. */
+    /* DOM §4.5's default encoding, utf-8 ("unless stated otherwise"); HTML §13.2.3.2's answer is written later by
+       document_set_encoding. Asked of the registry, so the set of encodings has one authority. */
     d->encoding = encoding_utf8();
     dd->user = d;
     return d;
 }
 
-/* THE RECORD'S HELD REFERENCES GO BACK, and the tree goes with them when this record OWNS it. Every node of a
-   document the page created has a wrapper the identity map holds a reference to, so a document freed without
-   handing those back leaves the map naming freed memory and the runtime's own leak walk counting its whole
-   tree. */
+/* The record's held references go back, and the tree with them when this record owns it: every node of a
+   page-created document has a wrapper the identity map references, so a document freed without handing them back
+   would leave the map naming freed memory. */
 static void doc_rec_release(Document *d)
 {
     JSContext *ctx = d->realm;
 
-    /* BEFORE the references go, and it is not one of them: §4.5.1's object holds a raw pointer to the Lexbor
-       document, and a DOMImplementation the page kept outlives this record. */
+    /* Before the references go, and not one of them: §4.5.1's object holds a raw pointer to the Lexbor document, and
+       a DOMImplementation the page kept outlives this record. */
     dom_implementation_detach(ctx, d->impl);
-    doc_rec_refs(d, doc_ref_release, NULL);   /* the ONE list — see doc_rec_refs */
-    doc_addrs_free(d);   /* every address this record ever held — see doc_addr_intern */
+    doc_rec_refs(d, doc_ref_release, NULL);   /* the one list; see doc_rec_refs */
+    doc_addrs_free(d);   /* every address this record held; see doc_addr_intern */
     policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
-    /* Permissions Policy §9.5's policy, malloc'd for the same reason and released beside the container it sits
-       beside on the record. NULL for a Document with no browsing context, which never had one. */
+    /* Permissions Policy §9.5's policies, malloc'd too and released beside the container. NULL for a Document with
+       no browsing context. */
     permissions_policy_free(d->permissions_policy);
     permissions_policy_free(d->report_only_permissions_policy);
     if (d->dom)
@@ -4441,29 +4124,27 @@ static void doc_rec_release(Document *d)
     free(d);
 }
 
-/* THE TREE IS ABOUT TO GO, SO THE RECORD THAT NAMES IT GOES FIRST — called from the ONE place a document's
-   lifetime ends. A delta-owned document is destroyed by the flow that made it, and its record is reachable from
-   nothing else, so without this the struct and the two references it holds (the wrapper and the
-   DOMImplementation) survive every exploration arm that ever created a document. */
+/* The tree is about to go, so the record naming it goes first, from the one place a document's lifetime ends. A
+   delta-owned document is destroyed by the flow that made it and its record is reachable from nothing else. */
 void document_record_release(lxb_html_document_t *dom)
 {
     Document *d = doc_rec(lxb_dom_interface_document(dom));
 
-    if (!d) return;   /* already released — the realm's own path clears the record before it destroys the tree */
+    if (!d) return;   /* already released: the realm's path clears the record before destroying the tree */
     DCHECK(!d->owned, "a document the REALM owns was destroyed through the delta's path — two owners for one "
                       "tree is one free too many");
     doc_rec_release(d);
 }
 
-/* …AND WHETHER THERE IS STILL ONE TO RELEASE — see document.h for why the destroy may not read `user` itself.
-   It reads and decides nothing, which is what a DCHECK condition must be. */
+/* And whether there is still one to release (see document.h for why the destroy may not read `user` itself). It
+   decides nothing, as a DCHECK condition must. */
 bool document_record_names(lxb_html_document_t *dom)
 {
     return dom && doc_rec(lxb_dom_interface_document(dom)) != NULL;
 }
 
-/* The realm's own path: clear the record FIRST, so the destroy below finds nothing to release and the two
-   owners cannot both run. */
+/* The realm's own path: clear the record first, so the destroy below finds nothing to release and only one owner
+   runs. */
 static void doc_rec_free(JSContext *ctx, Document *d)
 {
     lxb_html_document_t *dom = d->owned ? d->dom : NULL;
@@ -4474,10 +4155,9 @@ static void doc_rec_free(JSContext *ctx, Document *d)
         dom_cow_destroy_document(dom);
 }
 
-/* THE REALM OWNS THIS DOCUMENT — one of the two arms every Document created in this realm takes, and the one a
-   creation takes when it is BASELINE: it goes on the chain the realm's teardown walks and outlives every flow.
-   The other arm is the running flow's COW delta (dom_cow_note_created_document), which destroys the document
-   when the delta is discarded. Exactly one of the two, which is what `owned` records. */
+/* The realm owns this document: the arm a baseline creation takes, onto the chain the realm's teardown walks. The
+   other arm is the running flow's COW delta (dom_cow_note_created_document), which destroys the document when the
+   delta is discarded. Exactly one of the two, which `owned` records. */
 static void doc_realm_owns(JSContext *ctx, Document *d)
 {
     Document *active = doc_of(ctx);
