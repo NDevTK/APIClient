@@ -673,7 +673,7 @@ try {
     topLevelUrl: OPENER_ADDR, inheritedCsp: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
-    parentNavigable: 'u', containerPolicy: 'null', ancestorOrigins: 'none',
+    parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none',
     creationSandboxFlags: 'none' });
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
@@ -740,7 +740,7 @@ try {
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
      origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
      coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>ancestorOrigins<TAB>
-     creationSandboxFlags<TAB>provenance<TAB>group<TAB>driven<TAB>policy`, built by
+     creationSandboxFlags<TAB>provenance<TAB>group<TAB>driven<TAB>pinned<TAB>openerNavigable<TAB>policy`, built by
      core/frame/navigable.c. The policy is LAST
      because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
      field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
@@ -884,6 +884,11 @@ try {
          'as `derived`. `observed` would be an engine claiming a real load of this document makes this ' +
          'request, and `forced` is the arm both hosts decline to load at an unwidened origin, so a wrong ' +
          'word here is a peer that is never provisioned or a reply carried into the observed pool');
+  /* HTML §7.3.1.7: `window.open` without `noopener` creates an auxiliary navigable given this document's
+     browsing context, so it is in this document's group and its opener is this document's identity. */
+  if (create[16] !== 'creator')
+    fail(`the create notice places the popup in group \`${create[16]}\` and this document opened it without ` +
+         '`noopener` — §7.3.1.7 creates it given this browsing context, in this document\'s group');
   /* The opener's `window.open` runs in the page's own script, not in a drive of uncalled code. */
   if (create[17] !== 'undriven')
     fail(`the create notice states the drive mark \`${create[17]}\` and this document created the child from ` +
@@ -891,8 +896,11 @@ try {
   if (create[18] !== 'unpinned')
     fail(`the create notice states the witness mark \`${create[18]}\` and this document's \`window.open\` ` +
          'address is a literal its own script spelled, which no equality pinned');
-  if (create.slice(19).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(19).join('\t')}\`) and this ` +
+  if (!create[19] || create[19][0] !== 'W')
+    fail(`the create notice's §7.2.2.4 opener is \`${create[19]}\` and this document opened the popup without ` +
+         '`noopener` — the opener is this document\'s navigable identity, a `W` record');
+  if (create.slice(20).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(20).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

@@ -585,18 +585,18 @@ async function main() {
      it and two peers may hold the same number — which is exactly the fact only the routing zone has. */
   const reads = new Map();
 
-  /* HTML §7.5.1 "Shared document creation infrastructure"'s ELEVEN REMAINING FACTS FOR A TOP-LEVEL
+  /* HTML §7.5.1 "Shared document creation infrastructure"'s TWELVE REMAINING FACTS FOR A TOP-LEVEL
      TRAVERSABLE ARE `engine/top_level_facts.mjs`'s, IMPORTED AT THE TOP OF THIS FILE. They are still written
      by the ZONE and not assumed by the child — the party that knows a document is at the top of its tree is
      the party that seated it — and what has changed is only that the zone reads them from one statement
      instead of holding one of five.
-     THE ARGUMENT FOR EACH OF THE ELEVEN MOVED WITH THEM RATHER THAN BEING COPIED, which is the point: this
+     THE ARGUMENT FOR EACH OF THE TWELVE MOVED WITH THEM RATHER THAN BEING COPIED, which is the point: this
      paragraph was the fullest statement of the set in the tree, and leaving it where ONE of five consumers
      could read it is the same defect as leaving the values here. The module states each section's own
      sentence, why every answer is POSITIVE rather than a blank, and — which no consumer could — why the
      ORDER is walked off `content.mojom.Renderer.Init` rather than written down. */
 
-  /* …AND THE SAME ELEVEN FOR A PEER, TAKEN OFF THE CREATE NOTICE VERBATIM. Not one of them is derivable in the
+  /* …AND THE SAME TWELVE FOR A PEER, TAKEN OFF THE CREATE NOTICE VERBATIM. Not one of them is derivable in the
      instance that will host the child — they are items of the CREATOR's §7.1.7 container plus three separate
      statements about the navigable's place in the creator's frame tree — which is the whole reason the notice
      carries them. The POLICY is the record's REMAINDER because a raw CSP header field value may contain HTAB
@@ -605,13 +605,13 @@ async function main() {
      feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
      engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
      rather than by SPACE, because that section's flag names CONTAIN spaces.
-     THE POLICY IS THE REMAINDER FROM FIELD 19 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
+     THE POLICY IS THE REMAINDER FROM FIELD 20 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
      not fail, it silently joins the field before the policy onto the FRONT of it, which is a creator's CSP
      arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. The
-     PROVENANCE (field 15), the GROUP (field 16) and the two MARKS (fields 17, 18) are not in this list: they decide the LOAD and which
-     instance hosts it, not the Document the child instance is built from. */
+     OPENER (field 19) is in this list, after the parent, in qjs_init's order. The PROVENANCE (field 15), the
+     GROUP (field 16) and the two MARKS (fields 17, 18) are not: they decide the LOAD and which instance hosts it. */
   const createFacts = (f) =>
-    [f[5], b64(f.slice(19).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]];
+    [f[5], b64(f.slice(20).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[19], f[12], f[13], f[14]];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -1203,9 +1203,9 @@ async function main() {
     const f = record.split('\t');
 
     if (f[0] === 'navigable.create') {
-      /* EIGHTEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one
+      /* NINETEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one
          an unmoved count would let arrive as `undefined`, and every one of them below is read. */
-      if (f.length < 20 || (f[16] !== 'creator' && f[16] !== 'new') ||
+      if (f.length < 21 || (f[16] !== 'creator' && f[16] !== 'new') ||
           (f[17] !== 'driven' && f[17] !== 'undriven') || (f[18] !== 'pinned' && f[18] !== 'unpinned'))
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
                         'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
@@ -1213,7 +1213,7 @@ async function main() {
                         'navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ' +
                         'ancestor origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION ' +
                         'is evidence of, which browsing context group the navigable is in (`creator` or ' +
-                        '`new`), whose act it is, whether its path chose a witness, and the policy');
+                        '`new`), whose act it is, whether its path chose a witness, §7.2.2.4\'s opener, and the policy');
       /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
          against a duplicate notice — it is what a REPLAYED document does, re-creating its child navigable and
          re-announcing it under the same name. A second instance would give one document two heaps and two

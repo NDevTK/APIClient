@@ -256,6 +256,16 @@
          "decodes it into a WindowProxy during the call (remote_object_decode) and keeps no pointer into these " +
          "bytes" };
 
+  /* HTML §7.2.2.4's OPENER OF THAT SAME NAVIGABLE, in the parent's grammar. An auxiliary navigable opened without
+     `noopener` is created given its opener's browsing context (§7.3.1.7), which lives in the creating instance,
+     so it crosses as an identity the receiver mints a proxy from, exactly as the parent does. `N` is that
+     grammar's null. */
+  var OPENER_NAVIGABLE = { name: "openerNavigable", type: "string", retained: false,
+    why: "§7.2.2.4's opener of this document's navigable, as core/frame/remote_object.h's identity record, or " +
+         "`N` for none. A child navigable has a parent and no opener; an auxiliary one has an opener and no " +
+         "parent, and navigable_root_opener asserts the pair. NOT retained: it is decoded into a WindowProxy " +
+         "during the call" };
+
   /* HTML §7.3.1.3's OTHER LINK FOR THAT SAME NAVIGABLE — its CONTAINER, which is the element whose content
      navigable it is. It is its own parameter for the parent's reason and not as a second spelling of it: a
      navigable has BOTH links or neither, and what each carries is different in kind. A parent crosses as an
@@ -374,7 +384,7 @@
       { ordinal: 0, name: "Init",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE, OPENER_NAVIGABLE,
                  CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS],
         reply: [
           { name: "rc", type: "int32",
@@ -386,7 +396,7 @@
       { ordinal: 1, name: "Join",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE, OPENER_NAVIGABLE,
                  CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS, ARRIVAL],
         reply: [
           { name: "rc", type: "int32",

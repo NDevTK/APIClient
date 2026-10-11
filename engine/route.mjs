@@ -178,7 +178,8 @@ let instanceSerial = 0;
 async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arrival, inheritedCsp, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
-                          parentNavigable = 'u', containerPolicy = 'null', ancestorOrigins = 'none',
+                          parentNavigable = 'u', openerNavigable = 'N', containerPolicy = 'null',
+                          ancestorOrigins = 'none',
                           creationSandboxFlags = 'none') {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
@@ -236,7 +237,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
       inheritedCsp: inheritedCsp || '', inheritedCspSelfOrigin: inheritedCspSelf || '',
       inheritedCoep, inheritedCoepEndpoint,
       inheritedCoepReportOnly, inheritedCoepReportOnlyEndpoint,
-      parentNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
+      parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
     }, cs);
 
     M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
@@ -672,13 +673,13 @@ async function drainNotices(e) {
          under a policy container nobody stated. That is §A-FIELD-A-CONSUMER-DEFAULTS exactly: `slice(16)` on a
          sixteen-field record is `[]` and joins to the empty string, which is indistinguishable from a document
          that really sent no policy. The count is what tells those apart, and it is the only thing that can. */
-      if (f.length < 20)
-        fail(`a navigable.create notice was short of its fields (${f.length} of twenty): ${n} — ` +
+      if (f.length < 21)
+        fail(`a navigable.create notice was short of its fields (${f.length} of twenty-one): ${n} — ` +
              'navigable.c writes the child, the creator, the address, the origin, §8.1.3.1\'s top-level ' +
              'creation URL, CSP §2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s ' +
              'parent navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ancestor ' +
              'origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION is evidence of, its ' +
-             'group, its drive mark, its witness mark, and the policy');
+             'group, its drive mark, its witness mark, §7.2.2.4\'s opener, and the policy');
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
       /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list, FIELDS 7-10 ARE §7.1.4's EMBEDDER POLICY —
          its value, its reporting endpoint, its report-only value and its report-only endpoint — FIELD 11 IS
@@ -696,9 +697,9 @@ async function drainNotices(e) {
          §A-REQUEST-CARRIES-THE-PROVENANCE's `observed`/`derived`/`forced`, which this driver reads nowhere for
          the `document.fetch` branch's reason exactly — it serves a literal and spends no network — but which
          it must COUNT, because the policy behind it is the remainder and an uncounted field moves it), FIELD
-         16 IS ITS BROWSING CONTEXT GROUP (`creator` or `new`), FIELDS 17-18 ITS DRIVE AND WITNESS MARKS (all
-         counted for the same reason), and FIELD 19 IS THE LIST. The policy is the record's REMAINDER (a
-         raw CSP header may contain HTAB), which is why everything that is not the policy sits before it: an
+         16 IS ITS GROUP, FIELDS 17-18 ITS DRIVE AND WITNESS MARKS (all counted), FIELD 19 §7.2.2.4's OPENER,
+         and FIELD 20 IS THE LIST. The policy is the record's REMAINDER (a raw CSP header may contain HTAB),
+         which is why everything that is not the policy sits before it: an
          origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
          one-letter tag and '.'-terminated base64, RFC 8941 §3.3.3 "Strings" excludes one from a
          `report-to` endpoint, and §3.1.3's list is origin serializations joined by SPACE, which URL §3.2
@@ -708,8 +709,8 @@ async function drainNotices(e) {
          parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
          either of them into the container beside them could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f[15], f.slice(19).join('\t'),
-                                         f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14]));
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f[15], f.slice(20).join('\t'),
+                                         f[6], f[7], f[8], f[9], f[10], f[11], f[19], f[12], f[13], f[14]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin> <provenance> <driven> <pinned>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a

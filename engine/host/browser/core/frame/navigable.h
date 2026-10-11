@@ -774,4 +774,11 @@ void navigable_root_container(JSContext *ctx, JSValueConst proxy, const char *co
  * the definition. */
 void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const char *ancestor_origins);
 
+/* HTML §7.2.2.4's OPENER of the navigable this instance is rooted in, stated by the host as the parent is:
+ * `opener_navigable` is the creator's identity in core/frame/remote_object.h's grammar, or `N` for none. An
+ * auxiliary navigable opened without `noopener` is created given its opener's browsing context (§7.3.1.7), and
+ * that browsing context lives in the creating instance, so only the record that provisions this one can carry
+ * it. A child navigable has a parent and no opener; asserted against the parent link already rooted. */
+void navigable_root_opener(JSContext *ctx, JSValueConst proxy, const char *opener_navigable);
+
 #endif

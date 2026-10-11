@@ -1,8 +1,8 @@
-/* HTML §7.5.1 "Shared document creation infrastructure"'s ELEVEN REMAINING FACTS, FOR A DOCUMENT THAT IS ITS
+/* HTML §7.5.1 "Shared document creation infrastructure"'s TWELVE REMAINING FACTS, FOR A DOCUMENT THAT IS ITS
  * OWN TOP-LEVEL TRAVERSABLE — stated ONCE, for every host this engine is driven through.
  *
  * WHY IT EXISTS. `qjs_init` takes fifteen facts and four of them are per-run (the bytes, the address, the
- * document's name, the response's header block). The other ELEVEN are the same answers for every document
+ * document's name, the response's header block). The other TWELVE are the same answers for every document
  * nothing embeds, and they were written out at every site that seats one — the LIST rather than a count of
  * it, because the list is what a reader can act on and the count is what they would quote onward:
  * `engine/trusted.mjs`'s `topLevelFacts`, `engine/one_document.mjs`'s `facts` and `engine/layout_cost.mjs`'s
@@ -10,7 +10,7 @@
  * `engine/solvergate.mjs`'s `abiOperands` records (the wasm entry's named one); and `engine/route.mjs`'s
  * parameter DEFAULTS, which is the one this diff leaves and is the residual at the bottom of this banner.
  * `one_document.mjs` carried a landed residual naming this module as its next diff, in its own words: "the
- * eleven facts in one module both this file and `trusted.mjs` read, so there is one statement of them and no
+ * twelve facts in one module both this file and `trusted.mjs` read, so there is one statement of them and no
  * copy to drift — which is possible only because they are pure data and need none of the zone's fetching,
  * and is therefore a smaller diff than importing the zone would be."
  *
@@ -33,7 +33,7 @@
  * entry, ordered for the native channel — from one statement, which is what makes the two renderings unable to
  * disagree.
  *
- * WHAT EACH OF THE ELEVEN IS, AND WHY EVERY ONE IS A POSITIVE STATEMENT RATHER THAN A BLANK. This paragraph is
+ * WHAT EACH OF THE TWELVE IS, AND WHY EVERY ONE IS A POSITIVE STATEMENT RATHER THAN A BLANK. This paragraph is
  * `engine/trusted.mjs`'s, moved rather than copied: it was the fullest statement of the set in the tree and
  * leaving it where ONE of its consumers could read it is the same defect as leaving the values there.
  *   · §8.1.3.1 "Environments"' TOP-LEVEL CREATION URL is this document's own address. §8.1.3.5 reads it to
@@ -71,7 +71,7 @@
  * later value read one slot early in silence. The native channel has exactly that hazard with none of that
  * repair: its record is a TAB-joined array in declaration order, `abi_take` refuses an absent field but
  * nothing refuses a SHORT one written by a driver older than the interface, and a value in the wrong slot
- * parses. So the eleven names come from `Init`'s own parameters from `topLevelUrl` onward, and a parameter
+ * parses. So the twelve names come from `Init`'s own parameters from `topLevelUrl` onward, and a parameter
  * inserted among them moves both renderings together or refuses both.
  *
  * IMPORTING `renderer_abi.mjs` COSTS A NATIVE DRIVER NOTHING, WHICH IS THE ONE THING THAT MAKES THIS MODULE
@@ -80,10 +80,10 @@
  * never opens the artifact — which is what `one_document.mjs`'s own residual requires of its replacement
  * ("pure data and need none of the zone's fetching").
  *
- * NAMED RESIDUAL — `engine/route.mjs`. NOT COVERED: that driver states the same eleven as PARAMETER DEFAULTS
+ * NAMED RESIDUAL — `engine/route.mjs`. NOT COVERED: that driver states the same twelve as PARAMETER DEFAULTS
  * on `makeEngine`, because it provisions CHILD documents and must be able to pass a creator's real values, so
  * its copy is a default rather than a constant and converting it changes a signature. WHAT THE NEXT DIFF
- * BUILDS: `makeEngine` takes the eleven as one RECORD rather than as eleven trailing parameters, defaulted
+ * BUILDS: `makeEngine` takes the twelve as one RECORD rather than as twelve trailing parameters, defaulted
  * from `topLevelFacts(url)` as a whole, so a peer's values and a top-level document's come from one shape.
  * HOW ITS ABSENCE WOULD SHOW: a value changed here and not there seats a document driven through
  * `route.mjs` under a different §7.1.4 embedder policy or §7.1.5 flag set from the same document driven
@@ -91,13 +91,13 @@
  * difference. */
 import { RENDERER } from './renderer_abi.mjs';
 
-/* THE PARAMETER THE ELEVEN BEGIN AT. Stated as a NAME rather than as an index, because an index is an ordinal
+/* THE PARAMETER THE TWELVE BEGIN AT. Stated as a NAME rather than as an index, because an index is an ordinal
    over a set that grows and this module exists because that set grew three times. */
 const FIRST = 'topLevelUrl';
 
 const INIT = RENDERER.methods.find((m) => m.name === 'Init');
 if (INIT === undefined)
-  throw new Error('top_level_facts.mjs: `content.mojom.Renderer` declares no `Init` method — the eleven facts ' +
+  throw new Error('top_level_facts.mjs: `content.mojom.Renderer` declares no `Init` method — the twelve facts ' +
                   'below are that method\'s trailing parameters and there is nothing to walk them off, so ' +
                   'every host driven from here would seat a document on values nothing had ordered.');
 
@@ -106,7 +106,7 @@ export const TOP_LEVEL_FACT_NAMES = (() => {
   const i = INIT.params.findIndex((p) => p.name === FIRST);
   if (i < 0)
     throw new Error(`top_level_facts.mjs: \`content.mojom.Renderer.Init\` declares no \`${FIRST}\` parameter — ` +
-                    'the eleven facts are the tail of that declaration beginning at it, so a renamed or ' +
+                    'the twelve facts are the tail of that declaration beginning at it, so a renamed or ' +
                     'removed parameter is an interface this module can no longer find its own subject in.');
   return Object.freeze(INIT.params.slice(i).map((p) => p.name));
 })();
@@ -123,6 +123,7 @@ function statement(url) {
     inheritedCoepReportOnly: 'unsafe-none',
     inheritedCoepReportOnlyEndpoint: '',
     parentNavigable: 'u',
+    openerNavigable: 'N',   // §7.2.2.4's opener, remote_object.h's null: nothing opened a page a person named
     containerPolicy: 'null',
     ancestorOrigins: 'none',
     creationSandboxFlags: 'none',
@@ -153,13 +154,13 @@ function checked(url) {
   for (const name of have)
     if (!TOP_LEVEL_FACT_NAMES.includes(name))
       throw new Error(`top_level_facts.mjs states \`${name}\`, which \`content.mojom.Renderer.Init\` declares ` +
-                      'no parameter of among its trailing eleven — this module is NEWER than the interface, ' +
+                      'no parameter of among its trailing twelve — this module is NEWER than the interface, ' +
                       'or the name is misspelled, and either way the value crosses to a reader that never ' +
                       'looks at it while the parameter it was meant for goes unstated.');
   for (const name of have)
     if (typeof v[name] !== 'string')
       throw new Error(`top_level_facts.mjs states \`${name}\` as a ${typeof v[name]} — every one of these ` +
-                      'eleven reaches the ABI as a C string, so a non-string is a value that would arrive ' +
+                      'twelve reaches the ABI as a C string, so a non-string is a value that would arrive ' +
                       'having been stringified by whichever host happened to compose it.');
   return v;
 }
@@ -168,14 +169,14 @@ function checked(url) {
    `abiOperands("Init", "qjs_init", …)` record beside the four per-run facts that host states itself. */
 export function topLevelFacts(url) { return checked(url); }
 
-/* THE NATIVE `--abi` CHANNEL'S SHAPE — the same eleven, in the declaration's order, with that channel's own
+/* THE NATIVE `--abi` CHANNEL'S SHAPE — the same twelve, in the declaration's order, with that channel's own
    encoding applied.
  *
  * THE ENCODING IS A FACT OF THE CHANNEL AND NOT OF THE INTERFACE, WHICH IS WHY IT IS STATED HERE AND NOT
- * DERIVED. `test_forced.c`'s `abi_main` takes exactly one of the eleven through `abi_bytes` — the inherited
+ * DERIVED. `test_forced.c`'s `abi_main` takes exactly one of the twelve through `abi_bytes` — the inherited
  * CSP list — and its own comment says why: "a raw CSP header field value may contain HTAB (RFC 9110 §5.5
  * "Field Values") and this channel splits on one — every other field below is a token, an origin
- * serialization or a grammar that asserts it has no tab". The interface declares all eleven `string`, so
+ * serialization or a grammar that asserts it has no tab". The interface declares all twelve `string`, so
  * nothing in the declaration distinguishes them and a walk over it could not find this. It is one sentence
  * with one reader, which is the whole point of the module.
  *

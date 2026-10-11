@@ -419,7 +419,8 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * qjs_inherited_container. */
 /* `parent_navigable` is §7.3.1.3 "Child navigables"' parent of this document's navigable, stated by the zone that
  * routed the create, since a cross-origin `<iframe>` is the root of its own instance (navigable_root in
- * core/frame/navigable.h). `container_policy` is the creator's result of Permissions Policy §9.5 ("given null or
+ * core/frame/navigable.h). `opener_navigable` is §7.2.2.4's opener of that navigable in the same grammar, `N`
+ * for none (navigable_root_opener). `container_policy` is the creator's result of Permissions Policy §9.5 ("given null or
  * an element (container) and an origin (origin)"), whose arguments are both the creator's, in the text
  * core/permissions_policy/permissions_policy.h serializes; "there is no container" is that grammar's word for an
  * auxiliary navigable or a root with no embedder. Without it Permissions Policy §9.7 step 1 would grant every
@@ -444,7 +445,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
-                        const char *parent_navigable, const char *container_policy,
+                        const char *parent_navigable, const char *opener_navigable,
+                        const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags)
 {
     /* §7.1.5's set, parsed before anything is built from it; see the read below. */
@@ -595,6 +597,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            Document a navigable is given, and for a navigable rooted in a peer's frame tree only the creating
            instance can answer it. §7.3.1.3 creates a navigable and links it afterwards. */
         navigable_root_container(g_ctx, root_proxy, container_policy);
+        /* §7.2.2.4's opener for that navigable, which an auxiliary one has in the creating instance. */
+        navigable_root_opener(g_ctx, root_proxy, opener_navigable);
         /* §3.1.3's ancestor origins for that navigable's document, before the install, since §7.3.2.1 reads it
            there (see core/frame/navigable.h). */
         navigable_root_ancestor_origins(g_ctx, root_proxy, ancestor_origins);
@@ -657,7 +661,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
-                        const char *parent_navigable, const char *container_policy,
+                        const char *parent_navigable, const char *opener_navigable,
+                        const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags,
                         const char *arrival)
 {
@@ -782,6 +787,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
         /* §7.3.1.3's container, for qjs_init's reason: a document nested through a cross-origin one has both of
            its §7.3.1.3 links in a peer instance. */
         navigable_root_container(cctx, proxy, container_policy);
+        /* §7.2.2.4's opener, stated as in qjs_init. */
+        navigable_root_opener(cctx, proxy, opener_navigable);
         /* §3.1.3's ancestor origins for that navigable's document, composed in the peer that holds them. */
         navigable_root_ancestor_origins(cctx, proxy, ancestor_origins);
         SerializedPolicyContainer response =

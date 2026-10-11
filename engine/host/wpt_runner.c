@@ -1420,7 +1420,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
                             const char *coep_report_only, const char *coep_report_only_endpoint,
                             const char *parent, const char *container_policy,
                             const char *ancestor_origins, const char *creation_sandbox_flags,
-                            const char *arrival)
+                            const char *opener, const char *arrival)
 {
     int down[2], up[2];
     pid_t pid;
@@ -1472,7 +1472,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
               coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
-              ancestor_origins, creation_sandbox_flags, arrival, (char *)NULL);
+              ancestor_origins, creation_sandbox_flags, opener, arrival, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1660,7 +1660,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[20]; int nf = 0; char *q;
+    char *f[21]; int nf = 0; char *q;
     /* The record the emitting engine wrote, kept whole: the split below writes NULs into `line`, and a routed
        post crosses verbatim for the receiving engine's own entry to parse. */
     char *whole = strdup(line);
@@ -1668,9 +1668,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* The split stops at the last field and keeps the remainder verbatim, because the last field of a
        navigable.create is a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 20; q++)
+    for (q = line, f[nf++] = q; *q && nf < 21; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 20 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 21 && !strcmp(f[0], "navigable.create")) {
         /* Fields 5 to 10 are items of HTML §7.1.7's clone of the creator's container, which the hosting instance
            cannot derive: 5 is HTML §8.1.3.1's top-level creation URL, 6 CSP §2.2's self-origin, 7 to 10 §7.1.4's
            embedder policy (value, reporting endpoint, report-only value, report-only endpoint). 11 is HTML
@@ -1682,9 +1682,10 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            navigation's provenance (`observed`/`derived`/`forced`), handed to the child as its arrival grade
            (solver/engine.h's engine_set_arrival); this runner decides no fetch from it, since it fetches only
            from wptserve with no cookie jar. 16 is the browsing context group, 17 the drive mark, 18 the witness
-           mark. The CSP policy is field 19, the remainder, because none of the earlier fields can contain a tab
-           and a raw CSP header can. The token asserts on 15 to 18 are the index check: a field inserted before
-           the policy shifts them and fires here, where the count check alone would hand the policy a token. */
+           mark, 19 HTML §7.2.2.4 "Accessing related windows"' opener in the parent's grammar (`N` for none). The
+           CSP policy is field 20, the remainder, because none of the earlier fields can contain a tab and a raw
+           CSP header can. The token asserts on 15 to 18 are the index check: a field inserted before the policy
+           shifts them and fires here, where the count check alone would hand the policy a token. */
         DCHECK(!strcmp(f[15], PENDING_PROVENANCE_OBSERVED) || !strcmp(f[15], PENDING_PROVENANCE_DERIVED) ||
                !strcmp(f[15], PENDING_PROVENANCE_FORCED),
                "the create notice's fifteenth field is not one of the three provenance tokens engine.h "
@@ -1705,8 +1706,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         DCHECK(!strcmp(f[18], PENDING_PINNED_YES) || !strcmp(f[18], PENDING_PINNED_NO),
                "the create notice's eighteenth field is not a witness-mark token engine.h declares — the walk's "
                "indices and the record's fields have parted");
-        wpt_spawn_child(f[1], f[3], f[4], f[19], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
-                        f[14], f[15]);
+        /* Field 19 is the opener and the policy is field 20. */
+        wpt_spawn_child(f[1], f[3], f[4], f[20], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
+                        f[14], f[19], f[15]);
         free(whole);
         return;
     }
@@ -1732,7 +1734,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE, f[4]);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", f[4]);
         free(whole);
         return;
     }
@@ -1745,7 +1747,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE, f[4]);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", f[4]);
         free(whole);
         return;
     }
@@ -2462,7 +2464,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                      const char *inherited_coep_report_only,
                                      const char *inherited_coep_report_only_endpoint,
                                      const char *parent_navigable, const char *container_policy,
-                                     const char *ancestor_origins, const char *creation_sandbox_flags)
+                                     const char *ancestor_origins, const char *creation_sandbox_flags,
+                                     const char *opener_navigable)
 {
     /* §7.1.5's set, parsed before anything is built from it; see the read below. */
     SandboxFlags creation_flags = 0;
@@ -2656,6 +2659,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            navigable is given, and for a navigable rooted in another process's frame tree only that process could
            run it. Stated after the rooting, in §7.3.1.3's order, as the product host states it. */
         navigable_root_container(ctx, root_proxy, container_policy);
+        /* §7.2.2.4's opener, which an auxiliary navigable has in the process that opened it. */
+        navigable_root_opener(ctx, root_proxy, opener_navigable);
         /* §3.1.3's ancestor origins for that navigable's Document, before the install for the same reason:
            §7.3.2.1 runs those steps once per Document a navigable is given and reads this there. A third
            statement, not a field of either above (see navigable.h). */
@@ -2832,9 +2837,12 @@ static int wpt_child_main(int argc, char **argv)
        element and its node document's active set. The empty set is a real answer for a swap, so taking it by
        default would run a sandboxed frame's scripts, submit its forms and relax its `document.domain`. */
     const char *creation_sandbox_flags = argc > 15 ? argv[15] : NULL;
+    /* HTML §7.2.2.4's opener of this navigable, in the parent's grammar (`N` for none): an auxiliary navigable's
+       opener is a browsing context in the parent process. */
+    const char *opener_navigable = argc > 16 ? argv[16] : NULL;
     /* How the parent reached this document, the create or swap notice's provenance word;
        engine_provenance_of_token refuses an absent or unknown one. */
-    const char *arrival = argc > 16 ? argv[16] : NULL;
+    const char *arrival = argc > 17 ? argv[17] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -2885,6 +2893,9 @@ static int wpt_child_main(int argc, char **argv)
           "arrives here. Without the field this process would install the EMPTY list, which is the positive "
           "claim that this Document has no ancestors — a cross-origin frame telling every "
           "`location.ancestorOrigins` read that it is the top of its own tree");
+    CHECK(opener_navigable && *opener_navigable,
+          "wpt: a child document was started with no §7.2.2.4 opener navigable — an identity and `N` are the "
+          "two answers, so an absent field is a parent that did not state which applies");
     CHECK(creation_sandbox_flags && *creation_sandbox_flags,
           "wpt: a child document was started with no §7.1.5 CREATION SANDBOXING FLAG SET — the section reads "
           "the embedder ELEMENT's iframe sandboxing flag set and that element's node document's active set, "
@@ -2908,7 +2919,7 @@ static int wpt_child_main(int argc, char **argv)
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
                              coep_report_only_endpoint, parent_navigable, container_policy,
-                             ancestor_origins, creation_sandbox_flags);
+                             ancestor_origins, creation_sandbox_flags, opener_navigable);
     free(html);
     header_list_free(&html_headers);
 
@@ -3049,13 +3060,13 @@ int main(int argc, char **argv)
        the test document itself in `--test-document` mode; a `.any.js` run has no document response (its skeleton
        is this runner's), so no bytes or headers are passed. §7.3.1.3's parent is `u`, §3.1.3's list is empty
        (no container document, step 3), and §7.1.5's set is empty (a top-level traversable's popup sandboxing
-       flag set, which only §7.3.1.7's rules for choosing a navigable fill), each in its grammar's own word so an
-       empty field cannot be mistaken for a host that stopped stating it. */
+       flag set, which only §7.3.1.7's rules for choosing a navigable fill), and §7.2.2.4's opener is `N`, each in
+       its grammar's own word so an empty field cannot be mistaken for a host that stopped stating it. */
     ctx = wpt_build_document("wpt", g_top_origin, g_base_url, NULL, 0, NULL, "", "",
                              "unsafe-none", "", "unsafe-none", "", "u",
                              PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                              DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                             SANDBOX_FLAGS_SERIALIZED_NONE);
+                             SANDBOX_FLAGS_SERIALIZED_NONE, "N");
     /* The realm a relayed notice is delivered into. A child's notice arrives while this process is blocked inside
        wpt_child_ask, which has no ctx of its own. */
     g_wpt_ctx = ctx;

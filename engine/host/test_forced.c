@@ -27590,7 +27590,7 @@ static int abi_pay(void)
         } else if (!strcmp(verb, "join")) {
             /* A second document of this instance's origin-keyed agent cluster (SECURITY.md: one instance per
                cluster), which the zone routes here instead of provisioning a peer. The record is the
-               `document` record's first fifteen fields in qjs_join's parameter order; there is no peer
+               `document` record's first sixteen fields in qjs_join's parameter order; there is no peer
                reference field, because the zone joins only into an instance already referenced. qjs_join
                keeps the document bytes for the agent's life (mojom.js's `retained`), so they are this host's
                until the teardown; every other field is copied inside the entry. */
@@ -27607,6 +27607,7 @@ static int abi_pay(void)
             const char *jcoep_ro = abi_take(&p, "inherited embedder policy report-only value");
             const char *jcoep_ro_ep = abi_take(&p, "inherited embedder policy report-only endpoint");
             const char *jparent = abi_take(&p, "parent navigable");
+            const char *jopener = abi_take(&p, "opener navigable");
             const char *jcontainer = abi_take(&p, "container permissions policy");
             const char *jancestors = abi_take(&p, "ancestor origins");
             const char *jsandbox = abi_take(&p, "creation sandboxing flags");
@@ -27626,7 +27627,7 @@ static int abi_pay(void)
                    "a document was joined into an instance no peer references — the zone joins a create "
                    "notice's child, which a peer holds a WindowProxy for, so this frontier may not drain");
             jr = qjs_join(jhtml, (unsigned)jb_n, jurl, jdoc, jheaders, jtlu, jcsp, jcsp_self, jcoep, jcoep_ep,
-                          jcoep_ro, jcoep_ro_ep, jparent, jcontainer, jancestors, jsandbox, jarrival);
+                          jcoep_ro, jcoep_ro_ep, jparent, jopener, jcontainer, jancestors, jsandbox, jarrival);
             DCHECK(jr == 0, "qjs_join refused the document this zone routed here");
             free(jheaders);
             free(jcsp);
@@ -28342,8 +28343,8 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
    THE RECORD IS `document` and then, in `qjs_init`'s own parameter order, every fact that entry takes:
    `<address><TAB><name><TAB><headers b64><TAB><document b64><TAB><top-level creation URL><TAB>
     <inherited CSP b64><TAB><CSP self-origin><TAB><COEP><TAB><COEP endpoint><TAB><COEP report-only><TAB>
-    <COEP report-only endpoint><TAB><parent navigable><TAB><container policy><TAB><ancestor origins><TAB>
-    <creation sandboxing flags><TAB><peer reference>`,
+    <COEP report-only endpoint><TAB><parent navigable><TAB><opener navigable><TAB><container policy><TAB>
+    <ancestor origins><TAB><creation sandboxing flags><TAB><peer reference>`,
    verb first and tab separated, which is `wpt_runner.c`'s child channel's own shape rather than a second
    grammar. The LAST field is the one that is not a `qjs_init` parameter and not a fact about the Document at
    all: it is whether another agent created this navigable and still holds a WindowProxy for it, which decides
@@ -28373,7 +28374,7 @@ static int abi_main(int argc, char **argv)
     const char *paint_dir = arg_val(argc, argv, "--paint-dir");
     char *rec, *p;
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
-    const char *coep_ro, *coep_ro_ep, *parent, *container_policy, *ancestor_origins;
+    const char *coep_ro, *coep_ro_ep, *parent, *opener, *container_policy, *ancestor_origins;
     const char *creation_sandbox_flags, *referenced_f, *arrival_f;
     char *headers, *html, *csp;
     size_t headers_n = 0, html_n = 0, csp_n = 0;
@@ -28464,6 +28465,12 @@ static int abi_main(int argc, char **argv)
     CHECK(*parent != '\0',
           "the document record carries no §7.3.1.3 PARENT NAVIGABLE — a navigable either has a parent or is a "
           "top-level traversable and both are ANSWERS, so an empty field is neither");
+    /* HTML §7.2.2.4's OPENER of that navigable, in the parent's grammar: an auxiliary navigable's opener is a
+       browsing context in the creating instance, and `N` states there is none. */
+    opener = abi_take(&p, "opener navigable");
+    CHECK(*opener != '\0',
+          "the document record carries no §7.2.2.4 OPENER NAVIGABLE — a navigable either has an opener or does "
+          "not and `N` is the second answer, so an empty field is neither");
     /* §7.3.1.3's OTHER LINK, carrying an ANSWER rather than an element: Permissions Policy §9.5 "Create a
        Permissions Policy for a navigable" is given "null or an element (container) and an origin", and both
        of those belong to the creating instance — it holds the element and it computed the child's origin. So
@@ -28501,11 +28508,11 @@ static int abi_main(int argc, char **argv)
           "with a word of its own, so an absent field is a caller that did not state which applies and this "
           "instance would run the scripts, submit the forms and relax the `document.domain` an embedder's "
           "`sandbox` attribute forbids");
-    /* AND THE SEVENTEENTH, WHICH IS NOT A DOCUMENT FACT AT ALL. The sixteen above are HTML §7.5.1's — they
+    /* AND THE EIGHTEENTH, WHICH IS NOT A DOCUMENT FACT AT ALL. The seventeen above are HTML §7.5.1's — they
        describe the Document this process builds — and this one describes the INSTANCE: whether some other
        agent created the navigable this document is the active document of, and therefore still holds a
        WindowProxy for it. It is on this record because it is a fact of PROVISIONING and this record IS the
-       provisioning, so a zone that provisions a peer cannot state the sixteen and forget the one that decides
+       provisioning, so a zone that provisions a peer cannot state the seventeen and forget the one that decides
        whether the peer is still alive when the first read arrives. `abi_take` refuses an absent field, so it
        cannot be omitted by a zone that has not been updated — which is the whole reason it is a field rather
        than a second record the zone may or may not send.
@@ -28529,12 +28536,12 @@ static int abi_main(int argc, char **argv)
                       "wrote the record, and the trailing value crossed to a reader that never looks at it. "
                       "trailing=[%s]", p ? p : "");
 
-    /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the sixteen facts a document
+    /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the seventeen facts a document
        arrival carries — every one of them now stated by the party that HAS it. This document's OWN policy is
        not on that list at all: it arrives in the header block above, where a server put it. */
     r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, top_level_url,
                  csp, csp_self, coep, coep_ep, coep_ro, coep_ro_ep,
-                 parent, container_policy, ancestor_origins, creation_sandbox_flags);
+                 parent, opener, container_policy, ancestor_origins, creation_sandbox_flags);
     DCHECK(r == 0, "qjs_init refused the document this process was handed");
     /* THE POLICY BYTES ARE PARSED AND COPIED INSIDE THE ENTRY, exactly as the header block below is. */
     free(csp);

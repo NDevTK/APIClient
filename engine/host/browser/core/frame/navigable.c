@@ -3808,7 +3808,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     /* §7.3.1.3's PARENT, in the form a navigable crosses an instance boundary in — filled only on the arm that
        emits the notice, because that is the only arm where a navigable's tree has to be described to someone
        who cannot see it. */
-    char *parent_id = NULL;
+    char *parent_id = NULL, *opener_id = NULL;
     /* AND WHAT §7.3.1.3's CONTAINER ANSWERED, on the same arm and for the mirror reason: the peer holds the
        navigable and this instance holds the ELEMENT that presents it. Permissions Policy §9.5's result, as
        text; see the notice below. */
@@ -4378,6 +4378,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
               "navigable: OOM stating §3.1.3's ancestor origins for this navigable to a peer instance");
         parent_id = remote_object_encode(ctx, is_child ? document_window_proxy(ctx) : JS_UNDEFINED);
         CHECK(parent_id != NULL, "navigable: OOM naming this navigable's §7.3.1.3 parent for a peer instance");
+        /* §7.2.2.4's OPENER, in the same grammar: §7.3.1.7 creates an auxiliary navigable without `noopener`
+           given this document's browsing context, and a child navigable has none. `N` is that grammar's
+           null. */
+        opener_id = remote_object_encode(ctx, (is_child || (feat && feat->noopener)) ? JS_NULL
+                                                                                     : document_window_proxy(ctx));
+        CHECK(opener_id != NULL, "navigable: OOM naming this navigable's §7.2.2.4 opener for a peer instance");
         /* THE RECORD, FIELD BY FIELD, AND ITS SIZE IS A FUNCTION OF THIS ARRAY. engine_notice_build walks it
            twice — once to size, once to write — so the TAB in front of every field is paid for by the same
            edit that adds the field, and `sizeof fields / sizeof fields[0]` is the count nobody restates.
@@ -4434,6 +4440,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             peer_in_creator_group ? "creator" : "new",
             driven,   /* whose act it is (solver/engine.h's PENDING_DRIVEN_*), read by the zone's `actor` row */
             pinned,   /* whether its path chose a witness (PENDING_PINNED_*), read by the navigation default */
+            opener_id,   /* the opener's identity (remote_object.h), or N; field 19 */
             creator_policy.csp ? creator_policy.csp : "",
         };
 
@@ -4441,6 +4448,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         engine_host_notify(ctx, op);
         free(op);
         free(parent_id);
+        free(opener_id);
         free(container_policy);
         free(ancestor_origins);
         free(sandbox_flags);
@@ -4616,6 +4624,28 @@ void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const c
        on which host made it, so there is no shape of caller it silently serves differently. */
     if (document_ancestor_origins_serialized_has_ancestors(ancestor_origins))
         window_proxy_set_remote_ancestor_origins(proxy, ancestor_origins);
+}
+
+/* See navigable.h. */
+void navigable_root_opener(JSContext *ctx, JSValueConst proxy, const char *opener_navigable)
+{
+    JSValue parent = window_proxy_parent_navigable(ctx, proxy), opener;
+    bool has_parent = window_proxy_is(parent);
+
+    JS_FreeValue(ctx, parent);
+    DCHECK(opener_navigable != NULL && *opener_navigable != '\0',
+           "a navigable was rooted and told NOTHING about §7.2.2.4's OPENER — an identity and `N` are the two "
+           "things this statement can make, and an empty field is a host that stopped making it");
+    opener = remote_object_decode(ctx, opener_navigable);
+    DCHECK(JS_IsNull(opener) || window_proxy_is(opener),
+           "a navigable's OPENER decoded to something that is neither a navigable nor null — the creating "
+           "instance writes remote_object_encode of its own WindowProxy or of null");
+    DCHECK(!(has_parent && window_proxy_is(opener)),
+           "a navigable was rooted with both a §7.3.1.3 PARENT and a §7.2.2.4 OPENER — a child navigable is "
+           "created by §7.3.1.3's create, which gives it no opener, and an auxiliary one by §7.3.1.7 as a "
+           "top-level traversable, so the two fields came off records describing different navigables");
+    if (window_proxy_is(opener)) window_proxy_set_opener(ctx, proxy, opener);
+    JS_FreeValue(ctx, opener);
 }
 
 /* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, given `target`, this document's
