@@ -3193,30 +3193,6 @@ static int destination_is_script_like(const char *d, size_t n) {
     return 0;
 }
 
-/* Replaces one field of an already-joined line, shifting what follows: the dedup's one write half for every token
-   field. No field can be overwritten in place: the destination vocabulary is the spec's (`` -> `script` grows the
-   line by six bytes), the provenance's three tokens have three widths, and the initiator pair's equal width is a
-   coincidence not worth asserting. A caller rewriting several fields of one line goes back to front, since a
-   rewrite shifts everything after it. `off` is an offset, not a pointer, because growth may realloc the buffer. */
-static void join_set_field(char **join, size_t *n_out, size_t *cap, size_t off, size_t old_len,
-                           const char *tok) {
-    size_t tl = strlen(tok), tail_at = off + old_len, tail_len;
-
-    DCHECK(tail_at <= *n_out, "the join was asked to rewrite a field that ends past the text it has written — "
-                              "the offset came from a line in another buffer");
-    tail_len = *n_out - tail_at;
-    /* Guarded on growth rather than written as one expression: with a shrinking field, `*n_out + tl - old_len`
-       wraps in size_t and only happens to come back right. A shrinking field needs no room. */
-    while (tl > old_len && *n_out + (tl - old_len) + 1 > *cap) {
-        *cap *= 2;
-        *join = realloc(*join, *cap);
-        CHECK(*join, "engine: OOM widening a pending line's field");
-    }
-    if (tl != old_len) memmove(*join + off + tl, *join + tail_at, tail_len + 1);   /* +1 carries the NUL */
-    memcpy(*join + off, tok, tl);
-    *n_out += tl - old_len;
-}
-
 /* The provenance's wire spelling, the one place the record's number becomes the line's token, so engine.h's
    vocabulary and pending.h's numbering cannot drift apart. Exported because the @H surface prints the same
    three words (engine.h). */
@@ -3310,21 +3286,8 @@ const char *engine_driven_token(int driven)
                 "zone's firing decision reads this field", driven);
 }
 
-/* The same trip back, for a token already in the join; length-delimited because the caller holds a field of a
-   line, not a NUL-terminated string. */
-static int prov_of_token(const char *tok, size_t n) {
-    if (n == sizeof PENDING_PROVENANCE_OBSERVED - 1 && !memcmp(tok, PENDING_PROVENANCE_OBSERVED, n))
-        return PROV_OBSERVED;
-    if (n == sizeof PENDING_PROVENANCE_DERIVED - 1 && !memcmp(tok, PENDING_PROVENANCE_DERIVED, n))
-        return PROV_DERIVED;
-    if (n == sizeof PENDING_PROVENANCE_FORCED - 1 && !memcmp(tok, PENDING_PROVENANCE_FORCED, n))
-        return PROV_FORCED;
-    CHECK_FAILF("engine: a line this join wrote carries the provenance token `%.*s`, which it cannot have "
-                "written — the buffer is this function's alone", (int)n, tok);
-}
-
-/* The same trip back for Fetch §2.2.5's credentials mode, length-delimited for `prov_of_token`'s reason, and
-   derived from core/fetch/fetch.h's own wire spelling (`fetch_credentials_token`'s and nobody else's) rather
+/* Fetch §2.2.5's credentials mode, from the token a record carries: length-delimited because the record's string
+   is read with its length, and derived from core/fetch/fetch.h's own wire spelling (`fetch_credentials_token`'s and nobody else's) rather
    than a second list of the three words. */
 static FetchCredentialsMode cred_of_token(const char *tok, size_t n) {
     FetchCredentialsMode m;
@@ -3359,34 +3322,6 @@ static FetchCredentialsMode cred_narrower(FetchCredentialsMode a, FetchCredentia
     return FETCH_CREDENTIALS_INCLUDE;
 }
 
-/* Is this initiator token the parser-inserted one? Asked of a line's field and of the entry's own token through
-   the same comparisons, so the join cannot decide it two ways. A membership test, not a length test. */
-static int ini_is_parser(const char *tok, size_t n) {
-    if (n == sizeof PENDING_INITIATOR_PARSER - 1 && !memcmp(tok, PENDING_INITIATOR_PARSER, n)) return 1;
-    if (n == sizeof PENDING_INITIATOR_SCRIPT - 1 && !memcmp(tok, PENDING_INITIATOR_SCRIPT, n)) return 0;
-    CHECK_FAILF("engine: a pending line carries the initiator token `%.*s`, which is neither token engine.h "
-                "declares", (int)n, tok);
-}
-
-/* The same reader for the pinned mark, which the dedup fold asks of a line already in the buffer. Fatal on an
-   unknown word, for `ini_is_parser`'s reason: "not pinned" for an unrecognised token would be the permissive arm
-   of whether an act may be spent, and the buffer is written by the loop below, so an unreadable word means
-   reader and writer parted. */
-static int pinned_is_yes(const char *tok, size_t n) {
-    if (n == sizeof PENDING_PINNED_YES - 1 && !memcmp(tok, PENDING_PINNED_YES, n)) return 1;
-    if (n == sizeof PENDING_PINNED_NO - 1 && !memcmp(tok, PENDING_PINNED_NO, n)) return 0;
-    CHECK_FAILF("engine: a pending line carries the pinned token `%.*s`, which is neither token engine.h "
-                "declares", (int)n, tok);
-}
-
-/* The drive mark's trip back, for a token already in the join. */
-static int driven_is_yes(const char *tok, size_t n) {
-    if (n == sizeof PENDING_DRIVEN_YES - 1 && !memcmp(tok, PENDING_DRIVEN_YES, n)) return 1;
-    if (n == sizeof PENDING_DRIVEN_NO - 1 && !memcmp(tok, PENDING_DRIVEN_NO, n)) return 0;
-    CHECK_FAILF("engine: a pending line carries the drive token `%.*s`, which is neither token engine.h "
-                "declares", (int)n, tok);
-}
-
 /* Is `name` a member of the comma-joined asker set `set` (`n` bytes)? */
 static int asker_set_has(const char *set, size_t n, const char *name, size_t nl) {
     const char *at = set, *end = set + n;
@@ -3400,318 +3335,188 @@ static int asker_set_has(const char *set, size_t n, const char *name, size_t nl)
     return 0;
 }
 
-/* The URLs the host owes, newline-joined across every live flow and deduplicated over the request's identity,
-   or "". Several flows park on one request (a candidate re-fire re-runs the exploring flow's fetches) and
-   engine_provide fills every entry that names it, so the list is a set of requests, not of waiters;
-   deduplicating over the URL alone would drop a POST behind a GET and settle the POST with the GET's body, and
-   deduplicating without the mode (Fetch §2.2.5's request mode) would answer a `<script src=u>` and a
-   `fetch(u)` with one reply, where Fetch §4.1 Main fetch gives the first the body and the second a CORS check.
-   The buffer is this function's, valid until the next call. Each line is
-   `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
+/* Append `n` bytes to the join, growing it by doubling. */
+static void join_put(char **join, size_t *n_out, size_t *cap, const char *s, size_t n) {
+    while (*n_out + n + 1 > *cap) {
+        *cap *= 2;
+        *join = realloc(*join, *cap);
+        CHECK(*join, "engine: OOM growing the pending-request join");
+    }
+    memcpy(*join + *n_out, s, n);
+    *n_out += n;
+    (*join)[*n_out] = 0;
+}
+
+/* The URLs the host owes, newline-joined and deduplicated over the request's identity, or "". Several flows park
+   on one request (a candidate re-fire re-runs the exploring flow's fetches) and engine_provide fills every entry
+   that names it, so the list is a set of requests, not of waiters; deduplicating over the URL alone would drop a
+   POST behind a GET, and without the mode (Fetch §2.2.5's request mode) a `<script src=u>` and a `fetch(u)` would
+   share a reply that Fetch §4.1 Main fetch gives one as a body and the other behind a CORS check.
+   The set is solver/pending_index.h's: one node per identity, holding exactly the records the host can still be
+   shown (keyed, unanswered, not refused, named by a live register), walked in creation order. So the work is the
+   outstanding requests and not every register entry of every flow, and the identity's five strings are the
+   node's own copies, parsed once at the park. The buffer is this function's, valid until the next call. Each
+   line is `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>
    REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`, ASKERS being the comma-joined names of the documents whose
    parks the line folds (engine_asker_name), each once. */
 const char *engine_pending_fetches(void) {
-    static char *join;
-    static size_t cap;
+    static char *join, *askers;
+    static size_t cap, acap;
     size_t n_out = 0;
-    Flow *f;
+    long listed = 0;
+    PendIndexNode *node;
 
-    /* One pass and one conversion, for engine_host_requests' reason. */
     if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending requests"); }
+    if (!askers) { acap = 64; askers = malloc(acap); CHECK(askers, "engine: OOM joining a request's askers"); }
     join[0] = 0;
-    for (int k = 0; (f = flow_at(k)) != NULL; k++)
-        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
-            JSValue pe = pending_entry(f->pending, i);
-            JSValue uv = pending_get(pe, PEND_URL);
-            JSValue mv = pending_get(pe, PEND_METHOD);
-            JSValue dv = pending_get(pe, PEND_DESTINATION);
-            JSValue cv = pending_get(pe, PEND_CREDENTIALS);
-            JSValue ov = pending_get(pe, PEND_MODE);
-            JSValue rpv = pending_get(pe, PEND_REFERRER_POLICY);
-            JSValue rv = pending_get(pe, PEND_REFERRER);
-            size_t ul = 0, ml = 0, dl = 0, cl = 0, ol = 0, rpl = 0, rl = 0;
-            const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
-            const char *m = JS_IsString(mv) ? JS_ToCStringLen(pending_ctx(), &ml, mv) : NULL;
-            /* Fetch §2.2.5's destination, off the record the park stamped it on, not derived from the kind: one
-               kind of park can carry opposite answers to "may this reply be compiled". */
-            const char *d = JS_IsString(dv) ? JS_ToCStringLen(pending_ctx(), &dl, dv) : NULL;
-            /* The credentials mode, off the same record for the same reason: only the creating algorithm knows
-               it. pending.h's default is JS_NULL and `pending_park_request` always writes it, so a NULL here is a
-               park that never took an address, already dropped by `skip` on `!u`. */
+    for (node = pending_index_first(); node; node = pending_index_next(node)) {
+        int n_mem = pending_index_node_count(node);
+        const char *m = pending_index_node_method(node), *o = pending_index_node_mode(node);
+        const char *rp = pending_index_node_referrer_policy(node), *r = pending_index_node_referrer(node);
+        const char *u = pending_index_node_url(node);
+        /* The fold's state: the line's destination, initiator, (provenance, witness, drive) vector, credentials
+           mode and asker set, each stating what survives every member, independent of the members' order. */
+        char dst[32];
+        size_t dl = 0, a_n = 0;
+        int parser = 0, prov = 0, pinned = 0, driven = 0;
+        FetchCredentialsMode cred = FETCH_CREDENTIALS_INCLUDE;
+
+        if (n_mem == 0) continue;   /* every record answered, refused or dropped; the node keeps its history */
+        /* The line grammar, asked once of the identity every member shares: URL Standard §4.4 URL parsing removes
+           all ASCII tab and newline, and a method is an RFC 9110 §5.6.2 token, so a line breaking either never
+           went through the parser (a concolic shape carried as an address) and would split into records the
+           host fetches. */
+        DCHECK(!strpbrk(u, "\t\n"),
+               "an outstanding request's URL holds a TAB or a NEWLINE — URL Standard §4.4 URL parsing removes both "
+               "from its input, so this string never went through the parser and the joined line splits into "
+               "records nobody parked on");
+        DCHECK(method_is_token(m),
+               "an outstanding request's METHOD is not a token — Fetch §2.2.1 Methods, and RFC 9110 §5.6.2 Tokens "
+               "is the production; the joined line would not split back into the pair");
+        (void)fetch_mode_of_token(o);   /* fatal on a word §2.2.5 does not define */
+        DCHECK(fetch_is_referrer_policy(rp) && *r && !strpbrk(r, "\t\n"),
+               "an outstanding request carries no Referrer Policy §3 referrer policy, or no referrer, or one a line "
+               "cannot hold — pending_park_request writes both before the address, the policy through "
+               "fetch_referrer_policy_for_wire and the referrer as \"no-referrer\" or a parsed URL, so this "
+               "record bypassed that door");
+        /* Fetch §4.3 Scheme fetch's closure, at the consumer. The trusted zone fetches only HTTP(S) (Fetch §2.1
+           URL) and its refusal looks like a network failure, so a URL §4.3 answers inside this agent reaching
+           this line is a park that never ran §4.3, owed an answer that can only be `blocked`.
+           `pending_park_request` places the local answer; core/fetch/fetch.c's `fetch_owe` handles a request
+           with a `deliver` closure. */
+        DCHECK(scheme_fetch_is_network(pending_ctx(), u),
+               "a request whose URL's scheme Fetch §4.3 Scheme fetch answers INSIDE this agent is about to be "
+               "handed to the HOST'S network. The trusted zone fetches nothing but an HTTP(S) scheme (Fetch §2.1 "
+               "URL) and its refusal is indistinguishable from a network failure, so this flow would park for the "
+               "rest of the session on an answer that can only be `blocked`. The park that created this entry did "
+               "not run §4.3 — route it through pending_park_request (this file)");
+        a_n = 0;
+        askers[0] = 0;
+        for (int i = 0; i < n_mem; i++) {
+            JSValue pe = pending_index_node_member(node, i);
+            JSValue dv = pending_get(pe, PEND_DESTINATION), cv = pending_get(pe, PEND_CREDENTIALS);
+            size_t mdl = 0, cl = 0, al;
+            const char *md = JS_IsString(dv) ? JS_ToCStringLen(pending_ctx(), &mdl, dv) : NULL;
             const char *c = JS_IsString(cv) ? JS_ToCStringLen(pending_ctx(), &cl, cv) : NULL;
-            /* The request mode, off the same record: it is the third half of the key below, written by
-               `pending_park_request` before the address, so a record with an address and no mode bypassed it. */
-            const char *o = JS_IsString(ov) ? JS_ToCStringLen(pending_ctx(), &ol, ov) : NULL;
-            /* The referrer policy and the referrer, the fourth and fifth parts of the key. */
-            const char *rp = JS_IsString(rpv) ? JS_ToCStringLen(pending_ctx(), &rpl, rpv) : NULL;
-            const char *r = JS_IsString(rv) ? JS_ToCStringLen(pending_ctx(), &rl, rv) : NULL;
-            /* HTML §4.12.1.1's `parser document`, read off the record (pending.h's `parserIns`); engine.h's
-               tokens say why the engine states it and does not act on it. Not derived from the kind: §4.12.1.1
-               puts a non-parser-inserted element in the in-order list when the async setter clears force async,
-               and a parser-inserted `<script async src>` in the ASAP set. Reading the pusher's flag also keeps
-               this token and the provenance beside it from being two derivations of one fact. */
-            const char *ini = pending_get_int(pe, PEND_PARSER_INS)
-                              ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
-            /* What the request is evidence of, read off the record (pending.h's PROV field) and never
-               recomputed: it was true at the instant the request was built, and this walk runs later, over a flow
-               that may since have taken a contradicted arm. */
-            int prov_v = (int)pending_get_int(pe, PEND_PROV);
-            const char *prov = engine_provenance_token(prov_v);
-            /* Whether the address may rest on a witness this engine chose, off the record for the provenance's
-               reason: a pin taken after parking could not have reached this address's bytes. */
-            int pinned_v = (int)pending_get_int(pe, PEND_PINNED);
-            const char *pinned = engine_pinned_token(pinned_v);
-            /* Whose act it is, off the record: the drive mark of the flow that parked, independent of the two
-               grades above (engine.h's PENDING_DRIVEN_*). */
-            int driven_v = (int)pending_get_int(pe, PEND_DRIVEN);
-            const char *driven = engine_driven_token(driven_v);
-            size_t il = strlen(ini), pl = strlen(prov), nl = strlen(pinned), vl = strlen(driven), al;
-            /* A request the zone already refused is not listed, which keeps a decline a fork rather than a spin:
-               unanswered entries are re-joined every step, and each decline reaching the engine forks another
-               failure arm. A refusal answers "will you make this request", and this list is what the host can
-               still be asked; the record keeps the reason, and the parked flow its snapshot. */
-            int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE) || pending_entry_declined(pe));
-            /* Which document asked; read only for a listed entry, the one population that must carry it. */
-            const char *asker = skip ? "" : engine_asker_name(pe);
+            /* What each member is evidence of, read off its record and never recomputed: it was true at the
+               instant the request was built, and this walk runs later, over a flow that may since have taken a
+               contradicted arm. HTML §4.12.1.1's `parser document` likewise (pending.h's `parserIns`). */
+            int m_parser = (int)pending_get_int(pe, PEND_PARSER_INS) != 0;
+            int m_prov = (int)pending_get_int(pe, PEND_PROV);
+            int m_pinned = (int)pending_get_int(pe, PEND_PINNED);
+            int m_driven = (int)pending_get_int(pe, PEND_DRIVEN);
+            const char *asker = engine_asker_name(pe);
+            FetchCredentialsMode m_cred;
+
+            /* The member's half of the park's contract, asserted where the record is read. Only bytes are
+               listed (pending_park_request declines an address with none), a synchronous host request has no
+               address and belongs to engine_host_requests, and the destination and credentials mode are the
+               record's own, written unconditionally by the park. */
+            DCHECKF(pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_CONCRETE ||
+                    pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_EXAMPLE,
+                    "an outstanding request is about to be listed with the address class %d — only an address this "
+                    "run has bytes for may reach a host, and pending_park_request declines the rest",
+                    (int)pending_get_int(pe, PEND_ADDRESS));
+            DCHECK(pending_get_int(pe, PEND_KIND) != FLOW_PENDING_HOSTREQ,
+                   "a synchronous host request stands in the outstanding set — it is answered by "
+                   "engine_host_answer against a request id, and pending_push never tracks one");
+            DCHECK(md != NULL && fetch_is_destination_type(md),
+                   "an outstanding request carries no DESTINATION Fetch §2.2.5 Requests enumerates — the trusted "
+                   "zone reads it to decide whether the reply may be ingested as CODE, so a value outside the "
+                   "enumeration would be read as `not code` and a script's reply ingested as data");
+            DCHECK(c != NULL,
+                   "an outstanding request carries no CREDENTIALS MODE — pending_park_request writes it "
+                   "unconditionally after refusing the unplaced zero, so this record bypassed that door");
+            /* The line's destination is copied into a fixed buffer, so its width is a memory bound in every
+               build; §2.2.5's longest destination is far inside it. */
+            CHECK(md == NULL || mdl < sizeof dst,
+                  "engine: an outstanding request's destination is wider than any Fetch §2.2.5 destination");
+            m_cred = cred_of_token(c, cl);   /* fatal on a word §2.2.5 does not define */
+            if (i == 0) {
+                memcpy(dst, md, mdl); dl = mdl;
+                parser = m_parser; prov = m_prov; pinned = m_pinned; driven = m_driven; cred = m_cred;
+            } else {
+                /* The (provenance, witness, drive) vector folds as one, taking one member's whole, so the line
+                   never states a vector no member held: folding each by its own extremum gave (derived,
+                   unpinned, undriven) from a (forced, pinned, undriven) member and a (derived, unpinned,
+                   driven) one, each refused alone. The order is whose act first: drive, then witness, then
+                   provenance, the egress default's own discriminator, so a line fires by default exactly when one
+                   member alone would; ties fold toward most observed. */
+                int take = m_driven < driven ||
+                           (m_driven == driven && (m_pinned < pinned || (m_pinned == pinned && m_prov < prov)));
+                int f_prov = take ? m_prov : prov, f_pinned = take ? m_pinned : pinned;
+                int f_driven = take ? m_driven : driven;
+                DCHECK((f_prov == prov && f_pinned == pinned && f_driven == driven) ||
+                       (f_prov == m_prov && f_pinned == m_pinned && f_driven == m_driven),
+                       "a folded request line states a (provenance, witness, drive) vector neither the line nor the "
+                       "member it folds holds — the zone judges the line as one request, so the fold would fire an "
+                       "act no member was permitted as the page's own");
+                prov = f_prov; pinned = f_pinned; driven = f_driven;
+                /* The initiator folds to parser-inserted if any member is. The destination folds to the
+                   strictest ingestion: if any member compiles the reply the bytes must pass the code rule, so
+                   script-like (§2.2.5) wins; otherwise the line keeps what it has, since no consumer
+                   distinguishes, say, `image` from `font`. The credentials mode folds the other way (see
+                   `cred_narrower` for the rule and its residual). */
+                parser = parser || m_parser;
+                if (destination_is_script_like(md, mdl) && !destination_is_script_like(dst, dl)) {
+                    memcpy(dst, md, mdl); dl = mdl;
+                }
+                cred = cred_narrower(cred, m_cred);
+            }
+            /* The asker set is the union of the members' documents, so the zone judges the one reply against
+               every document it fills. */
             al = strlen(asker);
-            if (!skip) {
-                char *q = join, *stop = join + n_out;
-                /* Only bytes are listed: pending_park_request declines an address with none, so a listed record
-                   whose class is not CONCRETE or EXAMPLE is a shape about to be sent as a URL. */
-                DCHECKF(pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_CONCRETE ||
-                        pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_EXAMPLE,
-                        "an outstanding request is about to be listed with the address class %d — only an address "
-                        "this run has bytes for may reach a host, and pending_park_request declines the rest",
-                        (int)pending_get_int(pe, PEND_ADDRESS));
-                /* A synchronous host request has no address and belongs to engine_host_requests: listed here, the
-                   host would fetch a URL to settle a rendezvous that answers a program. It is skipped by carrying
-                   no URL, so this asserts the reason. */
-                DCHECK(pending_get_int(pe, PEND_KIND) != FLOW_PENDING_HOSTREQ,
-                       "a synchronous host request carries an ADDRESS — it is answered by engine_host_answer "
-                       "against a request id, not by a fetched body against a (method, url) pair, so listing "
-                       "it here would have the host answer one seam's question through the other");
-                /* The producer's half, asserted where the record is read: an address with no method is a dropped
-                   field, and the split could not make sense of the line. */
-                DCHECK(m != NULL,
-                       "an outstanding request carries an ADDRESS and no METHOD — the reply seam is keyed on the "
-                       "pair, so this entry cannot be listed at all. The park that created it must state its "
-                       "method (Fetch §2.2.5 Requests: unless stated otherwise it is `GET`)");
-                /* The line grammar holds by construction and is checked: URL Standard §4.4 URL parsing removes
-                   all ASCII tab and newline, and a method is an RFC 9110 §5.6.2 token. A URL that breaks it never
-                   went through the parser (a concolic shape carried as an address), and the line would split into
-                   two records the host fetches. */
-                DCHECK(!memchr(u, '\t', ul) && !memchr(u, '\n', ul),
-                       "an outstanding request's URL holds a TAB or a NEWLINE — URL Standard §4.4 URL parsing "
-                       "removes both from its input, so this string never went through the parser and the joined "
-                       "line splits into records nobody parked on");
-                DCHECK(method_is_token(m),
-                       "an outstanding request's METHOD is not a token — Fetch §2.2.1 Methods, and RFC 9110 "
-                       "§5.6.2 Tokens is the production; the joined line would not split back into the pair");
-                /* The destination half of the contract: without it the request cannot be classified at the
-                   chokepoint, and is fetched as data, so a script park's cross-origin body would be compiled. */
-                DCHECK(d != NULL,
-                       "an outstanding request carries an ADDRESS and no DESTINATION — Fetch §2.2.5 Requests "
-                       "gives every request one and the trusted zone reads it to decide whether the reply may "
-                       "be ingested as CODE. The park that created it must state it (core/fetch/fetch.h's "
-                       "request record carries the field; `` is a real answer and means DATA)");
-                DCHECK(fetch_is_destination_type(d),
-                       "an outstanding request's DESTINATION is not one Fetch §2.2.5 Requests enumerates — the "
-                       "consumer decides the CORB class by asking whether this value is SCRIPT-LIKE, so a "
-                       "value outside the enumeration is read as `not code` by default and a script's reply is "
-                       "ingested as data");
-                /* The credentials half: the park writes the field unconditionally, so a NULL means the park door
-                   was bypassed, a different repair from a producer that stated nothing. */
-                DCHECK(c != NULL,
-                       "an outstanding request carries an ADDRESS and no CREDENTIALS MODE — the field is "
-                       "written unconditionally by pending_park_request (this file) after it has refused the "
-                       "unplaced zero, so a record with an address and no mode is that door having been "
-                       "bypassed. Route the park through it; a producer that merely stated nothing aborts "
-                       "there instead, naming the algorithm that owes the answer");
-                /* The enumeration is checked by making the call: `cred_of_token` is fatal on a word §2.2.5 does
-                   not define (whether the person's session pays is at stake), so a DCHECK around it would compare
-                   a value with the only value it can return. */
-                (void)cred_of_token(c, cl);
-                DCHECK(o != NULL,
-                       "an outstanding request carries an ADDRESS and no MODE — pending_park_request writes the "
-                       "mode before the address, so this record bypassed that door, and the trusted zone would be "
-                       "asked a request whose reply it cannot decide the page may read");
-                /* The vocabulary, by making the call: the mapping is fatal on a word §2.2.5 does not define. */
-                (void)fetch_mode_of_token(o);
-                DCHECK(rp != NULL && fetch_is_referrer_policy(rp) && r != NULL && *r &&
-                       !memchr(r, '\t', rl) && !memchr(r, '\n', rl),
-                       "an outstanding request carries an ADDRESS and no Referrer Policy §3 referrer policy, or "
-                       "no referrer, or one a line cannot hold — pending_park_request writes both before the "
-                       "address, the policy through fetch_referrer_policy_for_wire and the referrer as "
-                       "\"no-referrer\" or a parsed URL, so this record bypassed that door");
-                /* Fetch §4.3 Scheme fetch's closure, at the consumer. The trusted zone fetches only HTTP(S)
-                   (Fetch §2.1 URL) and its refusal looks like a network failure, so a URL §4.3 answers inside
-                   this agent reaching this line is a park that never ran §4.3, owed an answer that can only be
-                   `blocked`. Asked once here, of everything, a park added later fires.
-                   `pending_park_request` places the local answer; core/fetch/fetch.c's `fetch_owe` handles a
-                   request with a `deliver` closure. */
-                DCHECK(scheme_fetch_is_network(pending_ctx(), u),
-                       "a request whose URL's scheme Fetch §4.3 Scheme fetch answers INSIDE this agent is "
-                       "about to be handed to the HOST'S network. The trusted zone fetches nothing but an "
-                       "HTTP(S) scheme (Fetch §2.1 URL) and its refusal is indistinguishable from a network "
-                       "failure, so this flow would park for the rest of the session on an answer that can "
-                       "only be `blocked`. The park that created this entry did not run §4.3 — route it "
-                       "through pending_park_request (this file), which places §4.3's own response on the "
-                       "record as PEND_VALUE + haveValue and the delivery reads it exactly as it reads the "
-                       "host's");
-                while (q < stop) {
-                    char *e = memchr(q, '\n', (size_t)(stop - q));
-                    char *lend = e ? e : stop;
-                    /* The line is split where it was joined, by scanning TABs: neither a method (RFC 9110 §5.6.2)
-                       nor a URL (URL Standard §4.4) can contain one, so the scan is exact whatever the token
-                       fields' widths. */
-                    char *t1 = memchr(q, '\t', (size_t)(lend - q));
-                    char *t2 = t1 ? memchr(t1 + 1, '\t', (size_t)(lend - t1 - 1)) : NULL;
-                    char *t3 = t2 ? memchr(t2 + 1, '\t', (size_t)(lend - t2 - 1)) : NULL;
-                    char *t4 = t3 ? memchr(t3 + 1, '\t', (size_t)(lend - t3 - 1)) : NULL;
-                    char *t5 = t4 ? memchr(t4 + 1, '\t', (size_t)(lend - t4 - 1)) : NULL;
-                    char *t6 = t5 ? memchr(t5 + 1, '\t', (size_t)(lend - t5 - 1)) : NULL;
-                    char *t7 = t6 ? memchr(t6 + 1, '\t', (size_t)(lend - t6 - 1)) : NULL;
-                    char *t8 = t7 ? memchr(t7 + 1, '\t', (size_t)(lend - t7 - 1)) : NULL;
-                    char *t9 = t8 ? memchr(t8 + 1, '\t', (size_t)(lend - t8 - 1)) : NULL;
-                    char *t10 = t9 ? memchr(t9 + 1, '\t', (size_t)(lend - t9 - 1)) : NULL;
-                    char *t11 = t10 ? memchr(t10 + 1, '\t', (size_t)(lend - t10 - 1)) : NULL;
-                    DCHECK(t11 != NULL,
-                           "a line already in this join carries fewer than eleven TABs — the buffer is this "
-                           "function's alone and every line it writes is `METHOD<TAB>DESTINATION<TAB>"
-                           "INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>"
-                           "REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL`, so this is the writer and the "
-                           "reader having parted");
-                    /* The key is (method, mode, referrer policy, referrer, url); none of the last four is
-                       folded, because a line is one request. */
-                    if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
-                        (size_t)(t8 - (t7 + 1)) == ol && !memcmp(t7 + 1, o, ol) &&
-                        (size_t)(t9 - (t8 + 1)) == rpl && !memcmp(t8 + 1, rp, rpl) &&
-                        (size_t)(t10 - (t9 + 1)) == rl && !memcmp(t9 + 1, r, rl) &&
-                        (size_t)(lend - (t11 + 1)) == ul && !memcmp(t11 + 1, u, ul)) {
-                        /* One reply fills every entry on the key, so each folded field states what survives
-                           every member, independent of walk order. The initiator folds to parser-inserted if any
-                           member is; the provenance folds with the witness and drive marks, as one member's
-                           vector (below); a flow's own use of the reply is its own `path_forced`.
-                           The destination folds to the strictest ingestion: if any member compiles the reply,
-                           the bytes must pass the code rule, so script-like (§2.2.5) wins; otherwise the line
-                           keeps what it has, since no consumer distinguishes, say, `image` from `font` (one
-                           that does needs the register keyed on the destination). Every offset and verdict is
-                           taken before the first write, and the writes run back to front (asker set,
-                           credentials, drive mark, witness, provenance, initiator, destination), because a
-                           rewrite shifts everything after its field. */
-                        size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
-                        size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
-                        size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
-                        size_t n_at = (size_t)(t4 + 1 - join), n_len = (size_t)(t5 - (t4 + 1));
-                        size_t v_at = (size_t)(t5 + 1 - join), v_len = (size_t)(t6 - (t5 + 1));
-                        size_t c_at = (size_t)(t6 + 1 - join), c_len = (size_t)(t7 - (t6 + 1));
-                        /* The asker set is the union of the members' documents, so the zone judges the one
-                           reply against every document it fills. */
-                        size_t a_end = (size_t)(t11 - join);
-                        int new_asker = !asker_set_has(t10 + 1, (size_t)(t11 - (t10 + 1)), asker, al);
-                        /* The (provenance, witness, drive) vector folds as one, taking one member's whole, so
-                           the line never states a vector no member held: folding each by its own extremum gave
-                           (derived, unpinned, undriven) from a (forced, pinned, undriven) member and a
-                           (derived, unpinned, driven) one, each refused alone. The order is whose act first:
-                           drive, then witness, then provenance, the egress default's own discriminator (the
-                           page's own unpinned act fires; a drive or a pinned witness needs a widening), so a line
-                           fires by default exactly when one member alone would; ties fold toward most observed.
-                           The marks are over-approximations recorded at the flow, so a member that composed the
-                           same bytes with its marks clear refutes them for this address. */
-                        /* Every reader below takes the computed offset, never a `tN + 1` of its own, so the
-                           offsets and tab pointers are not two spellings of one position that could drift. */
-                        int cur_prov = prov_of_token(join + p_at, p_len);
-                        int cur_pinned = pinned_is_yes(join + n_at, n_len);
-                        int cur_driven = driven_is_yes(join + v_at, v_len);
-                        int take_new = driven_v < cur_driven ||
-                                       (driven_v == cur_driven && (pinned_v < cur_pinned ||
-                                                                   (pinned_v == cur_pinned && prov_v < cur_prov)));
-                        int mo_prov = take_new ? prov_v : cur_prov;
-                        int mo_pinned = take_new ? pinned_v : cur_pinned;
-                        int mo_parser = ini_is_parser(join + i_at, i_len) || ini_is_parser(ini, il);
-                        int widen_dst = destination_is_script_like(d, dl) &&
-                                        !destination_is_script_like(join + d_at, d_len);
-                        /* The credentials mode folds the other way from the token fields (see `cred_narrower`
-                           for the rule and its residual). */
-                        FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
-                                                                    cred_of_token(c, cl));
-                        int mo_driven = take_new ? driven_v : cur_driven;
-                        /* The egress policy judges the line as one request, so its (provenance, witness, drive)
-                           vector must be one some member holds: a vector composed across members is an act no
-                           member would have been permitted. */
-                        DCHECK((mo_prov == cur_prov && mo_pinned == cur_pinned && mo_driven == cur_driven) ||
-                               (mo_prov == prov_v && mo_pinned == pinned_v && mo_driven == driven_v),
-                               "a folded request line states a (provenance, witness, drive) vector neither the line "
-                               "nor the member it folds holds — the zone judges the line as one request, so the "
-                               "fold would fire an act no member was permitted as the page's own");
-                        if (new_asker) {
-                            join_set_field(&join, &n_out, &cap, a_end, 0, asker);
-                            join_set_field(&join, &n_out, &cap, a_end, 0, ",");
-                        }
-                        join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
-                        join_set_field(&join, &n_out, &cap, v_at, v_len, engine_driven_token(mo_driven));
-                        join_set_field(&join, &n_out, &cap, n_at, n_len,
-                                       engine_pinned_token(mo_pinned));
-                        join_set_field(&join, &n_out, &cap, p_at, p_len, engine_provenance_token(mo_prov));
-                        join_set_field(&join, &n_out, &cap, i_at, i_len,
-                                       mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
-                        if (widen_dst) join_set_field(&join, &n_out, &cap, d_at, d_len, d);
-                        /* Every rewrite can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t11`)
-                           is dead from here; the break is what makes that safe. */
-                        skip = 1; break;
-                    }
-                    if (!e) break;
-                    q = e + 1;
-                }
+            if (!asker_set_has(askers, a_n, asker, al)) {
+                if (a_n) join_put(&askers, &a_n, &acap, ",", 1);
+                join_put(&askers, &a_n, &acap, asker, al);
             }
-            if (!skip) {
-                while (n_out + ml + dl + il + pl + nl + vl + cl + ol + rpl + rl + al + ul + 13 > cap) {
-                    cap *= 2;
-                    join = realloc(join, cap);
-                    CHECK(join, "engine: OOM growing the pending-request join");
-                }
-                memcpy(join + n_out, m, ml); n_out += ml;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, d, dl); n_out += dl;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, ini, il); n_out += il;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, prov, pl); n_out += pl;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, pinned, nl); n_out += nl;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, driven, vl); n_out += vl;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, c, cl); n_out += cl;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, o, ol); n_out += ol;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, rp, rpl); n_out += rpl;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, r, rl); n_out += rl;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, asker, al); n_out += al;
-                join[n_out++] = '\t';
-                memcpy(join + n_out, u, ul); n_out += ul;
-                join[n_out++] = '\n';
-                join[n_out] = 0;
-            }
-            if (u) JS_FreeCString(pending_ctx(), u);
-            if (m) JS_FreeCString(pending_ctx(), m);
-            if (d) JS_FreeCString(pending_ctx(), d);
+            if (md) JS_FreeCString(pending_ctx(), md);
             if (c) JS_FreeCString(pending_ctx(), c);
-            if (o) JS_FreeCString(pending_ctx(), o);
-            if (rp) JS_FreeCString(pending_ctx(), rp);
-            if (r) JS_FreeCString(pending_ctx(), r);
-            JS_FreeValue(pending_ctx(), rpv);
-            JS_FreeValue(pending_ctx(), rv);
-            JS_FreeValue(pending_ctx(), ov);
             JS_FreeValue(pending_ctx(), cv);
             JS_FreeValue(pending_ctx(), dv);
-            JS_FreeValue(pending_ctx(), mv);
-            JS_FreeValue(pending_ctx(), uv);
             JS_FreeValue(pending_ctx(), pe);
         }
+        listed += n_mem;
+        {
+            const char *ini = parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
+            const char *f[11];
+            f[0] = m; f[1] = NULL; f[2] = ini; f[3] = engine_provenance_token(prov);
+            f[4] = engine_pinned_token(pinned); f[5] = engine_driven_token(driven);
+            f[6] = fetch_credentials_token(cred); f[7] = o; f[8] = rp; f[9] = r; f[10] = askers;
+            for (int k = 0; k < 11; k++) {
+                if (k == 1) join_put(&join, &n_out, &cap, dst, dl);
+                else        join_put(&join, &n_out, &cap, f[k], strlen(f[k]));
+                join_put(&join, &n_out, &cap, "\t", 1);
+            }
+            join_put(&join, &n_out, &cap, u, strlen(u));
+            join_put(&join, &n_out, &cap, "\n", 1);
+        }
+    }
+    /* Every keyed record was listed exactly once: the gauge rises where a record joins a node and falls where it
+       leaves one (solver/pending_index.c), so a difference is a member this walk skipped or counted twice. */
+    DCHECKF(listed == pending_index_keyed_now(),
+            "the pending-request join listed %ld outstanding record(s) and the outstanding set holds %ld — the "
+            "walk and the set's own gauge read one population", listed, pending_index_keyed_now());
     return join;
 }
 

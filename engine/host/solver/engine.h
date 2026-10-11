@@ -666,8 +666,8 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
  * solver/flow.h's `path_forced`). It is read off the record (pending.h's `parserIns`, stamped from what the
  * inserting component stated), never derived from the park's kind, which answers wrongly both ways: the
  * in-order list holds an element whose `async` setter cleared `force async`, and the as-soon-as-possible set
- * holds a parser-inserted `<script async src>`. Equal token length is not relied on: the join shifts the field
- * (engine_pending_fetches' join_set_tokens). */
+ * holds a parser-inserted `<script async src>`. Equal token length is not relied on: engine_pending_fetches
+ * writes each line's fields once, after its fold. */
 #define PENDING_INITIATOR_PARSER "parser"   /* HTML §4.12.1.1's parser-inserted script of the loaded document */
 #define PENDING_INITIATOR_SCRIPT "script"   /* a park made by running code: fetch(), import(), an injected src */
 
