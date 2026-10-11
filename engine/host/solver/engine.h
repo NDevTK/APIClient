@@ -644,6 +644,16 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
 #define PENDING_PROVENANCE_OBSERVED "observed" /* a real load of this document makes exactly this request */
 #define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
 #define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
+/* The engine's own refusal of a request whose address holds an unknown no example grounds (core/fetch/fetch.h's
+   FETCH_ADDRESS_UNKNOWN): written where the zone writes its reasons, so the record states why its flow is parked. */
+#define PENDING_DECLINED_UNADDRESSED "unaddressed: the address holds a value this run has no bytes for"
+/* How many requests the engine declined that way, over both channels (the pending lines and the synchronous
+   rendezvous). */
+long engine_unaddressed_total(void);
+/* engine_host_request for a request whose address has no bytes (core/fetch/fetch.h's FETCH_ADDRESS_UNKNOWN):
+   the rendezvous is opened on the running flow and refused with PENDING_DECLINED_UNADDRESSED before any host
+   is shown it, so the flow takes flow_decline_fork's two arms. Returns the rendezvous id. */
+uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op);
 
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
  * because provenance grades what a reply is worth while this decides whether the act may be spent, and a

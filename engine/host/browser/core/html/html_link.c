@@ -900,6 +900,8 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
            HTML §4.2.4.3's link processing options and of §4.6.8.12 step 11 alike. */
         req.referrer = "client";
         req.referrer_policy = referrer_policy_attribute_keyword(el);
+        /* resolved from the `href` string; an unknown `href` records its shape and parks nothing */
+        req.address = FETCH_ADDRESS_CONCRETE;
         /* …AND IT IS OWED TO THIS ELEMENT'S OWN COMPLETION STEPS, WHICH IS WHAT THE PARK KIND SAYS AND WHAT
            `fetch_owe` COULD NOT. That door parks FLOW_PENDING_RESOLVE — §5.6's `fetch()`, whose delivery
            compiles a JavaScript-typed reply as a CLASSIC program, because a reply a page holds as DATA is one

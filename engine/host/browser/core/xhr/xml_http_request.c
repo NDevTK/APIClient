@@ -175,6 +175,11 @@ typedef struct {
        line for the same reason; -1 until §3.5.6 step 6 composes a request, since 0 (`undriven`) would let a
        drive's request fire as the page's own. */
     int8_t   request_driven;
+    /* WHETHER `url` IS BYTES THE REQUEST MAY BE SENT TO — core/fetch/fetch.h's FetchAddressClass, decided where
+       XHR §3.5.1 The open() method step 7 parses the URL. An argument composed out of unknown input is parsed
+       from its example where it has one (the address that session sends) and is otherwise UNKNOWN, its `url`
+       then being the parse of its display shape, kept only as the request's identity. 0 before open(). */
+    uint8_t  url_address;
 } XhrData;
 
 static JSClassID g_xhr_class;
@@ -832,6 +837,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JSValue mval;   /* step 4's NORMALIZED METHOD — owned, placed by steps 2-4 below and consumed at 11.2 */
         UrlRecord rec;
         bool ok;
+        FetchAddressClass url_address;
         bool async = true;
         int i;
 
@@ -936,7 +942,28 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         u = xhr_arg_cstring(ctx, xhr_idl_arg(argc, argv, 1), NULL);
         if (!u) { JS_FreeValue(ctx, mval); return JS_STEP_ABRUPT; }
         url_record_init(&rec);
-        ok = fetch_parse_url(ctx, &rec, u, strlen(u));
+        url_address = concolic_is(xhr_idl_arg(argc, argv, 1)) ? FETCH_ADDRESS_UNKNOWN : FETCH_ADDRESS_CONCRETE;
+        /* A concolic argument is grounded on its example where the example parses: that is the URL step 7
+           parses for the session the example came from. Otherwise its shape is parsed, as before, for the
+           request's identity alone. */
+        if (url_address == FETCH_ADDRESS_UNKNOWN) {
+            JSValue ex = concolic_example(ctx, xhr_idl_arg(argc, argv, 1));
+
+            if (JS_IsString(ex)) {
+                const char *eu = JS_ToCString(ctx, ex);
+
+                CHECK(eu != NULL, "XMLHttpRequest: OOM reading an address's example for §3.5.1 step 7");
+                if (fetch_parse_url(ctx, &rec, eu, strlen(eu))) {
+                    url_address = FETCH_ADDRESS_EXAMPLE;
+                } else {
+                    url_record_free(&rec);
+                    url_record_init(&rec);
+                }
+                JS_FreeCString(ctx, eu);
+            }
+            JS_FreeValue(ctx, ex);
+        }
+        ok = url_address == FETCH_ADDRESS_EXAMPLE || fetch_parse_url(ctx, &rec, u, strlen(u));
         JS_FreeCString(ctx, u);
         if (!ok) {
             JS_FreeValue(ctx, mval);
@@ -998,6 +1025,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                                    ? JS_DupValue(ctx, xhr_idl_arg(argc, argv, 1)) : JS_NULL);
         url_record_free(&rec);
         d->synchronous = async ? 0 : 1;
+        d->url_address = url_address;
         /* Step 12: only a state that is not already opened fires. */
         if (d->state == XHR_OPENED) { *presult = JS_UNDEFINED; return 0; }
         d->state = XHR_OPENED;
@@ -2626,6 +2654,7 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
     /* §3.5.6's list states no referrer and no referrer policy, so they are Fetch §2.2.5's initial values. */
     req.referrer = "client";
     req.referrer_policy = "";
+    req.address = (FetchAddressClass)d->url_address;
     switch (scheme_fetch(ctx, &req, JS_UNDEFINED, &reply)) {
     case SCHEME_FETCH_RESPONSE:
         /* Through the ONE reply object every answer to this component takes, exactly as a host reply is. */
@@ -2714,7 +2743,11 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         } else {
             char *op = xhr_request_op(ctx, d);
             if (!op) return JS_STEP_ABRUPT;
-            s->req = engine_host_request(ctx, op);
+            DCHECK(d->url_address != FETCH_ADDRESS_UNPLACED,
+                   "an XMLHttpRequest reached §3.5.6 send() with no address class — §3.5.1 open() states it");
+            /* An address with no bytes is not fetchable: the rendezvous is refused before any host sees it. */
+            s->req = d->url_address == FETCH_ADDRESS_UNKNOWN ? engine_host_request_unaddressed(ctx, op)
+                                                             : engine_host_request(ctx, op);
             free(op);
             s->hdr.stage = XR_WAIT;
             return JS_STEP_YIELD;   /* the flow is BLOCKED on the answer; siblings run meanwhile */

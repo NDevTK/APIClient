@@ -271,6 +271,11 @@ static int program_load_door(int kind, int parser_inserted)
  * engine_provide places the host's, so flow_deliver_one_reply delivers both the same way and no entry needs a
  * `deliver` closure. The scheme switch is core/fetch/scheme_fetch.h's. The record's destination and provenance
  * are written whoever answers, because they belong to the request (a `data:` URL script is a code load). */
+/* The requests the engine declined for having no address bytes (engine.h): pending_park_request's, and the
+   synchronous rendezvous engine_host_request_unaddressed opens refused. */
+static long g_reply_unaddressed;
+long engine_unaddressed_total(void) { return g_reply_unaddressed; }
+
 static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
 {
     JSValue reply = JS_UNDEFINED;
@@ -290,6 +295,9 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     DCHECK(req != NULL && req->url != NULL && *req->url,
            "a park was given an address that is not one — every caller of this door resolved a URL before it "
            "reached here, and an entry with no address is one the join can neither list nor answer");
+    DCHECK(req->address != FETCH_ADDRESS_UNPLACED,
+           "a request parked without stating whether its URL is bytes it may be sent to — the producer holds "
+           "the address value (core/fetch/fetch.h's FetchAddressClass)");
     DCHECK(req->method != NULL && *req->method,
            "a request parked on an ADDRESS without stating its METHOD — the reply seam is keyed on the pair "
            "(engine.h), so an unnamed method would park this request under another one's identity and settle "
@@ -399,6 +407,20 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
         pending_set(e, PEND_HEADERS, hl);
     }
     if (req->body) pending_set_bytes(e, PEND_BODY, req->body, req->body_len);
+    /* What the URL is, on the record, so the join can assert that only bytes are ever listed. */
+    pending_set_int(e, PEND_ADDRESS, (int)req->address);
+    /* AN ADDRESS WITH NO BYTES IS NOT FETCHABLE, and nothing asks a host for it: its URL is the display shape of
+       an unknown, this engine's annotation, never a URL. It is declined here as the trusted zone declines a
+       request it will not make, so flow_decline_fork gives it the same two arms: one parked on the request,
+       owed by input (a later session whose run has an example grounds the address and fires it), and one
+       taking §5.6's network error. The record keeps the address as its key and the reason as its account; the
+       join never lists a declined record. */
+    if (req->address == FETCH_ADDRESS_UNKNOWN) {
+        pending_set(e, PEND_DECLINED, JS_NewString(ctx, PENDING_DECLINED_UNADDRESSED));
+        g_reply_unaddressed++;
+        free(up_url);
+        return;
+    }
 
     /* Fetch §4.1 Main fetch step 7, asked at the consumer. It precedes §4.3 (step 12), and every async request
        passes here: a `fetch()` through fetch_owe's provider edge, and the three program parks and the
@@ -509,6 +531,8 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
                          /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
                          /* …and so is the credentials mode, off the same element */
                          FETCH_CREDENTIALS_UNPLACED };
+    /* An address resolved from a string: an unknown `src` records its shape and parks nothing. */
+    req.address = FETCH_ADDRESS_CONCRETE;
     /* Fetch §2.2.5's metadata, which for a dynamic import is the referrer's. HostLoadImportedModule gets "the
        descendant script fetch options given originalFetchOptions, url, and settingsObject", an algorithm of
        §8.1.4.2 Fetching scripts: its step 1 copies the options, so the cryptographic nonce is the importing
@@ -623,6 +647,8 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
                          /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
                          /* …and so is the credentials mode, off the same element */
                          FETCH_CREDENTIALS_UNPLACED };
+    /* An address resolved from a string: an unknown `src` records its shape and parks nothing. */
+    req.address = FETCH_ADDRESS_CONCRETE;
     /* §4.12.1.1's three metadata members, off the element, so `<script nonce=x src=…>` under
        `script-src 'nonce-x'` is checked by step 7 at the park. */
     ScriptCspMeta meta;
@@ -3212,6 +3238,13 @@ const char *engine_pending_fetches(void) {
             int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE) || pending_entry_declined(pe));
             if (!skip) {
                 char *q = join, *stop = join + n_out;
+                /* Only bytes are listed: pending_park_request declines an address with none, so a listed record
+                   whose class is not CONCRETE or EXAMPLE is a shape about to be sent as a URL. */
+                DCHECKF(pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_CONCRETE ||
+                        pending_get_int(pe, PEND_ADDRESS) == FETCH_ADDRESS_EXAMPLE,
+                        "an outstanding request is about to be listed with the address class %d — only an address "
+                        "this run has bytes for may reach a host, and pending_park_request declines the rest",
+                        (int)pending_get_int(pe, PEND_ADDRESS));
                 /* A synchronous host request has no address and belongs to engine_host_requests: listed here, the
                    host would fetch a URL to settle a rendezvous that answers a program. It is skipped by carrying
                    no URL, so this asserts the reason. */
@@ -3768,6 +3801,19 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
    HOSTREQ record from outside the asking flow, so it is the statement of where such a record can be. It stops at
    the first match: exactly one register names an unanswered rendezvous, because a fork unshares it and mints a
    fresh id. */
+/* See engine.h. The rendezvous is opened and refused in one act, so its record exists for flow_decline_fork to
+   build the two arms over and is never listed to a host. */
+uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op) {
+    uint32_t req = engine_host_request(ctx, op);
+    int marked = engine_host_decline(ctx, req, PENDING_DECLINED_UNADDRESSED);
+
+    DCHECK(marked == 1, "a rendezvous opened for an unaddressed request was not found to refuse — "
+                        "engine_host_request parks it on the running flow's register");
+    (void)marked;
+    g_reply_unaddressed++;
+    return req;
+}
+
 int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
     DCHECK(req != 0, "a synchronous request with no id was refused — the id is this kind's only identity");
     /* The reason is required, for the address-keyed refusal's reason. */
@@ -5656,6 +5702,8 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
                          /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
                          /* …and so is the credentials mode, off the same element */
                          FETCH_CREDENTIALS_UNPLACED };
+    /* An address resolved from a string: an unknown `src` records its shape and parks nothing. */
+    req.address = FETCH_ADDRESS_CONCRETE;
     /* §4.12.1.1's three metadata members, off the row's own element (engine_queue_docscript_url and the seed's
        address arm both take it; flow_deliver_one_reply asserts it on the failure path). NULL is a stated answer:
        a host driving a synthesized program list has rows no `<script>` produced, and script_csp_meta answers the

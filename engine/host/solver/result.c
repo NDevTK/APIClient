@@ -1378,6 +1378,7 @@ char *result_cold_json(void) {
     METRIC_SET(reply_asked, pending_index_asked_total());
     METRIC_SET(reply_answered, pending_index_answered_total());
     METRIC_SET(reply_declined, pending_index_declined_total());
+    METRIC_SET(reply_unaddressed, engine_unaddressed_total());
     METRIC_SET(reply_dropped, pending_index_dropped_total());
     METRIC_SET(reply_outstanding, pending_index_keyed_now());
     METRIC_SET(paged_reqs, e.paged_reqs);

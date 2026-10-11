@@ -407,6 +407,9 @@ int pending_driven_compose(int kind, int path_driven);
        address for the mode's reason: both are part of the identity the outstanding set is keyed on */     \
     X(REFERRER_POLICY,"referrerPolicy",PEND_SHARE, JS_NULL)                            \
     X(REFERRER,   "referrer",  PEND_SHARE,  JS_NULL)                                   \
+    /* NO ADDRESS CLASS STATED (core/fetch/fetch.h's FETCH_ADDRESS_UNPLACED): `pending_park_request` writes \
+       it with the address, and the join lists only CONCRETE and EXAMPLE */                        \
+    X(ADDRESS,    "address",   PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* the asking document, which every fetch park writes; 0 names none (a document script, a host request) */ \

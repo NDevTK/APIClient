@@ -165,6 +165,19 @@ FetchCredentialsMode fetch_credentials_of_token(const char *token)
    associated mode, which is `same-origin`, `cors`, `no-cors`, `navigate`, `websocket`, or `webtransport`."
    Fatal on `_UNPLACED` for `fetch_credentials_token`'s reason: the trusted zone decides from this word whether
    the reply may be read by the page at all. */
+const char *fetch_address_token(FetchAddressClass a)
+{
+    switch (a) {
+    case FETCH_ADDRESS_CONCRETE: return "concrete";
+    case FETCH_ADDRESS_EXAMPLE:  return "example";
+    case FETCH_ADDRESS_UNKNOWN:  return "unknown";
+    case FETCH_ADDRESS_UNPLACED: break;
+    }
+    CHECK_FAIL("a request's address class was spelled and is none of core/fetch/fetch.h's three — the zero is a "
+               "producer that stated nothing, and the trusted zone reads the word to refuse a URL that is no "
+               "address");
+}
+
 const char *fetch_mode_token(FetchMode m)
 {
     switch (m) {
@@ -382,6 +395,10 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
     DCHECK(req != NULL && req->url != NULL && *req->url,
            "a request was owed to the host with no address — the reply seam is keyed on (method, url), so a "
            "request with neither names nothing the host can be asked for");
+    DCHECK(req->address != FETCH_ADDRESS_UNPLACED,
+           "a request was owed to the host without stating whether its URL is bytes it may be sent to — the "
+           "producer holds the address value and is the only one that knows (core/fetch/fetch.h's "
+           "FetchAddressClass)");
     DCHECK(req->method != NULL && *req->method,
            "a request was owed to the host without stating its METHOD — Fetch §2.2.5 \"Requests\" gives every "
            "request one (`GET` unless stated otherwise), so a component that reached this seam unnamed "
@@ -465,8 +482,8 @@ struct JSFetchState {
     JSValue   url;
     /* §5.4 step 5's parsed URL, serialized: the request's URL from that step on, whatever page code in the
        stages after it does to the document base URL. JS_UNDEFINED for a Request input (step 6 supplies the
-       URL) and for a concolic, which has no bytes to parse. `url` stays the page's own value, which is what
-       the endpoint surface reports. */
+       URL) and for a concolic whose example step 5 could not ground (fetch_park reads that as an address with
+       no bytes). `url` stays the page's own value, which is what the endpoint surface reports. */
     JSValue   req_url;
     JSValue   input;    /* the argument ITSELF — a Request carries a captured blob URL entry the URL cannot */
     /* §5.4 steps 10-27, applied by request.c's ONE implementation of them over the CONVERTED dictionary. This
@@ -1240,6 +1257,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
     const char *m_method = NULL, *m_dest = NULL, *m_integrity = NULL, *m_cred = NULL;
     const char *m_ref = NULL, *m_refpol = NULL;
     size_t integrity_len = 0;
+    FetchAddressClass address;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
@@ -1248,6 +1266,10 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
        and the ToString boundary owes C a real string rather than one — so this edge reads the concolic's own
        SHAPE, which is the display form the @H surface reports ("/api/{location.hash}"). Coercing it
        generically would either crash at that boundary or, worse, quietly de-taint the URL. */
+    /* What the URL is (core/fetch/fetch.h's FetchAddressClass): §5.4 step 5 left `req_url` a string beside a
+       concolic `url` exactly where it grounded the address on its example. */
+    address = !concolic_is(url) ? FETCH_ADDRESS_CONCRETE
+            : JS_IsString(req_url) ? FETCH_ADDRESS_EXAMPLE : FETCH_ADDRESS_UNKNOWN;
     if (concolic_is(url)) {
         /* the SHAPE, made a real string first, so there is exactly ONE ownership rule for `u` below. A live
            concolic always HAS one (solver/concolic.c mints it with the value), so the `: "{}"` that stood here
@@ -1317,10 +1339,10 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
         /* WHETHER THIS FLOW HAS A URL AT ALL, asked ONCE because two different steps below turn on the same
            one fact. A CONCOLIC's parse produced a record out of a DISPLAY FORM: its shape
            `/api/u?uid={state}.id` does parse, and it is not the address the request will go to — §5.4 step 2's
-           URL is unknown for exactly as long as the value is. Every algorithm that reads a URL record as the
+           URL is unknown for exactly as long as the value is, unless step 5 grounded it on its example. Every algorithm that reads a URL record as the
            request's URL is therefore off for it, which is why the serialization below and §2.9 above it read
            this and not the parse's own success. */
-        bool url_is_real = !concolic_is(url);
+        bool url_is_real = address != FETCH_ADDRESS_UNKNOWN;
 
         DCHECK(scheme != NULL || !url_is_real,
                "a concrete fetch() URL reached Fetch §4.3's scheme switch and the URL parser refused it. It is "
@@ -1461,6 +1483,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
                "about:client" is "client"; anything else is the URL step 14 kept. */
             req.referrer = !*m_ref ? "no-referrer" : !strcmp(m_ref, "about:client") ? "client" : m_ref;
             req.referrer_policy = m_refpol;
+            req.address = address;
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;
@@ -1660,6 +1683,38 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            request's URL from here on, so it is held in `req_url` before the stages below run page code that
            could move the document base URL. A Request input contributes its parsed URL (step 6). A concolic
            has no bytes to parse yet; fetch_park reads its shape. */
+        /* An address composed out of unknown input is grounded on its example where it has one: the example is
+           the address the page computes from what this session observed, so it is step 5's input for that
+           session. An example that does not parse grounds nothing and the address stays unknown, rather than
+           throwing step 5's TypeError for every world the unknown admits. fetch_park reads the outcome off
+           `req_url`: a string beside a concolic `url` is a grounded address. */
+        if (!request_is(s->input) && concolic_is(s->url)) {
+            JSValue ex = concolic_example(ctx, s->url);
+
+            if (JS_IsString(ex)) {
+                UrlRecord parsed;
+                size_t n = 0;
+                const char *in = JS_ToCStringLen(ctx, &n, ex);
+
+                CHECK(in != NULL, "OOM reading an address's example for Fetch §5.4 step 5");
+                url_record_init(&parsed);
+                if (fetch_parse_url(ctx, &parsed, in, n) &&
+                    !(parsed.username && *parsed.username) && !(parsed.password && *parsed.password)) {
+                    char *ser = url_serialize(&parsed, /*exclude_fragment*/ false);
+                    JSValue v;
+
+                    CHECK(ser != NULL, "OOM serializing an address's example for Fetch §5.4 step 5");
+                    v = JS_NewString(ctx, ser);
+                    free(ser);
+                    CHECK(!JS_IsException(v), "OOM holding an address's example for Fetch §5.4 step 5");
+                    JS_FreeValue(ctx, s->req_url);
+                    s->req_url = v;
+                }
+                url_record_free(&parsed);
+                JS_FreeCString(ctx, in);
+            }
+            JS_FreeValue(ctx, ex);
+        }
         if (!request_is(s->input) && !concolic_is(s->url)) {
             UrlRecord parsed;
             size_t n = 0;

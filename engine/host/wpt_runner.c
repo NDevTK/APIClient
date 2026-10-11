@@ -1562,6 +1562,8 @@ static int wpt_issue_pending(void)
         /* …AND THE REFERRER PAIR, the rest of the key, carried back for the mode's reason. */
         req.referrer_policy = referrer_policy;
         req.referrer = referrer;
+        /* a listed line's URL is bytes: the engine's join lists no other address class */
+        req.address = FETCH_ADDRESS_CONCRETE;
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;

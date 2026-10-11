@@ -1085,6 +1085,8 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
            element's referrerpolicy attribute". */
         req.referrer = "client";
         req.referrer_policy = referrer_policy_attribute_keyword(el);
+        /* resolved from a source string; an undecided source records its shape and parks nothing */
+        req.address = FETCH_ADDRESS_CONCRETE;
         req.headers = NULL;
         req.body = NULL;
         req.body_len = 0;

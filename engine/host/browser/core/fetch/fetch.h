@@ -154,6 +154,22 @@ char *fetch_referrer_for_wire(JSContext *ctx, const char *referrer);
    string, then set request's referrer policy to request's policy container's referrer policy", with this
    realm's Document's container. BORROWED from the request or the container. */
 const char *fetch_referrer_policy_for_wire(JSContext *ctx, const char *policy);
+/* WHETHER A REQUEST'S URL IS BYTES IT MAY BE SENT TO. Fetch §2.2.5 "Requests" gives every request a URL, and a
+   URL is bytes; an address composed out of a value this run holds no bytes for has a display shape
+   (`/api/{location.hash}`), which is this engine's annotation and never a URL. CONCRETE: the page's code
+   computed the bytes. EXAMPLE: the address holds an unknown and the bytes are the address the page computes
+   from that unknown's example, which is what a session with that input sends. UNKNOWN: no bytes exist, so the
+   request is not fetchable, and the engine declines it before any host is asked (solver/engine.c's
+   pending_park_request). `_UNPLACED` is the zero, as for the modes above, so a producer that states nothing is
+   refused rather than read as concrete. */
+typedef enum {
+    FETCH_ADDRESS_UNPLACED = 0,
+    FETCH_ADDRESS_CONCRETE,
+    FETCH_ADDRESS_EXAMPLE,
+    FETCH_ADDRESS_UNKNOWN,
+} FetchAddressClass;
+/* The one spelling of the three placed words; fatal on `_UNPLACED`. */
+const char *fetch_address_token(FetchAddressClass a);
 
 typedef struct {
     const char   *method;
@@ -243,6 +259,12 @@ typedef struct {
     /* Fetch §2.2.5's referrer policy, a Referrer Policy §3 referrer policy, the empty string where the creating
        algorithm states none (§4.1 "Main fetch" then takes the policy container's). BORROWED. */
     const char *referrer_policy;
+    /* Whether `url` is bytes this request may be sent to (FetchAddressClass above), stated by the producer that
+       holds the address value: fetch() and XHR from the value the page passed, every other producer CONCRETE
+       because it parks only addresses it resolved from strings (an element whose address is unknown input
+       records the shape on the @H surface and fetches nothing). Last, so the positional initializers in
+       solver/engine.c leave it at `_UNPLACED` and must state it. */
+    FetchAddressClass address;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to

@@ -161,6 +161,9 @@ METRIC(host_terminated, "hostTerminated", LIFETIME, "rendezvous", PROCESS, "solv
 METRIC(reply_asked, "replyAsked", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_answered, "replyAnswered", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_declined, "replyDeclined", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
+/* …and the requests the engine itself declined for an address with no bytes (solver/engine.h's
+   PENDING_DECLINED_UNADDRESSED), on the pending lines and the synchronous rendezvous alike. */
+METRIC(reply_unaddressed, "replyUnaddressed", LIFETIME, "record", PROCESS, "solver/engine.c", INT)
 METRIC(reply_dropped, "replyDropped", LIFETIME, "record", PROCESS, "solver/pending_index.c", INT)
 METRIC(reply_outstanding, "replyOutstanding", GAUGE, "record", AGENT, "solver/pending_index.c", INT)
 METRIC(paged_reqs, "pagedReqs", LIFETIME, "request", PROCESS, "solver/engine.c", INT)
