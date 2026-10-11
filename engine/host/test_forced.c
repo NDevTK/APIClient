@@ -27146,6 +27146,11 @@ static void abi_host_declined(unsigned id, const char *reason, int matched)
    negative and this value cannot collide with one. */
 #define ABI_PAY_CHANNEL_ENDED (-1)
 
+/* The bytes of every document a `join` record added, which qjs_join keeps for the agent's life; freed after
+   qjs_teardown with the root's. */
+static char **g_abi_joined;
+static int    g_abi_joined_n;
+
 static int abi_pay(void)
 {
     int paid = 0;
@@ -27293,6 +27298,52 @@ static int abi_pay(void)
                 free(json);
                 free(body);
             }
+            paid++;
+        } else if (!strcmp(verb, "join")) {
+            /* A second document of this instance's origin-keyed agent cluster (SECURITY.md: one instance per
+               cluster), which the zone routes here instead of provisioning a peer. The record is the
+               `document` record's first fifteen fields in qjs_join's parameter order; there is no peer
+               reference field, because the zone joins only into an instance already referenced. qjs_join
+               keeps the document bytes for the agent's life (mojom.js's `retained`), so they are this host's
+               until the teardown; every other field is copied inside the entry. */
+            const char *jurl = abi_take(&p, "address");
+            const char *jdoc = abi_take(&p, "document name");
+            size_t jh_n = 0, jb_n = 0, jc_n = 0;
+            char *jheaders = abi_bytes(abi_take(&p, "response header block"), &jh_n, "response header block");
+            char *jhtml = abi_bytes(abi_take(&p, "document bytes"), &jb_n, "document bytes");
+            const char *jtlu = abi_take(&p, "top-level creation URL");
+            char *jcsp = abi_bytes(abi_take(&p, "inherited CSP list"), &jc_n, "inherited CSP list");
+            const char *jcsp_self = abi_take(&p, "inherited CSP self-origin");
+            const char *jcoep = abi_take(&p, "inherited embedder policy");
+            const char *jcoep_ep = abi_take(&p, "inherited embedder policy reporting endpoint");
+            const char *jcoep_ro = abi_take(&p, "inherited embedder policy report-only value");
+            const char *jcoep_ro_ep = abi_take(&p, "inherited embedder policy report-only endpoint");
+            const char *jparent = abi_take(&p, "parent navigable");
+            const char *jcontainer = abi_take(&p, "container permissions policy");
+            const char *jancestors = abi_take(&p, "ancestor origins");
+            const char *jsandbox = abi_take(&p, "creation sandboxing flags");
+            char **grown;
+            int jr;
+
+            CHECKF(p == NULL, "a join record carries a field after its last. trailing=[%s]", p ? p : "");
+            DCHECK(jh_n == strlen(jheaders) && jc_n == strlen(jcsp),
+                   "a joined document's header block or inherited CSP list carries a NUL — both reach the ABI "
+                   "as C strings, so every field past that byte is one this engine would never be shown");
+            DCHECK(jb_n <= (size_t)UINT_MAX,
+                   "a joined document is longer than the ABI's length parameter can name — the instance would "
+                   "parse a prefix of it");
+            DCHECK(qjs_referenced(),
+                   "a document was joined into an instance no peer references — the zone joins a create "
+                   "notice's child, which a peer holds a WindowProxy for, so this frontier may not drain");
+            jr = qjs_join(jhtml, (unsigned)jb_n, jurl, jdoc, jheaders, jtlu, jcsp, jcsp_self, jcoep, jcoep_ep,
+                          jcoep_ro, jcoep_ro_ep, jparent, jcontainer, jancestors, jsandbox);
+            DCHECK(jr == 0, "qjs_join refused the document this zone routed here");
+            free(jheaders);
+            free(jcsp);
+            grown = realloc(g_abi_joined, (size_t)(g_abi_joined_n + 1) * sizeof *grown);
+            CHECK(grown != NULL, "OOM keeping a joined document's bytes for the agent's life");
+            g_abi_joined = grown;
+            g_abi_joined[g_abi_joined_n++] = jhtml;
             paid++;
         } else if (!strcmp(verb, "route")) {
             /* A CROSS-DOCUMENT MESSAGE, ARRIVING — the record VERBATIM as the sending instance wrote it, and
@@ -28509,6 +28560,10 @@ static int abi_main(int argc, char **argv)
        this is the first moment nothing can read them. `rec` goes with it because the address and the name are
        slices of it and this entry never copied them. */
     free(html);
+    for (int j = 0; j < g_abi_joined_n; j++) free(g_abi_joined[j]);
+    free(g_abi_joined);
+    g_abi_joined = NULL;
+    g_abi_joined_n = 0;
     free(rec);
     /* THE CHANNEL'S OWN TWO ALLOCATIONS. Neither is in the runtime's heap, so the gc walk in JS_FreeRuntime
        cannot see either and only this line can. */
