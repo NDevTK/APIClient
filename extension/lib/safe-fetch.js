@@ -1376,9 +1376,9 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    Send-panel record (safeFetchStatedShape), whose Origin and Referer replace the identity's on every rule of
    the send. A request with no identity runs `send` as this extension, uncredentialed.
    Named residual. Not covered: a credentialed send's reply Set-Cookie, which the identity's own request would
-   store in its jar and this send stores nowhere. Next diff stores it there through webRequest's
-   onHeadersReceived, which reports the offscreen document's replies under a permission this extension does
-   not hold. Its absence
+   store in its jar and this send stores nowhere. Next diff stores it there from a send made in a context
+   whose replies webRequest reports, which this cross-origin isolated document is not (SECURITY.md). Its
+   absence
    shows as a server that rotates a token on a tool-sent credentialed request leaving the person's next own
    request presenting the retired value. */
 async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
@@ -1818,10 +1818,10 @@ async function safeFetch(url, opts) {
      Fetch §4.5 "HTTP-redirect fetch" and HTML §7.4.5 send with the request's destination, mode and referrer
      policy, and a Referer and Cookie recomputed for the new URL. This document cannot read a redirect's
      Location or headers (`redirect: "manual"` answers an opaqueredirect with none), so a speak-as rule cannot
-     name the hop and it goes out as this extension, uncredentialed. Next diff follows each hop in the zone: a
-     per-send declarativeNetRequest block on the 3xx and webRequest's Location, under a permission this
-     extension does not hold (SECURITY.md). Its absence shows as a redirected document loaded logged out, its
-     hop sent `Sec-Fetch-Mode: cors` with no Referer. */
+     name the hop and it goes out as this extension, uncredentialed. Next diff follows each hop in the zone
+     (redirect "manual" and the 3xx's Location from webRequest), which needs the sends made from a context
+     webRequest observes: it reports none of this cross-origin isolated document's (SECURITY.md). Its absence
+     shows as a redirected document loaded logged out, its hop sent `Sec-Fetch-Mode: cors` with no Referer. */
   var init = { method: _method, credentials: "omit", redirect: "follow" };
   /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
      for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
