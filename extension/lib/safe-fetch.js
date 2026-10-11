@@ -1409,7 +1409,11 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    (`credentialed`); otherwise it carries none. The zone's own fetch omits credentials, so this extension's
    jar adds nothing and a reply's Set-Cookie is not stored. `stated` is null, or the operator tier's
    Send-panel record (safeFetchStatedShape), whose Origin and Referer replace the identity's on every rule of
-   the send. A request with no identity runs `send` as this extension. */
+   the send. A request with no identity runs `send` as this extension, uncredentialed.
+   Named residual. Not covered: a reply's Set-Cookie, which the frame's own request would store in its jar and
+   this send stores nowhere. Next diff reads it (webRequest onHeadersReceived, extraHeaders) and writes it into
+   the identity's partition with chrome.cookies.set. Its absence shows as a server that replaces a cookie on a
+   zone send finding the person's browser still presenting the value it replaced. */
 async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
   if (!identity) return send();
   CHECK(typeof withSpeakAsRules === "function",
@@ -1715,6 +1719,12 @@ async function safeFetch(url, opts) {
   /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
      cookie-bearing request. */
   var credentialed = _credentialedOf(opts);
+  /* A credentialed request speaks as a document: `_speakAs` sets that document's Cookie and the zone's fetch
+     omits credentials. One with no identity would go out with this extension's own jar, whose partition is
+     the extension's, and its reply's Set-Cookie would be stored there and in the person's jar. */
+  CHECK(!credentialed || (!!opts.identity && typeof opts.identity === "object"),
+        "safeFetch was asked for a credentialed request with no identity to speak as — it would send this " +
+        "extension's jar and store the reply's cookies where no page of the person's set them");
   var mode = _modeOf(opts);
   /* The request's origin for everything the analysed page's own code asks for: the browser-stated
      `MessageSender.origin` of the document (or the agent-cluster origin this zone assigned an instance), passed
@@ -1854,11 +1864,11 @@ async function safeFetch(url, opts) {
         "the request identity's origin (" + (opts.identity && opts.identity.origin) + ") is not the page origin " +
         "this zone judges the reply against (" + _pageOrigin + ") — two zone records of one request disagree, " +
         "and the preflight and the reply would be CORS-checked as two different requesters");
-  var init = { method: _method, credentials: credentialed ? "include" : "omit", redirect: "follow" };
+  var init = { method: _method, credentials: "omit", redirect: "follow" };
   /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
      for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
      and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds auth headers; cookies,
-     in credentialed mode, are the browser's own and are gated by the SOP/CORS check below. */
+     in credentialed mode, are the identity's (`_speakAs`) and are gated by the SOP/CORS check below. */
   if (opts.headers) init.headers = opts.headers;
   if (opts.signal) init.signal = opts.signal;
   /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one unit. A request with an

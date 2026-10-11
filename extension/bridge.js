@@ -1432,7 +1432,11 @@ async function frontierRederive(e) {
                                                   actor: "tool", driven: "unstated",
                                                   pinned: "unstated",
                                                   credentials: "include",
-                                                  credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
+                                                  credentialed: navigationCarriesSession(e.sourceUrl, e.origin),
+                                                  /* A parked document is one only this zone holds. */
+                                                  identity: navigationCarriesSession(e.sourceUrl, e.origin)
+                                                    ? navigationIdentity(engineIdentity(e.origin, e.sourceUrl),
+                                                                         e.origin, e.sourceUrl) : null }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
   const landed = r && Array.isArray(r.urlList) && r.urlList.length ? r.urlList[r.urlList.length - 1] : null;
@@ -1778,6 +1782,15 @@ function responseFieldLines(h) {
    them. Next diff builds a document load type in safe-fetch.js whose read principal is the response's own
    origin (the bytes go to a different instance, not the initiator). Absence shows as cross-origin child
    documents loading in their logged-out form. */
+/* Who a load made for the document `msg` describes speaks as, as navigationLoad's `speakerOf`: the browser's
+   frame (frameIdentity, by the document's id and its tab, which is its group) when the browser holds that
+   document, and engineIdentity for one only this zone holds (a route seed, a peer-announced child, a
+   rehydrated recipe). Resolves null when the browser's document has gone. */
+function documentSpeaker(msg) {
+  return async () => typeof msg.documentId === "string" && typeof msg.groupId === "number"
+    ? frameIdentity(msg.groupId, msg.documentId) : engineIdentity(msg.origin, msg.sourceUrl);
+}
+
 function navigationCarriesSession(absUrl, principalOrigin) {
   DCHECK(typeof principalOrigin === "string",
          "a document load was asked whether it carries the session with no principal stated at all — every " +
@@ -1785,6 +1798,23 @@ function navigationCarriesSession(absUrl, principalOrigin) {
          "the URL this zone fetched for a peer's child, the parked one for a cold recipe), so `undefined` " +
          "here is a producer that stopped writing the field rather than a document with no session");
   return _isRealOrigin(principalOrigin) && originOf(absUrl) === principalOrigin;
+}
+
+/* The facts a credentialed document load of `absUrl` speaks with as `speaker`: HTML §7.4.5's request, credentials
+   mode `include` and mode `navigate`, its Cookie by lib/request-identity.js's rules for `speaker`'s jar.
+   Named residual. Not covered: the navigation's referrer (its initiator's URL) and a child navigable's
+   destination; the load states no referrer and destination `document`. Next diff carries the initiator's
+   URL and the navigable's kind on the load. Absence shows as a zone document load with no Referer, and
+   Sec-Fetch-Dest `document`, where the browser's own load of that frame sent its embedder's URL and `iframe`. */
+function navigationIdentity(speaker, principalOrigin, absUrl) {
+  DCHECK(!!speaker && typeof speaker.origin === "string" && !!speaker.partitionKey,
+         "a credentialed document load was handed no identity to speak as");
+  DCHECK(speaker.origin === principalOrigin,
+         "a document load speaks as " + speaker.origin + " for the principal " + principalOrigin + " — the " +
+         "session it carries would be another document's");
+  return identityFor(speaker, { url: absUrl, requestInit: { credentials: "include", mode: "navigate",
+                                                            referrer: "", referrerPolicy: null } },
+                     "strict-origin-when-cross-origin");
 }
 
 /* ─── The one document-load path ────────────────────────────────────────────────────────────────────
@@ -1817,8 +1847,10 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    The test is written in the positive (`!== "rendezvous" && !== "report"`), so an unstated or misspelled word
    refuses by construction. */
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
+/* `speakerOf` resolves the identity whose session a load the browser would credential carries
+   (documentSpeaker's), or null when it has none, which loads without the session. */
 async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
-                              actor, driven) {
+                              actor, driven, speakerOf) {
   /* `refusalArm` is required; an unstated word takes the refusing arm, exactly as `none` does. */
   DCHECK(DOC_REFUSAL_ARMS.indexOf(refusalArm) >= 0,
          "a §7.4 navigation was loaded stating the refusal arm " + JSON.stringify(refusalArm) + ", which " +
@@ -1874,6 +1906,9 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      hosts at the line that opens the socket. At an unconfigured origin a derived navigation is refused like a
      forced one (the default fires program loads only), and the person widens the origin to permit it. A
      refusal comes back as the chokepoint's `blocked-signal:` reply record. */
+  const speaker = navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
+  const credentialed = speaker !== null;
+  const identity = credentialed ? navigationIdentity(speaker, principalOrigin, abs) : null;
   try {
     // Never `as: "script"`: these bytes are parsed as a document, not run as code.
     /* The session is carried where a browser's navigation would carry it; the chokepoint re-decides on the
@@ -1903,8 +1938,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
                                              (`destination=navigation`, `actor=page`, `provenance=derived`),
                                              so the witness mark carries no decision here. */
                                           pinned: "unstated",
-                                          credentials: "include",
-                                          credentialed: navigationCarriesSession(abs, principalOrigin) });
+                                          credentials: "include", credentialed, identity });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
            "\"Populating a session history entry\"'s attempt-to-populate reads the BODY and the POLICY off " +
@@ -2611,7 +2645,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
-                                   refusalArm, /*actor*/"page", driven);
+                                   refusalArm, /*actor*/"page", driven, documentSpeaker(msg));
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
     DCHECK(refusalArm === "rendezvous" || r.declined === null,
@@ -5020,7 +5054,9 @@ const _hostOps = {
                                            /* `page`: HTML §7.4.4's steps ran in the analysed document, so
                                               its own code composed the address; the declaration's drive
                                               mark says whether a drive of uncalled code ran them. */
-                                           /*actor*/"page", seed.driven));
+                                           /*actor*/"page", seed.driven,
+                                           /* A declared route is a document only this zone holds. */
+                                           async () => engineIdentity(seed.principalOrigin, seed.principalUrl)));
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -5570,7 +5606,7 @@ self.astDispatch = async function astDispatch(msg) {
                                            scoped to `provenance !== "observed"` and the observed/observed
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
-                                        /*actor*/"tool", /*driven*/"unstated");
+                                        /*actor*/"tool", /*driven*/"unstated", documentSpeaker(msg));
     /* The seed's own rule on top of the loader's: an OK empty body is an ordinary empty Document (HTML §7.4.5),
        but a seeded document with no bytes cannot be the program this run explores, and analysing it would read
        as a clean page. */

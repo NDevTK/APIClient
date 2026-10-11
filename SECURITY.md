@@ -251,12 +251,16 @@ The trusted zone can make its own fetch carry the request headers a document of 
 send. An identity is a document: its origin and URL, and its cookie partition key. A frame's identity
 comes from browser-stamped facts (`webNavigation`'s record and `cookies.getPartitionKey`, by
 `documentId`). An engine instance's identity is the cluster origin the zone assigned and the URL it loaded.
-Two callers speak as a document:
+Three callers speak as a document:
 - every page request `bridge.js` or `engine/trusted.mjs` hands `safeFetch` (`pageRequestIdentity`). These
   are uncredentialed under the egress default, so they carry the identity's Origin, Referer and
   `Sec-Fetch-*` and no cookies;
+- every credentialed document load `bridge.js` makes (`navigationIdentity`): a live document's seed speaks
+  as its browser frame (`frameIdentity`), and a document only the zone holds as its `engineIdentity`;
 - every operator send (above).
-Neither a message nor the engine can state an identity.
+Neither a message nor the engine can state an identity. `safeFetch` `CHECK`s that a credentialed request
+has one, and the zone's own fetch always omits credentials: the extension's jar, whose partition is the
+extension's, is never sent, and a reply's `Set-Cookie` is stored nowhere.
 - `lib/request-identity.js` and `lib/speak-as.js` compute the headers:
   - `Origin` by Fetch §3.2 "append a request `Origin` header";
   - `Referer` by Fetch §5.4's referrer rule, so a referrer not same-origin with the identity is "client",
