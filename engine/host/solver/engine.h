@@ -322,19 +322,21 @@ void engine_set_referenced(int referenced);
 /* The flag above, for the ABI's readers. It is the one copy. */
 int  engine_referenced(void);
 
-/* How the instance's root document was reached, as one of solver/pending.h's PROV_*, stated by the host that
-   provisioned it: the trusted zone's reach grade for the navigation that produced it, or `observed` for a
-   document a person named. A document reached past a forced gate in its creating instance is itself evidence
-   only that gate produced, so every timeline of it starts `forced` (flow.h's path_forced): engine_sched_begin's
-   seed hook marks each root flow before its seed parks anything. Required before the first session (asserted
-   there), stated once per instance and never changed (asserted), and it survives session boundaries, since a
-   cold-resumed residue is the same arrival.
-   Named residual. Not covered: the arrival's witness mark (flow.h's path_pinned), which is independent of the
-   grade. Next diff: the provisioning records carry the navigation's witness mark (the create notice's field
-   after the drive mark, the swap and navigate records' sixth field), this call and engine_join_document take
-   it beside the grade, and the seed marks path_pinned. Absence shows as: the requests of a document reached by
-   a navigation whose address rested on a pin stating the witness mark `unpinned`. */
-void engine_set_arrival(int prov);
+/* How a document was reached, stated by the host that provisioned it: the trusted zone's reach grade for the
+   navigation that produced it (solver/pending.h's PROV_*, `observed` for a document a person named), whether
+   that navigation was a drive of this tool's (`driven`), and whether its address rested on a pin (`pinned`).
+   Each creating world names its own navigable, so each arrival is one document's. A document reached past a
+   forced gate is evidence only that gate produced, so its timelines start with the navigation's marks
+   (flow.h's flow_mark_arrival): forced, pinned and driven carry into every request they make. */
+typedef struct { int prov, driven, pinned; } EngineArrival;
+/* The root document's arrival. engine_sched_begin's seed hook marks each root flow before its seed parks
+   anything. Required before the first session (asserted there), stated once per instance and never changed
+   (asserted), and it survives session boundaries, since a cold-resumed residue is the same arrival. */
+void engine_set_arrival(EngineArrival a);
+/* The wire spelling of an arrival, `<provenance>,<drive mark>,<witness mark>` in engine.h's PENDING_* words
+   (none holds a comma), parsed for a host stating one (qjs_set_arrival, qjs_join). Anything else is fatal
+   (CHECK): the release arm would grade a forced document's timelines as the page's own. */
+EngineArrival engine_arrival_of_token(const char *token);
 
 /* Install how the host pays what it owes, for the one-call driver (engine_run), which has no caller to return a
    stall to. The provider fills what engine_pending_fetches and engine_host_requests name and answers how many
@@ -396,10 +398,10 @@ void engine_sched_end(void);
  * document order, copied, because the host read them once and nothing owns them past this call. `sched[i]` is
  * entry i's §4.12.1.1 schedule (required, asserted). `els[i]` is entry i's `script` element, borrowed, because
  * it names a node of the handed-over tree, which outlives the rows. `arrival` is how this document was reached
- * (engine_set_arrival's vocabulary), so a document reached past a forced gate has a `forced` boot flow. */
+ * (engine_set_arrival), so its boot flow carries that navigation's marks. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
-                          int n, int arrival);
+                          int n, EngineArrival arrival);
 /* Request the RAM-to-disk park. The host sees the pressure; the engine takes it at the next step boundary with
    no flow switched in, writes the park document (cold_park_json, published in the result) and answers
    ENGINE_STEP_DONE, and the flows' memory goes with the instance the host then tears down. Nothing is dropped:
@@ -709,8 +711,8 @@ int engine_prov_of_running_path(void);
  * vocabulary; a second mapping could drift toward the stronger word. An unknown value is fatal (CHECK), since
  * a release fall-through would print garbage. */
 const char *engine_provenance_token(int prov);
-/* The inverse, for a host stating a grade it was handed on the wire (qjs_set_arrival, qjs_join). A word outside
- * the three is fatal (CHECK): the release arm would grade a forced document's timelines as the page's own. */
+/* The inverse, for a host stating a grade it was handed on the wire (engine_arrival_of_token's first word). A
+ * word outside the three is fatal (CHECK): the release arm would grade a forced document as the page's own. */
 int engine_provenance_of_token(const char *token);
 
 /* The witness mark (`PENDING_PINNED_*`) for a request built by running the page's code, read off the running

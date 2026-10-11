@@ -681,7 +681,7 @@ try {
   /* THE EMPTY STRING IS A FRESH FRONTIER, which the mojom declares is a different thing from a resumed one
      that happened to hold nothing. This gate has no residue to replay. */
   /* A document this driver names, as a person names a seed (solver/engine.h's engine_set_arrival). */
-  await opener.renderer.setArrival({ provenance: 'observed' });
+  await opener.renderer.setArrival({ arrival: 'observed,undriven,unpinned' });
   await opener.renderer.begin({ recipes: '' });
   let create = null, steps = 0, drained = false;
   while (create === null) {

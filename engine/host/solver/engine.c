@@ -4721,6 +4721,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* Being a driven orphan travels: an arm of an orphan drive is that drive continued, no more reproducible from
        a decision vector than its parent, so the cold tier must refuse it too. */
     sib->orphan = parent->orphan;
+    /* And a timeline of a document a drive navigated to is that drive's act on every arm. */
+    sib->arrival_driven = parent->arrival_driven;
     /* The name of the function it drives travels by the same sentence: the arm's recipe must say which body to
        re-take, and the park asserts a drive has a name. */
     sib->orphan_hash = parent->orphan_hash;
@@ -6125,16 +6127,58 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
 /* The root document's seeding: a fresh timeline of this instance's document. It is the seed hook flow_add asks
    (solver/flow.h), so the boot flow, every cold-resumed replay and every @S candidate session get one sequence by
    construction. */
-/* How the root document was reached (engine.h's engine_set_arrival); -1 until a host states it. */
-static int g_arrival = -1;
+/* How the root document was reached (engine.h's engine_set_arrival); `prov` is -1 until a host states it. */
+static EngineArrival g_arrival = { -1, 0, 0 };
 
-void engine_set_arrival(int prov) {
-    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
-            "a document's arrival was stated as %d, which is none of solver/pending.h's three grades", prov);
-    DCHECKF(g_arrival == -1 || g_arrival == prov,
-            "this instance's arrival was restated from %d to %d — it is a fact about the navigation that "
-            "provisioned the instance, and one instance has one", g_arrival, prov);
-    g_arrival = prov;
+/* The marks a timeline of a document reached by `a` starts with. */
+static FlowArrival arrival_marks(EngineArrival a) {
+    FlowArrival m = { a.prov == PROV_FORCED, a.pinned, a.driven };
+    return m;
+}
+
+static void arrival_check(EngineArrival a, const char *what) {
+    DCHECKF((a.prov == PROV_OBSERVED || a.prov == PROV_DERIVED || a.prov == PROV_FORCED) &&
+            (a.driven == 0 || a.driven == 1) && (a.pinned == 0 || a.pinned == 1),
+            "%s was stated with the grade %d, drive mark %d and witness mark %d — engine_arrival_of_token "
+            "composes the three from their words", what, a.prov, a.driven, a.pinned);
+    /* A person names a document by no fork and no drive, so `observed` carries neither mark. */
+    DCHECKF(a.prov != PROV_OBSERVED || (!a.driven && !a.pinned),
+            "%s was stated `observed` with a drive or witness mark — an observed document is one a person named, "
+            "which no drive navigated to and no pin addressed", what);
+}
+
+EngineArrival engine_arrival_of_token(const char *token)
+{
+    EngineArrival a;
+    const char *c1, *c2;
+    char prov[16];
+
+    CHECK(token != NULL, "engine: a host stated an arrival and handed no word");
+    c1 = strchr(token, ',');
+    c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+    CHECKF(c1 != NULL && c2 != NULL && strchr(c2 + 1, ',') == NULL && (size_t)(c1 - token) < sizeof prov,
+           "engine: a host stated the arrival `%s`, which is not `<provenance>,<drive mark>,<witness mark>`", token);
+    memcpy(prov, token, (size_t)(c1 - token));
+    prov[c1 - token] = 0;
+    a.prov = engine_provenance_of_token(prov);
+    CHECKF((c2 - c1 - 1 == (ptrdiff_t)strlen(PENDING_DRIVEN_YES) && !strncmp(c1 + 1, PENDING_DRIVEN_YES, c2 - c1 - 1)) ||
+           (c2 - c1 - 1 == (ptrdiff_t)strlen(PENDING_DRIVEN_NO) && !strncmp(c1 + 1, PENDING_DRIVEN_NO, c2 - c1 - 1)),
+           "engine: the arrival `%s` states a drive mark that is neither word engine.h spells", token);
+    a.driven = c2 - c1 - 1 == (ptrdiff_t)strlen(PENDING_DRIVEN_YES) && !strncmp(c1 + 1, PENDING_DRIVEN_YES, c2 - c1 - 1);
+    CHECKF(!strcmp(c2 + 1, PENDING_PINNED_YES) || !strcmp(c2 + 1, PENDING_PINNED_NO),
+           "engine: the arrival `%s` states a witness mark that is neither word engine.h spells", token);
+    a.pinned = !strcmp(c2 + 1, PENDING_PINNED_YES);
+    return a;
+}
+
+void engine_set_arrival(EngineArrival a) {
+    arrival_check(a, "the instance's document arrival");
+    DCHECKF(g_arrival.prov == -1 ||
+            (g_arrival.prov == a.prov && g_arrival.driven == a.driven && g_arrival.pinned == a.pinned),
+            "this instance's arrival was restated from (%d,%d,%d) to (%d,%d,%d) — it is a fact about the "
+            "navigation that provisioned the instance, and one instance has one",
+            g_arrival.prov, g_arrival.driven, g_arrival.pinned, a.prov, a.driven, a.pinned);
+    g_arrival = a;
 }
 
 /* Every fresh timeline of the root document comes through here (flow.c's flow_seed), so a document reached past
@@ -6143,7 +6187,7 @@ void engine_set_arrival(int prov) {
 static void engine_seed_root_flow(Flow *f) {
     DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the table "
                         "exists only while a session is open");
-    if (g_arrival == PROV_FORCED) flow_mark_arrival_forced(f);
+    flow_mark_arrival(f, arrival_marks(g_arrival));
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
 }
 
@@ -9649,7 +9693,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                         const ScriptSchedule *sched, lxb_dom_element_t **els, int n, int forking,
                         const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
-    DCHECK(g_arrival != -1,
+    DCHECK(g_arrival.prov != -1,
            "a session began on an instance whose host never stated how its document was reached — every "
            "timeline's grade starts from it, so call engine_set_arrival (the ABI's qjs_set_arrival) first, with "
            "the trusted zone's reach grade or `observed` for a document a person named");
@@ -9862,13 +9906,12 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
  * refusals included. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
-                          int n, int arrival) {
+                          int n, EngineArrival arrival) {
     Flow *f;
     RootScript *rows;
     int i, rown = 0;
 
-    DCHECKF(arrival == PROV_OBSERVED || arrival == PROV_DERIVED || arrival == PROV_FORCED,
-            "a document was joined with the arrival grade %d, which is none of solver/pending.h's three", arrival);
+    arrival_check(arrival, "a joined document's arrival");
     DCHECK(g_sess_live, "a document was joined to an instance with no live session");
     DCHECK(cctx != NULL, "a document was joined with no realm to compile its programs in");
     DCHECK(doc != 0, "a document was joined naming no document (the world registry's NONE)");
@@ -9885,7 +9928,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
        world of its own because it stands on no other flow's decisions. Every timeline this document has is a fork
        of it, as every timeline of the root is a fork of engine_sched_begin's flow. */
     f = flow_add_unseeded(g_sess_ctx, JS_UNDEFINED, WORLD_NONE);
-    if (arrival == PROV_FORCED) flow_mark_arrival_forced(f);
+    flow_mark_arrival(f, arrival_marks(arrival));
     /* The same table shape as the root document's seed, built here because §4.12.1.1's encoding-parse belongs to
        this document: §8.1.3.2 "Environment settings objects"' API base URL is the joined document's, so
        `<script src=app.js>` in a document at `/app/child.html` is `/app/app.js`. `cctx`, the joined document's

@@ -1049,15 +1049,19 @@ void flow_mark_forced_arm(void) {
     g_running->path_forced = 1;
 }
 
-void flow_mark_arrival_forced(Flow *f) {
+void flow_mark_arrival(Flow *f, FlowArrival a) {
     DCHECK(f != NULL && f != g_running,
-           "a document's arrival grade was written onto the running flow or onto none — it is a fact about a "
+           "a document's arrival marks were written onto the running flow or onto none — they are a fact about a "
            "timeline being minted, and flow_mark_forced_arm is the writer for the running one");
     DCHECKF(f->dyn_n == 0,
-            "a document's arrival grade was written onto a flow already holding %d program row(s) — the seed "
-            "parks those rows' requests off this bit, so marking after it grades them as the page's own",
+            "a document's arrival marks were written onto a flow already holding %d program row(s) — the seed "
+            "parks those rows' requests off these bits, so marking after it grades them as the page's own",
             f->dyn_n);
-    f->path_forced = 1;
+    DCHECK((a.forced == 0 || a.forced == 1) && (a.pinned == 0 || a.pinned == 1) && (a.driven == 0 || a.driven == 1),
+           "a document's arrival marks are not three bits — engine.c composes them from the host's three words");
+    f->path_forced |= a.forced;
+    f->path_pinned |= a.pinned;
+    f->arrival_driven |= a.driven;
 }
 
 int flow_path_driven(const Flow *f) {
@@ -1067,7 +1071,9 @@ int flow_path_driven(const Flow *f) {
            "fork copies it, so any other value is memory this field does not own");
     DCHECK(!f->cand_src || (f->cand_payload && !f->cand_sink != !f->cand_vfy),
            "a candidate session is missing its payload or names neither or both of a sink and a witness key");
-    return f->orphan || f->cand_src != NULL;
+    DCHECK(f->arrival_driven == 0 || f->arrival_driven == 1,
+           "a flow's arrival drive mark is neither set nor clear — flow_mark_arrival writes it as a bit");
+    return f->orphan || f->cand_src != NULL || f->arrival_driven;
 }
 
 FlowPathMarks flow_path_marks(const Flow *f) {

@@ -388,7 +388,7 @@ async function drive(opts) {
   M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
   /* NO RESIDUE, STATED — `qjs_begin`'s argument is the parked frontier a previous session left. */
   /* A document this driver names, as a person names a seed (solver/engine.h's engine_set_arrival). */
-  M.ccall('qjs_set_arrival', null, ['number'], [cs('observed')]);
+  M.ccall('qjs_set_arrival', null, ['number'], [cs('observed,undriven,unpinned')]);
   M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
   /* AFTER `qjs_begin` AND NOT BEFORE, because the frontier is SEEDED by that call: asked earlier there is no
      member to mark. ONE ask, standing, for the whole run — test_forced.c measured that no cadence a host can

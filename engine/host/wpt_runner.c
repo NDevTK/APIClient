@@ -1679,13 +1679,13 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            "Ancestor origins"' internal ancestor origin objects list, computed here because a serialization drops
            the origin record (§7.1.1 decides an opaque origin by identity). 14 is HTML §7.1.5 "Sandboxing"'s
            creation sandboxing flag set, comma-separated because its flag names contain spaces. 15 is the
-           navigation's provenance (`observed`/`derived`/`forced`), handed to the child as its arrival grade
-           (solver/engine.h's engine_set_arrival); this runner decides no fetch from it, since it fetches only
-           from wptserve with no cookie jar. 16 is the browsing context group, 17 the drive mark, 18 the witness
-           mark, 19 HTML §7.2.2.4 "Accessing related windows"' opener in the parent's grammar (`N` for none). The
-           CSP policy is field 20, the remainder, because none of the earlier fields can contain a tab and a raw
-           CSP header can. The token asserts on 15 to 18 are the index check: a field inserted before the policy
-           shifts them and fires here, where the count check alone would hand the policy a token. */
+           navigation's provenance (`observed`/`derived`/`forced`), which with 17 and 18 is handed to the child as
+           its arrival (solver/engine.h's engine_set_arrival); this runner decides no fetch from them, since it
+           fetches only from wptserve with no cookie jar. 16 is the browsing context group, 17 the drive mark, 18
+           the witness mark, 19 HTML §7.2.2.4 "Accessing related windows"' opener in the parent's grammar (`N` for
+           none). The CSP policy is field 20, the remainder, because none of the earlier fields can contain a tab
+           and a raw CSP header can. The token asserts on 15 to 18 are the index check: a field inserted before
+           the policy shifts them and fires here, where the count check alone would hand the policy a token. */
         DCHECK(!strcmp(f[15], PENDING_PROVENANCE_OBSERVED) || !strcmp(f[15], PENDING_PROVENANCE_DERIVED) ||
                !strcmp(f[15], PENDING_PROVENANCE_FORCED),
                "the create notice's fifteenth field is not one of the three provenance tokens engine.h "
@@ -1706,9 +1706,13 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         DCHECK(!strcmp(f[18], PENDING_PINNED_YES) || !strcmp(f[18], PENDING_PINNED_NO),
                "the create notice's eighteenth field is not a witness-mark token engine.h declares — the walk's "
                "indices and the record's fields have parted");
-        /* Field 19 is the opener and the policy is field 20. */
+        /* Field 19 is the opener and the policy is field 20. The child's arrival is fields 15, 17 and 18 in
+           engine.h's arrival word. */
+        char arrival[64];
+        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", f[15], f[17], f[18]) < (int)sizeof arrival,
+              "wpt: a create notice's three marks did not fit an arrival word — each is one of engine.h's words");
         wpt_spawn_child(f[1], f[3], f[4], f[20], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
-                        f[14], f[19], f[15]);
+                        f[14], f[19], arrival);
         free(whole);
         return;
     }
@@ -1717,10 +1721,13 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        creates the new browsing context "with null, null, and group"), so there is no policy container to clone
        and no opener policy to inherit; and the swapped-to navigable is a top-level traversable, so HTML
        §8.1.3.1's top-level creation URL is its own address, derived here and passed twice below. The provenance
-       is the child's arrival grade (engine.h's engine_set_arrival) and decides no fetch; both marks are counted,
-       not read. A new group is a new process here for the reason a cross-origin child is: SECURITY.md keys an
-       instance on `(browsing context group, origin)`, and a swap changes the first half. */
+       and both marks are the child's arrival (engine.h's engine_set_arrival) and decide no fetch. A new group is
+       a new process here for the reason a cross-origin child is: SECURITY.md keys an instance on `(browsing
+       context group, origin)`, and a swap changes the first half. */
     if (nf == 7 && !strcmp(f[0], "navigable.swap")) {
+        char arrival[64];
+        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", f[4], f[5], f[6]) < (int)sizeof arrival,
+              "wpt: a provisioning record's three marks did not fit an arrival word");
         /* With no creator every container item takes its spec value. The CSP list is empty, and an empty policy
            resolves no `'self'`, so there is no self-origin. §7.1.4's item is "a new embedder policy", spelled out
            because §7.1.7 gives every container one: `unsafe-none` with two empty reporting endpoints. §7.3.1.3's
@@ -1734,7 +1741,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", f[4]);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);
         free(whole);
         return;
     }
@@ -1742,12 +1749,15 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        navigation response's origin is another agent's, with §7.1.3.2 keeping the browsing context
        (core/frame/navigable.c's nav_navigate_to_peer). The child is the swap's in every field: a top-level
        document with no creator-side container, no parent, no element presenting it and its own address as its
-       top-level creation URL. The provenance is its arrival grade; both marks are counted, not read. */
+       top-level creation URL. The provenance and both marks are its arrival. */
     if (nf == 7 && !strcmp(f[0], "navigable.navigate")) {
+        char arrival[64];
+        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", f[4], f[5], f[6]) < (int)sizeof arrival,
+              "wpt: a provisioning record's three marks did not fit an arrival word");
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", f[4]);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);
         free(whole);
         return;
     }
@@ -2840,8 +2850,8 @@ static int wpt_child_main(int argc, char **argv)
     /* HTML §7.2.2.4's opener of this navigable, in the parent's grammar (`N` for none): an auxiliary navigable's
        opener is a browsing context in the parent process. */
     const char *opener_navigable = argc > 16 ? argv[16] : NULL;
-    /* How the parent reached this document, the create or swap notice's provenance word;
-       engine_provenance_of_token refuses an absent or unknown one. */
+    /* How the parent reached this document, as engine.h's arrival word (the create or swap notice's provenance,
+       drive mark and witness mark); engine_arrival_of_token refuses an absent or malformed one. */
     const char *arrival = argc > 17 ? argv[17] : NULL;
     JSContext *ctx;
     char *html = NULL;
@@ -2928,7 +2938,7 @@ static int wpt_child_main(int argc, char **argv)
        one flow finishes with its last script, the session closes, and a peer's first question arrives at a
        document with no timeline to answer in. The host states it because provisioning is the host's fact. */
     engine_set_referenced(1);
-    engine_set_arrival(engine_provenance_of_token(arrival));
+    engine_set_arrival(engine_arrival_of_token(arrival));
 
     /* The two intrinsics a peer performs a write and a call through are captured by the component that performs
        them, at this realm's install, before this document's scripts run, so a page cannot replace them on
@@ -3166,7 +3176,7 @@ int main(int argc, char **argv)
        elements, so §3.1.7's `currentScript` is null while each runs, that section's answer for a document not
        executing a script element. wpt_child_main passes document_exec_scripts's column. */
     /* The test document is the one this runner was named, as a person names a seed. */
-    engine_set_arrival(PROV_OBSERVED);
+    engine_set_arrival(engine_arrival_of_token("observed,undriven,unpinned"));
     engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, /*sched*/NULL, /*els*/NULL, g_prog_n,
                        /*forking*/0, NULL);
     for (;;) {

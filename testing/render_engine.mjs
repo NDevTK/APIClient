@@ -111,7 +111,7 @@ async function drive(gluePath, html, steps) {
   }, cs);
   M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
   /* A document this driver names, as a person names a seed (solver/engine.h's engine_set_arrival). */
-  M.ccall('qjs_set_arrival', null, ['number'], [cs('observed')]);
+  M.ccall('qjs_set_arrival', null, ['number'], [cs('observed,undriven,unpinned')]);
   M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
   M.ccall('qjs_request_dump', 'void', ['number'], [cs(RD.collectorSource())]);
 

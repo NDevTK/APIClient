@@ -29503,7 +29503,7 @@ int main(int argc, char **argv) {
     if (cold_park_path)            engine_set_park_hook(fixture_want_park);
     else if (!cold_resume_path)    engine_set_park_hook(fixture_have_answers);
     /* The fixture document is the one this process was named, the way a person names a seed. */
-    engine_set_arrival(PROV_OBSERVED);
+    engine_set_arrival(engine_arrival_of_token("observed,undriven,unpinned"));
     engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.els, lifecycle ? 0 : scripts.n,
                cold_residue);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */

@@ -347,10 +347,10 @@
          "pointer into these bytes" };
 
   var ARRIVAL = { name: "arrival", type: "string", retained: false,
-    why: "how this document was reached, as one of the three provenance words (`observed`, `derived`, " +
-         "`forced`): the trusted zone's reach grade for the navigation that produced it. A document reached past " +
-         "a forced gate starts every timeline forced (solver/engine.h's engine_set_arrival), so what it learns " +
-         "carries the fork. The engine CHECKs the word. NOT retained: it is read within the call" };
+    why: "how this document was reached, as engine.h's arrival word `<provenance>,<drive mark>,<witness mark>`: " +
+         "the trusted zone's reach grade for the navigation that produced it and that navigation's two marks. " +
+         "Every timeline of the document starts with them (solver/engine.h's engine_set_arrival), so what it " +
+         "learns carries the fork. The engine CHECKs the word. NOT retained: it is read within the call" };
 
   var ANCESTOR_ORIGINS = { name: "ancestorOrigins", type: "string", retained: false,
     why: "HTML §3.1.3's internal ancestor origin objects list for this document, composed by the renderer that " +
@@ -725,7 +725,7 @@
       /* The root document's arrival, stated beside SetReferenced and for its reason: a provisioning fact the
          engine cannot see, crossing after `Init` and before `Begin` (qjs_set_arrival asserts both). */
       { ordinal: 26, name: "SetArrival",
-        params: [{ name: "provenance", type: "string", retained: false, why: ARRIVAL.why }],
+        params: [ARRIVAL],
         reply: [WORKING_SET] },
 
       { ordinal: 23, name: "Decline",

@@ -641,7 +641,15 @@ async function main() {
      it. Overstating it keeps a frontier alive until the session ends, which costs a process and truncates
      nothing. That is not a licence to guess high: it is why the rule is stated per arm with its reason, so
      the next arm has to answer the question rather than inherit an answer. */
-  async function provision({ docId, url, origin, headers, bytes, facts, referenced, docReach, group }) {
+  /* engine.h's arrival word for a document: the reach grade, then the navigation's drive and witness marks. */
+  const arrivalWord = (reach, driven, pinned) => {
+    if (!['observed', 'derived', 'forced'].includes(reach) || !['driven', 'undriven'].includes(driven) ||
+        !['pinned', 'unpinned'].includes(pinned))
+      throw new Error(`an arrival was composed from \`${reach}\`, \`${driven}\` and \`${pinned}\` — the ` +
+                      'provisioning records carry a grade, a drive mark and a witness mark, each one word');
+    return `${reach},${driven},${pinned}`;
+  };
+  async function provision({ docId, url, origin, headers, bytes, facts, referenced, docReach, arrival, group }) {
     /* HOW THIS DOCUMENT WAS REACHED, STORED ON THE INSTANCE BECAUSE EVERY REQUEST IT EVER MAKES IS ASKED
        ABOUT IT. It is composed by the caller — the JOIN of the issuing document's grade and the engine's
        word for the navigation — and asserted HERE rather than at each of the request paths that read it,
@@ -715,10 +723,13 @@ async function main() {
                     'this line — its stderr is this process\'s — and they are the diagnosis; this is the ' +
                     'pipe noticing afterwards.');
     });
-    /* The reach grade rides last as the document's arrival (solver/engine.h's engine_set_arrival): a document
-       reached past a forced gate starts every timeline `forced`, so its learned endpoints carry the fork. */
+    /* The arrival rides last (solver/engine.h's engine_set_arrival): its grade is this document's reach, and the
+       navigation's drive and witness marks start every timeline, so what the document learns carries the fork. */
+    if (typeof arrival !== 'string' || !arrival.startsWith(`${docReach},`))
+      throw new Error(`an instance was provisioned for ${url} with the arrival \`${arrival}\` beside the reach ` +
+                      `\`${docReach}\` — the arrival's grade is the reach, composed by arrivalWord`);
     e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts,
-           String(referenced), docReach].join('\t'));
+           String(referenced), arrival].join('\t'));
     instances.push(e);
     loops.push(drive(e));
     retryHeld();
@@ -1248,10 +1259,12 @@ async function main() {
          grandchild joins A's instance. The holder is referenced, since every instance of a group either was
          provisioned for a peer's navigable or created one. The grade the holder judges requests under becomes
          the weaker of its own and the joined document's.
-         Named residual. Not covered: the grade is per instance, not per document, so the holder's own requests
-         are judged under the joined document's grade too. Next diff builds: the grade keyed on the asking
-         document, which the bill would have to carry. Absence shows as: a holder's own request declined at an
-         unwidened origin after a forced-grade child joined it. */
+         The joined document's own requests carry its navigation's forced, drive and witness marks in their own
+         fields, because its timelines start with them (the arrival on the `join` line).
+         Named residual. Not covered: the `doc-reach` row is per instance, not per document, so the holder's own
+         requests read the joined document's reach too. Next diff builds: the reach keyed on the asking
+         document, which the bill would have to carry. Absence shows as: a holder's own request refused on
+         `doc-reach` at an origin whose table permits the holder's reach, after a forced-grade child joined it. */
       const childOrigin = new URL(loaded.url).origin;
       const reach = ZONE.safeFetchReachJoin(e.docReach, f[15]);
       const holder = clusterOf(group, childOrigin);
@@ -1264,7 +1277,7 @@ async function main() {
         holder.docs.push(f[1]);
         holder.docReach = ZONE.safeFetchReachJoin(holder.docReach, reach);
         holder.ready.push(['join', loaded.url, f[1], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
-                           ...createFacts(f), reach].join('\t'));
+                           ...createFacts(f), arrivalWord(reach, f[17], f[18])].join('\t'));
         retryHeld();
         flush();
         return;
@@ -1281,7 +1294,7 @@ async function main() {
                            notice's word alone would let a child of a document this zone chose to open read
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
-                        docReach: reach,
+                        docReach: reach, arrival: arrivalWord(reach, f[17], f[18]),
                         referenced: 1 });
       return;
     }
@@ -1318,6 +1331,7 @@ async function main() {
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
                         docReach: ZONE.safeFetchReachJoin(e.docReach, f[4]),
+                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[4]), f[5], f[6]),
                         group: newGroup(), referenced: 0 });
       return;
     }
@@ -1340,6 +1354,7 @@ async function main() {
       await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
                         docReach: ZONE.safeFetchReachJoin(e.docReach, f[4]),
+                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[4]), f[5], f[6]),
                         group: e.group, referenced: 1 });
       return;
     }
@@ -1399,6 +1414,7 @@ async function main() {
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
                         docReach: ZONE.safeFetchReachJoin(e.docReach, f[2]),
+                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[2]), f[3], f[4]),
                         group: newGroup(), referenced: 0 });
       return;
     }
@@ -1821,7 +1837,8 @@ async function main() {
      tree beneath it. */
   const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
-                                 facts: topLevelFacts(docUrl), docReach: 'observed', group: newGroup(),
+                                 facts: topLevelFacts(docUrl), docReach: 'observed',
+                                 arrival: arrivalWord('observed', 'undriven', 'unpinned'), group: newGroup(),
                                  referenced: 0 });
 
   /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its

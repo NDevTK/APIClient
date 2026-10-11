@@ -1038,6 +1038,23 @@ function frontierPlace(e, when) {
 function frontierProvenance(e) {
   return e.provenance === undefined ? PROVENANCE_DERIVED : e.provenance;
 }
+/* engine.h's arrival word for a document: its reach grade, then the navigation's drive and witness marks. */
+function arrivalWord(reach, driven, pinned) {
+  DCHECK((reach === PROVENANCE_OBSERVED || reach === PROVENANCE_DERIVED || reach === PROVENANCE_FORCED) &&
+         (driven === DRIVEN_YES || driven === DRIVEN_NO) && (pinned === "pinned" || pinned === "unpinned"),
+         "an arrival was composed from `" + String(reach) + "`, `" + String(driven) + "` and `" + String(pinned) +
+         "` — the provisioning records carry a grade, a drive mark and a witness mark, each one word");
+  return reach + "," + driven + "," + pinned;
+}
+/* An entry's arrival. One written before the field states its grade and the strict marks: an `observed` entry is
+   the ambient seed, which no drive or pin reached, and any other grade takes `driven` and `pinned`, the words
+   that refuse rather than fire. */
+function frontierArrival(e) {
+  if (e.arrival !== undefined) return e.arrival;
+  const reach = frontierProvenance(e);
+  return reach === PROVENANCE_OBSERVED ? arrivalWord(reach, DRIVEN_NO, "unpinned")
+                                       : arrivalWord(reach, DRIVEN_YES, "pinned");
+}
 function frontierDoc(e, when) {
   frontierPlace(e, when);
   /* And it still holds its document: a shed entry's bytes are on the network, and the two states are told
@@ -1164,7 +1181,8 @@ async function frontierResidency() {
        its population supports. */
     const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                    responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
-                   credentialed: e.credentialed, provenance: frontierProvenance(e), shed: true };
+                   credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
+                   shed: true };
     frontierRecord(shed, "was shed to the configured share");
     await frontierWrite(e.key, shed);
     if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
@@ -1450,7 +1468,7 @@ async function frontierRederive(e) {
   const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                           responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit,
                           visits: e.visits, credentialed: e.credentialed, provenance: frontierProvenance(e),
-                          shed: true, stranded: true };
+                          arrival: frontierArrival(e), shed: true, stranded: true };
   frontierRecord(strandedEntry, "was stranded");
   await frontierWrite(e.key, strandedEntry);
   if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(strandedEntry));
@@ -2530,7 +2548,11 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* And how this zone reached the document, stated in the same window for the same reason: every timeline's
      grade starts from it (solver/engine.h's engine_set_arrival), so a document reached past a forced gate learns
      its endpoints as `forced`. `msg.provenance` is that reach grade, asserted where the root is built. */
-  await rend.renderer.setArrival({ provenance: msg.provenance });
+  DCHECK(typeof msg.arrival === "string" && msg.arrival.startsWith(msg.provenance + ","),
+         "a document is being rooted with the arrival `" + String(msg.arrival) + "` beside the reach grade `" +
+         String(msg.provenance) + "` — every composer of an AST_ANALYZE states both, the arrival's grade being " +
+         "the reach (arrivalWord)");
+  await rend.renderer.setArrival({ arrival: msg.arrival });
   /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
      one frontier entry. */
   /* `>>> 0` because the wire carries an i32 (mojom `int32 bundleId`) for a C `unsigned`; the reader
@@ -3124,7 +3146,7 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
     inheritedCoepReportOnly: inherited.embedder.reportOnlyValue,
     inheritedCoepReportOnlyEndpoint: inherited.embedder.reportOnlyEndpoint,
     parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
-    arrival: msg.provenance });
+    arrival: msg.arrival });
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");
@@ -3672,6 +3694,7 @@ async function hostNotice(eng, line) {
                   origin: originOf(loaded.url),
                   groupId: _inCreatorGroup ? eng.groupId : "noopener:" + (_nextNoopenerGroup++),
                   provenance: self.safeFetchReachJoin(eng.msg.provenance, f[15]),
+                  arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[15]), f[17], f[18]),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* The response's own header list, whole; the creator's container is relayed separately below. */
     DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
@@ -3859,6 +3882,7 @@ async function hostNotice(eng, line) {
                       sourceUrl: swapped.url, origin: originOf(swapped.url),
                       groupId: "swap:" + (_nextSwapGroup++),
                       provenance: self.safeFetchReachJoin(eng.msg.provenance, f[4]),
+                      arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[4]), f[5], f[6]),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
     /* No inherited policy: a swapped-to Document has no creator to clone a container from (HTML §7.3.2.1 with
@@ -3906,6 +3930,7 @@ async function hostNotice(eng, line) {
     const navMsg = { type: "AST_ANALYZE", pageHtml: navd.bytes === null ? new Uint8Array(0) : navd.bytes,
                      sourceUrl: navd.url, origin: originOf(navd.url), groupId: eng.groupId,
                      provenance: self.safeFetchReachJoin(eng.msg.provenance, f[4]),
+                     arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[4]), f[5], f[6]),
                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(navd.headers)) navMsg.responseHeaders[_n] = navd.headers[_n];
     const _nkey = clusterKeyOf(navMsg);
@@ -4892,6 +4917,8 @@ async function admitSeatLand(seat) {
                   /* The join of the declaring document's grade and the declaration's word, as for a child
                      navigable. */
                   provenance: self.safeFetchReachJoin(seed.reach, seed.provenance),
+                  arrival: arrivalWord(self.safeFetchReachJoin(seed.reach, seed.provenance), seed.driven,
+                                       seed.pinned),
                   persist: true };
     DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
            "a declared route minted a browsing-context group this pool already runs an instance for — the " +
@@ -4930,7 +4957,8 @@ async function admitSeatLand(seat) {
       doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
                           origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
                           recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
-                          credentialed: stored.credentialed, provenance: frontierProvenance(stored) },
+                          credentialed: stored.credentialed, provenance: frontierProvenance(stored),
+                          arrival: frontierArrival(stored) },
                         "was re-derived for the cold tier");
     } else {
       doc = frontierDoc(stored, "came back from the cold tier");
@@ -4945,7 +4973,7 @@ async function admitSeatLand(seat) {
                   responseHeaders: doc.responseHeaders,
                   topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed,
                   /* The word this residue was parked under, re-stated so the entry it parks again keeps it. */
-                  provenance: frontierProvenance(stored), persist: true };
+                  provenance: frontierProvenance(stored), arrival: frontierArrival(stored), persist: true };
     /* A rehydration whose engine aborts is bannered by engineBootFailed at the reservation, with the pool slot
        it releases; no catch here. A rehydrated recipe never has a caller (`cold`). */
     /* The stored document is passed as parked; engineRoot asserts its shape, so a missing document is never
@@ -5352,7 +5380,7 @@ const _hostOps = {
            outlive that guarantee and turn dropped flows into "the recipes joined to ''". */
         /* The provenance of the load that produced this document, read by frontierRederive when it fetches the
            bytes back; bound to a local above so the field's receiver is a name an auditor can anchor. */
-        provenance: _parkProvenance,
+        provenance: _parkProvenance, arrival: eng.msg.arrival,
         credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
         /* `emit` is the surface this run demonstrated, both halves of what it emits (@H endpoints and @S sinks).
            frontierWeight divides it by `visits`, so whenever the demonstrated surface is monotone the quotient is
@@ -5832,6 +5860,7 @@ self.astDispatch = async function astDispatch(msg) {
     /* The word the load was performed under, written onto the record (this run persists, so its residue is
        re-fetched later from what this states); the same constant as the load, so the two cannot disagree. */
     msg.provenance = PROVENANCE_OBSERVED;
+    msg.arrival = arrivalWord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned");
     /* The waiter carries both settlers, so a Clear can reject a document never seated with "cleared", which
        _dispatchDocument reads to abandon its tail without recording a page failure. No `code` is carried: no
        producer reaching this entry writes one. */
