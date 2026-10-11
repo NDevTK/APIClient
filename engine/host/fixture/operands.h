@@ -108,30 +108,32 @@ static const char HTML_OPERANDS[] =
        THE FIRST ROW IS `tdreach` AND IT IS WHY THE OTHER THREE MEAN ANYTHING. Without it a 0 on any row
        below is three states wearing one number — the arm ran and settled wrong, the arm ran and never
        settled, or this engine has no AsyncDisposableStack and the statement never began. The catch names the
-       third and `tdreach` names the difference between the other two. */
+       third and `tdreach` names the difference between the other two.
+       EACH SETTLEMENT IS REPORTED FROM THE ONE CALLBACK THE CHAIN CALLS: the arm handler the promise never
+       calls is an orphan this engine drives on purpose, so a fetch inside it would add the other answer. */
     " try {"
     "  fetch('/api/tdreach?d=ok');"
     /* A -- step 2's build path: a NON-async method, so the value is not a promise and step 1 is skipped. */
     "  var _tdA = new AsyncDisposableStack();"
     "  _tdA.use({ [Symbol.asyncDispose]: function () { return { then: function (r) { r(1); } }; } });"
-    "  _tdA.disposeAsync().then(function () { fetch('/api/tdplain?d=ok'); },"
-    "                           function () { fetch('/api/tdplain?d=no'); });"
+    "  _tdA.disposeAsync().then(function () { return 'ok'; }, function () { return 'no'; })"
+    "   .then(function (d) { fetch('/api/tdplain?d=' + d); });"
     /* B -- THE SAME ARM WITH `then` BEHIND AN ACCESSOR, which is the case the deleted selector detected by
        name: the C entry refused this rather than reading it, so it must now park on the flow and settle. */
     "  var _tdT = {};"
     "  Object.defineProperty(_tdT, 'then', { get: function () { return function (r) { r(2); }; } });"
     "  var _tdB = new AsyncDisposableStack();"
     "  _tdB.use({ [Symbol.asyncDispose]: function () { return _tdT; } });"
-    "  _tdB.disposeAsync().then(function () { fetch('/api/tdacc?d=ok'); },"
-    "                           function () { fetch('/api/tdacc?d=no'); });"
+    "  _tdB.disposeAsync().then(function () { return 'ok'; }, function () { return 'no'; })"
+    "   .then(function (d) { fetch('/api/tdacc?d=' + d); });"
     /* C -- the chain link's OWN PromiseResolve, which only runs when a link already carries an error. LIFO
        disposes the last use() first, so the throw below is what puts every link under it on that arm with a
        thenable value. The stack must still reject, and with the FIRST error. */
     "  var _tdC = new AsyncDisposableStack();"
     "  _tdC.use({ [Symbol.asyncDispose]: function () { return { then: function (r) { r(3); } }; } });"
     "  _tdC.use({ [Symbol.asyncDispose]: function () { throw new Error('tdboom'); } });"
-    "  _tdC.disposeAsync().then(function () { fetch('/api/tdprev?d=no'); },"
-    "                          function () { fetch('/api/tdprev?d=rej'); });"
+    "  _tdC.disposeAsync().then(function () { return 'no'; }, function () { return 'rej'; })"
+    "   .then(function (d) { fetch('/api/tdprev?d=' + d); });"
     " } catch (_tde) { fetch('/api/tdreach?d=no'); }"
     /* A BYOB READ WHOSE MINIMUM IS UNKNOWN IS THREE WORLDS AND NOT A RANGE. Streams §4.5.3 "Constructor,
        methods, and properties"' read(view, options) names `min` in step 4 ("If options["min"] is 0, return a
