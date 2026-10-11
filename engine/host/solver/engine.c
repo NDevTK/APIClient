@@ -8058,57 +8058,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
             else if (engine_close_request_fork(ctx, f)) {
                 g_step_unit = STEP_UNIT_CLOSE_REQUEST; return 0; }
             else {
-                /* A FLOW MAY NOT FINISH HOLDING WORK. Every branch above claims to have offered its queue a
-                   turn, so reaching here with a job still on it means one of them returned first and the job
-                   is about to be dropped with the flow — silently, because a dropped reaction looks exactly
-                   like a page that registered no handler. Asserted at the one place "finished" is decided. */
+                /* A flow may not finish holding work. Every arm above has offered its queue a turn, so a job still
+                   on it here means one of them returned first, and the job would be dropped with the flow silently:
+                   a dropped reaction looks exactly like a page that registered no handler. Asserted at the one
+                   place "finished" is decided. */
                 DCHECK(flow_job_pending(f) == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
                                      "callback or a delivered message would be dropped with it");
-                /* …AND A FLOW OF A REFERENCED DOCUMENT MAY NOT FINISH AT ALL — engine.h's engine_set_referenced.
-                   Having nothing left to run is not being done when a peer can still ask this timeline
-                   something; it is waiting on the host for the next operation, which is exactly what OWED
-                   means. The flow keeps its snapshot, its delta and its rank and is out of the pick until the
-                   host has something for it. */
+                /* A flow of a referenced document may not finish at all (engine.h's engine_set_referenced). Having
+                   nothing left to run is not being done while a peer can still ask this timeline something: it
+                   waits on the host for the next operation, which is what OWED means. The flow keeps its snapshot,
+                   delta and rank and is out of the pick until the host has something for it. */
                 if (g_referenced) { g_step_unit = STEP_UNIT_AWAIT_PEER; return FLOW_STEP_OWED; }
-                /* …AND A RESUMED DRIVE THAT NEVER GOT ITS BODY BACK SAYS SO ON ITS WAY OUT. The seed is not
-                   called from this exit any more — it is its own rung above it, where a flow has run out of the
-                   work the page ARRANGED rather than out of its timeline — and THAT is what makes this count
-                   mean what it says at THIS line: reaching the exit means the seed's rung answered 0 on this
-                   same pass, so the heap holds no untaken orphan and the body this recipe named is not coming.
-                   THIS SAID "A RUNG ABOVE THE TWO CLOCK-DRIVEN SOURCES", WHICH IS THE HALF THAT WENT STALE AND
-                   IS NOT THE HALF THIS COUNT NEEDS. The owner's ordering put the seed BELOW all three of them;
-                   what the count depends on is only that the seed stands above THIS EXIT, which it does, so the
-                   invariant is unchanged and only the coordinate was wrong. A record that names a rung's
-                   neighbour where it means its ANCESTOR is the stale-claim failure with the conclusion intact,
-                   which is the shape a reader trusts hardest — and the reason the boundary-sum assert in
-                   engine_frontier_census is over WHICH SIDE of the clock each arm is written on rather than
-                   over anybody's prose.
-                   AND THE SENTENCE THAT FOLLOWED — "a claimant therefore does not leave while a take could still
-                   feed it, which is the invariant the old placement bought with a special case" — IS AN INVARIANT
-                   THIS LADDER DOES NOT HAVE, and it is rewritten rather than deleted because it is exactly what a
-                   reader re-derives from the seed standing above this exit. The seed's rung answering 0 is a
-                   statement about ONE INSTANT, and the orphan set is not final: a live flow that is about to run
-                   a body CREATES function objects, which is the whole reason js_closure2 bumps the generation. So
-                   "the heap holds no untaken orphan NOW" was being read as "no take could ever feed it", and the
-                   two differ by every body some other member has not built yet. Measured on this fixture's own
-                   residue at 8b3b115a: three locators in, TWO met, one carried forward unmet through a third
-                   session unchanged — the inner body of an uncalled function, whose closure the outer drive
-                   builds and releases inside one step. The route is asked at a body's CREATION now
-                   (engine_orphan_born) precisely so that a claim is satisfied at the one moment its body exists
-                   rather than at whichever instant a take happens to land. WHAT IS STILL NOT COVERED, and it is
-                   narrower than what stood here: a body created by some OTHER member AFTER this flow has passed
-                   this line. WHAT THE NEXT DIFF BUILDS: a resting verdict for an open claim — the shape the
-                   referenced return above already has, which this arm cannot borrow because FLOW_STEP_OWED is a
-                   claim about the HOST and only a host event clears it, while a claim is answered by another
-                   FLOW. HOW ITS ABSENCE SHOWS: `orphanClaimsUnmet` nonzero on a run whose residue's locators all
-                   name bodies the page still ships. Its absence is a
-                   legitimate outcome and NOT a should-never-happen — §Time-travel has a resumed flow
-                   re-deriving from CURRENT sources, and the code itself is one — so it is COUNTED rather than
-                   asserted, at the one place it can be distinguished from a drive that ran. Without the count a
-                   residue whose every drive missed looks exactly like one whose every drive landed.
-                   AND A CLAIMANT HOLDING A BODY CANNOT STAND HERE AT ALL: engine_orphan_resume is the rung that
-                   builds the call, it returns on exactly that pair, and it is now above every clock-driven
-                   source — so the two reads disagreeing is the only route to this assert. */
+                /* A resumed drive that never got its body back is counted on its way out. The seed is its own rung
+                   above this exit, so reaching the exit means the seed's rung answered 0 on this same pass: the heap
+                   holds no untaken orphan at this instant. The orphan set is not final (a live flow creates function
+                   objects, which is why js_closure2 bumps the generation), so the route is asked at a body's
+                   creation (engine_orphan_born), satisfying a claim at the moment its body exists.
+                   Named residual. Not covered: a body created by another member after this flow has passed this
+                   line. Next diff builds: a resting verdict for an open claim, shaped like the referenced return
+                   above, which this arm cannot borrow because FLOW_STEP_OWED is a claim about the host, cleared
+                   only by a host event, while a claim is answered by another flow. Absence shows as:
+                   `orphanClaimsUnmet` nonzero on a run whose residue's locators all name bodies the page still
+                   ships.
+                   Counted rather than asserted, because a miss is a legitimate outcome (a resumed flow re-derives
+                   from current sources, and the code is one); without the count a residue whose every drive missed
+                   looks like one whose every drive landed. A claimant holding a body cannot stand here:
+                   engine_orphan_resume builds the call, returns on exactly that pair and stands above every
+                   clock-driven source, so only the two reads disagreeing reach the assert. */
                 if (f->orphan_want) {
                     DCHECK(JS_IsUndefined(f->fn),
                            "a flow holds an open orphan claim and a body at the same time — "
@@ -8117,21 +8093,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            "disagree and the drive's call would be built by nobody");
                     g_orphan_claims_unmet++;
                 }
-                /* …AND IT MAY NOT FINISH HOLDING AN UN-NOTIFIED REJECTION, which is the OTHER half of the job
-                   assertion above and the invariant that REPLACES the arm this ladder used to carry. HTML
-                   §8.1.4.7 Unhandled promise rejections' notify runs at the end of every microtask checkpoint
-                   now (engine_sched_slice), and that seam is reached by every step that ends a unit of work —
-                   strictly more often than the deleted arm could ever have been — so a non-empty list HERE
-                   means this flow reached the one exit that declares its timeline OVER without ever ending a
-                   unit, and the fires that would have queued (they are §8.1.4.7 step 4 TASKS, so they are work
-                   this flow would still have had) die with it. That is an error the PAGE reported and this
-                   engine never saw, which reads exactly like a flow that ran and did nothing.
-                   BELOW THE REFERENCED RETURN, because the message is about FINISHING and a referenced flow
-                   does not finish — an assert whose text names an event that did not happen sends its reader
-                   somewhere the crash is not.
-                   COUNTED OUTSIDE THE CONDITION AND UNDER THE DEV GUARD: the read interns `length`, which is a
-                   side effect, and check.h forbids one inside a DCHECK — the same rule and the same shape as
-                   engine_host_take's pending_extra_count. */
+                /* And it may not finish holding an un-notified rejection, the other half of the job assertion
+                   above. HTML §8.1.4.7 Unhandled promise rejections' notify runs at the end of every microtask
+                   checkpoint (engine_sched_slice), a seam every step that ends a unit of work reaches, so a non-empty
+                   list here means this flow reached the exit that declares its timeline over without ending a unit,
+                   and the fires that would have been queued (§8.1.4.7 step 4 tasks, work this flow would still have
+                   had) die with it: an error the page reported that this engine never saw. Below the referenced
+                   return, because the message is about finishing and a referenced flow does not finish. Read
+                   outside the condition under the dev guard: the read interns `length`, a side effect a DCHECK may
+                   not have (as engine_host_take's pending_extra_count). */
 #if APICLIENT_DEV
                 {
                     int unnotified = unhandled_rejection_pending(ctx);
@@ -8143,61 +8113,27 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            "seam and this exit have stopped agreeing about when a flow's turn ends");
                 }
 #endif
-                /* NO ORPHAN ARM IS NAMED HERE, AND THE `flow_count() > 1` ASSERT THAT STOOD BESIDE ONE IS GONE
-                   WITH IT RATHER THAN BEING WEAKENED. It guarded a retirement that had just SEEDED — the one
-                   ordering in which the last member could consume the surface and leave nobody to drive it —
-                   and a seed that returns 0 from its own rung does not retire at all, so the state it forbade
-                   is now unreachable by construction instead of by assertion. §Fix-the-ROOT: the impossible
-                   state is made impossible and the workaround is deleted, not kept as a net. */
+                /* No orphan arm here: the seed is its own rung and a seed that returns 0 does not retire, so the
+                   last member cannot consume the orphan surface and leave nobody to drive it. */
                 g_step_unit = STEP_UNIT_FINISHED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
-            /* NO ARM IS NAMED HERE, AND THAT IS THE CORRECTION. `STEP_UNIT_COMPILE_PROGRAM` was set at this
-               line for all three exits of this block, and the exit it was named for — a CLASSIC program that
-               compiled and started — is the one that does not return from inside the block: it falls through
-               to the resume roughly two hundred lines below, which assigns `STEP_UNIT_RESUME_PROGRAM` over it
-               before running a single opcode. So the row spelled `compile-program` could only ever be reached
-               by the two exits that do NOT run a classic program (a compile that FAILED, and a MODULE that
-               evaluated), and every step that actually started one was counted as a resume.
-               WHAT THAT COST IS NOT THE LABEL, IT IS THE ONE COMPARISON THE CENSUS EXISTS TO MAKE. `steps` and
-               `live` say work is admitted and not retired; the arm histogram is what says whether the members
-               that are not retiring are MOVING THROUGH their documents or grinding inside one program, and
-               those two answers were summed into `resume-program`. A run in which every member starts a program
-               and a run in which no member has started one since its first are then the SAME NUMBER in that
-               row, whatever the number is — and step_unit.h's own preamble names that pair as arms that "take
-               opposite work". This claim is about the assignments and not about any run: no count anywhere is
-               evidence for it, and none is needed, because the overwrite is on the path.
-               AND `compile-program` WAS READ AS A COUNT OF PROGRAM STARTS AND COMPARED ACROSS REVISIONS, which
-               is how a defect in a label becomes a defect in a diagnosis. That reading is wrong twice over and
-               the two refutations are independent, which is worth keeping because either one alone would look
-               like a quibble: the row does not count starts at all (this comment), and the smoke's whole-run
-               counts on this host are not comparable between revisions anyway (§Testing's one-run rule, and a
-               measured 22 / 69 / 22 answered-statement count across three CONSECUTIVE revisions, which admits
-               no monotone reading of any of them). What the row does count is a compile that FAILED and a
-               MODULE that evaluated — two events with nothing in common but the block they leave from.
-               EACH EXIT NAMES ITSELF NOW, in the same shape as every other arm of this ladder. */
-            /* AND THE ONE ARM THAT MAY REACH THIS LINE SAYS SO, which is what turns the fall-through from a
-               property of the control flow into something an edit can break LOUDLY. Every arm of the ladder
-               above returns, so today the compile is reachable only from the empty `seq_compiles` arm — and
-               that is the kind of invariant a later arm added without a `return` retires in silence, with
-               `body` then read uninitialised and a stale `kind` compiled as a program. It is not a second
-               spelling of the chain's head: the two sides are a LOCAL the block above wrote and the CONTROL
-               PATH that got here, and an arm that falls through makes them disagree. */
+            /* No step unit is named here: each exit of the compile below names itself, and a classic program that
+               started is named where it starts running (`start-program`). The compile is reached only from the
+               `seq_compiles` arm, since every other arm of the ladder returns; an arm added without a `return`
+               would reach it in silence, reading `body` uninitialised and compiling a stale `kind`. The assert
+               compares a local the block above wrote with the control path that got here. */
             DCHECK(seq_compiles,
                    "control reached the compile without the sequence arm having decided a program starts — "
                    "every other arm of the task-source ladder returns, so an arm that falls through instead "
                    "is about to compile whatever `body` and `kind` were left holding");
-            /* NO REPLAY, asserted at the only place a program can start. A flow compiles each entry of its
-               sequence once and thereafter RESUMES the suspended frame; reaching this line again for an index
-               it already started means the resume path lost the frame and the flow is re-executing a program —
-               re-running side effects it already performed, against a delta that already holds them. That is
-               the one thing this scheduler must never do, and nothing was checking it. */
-            /* A COMPILE THAT HANDED THE THREAD BACK IS AT THIS INDEX AND HAS STARTED NOTHING, which is the
-               one way this line is reached twice for one row WITHOUT a replay: the parse is suspended at an
-               exact production, no bytecode has run, no side effect has been performed, and the next stint
-               continues it rather than re-running it. The assert keeps its whole force for every other
-               reading — `compile` is NULL the moment a program starts — and the pair is asserted together
-               below so a parked parse cannot be resumed against a row the flow has moved off. */
+            /* No replay, asserted at the only place a program can start. A flow compiles each row of its sequence
+               once and thereafter resumes the suspended frame, so reaching here again for a row it already started
+               means the resume path lost the frame and the flow would re-run side effects against a delta that
+               already holds them. The one exception is a compile that handed the thread back: the parse is
+               suspended at an exact production, no bytecode has run, and the next stint continues it. `compile` is
+               NULL the moment a program starts, so the first assert keeps its force for every other reading, and
+               the second keeps a parked parse from resuming against a row the flow has moved off. */
             DCHECK(f->script_i > f->last_compiled || f->compile != NULL,
                    "a flow compiled a program it had already started — the suspended frame was lost and the "
                    "flow is REPLAYING it, re-running side effects against a delta that already holds them");
@@ -8206,150 +8142,88 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    "now names — the parse would be resumed into a program the flow has already left, so the "
                    "bytes it is half-way through and the bytes the row holds are two different programs");
             f->last_compiled = f->script_i;
-            /* THE DEEPEST PROGRAM THIS DOCUMENT HAS EVER REACHED, recorded where a program is STARTED and by
-               whichever flow starts it — a coverage fact about the document, not about the flow holding the
-               thread (see g_deepest). */
+            /* The deepest program this document has reached, recorded where a program starts and by whichever flow
+               starts it: a coverage fact about the document, not the flow holding the thread (see g_deepest). A row
+               whose parse is parked has been reached, and re-assigning a maximum is idempotent across stints. */
             if (f->script_i > g_deepest) g_deepest = f->script_i;
-            /* THE START COUNT IS NOT RAISED HERE ANY MORE, AND THE RETIRED REASON IS KEPT BECAUSE IT WAS
-               EXACT FOR AS LONG AS A COMPILE WAS ATOMIC. `g_prog_starts++` stood on this line under
-               "…AND HOW MANY STARTS THAT IS, WHICH A MAXIMUM CANNOT SAY", and a compile was atomic until a
-               module parse gained a suspend seam — after which this line is reached once per compile STINT,
-               which the paragraph above it already says in its own words: "A COMPILE THAT HANDED THE THREAD
-               BACK IS AT THIS INDEX AND HAS STARTED NOTHING". So the counter measured stints, and
-               `engine_any_program_started` crossed zero while a parse was still suspended and not one opcode
-               had run.
-               THE COST IS NOT THE COUNT, IT IS THE PER-ADDRESS STAMP THAT READS THAT BIT.
-               core/…/endpoint.c writes `e->pre_program = !engine_any_program_started()` on every address it
-               mints, so an address composed while the FIRST program's parse was suspended was stamped
-               POST-program — forced execution credited with a surface no line of the document had yet
-               produced, which is the flattering direction and is what CLAUDE.md
-               §What-the-tool-produces calls the product's own razor.
-               MEASURED on one real-app run at 309543d, read off that run's own frontier census:
-               `module-compile-handed-the-thread-back` 1006 runs with `classicCompileResumed` 0, against a
-               document whose doors are 1 `document-script` and 98 `module-import` — so essentially every
-               raise after the first was a resume stint.
-               WHAT SURVIVES IS THE ARM ARGUMENT AND IT MOVED WITH THE RAISE rather than staying here: the
-               arm is read FROM THE ROW AT THE CURSOR AND NEVER FROM THE FLOW, because a candidate SESSION
-               (`Flow.cand_src`, the label `finished_cands` partitions on) re-runs this document from the
-               baseline and therefore compiles the page's OWN programs too, so a per-flow label would count
-               every page script an @S re-fire started as a candidate program. Those are different
-               populations, and this is the one `progQueuedCand` is the ask for.
-               `g_deepest` ABOVE STAYS WHERE IT IS, and that is a statement about what it counts rather than
-               an inconsistency this diff left behind: its own headline is the deepest program this document
-               has ever REACHED, a row whose parse is parked HAS been reached, and a maximum re-assigned the
-               value it already holds is idempotent across stints where a count is not. */
-            /* IN THE REALM OF THE DOCUMENT THE PROGRAM BELONGS TO — asked of the program, never of the
-               session. A program compiled here is closed over the compiling realm's global (JS_FlowNew), so
-               the realm is not a detail of where it happens to run: `globalThis[member]` compiled in the root
-               reads the ROOT Window's member, a child document's classic script defines the child's globals on
-               its creator, and a peer's operation answers about the wrong document. Every one of those is one
-               question — which document is this a program OF — and it is answered by the queue entry rather
-               than by a `? :` per kind: the kinds that used to need one are exactly the kinds whose document is
-               not the session's, and there is no upper limit on those (a same-origin agent cluster holds a
-               realm per document). */
+            /* The program-start count is not raised here. This line is reached once per compile stint, not once per
+               program, and core/…/endpoint.c stamps each address's `pre_program` from engine_any_program_started,
+               so a raise here would credit forced execution with an address composed while the first program's
+               parse was still suspended. It is raised where a program has started, below. */
+            /* In the realm of the document the program belongs to, asked of the row, never of the session. A
+               program compiled here closes over the compiling realm's global (JS_FlowNew): compiled in the root,
+               `globalThis[member]` reads the root Window's member, a child document's classic script defines the
+               child's globals on its creator, and a peer's operation answers about the wrong document. The queue
+               entry answers which document this is a program of, for every kind; a same-origin agent cluster holds
+               a realm per document, so the non-session documents are not a fixed set. */
             JSContext *prog_ctx = doc_realm(flow_dyn_doc(f));
-            /* AN INLINE PROGRAM'S NAME IS ITS DOCUMENT'S ADDRESS, which is HTML §4.12.1.1's "let base URL be el's
-               node document's document base URL" for a script with no `src`, and is what a relative
-               `import('./chunk.js')` inside it resolves against — the moat's whole lazy-chunk surface. This used
-               to be NULL under a comment saying the document URL was something "this host does not model yet",
-               and that claim had stopped being true: document_base_url is in a header this file already
-               includes, and it is the ONE component that owns what a document's address is. A name that is not
-               the document's is also not a name two documents can differ by, and the compile above is explicitly
-               per-document. */
+            /* An inline program's name is its document's address: HTML §4.12.1.1's "let base URL be el's node
+               document's document base URL" for a script with no `src`, which a relative `import('./chunk.js')`
+               inside it resolves against. document_base_url is the one component that owns a document's address,
+               and the compile is per document. */
             const char *prog_name = document_base_url(prog_ctx);
-            /* …AND AN EXTERNAL ONE'S NAME IS ITS OWN ADDRESS, which is a different question with a different
-               answer and was being given this one. §4.12.1.1 hands its resolved `url` to §8.1.4.2 "Fetching
-               scripts" — "Fetch a classic script given url, …" and "Fetch an external module script graph given
-               url, …" — and what that section creates is a script based on the address the bytes came FROM:
-               "let script be the result of creating a classic script given sourceText, settingsObject,
-               RESPONSE'S URL, options, mutedErrors, and url". Never the document's.
-               It decides answers in both of §8.1.4.4's entries: a nested `import('./chunk.js')` inside a bundle
-               served from `/assets/app.js` is `/assets/chunk.js` and not `/chunk.js`, and for a MODULE the name
-               is additionally the module map KEY — so two `<script type=module src>` in one document, named by
-               the address they share, are ONE module, and the second one's graph finds the first one's record
-               and evaluates nothing. A modern app with several module entry points loses all but one of them.
-               AND IT IS ASKED OF THE ROW, for the reason the type above is: the session document was not the
-               only document of this agent with external scripts, it was only the one whose external scripts had
-               anywhere to keep their address. A child navigable's and a joined document's rows carried theirs
-               in the BODY column and lost it the moment the reply overwrote it, so every one of those bundles
-               compiled under its document's name — one module map key shared by the lot.
-               THE COMPANION ASSERT MOVED WITH THE SEQUENCE. It used to ask "was this row external?" of a
-               parallel array that only the session document's half of the old sequence had; the row itself is
-               what answers now, and it is asserted where the answer is WRITTEN —
-               flow_deliver_one_reply moves the address out of the body column at the one moment it can, and
-               asserts the column was empty before it did. */
+            /* An external program's name is its own address. §4.12.1.1 hands its resolved `url` to §8.1.4.2
+               Fetching scripts, which creates the script from the address the bytes came from: "let script be the
+               result of creating a classic script given sourceText, settingsObject, response's URL, options,
+               mutedErrors, and url". It decides answers in both of §8.1.4.4's entries: a nested
+               `import('./chunk.js')` in a bundle served from `/assets/app.js` is `/assets/chunk.js`, and for a
+               module the name is also the module map key, so two `<script type=module src>` named by their
+               document's address would be one module and the second would evaluate nothing. Asked of the row,
+               because every document of this agent can hold external scripts; flow_deliver_one_reply moves the
+               address out of the body column and asserts the column was empty before it did. */
             int src_flags = 0;
             {
                 const char *ext = flow_dyn_url(f);
                 if (ext) prog_name = ext;
-                /* …AND WHICH HALF OF THE DOCUMENT THIS PROGRAM IS. HTML §4.12.1 "The script element" splits a
-                   document's programs by one attribute — `src` "denotes that instead of using the element's
-                   child text content as the script content, the script will be fetched from the specified
-                   URL" — so a page-script row with no ADDRESS is an INLINE script and its source text came in
-                   the document's own response, rendered against this visitor's credentials. An external row's
-                   bytes are a subresource served identically to everybody, which is the whole reason its code
-                   contains the logged-in surface a logged-out visit never runs.
-                   THE KIND IS ASKED TOO, because an address is not the only thing a row can lack: a candidate
-                   body, a `javascript:` URL and a driven orphan are all address-free and none of them is a
-                   `<script>` the server rendered. The solver reads this at the one place it decides whether a
-                   missing member of a present record is unknown INPUT or `undefined` — see
-                   solver/absent.h. */
+                /* And which half of the document this program is. HTML §4.12.1 The script element splits a
+                   document's programs by one attribute: `src` "denotes that instead of using the element's child
+                   text content as the script content, the script will be fetched from the specified URL". A
+                   page-script row with no address is an inline script, whose source text came in the document's own
+                   response, rendered against this visitor's credentials; an external row's bytes are a subresource
+                   served identically to everybody, which is why its code holds the logged-in surface a logged-out
+                   visit never runs. The kind is asked too: a candidate body, a `javascript:` URL and a driven orphan
+                   are address-free and none is a `<script>` the server rendered. The solver reads this where it
+                   decides whether a missing member of a present record is unknown input or `undefined`
+                   (solver/absent.h). */
                 if (!ext && flow_dyn_kind(f) == DYN_PAGE_SCRIPT)
                     src_flags = JS_EVAL_FLAG_INLINE_SCRIPT;
             }
-            /* A MODULE IS A DIFFERENT ALGORITHM, NOT A FLAG — §8.1.4.4 has two entries and this is where they
-               part. A CLASSIC script is a program: JS_FlowNew wraps it in a preemptible frame the scheduler
-               resumes, and it completes with a VALUE. A MODULE is a graph: it is linked and evaluated, its body
-               is an async function on the flow machinery's own seam (so a top-level `await` and a loop
-               back-edge PARK it into the slot JS_ResumeParkedFlow drains at the top of this loop), and Evaluate
-               completes with a PROMISE — which is exactly why `await` at a module's top level is observable and
-               is a SyntaxError in the classic entry. Compiling every entry with JS_EVAL_TYPE_GLOBAL is how
-               `<script type=module>` reached this line indistinguishable from a classic one and came back a
-               SyntaxError from a parser that is fine. */
-            int started;   /* did the program START? — a classic gets a frame, a module has already evaluated */
+            /* A module is a different algorithm, not a flag: §8.1.4.4 has two entries and they part here. A classic
+               script is a program: JS_FlowNew wraps it in a preemptible frame the scheduler resumes, and it
+               completes with a value. A module is a graph: it is linked and evaluated, its body is an async function
+               on the flow machinery's seam (a top-level `await` or a loop back-edge parks it into the slot
+               JS_ResumeParkedFlow drains at the top of this loop), and Evaluate completes with a promise, which is
+               why a top-level `await` is a SyntaxError in the classic entry. */
+            int started;   /* did the program start: a classic gets a frame, a module has already evaluated */
             if (stype == SCRIPT_TYPE_MODULE) {
-                /* INITIALISED, because the entry below takes its ADDRESS and a suspended answer writes
-                   JS_UNDEFINED into it and nothing else — so the park arm's own assert reads a value this
-                   line put there rather than whatever the frame held. */
+                /* Initialised, because the entry takes its address and a suspended answer writes JS_UNDEFINED into
+                   it and nothing else, so the park arm's assert reads a value this line put there. */
                 JSValue ev = JS_UNDEFINED;
-                /* `prog_name` IS THIS MODULE'S RECORD IDENTITY — see the name above. JS_FlowEvalModule asserts
-                   it is non-empty for the same reason: it keys the module map, it is `import.meta.url`, and it
-                   is the base the loader registers each fetched dependency under. */
-                /* §4.12.1.1 "Processing model", "execute the script element", the MODULE arm's first step:
-                   "Assert: document's currentScript attribute is null." It is the standard's own assertion and
-                   it is BEHAVIOUR here rather than an exemption — the module arm has no set/restore bracket at
-                   all, so `import.meta` is what a module reads instead, and a non-null slot at this line means
-                   a classic script's bracket leaked past its own completion. */
+                /* `prog_name` is this module's record identity: it keys the module map, it is `import.meta.url`,
+                   and it is the base the loader registers each fetched dependency under, so JS_FlowEvalModule
+                   asserts it is non-empty. */
+                /* §4.12.1.1 Processing model, "execute the script element", the module arm's first step: "Assert:
+                   document's currentScript attribute is null." The module arm has no set/restore bracket (a module
+                   reads `import.meta` instead), so a non-null slot here means a classic script's bracket outlived
+                   its own completion. */
                 DCHECK(document_current_script_is_null(prog_ctx),
                        "§4.12.1.1's module arm asserts this document's currentScript is null and it is not — "
                        "a classic script's §3.1.7 bracket has outlived the program it belonged to, so this "
                        "module would run with some other script element globally exposed");
-                /* …AND THIS PARSE CAN NOW GIVE THE THREAD BACK PART WAY THROUGH, which is the third answer and
-                   is the whole of what this call gained. 16.2.1.7.1 ParseModule used to run with the seam
-                   DISARMED on this entry alone: `pd_can_yield` is set from `g_eval_compile_slot` and nowhere
-                   else, the slot's only non-NULL write was the CLASSIC entry's, and this call passed no
-                   carrier — so js_parse_want_yield answered false for the length of a module the PAGE chose,
-                   which is exactly the quantity solver/rest_unit.h's bound (1) names as the one that must
-                   never appear in a step's cost.
-                   NOTHING HERE IS BRACKETED OR COUNTED, AND THAT IS THE SAME DECISION THE PARAGRAPH BELOW
-                   RECORDS RATHER THAN A ROW SOMEBODY FORGOT: this entry compiles AND EVALUATES, so a timing
-                   bracket round it would time a parse and an execution together and a `compiles` row raised
-                   after it would count a program that has already RUN. The arm below is the reader.
-                   NO SHARED-PARSE CONSULT EITHER, which is a statement about the MECHANISM and not about this
-                   arm: `dyn_body_parse_ref` holds a CLOSURE a later flow instantiates, and a module's parse
-                   produces a RECORD that is linked and evaluated once under its own name — the module map is
-                   that phase's own memo (js_find_loaded_module) and a second one beside it would be the two
-                   answers to one question §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q" forbids. */
+                /* Passing `&f->compile` lets 16.2.1.7.1 ParseModule give the thread back part way through (the
+                   third answer), so a module's length, which the page chooses, never appears in a step's cost
+                   (solver/rest_unit.h's bound (1)). Nothing here is bracketed or counted: this entry compiles and
+                   evaluates, so a timing bracket would time a parse and an execution together and a `compiles` row
+                   would count a program that has already run. Nor is the shared parse consulted:
+                   `dyn_body_parse_ref` holds a closure a later flow instantiates, while a module's parse produces a
+                   record linked and evaluated once under its name, and the module map (js_find_loaded_module) is
+                   that phase's own memo. */
                 int mr = JS_FlowEvalModule(prog_ctx, body, body_n, prog_name, src_flags, &ev, &f->compile);
                 if (mr == 0) {
-                    /* PARKED MID-PARSE. No ENGINE_LEAVE_ROW and no cursor move, exactly as the classic arm
-                       below does it and for the same reason: the parse is suspended at an exact production,
-                       no bytecode has run, no side effect has been performed, this row is still the row the
-                       flow is at, and the ladder re-enters here when the flow is next picked. The pair of
-                       asserts above this block (`script_i > last_compiled || compile != NULL` and
-                       `compile == NULL || script_i == last_compiled`) is what keeps a parked parse from being
-                       resumed against a row the flow has moved off, and it covers this arm unchanged because
-                       both read the one field both entries park into. */
+                    /* Parked mid-parse. No ENGINE_LEAVE_ROW and no cursor move, as in the classic arm: no bytecode
+                       has run, this row is still the flow's row, and the ladder re-enters here when the flow is next
+                       picked. The pair of asserts above this block keeps the parked parse from resuming against
+                       another row; both read the one field both entries park into. */
                     DCHECK(f->compile != NULL && JS_IsUndefined(ev),
                            "a module compile answered SUSPENDED and left neither a parked parse nor an "
                            "evaluation — the flow would stand at a row whose module is neither evaluating "
@@ -8360,105 +8234,67 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 DCHECK(f->compile == NULL,
                        "a module compile that finished left a parked parse behind it — the next step would "
                        "resume a parse for a module that has already been linked and evaluated");
-                /* `started` IS THE SAME PREDICATE IT WAS, which is why the entry folds an abrupt evaluation
-                   into -1 rather than handing one back beside a status: this used to read
-                   `!JS_IsException(ev)` over a returned value, and `mr > 0` is that same question asked of
-                   the one answer instead of composed from two. */
+                /* `started` is asked of the entry's one answer: it folds an abrupt evaluation into -1 rather than
+                   returning a status beside a value. */
                 started = (mr > 0);
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
-                /* THE ROW'S OWN BODY, TAKEN BEFORE ANYTHING IS SPENT ON IT, AND THE ASSERT THAT GUARDS THAT
-                   IDENTITY MOVED UP WITH IT. It used to stand two hundred lines below, after the parse, under
-                   a message about a MARK being recorded against the wrong row; the body is now read BEFORE the
-                   parse — the shared-parse question is asked of it — so the same disagreement would hand this
-                   row a closure compiled from another row's bytes, which is strictly worse than a mis-filed
-                   census mark. The claim is unchanged and its position is what makes it cover both: `body` came
-                   off this row when the sequence arm read it and nothing between may have moved the cursor. */
+                /* The row's own body, asserted before anything is spent on it: the shared-parse question below is
+                   asked of it, so a cursor that moved between the sequence arm's read and here would hand this row
+                   a closure compiled from another row's bytes. */
                 DCHECK(f->script_i < f->dyn_n && dyn_body_text(f->dyn[f->script_i]) == body,
                        "the row the cursor names is not the row whose bytes this compile is about — the cursor "
                        "moved between the sequence arm's read and here, so this program would be started from "
                        "another row's parse and the repeat census would mark one program's bytes for another's");
                 DynBody *pb = f->dyn[f->script_i];
-                /* HAS SOME FLOW OF THIS PROCESS ALREADY PARSED THESE BYTES UNDER THIS ROW'S OWN KEY — asked of
-                   EVERY classic row, with no kind, no spelling and no population carved out, because a cache
-                   that is only sometimes consulted is the dual-system shape CLAUDE.md §A-superseded-system-is-
-                   DELETED forbids: the half it is not asked about keeps the old cost with nothing saying so.
-                   IT IS NOT A SECOND WAY TO OBTAIN A PROGRAM. There is ONE parse in this engine
-                   (JS_FlowCompileStep) and ONE instantiation (JS_FlowInstantiate), and this line changes only
-                   HOW MANY TIMES the first is spent for one set of bytes — which is why the false arm below is
-                   the PRODUCER rather than a legacy body: delete the hold and the parse still has to happen,
-                   which is §C-stack's own test for routing against fallback.
-                   THE KEY IS THE ROW'S, NOT THE BODY'S, and all three parts of it are already computed above
-                   for the compile itself: `prog_ctx` (the document's realm — JS_CallInternal takes the running
-                   realm from the BYTECODE, so a frame over a foreign closure runs against the wrong global),
-                   `prog_name` (the ScriptOrModule name, which is the module-map key and the base a relative
-                   `import()` resolves against) and `src_flags` (strictness and JS_EVAL_FLAG_INLINE_SCRIPT).
-                   Nothing here recomputes any of them, so the cache cannot key on a fact the compile does not.
-                   `f->compile == NULL` IS WHEN THE QUESTION CAN BE ASKED AT ALL, AND IS NOT A CARVE-OUT. A
-                   non-NULL carrier is this flow's OWN parse of THIS row, suspended at an exact production; the
-                   flow is not beginning a program, it is continuing one, and taking a shared closure here would
-                   leave that carrier live under a row whose program has started — which the assert below this
-                   block and JS_FlowCompileStep's own suspend assert both exist to forbid. So the consult is
-                   unconditional over ROWS and asked once per row, at the one stint that begins it. */
+                /* Has some flow of this process already parsed these bytes under this row's key? Asked of every
+                   classic row, with no kind or population carved out: a cache consulted only sometimes leaves the
+                   other half paying the old cost with nothing saying so. It is not a second way to obtain a program:
+                   there is one parse (JS_FlowCompileStep) and one instantiation (JS_FlowInstantiate), and this
+                   changes only how many times the parse is spent for one set of bytes, so the false arm is the
+                   producer, not a legacy body. The key is the row's, its three parts already computed for the
+                   compile: `prog_ctx` (the document's realm; JS_CallInternal takes the running realm from the
+                   bytecode, so a frame over a foreign closure runs against the wrong global), `prog_name` (the
+                   ScriptOrModule name, the module map key and the base of a relative `import()`) and `src_flags`
+                   (strictness and JS_EVAL_FLAG_INLINE_SCRIPT). `f->compile == NULL` is when the question can be
+                   asked at all: a non-NULL carrier is this flow's own suspended parse of this row, and taking a
+                   shared closure would leave it live under a started program, which the assert below and
+                   JS_FlowCompileStep's suspend assert forbid. So the consult is made once per row, at the stint that
+                   begins it. */
                 JSValue held = JS_UNDEFINED;
                 int shared = (f->compile == NULL)
                              && dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &held);
                 if (shared) {
-                    /* NO BRACKET AND NO COMPILE ROW IS RAISED HERE, WHICH IS WHAT KEEPS THE CENSUS'S OWN
-                       IDENTITIES EXACT. `g_classic_compiles` is ONE PER PROGRAM PARSED and this stint parses
-                       nothing; `g_classic_compile_over` times a parse and there is none to time; and the stint
-                       identity `compile STINTS == classic_compiles + arms[compile-handed-the-thread-back]`
-                       holds because a stint that never entered the parse is not a compile stint. The row that
-                       DOES rise is g_classic_parse_shared, and it is what makes a falling `classicCompiles`
-                       attributable — see its declaration. */
+                    /* No bracket and no compile row here, which keeps the census's identities exact:
+                       `g_classic_compiles` is one per program parsed and this stint parses nothing,
+                       `g_classic_compile_over` times a parse and there is none, and the stint identity
+                       `compile stints == classic_compiles + arms[compile-handed-the-thread-back]` holds because a
+                       stint that never entered the parse is not a compile stint. g_classic_parse_shared rises
+                       instead, which makes a falling `classicCompiles` attributable (see its declaration). */
                     f->frame = JS_FlowInstantiate(prog_ctx, held);
                     JS_FreeValue(prog_ctx, held);
                     g_classic_parse_shared++;
                 } else {
-                    /* THE COMPILE, BRACKETED — see g_classic_compiles. Both readings are in the slice's own
-                       measure (quantum_thread_us), so the comparison below is the same inequality
-                       quantum_expired() asks and not a second opinion about the budget.
-                       ONLY THE CLASSIC ARM IS BRACKETED, AND THAT IS THE POINT RATHER THAN AN OMISSION:
-                       JS_FlowEvalModule above compiles AND EVALUATES, so a bracket around it would time a
-                       compile and an execution together — which is the conflation these rows exist to end.
-                       A FAILED COMPILE IS COUNTED, because it PARSED the bytes and spent the time; the row is
-                       about what the span cost, never about what it produced. Nothing branches on either. */
-                    /* …AND THE COMPILE CAN NOW GIVE THE THREAD BACK PART WAY THROUGH, which is what the third
-                       answer is. JS_FlowCompileStep polls the SAME budget hook and the SAME preempt policy the
-                       interpreter's dispatch does, from the parse's own production dispatch, and hands the parse
-                       back through `f->compile`; the next stint continues it at the exact production. The row's
-                       program has NOT started, so nothing below this runs and the cursor does not move.
-                       WHY THE BRACKET STAYS AND WHAT IT NOW MEANS. It used to time a whole compile and the
-                       overrun row counted spans that could not have rested however the scheduler was ordered.
-                       It times one STINT now, and that is a sharper reading rather than a weaker one: a stint
-                       that meets the slice is a stint the seam DID NOT FIRE IN, so the row stops being a
-                       measurement of the page's source length and becomes a measurement of this seam.
-                       AND IT CHANGED THE ROW'S SUBJECT AND NOT ONLY ITS SHARPNESS, which is the half that was
-                       written here and never carried to the check that reads it. The numerator below is now PER
-                       STINT while `g_classic_compiles` a few lines down is PER PROGRAM, so `over <= compiles`
-                       stopped holding the instant this seam landed and the assert in engine_step_unit_runs went
-                       on stating it — measured, 15 against 14 on the native smoke, which is one program that
-                       took two overrunning stints rather than a counter raised somewhere else, and the assert's
-                       own text sent its reader looking for that second raise site. The denominator this
-                       numerator actually has is derived at the declaration (g_classic_compiles) out of the two
-                       arms every stint ends in; nothing extra is counted here, and a third accumulator beside
-                       these two would be the second answer that drifts. */
-                    /* …AND WHICH OF THE TWO KINDS OF STINT THIS ONE IS, READ BEFORE THE CALL BECAUSE THE CALL
-                       CONSUMES THE ANSWER — see g_classic_compile_resumed. JS_FlowCompileStep takes the carrier out
-                       of this slot (`*pcompile = NULL`) the moment it decides to continue a parse, so the field
-                       is NULL at every line below this one whichever kind of stint it was, and a read placed
-                       after the call would report every stint as a start. It is not a second copy of the
-                       predicate the compile itself branches on: the call is handed `&f->compile`, so this reads
-                       the same storage one statement earlier with nothing between the two that could write it.
-                       ABOVE THE TIMING BRACKET AND NOT INSIDE IT, so the span `g_classic_compile_over` is drawn
-                       from stays exactly the parse and nothing else — the bracket's own paragraph above is what
-                       makes that a reading of this seam rather than of the page's source length.
-                       UNCONDITIONALLY, AND NOT UNDER EITHER ARM BELOW: a resume is a fact about how this stint
-                       STARTED, so it is true of a stint that goes on to park again, one that finishes the parse
-                       and one whose parse ends in a SyntaxError alike. Raised under an arm it would partition the
-                       outcomes instead of the stints, and the subtraction at the declaration would then be a
-                       difference between two populations of different width. */
+                    /* The compile, bracketed (see g_classic_compiles). Both readings are in the slice's own measure
+                     * (quantum_thread_us), so the comparison is the inequality quantum_expired() asks. Only the
+                     * classic arm is bracketed: JS_FlowEvalModule compiles and evaluates, and a bracket around it
+                     * would time both together. A failed compile is counted, because it parsed the bytes and spent
+                     * the time. Nothing branches on either.
+                     *
+                     * JS_FlowCompileStep polls the same budget hook and preempt policy as the interpreter's
+                     * dispatch, from the parse's production dispatch, and hands a suspended parse back through
+                     * `f->compile`; the next stint continues it at the exact production, and nothing below runs.
+                     * So the bracket times one stint: a stint that meets the slice is one the seam did not fire in,
+                     * which makes `g_classic_compile_over` a measurement of this seam, not of the page's source
+                     * length. It is per stint while `g_classic_compiles` is per program; its denominator is derived
+                     * at g_classic_compiles's declaration from the two arms every stint ends in. */
+                    /* Whether this stint resumes a parse (g_classic_compile_resumed), read before the call because
+                       the call takes the carrier out of the slot (`*pcompile = NULL`) when it continues a parse; it
+                       reads the storage the call is handed, one statement earlier. Above the timing bracket, so the
+                       bracket's span stays the parse. Unconditional, not under an outcome arm: a resume is a fact
+                       about how the stint started, true of one that parks again, finishes or ends in a SyntaxError,
+                       and raised under an arm it would partition outcomes rather than stints. */
                     if (f->compile != NULL) g_classic_compile_resumed++;
                     int64_t t_comp0 = quantum_thread_us();
                     JSValue fn = JS_UNDEFINED;
@@ -8466,7 +8302,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     if (quantum_thread_us() - t_comp0 >= (int64_t)ENGINE_QUANTUM_MS * 1000)
                         g_classic_compile_over++;
                     if (cr == 0) {
-                        /* PARKED MID-PARSE. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
+                        /* Parked mid-parse. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
                            flow is at, and the ladder re-enters here when the flow is next picked. */
                         DCHECK(f->compile != NULL && JS_IsUndefined(fn),
                                "a compile answered SUSPENDED and left neither a parked parse nor a program — the "
@@ -8477,73 +8313,59 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     DCHECK(f->compile == NULL,
                            "a compile that finished left a parked parse behind it — the next step would resume a "
                            "parse for a program that has already started");
-                    /* A FAILED COMPILE IS STILL A COMPILE and a SUSPENDED one is not — see g_classic_compiles: the
+                    /* A failed compile is still a compile and a suspended one is not (see g_classic_compiles): the
                        row is about what the span cost, and a stint that handed the thread back has not finished
-                       spending it. Counting a stint would make the denominator the number of times the scheduler
+                       spending it. Counting stints would make the denominator the number of times the scheduler
                        looked at a parse rather than the number of programs parsed. */
                     g_classic_compiles++;
-                    /* …AND WHETHER THESE BYTES HAD BEEN PARSED BEFORE, PARTITIONED OFF THAT TOTAL AT THIS EVENT
-                       rather than left to be inferred from a denominator that is not published — see
-                       g_classic_compile_again for the inference this replaces and solver/dyn_body.h for why the
-                       identity is the BODY. ON THIS LINE AND NOT ONE EARLIER: a stint that handed the thread back
-                       has parsed part of a program and finished none, so marking at the entry would report the
-                       SECOND stint of one parse as a repeat of its own first.
-                       AND THE ROW STAYS NONZERO BY DESIGN RATHER THAN BY OVERSIGHT NOW THAT A PARSE IS SHARED, for
-                       two populations this block is the only site that can see: a program whose parse FAILED holds
-                       nothing (its result is an exception, which is one flow's completion and not a fact about the
-                       bytes), and a flow already mid-parse of a row another flow finished in the meantime resumes
-                       its own parse to the end. Both really do parse bytes twice, so counting them is the census
-                       being right rather than the cache being half-consulted. */
+                    /* Whether these bytes had been parsed before, partitioned off that total at this event (see
+                       g_classic_compile_again, and solver/dyn_body.h for why the identity is the body). On this
+                       line, not at the entry: a stint that handed the thread back has finished no program, so
+                       marking at the entry would report the second stint of one parse as a repeat of its first.
+                       The row stays nonzero with the parse shared, for two populations only this block can see: a
+                       program whose parse failed holds nothing (its exception is one flow's completion, not a fact
+                       about the bytes), and a flow already mid-parse of a row another flow has since finished
+                       resumes its own parse to the end. Both parse the bytes twice. */
                     if (dyn_body_note_parsed(pb)) {
                         g_classic_compile_again++;
                         g_classic_compile_again_bytes += (int64_t)dyn_body_len(pb);
                     }
-                    /* THE FLOOR'S BOUND, RAISED UNCONDITIONALLY BECAUSE IT IS A PROPERTY OF THE BUFFER AND NOT
-                       OF THIS PARSE: a reply is decoded PER DELIVERY, so two arms parked on one external row
-                       adopt two buffers over the same chunk and a repeat between them is UNOBSERVABLE above.
-                       A reader therefore has repeats in [`again`, `again + ownDecode`] instead of a floor and
-                       a sentence, and the upper end is loose by the number of DISTINCT such programs — which
-                       is the honest direction and is why it is published rather than described. */
+                    /* The floor's bound, raised unconditionally because it is a property of the buffer, not of
+                       this parse: a reply is decoded per delivery, so two arms parked on one external row adopt two
+                       buffers over the same chunk and a repeat between them is unobservable above. Repeats are
+                       therefore in [`again`, `again + ownDecode`], the upper end loose by the number of distinct
+                       such programs. */
                     if (dyn_body_is_own_decode(pb)) g_classic_compile_own_decode++;
                     if (cr > 0) {
-                        /* HELD FOR EVERY LATER TIMELINE THAT REACHES THESE BYTES — the whole of the fix, and it is
-                           one call because the identity it keys on is the one the repeat census already keys on
-                           (solver/dyn_body.h). The body takes its OWN reference, so this flow still owns `fn` and
-                           frees it below exactly as it did when the two halves were one entry. A second offer of
-                           one body's parse keeps the FIRST closure, for the reason dyn_body_parse_hold states:
-                           `entered` is a mutable bit ON the bytecode and it IS the orphan identity. */
+                        /* Held for every later timeline that reaches these bytes, keyed on the identity the repeat
+                           census keys on (solver/dyn_body.h). The body takes its own reference, so this flow still
+                           owns `fn` and frees it below. A second offer of one body's parse keeps the first closure,
+                           for the reason dyn_body_parse_hold states: `entered` is a mutable bit on the bytecode and
+                           is the orphan identity. */
                         dyn_body_parse_hold(pb, prog_ctx, prog_name, src_flags, fn);
                         f->frame = JS_FlowInstantiate(prog_ctx, fn);
                         JS_FreeValue(prog_ctx, fn);
                     } else {
-                        /* THE PARSE FAILED AND THE EXCEPTION IS PENDING — no program starts, which is what
-                           §4.12.1.1's "if el's result is null, then fire an event named error at el, and return"
-                           says, and nothing is held: see the paragraph above for why a SyntaxError is not a fact
-                           about the bytes that a later timeline may inherit. */
+                        /* The parse failed and the exception is pending: no program starts (§4.12.1.1's "if el's
+                           result is null, then fire an event named error at el, and return"), and nothing is held,
+                           since a SyntaxError is not a fact about the bytes a later timeline may inherit. */
                         f->frame = NULL;
                     }
                 }
                 started = (f->frame != NULL);
-                /* §4.12.1.1's CLASSIC arm, steps 1-2, and the reason they are HERE and not around a call: the
-                   arm's third step ("run the classic script") is the JS_FlowNew above plus every JS_FlowResume
-                   that follows it, spread over an unbounded number of scheduler steps with sibling flows
-                   running in between. A C save/restore bracket would set the slot for whichever flow happened
-                   to be running when the NEXT program started — CLAUDE.md §scheduler's "an operation that
-                   becomes a work item takes its inputs with it". The write instead rides this flow's COW
-                   delta (core/dom/document_current_script.c), so a context switch unapplies it, a park carries
-                   it, and a resume brings it back byte-identical.
-                   ONLY IF THE PROGRAM STARTED: a compile that failed runs no script, which is what
-                   §4.12.1.1's own "if el's result is null, then fire an event named error at el, and return"
-                   says one step earlier — so there is nothing to bracket and the restore below is not owed. */
+                /* §4.12.1.1's classic arm, steps 1-2, here rather than around a call: the arm's third step ("run
+                   the classic script") is JS_FlowNew plus every JS_FlowResume after it, spread over any number of
+                   scheduler steps with sibling flows running between. A C save/restore bracket would set the slot
+                   for whichever flow was running when the next program started; the write instead rides this
+                   flow's COW delta (core/dom/document_current_script.c), so a context switch unapplies it, a park
+                   carries it and a resume restores it byte-identically. Only if the program started: a failed
+                   compile runs no script, so there is nothing to bracket and the restore below is not owed. */
                 if (started && flow_dyn_el(f)) {
-                    /* …AND STEP 1'S oldCurrentScript IS NULL FOR A ROW OF THIS SEQUENCE, asserted HERE because
-                       this is the one caller whose premise supports it: a flow holds at most ONE live program
-                       frame (the compile above runs only under `!f->frame`), so the previous row's restore has
-                       already run by the time this one starts. A non-null value is the C-bracket bug arriving —
-                       a restore that was skipped, or two flows' writes leaking across the COW delta so a
-                       sibling's element is being read as this one's. §4.12.1.1 step 36's NESTED run is the
-                       caller that cannot make this claim, and it carries the value instead
-                       (core/html/html_script.c). */
+                    /* Step 1's oldCurrentScript is null for a row of this sequence, asserted here because this
+                       caller's premise supports it: a flow holds at most one live program frame (the compile runs
+                       only under `!f->frame`), so the previous row's restore has already run. A non-null value is a
+                       skipped restore, or two flows' writes leaking across the COW delta. §4.12.1.1 step 36's nested
+                       run cannot make this claim and carries the value instead (core/html/html_script.c). */
                     JSValue old = document_current_script_set(prog_ctx, flow_dyn_el(f));
 
                     DCHECK(JS_IsNull(old),
@@ -8555,16 +8377,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     JS_FreeValue(prog_ctx, old);
                 }
             }
-            /* HOW MANY PROGRAMS STARTED, COUNTED WHERE `started` IS DECIDED AND AT NO OTHER LINE. Both arms
-               above answer it — a module from `mr > 0`, a classic from `f->frame != NULL` — and this is the
-               first line at which either answer is in hand, which is the whole reason the raise is here
-               rather than at the compile two hundred lines up (see the retired paragraph there). The three
-               move together because they are ONE partition, and engine_frontier_census asserts that identity
-               where all three are in one hand.
-               A FAILED COMPILE IS NOT A START EITHER, AND THAT IS CLOSED IN THE SAME MOTION rather than as a
-               second diff: `started` is false for a SyntaxError and for the OOM floor, and both of those used
-               to be counted as programs that started. §4.12.1.1's own "if el's result is null, then fire an
-               event named error at el, and return" is the standard saying so. */
+            /* How many programs started, counted where `started` is decided and nowhere else: the module arm
+               answers from `mr > 0`, the classic from `f->frame != NULL`, and this is the first line with either
+               answer in hand. A failed compile is not a start (a SyntaxError or the OOM floor leaves `started`
+               false), as §4.12.1.1's "if el's result is null, then fire an event named error at el, and return"
+               says. The three counters are one partition, asserted in engine_frontier_census. The arm is read from
+               the row at the cursor, never the flow: a candidate session (`Flow.cand_src`) re-runs the document
+               from the baseline and compiles the page's own programs too, and `progQueuedCand` is the ask these
+               starts are read against. */
             DCHECK(f->compile == NULL,
                    "a program's start is being counted while this flow still holds a suspended parse — both "
                    "compile arms above assert the carrier is NULL once they have an answer and both park arms "
@@ -8575,59 +8395,44 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 if (flow_dyn_kind(f) == DYN_CANDIDATE) g_prog_starts_cand++; else g_prog_starts_other++;
             }
             if (!started) {
-                /* WHAT ACTUALLY FAILED, read before anything is decided from it. A compile can fail two ways
-                   and they are not the same event: a SyntaxError is the program's, and OUT OF MEMORY is the
-                   physical floor — the frontier could not hold another flow. Reporting the second as the first
-                   sends every reader looking for a parse bug in code that parses; it cost most of a session. */
+                /* What failed, read before anything is decided from it. A SyntaxError is the program's; out of
+                   memory is the physical floor. Reporting the second as the first sends a reader looking for a
+                   parse bug in code that parses. */
                 JSValue exc = JS_GetException(ctx);
                 bool oom = JS_IsOutOfMemoryError(ctx, exc);
 
-                /* OOM IS A `CHECK`, in dev and in release alike: a dropped flow corrupts the frontier, and
-                   there is no version of this the engine may proceed past.
-                   AND REACHING IT NOW MEANS SOMETHING NARROWER THAN IT USED TO, because the partial self-park
-                   is built and this allocation is INSIDE its safepoint. The refusal that produced this NULL
-                   already went through the runtime's reclaim edge (quickjs.h's JSMemoryReclaimFunc, answered by
-                   engine_reclaim_tail below), which paged the lowest-weight member out to the cold tier and
-                   retried — and it did that for as long as it had a member to give. So a NULL here is not "the
-                   frontier could not hold another flow"; it is "the frontier is down to the flow that is
-                   RUNNING and one more allocation would not fit". That is the physical floor with nothing left
-                   to sell, and the only thing carrying past it is the host: a whole-engine park (Level-1
-                   eviction) frees the RAM of a document this instance should not be holding at all.
-                   WHAT IS STILL NOT COVERED, so that a reader standing here knows where to look: the reclaim is
-                   armed only inside a flow step (engine_reclaim_allow), because that is the one region in which
-                   the engine holds no position in its own frontier. An allocation refused at HOST time — in a
-                   walk over the flows, in the result document, in a reply being routed — is refused with the
-                   tail still unsold, and its failure is reported by whoever asked for it rather than here. */
+                /* OOM is a CHECK in dev and release alike: a dropped flow corrupts the frontier. This allocation
+                   is inside the partial self-park's safepoint, so the refusal behind this NULL already went
+                   through the runtime's reclaim edge (quickjs.h's JSMemoryReclaimFunc, answered by
+                   engine_reclaim_tail), which paged the lowest-weight member out to the cold tier and retried for
+                   as long as it had a member to give. A NULL here means the frontier is down to the running flow,
+                   and only the host's Level-1 eviction (a whole-engine park) carries past it. The reclaim is armed
+                   only across a flow step (`g_reclaim_allowed`), the one region in which the engine holds no
+                   position in its own frontier; an allocation refused at host time (a walk over the flows, the
+                   result document, a reply being routed) is refused with the tail unsold and reported by its
+                   asker. */
                 CHECK(!oom, "the frontier could not hold another flow after the cold tier had already paged out "
                             "every member it could — this is the physical RAM floor with the tail already sold. "
                             "The engine is down to the flow that is running; what carries past this is the "
                             "HOST's Level-1 eviction (engine_request_park), which gives up this whole document's "
                             "residue for a document worth more");
-                /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
-                   several breakouts per sink precisely because most do not fit most contexts. A `javascript:`
-                   URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
-                   no navigation — `<a href="javascript:{{{">` is a link that does nothing, not an engine bug. A
-                   PAGE script that does not compile is a different thing entirely and still asserts. */
-                /* FOR A MODULE THIS IS THE COMPILE AND ONLY THE COMPILE. It used to name linking too, and that
-                   stopped being true when loading became its own phase: §8.1.4.4's module entry now LOADS the
-                   graph (16.2.1.6.1.1, asynchronous — the host fetches each specifier) and links it only upon
-                   that load's fulfilment, so a graph that fails to load or to link REJECTS the evaluation
-                   promise and is reported by module_report_rejection, exactly as HTML's "set moduleScript's
-                   error to rethrow" says. What can still fail before a module starts is 16.2.1.7.1 ParseModule,
-                   which is the page's own SyntaxError. */
-                /* A CROSS-AGENT OPERATION'S PROGRAM IS THE ENGINE'S OWN TEXT (core/frame/remote_op.c), so it
-                   parses or this engine wrote it wrong — and skipping it would leave the peer's flow parked on
-                   an answer that is now never coming.
-                   BOTH ASSERTS CARRY THE SyntaxError, WHICH IS THE ONLY PART A READER CAN ACT ON. They named
-                   the EVENT and freed the description of it one line below, and the cost was measured: five of
-                   eleven real production bundles (developer.mozilla.org, vuejs.org) abort here, and the abort
-                   said nothing about which construct the parser refused or where. `exc` already carries the
-                   message and, through the error's stack slot, the position — so the DCHECK's own text is where
-                   that belongs, exactly as the reader of a `@WHY` gets a file:line and no stack. */
+                /* An @S candidate that does not parse is a dead candidate: the search tries several breakouts per
+                   sink because most do not fit most contexts. A `javascript:` URL that does not parse is HTML
+                   §7.4.2.3.2's abrupt evaluation, which produces no Document and no navigation
+                   (`<a href="javascript:{{{">` is a link that does nothing). A page script that does not compile
+                   still asserts. */
+                /* For a module this is the parse only: §8.1.4.4's module entry loads the graph (16.2.1.6.1.1,
+                   asynchronous; the host fetches each specifier) and links it on that load's fulfilment, so a graph
+                   that fails to load or link rejects the evaluation promise and is reported by
+                   module_report_rejection, as HTML's "set moduleScript's error to rethrow" says. What fails before
+                   a module starts is 16.2.1.7.1 ParseModule, the page's own SyntaxError. */
+                /* A cross-agent operation's program is the engine's own text (core/frame/remote_op.c), so it parses
+                   or this engine wrote it wrong, and skipping it would leave the peer's flow parked on an answer
+                   never coming. The asserts carry the SyntaxError, the part a reader can act on: `exc` holds the
+                   message and, through the error's stack slot, the position. */
 #if APICLIENT_DEV
-                /* AND A HOST INSTRUMENT'S PROGRAM IS TEXT THE HOST WROTE, so it parses or the instrument
-                   is wrong — skipping it would leave the driver with an empty register and nothing anywhere
-                   saying the program never ran, which reads as a document that produced no geometry. */
+                /* And a host instrument's program is text the host wrote, so it parses or the instrument is wrong;
+                   skipping it would leave the driver an empty register, reading as a document with no geometry. */
                 if (kind == DYN_PAGE_SCRIPT || kind == DYN_CROSS_AGENT_OP || kind == DYN_VALUE_DUMP) {
                     char et[320];
 
@@ -8647,81 +8452,57 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 }
 #endif
                 JS_FreeValue(ctx, exc);
-                /* STEP OVER IT. Not advancing left the flow pointing at the same unparseable body, so the next
-                   scheduler step compiled it again, and again — the flow could never finish and never made
-                   progress. It was invisible because the search seeds several breakouts per sink and most do
-                   not fit most contexts, so a dead candidate looks exactly like a busy one from the outside;
-                   the no-replay DCHECK at the compile site is what named it. Dead means SKIPPED, which is what
-                   "a dead candidate and nothing more" was always supposed to mean. */
-                /* AND IT IS THE ONE ARM OF THIS LADDER THAT ADVANCES THE CURSOR WITHOUT RUNNING ANYTHING, which
-                   is why it is its own row rather than sharing one with a program that started. A frontier
-                   standing here is stepping THROUGH bodies rather than executing them — a run of dead @S
-                   candidates, or a page whose modules do not parse — and the work that answers it is at the
-                   compile, never at the scheduler. */
+                /* Step over it. Not advancing would leave the flow at the same unparseable body, compiled again on
+                   every step, never finishing and never progressing; a dead candidate is skipped. This is the one
+                   arm of the ladder that advances the cursor without running anything, so it has its own row: a
+                   frontier standing here is stepping through bodies (a run of dead @S candidates, or a page whose
+                   modules do not parse), and the work that answers it is at the compile, never the scheduler. */
                 g_step_unit = STEP_UNIT_NO_COMPILE;
                 ENGINE_LEAVE_ROW(f);
                 return 0;
             }
-            /* A MODULE HAS ALREADY RUN AS FAR AS IT GOES IN THIS UNIT, so this entry is finished here and the
-               flow leaves with no frame of its own. There is nothing for the resume below to hold: a module
-               body is an async activation the flow machinery owns, not a program handle — it parked itself into
-               the slot the top of this loop drains (a top-level `await`, or a loop back-edge under the forced
-               preempt), and the scheduler resumes it there like every other parked continuation. Its evaluation
-               promise settling is likewise a FLOW resuming and not a drain: the reaction is a microtask on THIS
-               flow's queue, run by the checkpoint above, which is why nothing here waits for it. */
-            /* …AND IT IS ITS OWN ARM, because it is §8.1.4.4's OTHER entry and the difference is exactly what
-               the census has to be able to see: this exit leaves the flow with NO FRAME, so the next step
-               enters the ladder above at `if (!f->frame)` and the flow's own queued reactions are reachable,
-               while the classic exit below leaves a live frame and every job arm is out of reach until it
-               completes. Two arms, two shapes of frontier. */
+            /* A module has already run as far as it goes in this unit, so its row is finished here and the flow
+               leaves with no frame of its own. A module body is an async activation the flow machinery owns, not a
+               program handle: it parked itself into the slot the top of this loop drains (a top-level `await`, or a
+               loop back-edge under the forced preempt), and the scheduler resumes it there like every parked
+               continuation. Its evaluation promise settles as a reaction on this flow's queue, run by the
+               checkpoint above, so nothing here waits for it. It is its own arm, §8.1.4.4's other entry: this exit
+               leaves no frame, so the flow's queued reactions are reachable on the next step, while the classic
+               exit below leaves a live frame and every job arm is out of reach until it completes. */
             if (stype == SCRIPT_TYPE_MODULE) {
                 g_step_unit = STEP_UNIT_EVALUATE_MODULE;
                 ENGINE_LEAVE_ROW(f);
                 return 0;
             }
         }
-        /* HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet — built at the completion
-           below and INSTALLED after that completion's frame has been freed, which is the only reason it is
-           declared out here rather than beside the completion it belongs to: the report takes the slot, so it
-           cannot be put there while the slot is still occupied. NULL for every completion that owes none, which
-           is every completion but a classic script's abrupt one. */
+        /* HTML §8.1.4.4 Calling scripts, run a classic script step 8's third bullet: built at the completion below
+           and installed after that completion's frame has been freed, since the report takes the slot; declared out
+           here for that reason. NULL for every completion but a classic script's abrupt one. */
         JSValue *report = NULL;
-        /* IS THE FRAME ABOUT TO RUN A PROGRAM OR A CALL — asked of the FRAME, before it can complete and be
-           freed, because the two completions mean different things below and nothing else can tell them
-           apart. A driven orphan's flow runs its call and then goes on to run whatever that call queued
-           (a lazy chunk it loaded is an ordinary program of this flow's sequence), so `f->orphan` says what
-           the FLOW is and this says what THIS completion is. The position in the sequence cannot answer it:
-           a row queued by the running call moves the cursor back inside the sequence while the call frame
-           is still live.
-           DECLARED OUT HERE FOR THE SAME REASON `report` IS, and that is a correction rather than a tidy-up: it
-           was scoped to the block below, so the one consumer that is BELOW the block — the cursor advance at
-           the tail — could not ask it and advanced for a call as if a call were a row. See that site. */
+        /* Whether the frame is about to run a program or a call, asked of the frame before it can complete and be
+           freed, since the two completions mean different things below. A driven orphan's flow runs its call and
+           then whatever that call queued (a lazy chunk it loaded is an ordinary program of this flow's sequence),
+           so `f->orphan` says what the flow is and this says what this completion is. The position in the sequence
+           cannot answer it: a row queued by the running call moves the cursor back inside the sequence while the
+           call frame is live. Declared out here so the cursor advance at the tail can ask it too. */
         int is_call = JS_FlowIsCall((JSValue *)f->frame);
-        /* …AND WHETHER IT IS A PROGRAM, WHICH IS A DIFFERENT QUESTION AND NOT THE NEGATION OF THAT ONE. The
-           four consumers below that mean "this completion finished the row at the cursor" all asked `!is_call`,
-           and a base has THREE kinds: `!is_call` answers TRUE for the third — a CLONE OF AN ACTIVATION THIS
-           HOST NEVER CREATED, taken by JS_FlowClone at a concolic branch inside a MODULE BODY, whose row
-           flow_step's own module arm LEFT the instant HTML §8.1.4.4 "Calling scripts"' run a module script
-           Evaluate returned. So an arm of a module body read as that row's program: it left the row a SECOND
-           time, which ENGINE_LEAVE_ROW aborts on where the cursor is already at the end (measured, on a
-           mirrored production bundle) and which SKIPS THE NEXT ROW IN SILENCE where it is not, because a row
-           behind the cursor is never compiled and flow_programs_unstarted_for_document does not count it
-           either. See JS_FlowIsProgram; both are one read of `base_kind`, so they cannot come apart.
-           THE ARM'S HOME IS THIS SLOT AND ALWAYS WAS — that is what the third kind was ADDED for. JS_FlowResume
-           has a FLOW_BASE_ASYNC_CALL arm whose own text says "a flow whose base is a module body … is the
-           sibling of a fork inside one; the scheduler drives it here", and it refuses the alternative in the
-           same breath: "two drivers for one state is how a flow gets resumed twice". What was missing was never
-           a home, it was the question. */
+        /* And whether it is a program, which is not the negation of `is_call`. A base has three kinds, and
+           `!is_call` is also true of a clone of an activation this host never created, taken by JS_FlowClone at a
+           concolic branch inside a module body, whose row flow_step's module arm left when HTML §8.1.4.4 "Calling
+           scripts"' run a module script Evaluate returned. Read as that row's program, such an arm would leave the
+           row a second time: ENGINE_LEAVE_ROW aborts where the cursor is at the end, and elsewhere the next row is
+           skipped in silence (a row behind the cursor is never compiled, and flow_programs_unstarted_for_document
+           does not count it). The consumers that mean "this completion finished the row at the cursor" ask this;
+           both are one read of `base_kind` (JS_FlowIsProgram). The third kind is driven by JS_FlowResume's
+           FLOW_BASE_ASYNC_CALL arm, which refuses a second driver: "two drivers for one state is how a flow gets
+           resumed twice". */
         int is_program = JS_FlowIsProgram((JSValue *)f->frame);
-        /* AND THE FRAME AND THE CURSOR PAIR AGREE ABOUT IT, WHICH IS THE ONE THING EITHER OF THEM CAN BE
-           CHECKED AGAINST. flow.c's flow_programs_unstarted_for_document already declares the cursor side:
-           "between two programs the cursor stands one past the last started row and DURING one it stands ON
-           it" — so `last_compiled == script_i` IS "this flow is inside a program of its sequence", derived from
-           two fields the compile site maintains and this slot does not. `f->reporting` is the one call frame
-           that IS the row's remaining work (§8.1.4.4 step 8's report is inside step 8, so the row is still the
-           reporting flow's), which is why it sits on the frame side of the equality rather than beside it.
-           TWO-SIDED, so neither side can drift: a frame kind that stops matching the cursor pair fires here
-           rather than at whichever of the four consumers below happened to be reached first. */
+        /* The frame and the cursor pair agree about it. flow.c's flow_programs_unstarted_for_document declares the
+           cursor side ("between two programs the cursor stands one past the last started row and during one it
+           stands on it"), so `last_compiled == script_i` is "inside a program of its sequence", from two fields
+           the compile site maintains. `f->reporting` is the one call frame that is the row's remaining work
+           (§8.1.4.4 step 8's report is inside step 8), so it sits on the frame side. Two-sided, so a frame kind
+           that stops matching the cursor pair fires here rather than at whichever consumer is reached first. */
         DCHECKF((is_program || f->reporting) == (f->last_compiled == f->script_i),
                 "this flow's FRAME and its CURSOR disagree about whether it is inside a program of its own "
                 "sequence: the frame says %s and the pair says %s (script_i=%d last_compiled=%d "
@@ -8734,73 +8515,51 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 f->script_i, f->last_compiled, is_program, is_call, f->reporting);
         {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
-               taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
+               taken and released here, never discarded by the engine, which would hide a live value from the host. */
             JSValue cv = JS_UNDEFINED;
-            /* DID THIS STEP START THE FRAME IT IS ABOUT TO RESUME — the one question this line used to answer
-               the same way for both. The block above is the ONLY thing in this function that writes
-               `last_compiled`, and it writes it strictly upward, so the field having moved across that block is
-               the compile itself and not a second record of it. A flow that arrived here with a live frame did
-               not enter the block at all and reads the value it entered with.
-               THE TWO ARE OPPOSITE FACTS ABOUT A FRONTIER, WHICH IS WHY ONE ROW COULD NOT CARRY THEM: a START
-               has advanced this flow's HTML §4.12.1.1 position — a program of the document that had never run is now
-               running — and a RESUME has advanced a program counter inside one that already was. A census in
-               which every step is a resume and one in which every step starts a new program are the same
-               census when they share a row, and "the members are not retiring" is exactly the state in which
-               the difference is the whole diagnosis. */
+            /* Whether this step started the frame it is about to resume. The block above is the only writer of
+               `last_compiled` in this function and writes it strictly upward, so the field moving across that block
+               is the compile itself; a flow that arrived with a live frame never entered the block. The two are
+               opposite facts about a frontier: a start advances this flow's HTML §4.12.1.1 position (a program that
+               had never run is now running), a resume advances a program counter inside one already running, and a
+               census of all starts and one of all resumes are the same census when they share a row. */
             int started_here = (f->last_compiled != last_compiled0);
-            /* NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: a start whose PARSE SPANNED
-               SEVERAL STINTS. `f->last_compiled = f->script_i` runs at the TOP of the compile site, above the
-               shared-parse consult and above JS_FlowCompileStep, so a parse that hands the thread back parks
-               with the field ALREADY at the cursor — and the later stint that finishes that parse, installs
-               the frame and falls through to this line reads the field UNMOVED. So `started_here` is
-               `last_compiled MOVED ON THIS STEP`, which is `this step is the FIRST stint of this row's parse`,
-               and the five start rows (`start-a-classic-program`, `start-blocked-on-a-host-answer`,
-               `start-ended-its-frame`, `start-reported-an-exception`, `start-detached-its-base`) are the
-               classic starts whose parse finished in ONE stint plus those taken from a parse another timeline
-               had already finished — never the starts. Every step that installs a frame for a multi-stint
-               parse is filed under `resume-program` or one of its three siblings, which is exactly the merge
-               solver/step_unit.h's start/resume split exists to END, arriving through this PREDICATE rather
-               than through a missing arm.
-               WHAT THE NEXT DIFF BUILDS: the question asked of the FRAME rather than of the cursor pair.
-               `framed_at_entry` is read before the loop and is already exactly "this call did not install the
-               frame it is about to resume", so a call that reaches this line having entered UNFRAMED installed
-               one here — true on every stint that installs a frame and on no stint that does not, for a shared
-               parse as for a parsed one. It is the same SELECT-rather-than-skip the four outcomes of
-               JS_FlowResume below already are, over a reading this function already takes.
-               HOW ITS ABSENCE WOULD SHOW: on a document whose programs are long enough for the parse to rest,
-               `sum(start rows) - classicParseShared` stands BELOW `classicCompiles` while
-               `compile-handed-the-thread-back` is nonzero, with the missing starts sitting in `resume-program`
-               and its three siblings — so a reader of that census reads a frontier grinding inside its
-               programs at steps where a program of the document was starting for the first time, which is the
-               one reading those two rows were split apart to be able to tell from each other. */
-            /* AND A PROGRAM THIS STEP STARTED IS NEVER A CALL, which is not decoration: three consumers below
-               (`g_completed`, §4.12.1.1 step 4's restore, and the cursor advance at the tail) are each guarded
-               by `is_call` on the premise that a call frame holds no row of the sequence, and the frame the
-               block above just built holds the row `last_compiled` was written from. A true reading here would
-               mean the compile produced a call root, and all three of those guards would then be excluding the
-               one frame that IS this row's program. */
+            /* Named residual. Not covered: a start whose parse spanned several stints. `f->last_compiled =
+             * f->script_i` runs at the top of the compile site, above the shared-parse consult and
+             * JS_FlowCompileStep, so a parse that hands the thread back parks with the field already at the
+             * cursor, and the later stint that finishes it, installs the frame and reaches this line reads it
+             * unmoved. `started_here` is therefore "this step is the first stint of this row's parse": the five
+             * start rows (`start-a-classic-program`, `start-blocked-on-a-host-answer`, `start-ended-its-frame`,
+             * `start-reported-an-exception`, `start-detached-its-base`) count classic starts parsed in one stint
+             * plus those taken from a parse another timeline finished, and a multi-stint start is filed under
+             * `resume-program` or a sibling. Next diff builds: the question asked of the frame. `framed_at_entry`,
+             * read before the loop, is "this call did not install the frame it is about to resume", true on every
+             * stint that installs a frame and no other, for a shared parse as for a parsed one. Absence shows as:
+             * on a document whose programs are long enough for the parse to rest, `sum(start rows) -
+             * classicParseShared` below `classicCompiles` while `compile-handed-the-thread-back` is nonzero, with
+             * the missing starts in `resume-program` and its siblings. */
+            /* A program this step started is never a call. Three consumers below (`g_completed`, §4.12.1.1 step
+               4's restore, and the cursor advance at the tail) are guarded by `is_call` on the premise that a call
+               frame holds no row of the sequence, and the frame the block above built holds the row
+               `last_compiled` was written from; a true reading would have all three exclude this row's program. */
             DCHECK(!started_here || !is_call,
                    "the frame a step just COMPILED reports itself as a call root — JS_FlowNew builds a program "
                    "base, so this is a compile that produced something else, and the three consumers below "
                    "that exclude calls would each exclude the row this step just started");
             g_step_unit = started_here ? STEP_UNIT_START_PROGRAM : STEP_UNIT_RESUME_PROGRAM;
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
-            /* HTML §6.10.1 "Close requests"' STEP 9, TAKEN OUT OF THE ONE PLACE A TASK'S COMPLETION VALUE IS
-               IN HAND. "Alternative processing: Otherwise, there was nothing watching for a close request. The
-               user agent may instead interpret this interaction as some other action, instead of interpreting
-               it as a close request." The "may" is this engine's and it declines — there is nothing here to
-               reinterpret the gesture AS — but the FACT is what stops the arrival being modelled again in this
-               timeline, and it is the algorithm's own answer rather than a second question asked of the
-               manager behind its back. Latched and never cleared: a path cannot un-observe it.
-               IT IS THE FIRST ARM OF THIS CHAIN AND THAT ORDER IS LOAD-BEARING, for `is_call`'s reason exactly:
-               `close_req` is a fact about the LIVE FRAME and `flow_dyn_kind` is a fact about the ROW AT THE
-               CURSOR, and the frame completing here is not that row. Past the end of the sequence the kind
-               answers DYN_PAGE_SCRIPT, so the arm below could not claim a task — but a `close` handler that
-               loads a chunk or is handed a cross-agent operation moves `dyn_n` PAST the cursor while the task
-               is still running, and then it could: the operation's answer machinery would be handed step 9's
-               boolean, a peer would resume on it, and this flow would never latch and would model close
-               requests for ever. Both readings are wrong and neither would say so.
-               THE TWO ARMS ARE SPLIT ON `JS_IsException` because a completion is either abrupt or a value. */
+            /* HTML §6.10.1 Close requests' step 9, taken where a task's completion value is in hand: "Alternative
+               processing: Otherwise, there was nothing watching for a close request. The user agent may instead
+               interpret this interaction as some other action, instead of interpreting it as a close request."
+               This engine declines the "may" (there is nothing to reinterpret the gesture as), but the fact stops
+               the arrival being modelled again in this timeline, and it is the algorithm's own answer. Latched and
+               never cleared: a path cannot un-observe it. It is the first arm of this chain, for `is_call`'s
+               reason: `close_req` is a fact about the live frame and `flow_dyn_kind` about the row at the cursor,
+               which is not the frame completing here. A `close` handler that loads a chunk or is handed a
+               cross-agent operation moves `dyn_n` past the cursor while the task runs, so the arm below could
+               claim the task: the operation's answer machinery would be handed step 9's boolean, a peer would
+               resume on it, and this flow would never latch and would model close requests for ever. The arms
+               split on `JS_IsException` because a completion is either abrupt or a value. */
             if (r == 0 && f->close_req && !JS_IsException(cv)) {
                 DCHECK(is_call,
                        "a modelled close request's frame does not report itself as a call root — it is built "
@@ -8815,47 +8574,38 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "take_result false and the boolean was freed one frame below this read");
                 if (JS_ToBool(ctx, cv)) f->close_req_none = 1;
             }
-            /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED AHEAD OF EVERY THROW ARM
-               BELOW because the two readings of a throw are mutually exclusive: this program is another
-               agent's operation, so its throw belongs to the flow that ASKED — reported here as this
+            /* A cross-agent operation's completion is an answer, asked ahead of every throw arm below because this
+               program is another agent's operation: its throw belongs to the flow that asked, and reported as this
                document's page error it would be lost and the peer would resume with `undefined` where the spec
-               propagates a throw. It now stands SECOND rather than first, behind the one arm that is about the
-               live FRAME rather than about the row at the cursor; see that arm for why the order between them
-               is not a preference. */
+               propagates a throw. It stands behind the close-request arm, which is about the live frame rather
+               than the row at the cursor (see that arm for why the order is not a preference). */
             else if (r == 0 && flow_dyn_kind(f) == DYN_CROSS_AGENT_OP)
                 flow_answer_perform(ctx, f, cv);
-            /* A HOST INSTRUMENT'S COMPLETION IS ITS ANSWER, AND IT STANDS BESIDE THE ONE ABOVE FOR THE SAME
-               REASON: it is read as a VALUE, so it is taken before every throw arm below, each of which would
-               otherwise report it as this document's page error and hand the driver an empty register.
-               ITS THROW IS NOT HANDLED HERE AND THAT IS DELIBERATE, NOT AN OMISSION. A cross-agent operation's
-               throw belongs to the peer that asked, so that arm carries the completion TYPE; an instrument's
-               throw belongs to nobody — the program is the host's own text over the page's platform, so a
-               throw escaping it is a capability this engine does not have, which §Offensive-programming makes
-               a crash naming what to build rather than a value to report. It falls through to the classic
-               script's report arm below, which records the thrown value's own text in the result document's
-               `pageErrors` where a reader can act on it. */
+            /* A host instrument's completion is its answer, taken before every throw arm for the same reason: each
+               would report it as this document's page error and hand the driver an empty register. Its throw is
+               not handled here: an instrument's program is the host's own text over the page's platform, so a
+               throw escaping it is a capability this engine lacks, a crash naming what to build rather than a
+               value to report. It falls through to the classic script's report arm below, which records the thrown
+               value's own text in the result document's `pageErrors`. */
             else if (r == 0 && flow_dyn_kind(f) == DYN_VALUE_DUMP)
                 flow_emit_dump(ctx, f, cv);
-            /* THE REPORT ITSELF COMPLETING ABRUPTLY IS THIS ENGINE'S DEFECT, and it is asked FIRST because a
-               report frame is a call root and so is a driven orphan's — the arm below would read it as the
-               exploration surface and swallow it, which is the one reading that hides an engine bug inside the
-               one category of throw this engine deliberately ignores. Nothing the PAGE writes reaches here:
-               DOM §2.9's inner invoke step 2.11 CATCHES a listener's throw and reports it (event_target.c
-               declares catches_abrupt for exactly that), and HTML §8.1.4.6 step 6's error reporting mode is
-               what stops the report of a report. So what completed abruptly is a step of §8.1.4.6 itself. */
+            /* The report itself completing abruptly is this engine's defect, asked first because a report frame is
+               a call root and so is a driven orphan's: the orphan arm below would read it as the exploration
+               surface and swallow an engine bug. Nothing the page writes reaches here: DOM §2.9's inner invoke step
+               2.11 catches a listener's throw and reports it (event_target.c declares catches_abrupt for that), and
+               HTML §8.1.4.6 step 6's error reporting mode stops the report of a report. So what completed abruptly
+               is a step of §8.1.4.6 itself. */
             else if (JS_IsException(cv) && f->reporting) {
                 JSValue e = JS_GetException(ctx);
-                /* THE THROWN VALUE'S OWN TEXT, RECORDED BEFORE THE ABORT DISCARDS IT. `msg` reaches the
-                   assertion line unescaped (check.h says so), so the exception's message cannot be put in it —
-                   and an assert that names a failure while freeing the value describing it names a problem
-                   nobody can act on (result.h states the same rule and the same cost). */
+                /* The thrown value's own text, recorded before the abort discards it: `msg` reaches the assertion
+                   line unescaped (check.h), so it cannot carry the exception's message (result.h states the same
+                   rule). */
                 result_page_error_value(ctx, e);
                 JS_FreeValue(ctx, e);
-                /* THE FLAG IS NOT CLEARED HERE, AND THAT IS WHAT KEEPS THE RELEASE BUILD HONEST. This DFAIL
-                   compiles out in release, so control falls through to the tail — where the flag is what says
-                   this frame was the row's remaining work and therefore owes §4.12.1.1 step 4's restore.
-                   Clearing it at the abort would leave `document.currentScript` set for the rest of the
-                   session in exactly the build that cannot report why. */
+                /* The flag is not cleared here. The DFAIL compiles out in release, so control falls through to the
+                   tail, where the flag says this frame was the row's remaining work and owes §4.12.1.1 step 4's
+                   restore; clearing it would leave `document.currentScript` set for the rest of the session in the
+                   build that cannot report why. */
                 DFAIL("HTML §8.1.4.4 \"Calling scripts\" step 8's report of a classic script's abrupt "
                       "completion ITSELF completed abruptly. DOM §2.9 inner invoke step 2.11 catches a "
                       "listener's throw and §8.1.4.6 step 6's error reporting mode stops a report of a report, "
@@ -8863,21 +8613,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                       "the last entry of the result document's `pageErrors`, and what it names is built in "
                       "core/events/report_exception.c");
             }
-            /* A MODELLED CLOSE REQUEST THAT THREW IS THIS ENGINE'S DEFECT, and it is asked BEFORE the orphan
-               arm below because the two can be true of one flow: a flow that drove an uncalled function
-               earlier carries `orphan` for the rest of its life, and the frame completing here is the close
-               request's task rather than that drive's call. Left to the orphan arm the throw would be
-               SWALLOWED as the exploration surface, which is the one reading that hides an engine bug inside
-               the category of throw this engine deliberately ignores.
-               NOTHING THE PAGE WRITES REACHES HERE, which is what makes the abort right rather than harsh.
-               HTML §6.10.2 "Close watcher infrastructure" says of a watcher's cancel action and of its close
-               action that each "can never throw an exception", and DOM §2.9's inner invoke step 2.11 catches a
-               listener's throw and reports it. So what completed abruptly is a step of §6.10.1 or §6.10.2
-               itself. */
+            /* A modelled close request that threw is this engine's defect, asked before the orphan arm because both
+               can be true of one flow: a flow that drove an uncalled function carries `orphan` for the rest of its
+               life, and the frame completing here is the close request's task, not that drive's call, so the orphan
+               arm would swallow the throw. Nothing the page writes reaches here: HTML §6.10.2 "Close watcher
+               infrastructure" says a watcher's cancel action and close action each "can never throw an exception",
+               and DOM §2.9's inner invoke step 2.11 catches a listener's throw. So what completed abruptly is a step
+               of §6.10.1 or §6.10.2 itself. */
             else if (JS_IsException(cv) && f->close_req) {
                 JSValue e = JS_GetException(ctx);
-                /* THE THROWN VALUE'S OWN TEXT, RECORDED BEFORE THE ABORT DISCARDS IT — check.h says the
-                   assertion line is unescaped, so the message cannot carry it. */
+                /* The thrown value's own text, recorded before the abort discards it (check.h: the assertion line
+                   is unescaped). */
                 result_page_error_value(ctx, e);
                 JS_FreeValue(ctx, e);
                 DFAIL("HTML §6.10.1 \"Close requests\"' close request steps completed ABRUPTLY. §6.10.2 states "
@@ -8887,50 +8633,41 @@ static int flow_step(JSContext *ctx, Flow *f) {
                       "own text is the last entry of the result document's `pageErrors`, and what it names is "
                       "built in core/html/close_request.c and core/html/close_watcher.c");
             }
-            /* A DRIVEN ORPHAN THAT THREW IS THE EXPLORATION SURFACE AND NOT A PAGE ERROR — the one completion
-               here that is nobody's defect. The page never called this function; this engine did, with unknown
-               input in place of every argument and the receiver, so `this.config.url` throwing a TypeError is
-               what forced execution ON UNKNOWN INPUT looks like when it works. CLAUDE.md names it in the list
-               of things that are deliberately not a `@WHY` ("a forced-exec flow THROWING on opaque/attacker
-               input"), and recording it as the page's would report a document error per uncalled function —
-               attributing to the bundle a throw that only this engine's invocation could produce. The throw is
-               CONSUMED rather than left live, which is the half that is not optional: the next thing to ask the
-               context anything would find it. */
+            /* A driven orphan that threw is the exploration surface, not a page error. The page never called this
+               function; this engine did, with unknown input for every argument and the receiver, so
+               `this.config.url` throwing a TypeError is forced execution on unknown input working. Recording it as
+               the page's would report a document error per uncalled function, attributing to the bundle a throw
+               only this engine's invocation could produce. The throw is consumed rather than left live: the next
+               thing to ask the context anything would find it. */
             else if (JS_IsException(cv) && f->orphan && is_call) {
                 JSValue e = JS_GetException(ctx);
                 JS_FreeValue(ctx, e);
             }
-            /* HTML §8.1.4.4 "Calling scripts", RUN A CLASSIC SCRIPT STEP 8, THIRD BULLET: "Otherwise, rethrow
-               errors is false. Perform the following steps: 1. Report an exception given by
-               evaluationStatus.[[Value]] for script's settings object's global object. …"
-               THIS IS AN `error` EVENT AT THE GLOBAL AND NOT A DIAGNOSTIC, and the difference is a capability
-               the engine claimed and did not have: a page that installs `window.onerror` for its own routing or
-               telemetry took one path in a browser and another here, and the message that named the missing
-               capability reached the result document without ever reaching the page. The console line is still
-               written — §8.1.4.6 step 7.3, at the one place the standard puts it, behind step 7's notHandled,
-               through the hook registered beside the unhandled-rejection one — so a script that throws with
-               nothing listening reports exactly as it did, and one whose listener calls `preventDefault()` now
-               correctly reports nowhere.
-               THE OTHER TWO BULLETS OF STEP 8 ARE `rethrow errors is true`, and this engine has exactly one
-               caller that wants the throw back: a peer's operation, whose completion the arm at the top of this
-               chain hands to the agent that ASKED. That arm is step 8's first bullet, reached before this one
-               and for the reason the standard separates them — so the third bullet is unconditional here.
-               THE REALM IS THE PROGRAM'S. "script's settings object's global object" is the document the row
-               belongs to, which is the realm the program was COMPILED in — not whichever realm the scheduler
-               happens to be holding, and not the session's. */
+            /* HTML §8.1.4.4 "Calling scripts", run a classic script step 8, third bullet: "Otherwise, rethrow
+             * errors is false. Perform the following steps: 1. Report an exception given by
+             * evaluationStatus.[[Value]] for script's settings object's global object. …" This is an `error` event
+             * at the global, not a diagnostic: a page that installs `window.onerror` for routing or telemetry takes
+             * a browser's path. The console line is written at §8.1.4.6 step 7.3, behind step 7's notHandled,
+             * through the hook registered beside the unhandled-rejection one, so a throw with nothing listening is
+             * reported and one whose listener calls `preventDefault()` is not.
+             *
+             * Step 8's other two bullets are `rethrow errors is true`, and the one caller that wants the throw back
+             * is a peer's operation, whose completion the cross-agent arm above hands to the agent that asked; that
+             * arm is step 8's first bullet, so this one is unconditional. The realm is the program's: "script's
+             * settings object's global object" is the document the row belongs to, the realm the program was
+             * compiled in, not the realm the scheduler holds or the session's. */
             else if (JS_IsException(cv)) {
                 JSValue e = JS_GetException(ctx);
                 report = report_exception_flow(doc_realm(flow_dyn_doc(f)), e);
                 JS_FreeValue(ctx, e);
             }
-            /* ONE PROGRAM'S COMPLETION VALUE IS READ, AND IT DECIDES A NAVIGATION. HTML §7.4.2.3.2's
-               evaluate-a-javascript:-URL step 9: "if evaluationStatus is a normal completion, and
-               evaluationStatus.[[Value]] is a String, then set result to it" — and a non-null result becomes a
-               new Document, built from a synthesized `text/html` response whose body is that string, which
-               REPLACES the target navigable's active document. Every other completion is step 10's null, which
-               is the ordinary `javascript:doThing()` and is finished here.
-               This is the only place in the engine where that value exists, which is why the condition is
-               asked here rather than at the row that queued the program. */
+            /* One program's completion value is read, and it decides a navigation. HTML §7.4.2.3.2's evaluate a
+               javascript: URL step 9: "if evaluationStatus is a normal completion, and evaluationStatus.[[Value]]
+               is a String, then set result to it", and a non-null result becomes a new Document, built from a
+               synthesized `text/html` response whose body is that string, which replaces the target navigable's
+               active document. Every other completion is step 10's null, the ordinary `javascript:doThing()`,
+               finished here. This is the only place the value exists, so the condition is asked here rather than
+               at the row that queued the program. */
             if (r == 0 && JS_IsString(cv) && flow_dyn_kind(f) == DYN_JAVASCRIPT_URL)
                 DFAIL("a `javascript:` URL evaluated to a STRING — HTML §7.4.2.3.2 step 9 turns that into a new "
                       "Document that REPLACES the target navigable's active document, built from a synthesized "
@@ -8939,31 +8676,22 @@ static int flow_step(JSContext *ctx, Flow *f) {
                       "`document.fetch\\t<prov>\\t<url>`), so build the navigate that takes a RESPONSE THE "
                       "ENGINE ALREADY HAS and route this through it");
             JS_FreeValue(ctx, cv);
-            /* §8.1.4.4 step 8 IS ABOUT AN evaluationStatus, and a frame that suspended or detached has none.
-               Both returns below advance past this row without ever reaching the install, so a report built on
-               one of those paths would be dropped silently — and the exception it carries would have come from
-               somewhere that is not this program's completion. */
+            /* §8.1.4.4 step 8 is about an evaluationStatus, and a frame that suspended or detached has none: both
+               returns below leave without reaching the install, so a report built on those paths would be dropped
+               silently, carrying an exception that is not this program's completion. */
             DCHECK(report == NULL || r == 0,
                    "§8.1.4.4 step 8's report was built for a frame that has not COMPLETED — a suspended or "
                    "detached base has no evaluation status to be abrupt, so the exception this report carries "
                    "belongs to something other than this program's run");
             if (r == 1) {
-                /* A MID-FRAME YIELD, and the one case where it is not "more work". A flow that suspended
-                   inside a machine holding an unanswered synchronous host request has no work at all until the
-                   host answers, and reporting it runnable would have the scheduler hand it the thread again
-                   immediately — the spin the blocked yield above exists to prevent. OWED is the register the
-                   scheduler already has for exactly this: waiting, not finished.
-                   AND THE TWO ARE NOW TWO ROWS, SELECTED BY THE PREDICATE THAT WAS ALREADY BEING ASKED HERE.
-                   `g_step_unit` was set to the frame-live row above, and until this line the two states that
-                   reach it were summed into it: a resume the quantum PREEMPTED, which advanced the program and
-                   is the thread doing what the design asks, and one that suspended owing the host an answer,
-                   which advanced nothing and will advance nothing however often it is re-dispatched. Only the
-                   first is a statement about throughput; the second is a statement about the reply door, one
-                   component over, and they are repaired by different diffs. Read ONCE and spent twice — the
-                   arm and the register are two consumers of one fact, never two spellings of it — which is the
-                   same SELECT-rather-than-skip the frame-clearing outcomes below are, so the four frame-live
-                   rows partition by construction. See solver/step_unit.h for what this narrows and why the
-                   narrowing is stated there rather than discovered by whoever differences an old census. */
+                /* A mid-frame yield, and the one case where it is not more work. A flow that suspended inside a
+                   machine holding an unanswered synchronous host request has no work until the host answers, and
+                   reporting it runnable would have the scheduler hand it the thread again at once; OWED is waiting,
+                   not finished. The two states are two rows: a resume the quantum preempted advanced the program,
+                   while one that suspended owing the host an answer advanced nothing however often it is
+                   re-dispatched, a fact about the reply door that a different diff repairs. Read once and spent
+                   twice (the arm and the return), so the four frame-live rows partition by construction
+                   (solver/step_unit.h). */
                 int blocked = flow_blocked(f);
                 g_step_unit = started_here ? (blocked ? STEP_UNIT_START_BLOCKED  : STEP_UNIT_START_PROGRAM)
                                            : (blocked ? STEP_UNIT_RESUME_BLOCKED : STEP_UNIT_RESUME_PROGRAM);
@@ -8972,203 +8700,120 @@ static int flow_step(JSContext *ctx, Flow *f) {
             if (r == JS_FLOW_DETACHED) {
                 /* the base registered itself as a continuation elsewhere (a module body's top-level await): it
                    is no longer this flow's to free, and the awaited promise will drive it from here. */
-                /* AND THAT IS THE ONE COMPLETION PATH §4.12.1.1's CLASSIC RESTORE CANNOT REACH, so it is
-                   asserted rather than left to be discovered. A detached base is a MODULE body's continuation
-                   — a module has no bracket — and a classic program that detached would leave this document's
-                   §3.1.7 currentScript set for ever, with the next program's set asserting on it one step
-                   later and naming the wrong site. Named here, where it would be born. */
+                /* And that is the one completion path §4.12.1.1's classic restore cannot reach, so it is asserted
+                   where it would be born. A detached base is a module body's continuation (a module has no
+                   bracket); a classic program that detached would leave this document's §3.1.7 currentScript set
+                   for ever, and the next program's set would assert one step later at the wrong site. */
                 DCHECK(flow_dyn_el(f) == NULL || document_current_script_is_null(doc_realm(flow_dyn_doc(f))),
                        "a classic script's program DETACHED its base while §4.12.1.1's currentScript bracket "
                        "was open — the restore is at the program's completion and a detached base never "
                        "reaches one, so this document's currentScript would stay set for the rest of the "
                        "session. Route the restore through whatever drives the detached continuation");
-                /* THIS ROW IS OVER, WHICH THE CURSOR ALREADY SAYS AND THE FLAG MUST SAY WITH IT. A frame this
-                   flow no longer owns cannot be §8.1.4.4 step 8's report of the row the cursor is about to
-                   leave; left standing, the flag would make the NEXT program's completion read as a report.
-                   AND THE CURSOR MOVES ONLY FOR A FRAME THAT IS THIS ROW'S WORK — the same predicate the
-                   restore below and the tail both use, expanded here rather than shared, for the reason the
-                   tail gives. It was written as `!is_call` and THAT WAS AN UNCONDITIONAL ADVANCE, which the
-                   sentence standing here said in as many words and then filed as harmless: a detaching base is
-                   a MODULE body's continuation, it said, so `is_call` is false here today. Both halves of that
-                   are true and the conclusion was the wrong way round — a detaching base is reached only through
-                   JS_FlowResume's FLOW_BASE_ASYNC_CALL arm, which is only ever a CLONE of a module body taken
-                   at a concolic branch, and flow_step's own module arm LEFT that row before the fork existed.
-                   So the advance was this row being left a SECOND time, at the one exit where the cursor's own
-                   `script_i < dyn_n` check is the only thing that could ever have said so.
-                   IT STAYS A PREDICATE AND THE PREDICATE IS NOW THE RIGHT ONE: with `is_program` no state this
-                   arm can be reached in advances, which is correct rather than dead — the day a PROGRAM or a
-                   report detaches, its row is finished here and the advance is owed. */
+                /* This row is over, which the cursor says and the flag must say with it: a frame this flow no
+                   longer owns cannot be §8.1.4.4 step 8's report of the row the cursor is about to leave, and a
+                   standing flag would make the next program's completion read as a report. The cursor moves only
+                   for a frame that is this row's work, the predicate the restore below and the tail use (expanded
+                   here, not shared, for the reason the tail gives). A detaching base is reached only through
+                   JS_FlowResume's FLOW_BASE_ASYNC_CALL arm, a clone of a module body taken at a concolic branch,
+                   whose row flow_step's module arm left before the fork existed; so no state reachable here
+                   advances today, and the day a program or a report detaches, its row is finished here and the
+                   advance is owed. */
                 if (f->reporting || is_program) {
                     ENGINE_LEAVE_ROW(f);
                 }
-                /* AND A MODELLED CLOSE REQUEST CANNOT REACH THIS EXIT AT ALL. A detaching base is a
-                   MODULE body handing its continuation to an awaited promise, and §6.10.1's task is a
-                   CALL of a step machine with no module in it — so a set flag here is a frame that
-                   registered itself as a continuation elsewhere while this flow still expects to read
-                   its completion value, and step 9's answer would be lost with nothing to say so. */
+                /* A modelled close request cannot reach this exit: a detaching base is a module body handing its
+                   continuation to an awaited promise, and §6.10.1's task is a call of a step machine with no module
+                   in it. A set flag here is a frame that registered itself elsewhere while this flow still expects
+                   its completion value, and step 9's answer would be lost silently. */
                 DCHECK(!f->close_req,
                        "a modelled close request's task DETACHED its base — HTML §6.10.1 Close requests' task "
                        "is a call of a step machine, which has no continuation to hand to an awaited promise, "
                        "so this flow is about to drop the completion value step 9's answer rides on");
                 f->close_req = 0;
                 f->reporting = 0;
-                /* …AND THIS EXIT IS ITS OWN ARM, NAMED HERE BECAUSE THE ASSIGNMENT BEFORE THE RESUME COULD NOT
-                   KNOW IT. `g_step_unit` was set to RESUME_PROGRAM one screen up, before JS_FlowResume ran and
-                   therefore before any of its four outcomes existed — so this exit, which CLEARS the frame,
-                   was reported under the row that now means a resume which did not. The difference is the
-                   whole of what the row is read for: every job, delivery, task, lifecycle and retirement arm
-                   of flow_step is under `frame == NULL`, so a step that leaves the frame gone is a step that
-                   made that ladder reachable and a step that leaves it live is not.
-                   `started_here` SELECTS THE ARM rather than skipping the assignment, which is the half of
-                   this that was a residual until now. A START is forward progress by construction on either
-                   outcome, so it may not be filed under a resume's row — but leaving it at
-                   `start-a-classic-program` filed it under a row that also holds starts whose frame is still
-                   LIVE, and those two are opposite answers to the one predicate the rest of the ladder is
-                   gated on. It has its own row now. A module that starts returns at EVALUATE_MODULE above and
-                   never reaches this line, so this arm is unreachable today and is named anyway for the
-                   reason the predicate was written as a predicate: the day a started frame detaches, the
-                   alternative silently takes that step out of the row HTML §4.12.1.1 position advances are counted
-                   in. */
+                /* This exit is its own arm, named here because the assignment before the resume runs before any of
+                   JS_FlowResume's four outcomes exist. Every job, delivery, task, lifecycle and retirement arm of
+                   flow_step is under `frame == NULL`, so a step that clears the frame makes that ladder reachable
+                   and one that leaves it live does not. `started_here` selects the arm: a start is forward progress
+                   on either outcome and may not be filed under a resume's row, nor under `start-a-classic-program`,
+                   whose frame is still live. A module that starts returns at EVALUATE_MODULE above, so the start
+                   arm is unreachable today; it is named so that the day a started frame detaches, the step stays in
+                   the row HTML §4.12.1.1 position advances are counted in. */
                 g_step_unit = started_here ? STEP_UNIT_START_DETACHED : STEP_UNIT_DETACH_PROGRAM;
                 f->frame = NULL;
                 return 0;
             }
-            /* THE PROGRAM RAN TO ITS END — the ONE event that moves this document's completed depth, recorded
-               here because this is the only line in the engine at which a program's own completion is the fact
-               in hand. The three other sites that advance `script_i` are not completions and must not be
-               counted as ones: a module has evaluated to a PROMISE rather than a value, a detached base has
-               handed its continuation to an awaited promise, and a compile failure never started. See
-               g_completed.
-               A DRIVEN ORPHAN'S CALL IS A FOURTH, and the first one that is not a program at all: its frame
-               holds no row of the sequence, so its cursor is one PAST the last program and counting it would
-               report this document as having run a program it does not have.
-               AND AN ARM OF A MODULE BODY IS A FIFTH, which `!is_call` admitted: its base is a CLONE OF AN
-               ACTIVATION THIS HOST NEVER CREATED, its completion SETTLES THE MODULE'S EVALUATION PROMISE
-               rather than finishing a row, and the row it stands past was left by flow_step's module arm
-               before the arm existed. Counting it would say this document has RUN TO COMPLETION a program
-               whose promise is the only thing that just settled — which is the first of the three exclusions
-               above ("a module has evaluated to a PROMISE rather than a value") arriving through a fork
-               instead of through the module arm, and reaching the one number engine.h argues is the answer to
-               "has anything this document loads AFTER program i ever been compiled". */
+            /* The program ran to its end: the one event that moves this document's completed depth (g_completed),
+               recorded at the only line where a program's own completion is the fact in hand. The other sites that
+               advance `script_i` are not completions: a module evaluated to a promise rather than a value, a
+               detached base handed its continuation to an awaited promise, and a failed compile never started.
+               Two frames that complete here are not programs either, which is why the guard is `is_program`: a
+               driven orphan's call holds no row (its cursor is one past the last program), and an arm forked
+               inside a module body settles the module's evaluation promise rather than finishing a row, a row
+               flow_step's module arm already left. Counting either would report a program this document never
+               ran to completion, in the number engine.h argues answers "has anything this document loads after
+               program i ever been compiled". */
             if (is_program && f->script_i > g_completed) g_completed = f->script_i;
-            /* …AND THE STEP IS RE-NAMED HERE, AT THE ONLY LINE THAT KNOWS THE RESUME'S OUTCOME. The assignment
-               one screen up runs BEFORE JS_FlowResume, so it can say which of §8.1.4.4 "Calling scripts"'s two
-               entries this step took and cannot say what became of the frame — and the frame is the fact the
-               row is read for. `resume-program` was therefore one row over the two arms flow_step already
-               branches on: the mid-frame yield above, which returns with the frame LIVE, and this, which is
-               about to free it. Every job, delivery, task, lifecycle and retirement arm of this function is
-               under `frame == NULL`, so those two steps did OPPOSITE things to the one predicate that decides
-               whether the rest of the ladder is reachable, and the census summed them. It is the same
-               correction as `compile-program`'s two hundred lines up and for the same reason; see
-               solver/step_unit.h for the pair of readings the merged row destroyed.
-               AND THE REPORT IS THE OTHER ARM OF THIS LINE, WHICH IS THE CORRECTION THAT MAKES THE PREDICATE
-               THE FRAME AND NOT THE PROGRAM. §8.1.4.4 "Calling scripts"' run a classic script step 8's third
-               bullet is "Otherwise, rethrow errors is false. Perform the following steps:", whose step 1 is
-               "Report an exception given by evaluationStatus.[[Value]] for script's settings object's global
-               object" — that bullet holds exactly one list, which is what makes `8.3.1` a step and not a
-               guess. The report takes the slot this program just vacated — the tail below installs it as
-               `f->frame` and returns — so a completion that owes one
-               ENDS a program and leaves the member FRAMED anyway. Named as an end it would put a framed member
-               in the population that can reach the ladder, which is the single thing this split exists to
-               count; named as a resume it would put an ended program in the row of programs that did not end.
-               It is its own arm because it is its own answer.
-               AND THE START ARM IS THE SAME SPLIT, BUILT HERE RATHER THAN NAMED. This carried a residual
-               saying `start-a-classic-program` still spanned all four of a start's outcomes because the
-               re-naming was guarded on `!started_here`, and that the frame-cleared population was therefore a
-               sum of whole rows PLUS PART OF ONE. Its stated symptom was then MEASURED on a real page — census
-               mass in `start-a-classic-program` beside `finished: 0`, with nothing able to say whether those
-               starts had ended — and a reader took the row for "one program was started", which it never meant,
-               because these completion arms overwrite it. So the predicate now SELECTS a start's arm instead of
-               skipping the assignment: `start-a-classic-program` means a start that returned with its frame
-               LIVE, and `start-ended-its-frame` / `start-reported-an-exception` are its frame-clearing
-               outcomes. The rows partition by construction, because it is the one predicate evaluated once at
-               this one line — the same property that makes the resume pair trustworthy one arm over. */
+            /* The step is renamed here, at the only line that knows the resume's outcome: the assignment before
+             * JS_FlowResume can say which of §8.1.4.4 "Calling scripts"'s two entries this step took but not what
+             * became of the frame, and the frame is what the row is read for. The mid-frame yield above returns
+             * with the frame live; this arm frees it (solver/step_unit.h has the readings a merged row loses).
+             *
+             * The report is the other arm, which makes the predicate the frame and not the program. Run a classic
+             * script step 8's third bullet is "Otherwise, rethrow errors is false. Perform the following steps:",
+             * whose step 1 is "Report an exception given by evaluationStatus.[[Value]] for script's settings
+             * object's global object"; that bullet holds one list, so `8.3.1` is a step. The report takes the slot
+             * this program vacated (the tail installs it as `f->frame` and returns), so a completion that owes one
+             * ends a program and leaves the member framed: named as an end it would put a framed member in the
+             * population that can reach the ladder, named as a resume it would put an ended program among
+             * programs that did not end. A start's outcomes split the same way: `start-a-classic-program` returned
+             * with its frame live, `start-ended-its-frame` and `start-reported-an-exception` cleared it. One
+             * predicate evaluated once at this line, so the rows partition by construction. */
             g_step_unit = started_here
                 ? (report ? STEP_UNIT_START_REPORTED : STEP_UNIT_START_ENDED_FRAME)
                 : (report ? STEP_UNIT_REPORT_EXCEPTION : STEP_UNIT_END_FRAME);
-            /* §4.12.1.1's CLASSIC arm, step 4: "Set document's currentScript attribute to oldCurrentScript."
-               THIS is the other end of the bracket the compile opened, and it is placed at the ONE line a
-               program's own completion is the fact in hand — the same line `g_completed` is written at, and for
-               the same reason. It covers a program that RAN TO ITS END and one that THREW alike, because
-               §8.1.4.4's run-a-classic-script REPORTS the exception rather than propagating it and the restore
-               is after the run either way.
-               AND "AFTER THE RUN" IS NOW A DIFFERENT LINE, WHICH IS THE WHOLE OF WHAT THE REPORT MOVED. That
-               sentence was written while the report did not exist, so "after the run" and "after the throw"
-               were the same instant; they are not. §4.12.1.1 restores at STEP 4, after step 3's run a classic
-               script, and §8.1.4.4 step 8's report is a step INSIDE that run — so a page's `error` listener
-               reads the throwing `<script>` out of `document.currentScript`, exactly as it does in a browser,
-               and restoring at the throw would hand it null. A program that owes a report has therefore NOT
-               finished step 3, and the restore travels to the report frame's own completion.
-               A PARKED PROGRAM NEVER GETS HERE, which is the whole design: a mid-frame yield returned above
-               with the frame still live, and the slot went with the flow's delta.
-               THE FRAME'S KIND IS THE GUARD BECAUSE THE CURSOR IS NOT ONE. A driven orphan's call frame sits
-               past the end of the sequence — where flow_dyn_el answers NULL — but a row the running call
-               QUEUED moves the cursor back inside it, so without this the completion of a CALL would restore a
-               row whose program has not started. `f->reporting` is what tells the ONE call frame that IS this
-               row's remaining work from the one that is somebody else's — see flow.h.
-               ASKED AS `is_program` AND NOT AS `!is_call`, which admitted a third kind neither sentence above
-               is about: an arm forked inside a MODULE BODY. §4.12.1.1 "Processing model"'s module arm has no
-               set/restore bracket at all — the compile site asserts currentScript is NULL there, on the
-               standard's own "Assert: document's currentScript attribute is null" — so there is nothing for
-               such an arm to restore, and where its cursor had moved back inside the sequence it would have
-               restored a row whose program has not started, which is the identical defect the orphan sentence
-               above describes. */
+            /* §4.12.1.1's classic arm, step 4: "Set document's currentScript attribute to oldCurrentScript.", the
+             * other end of the bracket the compile opened, at the line where a program's own completion is in hand
+             * (as for `g_completed`). It covers a program that ran to its end and one that threw, since §8.1.4.4's
+             * run a classic script reports the exception rather than propagating it, but not one that owes a
+             * report: step 8's report is a step inside step 3's run, so a page's `error` listener reads the
+             * throwing `<script>` out of `document.currentScript`, as in a browser, and the restore travels to the
+             * report frame's own completion. A parked program never gets here: a mid-frame yield returned above
+             * with the frame live, and the slot went with the flow's delta.
+             *
+             * The guard is the frame's kind, because the cursor is not one: a driven orphan's call frame sits past
+             * the end of the sequence (where flow_dyn_el answers NULL), but a row the running call queued moves the
+             * cursor back inside it. `f->reporting` tells the one call frame that is this row's remaining work
+             * (flow.h). It is `is_program`, not `!is_call`, because an arm forked inside a module body has nothing
+             * to restore: §4.12.1.1's module arm has no bracket (the compile site asserts the standard's "Assert:
+             * document's currentScript attribute is null"). */
             if (!report && (f->reporting || is_program) && flow_dyn_el(f))
                 document_current_script_restore(doc_realm(flow_dyn_doc(f)), flow_dyn_el(f), JS_NULL);
         }
         JS_FlowFree(ctx, (JSValue *)f->frame);
-        /* …AND THE MODELLED CLOSE REQUEST'S FLAG DIES WITH THE FRAME IT NAMES, at the free rather than at the
-           tail: the report install two lines down RETURNS, so a flag cleared only at the bottom would still be
-           standing over the report's frame and that frame's completion would be read as §6.10.1's step 9
-           answer. In dev an abruptly-completing task aborts above and never gets here; in release that DFAIL is
-           compiled out, which is exactly the build in which a flag left standing has nothing to say so. Its
-           value has already been READ — the completion arm above runs before any of this. */
+        /* The modelled close request's flag dies with the frame it names, at the free rather than at the tail: the
+           report install below returns, so a flag cleared only at the bottom would stand over the report's frame,
+           whose completion would be read as §6.10.1's step 9 answer. In dev an abruptly-completing task aborts
+           above; in release that DFAIL is compiled out, the build where a standing flag has nothing to say so. Its
+           value was already read by the completion arm above. */
         f->close_req = 0;
-        /* §8.1.4.4 STEP 8.3.1 TAKES THE SLOT STEP 8'S PROGRAM JUST VACATED, and the cursor does NOT move: the
-           report is the rest of this row's run-a-classic-script, so the row is finished by the report's
-           completion and advanced exactly once, there. Everything the `if (!f->frame)` block above would do —
-           step 8.3.2's microtask checkpoint first among them — is skipped for as long as this frame lives,
-           which is the order §8.1.4.4 states and the reason the report is a frame at all. */
+        /* §8.1.4.4 step 8.3.1 takes the slot step 8's program vacated, and the cursor does not move: the report is
+           the rest of this row's run a classic script, so the row is advanced once, at the report's completion.
+           Everything the `if (!f->frame)` block above would do, step 8.3.2's microtask checkpoint first, is skipped
+           while this frame lives, the order §8.1.4.4 states and the reason the report is a frame. */
         if (report) { f->frame = report; f->reporting = 1; return 0; }
-        /* THIS SCRIPT DONE -> NEXT, AND ONLY WHEN THE FRAME THAT FINISHED WAS A SCRIPT. The cursor names a ROW,
-           and the two consumers three lines up already know that a CALL is not one: `g_completed` is guarded by
-           `!is_call` and §4.12.1.1 step 4's restore by `f->reporting || !is_call`. This line was the third
-           consumer of the same fact and the only one that was never given it, because `is_call` was scoped to
-           the block above and this line is below it — so a DRIVEN ORPHAN'S CALL, whose frame holds no row at
-           all, moved the row cursor.
-           WHAT THAT COSTS IS NOT AN OFF-BY-ONE IN A DIAGNOSTIC, IT IS DROPPED WORK. A drive is assembled with
-           its parent's cursor, which stands at `dyn_n` (the parent had run out of rows — that is WHY the
-           orphan arm was reached), so the call's completion left the cursor at `dyn_n + 1`. Every APPEND takes
-           slot `dyn_n`. From that instant the flow was one slot AHEAD of every program anything could ever
-           queue onto it: the row is written, `dyn_n` grows past the cursor, and the row is never compiled and
-           never run. flow_programs_unstarted_for_document then answers 0 for it as well — it selects
-           `k >= script_i` — so HTML §7.5.10 "Destroying documents" step 5's count of tasks to remove reads
-           zero for a row that is unstarted, and nothing anywhere says a program was lost.
-           MEASURED, on the `--cold-park` fixture: an orphan drive at `script_i=3, dyn_n=2, last_compiled=1`
-           was handed a cross-agent operation, which engine_perform appends to EVERY live timeline. It landed
-           at row 2, behind the cursor, was never turned into a program, and the flow finished still holding
-           the peer's rendezvous token — flow_finish's `!flow_owes_answer(f)`, which is that peer suspended at
-           the line that asked with nothing coming. The same slot is where a lazy chunk a driven function loads
-           and a `<script>` it appends both land, so the operation is what CRASHED and never what was unique.
-           THE PREDICATE IS THE RESTORE'S, VERBATIM, and read BEFORE `f->reporting` is cleared: `f->reporting`
-           is what tells the ONE call frame that IS this row's remaining work (§8.1.4.4 step 8's report) from
-           the one that is somebody else's.
-           AND THE FOURTH KIND OF FRAME IS WHY IT IS `is_program` AND NOT `!is_call` — THIS IS THE LINE THE
-           MEASURED ABORT FIRED AT. A concolic branch inside a MODULE BODY forks an arm whose base is a clone
-           of that body (FLOW_BASE_ASYNC_CALL), and flow_step's module arm had already left the row when
-           §8.1.4.4's run a module script Evaluate returned. `!is_call` is TRUE for such a base, so the arm's
-           completion left that row a SECOND time — and the paragraph above is the whole description of what
-           that costs, with `dyn_n` in place of the orphan's cursor. MEASURED on the `tldraw` mirror, 3 runs of
-           3, reaching the fork at `cursor=2 last_compiled=1 rows=2`: the cursor is AT the end, because a
-           `type=module` entry is typically a document's LAST script, so ENGINE_LEAVE_ROW's own
-           `script_i < dyn_n` is what fires. Where it is not — a branch inside a module body of a document with
-           rows still ahead — the identical arm SKIPS the next row in silence, which is the dropped work the
-           orphan paragraph measured and which no census can see.
-           AND WHICH SITES REPRODUCE IT IS A FACT ABOUT AN ARTIFACT AND NOT ABOUT THIS DEFECT, which is worth
-           one line because the obvious reading of a site list is that the list is the population: on the
-           artifact this was measured against, `telegram` and `gitpod` both terminate UPSTREAM in layout
-           (core/layout/used_value.c) and never reach a fork at all, so a run of either says nothing either
-           way. A terminal event is not comparable across artifacts; the assert IDENTITY is. */
+        /* This script done, next: only when the frame that finished is this row's work, by the restore's predicate,
+           read before `f->reporting` is cleared. The cursor names a row and a call is not one. A driven orphan's
+           drive is assembled with its parent's cursor at `dyn_n` (the parent ran out of rows, which is why the
+           orphan arm was reached), so advancing for its call would put the cursor at `dyn_n + 1`, one slot ahead
+           of every append: the next row anything queues (a lazy chunk the driven function loads, a `<script>` it
+           appends, a cross-agent operation engine_perform appends to every live timeline) is written behind the
+           cursor and never compiled, and flow_programs_unstarted_for_document (which selects `k >= script_i`)
+           answers 0 for it, so HTML §7.5.10 "Destroying documents" step 5 reads zero for an unstarted row. An arm
+           forked inside a module body (FLOW_BASE_ASYNC_CALL) is excluded for the same reason: the module arm
+           already left its row, so advancing would leave it a second time, which ENGINE_LEAVE_ROW's
+           `script_i < dyn_n` catches where the cursor is at the end and which skips the next row in silence
+           where it is not. */
         if (f->reporting || is_program) {
             ENGINE_LEAVE_ROW(f);
         }
