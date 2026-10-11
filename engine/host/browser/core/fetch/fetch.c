@@ -161,8 +161,28 @@ FetchCredentialsMode fetch_credentials_of_token(const char *token)
     return FETCH_CREDENTIALS_UNPLACED;
 }
 
-/* FETCH §2.2.5 "Requests"' MODE, from the word §5.4's record holds — see core/fetch/fetch.h for why there is
-   no direction back to text. */
+/* FETCH §2.2.5 "Requests"' MODE, spelled for the wire. The words are §2.2.5's own: "A request has an
+   associated mode, which is `same-origin`, `cors`, `no-cors`, `navigate`, `websocket`, or `webtransport`."
+   Fatal on `_UNPLACED` for `fetch_credentials_token`'s reason: the trusted zone decides from this word whether
+   the reply may be read by the page at all. */
+const char *fetch_mode_token(FetchMode m)
+{
+    switch (m) {
+    case FETCH_MODE_SAME_ORIGIN:  return "same-origin";
+    case FETCH_MODE_CORS:         return "cors";
+    case FETCH_MODE_NO_CORS:      return "no-cors";
+    case FETCH_MODE_NAVIGATE:     return "navigate";
+    case FETCH_MODE_WEBSOCKET:    return "websocket";
+    case FETCH_MODE_WEBTRANSPORT: return "webtransport";
+    case FETCH_MODE_UNPLACED:     break;
+    }
+    CHECK_FAIL("a request's mode was spelled for the wire and is not one Fetch §2.2.5 \"Requests\" defines — "
+               "the zero is core/fetch/fetch.h's _UNPLACED, a producer that stated nothing, and both park doors "
+               "refuse it before a request can reach this spelling");
+    return NULL;
+}
+
+/* FETCH §2.2.5 "Requests"' MODE, from the word §5.4's record holds. */
 FetchMode fetch_mode_of_token(const char *token)
 {
     if (token) {
@@ -573,6 +593,12 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             JS_ThrowTypeError(ctx, "Failed to fetch");
             s->value = JS_GetException(ctx);
             s->reject = 1;
+        } else if (fetch_reply_type(ctx, body_v) == FETCH_REPLY_OPAQUE) {
+            /* A `no-cors` request to another origin: Fetch §4.1 "Main fetch" makes its response an opaque
+               filtered response, and the page reads nothing of it. The trusted zone sent no bytes for it; the
+               Response is built from the type alone, so a record that carried some still exposes none. */
+            s->value = response_new_opaque(ctx);
+            if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         } else {
             /* THE REPLY THE HOST BUILT. It is this engine's own object, so these reads run none of the page's
                code — the value never passes through the page's hands between the host and here. */
@@ -620,7 +646,8 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                    "fetch_reply_status_text answers NULL for the JSON `null` alone, and this arm already "
                    "tested for that, so the two disagree about which reply has no response at all");
             s->value = response_new(ctx, ul_v, status, stx,
-                                    hl.n ? &hl : NULL, (const char *)body, body_len);
+                                    hl.n ? &hl : NULL, (const char *)body, body_len,
+                                    fetch_reply_type(ctx, body_v) == FETCH_REPLY_CORS);
             header_list_free(&hl);
             free(stx);
             JS_FreeValue(ctx, ul_v);
@@ -765,7 +792,7 @@ const uint8_t *fetch_body_bytes(JSContext *ctx, JSValueConst body, size_t *out_n
    record and not one per host. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n,
-                        const char *computed_type)
+                        const char *computed_type, const char *type)
 {
     JSValue o = JS_NewObject(ctx), h, v;
     int i;
@@ -920,7 +947,37 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's computed MIME type");
     CHECK(JS_DefinePropertyValueStr(ctx, o, "computedType", v, JS_PROP_C_W_E) >= 0,
           "fetch: a reply record refused its computed MIME type");
+    /* The filtered response this is (fetch.h), stated by the host; the reader is fatal on anything else. */
+    CHECK(type != NULL && (!strcmp(type, "basic") || !strcmp(type, "cors") || !strcmp(type, "opaque")),
+          "a host built a reply without stating which Fetch §2.2.6 filtered response it is");
+    v = JS_NewString(ctx, type);
+    CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's response type");
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "type", v, JS_PROP_C_W_E) >= 0,
+          "fetch: a reply record refused its response type");
     return o;
+}
+
+FetchReplyType fetch_reply_type(JSContext *ctx, JSValueConst reply)
+{
+    JSValue v;
+    const char *s;
+    FetchReplyType t = 0;
+
+    DCHECK(JS_IsObject(reply), "a response type was asked of something that is not the host's reply record — a "
+                               "network error has no response and is not asked");
+    v = JS_GetPropertyStr(ctx, reply, "type");
+    s = JS_IsString(v) ? JS_ToCString(ctx, v) : NULL;
+    if (s && !strcmp(s, "basic")) t = FETCH_REPLY_BASIC;
+    else if (s && !strcmp(s, "cors")) t = FETCH_REPLY_CORS;
+    else if (s && !strcmp(s, "opaque")) t = FETCH_REPLY_OPAQUE;
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    /* Fatal in release: the type decides whether the page may read the body, and an unread field would be
+       answered by whichever arm a consumer wrote as its else. */
+    CHECK(t != 0, "the host's reply record states no Fetch §2.2.6 filtered response type (`basic`, `cors` or "
+                  "`opaque`) — the trusted zone decides it from the request's mode and origin, and an absent one "
+                  "is a producer that stopped stating it");
+    return t;
 }
 
 /* THE COMPUTED TYPE, READ BACK — see fetch.h for why it is read and never derived. */

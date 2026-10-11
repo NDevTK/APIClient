@@ -27,6 +27,7 @@ typedef struct PendIndexMember {
    is the endpoint surface, which this engine already keeps whole. */
 struct PendIndexNode {
     char             *method;
+    char             *mode;    /* Fetch §2.2.5's request mode: two requests that differ only in it are two */
     char             *url;
     uint32_t          hash;
     PendIndexMember **mem;
@@ -161,10 +162,12 @@ static uint32_t pend_hash_bytes(const char *s, uint32_t h)
     return h;
 }
 
-static uint32_t pend_hash_pair(const char *method, const char *url)
+static uint32_t pend_hash_pair(const char *method, const char *mode, const char *url)
 {
     uint32_t h = pend_hash_bytes(method, 2166136261u);
     h = pend_hash_bytes("\t", h);       /* the separator is part of the key: `GET` + `\tx` is not `GET\t` + `x` */
+    h = pend_hash_bytes(mode, h);
+    h = pend_hash_bytes("\t", h);
     return pend_hash_bytes(url, h);
 }
 
@@ -328,30 +331,31 @@ void pending_index_unref(JSValueConst rec)
     }
 }
 
-void pending_index_key(JSValueConst rec, const char *method, const char *url)
+void pending_index_key(JSValueConst rec, const char *method, const char *mode, const char *url)
 {
     PendIndexMember *m = pend_member(rec);
     PendIndexNode *n;
     uint32_t h, b;
 
-    DCHECK(method != NULL && url != NULL,
-           "a request was keyed into the outstanding set with half a pair — the reply seam is keyed on "
-           "(method, url) and a half key would collect another request's body");
+    DCHECK(method != NULL && mode != NULL && url != NULL,
+           "a request was keyed into the outstanding set with part of its identity — the reply seam is keyed "
+           "on (method, mode, url) and a partial key would collect another request's body");
     DCHECK(m != NULL, "an untracked record was keyed — tracking begins at the push and a record that reaches "
                       "this line without it is one the last register already dropped");
     DCHECK(m->node == NULL, "a record was keyed twice — a request's identity is written once, at the park, so "
                             "a second key is either a rewritten address or a member the first key lost");
-    h = pend_hash_pair(method, url);
+    h = pend_hash_pair(method, mode, url);
     if (!g_pair_buckets) pend_pair_grow();
     for (n = g_by_pair[h & (g_pair_buckets - 1)]; n; n = n->hnext)
-        if (n->hash == h && !strcmp(n->method, method) && !strcmp(n->url, url)) break;
+        if (n->hash == h && !strcmp(n->method, method) && !strcmp(n->mode, mode) && !strcmp(n->url, url)) break;
     if (!n) {
         if (g_pair_n >= g_pair_buckets) pend_pair_grow();
         n = calloc(1, sizeof *n);
         CHECK(n != NULL, "engine: OOM recording an outstanding request");
         n->method = strdup(method);
+        n->mode = strdup(mode);
         n->url = strdup(url);
-        CHECK(n->method && n->url, "engine: OOM recording an outstanding request's identity");
+        CHECK(n->method && n->mode && n->url, "engine: OOM recording an outstanding request's identity");
         n->hash = h;
         b = h & (g_pair_buckets - 1);
         n->hnext = g_by_pair[b];
@@ -436,6 +440,11 @@ const char *pending_index_node_method(const PendIndexNode *n)
     DCHECK(n != NULL, "an outstanding request's method was read off no node");
     return n->method;
 }
+const char *pending_index_node_mode(const PendIndexNode *n)
+{
+    DCHECK(n != NULL, "an outstanding request's mode was read off no node");
+    return n->mode;
+}
 const char *pending_index_node_url(const PendIndexNode *n)
 {
     DCHECK(n != NULL, "an outstanding request's address was read off no node");
@@ -458,15 +467,17 @@ long pending_index_node_answered(const PendIndexNode *n)
     return n->answered;
 }
 
-PendIndexNode *pending_index_find(const char *method, const char *url)
+PendIndexNode *pending_index_find(const char *method, const char *mode, const char *url)
 {
     uint32_t h;
     PendIndexNode *n;
-    DCHECK(method != NULL && url != NULL, "the outstanding set was searched with half a request identity");
+    DCHECK(method != NULL && mode != NULL && url != NULL,
+           "the outstanding set was searched with part of a request identity");
     if (!g_pair_buckets) return NULL;
-    h = pend_hash_pair(method, url);
+    h = pend_hash_pair(method, mode, url);
     for (n = g_by_pair[h & (g_pair_buckets - 1)]; n; n = n->hnext)
-        if (n->hash == h && !strcmp(n->method, method) && !strcmp(n->url, url)) return n;
+        if (n->hash == h && !strcmp(n->method, method) && !strcmp(n->mode, mode) && !strcmp(n->url, url))
+            return n;
     return NULL;
 }
 
@@ -512,6 +523,7 @@ void pending_index_reset(JSContext *ctx)
     while (n) {
         PendIndexNode *next = n->anext;
         free(n->method);
+        free(n->mode);
         free(n->url);
         free(n->mem);
         free(n);

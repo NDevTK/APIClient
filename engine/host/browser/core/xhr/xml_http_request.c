@@ -2196,6 +2196,10 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
        defines are written. This line used to hold two of them inline, which made this seam the only place in
        the engine that could say a credentials mode at all and said it in a vocabulary of its own. */
     json_buf_str(&b, fetch_credentials_token(xhr_credentials_mode(d)));
+    /* §3.5.6 step 6's mode, the literal `cors` row of the same request the scheme-fetch route builds, through
+       core/fetch/fetch.h's one spelling: the trusted zone runs Fetch §4.10 "CORS check" from it. */
+    json_buf_raw(&b, ","); json_buf_key(&b, "mode");
+    json_buf_str(&b, fetch_mode_token(FETCH_MODE_CORS));
     json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
     json_buf_str(&b, engine_provenance_token(xhr_request_prov(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "pinned");

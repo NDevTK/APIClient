@@ -522,7 +522,7 @@ int pending_owed_replies(JSValueConst reg)
            reached through the one entry kind for which no reply exists at all. */
         if (kind != FLOW_PENDING_HOSTREQ && pending_entry_host_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
-               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and engine_provide delivers
+               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and engine_provide delivers
                against the pair, so an owed
                entry missing either is one the host was never shown and never will be — counting it credits a reply nobody is
                going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at
@@ -734,7 +734,7 @@ static void pend_index_sync(JSValueConst e, int field)
 {
     JSValue uv, mv;
 
-    if (field != PEND_URL && field != PEND_METHOD && field != PEND_HAVE_VALUE &&
+    if (field != PEND_URL && field != PEND_METHOD && field != PEND_MODE && field != PEND_HAVE_VALUE &&
         field != PEND_DECLINED) return;
     if (!pending_index_tracked(e)) return;   /* answered, refused, synchronous, or dropped by every register */
     /* A REFUSAL TAKES THE RECORD OUT OF THE SET THE HOST IS LOOKED UP IN, and this arm is asked BEFORE the
@@ -777,18 +777,30 @@ static void pend_index_sync(JSValueConst e, int field)
        flow parked on the new one would wait for the rest of the session. Asserted here rather than trusted,
        because the write that would break it is an ordinary-looking `pending_set` in some other file. */
     DCHECK(!pending_index_keyed(e),
-           "a request's METHOD or ADDRESS was rewritten after the frontier's outstanding set was keyed on it — "
-           "the reply seam is keyed on the pair, so the set would go on offering the old identity to the host "
-           "and the reply for the new one would match nothing");
+           "a request's METHOD, MODE or ADDRESS was rewritten after the frontier's outstanding set was keyed on "
+           "it — the reply seam is keyed on (method, mode, url), so the set would go on offering the old "
+           "identity to the host and the reply for the new one would match nothing");
     uv = pending_get(e, PEND_URL);
     mv = pending_get(e, PEND_METHOD);
     if (JS_IsString(uv) && JS_IsString(mv)) {
-        const char *u = JS_ToCString(pend_ctx(), uv);
-        const char *m = JS_ToCString(pend_ctx(), mv);
-        CHECK(u != NULL && m != NULL, "engine: OOM naming an outstanding request");
-        pending_index_key(e, m, u);
+        /* The mode is the third half of the identity (Fetch §2.2.5's request mode): `pending_park_request`, the
+           one writer of the address and the method, writes it before either, so a record whose pair is complete
+           and whose mode is not is a writer that bypassed that door. */
+        JSValue dv = pending_get(e, PEND_MODE);
+        const char *u, *m, *d;
+        DCHECK(JS_IsString(dv),
+               "a request's METHOD and ADDRESS were written with no MODE on the record — the outstanding set is "
+               "keyed on (method, mode, url) because Fetch §4.1 Main fetch answers two requests that differ only "
+               "in mode differently, and pending_park_request writes the mode before the other two");
+        u = JS_ToCString(pend_ctx(), uv);
+        m = JS_ToCString(pend_ctx(), mv);
+        d = JS_IsString(dv) ? JS_ToCString(pend_ctx(), dv) : NULL;
+        CHECK(u != NULL && m != NULL && d != NULL, "engine: OOM naming an outstanding request");
+        pending_index_key(e, m, d, u);
+        JS_FreeCString(pend_ctx(), d);
         JS_FreeCString(pend_ctx(), m);
         JS_FreeCString(pend_ctx(), u);
+        JS_FreeValue(pend_ctx(), dv);
     }
     JS_FreeValue(pend_ctx(), mv);
     JS_FreeValue(pend_ctx(), uv);

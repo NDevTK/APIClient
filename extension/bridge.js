@@ -1358,8 +1358,10 @@ async function frontierRederive(e) {
        wherever the session pays. */
     /* `actor: "tool"`: no page asked for this load; the frontier did. It changes no outcome here, since the
        witness mark is `unstated`. */
+    /* `mode: "navigate"`: the navigate algorithm's own request (Fetch §2.2.5 Requests). */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
-                                                  destination: "document", provenance: frontierProvenance(e),
+                                                  destination: "document", mode: "navigate",
+                                                  provenance: frontierProvenance(e),
                                                   docReach: frontierProvenance(e),
                                                   actor: "tool",
                                                   pinned: "unstated",
@@ -1822,8 +1824,10 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        the join, which names the document these bytes will become. */
     /* `actor` and `provenance` are independent: a page navigates itself on a forced arm as readily as on an
        observed one. */
+    /* `mode: "navigate"`: HTML §7.4.5's fetch is the navigate algorithm's, whose reader is the instance the
+       document becomes, not the page that named it. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
-                                          destination: "document", provenance: provenance,
+                                          destination: "document", mode: "navigate", provenance: provenance,
                                           docReach: fromReach, actor: actor,
                                           /* `unstated`: a navigation's provenance arrives by notice, not by
                                              park, so no witness mark was composed (see safe-fetch.js's
@@ -2355,7 +2359,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      refusal as a status-0 record, which xml_http_request.c's xhr_take_reply treats as a network error. */
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
-  const fetched = async (method, u, destination, provenance, pinned, credentials) => {
+  const fetched = async (method, u, destination, provenance, pinned, credentials, mode) => {
     DCHECK(pinned === "pinned" || pinned === "unpinned",
            "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
            "`pinned` or `unpinned` on every line of the pending join, and the chokepoint reads it WITH the " +
@@ -2364,19 +2368,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "an act that never had one");
     DCHECK(typeof destination === "string",
            "a pending request reached the chokepoint with no DESTINATION — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and Fetch §2.2.5 " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and Fetch §2.2.5 " +
            "makes the destination part of the request, so a caller that omits it is one whose code load " +
            "would be fetched as data and compiled. The empty string is a real destination and means DATA");
     DCHECK(typeof method === "string" && method !== "",
            "a pending request reached the chokepoint with no method — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and the " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and the " +
            "(method, url) pair is what the flow parked on, so a request whose method is unknown can be " +
            "neither refused nor issued");
     /* The credentials mode is passed through for the same reason; reducing it with this zone's willingness is
        the chokepoint's job (`_credentialedOf`). */
     DCHECK(typeof credentials === "string" && credentials !== "",
            "a pending request reached the chokepoint with no CREDENTIALS MODE — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`, Fetch §2.2.5 " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`, Fetch §2.2.5 " +
            "\"Requests\" gives every request one, and only the algorithm that created it knows which. A " +
            "caller that drops it hands `safe-fetch.js` a request it can decide nothing about");
     /* The method half of the firing question is asked of the chokepoint (`safeFetchMethodRefusal`), so this
@@ -2395,16 +2399,18 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const abs = new URL(u, msg.sourceUrl).href;
       // Every park takes one shape; the request's own destination decides the chokepoint's rule (CORB for a
       // code load), and credentials are stated below.
-      /* @security-finding: no `pageOrigin` reaches the chokepoint from this path (replies to requests the
-         analysed bundle made, and chunk loads), so it is stated uncredentialed. The document-load path passes
-         one and carries the session. `msg.credentialed` states whether the document load carried the session
-         (what the frontier record remembers) and is not this question; reading it here made the credentialed SOP
-         refuse every reply unread after spending the person's cookies. Stated `false`, nothing gains credentials,
-         and the deny list's scope to credentialed requests is unchanged (an uncredentialed GET to a logout path
-         destroys nothing).
-         When credentials are built for this path, pass `msg.origin` (MessageSender.origin, plumbed by
-         _dispatchDocument), never `originOf(msg.sourceUrl)`, which would give a sandboxed iframe its embedder's
-         authenticated bytes. That also loosens CORB for a same-origin chunk, a decision to take then. */
+      /* The page's requests are uncredentialed (`credentialed: false`, stated, not read): `msg.credentialed`
+         says whether the DOCUMENT load carried the session and is not this question. The request origin is
+         `eng.origin`, the agent-cluster origin this zone assigned the instance from its own record (the
+         browser's MessageSender.origin for a live document, the origin of the URL this zone loaded for a child),
+         never `originOf(msg.sourceUrl)`, which would give a sandboxed iframe its embedder's origin, and never a
+         word the engine states. safe-fetch.js reads it for Fetch §4.1 Main fetch's response tainting (§4.10
+         CORS check for a `cors` request, an opaque response for a cross-origin `no-cors` one) and for CORB's
+         same-origin exemption. */
+      CHECK(typeof eng.origin === "string",
+            "a page request is about to be judged with no origin on the instance that made it — the zone " +
+            "assigns every instance its cluster origin at creation, and the chokepoint decides from it what " +
+            "the page may read of another origin's reply");
       /* One shape for every park: the destination decides which rule the chokepoint applies and the policy on
          whether a code load may carry the session is the chokepoint's (HTML §8.1.4.2 Fetching scripts gives a
          classic script `same-origin` credentials). */
@@ -2427,8 +2433,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `actor: "page"`: this frame answers a park the engine put on its pending line, and the engine parks on
          what the analysed document's code does. Stated so safe-fetch.js can assert it; with `witness` unpinned it
          is the row the owner's value arm turns on. */
-      const opts = { pageUrl: msg.sourceUrl, destination, provenance, pinned, credentials,
-                     actor: "page",
+      /* `mode` is the request's own (Fetch §2.2.5 Requests), off the pending line, relayed: the engine states
+         what the request IS, and the chokepoint's `_modeOf` CHECKs the word. */
+      const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
+                     credentials, actor: "page",
                      docReach: msg.provenance, credentialed: false };
       const r = await self.safeFetch(abs, opts);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
@@ -2485,8 +2493,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       if (r.status === 0) return null;
       /* Two pieces of one reply crossing on two channels: `meta` is the JSON qjs_provide parses and `bytes` is
          copied into the engine's heap beside it. Returned together so neither is delivered without the other. */
+      /* `type` is the filtered response the chokepoint chose (Fetch §2.2.6 Responses): `basic`, `cors` (its
+         header list already narrowed) or `opaque`; the engine builds a `fetch()`'s Response from it. */
+      DCHECK(r.type === "basic" || r.type === "cors" || r.type === "opaque",
+             "safeFetch answered a reply with no filtered-response type — it states one on every reply, and " +
+             "the engine reads it to decide what the page may read");
       return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers),
-                       urlList: r.urlList, computedType: r.computedType },
+                       urlList: r.urlList, computedType: r.computedType, type: r.type },
                bytes: r.body };
     } catch (e) {
       /* A thrown fetch is a network error and crosses as `null`; an invariant abort thrown through this catch
@@ -2581,25 +2594,25 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     }
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
-      /* The credentials mode is part of the request's identity too, refused rather than downgraded. XHR
-         §3.5.6 The send() method sets it from §3.5.4 The withCredentials getter and setter (`include` if
-         cross-origin credentials is true, otherwise `same-origin`), which xml_http_request.c writes on the
-         record. safeFetch's fetch here is uncredentialed, and for a cross-origin `include` request that is a
-         different fetch: Fetch's CORS check under `include` refuses `Access-Control-Allow-Origin: *` and needs
-         `Access-Control-Allow-Credentials: true`, so it is refused with `blocked-credentialed-cross-origin`,
-         which the page sees as the `error` event a browser would also give. Same-origin `include` and
-         `same-origin` attach the same cookies and are not refused.
-         The page's `withCredentials` never turns credentials on: `q.credentials` is relayed as
-         `opts.credentials` (Fetch §2.2.5 Requests' credentials mode, a statement about the request) and
-         safe-fetch.js composes it with `credentialed`, so it can refuse and never grant. */
+      /* The credentials mode (XHR §3.5.6 The send() method: `include` if cross-origin credentials is true,
+         otherwise `same-origin`, which xml_http_request.c writes on the record) is relayed as `opts.credentials`,
+         a statement about the request that safe-fetch.js composes with `credentialed` and so can refuse and
+         never grant. Fetch §4.10 CORS check reads it: an `include` reply passes only with the exact origin and
+         `Access-Control-Allow-Credentials: true`. */
       DCHECK(q.credentials === "include" || q.credentials === "same-origin",
              "the engine's xhr.send record names no credentials mode this zone speaks (`" + q.credentials +
              "`) — XHR §3.5.6 The send() method computes exactly two, and xhr_request_op writes one on every " +
              "record. A request whose credentials mode is unknown cannot be refused OR issued, and answering " +
              "it uncredentialed would hand the page a response for a request it did not make");
-      if (q.credentials === "include" && new URL(abs).origin !== new URL(msg.sourceUrl).origin)
-        return { meta: { status: 0, statusText: "blocked-credentialed-cross-origin", headers: [] },
-                 bytes: null };
+      /* The mode, §3.5.6's own `cors`, stated on the record by xml_http_request.c and relayed; safe-fetch.js's
+         `_modeOf` CHECKs the word. The origin is the instance's, from this zone's record (see `fetched`). */
+      CHECK(typeof eng.origin === "string",
+            "an XMLHttpRequest is about to be judged with no origin on the instance that made it — the zone " +
+            "assigns every instance its cluster origin at creation");
+      CHECK(q.mode === "cors",
+            "the engine's xhr.send record states the mode `" + q.mode + "` — XHR §3.5.6 The send() method " +
+            "builds every request in `cors` mode, and a reply that returns to the page in any other mode would " +
+            "skip the CORS check the chokepoint runs for it");
       /* @security-finding: `headers` come from the untrusted bundle and are read by the chokepoint. That is
          within the model for an uncredentialed GET to a public host (the browser strips forbidden header names),
          and must be re-decided the day this path is credentialed. Only what the chokepoint reads is passed. */
@@ -2640,8 +2653,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `actor: "page"`: every XHR is made by running the page's code, the same population as the `fetch()`
          relay. With a real witness mark, an XHR whose path pinned nothing fires at an origin the person
          permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
-      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
-                                            provenance: q.provenance, pinned: _xhrPinned,
+      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination: "",
+                                            mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                             docReach: msg.provenance, actor: "page",
                                             credentialed: false,
                                             credentials: q.credentials, headers: q.headers });
@@ -2949,7 +2962,7 @@ function engineWeight(eng) {
 /* Delivered against the request, which is the pair: `qjs_provide` takes the method first, as a request line
    states it (RFC 9112 §3 Request Line), because the engine's pending register is keyed on both, so a GET and a
    POST to one address cannot collect each other's bodies. */
-async function engineProvide(eng, method, url, rep) {
+async function engineProvide(eng, method, mode, url, rep) {
   /* A decline may not arrive here: `provide` settles the park, and `reply: "null"` settles it with a network
      error. A decline is delivered through engineDecline, which keeps the flow parked. */
   DCHECK(!(rep && rep.refusal),
@@ -2961,21 +2974,22 @@ async function engineProvide(eng, method, url, rep) {
   DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
-  await eng.r.renderer.provide({ method, url, reply: JSON.stringify(rep === null ? null : rep.meta),
+  await eng.r.renderer.provide({ method, mode, url, reply: JSON.stringify(rep === null ? null : rep.meta),
                                  body: rep === null ? null : rep.bytes });
 }
 /* The other answer on the same pair: this zone stating it will not make the request. It is not a delivery
    with a different payload, which is why engineProvide refuses a refusal. The engine keeps the flow's park and
    forks an arm that runs the page's `catch`, so the wait is preserved and the failure path explored. No bytes
    accompany it, since nothing was fetched. */
-async function engineDecline(eng, method, url, reason) {
-  DCHECK(typeof method === "string" && method !== "" && typeof url === "string" && url !== "",
-         "a refusal was relayed naming no request — it is keyed on the (method, url) pair exactly as a reply " +
-         "is, because it answers the same question, and a half-named one refuses a request no flow parked on");
+async function engineDecline(eng, method, mode, url, reason) {
+  DCHECK(typeof method === "string" && method !== "" && typeof mode === "string" && mode !== "" &&
+         typeof url === "string" && url !== "",
+         "a refusal was relayed naming no request — it is keyed on (method, mode, url) exactly as a reply is, " +
+         "because it answers the same question, and a partly-named one refuses a request no flow parked on");
   DCHECK(typeof reason === "string" && reason !== "",
          "a refusal was relayed with no reason — the flow it refuses will not drain this session, so this is " +
          "the only account of it anybody gets and it is what says whether a widening would change the answer");
-  await eng.r.renderer.decline({ method, url, reason });
+  await eng.r.renderer.decline({ method, mode, url, reason });
 }
 /* One pending line, split in one place, mirroring the engine's `engine_pending_split` so the grammar cannot
    drift across hosts. The TAB delimiter is unambiguous: URL Standard §4.4 URL parsing strips every ASCII tab
@@ -2987,10 +3001,10 @@ async function engineDecline(eng, method, url, reason) {
    (Fetch §2.2.5 Requests: "" for a `fetch()`), so the shape assert is over the field count and the two ends. */
 function pendingRequest(line) {
   const f = line.split("\t");
-  CHECK(f.length === 7 && f[0] !== "" && f[6] !== "",
+  CHECK(f.length === 8 && f[0] !== "" && f[6] !== "" && f[7] !== "",
         "content.mojom.Renderer.GetPending answered a line that is not " +
-        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`: `" + line + "` — the " +
-        "engine joins the seven and this zone must deliver against the (method, url) pair, so a line missing a " +
+        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`: `" + line + "` — the " +
+        "engine joins the eight and this zone must deliver against (method, mode, url), so a line missing a " +
         "field puts a token where the address belongs and keys a reply on a request nothing parked on");
   const destination = f[1];
   const initiator = f[2];
@@ -3029,7 +3043,18 @@ function pendingRequest(line) {
      request knows it (an `<img>`'s potential-CORS request, a `<script src>`'s CORS settings attribute, a
      `fetch()`'s `RequestInit`), so it is relayed, never re-derived; its membership is checked at the deciding
      door (`_credentialedOf`), one check for both hosts. Here only the line's shape is asserted. */
-  return { method: f[0], destination, initiator, provenance, pinned, credentials, url: f[6] };
+  /* The request mode (Fetch §2.2.5 Requests), which the engine states and safe-fetch.js decides from
+     (`_modeOf` is the vocabulary CHECK, one for both hosts): what the page may read of the reply. This channel
+     returns the reply to the instance that asked, so it carries only the three modes whose reader is the
+     asking page; a `navigate` request is a host request whose bytes become another instance's document
+     (fetchedDocument), and an engine stating it here would be asking for another origin's bytes with no CORS
+     question asked. */
+  const mode = f[6];
+  CHECK(mode === "same-origin" || mode === "cors" || mode === "no-cors",
+        "GetPending stated the mode `" + mode + "` on a request whose reply returns to the asking page — " +
+        "only `same-origin`, `cors` and `no-cors` requests are read by their requester, and anything else " +
+        "here would skip the response tainting the chokepoint decides from the mode");
+  return { method: f[0], destination, initiator, provenance, pinned, credentials, mode, url: f[7] };
 }
 /* The door that does not await a body with no end. A round that waited on each pending fetch in turn would let
    a response the server never ends (one `fetch()` or XHR to an endpoint that holds its body open) keep the
@@ -3116,14 +3141,14 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
      outstanding to wait on. */
   let issued = 0;
   for (const line of requests) {
-    const { method, destination, provenance, pinned, credentials, url } = pendingRequest(line);
+    const { method, destination, provenance, pinned, credentials, mode, url } = pendingRequest(line);
     /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
        the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
        surface is then about the driving), while `asked: 0` says this loop never ran. */
-    /* The dedup key is the pair the engine parked on, the key the answer is delivered under (`engine_provide`
-       and `engine_decline` key on it, and `engine_pending_fetches` dedups over it). It uses the raw address off
-       the line, never the absolute URL `fetched` resolves. */
-    const key = "fetch\n" + method + "\n" + url;
+    /* The dedup key is the (method, mode, url) the engine parked on, the key the answer is delivered under
+       (`engine_provide` and `engine_decline` key on it, and `engine_pending_fetches` dedups over it). It uses
+       the raw address off the line, never the absolute URL `fetched` resolves. */
+    const key = "fetch\n" + method + "\n" + mode + "\n" + url;
     /* An entry stays listed until answered and this visits the list every slice, so without the dedup one
        page `fetch` would become one request per round. */
     if (eng._inflight.has(key)) continue;
@@ -3131,14 +3156,14 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
        re-listed request is counted once and the containment with the declined histogram holds. */
     issued += engineIssue(eng, key,
       () => { eng._egress.asked++;
-              return eng.fetched(method, url, destination, provenance, pinned, credentials); },
-      (answer) => engineDeliverReply(eng, method, url, answer));
+              return eng.fetched(method, url, destination, provenance, pinned, credentials, mode); },
+      (answer) => engineDeliverReply(eng, method, mode, url, answer));
   }
   return issued;
 }
 /* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's
    own pair, so the reply cannot be handed over against a pair it was not fetched under. */
-async function engineDeliverReply(eng, method, url, answer) {
+async function engineDeliverReply(eng, method, mode, url, answer) {
   /* A decline is its own delivery, on its own method. `Decline` carries the same pair `Provide` does with the
      chokepoint's reason: the engine records the refusal, stops listing the request (silence would be
      re-offered and re-refused every round), keeps one arm waiting with no reply invented, and forks the other
@@ -3169,11 +3194,11 @@ async function engineDeliverReply(eng, method, url, answer) {
     const _tok = answer.refusal.reason;
     if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
     eng._egress.declined[_tok]++;
-    await engineDecline(eng, method, url, answer.refusal.reason);
+    await engineDecline(eng, method, mode, url, answer.refusal.reason);
     /* `return`: the decline is the whole delivery for this request. */
     return;
   }
-  await engineProvide(eng, method, url, answer);
+  await engineProvide(eng, method, mode, url, answer);
 }
 /* Every owed list crosses the same way, newline-joined records or "" for none, and is split here. The caller
    names the mojom method and mojom declares the reply's type, so a NULL cannot become the text "null" and one

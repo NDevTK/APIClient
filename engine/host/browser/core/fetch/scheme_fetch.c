@@ -91,7 +91,7 @@ static SchemeFetchOutcome scheme_fetch_about(JSContext *ctx, const UrlRecord *re
     /* §4.2's ESSENCE of the type this arm's own header states. There is no network and no sniff to run: the
        standard writes the header, so the host's computed type IS what the standard wrote. */
     *out_reply = fetch_reply_new(ctx, 200, "OK", &hl, /*body*/ "", /*body_len*/ 0,
-                                 (const char *const *)&abs, 1, "text/html");
+                                 (const char *const *)&abs, 1, "text/html", "basic");
     header_list_free(&hl);
     free(abs);
     return SCHEME_FETCH_RESPONSE;
@@ -162,7 +162,7 @@ static SchemeFetchOutcome scheme_fetch_blob(JSContext *ctx, const FetchRequest *
         /* §4.2's ESSENCE the host computed: a Blob's type IS what this resource is — there is no server to have
            named one and no bytes to sniff that the store did not already label. */
         *out_reply = fetch_reply_new(ctx, 200, "OK", &bh, bytes, blen,
-                                     (const char *const *)&abs, 1, btype ? btype : "");
+                                     (const char *const *)&abs, 1, btype ? btype : "", "basic");
         header_list_free(&bh);
         free(len_s);
         out = SCHEME_FETCH_RESPONSE;
@@ -196,7 +196,7 @@ static SchemeFetchOutcome scheme_fetch_data(JSContext *ctx, const UrlRecord *rec
         CHECK(abs, "scheme fetch: OOM serializing a data: URL for the response's URL list");
         header_list_append(&hl, "content-type", ct);
         *out_reply = fetch_reply_new(ctx, 200, "OK", &hl, ds.body, ds.body_len,
-                                     (const char *const *)&abs, 1, cty);
+                                     (const char *const *)&abs, 1, cty, "basic");
         header_list_free(&hl);
         free(abs);
         free(cty);

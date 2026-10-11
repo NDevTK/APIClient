@@ -63,7 +63,7 @@ const PRINCIPAL = 'https://app.example.com/page';
    git grep -n 'PROVENANCE_OBSERVED, PROVENANCE_OBSERVED' extension/bridge.js  (the AMBIENT seed: observed/tool) */
 function navOpts(over) {
   return Object.assign({ pageUrl: PRINCIPAL, pageOrigin: new URL(PRINCIPAL).origin,
-                         destination: 'document', provenance: 'derived', docReach: 'observed',
+                         destination: 'document', mode: 'navigate', provenance: 'derived', docReach: 'observed',
                          actor: 'page', pinned: 'unstated', credentials: 'include',
                          credentialed: true }, over || {});
 }

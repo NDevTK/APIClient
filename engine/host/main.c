@@ -2281,11 +2281,11 @@ QJS_EXPORT void qjs_teardown(void)
  * run to completion over the hole and the result would look finished. */
 
 /* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>
-   PINNED<TAB>CREDENTIALS<TAB>URL` lines — the same grammar qjs_host_requests answers in, and the method is
-   there because it is half the request's IDENTITY. This list was addresses alone and the reply edge matched on
+   PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` lines, and the method and the mode are there because they are part
+   of the request's IDENTITY (solver/engine.h). This list was addresses alone and the reply edge matched on
    one, so a page issuing a GET and a POST to one address had both promises settled with whichever the zone
-   fetched first (solver/engine.h states the whole of it). The zone must issue each line with the method it
-   names and hand BOTH halves back to qjs_provide.
+   fetched first. The zone must issue each line with the method and mode it names and hand all three of
+   (method, mode, url) back to qjs_provide.
    THIS SENTENCE NAMED FIVE OF THE SEVEN, AND THE GRAMMAR HAS ONLY EVER GROWN. Each field that arrived rewrote
    the CHECKs that SPLIT the line — engine_pending_split is the authority and names every grammar it
    supersedes — and left the prose that INTRODUCES it, so the short copy was the one standing where a host
@@ -2328,16 +2328,16 @@ QJS_EXPORT const char *qjs_pending(void)
    ONE delivery for every parked request. A fetch's reply, the DOCUMENT's own external script and a lazy CHUNK's
    source all settle a park the flow registered before it suspended, and one engine_provide fills every entry
    naming that REQUEST whatever its kind — so there is ONE record and the kinds read the fields they need. */
-QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *reply, const char *body,
-                            unsigned body_len)
+QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *url, const char *reply,
+                            const char *body, unsigned body_len)
 {
     DCHECK(g_begun, "a reply was provided to an engine that never ran");
-    /* THE REQUEST THIS ANSWERS IS THE PAIR, IN THE ORDER THE JOIN EMITTED IT — a request line, METHOD then
-       target (RFC 9112 §3 Request Line). A zone still calling this with four operands lands its URL in `method`
-       and engine_provide's token assert names exactly that. */
-    DCHECK(method != NULL, "a reply was provided with no METHOD — qjs_pending answers "
-                           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and this entry takes "
-                           "the pair; a host sending the address alone is answering a request it cannot name");
+    /* THE REQUEST THIS ANSWERS IS (method, mode, url), IN THE ORDER THE JOIN EMITTED IT. A zone still calling
+       this with the pair alone lands its URL in `mode`, and engine_provide's mode mapping is fatal on it. */
+    DCHECK(method != NULL && mode != NULL,
+           "a reply was provided with no METHOD or no MODE — qjs_pending answers "
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and "
+           "this entry takes (method, mode, url); a host sending less is answering a request it cannot name");
     DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
                           "which is a value the engine's delivery distinguishes from a reply it never got");
     DCHECK(body != NULL || body_len == 0,
@@ -2368,7 +2368,7 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
                    "one, so these bytes name a reply the trusted zone did and did not have at the same time "
                    "(§5.6 stood on this sentence and is Fetch methods, where fetch() REJECTS over a network "
                    "error rather than where one is defined)");
-        n = engine_provide(g_ctx, method, url, v);
+        n = engine_provide(g_ctx, method, mode, url, v);
         JS_FreeValue(g_ctx, v);
         /* NOBODY IS PARKED ON IT, AND THERE ARE NOW TWO WAYS THAT HAPPENS. The one this asserts against is the
            host naming a URL no flow ever asked for — its pending/provide pairing off by one, so the flow that
@@ -2385,7 +2385,7 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
                would send the reader to look for a URL that is in fact on the list. */
             DFAILF("a reply was provided for a request no flow is parked on and none was paged out — the "
                    "host's pending/provide pairing is off, and resolving nothing leaves the flow that IS "
-                   "parked waiting forever. request=%s %s", method, url);
+                   "parked waiting forever. request=%s %s %s", method, mode, url);
         }
     }
 }
@@ -2396,18 +2396,18 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
    entry and qjs_provide one function up: that one owns the paged-sale credit because it holds the reply value
    across the call, and this one carries nothing the engine cannot see. Restating the test would be two answers
    to one question about one refusal, and the second would be the one nobody kept in step. */
-QJS_EXPORT void qjs_decline(const char *method, const char *url, const char *reason)
+QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *url, const char *reason)
 {
     DCHECK(g_begun, "a request was refused to an engine that never ran");
-    DCHECK(method != NULL && url != NULL,
+    DCHECK(method != NULL && mode != NULL && url != NULL,
            "a refusal arrived naming no request — qjs_pending answers "
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and a refusal answers the same PAIR "
-           "a reply does, because it answers the same question; one that names neither half refuses nothing");
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and a "
+           "refusal answers the same (method, mode, url) a reply does, because it answers the same question");
     DCHECK(reason != NULL && *reason != '\0',
            "a refusal arrived with no REASON — the flow it refuses will not drain this session, so the reason "
            "is the only account a reader ever gets of it, and it is what says whether a per-origin widening "
            "would make this request fire");
-    engine_decline(g_ctx, method, url, reason);
+    engine_decline(g_ctx, method, mode, url, reason);
 }
 
 /* WHAT ONLY THE TRUSTED ZONE CAN ANSWER, as `id<TAB>op` lines. A cross-document operation — creating a

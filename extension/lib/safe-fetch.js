@@ -322,6 +322,26 @@ function _destinationOf(opts) {
         "what the request is for");
   return opts.destination;
 }
+/* Fetch §2.2.5 "Requests"' mode — "A request has an associated mode, which is `same-origin`, `cors`, `no-cors`,
+   `navigate`, `websocket`, or `webtransport`." Stated by the algorithm that created the request (the engine
+   states it on the pending line and the XHR record; a §7.4 navigation is `navigate`) and never inferred from
+   the address. Fetch §4.1 "Main fetch" decides from it what the page may read of the reply: a `cors` reply
+   passes §4.10 "CORS check", a cross-origin `no-cors` reply becomes an opaque filtered response, and a
+   `same-origin` request to another origin is a network error. A CHECK, because the arm an absent or invented
+   mode would take is the one that hands the page another origin's bytes. `websocket` and `webtransport` are
+   not requests this chokepoint performs. */
+var _MODE_TYPES = ["same-origin", "cors", "no-cors", "navigate", "websocket", "webtransport"];
+function _modeOf(opts) {
+  CHECK(typeof opts.mode === "string" && _MODE_TYPES.indexOf(opts.mode) >= 0,
+        "safeFetch was called with a MODE that is not one Fetch §2.2.5 \"Requests\" enumerates: " +
+        JSON.stringify(opts.mode) + " — the mode decides whether the reply is CORS-checked, opaque, or " +
+        "refused for another origin, so a request that does not state the one its creating algorithm named " +
+        "would be answered by whichever arm reads it as the default");
+  CHECK(opts.mode !== "websocket" && opts.mode !== "webtransport",
+        "safeFetch was called with the mode `" + opts.mode + "`, which is a connection this chokepoint does " +
+        "not open — a WebSocket or WebTransport session is the page's own (intercept.js), never a GET here");
+  return opts.mode;
+}
 // What a reply is evidence of: `observed`, `derived` or `forced`. The engine states the word (solver/engine.h's
 // PENDING_PROVENANCE_*, composed at the park from the parking flow's `path_forced` and from HTML §4.12.1.1
 // "Processing model"'s parser-inserted script, a `script` whose parser document is non-null); a zone that
@@ -438,7 +458,7 @@ function _actorOf(opts) {
    rule also refuses `as`, since the CORB class is the request's destination. A closed set restates what the
    body reads, and the drift direction is safe: an option added to the body and not here aborts on its
    author's first call. */
-var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "pinned", "docReach",
+var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "mode", "provenance", "pinned", "docReach",
                           "actor", "credentialed", "credentials", "headers", "signal", "onChunk"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
    words `fetch_credentials_token` writes on the pending line. Written here because this zone is the other
@@ -1193,6 +1213,48 @@ function safeFetchSignalVector(facts) {
                          actor: facts.actor,
                          credentialed: facts.credentialed, headers: facts.headers });
 }
+/* Fetch §4.10 "CORS check", over the reply's own headers: "Let origin be the result of getting
+   `Access-Control-Allow-Origin` from response's header list. If origin is null, then return failure. If
+   request's credentials mode is not "include" and origin is `*`, then return success. If the result of
+   byte-serializing a request origin with request is not origin, then return failure. If request's credentials
+   mode is not "include", then return success. Let credentials be the result of getting
+   `Access-Control-Allow-Credentials` from response's header list. If credentials is `true`, then return
+   success. Return failure." Answers the failing step's name, or null for success. `headers` is this file's
+   lowercased map, whose duplicate values are already combined, so a list of two origins matches neither. */
+function _corsCheck(headers, serializedOrigin, credentialsMode) {
+  var origin = headers["access-control-allow-origin"];
+  if (origin === undefined) return "no-allow-origin";
+  if (credentialsMode !== "include" && origin === "*") return null;
+  if (origin !== serializedOrigin) return "allow-origin-mismatch";
+  if (credentialsMode !== "include") return null;
+  if (headers["access-control-allow-credentials"] === "true") return null;
+  return "no-allow-credentials";
+}
+/* Fetch §2.2.6 "Responses"' CORS filtered response: "a filtered response whose type is "cors" and header list
+   excludes any headers in internal response's header list whose name is not a CORS-safelisted response-header
+   name, given internal response's CORS-exposed header-name list". §2.2.2 "Headers" defines the safelist
+   ("`Cache-Control`, `Content-Language`, `Content-Length`, `Content-Type`, `Expires`, `Last-Modified`,
+   `Pragma`, Any item in list that is not a forbidden response-header name") and the forbidden names
+   (`Set-Cookie`, `Set-Cookie2`). The exposed list is `Access-Control-Expose-Headers`, whose `*` counts as a
+   wildcard only for a request whose credentials mode is not "include". The filter runs here, in the zone that
+   read the headers, so what the page may not read never reaches the engine. */
+var _CORS_SAFELISTED_RESPONSE = ["cache-control", "content-language", "content-length", "content-type",
+                                 "expires", "last-modified", "pragma"];
+var _FORBIDDEN_RESPONSE = ["set-cookie", "set-cookie2"];
+function _corsFilteredHeaders(headers, credentialsMode) {
+  var exposed = String(headers["access-control-expose-headers"] === undefined ? ""
+                       : headers["access-control-expose-headers"])
+    .split(",").map(function (n) { return n.trim().toLowerCase(); }).filter(function (n) { return n !== ""; });
+  var all = credentialsMode !== "include" && exposed.indexOf("*") >= 0;
+  var out = {}, k;
+  for (k in headers) {
+    if (!Object.prototype.hasOwnProperty.call(headers, k)) continue;
+    if (_CORS_SAFELISTED_RESPONSE.indexOf(k) >= 0 ||
+        (_FORBIDDEN_RESPONSE.indexOf(k) < 0 && (all || exposed.indexOf(k) >= 0)))
+      out[k] = headers[k];
+  }
+  return out;
+}
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   /* CORB for a script-like load, over facts already computed, answering the rule that refused or null, so
      the status message names which of four rules fired. Same-origin: the page's own data is its to read, and
@@ -1410,16 +1472,20 @@ async function _readBody(resp, sink, gated) {
    (same-origin with `opts.pageOrigin`, else exact-origin ACAO and ACAC `true`); GET only; http(s) only; no
    userinfo; origin-relative SSRF on the initial and the landed URL; the destructive-path deny list on
    credentialed non-`observed` requests, before the wire and after a redirect; the egress policy's firing
-   walk before the wire and on the landed URL; CORB for script-like destinations. Every post-fetch gate
-   judges the landed URL.
+   walk before the wire and on the landed URL; CORB for script-like destinations; for a request the analysed
+   page made, Fetch §4.1 "Main fetch"' response tainting from its mode (a `cors` reply passes §4.10 "CORS
+   check" and is CORS-filtered, a cross-origin `no-cors` reply is opaque, a cross-origin `same-origin` request
+   is a network error), stated on the record as `type`. Every post-fetch gate judges the landed URL.
    Principals, per call and never a global: `opts.pageUrl` (the document's `MessageSender.url`) classifies
-   the SSRF target; `opts.pageOrigin` (`MessageSender.origin`, opaque-unique) is the credentialed SOP's
-   principal and is never parsed from a URL. An opaque principal is same-origin with nothing.
+   the SSRF target; `opts.pageOrigin` (`MessageSender.origin`, opaque-unique, or the agent-cluster origin the
+   host assigned) is the credentialed SOP's principal and the request origin of every page request, held by
+   the host and never parsed from a URL or taken from the engine. An opaque principal is same-origin with
+   nothing.
    Credentialed callers: `bridge.js`'s `navigationLoad` and `frontierRederive`, only where the address is
-   same-origin with the browser-stated principal (`navigationCarriesSession`). The learned-GET replay
-   (`fetched`) states `credentialed: false` and no `pageOrigin`. The facts the policy decides from
-   (`destination`, `provenance`, `pinned`, `docReach`, `actor`, `credentialed`, `credentials`) are stated by
-   every caller and asserted at the entry. */
+   same-origin with the browser-stated principal (`navigationCarriesSession`). The page's own requests
+   (`fetched`, `fetchedXhr`) state `credentialed: false` and the page origin. The facts the policy decides from
+   (`destination`, `mode`, `provenance`, `pinned`, `docReach`, `actor`, `credentialed`, `credentials`) are
+   stated by every caller and asserted at the entry. */
 async function safeFetch(url, opts) {
   opts = opts || {};
   /* The option set this file reads is closed, so a caller's statement it will not read is refused at the
@@ -1437,6 +1503,24 @@ async function safeFetch(url, opts) {
   /* Derived once, above every gate it scopes; `_credentialedOf` also refuses a header list on a
      cookie-bearing request. */
   var credentialed = _credentialedOf(opts);
+  var mode = _modeOf(opts);
+  /* The request's origin for everything the analysed page's own code asks for: the browser-stated
+     `MessageSender.origin` of the document (or the agent-cluster origin this zone assigned an instance), passed
+     by the host from its own record and never taken from the engine. Fetch §4.1 "Main fetch" compares the
+     request's current URL with it to choose the response tainting. `""` is a principal nobody recorded and is
+     treated as an opaque origin, same-origin with nothing. A request this tool composed has this extension's
+     origin, whose `<all_urls>` host permission is the browser's answer to the CORS question, so no page origin
+     is asked of it. */
+  CHECK(actor !== "page" || mode === "navigate" || typeof opts.pageOrigin === "string",
+        "safeFetch was asked for a request the analysed page made without the page's origin — Fetch §4.1 " +
+        "\"Main fetch\" decides from it whether the page may read the reply (§4.10 \"CORS check\" against it, " +
+        "or an opaque response), so a page request with none would be read as same-origin with whatever it " +
+        "named. State the origin this zone holds for the requesting document");
+  CHECK(actor !== "page" || mode !== "cors" || _CREDENTIALS_MODES.indexOf(opts.credentials) >= 0,
+        "safeFetch was asked for a `cors` request the analysed page made without its credentials mode — " +
+        "Fetch §4.10 \"CORS check\" reads the request's credentials mode to decide whether `*` passes, so the " +
+        "check would be decided by silence");
+  var _pageOrigin = typeof opts.pageOrigin === "string" ? opts.pageOrigin : "";
   var parsed;
   try { parsed = new URL(String(url)); }
   /* Network: a string the URL Standard §6.1 "URL class" constructor refuses never becomes a request in a
@@ -1458,6 +1542,12 @@ async function safeFetch(url, opts) {
      already holds. */
   if (parsed.username !== "" || parsed.password !== "")
     return _refused("network", "blocked-url-credentials", [parsed.href], {});
+  /* Network: Fetch §4.1 "Main fetch"' switch — "request's mode is "same-origin": Return a network error" —
+     for a request that did not match the arm before it ("request's current URL's origin is same origin with
+     request's origin"). Asked before the wire and again on the landed URL. */
+  if (actor === "page" && mode === "same-origin" &&
+      !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin))
+    return _refused("network", "blocked-mode-same-origin:" + parsed.origin, [parsed.href], {});
   /* Decline: a script-like destination cannot be streamed (see `_bodyGated`), and no browser refuses a
      streamed script, so only this tool declines. Serving it whole to a caller that asked for chunks would
      leave that caller believing it streamed past the one gate that needs the whole body. */
@@ -1578,7 +1668,6 @@ async function safeFetch(url, opts) {
      opaque origin, and parsing the address would fabricate a tuple origin with same-origin access to its
      embedder. An opaque or absent principal is same-origin with nothing, so it gets strict CORB and a
      credentialed read that needs CORS, which it can never be granted (ACAO cannot equal it). */
-  var _pageOrigin = opts.pageOrigin || "";
   var _resourceSameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(_finalOrigin) &&
                             _finalOrigin === _pageOrigin;
   /* Network: SSRF via redirect. The initial check cannot see a 3xx into the intranet, so the landed host is
@@ -1640,6 +1729,47 @@ async function safeFetch(url, opts) {
                         _urlList(parsed.href, _finalHref, resp.redirected), {});
     }
   }
+  /* Fetch §4.1 "Main fetch"' response tainting, for a request the analysed page made. It is `basic` only where
+     the requested and the landed URL are both same-origin with the page; a redirect hop between them that left
+     the origin is not visible here (only the first and last URL are), which is a named residual in
+     SECURITY.md. Otherwise:
+       `same-origin` mode — a network error, the main-fetch switch's arm for that mode.
+       `cors` mode — §4.10 "CORS check" on the reply, before its body is read, with the request's origin
+         serialized as "null" where a redirect left an origin the request was not made from (§2.2.5's redirect
+         taint); a failure is a network error, and a pass is §2.2.6's CORS filtered response.
+       `no-cors` mode — §2.2.6's opaque filtered response. A `fetch()` (destination "") is the one consumer that
+         reads that response itself, so its body is not read and no bytes reach the engine; an element (a classic
+         script, an image, a stylesheet) consumes the internal response, so its bytes are delivered beside the
+         `opaque` type and the engine keeps them from page script.
+     A navigation is `navigate` and is judged by the instance that becomes its reader. */
+  var _type = "basic";
+  if (actor === "page" && mode !== "navigate" &&
+      !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin && _resourceSameOrigin)) {
+    if (mode === "same-origin")
+      return _refused("network", "blocked-mode-same-origin:" + _finalOrigin,
+                      _urlList(parsed.href, _finalHref, resp.redirected), {});
+    if (mode === "cors") {
+      var _tainted = resp.redirected && parsed.origin !== _finalOrigin && parsed.origin !== _pageOrigin;
+      var _cors = _corsCheck(headers, _tainted || !_isRealOrigin(_pageOrigin) ? "null" : _pageOrigin,
+                             opts.credentials);
+      if (_cors)
+        return _refused("network", "blocked-cors:" + _cors + ":" + _finalOrigin,
+                        _urlList(parsed.href, _finalHref, resp.redirected), {});
+      headers = _corsFilteredHeaders(headers, opts.credentials);
+      _type = "cors";
+    } else {
+      _type = "opaque";
+      if (destination === "") {
+        /* The body is given back unread: nothing may read an opaque response's body. */
+        if (resp.body) {
+          try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
+        }
+        return { ok: resp.ok, status: resp.status, statusText: "", headers: {}, body: _NO_BYTES(),
+                 urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: "",
+                 refusal: null, type: _type };
+      }
+    }
+  }
   /* The body, as bytes, after both SSRF checks, so nothing internal is ingested before the target is judged.
      There is no decode: the engine decodes with the response's charset and BOM (see the header), so it
      receives exactly what the server sent. It is read after the credentialed SOP/CORS check above, which needs
@@ -1689,7 +1819,7 @@ async function safeFetch(url, opts) {
          "opaque filtered response cannot arise, so a 0 here is a reply and a refusal wearing one number");
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
            urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed,
-           refusal: null };
+           refusal: null, type: _type };
 }
 /* The chokepoint and the policy that decides whether it fires, installed together so no host holds half the
    contract. `engine/trusted.mjs` runs this file in a vm context and reads them off it; `ast-worker.html`

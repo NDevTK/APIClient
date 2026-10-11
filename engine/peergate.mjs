@@ -500,7 +500,7 @@ async function main() {
      the seed, which this harness named on its own command line, which is what `observed` says. Stating one
      word for both would have this gate testing a request shape the run never makes. */
   const probe = await ZONE.safeFetch(`${peerOrigin}/pna-probe`,
-                                     { pageUrl: seedUrl, destination: 'document',
+                                     { pageUrl: seedUrl, destination: 'document', mode: 'navigate',
                                        provenance: 'derived', pinned: 'unpinned',
                                        /* THIS GATE COMPOSED THE ADDRESS, so the act is THIS TOOL'S and not
                                           any analysed page's — see safe-fetch.js's `_actorOf`. The peer

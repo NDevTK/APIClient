@@ -112,7 +112,7 @@
  *              because a gate was forced. A reply to it is evidence about what a server says to a request no
  *              client makes, and §@H forbids it ever being reported as OBSERVED.
  * THE ORDER IS THE JOIN'S, and it is why these are numbered rather than named-only: engine_pending_fetches
- * dedups over the (method, url) pair and has to state the fact that survives every member of the set, which is
+ * dedups over (method, mode, url) and has to state the fact that survives every member of the set, which is
  * the MOST OBSERVED of them — the same rule, and the same reasoning, as the initiator's.
  * IT IS `PEND_SHARE`, for `doc`'s reason exactly: an arm forked while the load is in flight is the same
  * request, built on the prefix both arms share and before either of them had taken the branch. A sibling that
@@ -391,6 +391,9 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     /* NO CREDENTIALS MODE STATED — which `pending_park_request` refuses to reach, so a record  \
        carrying this default is one no park with an ADDRESS ever touched (see the paragraph above) */ \
     X(CREDENTIALS,"credentials",PEND_SHARE, JS_NULL)                                   \
+    /* NO MODE STATED (Fetch §2.2.5's request mode), written by `pending_park_request` BEFORE the   \
+       address, because the mode is the third half of the identity the outstanding set is keyed on */ \
+    X(MODE,       "mode",      PEND_SHARE,  JS_NULL)                                   \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* the asking document, which every fetch park writes; 0 names none (a document script, a host request) */ \
@@ -450,7 +453,7 @@ void pending_free_ctx(JSContext *ctx);
 int  pending_count(JSValueConst reg);
 
 /* HOW MANY OF ONE KIND, and it is a KIND question because a departing flow takes TWO different debts with it
-   and one number cannot say which. A sold flow's fetch replies are paired by (method, url) against the
+   and one number cannot say which. A sold flow's fetch replies are paired by (method, mode, url) against the
    host's own list (engine_take_paged_owed), and its synchronous requests are routed BY ID to a call site — so
    a register counted whole spends a fetch's credit on a request's departure, and the pairing assert that
    exists to catch a host naming a request nobody parked on is then excused by a HOSTREQ that has nothing to

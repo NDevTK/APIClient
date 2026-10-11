@@ -986,7 +986,7 @@ void response_free(void)
 /* THE REPLY THE TRUSTED HOST FETCHED — headers the page may not write, which is the §5.5 "immutable" guard and
    the reason that guard exists at all. */
 JSValue response_new(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
-                     const HeaderList *headers, const char *body, size_t body_len)
+                     const HeaderList *headers, const char *body, size_t body_len, int cors)
 {
     ResponseData *d;
     JSValue obj;
@@ -1013,8 +1013,24 @@ JSValue response_new(JSContext *ctx, JSValueConst url_list, int status, const ch
        a host that could only hand over bytes forced — and a page reading `r.status` or `r.headers.get(...)` off
        a real reply got an answer this file invented. The guard is §5.5's "immutable": a reply the page did not
        construct is not a reply the page may rewrite. */
-    if (response_set(ctx, d, url_list, status, status_text ? status_text : "", RESPONSE_TYPE_BASIC,
+    if (response_set(ctx, d, url_list, status, status_text ? status_text : "",
+                     cors ? RESPONSE_TYPE_CORS : RESPONSE_TYPE_BASIC,
                      body ? body : "", body_len, headers, HEADERS_GUARD_IMMUTABLE) < 0) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
+    return obj;
+}
+
+JSValue response_new_opaque(JSContext *ctx)
+{
+    ResponseData *d;
+    JSValue obj = response_alloc(ctx, &d);
+    if (JS_IsException(obj))
+        return obj;
+    /* The URL list « » is JS_UNDEFINED here exactly as js_response_error states it; a null body is NULL. */
+    if (response_set(ctx, d, JS_UNDEFINED, 0, "", RESPONSE_TYPE_OPAQUE, NULL, 0, NULL,
+                     HEADERS_GUARD_IMMUTABLE) < 0) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
     }

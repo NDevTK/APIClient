@@ -25,7 +25,13 @@ JSValue response_url_list(JSContext *ctx, const char *const *urls, int n);
    `bytes()` hand those bytes back, and a strlen would have truncated the reply at its first interior NUL.
    `url_list` is §2.2.6's URL list — the whole of what `url` and `redirected` are computed from — and is
    COPIED, never adopted. */
+/* `cors` is Fetch §2.2.6 "Responses"' CORS filtered response (type "cors"), whose header list the trusted zone
+   has already narrowed to what that filter exposes; otherwise the type is "basic". */
 JSValue response_new(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
-                     const HeaderList *headers, const char *body, size_t body_len);
+                     const HeaderList *headers, const char *body, size_t body_len, int cors);
+/* Fetch §2.2.6 "Responses"' OPAQUE FILTERED RESPONSE: "a filtered response whose type is "opaque", URL list
+   is « », status is 0, status message is the empty byte sequence, header list is « », body is null, and body
+   info is a new response body info." It is what a `no-cors` `fetch()` of another origin resolves with. */
+JSValue response_new_opaque(JSContext *ctx);
 
 #endif

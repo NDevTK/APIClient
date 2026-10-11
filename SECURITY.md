@@ -124,11 +124,37 @@ and the bridge relays each to `safeFetch`.
 | per-origin egress policy, before the wire and on the landed URL | `_firingRefusal` | `blocked-signal:<signal>=<value>`, `blocked-signal-redirect:` |
 | destructive-path deny list where the session pays and the request is not `observed`, before the wire and after a redirect | `_destructiveToken` | `blocked-destructive:<token>`, `blocked-destructive-redirect:` |
 | own SOP/CORS on a credentialed reply, over the landed origin | `_resourceSameOrigin`, then exact-origin `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true` | `blocked-cors-credentialed:<landed origin>` |
+| a page's `same-origin`-mode request to another origin, before the wire and on the landed URL | `safeFetch` | `blocked-mode-same-origin:<origin>` |
+| a page's `cors`-mode reply from another origin passes Fetch §4.10 "CORS check" before its body is read, credentialed or not, and is CORS-filtered | `_corsCheck`, `_corsFilteredHeaders` | `blocked-cors:<failed step>:<landed origin>` |
+| a page's `no-cors`-mode reply from another origin is opaque; a `fetch()` (destination "") gets no bytes at all | `safeFetch`, the record's `type: "opaque"` | (resolves, as in a browser) |
 | CORB for a script-like destination (Fetch §2.2.5 "Requests"), whatever the status | `_isScriptLike`, `_corbDeniesScript` | `blocked-corb:<rule>:<type>` |
 | a script-like body is never streamed, so CORB always reads the whole body | `_bodyGated` | `blocked-stream-body-gated:` |
 
 Each refusal is graded by `_refused`: `network` where a real browser would also fail the request, `decline`
 where only this tool declines, so the flow parks instead of running its failure path.
+
+What the page may read of a reply is decided here from the request's Fetch §2.2.5 mode, which the engine states
+for every request (the pending line's `MODE` field, the XHR record's `mode`) and `_modeOf` CHECKs. A host-permission
+fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"' response tainting itself:
+
+- The request's origin is the page's, from the host's own record: `eng.origin` in `bridge.js` (the agent-cluster
+  origin this zone assigned the instance, from `_browserFacts.origin` or from the URL this zone loaded for a
+  child) and `e.origin` in `engine/trusted.mjs`. The engine states no origin; nothing on the pending line could
+  name one.
+- `basic` only where the requested and the landed URL are both same-origin with the page. Otherwise a `cors`
+  reply passes §4.10 "CORS check" (`*` passes unless the credentials mode is `include`; the origin is serialized
+  as `null` where a redirect left an origin the request was not made from) and becomes a CORS filtered response,
+  whose headers `_corsFilteredHeaders` narrows to the safelist and `Access-Control-Expose-Headers` before the
+  engine sees them. A cross-origin `no-cors` reply is opaque: for a `fetch()` the body is not read and the engine
+  builds Fetch §2.2.6's opaque filtered response (`response_new_opaque`, `fetch_reply_type`); for an element (a
+  classic script, an image, a stylesheet) the bytes are delivered for that element to consume.
+- The mode is part of the request's identity: the engine keys its pending register on (method, mode, url)
+  (`pending_index_key`, `engine_provide`), so a `<script src=u>` and a `fetch(u)` are two requests with two
+  answers. The pending channel carries only `same-origin`, `cors` and `no-cors` (`pendingRequest` in `bridge.js`
+  CHECKs it), because its reply returns to the asking page.
+- Page-script reads of a no-cors element's bytes are refused inside the engine where the platform defines a
+  read: a canvas tainted by a cross-origin image (`html_canvas_element.c`, origin-clean) and a cross-origin
+  stylesheet's rules (`css_style_sheet.c`, origin-clean).
 
 - Cookies are omitted unless the caller states `credentialed: true` and a Fetch §2.2.5 credentials mode;
   `_credentialedOf` composes the two and can only narrow. The willing callers are the document loads, and
@@ -294,9 +320,11 @@ requests fire only at an origin a person widened.
 - Cross-instance state crosses as serialized, typed text, never a live value, and a synchronous cross-instance
   read is a suspend point. The cross-origin `WindowProxy` member list is declared beside the `Window` member
   table in `engine/host/browser/core/frame/window_proxy.c`.
-- What the engine states to the chokepoint (`destination`, `provenance`, `pinned`, `credentials`) is checked
-  for vocabulary, not for truth. The engine can never turn cookies on (`_credentialedOf` only narrows) and never
-  chooses `actor`.
+- What the engine states to the chokepoint (`destination`, `mode`, `provenance`, `pinned`, `credentials`) is
+  checked for vocabulary, not for truth. The engine can never turn cookies on (`_credentialedOf` only narrows),
+  never chooses `actor`, and never states the origin a reply is judged against. A false mode can only pick
+  among the three page-readable modes (`pendingRequest`), and the weakest of them, `no-cors`, hands a `fetch()`
+  no bytes; the bytes it does hand an element are the ORB residual below.
 
 ## Live verify
 
@@ -366,8 +394,11 @@ Each residual states what is not covered, what would close it, and how its absen
 
 | Residual | Not covered | What closes it | How its absence shows |
 |----------|-------------|----------------|-----------------------|
-| Private network by name (unmitigated) | `_isPrivateHost` classifies the host string. A public-looking name that resolves to a private or loopback address (an intranet name, `.internal`, `.lan`, a single-label host, `127.0.0.1.nip.io`) is classified public, so a public page's requests to it fire, including by the default arm for the page's own unpinned `fetch()` | a classification of the resolved address, or Chrome's own local-network gate shown to apply to this extension's fetches | a page analysed from a public origin receiving a reply from a host on the person's network |
-| Uncredentialed replies are not CORS-filtered (unmitigated) | `safeFetch` applies SOP/CORS only when credentialed; a host-permission fetch bypasses the browser's CORS, and the engine's fetch has no CORS check, so the analysed page's code reads cross-origin bodies a browser would deny it. Harm needs authority by network position; with the row above, a page can read an intranet name and send the body out with a second unpinned `fetch()` | Fetch §4.10 "CORS check" on a `cors`-mode reply before its body reaches the engine | a page's script reading the body of a cross-origin reply that carries no `Access-Control-Allow-Origin` |
+| Private network by name (write side unmitigated) | `_isPrivateHost` classifies the host string. A public-looking name that resolves to a private or loopback address (an intranet name, `.internal`, `.lan`, a single-label host, `127.0.0.1.nip.io`) is classified public, so a public page's GETs to it are sent, including by the default arm for the page's own unpinned `fetch()`. The reply is unreadable unless that host answers `Access-Control-Allow-Origin` for the page or `*` (`_corsCheck`), where a browser would also ask Local Network Access | a classification of the resolved address before the connection, or Chrome's own local-network gate shown to apply to this extension's fetches | a page analysed from a public origin causing a request to a host on the person's network |
+| Redirect hops between the first and last URL | `safeFetch` sees only the requested and the landed URL, so a redirect chain that leaves the origin and returns is tainted `basic` where Fetch would taint it, and an intermediate redirect response's own CORS check is not run | a redirect walk this zone performs hop by hop | a `cors` reply delivered `basic` after a chain that crossed origins |
+| The request carries no page `Origin` header | `Origin` is a forbidden request header, so the zone's request carries this extension's origin or none, and a server that reflects the request's `Origin` answers an `Access-Control-Allow-Origin` that is not the page's. The page then gets a network error where a browser's request would pass: a narrowing | a transport that can state the page's origin | a cross-origin API that works in a browser failing `blocked-cors:allow-origin-mismatch` here |
+| No CORS preflight | a `cors` request with a header that is not CORS-safelisted (an XHR's own header list) is sent as a GET without the `OPTIONS` preflight a browser makes first, so a server that would refuse the preflight still receives it. The reply is still CORS-checked | the preflight (Fetch §4.8 "CORS-preflight fetch") before such a request | a server log showing a GET with a custom header and no preceding `OPTIONS` |
+| No ORB for a no-cors element's bytes | CORB applies to script-like destinations only, so a cross-origin `no-cors` image, style or font body of any type is delivered to the engine; page script cannot read it, but a compromised engine could | Chromium's ORB rules for the other no-cors destinations | a JSON or HTML body delivered for an `image` destination |
 | Redirect to a private host | `safeFetch` re-judges the landed host and refuses to ingest, but the hop that reached the private host was already sent | a manual redirect walk judging each `Location` before it is followed | a public host's 3xx onto an intranet address appearing in that host's logs |
 | Credential lineage | the chokepoint sees the credential state of the request in front of it and nothing about where the address came from | a `credentialed` bit on the response the engine ingests, carried into the concolic value's source identity and composed at the park beside the provenance word | every request at an origin reading `lineage=unknown`, including addresses the bundle built from a logged-in reply |
 | Authority in a path segment | `url-authority` matches capability-URL parameter names and the JWS prefix only; an opaque token in a path reads `unknown` | read the signal off the engine, whose park knows which source each segment came from | `url-authority=unknown` doing all the work at a widened origin whose addresses carry capability tokens |
@@ -380,7 +411,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Relayed-reply attribution | a `PAGE_FETCH` reply is vouched for only by the renderer that returned it and is filed under the requested URL, cross-origin included | none; the learned store is a research artifact, never evidence about a third party | a learned endpoint at another origin whose reply no server sent |
 | Passive learning is page-claimed | `RESPONSE_BODY`, `CONTENT_FORM_SUBMIT` and the `sourceOrigin` / `targetOrigin` on `PM_RECV` / `MC_OPEN` records are built in the page's renderer, and any script there can dispatch the wrapper events, so a page can file records under any address or origin. They do not reach the engine as an `event.origin` | none at this layer; the popup labels them as claims (`_claimedOriginPair`) and refuses to reply to a non-origin (`_isRealTargetOrigin`) | records for an origin the person never visited, learned while on an unrelated page |
 | Cross-origin child navigables load uncredentialed | `navigationCarriesSession` refuses the session cross-origin, because the chokepoint's credentialed gate asks whether the requesting principal may read the bytes, while a navigation's reader is another instance keyed on the response's origin | a document-load type in `safe-fetch.js` whose read principal is the response's own origin, not an `if` at the caller | cross-origin child documents loading in their logged-out form |
-| Page requests are uncredentialed | `fetched` and `fetchedXhr` state `credentialed: false`, so the analysed page's own data requests see the logged-out reply. The `@security-finding` at `fetched` names the value to pass (`msg.origin`) and the wrong fix (`originOf(msg.sourceUrl)`) | a per-origin credential decision passing the browser-stated origin | an app whose boot data differs by session analysed in its logged-out form |
+| Page requests are uncredentialed | `fetched` and `fetchedXhr` state `credentialed: false`, so the analysed page's own data requests see the logged-out reply. They already pass the page origin the credentialed SOP would need (`eng.origin`); the wrong origin would be `originOf(msg.sourceUrl)`, which gives a sandboxed iframe its embedder's | a per-origin credential decision over the request's own credentials mode | an app whose boot data differs by session analysed in its logged-out form |
 | A credentialed request cannot carry a header list | `_credentialedOf` `CHECK`s the combination, because nothing states whose header list it is | an ownership statement carried from the site that knows, as `provenance` is | that `CHECK` firing |
 | `same-origin` credentials mode where the zone is willing | `_credentialedOf` has no pre-request same-origin test, so it `CHECK_FAIL`s | the same-origin test on the request URL against `pageOrigin`, read before the wire | that `CHECK_FAIL` firing; every willing caller today states `include` |
 | A joined document is judged under its root's reach grade | `fetched` reads `msg.provenance` from the root's message, so a document joined through `engineJoin` is judged as its root was reached | the park's document name on the pending line, so the lookup is per document | at an origin widened for one grade, identical requests firing from a joined document and refused from a top-level one reached the same way |
@@ -399,7 +430,8 @@ Each residual states what is not covered, what would close it, and how its absen
 | A renderer states a principal, or a localhost address, to defeat the SSRF check | mitigated: no principal-shaped field is on the wire; every principal comes from `_browserFacts(sender)` |
 | A renderer seeds a cross-origin address to spend the person's session at a host it names | mitigated: `CONTENT_SEED` is admitted only at the origin of `_browserFacts.url`, and `navigationCarriesSession` attaches cookies only same-origin with the browser-stated principal |
 | A bundle imports `http://127.0.0.1/…` or an intranet IP from a public page | mitigated: `_isPrivateHost` on the requested and landed host |
-| A bundle fetches an intranet DNS name, or a public name resolving to loopback, from a public page | not mitigated: see the private-network-by-name and CORS residuals |
+| A bundle fetches an intranet DNS name, or a public name resolving to loopback, from a public page | partially mitigated: the reply is unreadable unless that host grants the page's origin or `*` (`_corsCheck`); the request is still sent (see the private-network-by-name residual) |
+| A bundle reads a cross-origin reply its browser would refuse it | mitigated: a `cors` reply needs Fetch §4.10's grant, a `no-cors` `fetch()` is opaque, and a `same-origin` request to another origin is a network error; the origin judged is the host's record of the page, never one the engine states |
 | A bundle imports a cross-origin HTML or JSON endpoint as a chunk | mitigated: the import's destination is script-like, so CORB refuses a non-JavaScript body at any status |
 | A sub-frame in a tab whose top is `http://localhost/` reaches the person's intranet | mitigated: the SSRF principal is the frame's own `sender.url`, never `sender.tab.url` |
 | A localhost page's analysis lends its origin to a public page's fetch | mitigated: the principal is per call, never a global |

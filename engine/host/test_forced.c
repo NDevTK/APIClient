@@ -746,7 +746,7 @@ static int fixture_provide(JSContext *ctx) {
         const char *nl = strchr(urls, '\n');
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
-        const char *method, *destination, *initiator, *provenance, *pinned, *credentials, *url;
+        const char *method, *destination, *initiator, *provenance, *pinned, *credentials, *mode, *url;
         UrlRecord rec;
         char *abs;
         JSValue reply;
@@ -754,7 +754,7 @@ static int fixture_provide(JSContext *ctx) {
 
         CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
-        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` AND IT
+        /* THE LINE IS `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` AND IT
            IS SPLIT BY THE
            ENGINE'S OWN SPLITTER — the reply seam is keyed on the pair, so a fixture that answered the whole
            line as an address would match nothing. THIS FIXTURE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT
@@ -763,7 +763,8 @@ static int fixture_provide(JSContext *ctx) {
            anything. What is asserted here is their VOCABULARY, which is the producer's contract and is exactly
            what a fixture is for; the DESTINATION's is asserted inside the splitter against Fetch §2.2.5's own
            enumeration, which is too long to restate at each host and is one table for that reason. */
-        engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &credentials, &url);
+        engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &credentials, &mode,
+                             &url);
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
         DCHECK(!strcmp(pinned, PENDING_PINNED_YES) || !strcmp(pinned, PENDING_PINNED_NO),
@@ -816,7 +817,7 @@ static int fixture_provide(JSContext *ctx) {
            this branch is never reached a second time. A fixture-side `once` flag would be a second answer
            to that question and free to disagree with it. */
         if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
-            filled += engine_decline(ctx, method, url,
+            filled += engine_decline(ctx, method, mode, url,
                                      "blocked-signal: this origin has not been widened for a program load "
                                      "at this address, so the act is derived and reported and not spent");
         } else {
@@ -844,9 +845,9 @@ static int fixture_provide(JSContext *ctx) {
                change to rows under test, made in passing, to tidy a reply nobody is asking about. */
             if (sv) header_list_append(&eh, "content-type", rtype);
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
-                                    (const char *const *)&abs, 1, rtype);
+                                    (const char *const *)&abs, 1, rtype, "basic");
             header_list_free(&eh);
-            filled += engine_provide(ctx, method, url, reply);
+            filled += engine_provide(ctx, method, mode, url, reply);
             JS_FreeValue(ctx, reply);
         }
         free(abs);
@@ -27115,6 +27116,7 @@ static int abi_pay(void)
         }
         if (!strcmp(verb, "provide")) {
             const char *method = abi_take(&p, "request method");
+            const char *mode = abi_take(&p, "request mode");
             const char *url = abi_take(&p, "request address");
 
             reply_b64 = abi_take(&p, "reply record");
@@ -27135,7 +27137,7 @@ static int abi_pay(void)
                        "a reply body is longer than the ABI's length parameter can name — the truncated value "
                        "would be accepted, so the flow would resume on a PREFIX of the response and every "
                        "value learned from it would be a fact about bytes the server did not send");
-                qjs_provide(method, url, reply, body, (unsigned)body_n);
+                qjs_provide(method, mode, url, reply, body, (unsigned)body_n);
                 free(reply);
                 free(body);
             }
@@ -27300,6 +27302,7 @@ static int abi_pay(void)
                uncounted, the very first refusal would end the session at `abi_stalled` before the arm it
                creates had ever been stepped, so the fork would exist and never once run. */
             const char *method = abi_take(&p, "refused request method");
+            const char *mode = abi_take(&p, "refused request mode");
             const char *url = abi_take(&p, "refused request URL");
             char *reason;
             size_t rn = 0;
@@ -27307,11 +27310,11 @@ static int abi_pay(void)
             reason = abi_bytes(abi_take(&p, "refusal reason"), &rn, "refusal reason");
             CHECKF(p == NULL, "a refused request carries a field after its reason. trailing=[%s]", p ? p : "");
             DCHECK(rn == strlen(reason), "a refusal reason carries a NUL");
-            CHECK(*method != '\0' && *url != '\0',
+            CHECK(*method != '\0' && *mode != '\0' && *url != '\0',
                   "a refused request named no method or no address — the refusal is keyed on the PAIR exactly "
                   "as a reply is, so a half-named one refuses whichever request the engine's pairing assert "
                   "happens to fall on and leaves the flow that IS parked waiting for the session");
-            qjs_decline(method, url, reason);
+            qjs_decline(method, mode, url, reason);
             /* AND THE SENTENCE IS STILL READ ALOUD, WHICH THE ENGINE ALONE WOULD NOT DO. The refusal now rides
                the engine's own record, which is what lets the flow park and fork — but nothing in this process
                PRINTS a record, so a reason relayed only through the ABI would be stored, asserted, acted on,

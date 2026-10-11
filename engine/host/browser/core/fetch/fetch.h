@@ -123,9 +123,11 @@ FetchCredentialsMode fetch_credentials_of_token(const char *token);
  * IT ARRIVES WITH ITS FIRST CONSUMER AND THIS IS THAT ARRIVAL, which is core/html/cors_settings_attribute.h's
  * own prediction coming true rather than a new decision: that file computes §2.5.1's mode and says the field
  * is not carried "because neither has a reader", and Subresource Integrity's integrity-policy check is the
- * reader. Nothing else in this engine reads it — SECURITY.md gives the SOP/CORS decision to the trusted zone,
- * which makes it from the request's own origin and the reply's headers — so it does NOT cross the wire, and a
- * seam that started sending it would be stating a fact no consumer over there asked for.
+ * reader. Its other reader is the trusted zone: the mode crosses the wire on the pending line
+ * (`fetch_mode_token`), because SECURITY.md gives the SOP/CORS decision to that zone and Fetch §4.1 "Main
+ * fetch" makes the decision from the mode — a `cors` reply passes §4.10 "CORS check", a `no-cors` one becomes an
+ * opaque filtered response, a `same-origin` one refuses another origin. The mode is part of the request's
+ * identity there: two requests that differ only in mode are two requests.
  *
  * `_UNPLACED` IS THE ZERO AND IT IS THE WHOLE POINT OF THE ENUM, for the reason FETCH_CREDENTIALS_UNPLACED is:
  * the failure this field has is SILENT. A producer that leaves it zero, or states the wrong one, does not
@@ -145,18 +147,12 @@ typedef enum {
     FETCH_MODE_WEBTRANSPORT,
 } FetchMode;
 
-/* §2.2.5's five words, in the ONE direction anything needs them: a request record built by §5.4 "Request
-   class" holds this field as the TEXT Web IDL §3.2.18 "Enumeration types" already validated, and the engine
-   reads it back as the domain. There is no token direction because nothing serializes a mode: the wire does
-   not carry it.
-   THE WEB IDL NUMBER HERE WAS §3.2.19 AND IS A REPAIR AT FOUR SITES, TWO OF THEM PRE-EXISTING. "Enumeration
-   types" is §3.2.18; §3.2.19 is "Callback function types". The two older sites stated the title WITHOUT
-   quotation marks, so the auditor's title channel had nothing to compare and reported nothing for years —
-   this one stated it in quotes, was caught on the first run, and the grep that fixed it found the rest.
-   A correctly-numbered citation whose TITLE is unquoted is invisible to the one check
-   that would judge it. An unrecognised word is this engine's own conversion having stopped, never a string a page
-   reached here with — §5.4 rejects anything outside `RequestMode` before the record is filled. */
+/* §2.2.5's six words, in both directions. `fetch_mode_of_token` reads back the TEXT a §5.4 "Request class"
+   record holds, which Web IDL §3.2.18 "Enumeration types" already validated, so an unrecognised word is this
+   engine's own conversion having stopped. `fetch_mode_token` is the one wire spelling, fatal on `_UNPLACED`
+   for `fetch_credentials_token`'s reason. */
 FetchMode fetch_mode_of_token(const char *token);
+const char *fetch_mode_token(FetchMode m);
 
 typedef struct {
     const char   *method;
@@ -237,7 +233,8 @@ typedef struct {
     /* Fetch §2.2.5 "Requests"' MODE. Stated by the algorithm that CREATES the request and never derived here:
        §5.4's constructor gives a request built from a string `cors`, HTML §2.5.1's create a potential-CORS
        request gives `no-cors` or `cors` off the element's `crossorigin` state, and XHR states `cors` outright.
-       Its only reader is §4.1 step 7's integrity-policy disjunct; it does not cross the wire. */
+       Read by §4.1 step 7's integrity-policy disjunct here, and carried on the pending line to the trusted
+       zone, which decides from it what the page may read of the reply. */
     FetchMode mode;
 } FetchRequest;
 
@@ -431,7 +428,17 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
    complete has no computed type, and "" is not it. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n,
-                        const char *computed_type);
+                        const char *computed_type, const char *type);
+
+/* WHICH FILTERED RESPONSE THE REPLY IS — Fetch §2.2.6 "Responses"' basic, CORS and opaque filtered responses,
+   chosen by the host that performed the fetch from the request's mode and origin (Fetch §4.1 "Main fetch"'s
+   response tainting). The record's `type` field states it; a C host states `basic` for what it serves. The
+   trusted zone has already removed what a CORS filtered response does not expose from the header list, and an
+   opaque reply to a `fetch()` carries no bytes. A `fetch()` delivery builds the matching Response; an element
+   that consumes the internal response reads the body as before. Fatal on an absent or unknown word: it decides
+   what a page may read. A network error (the JSON `null`) has no type and is not asked. */
+typedef enum { FETCH_REPLY_BASIC = 1, FETCH_REPLY_CORS, FETCH_REPLY_OPAQUE } FetchReplyType;
+FetchReplyType fetch_reply_type(JSContext *ctx, JSValueConst reply);
 
 /* ---- §2.2.6's BODY, WHICH IS A BYTE SEQUENCE AND CROSSES AS ONE ------------------------------------------
  *

@@ -686,7 +686,7 @@ try {
     const st = await opener.renderer.step();
     steps++;
     /* THE REQUESTS FLOWS ARE PARKED ON, ANSWERED THE WAY THE PRODUCTION CONSUMER ANSWERS THEM — one
-       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` line each, and the reply record crossing
+       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` line each, and the reply record crossing
        as JSON with the BODY BESIDE
        IT as bytes, because §2.2.5 makes a response's body a byte sequence and every way of putting one inside JSON is an
        encode or a decode run by the zone that fetched. `computedType` is this zone's own decision and is
@@ -706,16 +706,17 @@ try {
        joined the line after the provenance and is answered the same way and for the same reason. */
     for (const line of (await opener.renderer.getPending()).requests.split('\n').filter(Boolean)) {
       const t = line.split('\t');
-      if (t.length !== 7 || t[0] === '' || t[6] === '')
+      if (t.length !== 8 || t[0] === '' || t[7] === '')
         fail('a pending line is not ' +
-             '`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`, and the ' +
-             `reply is delivered against the (method, url) pair it names: ${line}`);
-      const method = t[0], u = t[6];
+             '`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL`, and the ' +
+             `reply is delivered against the (method, mode, url) it names: ${line}`);
+      const method = t[0], mode = t[6], u = t[7];
       console.log(`${TAG}   pending: ${method} ${u}`);
       await opener.renderer.provide({
-        method, url: u,
+        method, mode, url: u,
         reply: JSON.stringify({ status: 200, statusText: 'OK', headers: [],
-                                urlList: [new URL(u, OPENER_ADDR).href], computedType: 'application/json' }),
+                                urlList: [new URL(u, OPENER_ADDR).href], computedType: 'application/json',
+                                type: 'basic' }),
         body: new TextEncoder().encode('{}') });
     }
     /* DRAINED BY THE READ, so a notice this zone does not act on is one nothing else will ever see. */

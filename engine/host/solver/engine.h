@@ -703,11 +703,13 @@ const char *engine_pinned_token(int pinned);
    the same predicate in `extension/lib/safe-fetch.js` over the bytes it read. */
 
 /* What the host still owes the frontier's network parks: one
- * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` line per outstanding
- * request, newline-terminated, "" for none, deduped by (method, url). engine_pending_split is the authority on
- * the shape. The buffer is this function's and is valid until the next call.
- *   The method is part of the request's identity, so a GET and a POST to one address never collect each
- * other's bodies. The destination (Fetch §2.2.5) is on every line so the chokepoint can apply CORB to every
+ * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` line per
+ * outstanding request, newline-terminated, "" for none, deduped by (method, mode, url). engine_pending_split is
+ * the authority on the shape. The buffer is this function's and is valid until the next call.
+ *   The method and the mode are part of the request's identity, so a GET and a POST to one address never
+ * collect each other's bodies, and a `no-cors` and a `cors` request to one address are two requests: the
+ * trusted zone answers the first with the bytes an element consumes and the second only after Fetch §4.10
+ * "CORS check" passes. The mode is spelled by core/fetch/fetch.h's `fetch_mode_token`. The destination (Fetch §2.2.5) is on every line so the chokepoint can apply CORB to every
  * park. The credentials mode is §2.2.5's three-valued token, spelled by core/fetch/fetch.h's
  * `fetch_credentials_token`: only the algorithm that created the request knows it, and `same-origin` is a
  * condition the trusted zone resolves (extension/lib/safe-fetch.js), never the engine.
@@ -715,20 +717,20 @@ const char *engine_pinned_token(int pinned);
  * (Fetch §2.2.1 Methods), and every destination is lowercase ASCII. The join asserts all three. */
 const char *engine_pending_fetches(void);
 /* Split one engine_pending_fetches line where it was joined, so hosts do not each re-derive the grammar. `line`
-   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the seven fields
+   is the host's own mutable copy of one line without its newline; each TAB becomes a NUL and the eight fields
    are returned pointing into it. Every out-parameter is required (asserted): a host that skipped the
    destination would fetch a script as data, one that skipped the provenance would carry a forced reply as an
-   observation, and one that skipped the credentials mode would decide by silence whose session pays. A
-   missing TAB is fatal (CHECK). */
+   observation, one that skipped the credentials mode would decide by silence whose session pays, and one that
+   skipped the mode could not deliver the reply against the request it answers. A missing TAB is fatal (CHECK). */
 void engine_pending_split(char *line, const char **method, const char **destination,
                           const char **initiator, const char **provenance, const char **pinned,
-                          const char **credentials, const char **url);
-/* Deliver a body for one request, keyed on the `(method, url)` the flow parked on. Returns how many entries it
-   filled; 0 means the host's pairing is off or the record was sold (engine_take_paged_owed), which the caller
-   tells apart because it owns the credit. */
-int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value);
+                          const char **credentials, const char **mode, const char **url);
+/* Deliver a body for one request, keyed on the `(method, mode, url)` the flow parked on. Returns how many
+   entries it filled; 0 means the host's pairing is off or the record was sold (engine_take_paged_owed), which
+   the caller tells apart because it owns the credit. */
+int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *url, JSValueConst value);
 
-/* Refuse one request, keyed on the same `(method, url)` pair; returns how many records it newly refused (0 is a
+/* Refuse one request, keyed on the same `(method, mode, url)`; returns how many records it newly refused (0 is a
  * pairing error or a sale, which this tells apart itself). It is not a network error: a refusal a real browser
  * also makes (a blocked scheme, Fetch §4.3 "Scheme fetch"; a §4.10 "CORS check" failure; a CORB-blocked body)
  * arrives through engine_provide as Fetch §5.6 "Fetch methods"' network error. This is for a refusal only this
@@ -739,10 +741,10 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
  * error with its path marked forced. flow_decline_fork builds the pair at a scheduler step, because an arm
  * minted between steps would clone whichever flow ran last; this only records the fact. `reason` is the zone's
  * own words and is copied. */
-int engine_decline(JSContext *ctx, const char *method, const char *url, const char *reason);
+int engine_decline(JSContext *ctx, const char *method, const char *mode, const char *url, const char *reason);
 
 /* The same refusal for a synchronous request, keyed on the rendezvous id from engine_host_requests: such a
- * request has no (method, url), and pending_push keeps FLOW_PENDING_HOSTREQ out of the pair index, so
+ * request has no (method, mode, url), and pending_push keeps FLOW_PENDING_HOSTREQ out of the pair index, so
  * engine_decline cannot reach it (a §7.4 navigation is the first case). It is a separate entry, not a third
  * completion: a decline means the operation did not happen, and a refusal arriving at engine_host_take as a
  * value is what flow_decline_fork asserts against. Exactly one flow's register can name the id

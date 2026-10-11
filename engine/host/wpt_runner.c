@@ -371,7 +371,7 @@ static char g_wpt_root[512];
  * A `fetch()` PARKS the flow that issued it (engine_pending_fetch_url): the flow keeps its snapshot, reports
  * itself host-owed, and its continuation resumes with the reply. That register records the WHOLE request —
  * method, headers and body — and the seam the HOST is offered now names TWO of those: engine_pending_fetches
- * lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and engine_provide delivers against the
+ * lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and engine_provide delivers against the
  * pair. The corpus still asks this host for
  * POSTs whose answer depends on the BODY sent (`echo-content.py`) and for probes whose answer is the HEADERS it
  * was given (`inspect-headers.py`), and neither is on the line.
@@ -606,7 +606,8 @@ static uint64_t g_conn_seq;
 typedef struct {
     uint64_t seq;              /* stable across the table's compaction — an index is not */
     int      state, deliver, failed;
-    char    *method, *url;     /* the pair engine_provide is keyed on, and the address an answer reports */
+    char    *method, *url;     /* with `mode`, the key engine_provide delivers on; `url` is what an answer reports */
+    char    *mode;             /* Fetch §2.2.5's request mode, the line's own word */
     char    *authority;        /* which pool this request draws its connection from */
     uint64_t conn;             /* the connection carrying it; 0 before it has one */
     int      reused;           /* it was put on an ALREADY-OPEN connection — see §9.3.1 Retrying Requests */
@@ -647,13 +648,14 @@ static WptConn *wpt_conn_find(uint64_t id)
 /* IS THIS QUESTION ALREADY ASKED. The pending registers list an entry until it is ANSWERED, so a host that
    issued from them at every slice boundary would issue the same request once per slice — a page's one `fetch`
    becoming an unbounded stream of them. The key is the one the delivery is keyed on, which is why these are
-   two functions and not one: a network park is `(method, url)` (engine.h) and a host request is its id. */
-static bool wpt_request_asked(const char *method, const char *url)
+   two functions and not one: a network park is `(method, mode, url)` (engine.h) and a host request is its id. */
+static bool wpt_request_asked(const char *method, const char *mode, const char *url)
 {
     int i;
     for (i = 0; i < g_inflight_n; i++)
         if (g_inflight[i].deliver == WPT_DELIVER_FETCH &&
-            !strcmp(g_inflight[i].method, method) && !strcmp(g_inflight[i].url, url)) return true;
+            !strcmp(g_inflight[i].method, method) && !strcmp(g_inflight[i].mode, mode) &&
+            !strcmp(g_inflight[i].url, url)) return true;
     return false;
 }
 
@@ -784,7 +786,9 @@ static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t
     r->id = id;
     r->method = strdup(req->method ? req->method : "GET");
     r->url = strdup(req->url ? req->url : "");
-    CHECK(r->method && r->url, "wpt: OOM recording a request in flight");
+    /* A host request (a document, an XHR answered by id) is not keyed on the mode, and states none. */
+    r->mode = strdup(req->mode != FETCH_MODE_UNPLACED ? fetch_mode_token(req->mode) : "");
+    CHECK(r->method && r->url && r->mode, "wpt: OOM recording a request in flight");
 
     url_record_init(&base);
     url_record_init(&rec);
@@ -1262,7 +1266,7 @@ static void wpt_request_release(int i)
     WptConn *c = r->conn ? wpt_conn_find(r->conn) : NULL;
 
     if (c) { c->owner = 0; wpt_conn_release(c); }
-    free(r->method); free(r->url); free(r->authority); free(r->out); free(r->body);
+    free(r->method); free(r->mode); free(r->url); free(r->authority); free(r->out); free(r->body);
     header_list_free(&r->hdrs);
     g_inflight[i] = g_inflight[--g_inflight_n];
 }
@@ -1284,7 +1288,7 @@ static JSValue wpt_reply_value(JSContext *ctx, WptRequest *r, int status, Header
 {
     char *cty = wpt_computed_type(rh);
     const char *url = r->url;
-    JSValue v = body ? fetch_reply_new(ctx, status, "", rh, body, len, &url, 1, cty) : JS_NULL;
+    JSValue v = body ? fetch_reply_new(ctx, status, "", rh, body, len, &url, 1, cty, "basic") : JS_NULL;
     free(cty);
     return v;
 }
@@ -1350,7 +1354,7 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
             engine_host_answer(ctx, r->id, NULL, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             filled = 1;
         } else {
-            filled = engine_provide(ctx, r->method, r->url, reply);
+            filled = engine_provide(ctx, r->method, r->mode, r->url, reply);
             /* THE CALLER'S HALF OF THE PROVIDE EDGE'S CONTRACT, WHICH THIS HOST DID NOT HAVE. engine_provide
                tells "answered twice" apart from "answered for nobody" and asserts only the first, delegating
                the second to the caller BY NAME — because only the caller holds the credit that can excuse it
@@ -1372,7 +1376,7 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
                 DFAILF("a corpus reply was provided for a request no flow is parked on and none was paged "
                        "out — the pair this runner fetched under is not the pair the frontier parked on, so "
                        "the flow that IS parked waits for the rest of the run and this address is re-issued "
-                       "at every slice. request=%s %s", r->method, r->url);
+                       "at every slice. request=%s %s %s", r->method, r->mode, r->url);
             /* THE REQUEST RECORD THIS ANSWERED, released only now: it holds the body and headers that made
                the question, and a second flow parking the same pair before the answer landed is the case its
                own DCHECK is there to catch. */
@@ -1489,7 +1493,7 @@ static int wpt_issue_pending(void)
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
-        const char *method, *destination, *initiator, *provenance, *pinned, *credentials, *url;
+        const char *method, *destination, *initiator, *provenance, *pinned, *credentials, *mode, *url;
         FetchRequest req = {0};   /* §2.2.5 metadata stated as "nothing yet": these are the RUNNER's own
                                      HTTP client requests and reach no park, so a zero is the named abort a
                                      future reader gets rather than a stack address it would compare bytes at */
@@ -1506,7 +1510,8 @@ static int wpt_issue_pending(void)
            WHO ASKED and of WHAT THE REQUEST IS EVIDENCE OF is the zone that talks to the real web
            (engine/trusted.mjs); what is owed here is the vocabulary assert, because a runner that read a field
            it never checked would be the first to see the producer drift. */
-        engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &credentials, &url);
+        engine_pending_split(p, &method, &destination, &initiator, &provenance, &pinned, &credentials, &mode,
+                             &url);
         DCHECK(!strcmp(initiator, PENDING_INITIATOR_PARSER) || !strcmp(initiator, PENDING_INITIATOR_SCRIPT),
                "the pending join stated an initiator that is neither token engine.h declares");
         DCHECK(!strcmp(pinned, PENDING_PINNED_YES) || !strcmp(pinned, PENDING_PINNED_NO),
@@ -1524,7 +1529,7 @@ static int wpt_issue_pending(void)
         /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this host now visits the list at every slice rather
            than once per answer — so without this the page's one `fetch` would become one REQUEST PER SLICE at
            the server, which is a different question asked repeatedly rather than the one the flow parked on. */
-        if (wpt_request_asked(method, url)) { p = end + 1; continue; }
+        if (wpt_request_asked(method, mode, url)) { p = end + 1; continue; }
         for (i = 0; i < g_owed_n; i++)
             if (!strcmp(g_owed[i].url, url) && !strcmp(g_owed[i].method, method)) { rec = i; break; }
         req.method = method;
@@ -1539,15 +1544,10 @@ static int wpt_issue_pending(void)
            that `fetch_owe` and `pending_park_request` both abort on, so leaving it is an uninitialised read
            waiting for the first consumer that grows one. */
         req.credentials = fetch_credentials_of_token(credentials);
-        /* …AND FETCH §2.2.5's MODE IS DELIBERATELY NOT STATED HERE, WHICH IS THE ONE FIELD THAT DIFFERS FROM
-           THE CREDENTIALS MODE ABOVE. The mode does not cross the wire (core/fetch/fetch.h: its only reader
-           is §4.1 step 7's Integrity Policy disjunct, inside the engine), so this host has nothing to restate
-           it from — and inventing one would be a value no algorithm chose, on a record whose zero is the
-           refusal that exists to catch exactly that. Nothing reads it on this path: `wpt_request_begin` is
-           this runner's own HTTP issuer and reaches neither `fetch_owe` nor `pending_park_request`, which are
-           the two seams that assert the field. The day one of them is reached from here, the abort names this
-           line rather than letting a fabricated mode through. */
-        req.mode = FETCH_MODE_UNPLACED;
+        /* …AND FETCH §2.2.5's MODE THE LINE STATED, which is part of the key the reply is delivered on. This
+           runner applies no CORS check (its loopback corpus is the test's own origin set); the mode is carried
+           so the delivery names the request the frontier parked on. */
+        req.mode = fetch_mode_of_token(mode);
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;

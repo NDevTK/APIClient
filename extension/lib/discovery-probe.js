@@ -201,6 +201,10 @@ function _chokepointGetFn(tab, who) {
          about the CALLER. See safe-fetch.js's `_actorOf`. */
       actor: "tool",
       destination: "",
+      /* `cors`, the mode of this zone's own `fetch()` (Fetch §5.4 Request class: a request built from a string).
+         Its origin is this extension's, which holds `<all_urls>`, so the chokepoint asks it no page-origin CORS
+         question: the reply is read by this zone, never handed to a page. */
+      mode: "cors",
       /* AND THIS SWEEP DOES NOT SPEND THE PERSON'S SESSION, STATED RATHER THAN LEFT TO THE DOOR'S COERCION.
          It was the one fact this call omitted, and `_credentialedOf` read the absence as `false` — the right
          answer carried by the wrong thing, since an omission is not a decision and the egress surface grades
