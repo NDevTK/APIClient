@@ -30,6 +30,7 @@ typedef struct {
    recorded, which is how a hit after a later rest is told apart. */
 typedef struct {
     const lxb_dom_element_t *el;
+    LayoutQuestionKind       kind;
     unsigned                 code;
     uint64_t                 gen;
     uint64_t                 rest;
@@ -71,19 +72,27 @@ static LayoutJob *lj_current(void)
 
 /* ---- the memo ------------------------------------------------------------------------------------------- */
 
-static size_t lj_hash(const lxb_dom_element_t *el, unsigned code, size_t cap)
+static size_t lj_hash(const lxb_dom_element_t *el, LayoutQuestionKind kind, unsigned code, size_t cap)
 {
-    uint64_t h = (uint64_t)(uintptr_t)el * 0x9E3779B97F4A7C15ull ^ (uint64_t)code * 0xC2B2AE3D27D4EB4Full;
+    uint64_t h = (uint64_t)(uintptr_t)el * 0x9E3779B97F4A7C15ull ^
+                 ((uint64_t)code << 8 | (uint64_t)kind) * 0xC2B2AE3D27D4EB4Full;
 
     return (size_t)(h ^ (h >> 29)) & (cap - 1);
 }
 
-static LjSlot *lj_probe(LjSlot *tab, size_t cap, uint64_t gen, const lxb_dom_element_t *el, unsigned code)
+static LjSlot *lj_probe(LjSlot *tab, size_t cap, uint64_t gen, LayoutQuestion q)
 {
-    size_t i = lj_hash(el, code, cap);
+    size_t i = lj_hash(q.element, q.kind, q.code, cap);
 
-    while (tab[i].gen == gen && (tab[i].el != el || tab[i].code != code)) i = (i + 1) & (cap - 1);
+    while (tab[i].gen == gen && (tab[i].el != q.element || tab[i].kind != q.kind || tab[i].code != q.code))
+        i = (i + 1) & (cap - 1);
     return &tab[i];
+}
+
+/* The two kinds the memo holds and the stack suspends. */
+static bool lj_is_bf(LayoutQuestionKind kind)
+{
+    return kind == LAYOUT_Q_BF_BOX || kind == LAYOUT_Q_BF_WALK;
 }
 
 static void lj_memo_grow(LayoutJob *job)
@@ -94,7 +103,8 @@ static void lj_memo_grow(LayoutJob *job)
     CHECK(tab != NULL, "a layout job's memo could not grow");
     for (i = 0; i < job->memo_cap; i++) {
         if (job->memo[i].gen != job->gen) continue;
-        *lj_probe(tab, cap, job->gen, job->memo[i].el, job->memo[i].code) = job->memo[i];
+        *lj_probe(tab, cap, job->gen, layout_question(job->memo[i].kind, (lxb_dom_element_t *)job->memo[i].el,
+                                                      NULL, job->memo[i].code)) = job->memo[i];
     }
     free(job->memo);
     job->memo = tab;
@@ -320,16 +330,18 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
     DCHECK(job == lj_current(), "a drive was continued under a job other than the one it began on");
     if (job->n == job->base) return false;
     e = &job->stack[job->n - 1];
-    DCHECKF(e->state == LJ_SUSPENDED && e->q.kind == LAYOUT_Q_BF_BOX,
+    DCHECKF(e->state == LJ_SUSPENDED && lj_is_bf(e->q.kind),
             "a drive found a %s entry of kind %d at the top of its stack — only a deferred CSS 2.1 §9.4.1 "
-            "contribution is left above a drive's mark, because every other entry is closed by its own frame",
+            "contribution or stack is left above a drive's mark, because every other entry is closed by its "
+            "own frame",
             e->state == LJ_COMPUTING ? "computing" : "suspended", (int)e->q.kind);
     DCHECK(!layout_job_drive_spent(d),
            "a resting drive was continued after it spent its boxes; its driver rests instead");
     e->state = LJ_COMPUTING;
     job->nest++;
-    /* A resumed body continues a box already counted; a deferred one lays out its box now. */
-    if (!e->opened) lj_quota_take(job);
+    /* A resumed body continues a box already counted; a deferred contribution lays out its box now. A stack
+       counts its steps rather than itself. */
+    if (!e->opened && e->q.kind == LAYOUT_Q_BF_BOX) lj_quota_take(job);
     e->opened = true;
     *q = e->q;
     *at = job->n - 1;
@@ -360,14 +372,15 @@ LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
     LayoutJob *job = lj_current();
     LjSlot *s;
 
-    DCHECK(q.kind == LAYOUT_Q_BF_BOX && q.element != NULL && q.code != 0,
-           "a CSS 2.1 §9.4.1 contribution was asked with a question of another kind, no element or no pass");
+    DCHECK(lj_is_bf(q.kind) && q.element != NULL && q.code != 0,
+           "a CSS 2.1 §9.4.1 contribution or stack was asked with a question of another kind, no element or "
+           "no pass");
     DCHECK(job->drives > 0,
            "a CSS 2.1 §9.4.1 contribution was asked with no drive open — its asker is the stack walk, whose "
            "callers are either a contribution body or a drive, so a drive is always beneath it");
     METRIC_ADD(bf_asks, 1);
     if (job->memo_cap != 0) {
-        s = lj_probe(job->memo, job->memo_cap, job->gen, q.element, q.code);
+        s = lj_probe(job->memo, job->memo_cap, job->gen, q);
         if (s->gen == job->gen) {
             METRIC_ADD(bf_served, 1);
             if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
@@ -382,7 +395,7 @@ LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
     }
     *at = lj_push(job, q, LJ_COMPUTING);
     job->nest++;
-    lj_quota_take(job);
+    if (q.kind == LAYOUT_Q_BF_BOX) lj_quota_take(job);
     return LAYOUT_ASK_OPENED;
 }
 
@@ -395,18 +408,19 @@ void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer)
     DCHECKF(at + 1 == job->n, "a CSS 2.1 §9.4.1 contribution answered at entry %zu of a stack of %zu — a "
             "body answers only when every question it asked is closed", at, job->n);
     e = &job->stack[at];
-    DCHECK(e->state == LJ_COMPUTING && e->q.kind == LAYOUT_Q_BF_BOX,
-           "a CSS 2.1 §9.4.1 contribution answered an entry that is not a computing contribution");
+    DCHECK(e->state == LJ_COMPUTING && lj_is_bf(e->q.kind),
+           "a CSS 2.1 §9.4.1 contribution or stack answered an entry that is neither, computing");
     DCHECK(job->nest > 0, "a contribution body answered with no body computing above its drive");
     DCHECK(!e->staged,
            "a contribution body answered with a staged walk it never resumed; the body's run took a path to "
            "its answer that does not pass through the walk it stopped in");
     if (job->memo_used * 2 >= job->memo_cap) lj_memo_grow(job);
-    s = lj_probe(job->memo, job->memo_cap, job->gen, e->q.element, e->q.code);
+    s = lj_probe(job->memo, job->memo_cap, job->gen, e->q);
     DCHECK(s->gen != job->gen,
            "a CSS 2.1 §9.4.1 contribution was computed while the memo already held it — the ask consults the "
            "memo before it pushes, so a second body for one question is a probe that missed its own key");
     s->el = e->q.element;
+    s->kind = e->q.kind;
     s->code = e->q.code;
     s->gen = job->gen;
     s->rest = job->rests;
@@ -423,8 +437,8 @@ void layout_job_suspend(size_t at)
 
     DCHECKF(at < job->n && at >= job->base, "a body suspended entry %zu outside its drive's range [%zu, %zu)",
             at, job->base, job->n);
-    DCHECK(job->stack[at].state == LJ_COMPUTING && job->stack[at].q.kind == LAYOUT_Q_BF_BOX,
-           "a body suspended an entry that is not a computing CSS 2.1 §9.4.1 contribution");
+    DCHECK(job->stack[at].state == LJ_COMPUTING && lj_is_bf(job->stack[at].q.kind),
+           "a body suspended an entry that is not a computing CSS 2.1 §9.4.1 contribution or stack");
     for (i = at + 1; i < job->n; i++)
         DCHECK(job->stack[i].state == LJ_SUSPENDED,
                "a body returned \"not yet\" while a question above it is still computing — \"not yet\" "
@@ -434,8 +448,8 @@ void layout_job_suspend(size_t at)
            "stopped by a spent quota suspends with nothing above it, and it stages first");
     job->stack[at].state = LJ_SUSPENDED;
     job->nest--;
-    /* A body with no staged walk re-runs from its start. */
-    if (!job->stack[at].staged) METRIC_ADD(bf_replays, 1);
+    /* A stack with no staged walk re-runs from its start; a contribution's body is one ask of its stack. */
+    if (job->stack[at].q.kind == LAYOUT_Q_BF_WALK && !job->stack[at].staged) METRIC_ADD(bf_replays, 1);
 }
 
 static LjEntry *lj_body(LayoutJob *job, size_t at, const lxb_dom_element_t *el)
@@ -445,9 +459,9 @@ static LjEntry *lj_body(LayoutJob *job, size_t at, const lxb_dom_element_t *el)
     DCHECKF(at < job->n && at >= job->base, "a body named entry %zu outside its drive's range [%zu, %zu)",
             at, job->base, job->n);
     e = &job->stack[at];
-    DCHECK(e->state == LJ_COMPUTING && e->q.kind == LAYOUT_Q_BF_BOX && e->q.element == el,
-           "a stack walk named an entry that is not the computing CSS 2.1 §9.4.1 contribution of the "
-           "element it walks; a body passes its own entry to its own walk");
+    DCHECK(e->state == LJ_COMPUTING && e->q.kind == LAYOUT_Q_BF_WALK && e->q.element == el,
+           "a stack walk named an entry that is not the computing CSS 2.1 §9.4.1 stack of the element it "
+           "walks; a stack's body passes its own entry to its walk");
     return e;
 }
 
@@ -486,7 +500,7 @@ bool layout_job_bf_step(size_t at)
 
 size_t layout_job_open(LayoutQuestion q)
 {
-    DCHECK(q.kind != LAYOUT_Q_BF_BOX, "a CSS 2.1 §9.4.1 contribution is asked through layout_job_bf_ask");
+    DCHECK(!lj_is_bf(q.kind), "a CSS 2.1 §9.4.1 contribution or stack is asked through layout_job_bf_ask");
     return lj_push(lj_current(), q, LJ_COMPUTING);
 }
 

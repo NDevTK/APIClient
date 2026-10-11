@@ -37,15 +37,20 @@ typedef struct FpEntry {
        about how the number was produced. See core/layout/flow_placement.h's §10.1 section. */
     CssPx                    cb_width;
     const lxb_dom_element_t *cb_width_cb;
-    /* CSS 2.2 §9.2.1.1's anonymous block boxes of this box, as block_flow_anonymous_boxes enumerates them;
-       owned, NULL when there are none. */
+    /* CSS 2.2 §9.2.1.1's anonymous block boxes of this box, appended by its stack; owned. `has_anon` is the
+       stack having answered, which closes the list. */
     BlockFlowAnonBox        *anon;
-    size_t                   anon_n;
+    size_t                   anon_n, anon_cap;
+    /* The stack's state at the run that starts this container's content (`run_first`, on the container's
+       entry) and at the run after this box (`run_after`, on the box's entry). */
+    FlowRunStart             run_first, run_after;
+    /* CSS 2.1 §17.4's table box on this table element's wrapper stack. */
+    CssPx                    table_box_top;
     bool                     has_top;
     bool                     has_origin;
     bool                     has_cb_width;
     bool                     has_anon;
-    bool                     anon_served;   /* the anonymous boxes have been served at least once */
+    bool                     has_run_first, has_run_after, has_table_box;
 } FpEntry;
 
 
@@ -118,6 +123,33 @@ static void fp_grow(FlowPlacementRecord *r)
     free(r->tab);
     r->tab = tab;
     r->cap = cap;
+}
+
+/* The entry `el` writes to, inserted when absent; NULL when no record is held. */
+static FpEntry *fp_entry_for_write(const lxb_dom_element_t *el)
+{
+    FlowPlacementRecord *r = layout_job_placement();
+    size_t i;
+
+    if (r == NULL) return NULL;
+    if (r->used * 2 >= r->cap) fp_grow(r);
+    i = fp_probe(r->tab, r->cap, el);
+    if (r->tab[i].el == NULL) {
+        r->tab[i].el = el;
+        r->used++;
+    }
+    return &r->tab[i];
+}
+
+/* The entry `el` holds, or NULL. */
+static const FpEntry *fp_entry_peek(const lxb_dom_element_t *el)
+{
+    FlowPlacementRecord *r = layout_job_placement();
+    size_t i;
+
+    if (r == NULL || r->cap == 0) return NULL;
+    i = fp_probe(r->tab, r->cap, el);
+    return r->tab[i].el == NULL ? NULL : &r->tab[i];
 }
 
 void flow_placement_record_release(FlowPlacementRecord *r)
@@ -349,50 +381,101 @@ bool flow_placement_anon_ask(const lxb_dom_element_t *el, const BlockFlowAnonBox
     return true;
 }
 
-bool flow_placement_anon_first_serve(const lxb_dom_element_t *el)
-{
-    size_t i;
-    FlowPlacementRecord *r = layout_job_placement();
+void flow_placement_anon_derived(void) { g_anon_derived++; }
 
-    DCHECK(r != NULL && r->cap != 0, "a first serve was asked of a placement record that holds nothing");
-    i = fp_probe(r->tab, r->cap, el);
-    DCHECK(r->tab[i].el == el && r->tab[i].has_anon,
-           "a first serve was asked for a container whose anonymous boxes the record does not hold");
-    if (r->tab[i].anon_served) return false;
-    r->tab[i].anon_served = true;
+void flow_placement_anon_append(const lxb_dom_element_t *el, BlockFlowAnonBox box)
+{
+    FpEntry *e;
+
+    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous-box record was handed a box with no container");
+    e = fp_entry_for_write(el);
+    if (e == NULL) return;
+    DCHECK(!e->has_anon,
+           "an anonymous block box was appended to a container whose stack already answered; the stack is "
+           "asked once per job, so a second run of it is a memo probe that missed its own key");
+    if (e->anon_n == e->anon_cap) {
+        size_t cap = e->anon_cap != 0 ? e->anon_cap * 2 : 4;
+        BlockFlowAnonBox *v = realloc(e->anon, cap * sizeof *v);
+
+        CHECK(v != NULL, "out of memory recording one container's anonymous block boxes");
+        e->anon = v;
+        e->anon_cap = cap;
+    }
+    e->anon[e->anon_n++] = box;
+}
+
+void flow_placement_anon_close(const lxb_dom_element_t *el)
+{
+    FpEntry *e;
+
+    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous-box record was closed for no container");
+    e = fp_entry_for_write(el);
+    if (e == NULL) return;
+    DCHECK(!e->has_anon, "a container's stack answered twice in one job; it is asked once and memoized");
+    e->has_anon = true;
+}
+
+static bool fp_same_run(FlowRunStart a, FlowRunStart b)
+{
+    return fp_same_example(a.pos, b.pos) && fp_same_example(a.run_pos, b.run_pos) &&
+           fp_same_example(a.run_neg, b.run_neg) && a.escaping == b.escaping;
+}
+
+void flow_placement_run_record(const lxb_dom_element_t *container, const lxb_dom_element_t *after,
+                               FlowRunStart s)
+{
+    FpEntry *e;
+    FlowRunStart *slot;
+    bool *has;
+
+    DCHECK(container != NULL, "a run start was recorded for no container");
+    e = fp_entry_for_write(after != NULL ? after : container);
+    if (e == NULL) return;
+    slot = after != NULL ? &e->run_after : &e->run_first;
+    has = after != NULL ? &e->has_run_after : &e->has_run_first;
+    DCHECKF(!*has || fp_same_run(*slot, s),
+            "one run of CSS 2.2 §9.2.1.1 started at two different stack states in one job (position %g then %g); "
+            "the stack reads only the tree and the cascade, so a resumed step writes the state it wrote before",
+            slot->pos.px, s.pos.px);
+    *slot = s;
+    *has = true;
+}
+
+bool flow_placement_run_peek(const lxb_dom_element_t *container, const lxb_dom_element_t *after,
+                             FlowRunStart *out)
+{
+    const FpEntry *e;
+
+    DCHECK(container != NULL && out != NULL, "a run start was asked for no container or with nowhere to put it");
+    e = fp_entry_peek(after != NULL ? after : container);
+    if (e == NULL || !(after != NULL ? e->has_run_after : e->has_run_first)) return false;
+    *out = after != NULL ? e->run_after : e->run_first;
     return true;
 }
 
-void flow_placement_anon_record(const lxb_dom_element_t *el, const BlockFlowAnonBox *v, size_t n)
+void flow_placement_table_box_record(const lxb_dom_element_t *table, CssPx top)
 {
-    size_t i;
-    FlowPlacementRecord *r = layout_job_placement();
-    FpEntry *tab;
+    FpEntry *e;
 
-    DCHECK(el != NULL && (n == 0 || v != NULL),
-           "CSS 2.2 §9.2.1.1's anonymous-box record was handed boxes with no container or no array");
-    /* Counted before the guard, for the origin record's reason. */
-    g_anon_derived++;
-    if (r == NULL) return;
-    if (r->used * 2 >= r->cap) fp_grow(r);
-    tab = r->tab;
-    i = fp_probe(tab, r->cap, el);
-    if (tab[i].el == NULL) {
-        tab[i].el = el;
-        r->used++;
-    }
-    DCHECK(!tab[i].has_anon,
-           "a container's CSS 2.2 §9.2.1.1 anonymous boxes were enumerated twice in one job; the enumeration "
-           "asks this record first, so a second derivation is a probe that missed a key a write had landed");
-    tab[i].anon = NULL;
-    if (n != 0) {
-        tab[i].anon = malloc(n * sizeof *tab[i].anon);
-        CHECK(tab[i].anon != NULL, "out of memory recording one container's anonymous block boxes");
-        memcpy(tab[i].anon, v, n * sizeof *tab[i].anon);
-    }
-    tab[i].anon_n = n;
-    tab[i].has_anon = true;
-    tab[i].anon_served = false;
+    DCHECK(table != NULL, "a table box position was recorded for no table");
+    e = fp_entry_for_write(table);
+    if (e == NULL) return;
+    DCHECKF(!e->has_table_box || fp_same_example(e->table_box_top, top),
+            "a table box was placed at two tops on its wrapper's stack in one job: %g then %g",
+            e->table_box_top.px, top.px);
+    e->table_box_top = top;
+    e->has_table_box = true;
+}
+
+bool flow_placement_table_box_peek(const lxb_dom_element_t *table, CssPx *out)
+{
+    const FpEntry *e;
+
+    DCHECK(table != NULL && out != NULL, "a table box position was asked for no table or with nowhere to put it");
+    e = fp_entry_peek(table);
+    if (e == NULL || !e->has_table_box) return false;
+    *out = e->table_box_top;
+    return true;
 }
 
 bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out)
@@ -405,15 +488,6 @@ bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out)
     if (!flow_placement_peek(el, out)) return false;
     g_served++;
     return true;
-}
-
-bool flow_placement_agrees(const lxb_dom_element_t *el, CssPx top)
-{
-    CssPx rec;
-
-    DCHECK(el != NULL, "CSS 2.1 §9.4.1's placement record was asked to agree about no box");
-    if (!flow_placement_peek(el, &rec)) return false;
-    return fp_same_example(rec, top);
 }
 
 void flow_placement_walked(void) { g_walks++; }

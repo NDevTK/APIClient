@@ -53,14 +53,11 @@
  * How its absence shows: a deep document's C stack grows with its depth along a frame cycle that names no
  * `bf_box`, `uv_sized` or `used_value_px`. */
 
-/* NAMED RESIDUAL, replay. Not covered: a stack walk with no body of its own (core/layout/block_flow.c's
- * entries that place one child, find a static position, read a baseline or enumerate anonymous boxes, run on
- * a drive's frame) has no entry to stage in, so its retry starts at the first child again and re-lays out the
- * anonymous block boxes before the step it stopped at; and a body in §9.4.2's inline formatting context
- * re-runs from its start. Next: those entries ask their container's walk as a question whose body records
- * what they read, as flow_placement.h already records every position a walk passes. How its absence shows:
- * `_layoutBfReplays` counts the inline-context bodies; the walks show as a REST_UNIT_LAYOUT_DESCENDANTS unit
- * whose CPU grows with the child count of its node's container. */
+/* NAMED RESIDUAL, replay. Not covered: a LAYOUT_Q_BF_WALK body in §9.4.2's inline formatting context stages
+ * nothing, so after "not yet" it re-runs from its start: its child-list classification and the asks of every
+ * atomic inline before the one that deferred. Next: the atomic-inline index staged with the walk, so the
+ * context resumes at the item it stopped at. How its absence shows: `_layoutBfReplays`, which counts exactly
+ * those re-runs. */
 
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
@@ -79,7 +76,10 @@
 typedef struct LayoutJob LayoutJob;
 
 /* What LAYOUT_Q_BF_BOX answers: CSS 2.1 §9.4.1's contribution of one box to its parent's stack, with
-   CSS 2.1 §8.3.1's two adjoining runs as their extrema and CSS 2.2 §10.8.1's baseline for the asked pass. */
+   CSS 2.1 §8.3.1's two adjoining runs as their extrema and CSS 2.2 §10.8.1's baseline for the asked pass.
+   LAYOUT_Q_BF_WALK answers the same shape for the stack of a box's own children, which the contribution's
+   body asks for; the stack's body also writes what its other readers take from it into flow_placement.h's
+   record. */
 typedef struct {
     CssPx content_h, border_h;
     CssPx top_pos, top_neg, bottom_pos, bottom_neg;
@@ -87,7 +87,7 @@ typedef struct {
     bool  collapse_through, is_table_wrapper, has_line_box;
 } LayoutBfAnswer;
 
-/* What a LAYOUT_Q_BF_BOX body stages before it returns "not yet": its §9.4.1 stack walk's loop state at the
+/* What a LAYOUT_Q_BF_WALK body stages before it returns "not yet": its §9.4.1 stack walk's loop state at the
    step it retries (core/layout/block_flow.c's BfWalk, with §8.3.1's runs as their extrema). The two nodes
    are the walk's enumeration cursor and stay valid across a rest by the memo validity argument above. */
 typedef struct {
@@ -171,9 +171,10 @@ typedef enum {
     LAYOUT_ASK_DEFERRED    /* pushed suspended at `*at`: the caller returns "not yet" */
 } LayoutAsk;
 
-/* Ask a BF_BOX question. Asserts a drive is open: every ask has one beneath it on the C stack. The question
-   is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing bodies, or
-   when a resting drive is innermost and has spent its boxes. An open takes one box. */
+/* Ask a BF_BOX or BF_WALK question. Asserts a drive is open: every ask has one beneath it on the C stack. The
+   question is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing
+   bodies, or when a resting drive is innermost and has spent its boxes. A BF_BOX open takes one box; a stack
+   counts its steps instead. */
 LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at);
 
 /* The computing body at `at` completed: asserts it is the top, pops and memoizes it. */

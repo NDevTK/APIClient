@@ -16,9 +16,8 @@
  * synchronous job's while a drive is open. Nothing here decides whether an entry is still good: the job's
  * validity argument (no DOM write while a job's activation holds the thread; a driven job rests only inside
  * its own flow's member call) is what makes every entry an answer about the current tree. Each served answer
- * is still checked against its own derivation where that is cheap: `block_flow_child_top_ask` asserts that the
- * walk's answer for the box it named is the recorded one, and core/layout/flow_position.c re-derives a
- * recorded origin's equation at each hit.
+ * is still checked against its own derivation where that is cheap: a position written twice must agree, and
+ * core/layout/flow_position.c re-derives a recorded origin's equation at each hit.
  * RETIREMENT: this component goes when layout produces a box tree that paint reads, because a position is then
  * a field of the box rather than a function re-derived per ask. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLOW_PLACEMENT_H
@@ -67,17 +66,6 @@ bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out);
    about which build took the measurement rather than about the render. */
 bool flow_placement_peek(const lxb_dom_element_t *el, CssPx *out);
 
-/* DOES THIS RECORD ALREADY HOLD `el` AT `top` — the entry a DCHECK takes, and the reason it is not
-   `flow_placement_ask` with its census suppressed. It COUNTS NOTHING and MUTATES NOTHING, which is what
-   §Offensive-programming requires of an assertion's condition: an ask counted from inside a check would make
-   `asks == served + walks` false in a dev build and true in a release one, so the census would be a fact
-   about which build took the measurement. It answers FALSE when no record is held, when the record has no entry
-   for the box, and when the two EXAMPLES differ — three states its one caller does not need apart, because
-   each of them is the same finding: the walk's `want_top` write and the walk's record write have parted.
-   THE COMPARISON LIVES HERE AND NOWHERE ELSE, and core/layout/flow_placement.c says why it is not an entry of
-   core/css/css_length.h. */
-bool flow_placement_agrees(const lxb_dom_element_t *el, CssPx top);
-
 /* …AND THE WALK THAT ASK COST. Called by the one caller of `flow_placement_ask` on its FALSE arm, immediately,
    so that `asks == served + walks` holds at every instant and not merely at the end. */
 void flow_placement_walked(void);
@@ -111,17 +99,38 @@ bool flow_placement_cb_width_ask(const lxb_dom_element_t *el, CssPx *out, const 
 bool flow_placement_cb_width_peek(const lxb_dom_element_t *el, CssPx *out, const lxb_dom_element_t **cb_out);
 void flow_placement_cb_width_record(const lxb_dom_element_t *el, CssPx width, const lxb_dom_element_t *cb);
 
-/* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" of one container ------------------------------------------
- * block_flow_anonymous_boxes' answer, which is §9.4.1's walk over the container's whole child list; held so a
- * container's walk runs once per job however many of its inline descendants ask for their context. `peek`
- * counts nothing; `ask` counts; `record` copies the array and counts a derivation, and asserts the box had
- * none. The census `asks == served + derived` is asserted in `flow_placement_census`. */
+/* ---- What a container's §9.4.1 stack writes for its other readers ----------------------------------------
+ * The stack (core/layout/layout_job.h's LAYOUT_Q_BF_WALK, run once per job and resumed where it stopped) writes
+ * these as it passes them, so a reader asks the stack and then reads the record. A second write of one fact
+ * must agree (asserted), because a stack staged mid-step writes that step again when it resumes. */
+
+/* CSS 2.2 §9.2.1.1 "Anonymous block boxes" of one container, appended as the stack lays each out and closed
+   when it answers, so `peek` sees a container's boxes only once all of them are there. `peek` counts nothing;
+   `ask` counts an ask and, when held, a serve; a reader whose ask missed reports the stack it then asks with
+   `anon_derived`. The census `asks == served + derived` is asserted in `flow_placement_census`. */
 bool flow_placement_anon_peek(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n);
 bool flow_placement_anon_ask(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n);
-void flow_placement_anon_record(const lxb_dom_element_t *el, const BlockFlowAnonBox *v, size_t n);
-/* True exactly once per recorded container, at its first serve: when the served answer is re-derived and
-   compared. Asserts the record holds `el`'s boxes. */
-bool flow_placement_anon_first_serve(const lxb_dom_element_t *el);
+void flow_placement_anon_derived(void);
+void flow_placement_anon_append(const lxb_dom_element_t *el, BlockFlowAnonBox box);
+void flow_placement_anon_close(const lxb_dom_element_t *el);
+
+/* The stack's state where one of §9.2.1.1's runs starts: the running position, the open margin run's extrema
+   and whether that run still escapes through the container's top edge, which is what CSS 2.1 §10.3.7's and
+   §10.6.4's static position reads at the run its hypothetical box falls in. `after` is the block-level box the
+   run follows, NULL for the container's first run. */
+typedef struct {
+    CssPx pos, run_pos, run_neg;
+    bool  escaping;
+} FlowRunStart;
+void flow_placement_run_record(const lxb_dom_element_t *container, const lxb_dom_element_t *after,
+                               FlowRunStart s);
+bool flow_placement_run_peek(const lxb_dom_element_t *container, const lxb_dom_element_t *after,
+                             FlowRunStart *out);
+
+/* CSS 2.1 §17.4's table box on its wrapper box's stack: the distance from the wrapper's top content edge to the
+   table box's top border edge, keyed by the table element. */
+void flow_placement_table_box_record(const lxb_dom_element_t *table, CssPx top);
+bool flow_placement_table_box_peek(const lxb_dom_element_t *table, CssPx *out);
 
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent, so each
    may be differenced across two samples. `asks` counts §9.4.1 stack positions asked, `served` those this

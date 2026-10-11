@@ -26,12 +26,15 @@
      css-flexbox-1 §9.4 "Cross Size Determination" step 7 lays a flex item out as a block-level box, which
      is a different question about the same element.
    - LAYOUT_Q_BF_BOX: `name` is NULL; `code` is the baseline pass plus one, so the commonest pass
-     (`BF_BASELINE_NONE`, 0) still renders as a parameter. */
+     (`BF_BASELINE_NONE`, 0) still renders as a parameter.
+   - LAYOUT_Q_BF_WALK: the stack of the element's own children that LAYOUT_Q_BF_BOX's body asks for, run
+     whatever the element's `height` says; parameters as LAYOUT_Q_BF_BOX. */
 #define LAYOUT_QUESTIONS(X) \
     X(LAYOUT_Q_USED_VALUE_PX, "CSS 2.1 §6.1.3 \"Used values\"' used box-model length") \
     X(LAYOUT_Q_UV_SIZED, \
       "CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\"'/§10.7's final pass") \
-    X(LAYOUT_Q_BF_BOX, "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack contribution")
+    X(LAYOUT_Q_BF_BOX, "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack contribution") \
+    X(LAYOUT_Q_BF_WALK, "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack of a container's children")
 
 #define LAYOUT_QUESTION_ENUM(id, label) id,
 #define LAYOUT_QUESTION_LABEL(id, label) label,

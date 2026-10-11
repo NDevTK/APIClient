@@ -987,33 +987,20 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
    ELEMENTS, and an anonymous block box is not one, so the closest non-anonymous ancestor is the only box it
    can reach. The day that walk iterates boxes instead, the rule becomes a step in it. */
 
-/* §9.2.1.1's BOXES, COLLECTED AS §9.4.1's STACK GENERATES THEM — see block_flow.h for the entry's contract and
-   for why the position reported is the stack's own running offset rather than a second derivation of it. A
-   NULL sink is the walk running for one of its other two answers, which is every caller but that entry. */
-typedef struct {
-    BlockFlowAnonBox *v;
-    size_t n, cap;
-} BfAnonSink;
-
-static void bf_anon_record(BfAnonSink *s, BlockFlowRun run, CssPx top, CssPx height)
+/* §9.2.1.1's box at `top`, appended to `container`'s anonymous boxes in core/layout/flow_placement.h's record
+   as the stack lays it out; see block_flow.h for the entry's contract. */
+static void bf_anon_record(lxb_dom_element_t *container, BlockFlowRun run, CssPx top, CssPx height)
 {
-    if (s == NULL) return;
-    if (s->n == s->cap) {
-        size_t cap = s->cap != 0 ? s->cap * 2 : 4;
-        BlockFlowAnonBox *v = realloc(s->v, cap * sizeof(*v));
+    BlockFlowAnonBox box;
 
-        CHECK(v != NULL, "the anonymous block boxes of one block container could not be allocated");
-        s->v = v;
-        s->cap = cap;
-    }
-    s->v[s->n].run = run;
+    box.run = run;
     /* §9.2.1.1's "the margins will be 0" with §10.3.3's constraint equation over an initial `width: auto` puts
        this box's content box's inline-start edge exactly on its container's — see block_flow.h. A literal zero
        and not a measured one, so it carries no environment fact for css_length.h to union. */
-    s->v[s->n].content_x = css_px(0.0);
-    s->v[s->n].content_y = top;
-    s->v[s->n].height = height;
-    s->n++;
+    box.content_x = css_px(0.0);
+    box.content_y = top;
+    box.height = height;
+    flow_placement_anon_append(container, box);
 }
 
 /* ---- CSS 2.2 §9.2.1.1's BOX LIST, ENUMERATED IN CONTENT ORDER -------------------------------------------
@@ -1432,33 +1419,16 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, BlockFlowRun run, BfBaseline
     return out;
 }
 
-/* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION, AS A THIRD READING OF §9.4.1's RUNNING POSITION -----
-   Both sections define it in the same words — "the position an element would have had in the normal flow",
-   more precisely the top (or left) MARGIN EDGE "of a hypothetical box that would have been the first box of
-   the element if its specified `position` value had been `static` and its specified `float` had been `none`"
-   — and §10.6.3 is exactly what keeps the real box out of the walk that would place it ("only children in the
-   normal flow are taken into account, i.e. floating boxes and absolutely positioned boxes are ignored").
-   IT IS A READING AND NOT A PLACEMENT, which is the whole reason it costs nothing and changes nothing. The
-   walk below is byte-identical whether or not one is asked for: the hypothetical box is never put on the
-   stack, never merged into a run and never advances `pos`, because §10.6.3 says the REAL box contributes
-   nothing and the hypothetical one is not in this document at all. What is read out is the stack's own state
-   at the CONTENT POSITION the element occupies — the same `pos` and the same open run `block_flow_child_top_ask`
-   reports for a box that IS placed there, which is why this lives here rather than being composed at a caller
-   out of a height and a sibling count.
-   `after` IDENTIFIES THAT CONTENT POSITION AS THE RUN IT FALLS IN, named by the block-level box that run
-   FOLLOWS (NULL for the run before the first one). §9.2.1.1's runs partition the container's content and each
-   is visited exactly once by the enumeration below, so this is a key and not a search.
-   `margin` IS THE HYPOTHETICAL BOX'S OWN `margin-top`, RESOLVED BY THE CALLER, and it is an operand rather
-   than a read for a reason that is not tidiness: reading it through `used_value_px` would send an absolutely
-   positioned box into CSS 2.1 §10.6.4's constraint equation, which is the section that ASKED for this number.
-   The caller resolves §10.6.3's own sentence instead ("if `margin-top`, or `margin-bottom` are `auto`, their
-   used value is 0"), which is what the hypothetical STATIC box's margin is. */
-typedef struct {
-    lxb_dom_node_t *after;   /* the block-level box the hypothetical box's run follows; NULL is the first run */
-    CssPx margin;            /* §10.6.3's used `margin-top` for the hypothetical box */
-    CssPx *top;              /* out: its TOP MARGIN EDGE from this container's TOP CONTENT EDGE */
-    bool *found;             /* out: whether the enumeration reached that run at all */
-} BfStatic;
+/* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION, A READING OF §9.4.1's RUNNING POSITION --------------
+   Both sections define it as the top (or left) margin edge "of a hypothetical box that would have been the
+   first box of the element if its specified `position` value had been `static` and its specified `float` had
+   been `none`", and §10.6.3 keeps the real box out of the stack that would place it ("absolutely positioned
+   boxes are ignored"). The hypothetical box is never placed: the stack records its own state where each of
+   §9.2.1.1's runs starts (flow_placement.h's FlowRunStart, keyed by the block-level box the run follows), and
+   `block_flow_static_child_top_ask` reads the run its element falls in.
+   The hypothetical box's `margin-top` is an operand its caller resolves by §10.6.3's own sentence ("if
+   `margin-top`, or `margin-bottom` are `auto`, their used value is 0"): reading it through `used_value_px`
+   would send an absolutely positioned box into §10.6.4's constraint equation, the section that asked. */
 
 /* §8.3.1's collapse applied to the hypothetical box, then CSS 2 §8.1's own definition of a margin edge.
    THE BORDER EDGE IS WHERE §9.4.1's STACK WOULD REACH IT: the open run merged with the box's own top margin,
@@ -1532,16 +1502,12 @@ typedef struct {
     BfRun  run, esc_run;
 } BfWalk;
 
-/* The `body` of a walk that no LAYOUT_Q_BF_BOX body runs: it has no entry to stage in and is re-run whole. */
-#define BF_NO_BODY ((size_t) -1)
-
 /* Stage `w` and the baseline pair on `body`'s entry (layout_job.h's LayoutBfCursor), so the body's next run
    continues at the step `w` names. Answers false, the walk's "not yet". */
 static bool bf_walk_stage(size_t body, lxb_dom_element_t *el, const BfWalk *w, const BfBox *out)
 {
     LayoutBfCursor c;
 
-    if (body == BF_NO_BODY) return false;
     c.prev = w->prev;
     c.brk = w->brk;
     c.wi = w->wi;
@@ -1564,7 +1530,7 @@ static bool bf_walk_resume(size_t body, lxb_dom_element_t *el, BfWalk *w, BfBox 
 {
     LayoutBfCursor c;
 
-    if (body == BF_NO_BODY || !layout_job_bf_resume(body, el, &c)) return false;
+    if (!layout_job_bf_resume(body, el, &c)) return false;
     w->prev = c.prev;
     w->brk = c.brk;
     w->wi = c.wi;
@@ -1581,23 +1547,16 @@ static bool bf_walk_resume(size_t body, lxb_dom_element_t *el, BfWalk *w, BfBox 
     return true;
 }
 
-/* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container. It answers this
-   box's own contribution, and on the way it hands the caller the offset of `want`'s top border edge from this
-   box's top CONTENT edge — the same running position read out at the child that asked for it, which is why
-   there is one walk and not two.
-   `baseline` ASKS FOR CSS 2.2 §10.8.1's THIRD READING OF THAT SAME POSITION, reported on `BfBox`. It is a
-   REQUEST and not a mode: nothing else about the walk changes, and every arm below writes the pair whether it
-   was asked or not — what the flag decides is whether a `has_line_box` of false is a measurement or merely the
-   initialisation, which is why the flag gates the read at every level and travels down unchanged. It is not
-   free, and that is the whole reason it is a flag: answering it means walking INTO a child whose own `height`
-   already decided its size (`bf_height_needs_content`), so a height walk that always asked would look inside
-   boxes §10.6.3 never needs to open, doubling the tree walked at every level and reaching sections that crash.
-   It answers false ("not yet") when a contribution it asked was deferred by the layout job; `*result` is then
-   unwritten and the caller propagates or, at a drive, re-runs the walk (bf_layout_driven). `body` is the
-   entry of the LAYOUT_Q_BF_BOX body running the walk, which stages it there and continues it on its next run;
-   such a walk reports nothing but its answer. */
-static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *want_top, bool *found,
-                      BfAnonSink *anon, BfStatic *st, BfBaseline pass, size_t body, BfBox *result)
+/* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container: the body of
+   the LAYOUT_Q_BF_WALK question at `body`, which it stages on "not yet" and continues on its next run. It
+   answers the box's own reduction and writes what its other readers take from it into flow_placement.h's
+   record as it passes them: every child's top, where each run starts, the table box's top on a wrapper's
+   stack and, for the `BF_BASELINE_NONE` pass, the anonymous block boxes.
+   `pass` ASKS FOR CSS 2.2 §10.8.1's READING OF THAT SAME POSITION, reported on `BfBox`. It is a request and
+   not a mode: what it decides is whether a `has_line_box` of false is a measurement or the initialisation,
+   and it is a flag because answering it walks into a child whose own `height` already decided its size
+   (`bf_height_needs_content`), which a height walk must not pay for. */
+static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox *result)
 {
     /* §8.3.1's THIRD and FOURTH adjoining pairs are different conditions and were one flag here, which got
        `height: 0` wrong in both directions. The THIRD — "bottom margin of a last in-flow child and bottom
@@ -1647,9 +1606,6 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
 
         wrapper = table_wrapper_generates(d);
     }
-    DCHECK(body == BF_NO_BODY || (want == NULL && anon == NULL && st == NULL),
-           "a contribution body's walk was asked to report a position, a static position or anonymous boxes; "
-           "it resumes mid-walk, so only a walk run whole may report what it passes");
     w.prev = NULL;
     w.brk = NULL;
     w.wi = 0;
@@ -1661,12 +1617,7 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
     w.esc_run = bf_run_empty();
     /* A staged walk is a stack walk: the inline formatting context below stages nothing. */
     resumed = bf_walk_resume(body, el, &w, &out);
-    if (wrapper) {
-        DCHECK(anon == NULL && st == NULL,
-               "a table wrapper box's stack was asked for anonymous block boxes or a static position; its "
-               "children are the table box and its captions, which hold neither");
-        wn = bf_wrapper_boxes(el, &wl);
-    }
+    if (wrapper) wn = bf_wrapper_boxes(el, &wl);
     if (!resumed && !wrapper && bf_content_kind(el) == BF_CONTENT_INLINE) {
         /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
            margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
@@ -1676,25 +1627,14 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
         CssPx first_baseline = css_px(0.0), last_baseline = css_px(0.0);
         CssPx h;
 
-        /* §9.2.1.1's SPLIT, AS THE ONE SHAPE OF IT THIS WALK CAN STATE. A hypothetical BLOCK-LEVEL box in a
-           container that establishes §9.4.2's inline formatting context makes that container MIXED — "if a
-           block container box has a block-level box inside it, then we force it to have only block-level
-           boxes inside it" — so the hypothetical box is the first box on a stack this container does not
-           currently have, at its top content edge. The caller has already established that no box-generating
-           content precedes it (`block_flow_run_generates_box` over the run that ends at it), which is what
-           makes "the first box" true rather than assumed; where content DOES precede it the caller refuses,
-           because the anonymous box that content would become has a height this branch never measures. */
-        if (st != NULL && st->after == NULL) {
-            *st->top = bf_static_margin_edge(css_px(0.0), bf_run_empty(), st->margin, esc_top);
-            *st->found = true;
+        /* The one run here starts at the top content edge with nothing met, which is where §10.3.7's reader
+           puts a hypothetical block-level box that no box-generating content precedes (it refuses the case where
+           some does: §9.2.1.1 would split this context around it). */
+        {
+            FlowRunStart start = { css_px(0.0), css_px(0.0), css_px(0.0), esc_top };
+
+            flow_placement_run_record(el, NULL, start);
         }
-        DCHECK(want == NULL,
-               "CSS 2 §9.4.1's placement was asked for a box whose containing block establishes §9.4.2's "
-               "INLINE formatting context, so the box on the line is inline-level and its position is a "
-               "position ALONG a line box rather than a distance down a stack. core/layout/flow_position.c "
-               "takes an inline-level box out through its own section before asking, so the two "
-               "classifications have come apart — and answering a vertical offset here would be a coordinate "
-               "in the right units measured against the wrong axis");
         /* This container holds no block-level box, so §9.2.1.1 generates nothing and the one inline formatting
            context here is over the WHOLE child list — the same run form the anonymous box is measured through,
            with the container's own element supplying the style it already owns. */
@@ -1763,7 +1703,6 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
        no box for is skipped rather than placed, which is that section's sentence and not an optimisation — an
        empty anonymous box would take a height off the stack and be reported to every consumer of the
        enumeration. */
-    if (!resumed && !wrapper) bf_require_want_on_the_stack(el, want);
     /* `auto_h` IS PASSED RATHER THAN RE-READ, because §10.6.7 is stated for an 'Auto' height and this frame has
        already asked css-sizing-3 §3.2.1's behaves-as-auto for §8.3.1's third and fourth adjoining pairs above. A
        second read would be a second answer to one question, free to disagree about a percentage height. */
@@ -1789,22 +1728,20 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
             }
             w.wi++;
         } else if (w.at_run) {
-            /* §10.3.7's and §10.6.4's STATIC POSITION, READ AT THE RUN THE HYPOTHETICAL BOX FALLS IN and
-               before anything is done with that run — §9.2.1.1's runs partition this container's content and
-               each is visited exactly once here, so `prev` names this one and the test cannot fire twice. It
-               is read BEFORE the generates-a-box escape below because a run that generates NO box is the
-               commonest position an out-of-flow child sits at (two block-level siblings with white space
-               between them), and that `continue` would otherwise skip the only reading there is. */
-            if (st != NULL && !*st->found && w.prev == st->after) {
-                *st->top = bf_static_margin_edge(w.pos, w.run, st->margin, w.escaping);
-                *st->found = true;
+            /* Where this run starts, for §10.3.7's and §10.6.4's static position, recorded before the
+               generates-a-box escape below: a run that generates no box is the commonest position an
+               out-of-flow child sits at (two block-level siblings with white space between them). */
+            {
+                FlowRunStart start = { w.pos, w.run.pos, w.run.neg, w.escaping };
+
+                flow_placement_run_record(el, w.prev != NULL ? lxb_dom_interface_element(w.prev) : NULL, start);
             }
             if (!block_flow_run_generates_box(el, anon_run)) {
                 w.at_run = false;
                 continue;
             }
             /* The anonymous box is one of a resting drive's boxes; a body's walk that has spent them stops. */
-            if (body != BF_NO_BODY && !layout_job_bf_step(body)) return bf_walk_stage(body, el, &w, &out);
+            if (!layout_job_bf_step(body)) return bf_walk_stage(body, el, &w, &out);
             if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived()))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": an atomic inline was deferred */
             b = bf_anon_box(el, anon_run, pass);
@@ -1848,25 +1785,11 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
                    "reporting a line box for §10.8.1's baseline. One of the two readings is wrong about "
                    "§9.4.2's zero-height line box, and the margin it already collapsed is a position every "
                    "box below this one on the stack has been placed against");
-            /* THE POSITION GOES TO THE RECORD FOR EVERY BOX AND TO `want_top` FOR ONE, and the order of
-               those two lines is the whole difference this walk's cost used to turn on: the number is in
-               hand either way, so reporting it only for the box somebody happened to ask about is what made
-               a caller run this walk once per child of one container. core/layout/flow_placement.h states
-               the arithmetic; here it is one call with no test in front of it, because deciding who might
-               want a position is the throw-away rather than a saving.
-               A PARENT TEST STOOD IN FRONT OF IT AND IS RETIRED WITH THE PRECONDITION THAT WANTED IT. It
-               recorded a box only where its parent element was the walked container, because
-               `block_flow_child_top_ask` used to CRASH for a box whose containing block is not its parent, and a
-               position stored under such a key would have been a number returned where a refusal belonged on
-               a build with that crash compiled out. That entry now ANSWERS for exactly the boxes this
-               enumeration places — CSS 2.2 §9.2.1.1 "Anonymous block boxes" makes a block-level box inside a
-               broken inline box "a sibling of those anonymous boxes", a member of THIS container's box list —
-               so the test went with the refusal it was protecting, and the boxes it used to drop are the ones
-               the record most needs, since they are the ones whose position no parent walk can re-derive.
-               WHAT REPLACES IT STATES THE KEY'S MEANING RATHER THAN NARROWING THE POPULATION: an entry is
-               keyed by a box on this container's box list, and §10.1's second case makes this container that
-               box's containing block, so the frame the position is measured in is the frame every reader
-               takes it in. */
+            /* The position goes to the record for every box the stack places, with no test of who will ask.
+               An entry is keyed by a box on this container's CSS 2.2 §9.2.1.1 box list — which includes a
+               block-level box inside a broken inline box, "a sibling of those anonymous boxes" — and §10.1's
+               second case makes this container that box's containing block, so the frame the position is
+               measured in is the frame every reader takes it in. */
             DCHECK(ce == NULL || bf_on_box_list_of(ce, el),
                    "CSS 2 §9.4.1's stack placed a box that is NOT on CSS 2.2 §9.2.1.1's box list for the "
                    "container being walked, so the position about to be recorded is a distance down a stack "
@@ -1877,14 +1800,10 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
             if (ce != NULL) flow_placement_record(ce, through_top);
             DCHECK(!(wrapper && ce == NULL),
                    "a table box collapsed through on its wrapper's stack; bf_table_box gives it no such run");
-            if (ce != NULL && ce == want) {
-                *want_top = through_top;
-                *found = true;
-            }
             /* §9.2.1.1's box reaches here when every line box in it is one §9.4.2 says "must be treated as NOT
                EXISTING for any other purpose", and the note above is what gives it a top border edge anyway.
                It is still a BOX — zero-height, at that edge — so it is reported like every other one. */
-            if (ce == NULL) bf_anon_record(anon, anon_run, through_top, b.border_h);
+            if (ce == NULL && pass == BF_BASELINE_NONE) bf_anon_record(el, anon_run, through_top, b.border_h);
             w.run = bf_run_merge(w.run, b.bottom);
             continue;
         }
@@ -1898,13 +1817,9 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
         } else {
             w.pos = css_px_add(w.pos, bf_run_value(w.run));
         }
-        /* §9.2.1.1's anonymous block box is never the box asked for BY ELEMENT — it has no element, so no
-           `want` can name it — and `bf_require_want_on_the_stack` has already crashed for a `want` that is
-           INSIDE one. It is
-           REPORTED here instead, at the same running position and out of the same `pos`, which is what keeps an
-           anonymous box and its block-level siblings from disagreeing about where a margin collapsed. The box
-           has no border and no padding (§9.2.1.1's initial values), so this top BORDER edge is also its top
-           content edge and its top MARGIN edge. */
+        /* §9.2.1.1's anonymous block box is reported at the same running position as its block-level siblings,
+           which keeps them from disagreeing about where a margin collapsed. It has no border and no padding
+           (§9.2.1.1's initial values), so this top border edge is also its top content and margin edge. */
         /* …AND THE SAME REPORT FOR A BOX THAT DID NOT COLLAPSE THROUGH — the collapse-through arm above
            states the reason and it is one reason, not two, and so does the membership assert. */
         DCHECK(ce == NULL || bf_on_box_list_of(ce, el),
@@ -1912,17 +1827,9 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
                "container being walked — the identical assert on the collapse-through arm above states why "
                "the enumeration and this test cannot disagree");
         if (ce != NULL) flow_placement_record(ce, w.pos);
-        /* On a wrapper's stack the NULL entry is the table box, the table element's other box, so a walk asked
-           about the table element itself reports where its table box sits. */
-        if (wrapper && ce == NULL && want == el) {
-            *want_top = w.pos;
-            *found = true;
-        }
-        if (ce != NULL && ce == want) {
-            *want_top = w.pos;
-            *found = true;
-        }
-        if (ce == NULL) bf_anon_record(anon, anon_run, w.pos, b.border_h);
+        /* On a wrapper's stack the NULL entry is the table box, the table element's other box. */
+        if (wrapper && ce == NULL) flow_placement_table_box_record(el, w.pos);
+        if (ce == NULL && !wrapper && pass == BF_BASELINE_NONE) bf_anon_record(el, anon_run, w.pos, b.border_h);
         /* CSS 2.2 §10.8.1's "LAST line box in the normal flow", TAKEN OFF THE SAME `pos` THE PLACEMENT ABOVE
            JUST USED. §9.4.1 lays the boxes out "one after the other, vertically, beginning at the top of a
            containing block", so the last of them to hold a line box holds THE last line box — which is why
@@ -2070,10 +1977,10 @@ static bool bf_height_needs_content(lxb_dom_element_t *el)
    whatever `height` says — `block_flow_anonymous_boxes` runs it for the same reason and states it in the same
    words — and only the SIZE is still taken from used_value.h. */
 /* It answers false ("not yet") when a walk it ran answered false; `*result` is then unwritten. */
-static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, size_t at, BfBox *result)
+static bool bf_walk(lxb_dom_element_t *el, BfBaseline pass, BfBox *out);
+
+static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result)
 {
-    CssPx sink = css_px(0.0);
-    bool sunk = false;
     CssDisplay d = css_computed_display(el);
     bool container = block_flow_display_is_block_container(d);
     /* §17.4's wrapper is decided from the same string and BEFORE it is released, for the reason the two arms
@@ -2098,12 +2005,9 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, size_t at, Bf
        own formatting contexts, and `is_table_wrapper` lets CSS 2.1 §17.5.3's cell-baseline reader name what it
        needs instead. */
     if (wrapper) {
-        CssPx unused = css_px(0.0);
-        bool found = false;
         BfBox w;
 
-        if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE, at, &w)) return false;
-        DCHECK(!found, "a table wrapper's stack reported placing a box it was not asked about");
+        if (!bf_walk(el, BF_BASELINE_NONE, &w)) return false;
         b.content_h = w.content_h;
         b.border_h = w.content_h;
         *result = b;
@@ -2162,9 +2066,7 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, size_t at, Bf
         {
             BfBox inner;
 
-            if (!bf_layout(el, NULL, &sink, &sunk, NULL, NULL, pass, at, &inner)) return false;
-
-            DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
+            if (!bf_walk(el, pass, &inner)) return false;
             /* §8.3.1's fourth adjoining pair needs "zero or auto computed height", which is exactly what
                `bf_height_needs_content` just answered NO to — so a box on this arm cannot collapse through, and
                the two answers being discarded here are discarded because the section makes them unreachable
@@ -2181,8 +2083,7 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, size_t at, Bf
         *result = b;
         return true;
     }
-    if (!bf_layout(el, NULL, &sink, &sunk, NULL, NULL, pass, at, &b)) return false;
-    DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
+    if (!bf_walk(el, pass, &b)) return false;
     if (b.collapse_through) { *result = b; return true; }
     /* A box whose height BEHAVES AS AUTO (css-sizing-3 §3.2.1) is the one whose border-box height is this
        walk's own content height; a resolved percentage is a declared length like any other and goes back
@@ -2229,15 +2130,54 @@ static BfBox bf_box_unpack(const LayoutBfAnswer *a)
     return b;
 }
 
+/* A question's body: a contribution's (`bf_box_compute`) or a stack's (`bf_layout`, at its own entry). On
+   "not yet" the job suspends it; otherwise the answer is memoized. */
+static bool bf_question_run(LayoutQuestion q, size_t at, BfBox *out)
+{
+    BfBaseline pass = (BfBaseline)(q.code - 1u);
+    LayoutBfAnswer a;
+    bool done;
+
+    if (q.kind == LAYOUT_Q_BF_WALK) {
+        done = bf_layout(q.element, pass, at, out);
+        if (done && pass == BF_BASELINE_NONE) flow_placement_anon_close(q.element);
+    } else {
+        DCHECK(q.kind == LAYOUT_Q_BF_BOX, "a layout job handed block_flow.c a question of another kind");
+        done = bf_box_compute(q.element, pass, out);
+    }
+    if (!done) {
+        layout_job_suspend(at);
+        return false;
+    }
+    bf_box_pack(out, &a);
+    layout_job_bf_answer(at, &a);
+    return true;
+}
+
+/* Ask `q` of the job: served from the memo, deferred ("not yet", `*out` unwritten), or run here. */
+static bool bf_question_ask(LayoutQuestion q, BfBox *out)
+{
+    LayoutBfAnswer a;
+    size_t at = 0;
+
+    switch (layout_job_bf_ask(q, &a, &at)) {
+    case LAYOUT_ASK_ANSWERED:
+        *out = bf_box_unpack(&a);
+        return true;
+    case LAYOUT_ASK_DEFERRED:
+        return false;
+    case LAYOUT_ASK_OPENED:
+        break;
+    }
+    return bf_question_run(q, at, out);
+}
+
 /* §9.4.1's contribution of one box, asked through the layout job: the question is (element, pass) and the
    job's memo serves every pass. It answers false ("not yet") when the job deferred this question or one its
    body asked; `*out` is then unwritten and the caller propagates. Its one caller is the stack walk. */
 static bool bf_box(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
 {
     LayoutQuestion q;
-    LayoutBfAnswer a;
-    size_t at = 0;
-    BfBox b;
 
     DCHECK(el != NULL, "a box's contribution to §9.4.1's stack was asked for with no element");
     q = layout_question(LAYOUT_Q_BF_BOX, el, NULL, (unsigned) pass + 1u);
@@ -2251,23 +2191,22 @@ static bool bf_box(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
         "\"Minimum and maximum heights: 'min-height' and 'max-height'\"'s second conjunct at the last gate of "
         "`used_value_containing_block_height`; a chain through it means that gate no longer refuses. Fix it at "
         "the rule that re-enters, never by a limit.");
-    switch (layout_job_bf_ask(q, &a, &at)) {
-    case LAYOUT_ASK_ANSWERED:
-        *out = bf_box_unpack(&a);
-        return true;
-    case LAYOUT_ASK_DEFERRED:
-        return false;
-    case LAYOUT_ASK_OPENED:
-        break;
-    }
-    if (!bf_box_compute(el, pass, at, &b)) {
-        layout_job_suspend(at);
-        return false;
-    }
-    bf_box_pack(&b, &a);
-    layout_job_bf_answer(at, &a);
-    *out = b;
-    return true;
+    return bf_question_ask(q, out);
+}
+
+/* The stack of `el`'s own children for `pass`, asked through the layout job: run once per job whatever `el`'s
+   `height` says, and continued where it stopped. Every reader of a container's stack asks here. */
+static bool bf_walk(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
+{
+    LayoutQuestion q;
+
+    DCHECK(el != NULL, "a §9.4.1 stack was asked for with no container");
+    q = layout_question(LAYOUT_Q_BF_WALK, el, NULL, (unsigned) pass + 1u);
+    LAYOUT_QUESTION_REPEAT_CHECK(q,
+        "A container's stack asked, inside itself, for something only its finished stack answers: a child's "
+        "position, its own content height or baseline, a run's start or its anonymous boxes. The asking rule "
+        "reads its own output; fix it at the rule that re-enters, never by a limit.");
+    return bf_question_ask(q, out);
 }
 
 bool block_flow_drive_deferred(LayoutJobDrive *d)
@@ -2277,38 +2216,10 @@ bool block_flow_drive_deferred(LayoutJobDrive *d)
 
     while (!layout_job_drive_spent(d) && layout_job_drive_next(d, &q, &at)) {
         BfBox r;
-        LayoutBfAnswer a;
 
-        if (!bf_box_compute(q.element, (BfBaseline)(q.code - 1u), at, &r)) {
-            layout_job_suspend(at);
-            continue;
-        }
-        bf_box_pack(&r, &a);
-        layout_job_bf_answer(at, &a);
+        (void)bf_question_run(q, at, &r);
     }
     return !layout_job_drive_spent(d);
-}
-
-/* A drive (core/layout/layout_job.h) over the stack walk, for this file's entries that callers outside the
-   walk reach. It re-runs the walk until it answers, computing every contribution the job deferred beneath it
-   in between. Each attempt starts from cleared outputs, because an attempt that answered "not yet" may have
-   written some of them. */
-static BfBox bf_layout_driven(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *want_top, bool *found,
-                              BfAnonSink *anon, BfStatic *st, BfBaseline pass)
-{
-    LayoutJobDrive d;
-    BfBox b;
-
-    layout_job_drive_begin(&d);
-    for (;;) {
-        *found = false;
-        if (anon != NULL) anon->n = 0;
-        if (st != NULL) *st->found = false;
-        if (bf_layout(el, want, want_top, found, anon, st, pass, BF_NO_BODY, &b)) break;
-        (void)block_flow_drive_deferred(&d);
-    }
-    layout_job_drive_end(&d);
-    return b;
 }
 
 /* A FLEX CONTAINER'S AUTO HEIGHT IS TWO DIFFERENT SECTIONS OF css-flexbox-1 AND §5.1 "Flex Flow Direction: the
@@ -2431,33 +2342,13 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
     return true;
 }
 
-/* Whether `el` is a block container on its parent's §9.4.1 stack whose height is its content's: its stack
-   contribution (`bf_box`, memoized by the layout job) then holds this very walk, run by the same call, so the
-   content height is served from it rather than walked again for every caller that sizes the box. */
-static bool bf_auto_height_is_stack_contribution(lxb_dom_element_t *el)
-{
-    BoxTreeChild c = box_tree_child_of_node(lxb_dom_interface_node(el));
-    lxb_dom_element_t *parent = box_tree_parent(c);
-
-    if (parent == NULL || !block_flow_display_is_block_container(css_computed_display(parent))) return false;
-    if (block_flow_child_kind(parent, c) != BLOCK_FLOW_CHILD_BLOCK) return false;
-    return block_flow_display_is_block_container(css_computed_display(el)) && bf_height_needs_content(el);
-}
-
 bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
 {
-    CssPx unused = css_px(0.0);
-    bool found = false;
     CssDisplay d;
     bool container, flex, grid;
     BfBox b;
 
     DCHECK(el != NULL, "a content-based height was asked for with no element");
-    if (bf_auto_height_is_stack_contribution(el)) {
-        if (!bf_box(el, BF_BASELINE_NONE, &b)) return false;
-        *out = b.content_h;
-        return true;
-    }
     d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
     flex = css_display_spells(d, CSS_KEYWORD_FLEX) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX);
@@ -2479,8 +2370,7 @@ bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
               "context' — so there is no block formatting context inside it for this walk to run over. The "
               "caller is core/layout/used_value.c, which classifies the box type before asking, so the two "
               "lists have come apart");
-    if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE, BF_NO_BODY, &b)) return false;
-    DCHECK(!found, "the content-height walk reported placing the box it was not looking for");
+    if (!bf_walk(el, BF_BASELINE_NONE, &b)) return false;
     *out = b.content_h;
     return true;
 }
@@ -2498,8 +2388,6 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
 
 bool block_flow_last_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseline, bool *has)
 {
-    CssPx unused = css_px(0.0);
-    bool found = false;
     CssDisplay d;
     bool container;
     BfBox b;
@@ -2523,8 +2411,7 @@ bool block_flow_last_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baselin
            "out the REPLACED `inline-block`, which has no baseline at all — before asking, so the two lists "
            "have come apart");
     DCHECK(has != NULL, "the last-line-box baseline ask was given nowhere to say whether a line box exists");
-    if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_LAST, BF_NO_BODY, &b)) return false;
-    DCHECK(!found, "the baseline walk reported placing a box it was not looking for");
+    if (!bf_walk(el, BF_BASELINE_LAST, &b)) return false;
     /* `bf_layout` measures both of its distances from this box's TOP CONTENT EDGE, which is the frame this
        entry's contract states, so there is no conversion here and none is hidden in the caller either. */
     *baseline = b.baseline;
@@ -2545,8 +2432,6 @@ bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
 
 bool block_flow_first_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseline, bool *has)
 {
-    CssPx unused = css_px(0.0);
-    bool found = false;
     CssDisplay d;
     bool container;
     BfBox b;
@@ -2573,8 +2458,7 @@ bool block_flow_first_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseli
            "this walk is CSS 2.1 §17.2 The CSS table model's \"replaced elements with these 'display' values "
            "are treated as their given display types during layout\" needing an arm §17.5.3 does not write");
     DCHECK(has != NULL, "the first-line-box baseline ask was given nowhere to say whether a line box exists");
-    if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_FIRST, BF_NO_BODY, &b)) return false;
-    DCHECK(!found, "the first-baseline walk reported placing a box it was not looking for");
+    if (!bf_walk(el, BF_BASELINE_FIRST, &b)) return false;
     /* Same frame as the entry above and as `block_flow_auto_height`: the distance is from this box's own TOP
        CONTENT EDGE, so a caller measuring from a BORDER edge adds its own border and padding and this file
        adds neither. */
@@ -2598,7 +2482,6 @@ bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out)
 {
     lxb_dom_element_t *cb;
     CssPx top = css_px(0.0);
-    bool found = false;
     BfBox unused;
     char nbuf[160], cbuf[160], pbuf[160];
 
@@ -2669,19 +2552,21 @@ bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out)
            "walk below would report only that it never reached the box",
            box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf),
            box_subject_node(lxb_dom_interface_node(el)->parent, pbuf, sizeof pbuf));
-    /* §9.4.1's walk answers about every child and this entry is asked about one, so the first ask about any
-       child of a container pays for every later ask about its siblings: core/layout/flow_placement.h holds
-       the positions the walk reports for the span of one whole-tree geometry pass and nothing outside one.
-       Outside a pass this answers false and the walk below runs. */
+    /* §9.4.1's stack answers about every child and this entry is asked about one: the container's stack
+       (`bf_walk`) records every position it passes in core/layout/flow_placement.h's record, so the first ask
+       about any child of a container pays for every later ask about its siblings, and a position recorded
+       before the stack stopped is final. */
     DCHECK(out != NULL, "a box's vertical placement was asked for with nowhere to put it");
     if (flow_placement_ask(el, &top)) {
         *out = top;
         return true;
     }
-    /* A walk that answers "not yet" is still a walk the ask paid for; its retry is a second ask. */
+    /* A stack that answers "not yet" is still a walk the ask paid for; its retry is a second ask. */
     flow_placement_walked();
-    if (!bf_layout(cb, el, &top, &found, NULL, NULL, BF_BASELINE_NONE, BF_NO_BODY, &unused)) return false;
-    if (!found)
+    /* A wrapper's members are the table box and its captions, which no inline box holds. */
+    if (!table_wrapper_generates(css_computed_display(cb))) bf_require_want_on_the_stack(cb, el);
+    if (!bf_walk(cb, BF_BASELINE_NONE, &unused)) return false;
+    if (!flow_placement_peek(el, &top))
         DFAIL("CSS 2 §9.4.1's walk over this box's containing block placed every in-flow block-level child it "
               "found and NEVER REACHED THIS BOX, so there is no position to report. The walk skips exactly what "
               "§9.2 and §10.6.3 say generates no box or is out of flow — a `display: none` element, a comment, "
@@ -2690,20 +2575,6 @@ bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out)
               "the first and core/layout/flow_position.c's own §9.3 test covers the last. The two answers have "
               "come apart, and reporting a coordinate for a box that is not in this formatting context would be "
               "a number in the right units for a box that is not there");
-    /* THE WALK'S OWN ANSWER AND THE RECORD'S, ASSERTED AGAINST EACH OTHER AT EVERY MISS. They are written by
-       two DIFFERENT lines of one loop — `*want_top` for the box this entry named, `flow_placement_record` for
-       every box the walk passes — so they can disagree, and the day they do, a position every box below it on
-       the stack was placed against is wrong while both files read as correct. This arms on every ask the
-       record did not answer, which is every first ask of every container a job lays out. */
-    DCHECKF(!flow_placement_is_held() || flow_placement_agrees(el, top),
-            "CSS 2 §9.4.1's walk reported this box's top border edge as %g and the placement record this same "
-            "walk wrote holds a different number for it — or holds nothing for it at all. The two come off ONE "
-            "loop over ONE child list: `want_top` is written where the walk recognises the box it was asked "
-            "about and the record is written for every box it passes, one line apart. So this is those two "
-            "lines having come apart, and the number every box below this one on the stack is placed against "
-            "is the one in question. Read core/layout/block_flow.c's two `flow_placement_record` calls against "
-            "the two `want_top` writes beside them before trusting either",
-            top.px);
     *out = top;
     return true;
 }
@@ -2819,9 +2690,9 @@ bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
     lxb_dom_element_t *cb;
     lxb_dom_node_t *n, *after;
     BlockFlowRun before;
-    BfStatic st;
-    CssPx top = css_px(0.0);
-    bool found = false, reached = false;
+    FlowRunStart start;
+    BfRun run;
+    bool reached = false, held;
     char nbuf[160], cbuf[160];
 
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's static position was asked for with no element");
@@ -2878,18 +2749,18 @@ bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
                "break at this element — after which the position falls out of the same loop body every other "
                "box on the stack is placed by",
                box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
-    st.after = after;
-    st.margin = bf_hypothetical_margin_top(el, cb);
-    st.top = &top;
-    st.found = &found;
     {
-        CssPx unused = css_px(0.0);
-        bool want_found = false;
+        lxb_dom_element_t *ae = after != NULL ? lxb_dom_interface_element(after) : NULL;
         BfBox w;
 
-        if (!bf_layout(cb, NULL, &unused, &want_found, NULL, &st, BF_BASELINE_NONE, BF_NO_BODY, &w)) return false;
+        /* A run start recorded before the stack stopped is final, as a position is. */
+        held = flow_placement_run_peek(cb, ae, &start);
+        if (!held) {
+            if (!bf_walk(cb, BF_BASELINE_NONE, &w)) return false;
+            held = flow_placement_run_peek(cb, ae, &start);
+        }
     }
-    if (!found)
+    if (!held)
         DFAILF("%s, whose static-position containing block is %s: CSS 2 §9.4.1's walk over that container "
                "visited every one of CSS 2.2 §9.2.1.1's runs and none of them was the one this element sits "
                "in. The run is named by the block-level box it FOLLOWS and the enumeration visits each run "
@@ -2897,7 +2768,9 @@ bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
                "have come apart, which they can only do if one of them classified a child differently from "
                "the other",
                box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
-    *out = top;
+    run.pos = start.run_pos;
+    run.neg = start.run_neg;
+    *out = bf_static_margin_edge(start.pos, run, bf_hypothetical_margin_top(el, cb), start.escaping);
     return true;
 }
 
@@ -2912,55 +2785,6 @@ CssPx block_flow_static_child_top(lxb_dom_element_t *el)
     return top;
 }
 
-/* The enumeration itself, one §9.4.1 walk with an anonymous-box sink; the ask below holds its answer. */
-static bool bf_anon_boxes_compute(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count)
-{
-    BfAnonSink sink;
-    CssPx unused = css_px(0.0);
-    bool found = false;
-    CssDisplay d;
-    bool container;
-    BfBox b;
-
-    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with no element");
-    DCHECK(out != NULL,
-           "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with nowhere to put them. A count alone "
-           "names no run and no position, so a caller holding one would know that a box exists and have no way "
-           "to reach the formatting context inside it — which is the only thing this entry is asked for");
-    DCHECK(count != NULL, "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with nowhere to count them");
-    sink.v = NULL;
-    sink.n = 0;
-    sink.cap = 0;
-    *out = NULL;
-    *count = 0;
-    /* §9.2.1.1's sentence has TWO conjuncts — "if a BLOCK CONTAINER BOX … HAS A BLOCK-LEVEL BOX INSIDE IT" —
-       and both are asked here rather than left to the walk, because a zero is that sentence ANSWERING. See
-       block_flow.h for what each shape of zero means; every one of them is a positive statement about which
-       box holds this element's inline-level content, never this component declining to look. */
-    d = css_computed_display(el);
-    container = block_flow_display_is_block_container(d);
-    if (!container) return true;
-    if (bf_content_kind(el) != BF_CONTENT_MIXED) return true;
-    /* §9.4.1's STACK IS RUN, because that is where §9.2.1.1's boxes are generated and where their positions
-       come from. It is run whatever this container's `height` says — `bf_height_needs_content` decides whether
-       a box's own content decides ITS SIZE, which is a different question from where the boxes inside it are,
-       and a container with a declared height is exactly the one whose text can overflow it. */
-    if (!bf_layout(el, NULL, &unused, &found, &sink, NULL, BF_BASELINE_NONE, BF_NO_BODY, &b)) {
-        free(sink.v);
-        return false;
-    }
-    DCHECK(!found, "the anonymous-box walk reported placing a box it was not looking for");
-    DCHECK(sink.n > 0,
-           "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "
-           "holds BOTH a block-level box and inline-level content. Those are the section's own two conjuncts, "
-           "the classification above and the walk decide them over the same child list with the same "
-           "per-child predicate, and the walk wraps every maximal inline-level run it meets — so an empty "
-           "answer is one classification having been asked twice and answered differently");
-    *out = sink.v;
-    *count = sink.n;
-    return true;
-}
-
 static BlockFlowAnonBox *bf_anon_copy(const BlockFlowAnonBox *v, size_t n)
 {
     BlockFlowAnonBox *c;
@@ -2972,69 +2796,45 @@ static BlockFlowAnonBox *bf_anon_copy(const BlockFlowAnonBox *v, size_t n)
     return c;
 }
 
-#if APICLIENT_DEV
-/* NaN equals itself here: one derivation run twice over one document agrees with itself. */
-static bool bf_same_px(CssPx a, CssPx b)
-{
-    return a.px == b.px || (a.px != a.px && b.px != b.px);
-}
-
-/* A served enumeration re-derived and compared at its first serve: a key that omits an operand of the walk
-   answers a second asker with the first asker's boxes. The re-derivation runs in a drive of its own. */
-static void bf_anon_recheck(lxb_dom_element_t *el, const BlockFlowAnonBox *held, size_t hn)
-{
-    BlockFlowAnonBox *fresh = NULL;
-    LayoutJobDrive d;
-    size_t n = 0, i;
-    char nbuf[160];
-
-    if (!flow_placement_anon_first_serve(el)) return;
-    layout_job_drive_begin(&d);
-    while (!bf_anon_boxes_compute(el, &fresh, &n)) (void)block_flow_drive_deferred(&d);
-    layout_job_drive_end(&d);
-    DCHECKF(n == hn, "%s: a layout job served %zu CSS 2.2 §9.2.1.1 anonymous boxes where a fresh walk "
-            "enumerates %zu, so the placement record's key omits an operand of the walk",
-            box_subject(el, nbuf, sizeof nbuf), hn, n);
-    for (i = 0; i < n; i++)
-        DCHECKF(fresh[i].run.after == held[i].run.after && fresh[i].run.end == held[i].run.end &&
-                    bf_same_px(fresh[i].content_x, held[i].content_x) &&
-                    bf_same_px(fresh[i].content_y, held[i].content_y) &&
-                    bf_same_px(fresh[i].height, held[i].height),
-                "%s, anonymous box %zu: a layout job served (%g, %g, height %g) where a fresh walk gives "
-                "(%g, %g, height %g)", box_subject(el, nbuf, sizeof nbuf), i, held[i].content_x.px,
-                held[i].content_y.px, held[i].height.px, fresh[i].content_x.px, fresh[i].content_y.px,
-                fresh[i].height.px);
-    free(fresh);
-}
-#endif
-
 bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count)
 {
     const BlockFlowAnonBox *held = NULL;
     size_t hn = 0;
+    BfBox b;
 
     DCHECK(el != NULL && out != NULL && count != NULL,
            "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with no element or nowhere to put them");
-    /* The census counts an ask at the attempt that answers it, as the origin's does. */
-    if (flow_placement_anon_peek(el, &held, &hn)) {
-        (void)flow_placement_anon_ask(el, &held, &hn);
-#if APICLIENT_DEV
-        bf_anon_recheck(el, held, hn);
-#endif
-        *out = bf_anon_copy(held, hn);
-        *count = hn;
-        return true;
+    *out = NULL;
+    *count = 0;
+    /* §9.2.1.1's sentence has TWO conjuncts — "if a BLOCK CONTAINER BOX … HAS A BLOCK-LEVEL BOX INSIDE IT" —
+       and both are asked here rather than left to the walk, because a zero is that sentence ANSWERING. See
+       block_flow.h for what each shape of zero means. */
+    if (!block_flow_display_is_block_container(css_computed_display(el))) return true;
+    if (bf_content_kind(el) != BF_CONTENT_MIXED) return true;
+    /* The census counts an ask at the attempt that answers it, as the origin's does. The stack runs whatever
+       this container's `height` says: a container with a declared height is exactly the one whose text can
+       overflow it. */
+    if (!flow_placement_anon_ask(el, &held, &hn)) {
+        flow_placement_anon_derived();
+        if (!bf_walk(el, BF_BASELINE_NONE, &b)) return false;
+        DCHECK(flow_placement_anon_peek(el, &held, &hn),
+               "a container's stack answered without closing its anonymous boxes in the placement record; the "
+               "stack question's body closes them when its BF_BASELINE_NONE pass answers");
     }
-    if (!bf_anon_boxes_compute(el, out, count)) return false;
-    (void)flow_placement_anon_ask(el, &held, &hn);
-    flow_placement_anon_record(el, *out, *count);
+    DCHECK(hn > 0,
+           "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "
+           "holds BOTH a block-level box and inline-level content. Those are the section's own two conjuncts, "
+           "the classification above and the stack decide them over the same child list with the same "
+           "per-child predicate, and the stack wraps every maximal inline-level run it meets — so an empty "
+           "answer is one classification having been asked twice and answered differently");
+    *out = bf_anon_copy(held, hn);
+    *count = hn;
     return true;
 }
 
 bool block_flow_table_box_top_ask(lxb_dom_element_t *table, CssPx *out)
 {
     CssPx top = css_px(0.0);
-    bool found = false;
     CssDisplay d = css_computed_display(table);
     bool wrapper = table_wrapper_generates(d);
     char nbuf[160];
@@ -3042,8 +2842,11 @@ bool block_flow_table_box_top_ask(lxb_dom_element_t *table, CssPx *out)
 
     DCHECKF(wrapper, "%s: a table box's offset was asked of an element that generates no table wrapper box",
             box_subject(table, nbuf, sizeof nbuf));
-    if (!bf_layout(table, table, &top, &found, NULL, NULL, BF_BASELINE_NONE, BF_NO_BODY, &w)) return false;
-    DCHECKF(found, "%s: the table wrapper's stack never placed its table box", box_subject(table, nbuf, sizeof nbuf));
+    if (!flow_placement_table_box_peek(table, &top)) {
+        if (!bf_walk(table, BF_BASELINE_NONE, &w)) return false;
+        if (!flow_placement_table_box_peek(table, &top))
+            DFAILF("%s: the table wrapper's stack never placed its table box", box_subject(table, nbuf, sizeof nbuf));
+    }
     *out = top;
     return true;
 }
@@ -3061,17 +2864,16 @@ CssPx block_flow_table_box_top(lxb_dom_element_t *table)
 
 CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table)
 {
-    CssPx unused = css_px(0.0);
-    bool found = false;
     bool wrapper = table_wrapper_generates(css_computed_display(table));
     char nbuf[160];
+    LayoutJobDrive d;
     BfBox w;
 
     DCHECKF(wrapper, "%s: a table wrapper box's height was asked of an element that generates none",
             box_subject(table, nbuf, sizeof nbuf));
-    w = bf_layout_driven(table, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE);
-    DCHECKF(!found, "%s: the wrapper walk reported placing a box it was not asked about",
-            box_subject(table, nbuf, sizeof nbuf));
+    layout_job_drive_begin(&d);
+    while (!bf_walk(table, BF_BASELINE_NONE, &w)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     return w.content_h;
 }
 
