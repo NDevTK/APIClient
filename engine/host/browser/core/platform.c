@@ -722,7 +722,7 @@ static const PlatformComponent PLATFORM[] = {
        §2.9's range and orders §2.10's cursor walk; §4.7's IDBKeyRange is the interface over it, and §4.3's
        IDBFactory is the door to the rest. Neither row has a document half: §3.7 gives every realm its own
        interface prototype, and the IDBFactory `indexedDB` answers with is `[SameObject]` per realm.
-       §2.1's database set is an agent row with a release: "each storage key has an associated set of databases",
+       Indexed Database §2.1's database set is an agent row with a release: "each storage key has an associated set of databases",
        an instance is an origin-keyed agent cluster and storage is keyed by origin, so a same-origin child
        navigable reaches the agent's set, freed against the runtime here (core/platform.h's third column). */
     { "idb_key_range",       d_idb_key_range,       NULL,        r_idb_key_range },
@@ -752,7 +752,7 @@ static const PlatformComponent PLATFORM[] = {
        because a cursor's source handle is one of those and §4.9's `source` answers with it. It holds the private
        Symbol §2.10's eleven fields hang off and §6.7's step machine. */
     { "idb_cursor",          d_idb_cursor,          NULL,        r_idb_cursor },
-    /* §4.5's createIndex note, as the request it says it is: "the index creation itself is processed as an
+    /* Indexed Database §4.5's createIndex note, as the request it says it is: "the index creation itself is processed as an
        asynchronous request within the upgrade transaction". No interface and no realm install: it declares one
        step machine, agent-lifetime state the release gives back. It follows the rows above because §4.5's member
        reaches it and it places its request through §5.6's. */
@@ -789,7 +789,7 @@ static const PlatformComponent PLATFORM[] = {
     { "message_port",        d_message_port,        NULL,        r_message_port },
     /* XHR §3 "Interface XMLHttpRequest" (`XMLHttpRequestEventTarget`, `XMLHttpRequestUpload` and `XMLHttpRequest`,
        `[Exposed=(Window,DedicatedWorker,SharedWorker)]`) and §5 "Interface ProgressEvent"
-       (`[Exposed=(Window,Worker)]`): no document half. §5's interface object comes from progress_event.c's own
+       (`[Exposed=(Window,Worker)]`): no document half. XHR §5's interface object comes from progress_event.c's own
        intrinsic. XHR's per-document state (§3.5.1's API base URL, §3.5.4's credentials mode) is read from the
        running realm when a member is called, never when the interface object is minted. */
     { "xml_http_request",    d_xhr,                 NULL,        r_xhr },
@@ -990,7 +990,7 @@ static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
  * pass; edit the row at the move (the duplicate check below sees a move that adds a row).
  *
  * The third column is Web IDL §3.3.7 [Exposed]'s condition, and the probe is two-sided against it: exposed means
- * present, not exposed means absent. §3.3.13 [SecureContext]'s example ("there will be no \"HeartbeatSensor\"
+ * present, not exposed means absent. Web IDL §3.3.13 [SecureContext]'s example ("there will be no \"HeartbeatSensor\"
  * property on Window") is a name owed only in a secure realm. The condition is stated here, not read back from
  * the install, because this list is an oracle: an expectation derived from the gate it checks asserts nothing.
  * `IDL_EXPOSED` is 0 and means the IDL carries no condition, so a row that omits the column states the
@@ -1043,7 +1043,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "PerformanceObserver",   "performance_observer" },
     { "PerformanceObserverEntryList", "performance_observer" },
     { "PerformanceMark",       "user_timing" },
-    /* §2.3's interface object, beside §2.2's. A name with no row here is a missing witness, not an abort, so the
+    /* User Timing §2.3's interface object, beside §2.2's. A name with no row here is a missing witness, not an abort, so the
        list reports clean over it. A realm without `PerformanceMeasure` is one where `performance.measure(...)`
        throws a TypeError. Its IDL carries no condition this engine's two realm kinds tell apart. */
     { "PerformanceMeasure",    "user_timing" },
@@ -1066,7 +1066,8 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "CSSStyleValue",         "css_unit_value" },
     { "CSSNumericValue",       "css_unit_value" },
     { "CSSUnitValue",          "css_unit_value" },
-    /* §4.2's interface object, placed by the `css_unit_value` install through core/css/css_keyword_value.c, so the
+    /* CSS Typed OM §4.2's interface object, placed by the `css_unit_value` install through
+       core/css/css_keyword_value.c, so the
        witness names the row whose failure would take it. */
     { "CSSKeywordValue",       "css_unit_value" },
     /* §4.3.4's eight, placed by the `css_unit_value` install through core/css/css_math_value.c. `x instanceof
@@ -1438,8 +1439,8 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        the use of JavaScript Atomics APIs to potentially block", so `Atomics.wait` on this agent throws a
        TypeError. */
     agent_create_can_block(false);
-    /* The browsing context group, before the cluster, because §8.1.2.2 takes it as an argument ("given an origin,
-       a browsing context group and a boolean requestsOAC") and its step 3 reads the group's cross-origin isolation
+    /* The browsing context group, before the cluster, because §8.1.2.2's obtain a similar-origin window agent takes
+       it as an argument beside the origin and requestsOAC, and its step 3 reads the group's cross-origin isolation
        mode. §7.3.2.3's group is the other half of the `(browsing context group, origin)` key SECURITY.md makes
        this instance; it installs nothing, so it is not a row. */
     browsing_context_group_create(agent->opener_policy);
@@ -1463,7 +1464,7 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
  * global ("Dedicated worker agent — Contains a single DedicatedWorkerGlobalScope"), so a worker agent is never
  * assembled from the window entry plus a second realm. It has no browsing context group (§7.3.2.3's creation is a
  * step no worker algorithm runs), no `requests_oac` (§8.1.2.2's worker algorithm takes none, and §7.5.1 reads it
- * off a navigation response) and no top-level creation URL (§10.2.6.2 "Script settings for workers": "top-level
+ * off a navigation response) and no top-level creation URL (HTML §10.2.6.2 "Script settings for workers": "top-level
  * creation URL to null"). It has no install column: core/workers/worker_global_scope.c installs §10.2.1.1's
  * surface through the realm-intrinsic column this entry ends in, and a worker agent has no Document.
  *
@@ -1679,7 +1680,7 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
                 "this engine models) that this witness row does not state. If the component gates the install, "
                 "the row states the same condition and this probe then requires the name to be ABSENT here",
                 PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].component);
-        /* §3.3.13's example: "In such a context, there will be no \"HeartbeatSensor\" property on Window." A page
+        /* Web IDL §3.3.13's example: "In such a context, there will be no \"HeartbeatSensor\" property on Window." A page
            reads that as `'X' in window` answering false, distinct from a property that answers undefined. */
         DCHECKF(owed || has == 0,
                 "the global `%s` is on a realm whose Web IDL §3.3.7 [Exposed] condition excludes it — §3.3.13 "
