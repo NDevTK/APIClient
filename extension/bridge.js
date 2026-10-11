@@ -588,7 +588,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      nothing-to-run arm) never take this branch, so a null here means that split moved. */
   DCHECK(!(outcome !== "crashed" && result) || (eng && eng._egress),
          "a run reached the counters arm with no egress census on its instance — `_egress` is declared in the " +
-         "`eng` literal beside `_cold`, so an instance without one was built somewhere else, and the row would " +
+         "`eng` literal beside `_resolvers`, so an instance without one was built somewhere else, and the row would " +
          "report this zone's own refusals as absent for a run that had them");
   /* The counters arm also reads `eng.residentBytes`, which engineRecordFacts writes before the reservation
      leaves `booting`; only an instance that has stepped reaches here. An absent value would be dropped by the
@@ -2082,7 +2082,7 @@ function embedderPolicyWhole(e) {
    read, the engine's abort) must take the frame with it; separating the two operations makes that cleanup
    one line. The renderer's name is this instance's agent cluster key: renderer-host.js takes a name and
    computes nothing, so the name this zone passes is the answer, and it identifies the frame. */
-function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inherited, parentNavigable,
+function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
                       containerPolicy, ancestorOrigins, creationSandboxFlags, referenced) {
   /* The one way to obtain an instance, asserted rather than met as a TypeError inside admit's catch (which
      would report a boot abort of an instance never built). render-process-host.js holds which agent clusters
@@ -2092,11 +2092,6 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
          "renderer-host.js is not loaded in this zone — it is what obtains an instance once the registry has " +
          "admitted its agent cluster, so without it every document would be reported as a crashed instance " +
          "rather than as a bridge that is missing half of itself");
-  DCHECK(typeof cold === "boolean",
-         "an instance was started without saying whether it has a live caller — `_cold` decides at finalize " +
-         "whether this document's findings are RETURNED to a requester or MERGED to the moat, and it is a " +
-         "fact about the call site (a child navigable and a resumed recipe have no requester; an admitted " +
-         "document does), so it belongs on the record from the instant the pool can see it");
   /* The clone of the creator's policy container (HTML §7.1.7 Policy containers), or `null` for a document with
      no creator (a reported root, a rehydrated recipe, a group swap). Stated by every call site and never
      defaulted: a create notice always carries one, so `null` and "the caller forgot" must stay distinct. */
@@ -2231,7 +2226,7 @@ function engineReserve(cluster, docId, msg, cold, referenced) {
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
                 groupId: msg && msg.groupId, _resumed: null, referenced,
                 _coldLookup: null, _coldOther: null, _bundleId: null,
-                origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
+                origin: (msg && msg.origin) || "", _resolvers: [], _remoteAsked: new Set(),
                 /* The requests this zone has asked for and not yet answered to the engine, keyed as the
                    answering seam is keyed. The engine re-lists a request with neither value nor refusal every
                    round (solver/engine.c's `skip` is `!u || PEND_HAVE_VALUE || declined`), so a door that issues
@@ -3655,7 +3650,7 @@ async function hostNotice(eng, line) {
        because one round's notices are acted on in order: a page opens a window and posts to it in one turn, so
        the instance must exist before the post is routed. Referenced, since the notice itself proves a
        WindowProxy is held for it. */
-    await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true, inherited, parentNavigable,
+    await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], inherited, parentNavigable,
                        containerPolicy, ancestorOrigins, creationSandboxFlags, 1)._readyP;
     return;
   }
@@ -3724,7 +3719,7 @@ async function hostNotice(eng, line) {
     /* Not referenced: the old browsing context "will not be used by the new Document" (HTML §7.1.3.2's note)
        and the emitting engine discards it after writing this notice, so the opener's handle answers about the
        document it had (its `closed` is true) and nothing holds a proxy for this one. */
-    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, true, null, "u", "null",
+    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, null, "u", "null",
                        "none", "none", 0)._readyP;
     return;
   }
@@ -3772,7 +3767,7 @@ async function hostNotice(eng, line) {
       return;
     }
     /* No creator: engineCreate's grammar for that is `null`, as for the swap arm. */
-    await engineCreate("", navMsg.pageHtml, navMsg, false, f[1], navd.url, true, null, "u", "null",
+    await engineCreate("", navMsg.pageHtml, navMsg, false, f[1], navd.url, null, "u", "null",
                        "none", "none", 1)._readyP;
     return;
   }
@@ -4603,20 +4598,14 @@ const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedR
    holds many documents and a (tab, frame) pair is reused across navigations), so the names are carried, not
    re-derived from a sourceUrl. The list is the waiters, the same set the terminal result is resolved to: every
    browser document that joined the instance is answered with the same analysis, so a snapshot belongs to all
-   of them. Empty is a positive statement: a child navigable the engine announced and a rehydrated recipe
-   have no live caller by construction (`_cold`), and their findings go to the cumulative store alone. */
+   of them. Empty is a positive statement: the instance has no live caller (a child navigable the engine
+   announced, a rehydrated recipe), and its findings go to the cumulative store alone. */
 function engineLiveDocumentIds(eng) {
-  DCHECK(eng._cold === (eng._resolvers.length === 0),
-         "an instance disagrees with itself about whether it has a live caller — `_cold` is declared at " +
-         "engineCreate and the waiter list is what finalize resolves, so a cold engine holding a waiter " +
-         "would answer a document nobody is running, and a live one holding none would merge this page's " +
-         "findings to the moat alone and report the document that asked for them as clean. The one way a " +
-         "LIVE engine loses its waiters is hostClear, which also drops it from the pool and marks it — so " +
-         "this firing says an engine that was dropped is still being driven, and the fix is at the round " +
-         "that kept driving it, not here. That is exactly what it caught: a Clear landing inside " +
-         "streamPartial's own await left a live instance with no waiters, and the merge on the next line " +
-         "aborted the trusted zone rather than reaching the store. streamPartial refuses a dropped engine " +
-         "before it builds this list; a firing here now means some OTHER round is doing what that one was");
+  DCHECK(eng._dropped !== true,
+         "the live documents of an instance a Clear dropped were asked for — hostClear rejects its waiters, so " +
+         "the empty list would read as an instance with no live caller and merge a wiped run's findings to " +
+         "the store; the round that is still driving it must refuse a dropped engine first, as streamPartial " +
+         "does");
   return eng._resolvers.map((w) => {
     DCHECK(w.msg && w.msg.documentId,
            "a live caller waiting on this instance carries no documentId — astDispatch asserts the browser's " +
@@ -4624,6 +4613,12 @@ function engineLiveDocumentIds(eng) {
            "to be merged and would be reported as analysed and empty");
     return String(w.msg.documentId);
   });
+}
+/* Whether an instance has a live caller is its waiter list and nothing else: an instance created for a child
+   navigable or a recipe has none, and a browser document that arrives later for a document it already runs
+   (the routing walk in `admit`) gives it one, so finalize answers that document instead of merging alone. */
+function engineHasLiveCaller(eng) {
+  return eng._resolvers.length !== 0;
 }
 /* The seat for an admission whose document is still on the network, the fourth pool state. `ops.admit()` runs
    at the top of every round, so a suspension inside it would stall the whole Level-1 loop; a declared route's
@@ -4648,7 +4643,7 @@ function admitLoadSeat(what, load) {
                  /* Absent by value rather than omitted, so pool walks that do not check state read `null`
                     and never match a seat (`hostHolderOf`, `hostClusterOf`, `_bestCandidate`, hostClear). */
                  cluster: null, docId: null, topDocId: null, joinedDocIds: [], msg: null, r: null,
-                 _resolvers: [], _cold: true, _readyP: null };
+                 _resolvers: [], _readyP: null };
   seat._readyP = (async () => {
     try { seat.landed = await load(); }
     catch (e) { seat.failed = e; }
@@ -4734,7 +4729,7 @@ async function admitSeatLand(seat) {
        `none`: no parent, no container element and no ancestors, one fact about a top-level page. `cold: true`:
        no caller awaits it, so its findings merge into the cumulative store. Not referenced: nothing holds a
        WindowProxy for a merely declared route, so its frontier may drain. */
-    await engineCreate("", loaded.bytes, msg, true, null, loaded.url, true, null, "u", "null",
+    await engineCreate("", loaded.bytes, msg, true, null, loaded.url, null, "u", "null",
                        "none", "none", 0)._readyP;
     return null;
   }
@@ -4790,7 +4785,7 @@ async function admitSeatLand(seat) {
        a child it creates again arrives as a create notice and is provisioned referenced. This differs from
        `qjs_set_referenced` surviving a teardown, which is one instance's statement about itself across a park;
        here a new instance replaces one whose peers no longer exist. */
-    await engineCreate(doc.code, doc.html, msg, true, null, null, true, null, "u", "null",
+    await engineCreate(doc.code, doc.html, msg, true, null, null, null, "u", "null",
                        "none", "none", 0)._readyP;
     return null;
   }
@@ -5109,7 +5104,7 @@ const _hostOps = {
            sub-frames waiting for their embedder's create notice), so no instance holds a WindowProxy for it and
            its frontier may drain. A cross-origin child created into this instance later is the join arm's
            question, refused there, since the flag can only be stated before the frontier is seeded. */
-        const eng = engineCreate("", job.html, job.msg, job.persist, null, null, false, null, "u",
+        const eng = engineCreate("", job.html, job.msg, job.persist, null, null, null, "u",
                                  "null", "none", "none", 0);
         DCHECK(hostClusterOf(key) === eng,
                "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
@@ -5196,7 +5191,7 @@ const _hostOps = {
         visits: prior ? prior.visits + 1 : 1,
       });
     }
-    if (eng._cold) {
+    if (!engineHasLiveCaller(eng)) {
       /* No live caller (a child document or a rehydrated recipe): its findings merge into the cumulative store
          here. Not caught, so the merge's own contract asserts (_mergeFrontierResult) are seen. */
       DCHECK(typeof self.onFrontierAdvance === "function",
@@ -5284,7 +5279,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
              "is a slot that blocks admission and can never be landed by anybody");
       return { name: null, docId: null, topDocId: null, state: "loading",
                framed: false, routingId: null, heapBytes: null, topWeight: null,
-               cold: !!eng._cold, joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice(),
+               cold: !engineHasLiveCaller(eng), joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice(),
                loadKind: eng.what.kind, settled: !!eng.settled };
     }
     if (eng.state === "booting") {
@@ -5295,7 +5290,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
              "blocks admission while answering nobody");
       return { name: eng.cluster, docId: eng.docId, topDocId: eng.topDocId, state: "booting",
                framed: !!(eng.r && eng.r.frame.parentNode), routingId: eng.r ? eng.r.routingId : null,
-               heapBytes: null, topWeight: null, cold: !!eng._cold, joined: eng._resolvers.length,
+               heapBytes: null, topWeight: null, cold: !engineHasLiveCaller(eng), joined: eng._resolvers.length,
                joinedDocIds: eng.joinedDocIds.slice() };
     }
     /* The working set is read where the pool recorded it (engineRecordFacts takes `workingSetBytes` from the
@@ -5314,7 +5309,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
     return { name: eng.r.name, docId: eng.docId, topDocId: eng.topDocId, state: eng.state,
              framed: !!eng.r.frame.parentNode,
              routingId: eng.r.routingId, heapBytes: eng.residentBytes, topWeight: eng.topWeight,
-             cold: !!eng._cold, joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice() };
+             cold: !engineHasLiveCaller(eng), joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice() };
   });
   /* No reservation outlives its provisioning, asserted as arithmetic: a reservation is made once and takes one
      exit (rooted or failed), so `made - rooted - failed` provisionings are running and the pool may hold no more
