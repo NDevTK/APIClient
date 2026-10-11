@@ -292,6 +292,11 @@ CssPx used_value_abs_offset_trailing_px(lxb_dom_element_t *el, bool vertical);
    against this, so core/layout/flow_position.c can ask the position before the solve runs. */
 bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, bool *trailing);
 
+/* Whether the same solve's tentative pass on the block axis reads CSS 2.1 §10.6.4's content-based height
+   (core/layout/block_flow.h's `block_flow_auto_height`): a computed `height` of `auto` with `top` or `bottom`
+   `auto`. The solve asserts each read against the same test over its own length. */
+bool used_value_abs_auto_height_read(lxb_dom_element_t *el);
+
 /* CSS 2.2 §9.4.3 "Relative positioning"' used translation on one axis: the signed distance a relatively
    positioned box is shifted by after normal flow places it, the used `left` horizontally and `top` vertically
    ("'Left' moves the boxes to the right", "'Top' moves the boxes down"). §9.4.3 states a pair, "the used

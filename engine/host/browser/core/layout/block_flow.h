@@ -538,6 +538,11 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
    established the property behaves as auto, which was true of the one caller there was. */
 CssPx block_flow_auto_height(lxb_dom_element_t *el);
 
+/* The same height asked without a drive of its own: false ("not yet") when the walk deferred a question, with
+   `*out` unwritten and the question suspended on the current job. `block_flow_auto_height` is this ask inside
+   a drive. */
+bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out);
+
 /* CSS 2 §9.4.1's vertical placement of `el`: the distance from the top content edge of `el`'s containing block
    to `el`'s top border edge, in CSS pixels; the caller adds the containing block's origin plus its top border
    and padding. `el` must be an in-flow block-level box whose containing block is §10.1's second case

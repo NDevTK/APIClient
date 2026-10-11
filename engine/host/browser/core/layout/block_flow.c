@@ -2348,7 +2348,7 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
     return true;
 }
 
-CssPx block_flow_auto_height(lxb_dom_element_t *el)
+bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
 {
     CssPx unused = css_px(0.0);
     bool found = false;
@@ -2367,11 +2367,7 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
        returns here, and so does the `column` arm's §9.9.1 "Flex Container Intrinsic Main Sizes" max-content
        main size. The VERTICAL WRITING MODES still crash by name and return FALSE, and their fall-through into
        §10.6.3's stack below is the release arm this walk already had for them. */
-    if (flex) {
-        CssPx cross;
-
-        if (bf_flex_auto_block_size(el, &cross)) return cross;
-    }
+    if (flex && bf_flex_auto_block_size(el, out)) return true;
     if (grid)
         DFAIL("css-grid-1 §11 \"Grid Layout Algorithm\" sizes a GRID CONTAINER's ROWS and its auto height is "
               "the sum of the row track sizes plus the gutters, not CSS 2.1 §10.6.3's stack of block-level "
@@ -2383,9 +2379,21 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
               "context' — so there is no block formatting context inside it for this walk to run over. The "
               "caller is core/layout/used_value.c, which classifies the box type before asking, so the two "
               "lists have come apart");
-    b = bf_layout_driven(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE);
+    if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE, &b)) return false;
     DCHECK(!found, "the content-height walk reported placing the box it was not looking for");
-    return b.content_h;
+    *out = b.content_h;
+    return true;
+}
+
+CssPx block_flow_auto_height(lxb_dom_element_t *el)
+{
+    LayoutJobDrive d;
+    CssPx h;
+
+    layout_job_drive_begin(&d);
+    while (!block_flow_auto_height_ask(el, &h)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    return h;
 }
 
 bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)

@@ -3531,6 +3531,27 @@ static bool uv_abs_static_cb_is_rtl(lxb_dom_element_t *el)
     return rtl;
 }
 
+/* Whether §10.6.4's solve over `size_len` reads the content-based height: the all-three-`auto` entry, rule 1
+   and rule 3, which are a `height` of `auto` with `top` or `bottom` `auto`. Rule 5 solves for the height. */
+static bool uv_abs_reads_auto_height(lxb_dom_element_t *el, CssLength size_len)
+{
+    return uv_len_is_auto(size_len) &&
+           (uv_len_is_auto(css_computed_length(el, "top")) || uv_len_is_auto(css_computed_length(el, "bottom")));
+}
+
+/* The content-based height as `uv_abs_solve` reads it, asserting that `uv_abs_reads_auto_height` reports this
+   read for the solve's own `size_len`, which core/layout/flow_position.c's out-of-flow origin asks before the
+   solve runs (for the tentative pass's computed `height`; §10.7's re-runs pass a length). */
+static CssPx uv_abs_auto_height(lxb_dom_element_t *el, CssLength size_len)
+{
+    char nbuf[160];
+
+    DCHECKF(uv_abs_reads_auto_height(el, size_len),
+            "%s: the solve read the content-based height and `uv_abs_reads_auto_height` does not report that "
+            "read", box_subject(el, nbuf, sizeof nbuf));
+    return block_flow_auto_height(el);
+}
+
 bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, bool *trailing)
 {
     CssLength lb, la;
@@ -3543,6 +3564,16 @@ bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, b
     la = css_computed_length(el, vertical ? "bottom" : "right");
     *trailing = !vertical && uv_abs_static_cb_is_rtl(el);
     return uv_len_is_auto(lb) && uv_len_is_auto(la);
+}
+
+bool used_value_abs_auto_height_read(lxb_dom_element_t *el)
+{
+    char nbuf[160];
+
+    DCHECKF(el != NULL && uv_box_kind(el) == UV_BOX_ABS,
+            "%s: CSS 2.1 §10.6.4's content-based height is read only by an absolutely positioned box's solve",
+            box_subject(el, nbuf, sizeof nbuf));
+    return uv_abs_reads_auto_height(el, css_computed_length(el, "height"));
 }
 
 /* The static position as `uv_abs_solve` reads it, asserting that `used_value_abs_static_position_read`
@@ -3623,7 +3654,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
                choose between because a block axis has no bidirectional order to reverse. */
             r.before = uv_abs_static_position(el, vertical, false);
             content = vertical
-                          ? block_flow_auto_height(el)
+                          ? uv_abs_auto_height(el, size_len)
                           : uv_abs_shrink_to_fit(
                                 el, css_px_sub(css_px_sub(css_px_sub(free_space, r.before), r.m_before),
                                                r.m_after));
@@ -3710,7 +3741,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
                The available width is §10.3.7's own — "this is found by solving for 'width' after setting
                'left' (in case 1) or 'right' (in case 3) to 0" — so the term taken out for THIS rule's `auto`
                offset is a literal zero and `right` is declared. */
-            content = vertical ? block_flow_auto_height(el)
+            content = vertical ? uv_abs_auto_height(el, size_len)
                                : uv_abs_shrink_to_fit(el, css_px_sub(css_px_sub(free_space, fixed), r.after));
             r.before = css_px_sub(css_px_sub(css_px_sub(free_space, fixed), content), r.after);
         } else if (a_before && a_after) {
@@ -3732,7 +3763,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
             /* Rule 3: "`width` and `right` are `auto` and `left` is not `auto`, then the width is
                shrink-to-fit. Then solve for `right`", over the available width "found by solving for `width`
                after setting … `right` (in case 3) to 0". */
-            content = vertical ? block_flow_auto_height(el)
+            content = vertical ? uv_abs_auto_height(el, size_len)
                                : uv_abs_shrink_to_fit(el, css_px_sub(css_px_sub(free_space, fixed), r.before));
             r.after = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), content);
         } else if (a_before) {
