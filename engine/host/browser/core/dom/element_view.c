@@ -1165,7 +1165,10 @@ static void ev_border_area_px(const EvTarget *t, CssPx out[4])
         w = first.width;
         h = first.height;
     } else {
-        FlowPoint o = flow_border_box_origin(el);
+        /* A table element's border area is its TABLE box's (`ev_table_fragments`), which is not at the
+           element's origin when a caption is stacked above it. */
+        FlowPoint o = element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_TABLE ? flow_table_box_origin(el)
+                                                                                     : flow_border_box_origin(el);
 
         w = used_value_border_edge_px(el, false);
         h = used_value_border_edge_px(el, true);
@@ -1271,11 +1274,8 @@ ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
    the same property list.
    A CAPTION NEEDS NO ENTRY OF ITS OWN EITHER, for CSS 2.1 §17.4's own reason: "The caption boxes are block-level
    boxes that retain their own content, padding, margin, and border areas, and are rendered as normal block boxes
-   inside the table wrapper box", so the ordinary block-box derivation is the right one for it. What a caption
-   still lacks is its POSITION, which core/layout/flow_position.c refuses by name — CSS 2.1 §9.4.1 "Block
-   formatting contexts"' stack over the WRAPPER's own child box list — so a table that has one crashes THERE, at
-   the earlier subproblem, exactly as the inline arm crashes inside core/layout/used_value.h for a box CSS 2.1 §10
-   "Visual formatting model details" does not size.
+   inside the table wrapper box", so the ordinary block-box derivation is the right one for it. The table box's
+   own position is `flow_table_box_origin`, below the captions on the wrapper's stack.
    NAMED RESIDUAL — THE ORDER. Step 3 wants its rectangles "in content order" and CSSOM VIEW defines no such term;
    the only ordering the box structure carries is CSS 2.1 §17.4's own "(in document order)" over the WRAPPER's
    children, and a `<caption>` element may stand before or after the table element's internal boxes. WHAT IS NOT
@@ -1286,9 +1286,7 @@ ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
    with two consumers rather than a child scan written here, which would be a second copy of CSS 2.1 §17.2.1
    "Anonymous table objects"' classification. HOW ITS ABSENCE WOULD SHOW: `getClientRects()` on a `table` whose
    first child generates a caption box answers with that caption's rectangle SECOND where a browser answers with
-   it first — an ordering visible in the returned DOMRectList and in nothing else. It is not observable from this
-   engine today, because the same caption's position is refused by name one component over, so no list of more
-   than one member is produced at all.
+   it first — an ordering visible in the returned DOMRectList and in nothing else.
    Answers the count and stores a newly allocated array of that many ELEMENTS at `*out`, which the caller owns and
    frees. The count is never zero — the table box is always on it. */
 static size_t ev_table_fragments(lxb_dom_element_t *el, lxb_dom_element_t ***out)
@@ -1375,9 +1373,8 @@ static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
        the tail are the same call on different targets rather than two assemblies: CSS 2.1 §17.4's
        declaration split (`ev_table_fragments`) makes the table element's border and padding the table box's,
        so a table with no caption answers with exactly the rectangle the single-fragment tail would have
-       produced — the list grew a member, the measurement did not change. A CAPTION'S rectangle is an ordinary block box's and crashes
-       inside core/layout/flow_position.c for its POSITION, which is the earlier subproblem and the whole of
-       what a caption still waits on. */
+       produced — the list grew a member, the measurement did not change. A CAPTION'S rectangle is an ordinary
+       block box's. */
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE) {
         lxb_dom_element_t **frags = NULL;
         size_t n = ev_table_fragments(el, &frags), i;

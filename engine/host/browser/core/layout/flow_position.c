@@ -161,20 +161,8 @@ typedef struct {
 /* `el` is the box being placed, not the table: the refusals below name it. */
 static void fp_table_frame_build(lxb_dom_element_t *el, FpTableFrame *out)
 {
-
     out->table = table_box_table_of(el);
-    DCHECK(!table_wrapper_owns_property("border-top-width") && !table_wrapper_owns_property("padding-top") &&
-               !table_wrapper_owns_property("padding-left") && table_wrapper_owns_property("margin-top"),
-           "CSS 2.1 §17.4 Tables in the visual formatting model's declaration split is what makes the table "
-           "box's border-box origin the same point as the table wrapper box's: the wrapper takes the table "
-           "element's `margin-*` and the INITIAL value of its border and padding, and the table box takes the "
-           "border and padding and the initial `margin-*`. This arithmetic reads the table element's own border "
-           "and padding as the TABLE BOX's and adds nothing for the wrapper — so if that list has moved, the "
-           "two boxes no longer coincide and every box below is offset by a border nobody accounted for");
-    /* §17.4's wrapper is what §9.4.1 stacks, so the table element's origin is an ordinary recursion, and the
-       table box sits below the wrapper's top captions on the wrapper's own stack. */
-    out->origin = flow_border_box_origin(out->table);
-    out->origin.y = css_px_add(out->origin.y, block_flow_table_box_top(out->table));
+    out->origin = flow_table_box_origin(out->table);
     table_grid_build(out->table, &out->grid);
     table_widths(out->table, &out->grid, &out->widths);
     table_heights(out->table, &out->grid, &out->heights);
@@ -1021,6 +1009,25 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 
 /* CSS 2 §8.1 "Box dimensions"' padding box origin: the border box origin moved inward by the leading border on
    each axis, derived from `flow_border_box_origin` so an unplaceable box crashes there first. */
+FlowPoint flow_table_box_origin(lxb_dom_element_t *table)
+{
+    FlowPoint p;
+
+    DCHECK(!table_wrapper_owns_property("border-top-width") && !table_wrapper_owns_property("padding-top") &&
+               !table_wrapper_owns_property("padding-left") && table_wrapper_owns_property("margin-top"),
+           "CSS 2.1 §17.4 Tables in the visual formatting model's declaration split is what puts the table "
+           "box's border edge on the table wrapper box's content edge: the wrapper takes the table "
+           "element's `margin-*` and the INITIAL value of its border and padding, and the table box takes the "
+           "border and padding and the initial `margin-*`. This arithmetic reads the table element's own border "
+           "and padding as the TABLE BOX's and adds nothing for the wrapper — so if that list has moved, the "
+           "two boxes no longer coincide and every box below is offset by a border nobody accounted for");
+    /* §17.4's wrapper is what §9.4.1 stacks, so the table element's origin is an ordinary recursion, and the
+       table box sits below the wrapper's top captions on the wrapper's own stack. */
+    p = flow_border_box_origin(table);
+    p.y = css_px_add(p.y, block_flow_table_box_top(table));
+    return p;
+}
+
 FlowPoint flow_padding_box_origin(lxb_dom_element_t *el)
 {
     LayoutJobDrive d;

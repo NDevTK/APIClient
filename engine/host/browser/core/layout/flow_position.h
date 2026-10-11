@@ -71,6 +71,12 @@ bool flow_border_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out);
    and css-overflow-3 §2.3 "Scrolling Overflow"'s scrollport ("coincide with its padding box") both need it. */
 FlowPoint flow_padding_box_origin(lxb_dom_element_t *el);
 
+/* The top-left corner of `table`'s TABLE box's border box. `flow_border_box_origin(table)` is its table wrapper
+   box's, which CSS 2.1 §17.4 "Tables in the visual formatting model" gives the element's margins; the table box
+   has the element's border and padding, starts at the wrapper's content edge and sits below the captions
+   §17.4.1 puts above it. `table` must generate a table wrapper box (asserted). */
+FlowPoint flow_table_box_origin(lxb_dom_element_t *table);
+
 /* CSS 2.1 §10.3.7's and §10.6.4's static position: the distance from the leading edge of absolutely positioned
    `el`'s containing block (§10.1's third or fourth case) to the leading margin edge of the hypothetical box, the
    element "if its specified `position` value had been `static` and its specified `float` had been `none`".
