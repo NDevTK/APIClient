@@ -405,24 +405,6 @@ static bool mth_type_is_valid(const CssMathType *t, CssMathProduction ctx)
     return false;
 }
 
-/* ---- §10.9.2 "Infinities, NaN, and Signed Zero" ---------------------------------------------------------- */
-
-/* §10.9.2: "When comparing 0⁺ and 0⁻, 0⁻ is less than 0⁺. For example, min(0⁺, 0⁻) must produce 0⁻". C leaves
-   `fmin(-0.0, 0.0)` unspecified, so the comparison is written rather than borrowed. NaN is NOT decided here —
-   every caller tests for it first, because §10.5.1's note makes NaN infectious in every function while a
-   comparison would simply answer false. */
-static bool mth_less(double a, double b)
-{
-    DCHECK(a == a && b == b,
-           "css-values-4 §10.9.2's zero-aware comparison was handed a NaN. §10.5.1's note makes NaN INFECTIOUS "
-           "in every math function — \"forcing the function to return NaN if any argument calculation is "
-           "NaN\" — so a NaN must be answered by the caller before any ordering question is asked; deciding it "
-           "here would silently pick the other operand, which is JS's `Math.min` behavior and is exactly the "
-           "divergence that note says CSS does not have");
-    if (a == 0.0 && b == 0.0) return signbit(a) && !signbit(b);
-    return a < b;
-}
-
 /* ---- what a calculation has simplified to (see css_math.h) ----------------------------------------------- */
 
 /* WHY A VALUE HAS NO NUMBER, WHICH IS TWO DIFFERENT ABSENCES AND MUST NOT BE ONE FLAG. Both are carried to the
@@ -1051,7 +1033,7 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
     unsigned n = 0;
     bool last = false, saw_nan = false, saw_inf = false, any_pct = false;
     double fold = 0.0;
-    CssPx facts = css_px(0.0);
+    CssPx facts = css_px(0.0), best = css_px(0.0);
 
     for (;;) {
         MthVal a;
@@ -1071,14 +1053,14 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
             if (mth_is_nan(&a)) saw_nan = true;
             else if (isinf(a.num.px)) saw_inf = true;
             if (kind == 2) fold += a.num.px * a.num.px;
-            else if (n == 0) fold = a.num.px;
             /* §10.5.1's note makes NaN INFECTIOUS in every function, so once one has been seen the result is
-               decided and NO ORDERING IS ASKED. That is not an optimisation: `mth_less` asserts it is never
+               decided and NO ORDERING IS ASKED. That is not an optimisation: the ordering asserts it is never
                handed a NaN, because a comparison that quietly answered false would be JS's `Math.min` behavior,
                and `min(1px, calc(NaN * 1px))` is a page's own value rather than a broken invariant. */
-            else if (saw_nan) { /* the fold below is superseded by §10.5.1's NaN */ }
-            else if (kind == 0) fold = mth_less(a.num.px, fold) ? a.num.px : fold;
-            else fold = mth_less(fold, a.num.px) ? a.num.px : fold;
+            else if (saw_nan) { /* the result below is superseded by §10.5.1's NaN */ }
+            /* The length's own extreme, which keeps the winner's form where the facts' ranges decide it. */
+            else if (n == 0) best = a.num;
+            else best = kind == 0 ? css_px_min(best, a.num) : css_px_max(best, a.num);
         }
         n++;
         if (last) break;
@@ -1106,11 +1088,12 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
            which §10.5.1's note makes strictly stronger ("Math.hypot(Infinity, NaN) will return Infinity" is
            named there as the JS behavior CSS does not share). */
         fold = saw_nan ? NAN : (saw_inf ? INFINITY : sqrt(fold));
+        out->num = css_px_opaque(facts, fold);
     } else if (saw_nan) {
-        fold = NAN;
+        out->num = css_px_opaque(facts, NAN);
+    } else {
+        out->num = best;
     }
-    out->num = facts;
-    out->num = css_px_opaque(out->num, fold);
     return true;
 }
 
@@ -1176,21 +1159,21 @@ static bool mth_clamp(Mth *m, MthVal *out)
         return true;
     }
     {
-        double v = arg[1].num.px;
-        CssPx facts = arg[1].num;
+        bool nan = mth_is_nan(&arg[1]);
+        CssPx facts = arg[1].num, v = arg[1].num;
 
+        /* §10.2's max(MIN, min(VAL, MAX)), over the lengths' own extremes and after §10.5.1's NaN. */
         if (present[2]) {
             facts = mth_join(facts, arg[2].num, 0.0);
-            if (mth_is_nan(&arg[2]) || v != v) v = NAN;
-            else if (mth_less(arg[2].num.px, v)) v = arg[2].num.px;
+            nan = nan || mth_is_nan(&arg[2]);
+            if (!nan) v = css_px_min(v, arg[2].num);
         }
         if (present[0]) {
             facts = mth_join(facts, arg[0].num, 0.0);
-            if (mth_is_nan(&arg[0]) || v != v) v = NAN;
-            else if (mth_less(v, arg[0].num.px)) v = arg[0].num.px;
+            nan = nan || mth_is_nan(&arg[0]);
+            if (!nan) v = css_px_max(arg[0].num, v);
         }
-        out->num = facts;
-        out->num = css_px_opaque(out->num, v);
+        out->num = nan ? css_px_opaque(facts, NAN) : v;
         out->pct = 0.0;
         out->pct_term = false;
     }

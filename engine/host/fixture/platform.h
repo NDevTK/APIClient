@@ -513,6 +513,12 @@ static const char HTML_PLATFORM[] =
     "soP.appendChild(soC); document.body.appendChild(soP);"
     "fetch('/api/snapoffset?v=' + (soC.offsetLeft === 10 ? 'is10' : 'wrong'));"
     "fetch('/api/snapdelta?l=' + soC.offsetLeft + '&w=' + soC.offsetWidth);"
+    /* css-values-4 §10.2 "Comparison Functions": `min(50vw, 50vw + 100px)` is 50vw in every world, so the two
+       widths differ by the constant 300 and their `long` difference is 300 at every viewport. */
+    "var mmA = document.createElement('p'); mmA.style.setProperty('width', 'min(50vw, 50vw + 100px)');"
+    "var mmB = document.createElement('p'); mmB.style.setProperty('width', 'calc(50vw - 300px)');"
+    "document.body.appendChild(mmA); document.body.appendChild(mmB);"
+    "fetch('/api/mathextreme?v=' + (mmA.offsetWidth - mmB.offsetWidth === 300 ? 'is300' : 'wrong'));"
     /* §4.8.3's `[CEReactions, ReflectSetter] attribute unsigned long width`: the setter is HTML §2.6.1's
        reflection and the getter is determine-the-dimensions, two different questions this pair holds apart.
        core/css/css_presentational_hints.c carries HTML §15.4.3 "Attributes for embedded content and images",

@@ -273,7 +273,8 @@ CssPx css_px_scale(CssPx a, double k);
    is a function of both viewport axes and not of whichever one is smaller at 1280 x 720.
    Where both operands' forms are known and the facts' ranges put their difference on one side of zero in
    every world, the winner is the same at every viewport, and the result keeps the winner's form (the set is
-   still the union). Otherwise the form is opaque. */
+   still the union). Otherwise the form is one atom. Two zeros are ordered by css-values-4 §10.9.2, so these
+   are also §10.2's min() and max(); a NaN operand is the caller's to answer. */
 CssPx css_px_max(CssPx a, CssPx b);
 CssPx css_px_min(CssPx a, CssPx b);
 /* A PRODUCT AND A QUOTIENT OF TWO OPERANDS, each carrying BOTH their facts. What a `CssPx` carries is a NUMBER

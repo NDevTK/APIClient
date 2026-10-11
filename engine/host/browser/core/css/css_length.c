@@ -146,13 +146,13 @@ static int css_px_mono_cmp(const void *x, const void *y)
 static unsigned g_css_px_atom;
 
 /* `out`'s form becomes one fresh atom: an opaque function of the facts in `out.env`, named so that every place
-   this one result is carried to can still subtract it. */
+   this one result is carried to can still subtract it. A non-finite example has no form and stays opaque. */
 static void css_px_form_atom(CssPx *out)
 {
     DCHECK(out->env != CSS_ENV_NONE, "an atom was minted for a length derived from no fact");
-    DCHECKF(isfinite(out->px), "an atom was minted over the non-finite example %g, which no form evaluates to",
-            out->px);
     DCHECK(g_css_px_atom != UINT_MAX, "the atom counter ran out of names");
+    out->form.known = false;
+    if (!isfinite(out->px)) return;
     out->form.known = true;
     out->form.n = 1;
     out->form.c = 0.0;
@@ -316,6 +316,15 @@ static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
     }
 }
 
+/* css-values-4 §10.9.2 Infinities, NaN, and Signed Zero: "When comparing 0⁺ and 0⁻, 0⁻ is less than 0⁺". C
+   leaves `fmin(-0.0, 0.0)` unspecified. NaN is the caller's to answer first. */
+static bool css_px_less(double a, double b)
+{
+    DCHECK(a == a && b == b, "two lengths were ordered over a NaN, which has no order: css-values-4 §10.5.1's note makes NaN infectious in every math function, so its caller answers it first");
+    if (a == 0.0 && b == 0.0) return signbit(a) && !signbit(b);
+    return a < b;
+}
+
 /* THE LARGER (AND THE SMALLER) EXAMPLE, CARRYING BOTH OPERANDS' FACTS — which is why this is `css_px_combine`
    and not `a.px > b.px ? a : b`. Returning the winner whole would drop the loser's fact, and the loser is the
    arm the OTHER viewport takes: css-sizing §5's floor picks the declared length at 1280 and the four-term
@@ -326,7 +335,8 @@ static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
    with that decision, which is what makes it falsifiable here. `want_hi` picks the larger. */
 static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
 {
-    CssPx out = css_px_combine(a, b, want_hi ? (a.px > b.px ? a.px : b.px) : (a.px < b.px ? a.px : b.px));
+    bool a_wins = want_hi ? css_px_less(b.px, a.px) : css_px_less(a.px, b.px);
+    CssPx out = css_px_combine(a, b, a_wins ? a.px : b.px);
     const CssPx *win = NULL;
     double lo, hi, tol;
 
@@ -350,7 +360,6 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
             "an extreme over %g and %g was decided for every world by the facts' ranges (a - b in [%g, %g]) "
             "and the examples disagree with that decision — one operand's form is not the function its "
             "example was computed by", a.px, b.px, lo, hi);
-    out.px = win->px;
     css_px_form_lin(&out, *win, 1.0, css_px(0.0), 0.0);
     return out;
 }
