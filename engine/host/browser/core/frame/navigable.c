@@ -846,6 +846,8 @@ typedef struct {
     char *integrity_policy;
     /* …and §7.1.7's referrer policy item, for the same two wires; NULL for a container that states none. */
     char *referrer_policy;
+    /* …and the CSP list's REPORT policies, for `csp`'s reason; NULL for none. */
+    char *csp_report_only;
     /* PERMISSIONS POLICY §9.1's TWO RESPONSE HEADER FIELD VALUES, copied for the same reason `csp` is: HTML
        §7.5.1 creates the Document from them and the creation is finished on the far side of however many
        suspensions the parse takes, by which time the header list this frame read them out of is gone. NULL for
@@ -899,6 +901,7 @@ static void nav_create_free(NavCreateWork *w)
     free(w->csp); free(w->self_origin); free(w->coep_endpoint); free(w->coep_report_only_endpoint);
     free(w->integrity_policy);
     free(w->referrer_policy);
+    free(w->csp_report_only);
     free(w->permissions_policy); free(w->permissions_policy_report_only);
     free(w->decoded);
     free(w);
@@ -1006,6 +1009,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
     w->coep_report_only_endpoint = nav_strdup(policy.embedder.report_only_endpoint);
     w->integrity_policy         = nav_strdup(policy.integrity_policy);
     w->referrer_policy          = nav_strdup(policy.referrer_policy);
+    w->csp_report_only          = nav_strdup(policy.csp_report_only);
     w->permissions_policy       = nav_strdup(permissions_policy.enforced);
     w->permissions_policy_report_only = nav_strdup(permissions_policy.report_only);
     w->coep_value               = policy.embedder.value;
@@ -1110,7 +1114,7 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
     }
     /* THE CONTAINER, REBUILT FROM THE ITEMS THIS RECORD COPIED. It is assembled here rather than held as a
        struct because what a struct of borrowed pointers survives is a call and not a park. */
-    policy = serialized_policy_container(w->csp, w->self_origin,
+    policy = serialized_policy_container(w->csp, w->csp_report_only, w->self_origin,
                                          serialized_embedder_policy(w->coep_value, w->coep_endpoint,
                                                                     w->coep_report_only_value,
                                                                     w->coep_report_only_endpoint),
@@ -1346,6 +1350,7 @@ enum {
     NAV_LOAD_ARG_URL,                          /* §7.4.5's ENTRY'S URL — the address this job was enqueued with */
     NAV_LOAD_ARG_INITIATOR_ORIGIN,             /* §7.4.2.2's initiatorOriginSnapshot, as a handle */
     NAV_LOAD_ARG_CSP,                          /* §7.1.7's clone of the initiator's container: its CSP text */
+    NAV_LOAD_ARG_CSP_REPORT_ONLY,              /* …and that list's report policies, "" for none */
     NAV_LOAD_ARG_SELF_ORIGIN,                  /* …and CSP §2.2's self-origin that list is paired with */
     NAV_LOAD_ARG_ABOUT_BASE,                   /* §7.4.5's aboutBaseURL, or JS_NULL for a destination that fetches */
     NAV_LOAD_ARG_COEP,                         /* §7.1.4's four items of that same container, as §7.1.4's tokens */
@@ -1624,6 +1629,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        actually created with, and the one §7.4.5 reads the CSP-derived sandboxing flags off. */
     SerializedPolicyContainer policy;
     const char *inherited_csp = NULL;
+    const char *inherited_csp_report_only = NULL;
     const char *inherited_integrity = NULL;
     const char *inherited_referrer_policy = NULL;
     const char *inherited_self = NULL;
@@ -1653,6 +1659,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        traversable's fetch, which is the only place §7.4.5 obtains one. See below. */
     OpenerPolicy response_coop;
     char *resp_csp = NULL;   /* owned by header_list_get and freed with free(), NOT a JS_ToCString */
+    char *resp_csp_report_only = NULL;   /* §2.2.2's second get, owned the same way */
     /* SUBRESOURCE INTEGRITY §3.8.1 "Parse Integrity-Policy headers"' enforcing header, read off THIS response
        beside its CSP for the same reason and with the same ownership. */
     char *resp_integrity = NULL;
@@ -1877,6 +1884,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
            one map entry and could not express two `Content-Security-Policy` headers at all. */
         resp_csp = header_list_get(&response_headers, "content-security-policy");
+        resp_csp_report_only = header_list_get(&response_headers, "content-security-policy-report-only");
         resp_integrity = header_list_get(&response_headers, "integrity-policy");
         resp_referrer_policy = fetch_referrer_policy_of_response(&response_headers);
         /* THE SAME `get`, FOR THE HEADER THAT DECIDES WHAT THIS DOCUMENT MAY USE. It is read HERE, at the child
@@ -1994,6 +2002,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "container travels whole or it is not a container, and every operation that enqueues a load has a "
            "document whose container holds one (initially a new embedder policy, never absent)");
     inherited_csp  = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_CSP));
+    DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_CSP_REPORT_ONLY)),
+           "a document load ran with no report-only half of its initiator's CSP list on its job — the enqueue "
+           "writes the creator's text or \"\" for none, so a non-string is an enqueue that stopped writing it");
+    inherited_csp_report_only = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_CSP_REPORT_ONLY));
     inherited_self = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_SELF_ORIGIN));
     inherited_coep = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_COEP));
     inherited_coep_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_COEP_ENDPOINT));
@@ -2033,8 +2045,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        the documents whose container is INHERITED rather than obtained from a response — a `data:` or
        cross-origin child would load a script its creator's policy refuses while a SAME-INSTANCE sibling of
        the same document was refused it, and the two disagreeing was the only way to see it. */
-    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep, inherited_integrity,
-                                            inherited_referrer_policy);
+    inherited = serialized_policy_container(inherited_csp, inherited_csp_report_only, inherited_self,
+                                            inherited_ep, inherited_integrity, inherited_referrer_policy);
     /* §7.4.2.2 "Beginning navigation"'s ABOUT BASE URL for THIS navigation. For a url that matches
        `about:blank` or is `about:srcdoc`, its step is "Set documentState's about base URL to
        initiatorBaseURLSnapshot" — which is why the INITIATOR's base URL rides the job and is used only when
@@ -2121,7 +2133,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     CHECK(response_self != NULL, "navigable: OOM stating CSP §2.2.2's self-origin for a navigation response");
     /* §2.2.2's pair for this load's own response: its policies and that self-origin, beside §7.1.4's item
        obtained just above. */
-    response = serialized_policy_container(resp_csp, response_self,
+    response = serialized_policy_container(resp_csp, resp_csp_report_only, response_self,
                                            serialized_embedder_policy_of(&response_ep), resp_integrity,
                                            resp_referrer_policy ? resp_referrer_policy : "");
     /* §7.1.7's DETERMINE NAVIGATION PARAMS POLICY CONTAINER, WHOSE FIRST ARGUMENT THE SECTION NAMES
@@ -2327,6 +2339,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        unconditionally because the job always carries a container: the conversions above are the only
        producers of these pointers and none of them is conditional. */
     JS_FreeCString(ctx, inherited_csp);
+    JS_FreeCString(ctx, inherited_csp_report_only);
     JS_FreeCString(ctx, inherited_integrity);
     if (inherited_referrer_policy) JS_FreeCString(ctx, inherited_referrer_policy);
     JS_FreeCString(ctx, inherited_self);
@@ -2340,6 +2353,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        fetched body's own note states one screen down, and the same reason. */
     JS_FreeCString(ctx, resource);
     free(resp_csp);
+    free(resp_csp_report_only);
     free(resp_integrity);
     free(resp_referrer_policy);
     free(resp_pp);
@@ -2650,7 +2664,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
        hand-written enumeration is two copies of one number with only one of them ever read. */
     JSValueConst argv[NAV_LOAD_ARG_COUNT];
     JSValue fn, url, org, csp, self, about, prov, drv, pin, res;
-    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol, reqpol, initdoc;
+    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol, reqpol, initdoc, cspro;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
@@ -2696,6 +2710,8 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
            "that read one off the navigable being loaded instead of carrying its own");
     csp = JS_NewString(ctx, inherit_policy.csp ? inherit_policy.csp : "");
     CHECK(!JS_IsException(csp), "the document-load job's inherited policy could not be allocated");
+    cspro = JS_NewString(ctx, inherit_policy.csp_report_only ? inherit_policy.csp_report_only : "");
+    CHECK(!JS_IsException(cspro), "the document-load job's inherited report-only policy could not be allocated");
     self = JS_NewString(ctx, inherit_policy.self_origin);
     CHECK(!JS_IsException(self), "the document-load job's inherited self-origin could not be allocated");
     /* §7.1.4'S ITEM, ALL FOUR OF IT, BECAUSE §7.1.7'S CLONE MOVES A CONTAINER WHOLE. The two VALUES ride as the
@@ -2828,6 +2844,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[NAV_LOAD_ARG_URL] = url;
     argv[NAV_LOAD_ARG_INITIATOR_ORIGIN] = org;
     argv[NAV_LOAD_ARG_CSP] = csp;
+    argv[NAV_LOAD_ARG_CSP_REPORT_ONLY] = cspro;
     argv[NAV_LOAD_ARG_SELF_ORIGIN] = self;
     argv[NAV_LOAD_ARG_ABOUT_BASE] = about;
     argv[NAV_LOAD_ARG_COEP] = coep;
@@ -2850,6 +2867,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, refpol);
     JS_FreeValue(ctx, pin);
+    JS_FreeValue(ctx, cspro);
     JS_FreeValue(ctx, drv);
     JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);

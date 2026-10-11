@@ -3083,9 +3083,11 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
    "Loading HTML documents" feeds a parser into it, so step 5's "enforce the policy" appends to an existing list;
    here the record is built after the parse, so the parser's `<meta>`s are appended as one batch. A `<meta>` a
    script inserts later goes through DOM §4.2.3's insertion steps to document_meta_csp_inserted below, which performs
-   step 5 as CSP §2.2's append. */
-PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
-                                     SerializedEmbedderPolicy embedder, const char *integrity_policy)
+   step 5 as CSP §2.2's append. `csp_report_only` is the response's `Content-Security-Policy-Report-Only`
+   (or the creator's clone of it), which no `<meta>` adds to. */
+PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const char *csp_report_only,
+                                     const Origin *self_origin, SerializedEmbedderPolicy embedder,
+                                     const char *integrity_policy)
 {
     lxb_dom_node_t *cur;
     char *acc = NULL;
@@ -3138,7 +3140,8 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
         /* The merged list takes one self-origin, the created-with policy's: CSP §3.3 delivers a meta policy inside
            the response this document came from, so §2.2.2's "response's URL's origin" is the same for both halves.
            §7.1.4's item passes through untouched, since a `<meta http-equiv>` delivers only a CSP policy. */
-        PolicyContainer *p = policy_container_new(acc, self_origin, NULL, embedder, integrity_policy);
+        PolicyContainer *p = policy_container_new(acc, csp_report_only, self_origin, NULL, embedder,
+                                                  integrity_policy);
         free(acc);
         return p;
     }
@@ -4413,8 +4416,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "one cannot resolve `'self'` and would report every one of its own scripts as blocked by its own "
            "policy. §7.1.7's determine step answers this for every creating operation and always with a "
            "container, so an absence here is a caller that did not run it");
-    d->policy = document_policy_new(dom, policy.csp, origin_parse(policy.self_origin), policy.embedder,
-                                    policy.integrity_policy);
+    d->policy = document_policy_new(dom, policy.csp, policy.csp_report_only, origin_parse(policy.self_origin),
+                                    policy.embedder, policy.integrity_policy);
     /* §7.1.5's active sandboxing flag set, as the creating operation decided it: §7.2's creation flags for the
        initial about:blank, §7.4.5's final flag set for a navigated Document. Beside the policy container because
        §7.5.1 hands the Document both together, and not derived from it: the container contributes only the CSP

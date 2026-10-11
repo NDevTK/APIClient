@@ -374,7 +374,12 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
            "value — the emitting engine writes its container's item onto the `navigable.create` notice and the "
            "zone relays it verbatim, so this is a relay that stopped writing the field. Read as the default it "
            "would send referrers from a child whose creator's policy strips them");
-    return serialized_policy_container_or_none(csp, self_origin,
+    /* Named residual: the report-only half of the inherited CSP list is not on this ABI entry. Not covered: a
+       child whose creator lives in another instance does not inherit its creator's
+       `Content-Security-Policy-Report-Only` policies. Next diff builds: the field on the `navigable.create`
+       notice, qjs_init/qjs_join and mojom, read here. How its absence shows: such a child fires no report-only
+       securitypolicyviolation event where a same-instance sibling fires one. */
+    return serialized_policy_container_or_none(csp, NULL, self_origin,
                                                serialized_embedder_policy(v, coep_endpoint, ro,
                                                                           coep_report_only_endpoint),
                                                /* Named residual: §7.1.7's integrity policy item is not on this
@@ -608,7 +613,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            step 3's CSP list and §7.1.7's create-a-policy-container-from-a-fetch-response step 4 embedder item are
            `np`'s (core/frame/navigation_params.c); this file says which navigable and which realm. */
         SerializedPolicyContainer response =
-            serialized_policy_container(np.csp, origin, serialized_embedder_policy_of(&np.embedder),
+            serialized_policy_container(np.csp, np.csp_report_only, origin, serialized_embedder_policy_of(&np.embedder),
                                         np.integrity_policy, np.referrer_policy);
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
@@ -795,7 +800,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
         /* §3.1.3's ancestor origins for that navigable's document, composed in the peer that holds them. */
         navigable_root_ancestor_origins(cctx, proxy, ancestor_origins);
         SerializedPolicyContainer response =
-            serialized_policy_container(np.csp, origin_serialized(origin_agent()),
+            serialized_policy_container(np.csp, np.csp_report_only, origin_serialized(origin_agent()),
                                         serialized_embedder_policy_of(&np.embedder), np.integrity_policy,
                                         np.referrer_policy);
         SerializedPolicyContainer policy =

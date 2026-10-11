@@ -89,7 +89,10 @@ struct PolicyContainer {
        container TRAVELS as — a clone across an instance or a session is this string, re-parsed — and because a
        report is worth nothing without the policy text it names. */
     char    *csp_text;
-    /* §2.2's CSP LIST, parsed over `csp_text`. Every name and value token is a SLICE of it, so the two fields
+    /* The serialized REPORT policies (§2.2.2's `Content-Security-Policy-Report-Only`), or NULL (OWNED). They are
+       a second text because §2.2's serialization carries no disposition; the list below parses both. */
+    char    *csp_report_text;
+    /* §2.2's CSP LIST, parsed over `csp_text` and then `csp_report_text`. Every name and value token is a SLICE of it, so the two fields
        are one value with one lifetime: free them together and never reallocate the text under the list. */
     CspList  csp;
     char    *referrer_policy;    /* §7.1.7's referrer policy (owned) */
@@ -138,7 +141,7 @@ struct PolicyContainer {
    sentence above, and an under-priced item is not a slow diff — it is a diff that gets SCOPED to a few files,
    lands in those, and leaves the item absent from the producers nobody counted. */
 
-PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
+PolicyContainer *policy_container_new(const char *csp_text, const char *csp_report_text, const Origin *self_origin,
                                       const char *referrer_policy, SerializedEmbedderPolicy embedder,
                                       const char *integrity_policy_text)
 {
@@ -157,6 +160,13 @@ PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_o
        `<meta>` ("a disposition of "enforce"") and a creator's clone of those. */
     csp_list_parse(&p->csp, p->csp_text, p->csp_text ? strlen(p->csp_text) : 0, self_origin,
                    CSP_DISPOSITION_ENFORCE);
+    /* §2.2.2's second extraction: "with a source of "header", and a disposition of "report"", appended after
+       the enforce policies in §2.2.2's own order. */
+    if (csp_report_text && *csp_report_text) {
+        p->csp_report_text = strdup(csp_report_text);
+        CHECK(p->csp_report_text != NULL, "policy container: OOM copying a report-only policy");
+        csp_list_append(&p->csp, p->csp_report_text, strlen(p->csp_report_text), CSP_DISPOSITION_REPORT);
+    }
     /* §7.1.7: "A referrer policy, which is a referrer policy. It is initially the default referrer policy".
        NULL is a creator that states none. */
     p->referrer_policy = strdup(referrer_policy ? referrer_policy : FETCH_DEFAULT_REFERRER_POLICY);
@@ -221,7 +231,7 @@ PolicyContainer *policy_container_clone(const PolicyContainer *src)
            every READER of this container will actually see is the only version of this question worth asking.
            A clone whose source states no policy has none here either, and both sides are then §3.8's "a new
            integrity policy" — equal, so the assert holds for that arm too rather than being skipped for it. */
-        PolicyContainer *clone = policy_container_new(src->csp_text, src->csp.self_origin,
+        PolicyContainer *clone = policy_container_new(src->csp_text, src->csp_report_text, src->csp.self_origin,
                                                      src->referrer_policy,
                                                      serialized_embedder_policy_of(&src->embedder),
                                                      src->integrity_policy_text);
@@ -299,6 +309,10 @@ void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_
     if (old_len) p->csp_text[old_len++] = ',';
     memcpy(p->csp_text + old_len, serialized_policy, add_len + 1);
     csp_list_parse(&p->csp, p->csp_text, old_len + add_len, self_origin, CSP_DISPOSITION_ENFORCE);
+    /* The report policies are re-appended after the re-parse: their text did not move, and the meta policy is
+       an enforce one, so the count below still grows by exactly the one appended. */
+    if (p->csp_report_text)
+        csp_list_append(&p->csp, p->csp_report_text, strlen(p->csp_report_text), CSP_DISPOSITION_REPORT);
     /* THE INVARIANT, AT ITS ORIGIN: the list GREW BY ONE. It is the whole of "every delivery appends and none
        replaces" made mechanical — a replace lands on `n_before`, a drop lands below it, and a policy that
        re-parsed as several lands above it. §2.2.2's "if policy's directive set is not empty, append policy"
@@ -321,6 +335,7 @@ void policy_container_free(PolicyContainer *p)
     if (!p) return;
     csp_list_free(&p->csp);   /* frees the parse's arrays; the text it points into is freed next */
     free(p->csp_text);
+    free(p->csp_report_text);
     free(p->referrer_policy);
     /* §7.1.4's TWO ENDPOINT STRINGS — the other half of the obligation policy_container_new took on. This line
        and the adopt in the constructor are read together: an item owned by one and not released by the other
@@ -332,6 +347,8 @@ void policy_container_free(PolicyContainer *p)
 }
 
 const char *policy_container_csp(const PolicyContainer *p) { return p ? p->csp_text : NULL; }
+
+const char *policy_container_csp_report_only(const PolicyContainer *p) { return p ? p->csp_report_text : NULL; }
 
 const CspList *policy_container_csp_list(const PolicyContainer *p) { return p ? &p->csp : NULL; }
 
@@ -364,7 +381,8 @@ const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyCont
     return p ? &p->integrity_policy : NULL;
 }
 
-SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
+SerializedPolicyContainer serialized_policy_container(const char *csp, const char *csp_report_only,
+                                                     const char *self_origin,
                                                      SerializedEmbedderPolicy embedder,
                                                      const char *integrity_policy,
                                                      const char *referrer_policy)
@@ -382,6 +400,7 @@ SerializedPolicyContainer serialized_policy_container(const char *csp, const cha
            "without one resolves `'self'` against nothing and reports the document's own scripts as blocked by "
            "its own policy; the ABSENCE of a container is serialized_policy_container_none");
     out.csp = csp;
+    out.csp_report_only = csp_report_only;
     out.self_origin = self_origin;
     out.embedder = embedder;
     out.integrity_policy = integrity_policy;
@@ -397,6 +416,7 @@ SerializedPolicyContainer serialized_policy_container_none(void)
     SerializedPolicyContainer out;
 
     out.csp = NULL;
+    out.csp_report_only = NULL;
     out.self_origin = NULL;
     /* §7.1.4's "A NEW EMBEDDER POLICY" EVEN HERE, AND IT IS NOT A CONTRADICTION WITH "THERE IS NO CONTAINER".
        The absence is carried by the SELF-ORIGIN — the one field serialized_policy_container_exists reads — so
@@ -413,7 +433,8 @@ SerializedPolicyContainer serialized_policy_container_none(void)
     return out;
 }
 
-SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
+SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *csp_report_only,
+                                                              const char *self_origin,
                                                               SerializedEmbedderPolicy embedder,
                                                               const char *integrity_policy,
                                                               const char *referrer_policy)
@@ -424,13 +445,15 @@ SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, c
        rather than "no container": read as an absence it would silently put the document under a container of
        its own, and read as a container it would resolve `'self'` against nothing. Neither is survivable, so it
        crashes here, at the boundary that produced it. */
-    DCHECK(!(csp != NULL && *csp) || (self_origin != NULL && *self_origin),
+    DCHECK(!((csp != NULL && *csp) || (csp_report_only != NULL && *csp_report_only)) ||
+           (self_origin != NULL && *self_origin),
            "a §7.1.7 policy container arrived from outside this engine with POLICIES and no CSP §2.2 "
            "SELF-ORIGIN — the two halves of one CSP list travel together (§2.2 makes the list a struct of "
            "both), so this is a relay that stopped writing the origin field and not a document with no "
            "container; `'self'` would resolve against this document's own address instead of the creator's");
     if (!(self_origin != NULL && *self_origin)) return serialized_policy_container_none();
-    return serialized_policy_container(csp, self_origin, embedder, integrity_policy, referrer_policy);
+    return serialized_policy_container(csp, csp_report_only, self_origin, embedder, integrity_policy,
+                                       referrer_policy);
 }
 
 SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *p)
@@ -449,7 +472,7 @@ SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *
            "a policy container's CSP list has no CSP §2.2 SELF-ORIGIN to serialize — every list has one and "
            "policy_container_new parses it in whether or not there is policy text, so a container without one "
            "was built somewhere that did not state it");
-    return serialized_policy_container(policy_container_csp(p),
+    return serialized_policy_container(policy_container_csp(p), policy_container_csp_report_only(p),
                                        origin_serialized(policy_container_self_origin(p)),
                                        serialized_embedder_policy_of(policy_container_embedder(p)),
                                        p->integrity_policy_text,

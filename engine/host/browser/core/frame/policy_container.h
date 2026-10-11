@@ -49,7 +49,10 @@ typedef struct PolicyContainer PolicyContainer;
    item exists to end; a caller with no response says so by passing serialized_embedder_policy_new(), which is
    the standard's own words rather than an omission. It is COPIED — both endpoint strings — because a container
    owns its items and outlives the operation that built it. */
-PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
+/* `csp_report_text` is the serialized list of REPORT policies — CSP §2.2.2's
+   `Content-Security-Policy-Report-Only` extraction, "a disposition of "report"" — parsed after `csp_text`'s
+   enforce policies into the same list. Copied; NULL or "" holds none. */
+PolicyContainer *policy_container_new(const char *csp_text, const char *csp_report_text, const Origin *self_origin,
                                       const char *referrer_policy, SerializedEmbedderPolicy embedder,
                                       const char *integrity_policy_text);
 
@@ -115,6 +118,8 @@ void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_
    The TEXT is what the container TRAVELS as and what a report has to quote — §7.4's clone across an instance
    or a session is this string, re-parsed. BORROWED; NULL for no policy. */
 const char *policy_container_csp(const PolicyContainer *p);
+/* The serialized REPORT policies of the container's CSP list, or NULL for none. BORROWED. */
+const char *policy_container_csp_report_only(const PolicyContainer *p);
 /* The PARSED §2.2 list is what a component ASKS. Every directive question in the engine goes through it, so
    the parse happens once per container rather than once per sink — and so that there is exactly one reading of
    CSP's grammar in the tree (core/frame/csp_directive_list.h says why that matters). BORROWED, and NULL for a
@@ -187,7 +192,10 @@ void policy_container_set_referrer_policy(PolicyContainer *p, const char *policy
  * keyword)" and §2.2.2 states the self-origin from OUTSIDE the bytes ("self-origin is response's URL's
  * origin"). The policies travel as their §2.2 serialization and the self-origin as §7.1.1's. */
 typedef struct {
-    const char *csp;           /* CSP §2.2's policies, serialized. NULL or "" is a list holding none. */
+    const char *csp;           /* CSP §2.2's ENFORCE policies, serialized. NULL or "" is none. */
+    /* …and the same list's REPORT policies (§2.2.2's `Content-Security-Policy-Report-Only`), serialized beside
+       them because §2.2's serialization carries no disposition. NULL or "" is none. */
+    const char *csp_report_only;
     /* CSP §2.2's SELF-ORIGIN of that list, serialized — and ALSO WHAT SAYS THERE IS A CONTAINER AT ALL. §2.2
        gives every CSP list a self-origin whether or not it holds policies, so an absent one means there is no
        container here, while an empty POLICY with a self-origin beside it is a real container that holds no
@@ -225,7 +233,8 @@ typedef struct {
    embedder policy whether or not a response stated one, so the caller with nothing to state says so with
    serialized_embedder_policy_new() — §7.1.4's own "a new embedder policy" — rather than by omitting an
    argument this function would then have to invent. */
-SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
+SerializedPolicyContainer serialized_policy_container(const char *csp, const char *csp_report_only,
+                                                      const char *self_origin,
                                                       SerializedEmbedderPolicy embedder,
                                                       const char *integrity_policy,
                                                       const char *referrer_policy);
@@ -243,7 +252,8 @@ SerializedPolicyContainer serialized_policy_container_none(void);
    record reads its fields before it knows whether they describe a container, and refusing to take the item
    until the answer is known would put the §7.1.7 test in the caller — which is the second reading this
    function exists to prevent. An absent container discards it, exactly as it discards the policy text. */
-SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
+SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *csp_report_only,
+                                                              const char *self_origin,
                                                               SerializedEmbedderPolicy embedder,
                                                               const char *integrity_policy,
                                                               const char *referrer_policy);

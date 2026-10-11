@@ -40,6 +40,9 @@ typedef struct {
        delivers several policies and how core/frame/policy_container.c parses them apart again. NULL when the
        response carried no `Content-Security-Policy`. Owned. */
     char        *csp;
+    /* …and §2.2.2's REPORT policies, the `Content-Security-Policy-Report-Only` get, NULL when the response
+       carried none. Owned. */
+    char        *csp_report_only;
     /* PERMISSIONS POLICY §9.1's TWO HEADER FIELD VALUES, as Fetch §2.2.2 step 2's get returned them — the
        enforced `Permissions-Policy` and the report-only `Permissions-Policy-Report-Only`. NULL for a response
        that carried neither, which is §9.1 step 3's empty ordered map and not a hole. Owned.

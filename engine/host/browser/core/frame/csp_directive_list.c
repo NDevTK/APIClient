@@ -170,8 +170,6 @@ void csp_policy_parse(CspPolicy *out, const char *text, size_t len, CspDispositi
 void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin,
                     CspDisposition disposition)
 {
-    size_t pos = 0;
-
     DCHECK(out != NULL, "a CSP list was parsed into nothing");
     DCHECK(out->policies == NULL && out->n_policies == 0,
            "a CSP list was parsed over one that already holds policies — csp_list_free frees exactly what ONE "
@@ -180,6 +178,14 @@ void csp_list_parse(CspList *out, const char *serialized, size_t len, const Orig
        out with zero policies still carries the origin: `csp_list_free` zeroes only what it allocated, and a
        caller that later merges into this list must not find the origin missing because the text was empty. */
     out->self_origin = self_origin;
+    csp_list_append(out, serialized, len, disposition);
+}
+
+void csp_list_append(CspList *out, const char *serialized, size_t len, CspDisposition disposition)
+{
+    size_t pos = 0;
+
+    DCHECK(out != NULL, "a CSP list was appended to nothing");
     if (!serialized || !len) {
         DCHECK(len == 0 || serialized != NULL, "a CSP list parse was given a length with no bytes");
         return;

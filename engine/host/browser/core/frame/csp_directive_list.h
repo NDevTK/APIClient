@@ -118,6 +118,11 @@ typedef enum {
 void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin,
                     CspDisposition disposition);
 
+/* §2.2.2's SECOND extraction appended to a list csp_list_parse already began: every non-empty policy of
+   `serialized` is parsed with `disposition` and appended after the policies already there, and the list's
+   self-origin is untouched. `serialized` is BORROWED, as csp_list_parse's is. */
+void csp_list_append(CspList *list, const char *serialized, size_t len, CspDisposition disposition);
+
 /* Frees exactly what csp_list_parse allocated — the directive and value arrays — and never the text. */
 void csp_list_free(CspList *list);
 

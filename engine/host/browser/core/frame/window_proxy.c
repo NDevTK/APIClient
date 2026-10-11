@@ -871,6 +871,8 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     p->creator_policy =
         serialized_policy_container(creator_policy.csp && *creator_policy.csp
                                         ? proxy_strdup(creator_policy.csp) : NULL,
+                                    creator_policy.csp_report_only && *creator_policy.csp_report_only
+                                        ? proxy_strdup(creator_policy.csp_report_only) : NULL,
                                     proxy_strdup(creator_policy.self_origin),
                                     serialized_embedder_policy(creator_policy.embedder.value,
                                                                proxy_strdup(creator_policy.embedder.endpoint),
@@ -1016,7 +1018,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
            "instance's own, or a remote one for a parent another instance holds) and JS_UNDEFINED, which is the "
            "positive statement that this navigable is a top-level traversable");
     obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, creation_sandbox_flags, opener_policy,
-                           serialized_policy_container(NULL, origin_serialized(origin_agent()),
+                           serialized_policy_container(NULL, NULL, origin_serialized(origin_agent()),
                                                        serialized_embedder_policy_new(),
                                                        /* a top-level navigable created from no response states
                                                           no integrity policy, which SRI §3.8 answers with "a

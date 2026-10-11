@@ -553,7 +553,8 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
    meta walk below has nothing to say about it (CSP §3.3's `<meta>` delivers CSP policies and nothing else, and
    `Cross-Origin-Embedder-Policy` has no `<meta>` form at all), so this function neither derives it nor defaults
    it — which is what keeps the two halves this function DOES merge from acquiring a silent third. */
-PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
+PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const char *csp_report_only,
+                                     const Origin *self_origin,
                                      SerializedEmbedderPolicy embedder, const char *integrity_policy);
 
 /* THIS DOCUMENT'S POLICY CONTAINER — HTML §7.2.6, built at install from the above. Built at install rather

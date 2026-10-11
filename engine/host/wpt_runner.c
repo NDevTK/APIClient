@@ -2662,8 +2662,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                "a document was built with an §7.1.4 EMBEDDER POLICY VALUE naming none of the three strings the "
                "section defines — this runner writes these tokens onto a child's command line itself, so a "
                "token outside them is this program's two ends disagreeing about their own record");
+        /* The report-only half of the CSP list is not on this runner's argv relay; main.c's
+           qjs_inherited_container states the residual this shares. */
         inherited = serialized_policy_container_or_none(
-            inherited_csp, inherited_csp_self_origin,
+            inherited_csp, NULL, inherited_csp_self_origin,
             serialized_embedder_policy(_coep, inherited_coep_endpoint, _coep_ro,
                                        inherited_coep_report_only_endpoint),
             /* Named residual. Not covered: §7.1.7's integrity policy item on this runner's command-line relay of
@@ -2693,7 +2695,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
         navigable_root_ancestor_origins(ctx, root_proxy, ancestor_origins);
         /* §7.1.4's item of the response's own container: §7.1.7's create a policy container from a fetch
            response step 4, obtained where the response is read and handed to the constructor here. */
-        response = serialized_policy_container(np.csp, origin,
+        response = serialized_policy_container(np.csp, np.csp_report_only, origin,
                                                serialized_embedder_policy_of(&np.embedder),
                                                np.integrity_policy, np.referrer_policy);
         policy = policy_container_determine_navigation_params(g_base_url, response, inherited);

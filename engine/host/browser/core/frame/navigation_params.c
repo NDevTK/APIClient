@@ -47,6 +47,7 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
        `Content-Security-Policy-Report-Only` is deliberately not read: every policy this engine parses has
        disposition ENFORCE (core/frame/policy_container.h), and a report-only policy blocks nothing. */
     out->csp = header_list_get(headers, "content-security-policy");
+    out->csp_report_only = header_list_get(headers, "content-security-policy-report-only");
 
     /* §7.4.5's FINAL SANDBOXING FLAG SET. The caller's half plus this response's, and the union is HERE rather
        than at the call site because the second half is a fact about the response and this is the one place a
@@ -137,6 +138,8 @@ void navigation_params_free(NavigationParams *p)
     if (!p) return;
     free(p->csp);
     p->csp = NULL;
+    free(p->csp_report_only);
+    p->csp_report_only = NULL;
     free(p->permissions_policy);
     p->permissions_policy = NULL;
     free(p->permissions_policy_report_only);
