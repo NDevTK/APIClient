@@ -380,25 +380,19 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    `url`: extension/lib/learn.js mints `{path_*}` holes from live traffic into addresses it reads `concrete`
    for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
    composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
-/* `witness` is what the flows that reached this record assumed: an array with one element per distinct
-   sighting witness, never a union of two (a union would state a combination no flow assumed), and never
-   empty. An element is `null` for a sighting no flow stood at (`witnessClass` `unasked`), else an array,
-   possibly empty, of the minting flow's assumptions at the act, sorted by kind and then text:
-     `{source, value, kind}` per pin in its constraint, the source path, the operand the page's own `===`
-       determined it to be (its ToString) and that operand's type, as in `looselyEquals`;
-     `{decision, taken}` per branch whose taken arm pinned nothing and was established by no observation
-       of the run (the flow's own example contradicts it, or there is none), the condition's display shape
-       and its ToBoolean on that path;
-     `{decision, completion}` per native operation that settled on a completion other than the one its
-       machine declared real (or the machine declared none), spelled `op(operand)`, with the index of the
-       completion the machine declared and the flow took.
-   A decision states the arm taken and never a value satisfying it; @H invents none.
-   A pin is listed whether or not an observation agreed with it: it is the value the path stands on.
-   Named residual. Not covered: an assumed arm whose predicate has no identity this engine can spell, a
-   declined request's failure arm and a modelled close request mark the path forced and file no decision.
-   Next diff: a decision row for each, keyed by the act's own name. How its absence shows: a `forced` row
-   whose every witness element is an empty array. */
-/* Each param:`name`; `location` (`path`|`query`|`body`, which is what the reviewer replays it with);
+/* `witness`: one element per distinct sighting witness, never a union of two (it would state a combination no
+   flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else the
+   minting flow's assumptions at the act, sorted by kind then text: `{source, value, kind}` per pin (the source
+   path, the ToString of the operand its `===` determined, that operand's type), whether or not an observation
+   agreed; `{decision, taken}` per branch arm that pinned nothing and that no observation established (its
+   example contradicts it, or there is none), as the condition's shape and its ToBoolean; `{decision,
+   completion}` per native operation settling on a completion other than its machine's declared real one,
+   as `op(operand)` and the completion index. A decision states the arm, never a value satisfying it.
+   Named residual. Not covered: an assumed arm whose predicate has no spellable identity, a declined request's
+   failure arm and a modelled close request mark the path forced and file no decision. Next diff: a decision
+   row for each, keyed by the act's own name. How its absence shows: a `forced` row whose every witness
+   element is an empty array. */
+/* Each param: `name`; `location` (`path`|`query`|`body`, which is what the reviewer replays it with);
    `valueClass`; `validValues`; and the optional domain keys below. `valueClass` is `unknown` when some
    observed path minted the param from a value the code did not compute, else `concrete` (the address's two
    older words; a param value has no pinned-and-held population for a third). It is always present and merges
