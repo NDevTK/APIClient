@@ -5,7 +5,7 @@
 // carries the provenance of its values"), its drive mark (whether a drive of uncalled code made it), its
 // witness mark (whether its address rested on a value a fork pinned), and HTML §7.1.5's creation sandboxing
 // flag set. The zone writes one per document at provisioning, from the provisioning notice joined with the
-// creating instance's record, and never again. lib/safe-fetch.js reads the marks as a floor under the engine's
+// issuing document's record, and never again. lib/safe-fetch.js reads the marks as a floor under the engine's
 // per-request words, and the zone hands the flag set to the engine, so an engine whose words are wrong can
 // narrow what fires and what a document may do, and never widen either.
 //
@@ -116,10 +116,8 @@ function _marksJoin(a, b) {
 /* The stronger-wins join: the weaker reach, a mark either record carries, and the union of the flag sets.
    It is HTML §7.1.5's "determine the creation sandboxing flags" for a nested navigable, "the union of the
    flags that are present in" "the flags set on embedder's iframe sandboxing flag set" and "the flags set on
-   embedder's node document's active sandboxing flag set": `a` is the creating instance's record and `b` the
-   notice's own. It
-   is also how an instance's record covers every document it holds, and how a top-level provision keeps its
-   navigable's flags. */
+   embedder's node document's active sandboxing flag set": `a` is the creating document's record and `b` the
+   notice's own. It is also how a top-level provision keeps its navigable's flags and its issuer's marks. */
 function docRecordJoin(a, b) {
   CHECK(_DOC_RECORDS.has(a) && _DOC_RECORDS.has(b),
         "two document records were joined and one was not minted by docRecord");
@@ -130,7 +128,7 @@ function docRecordJoin(a, b) {
                            }), [a, b]);
 }
 
-/* An auxiliary navigable (a popup) the creating instance `creator` opened, whose notice states `own`. HTML
+/* An auxiliary navigable (a popup) the creating document `creator` opened, whose notice states `own`. HTML
    §7.3.1.7 "the rules for choosing a navigable", given the creator's active sandboxing flag set:
      - "If sandboxingFlagSet has the sandboxed auxiliary navigation browsing context flag set", no navigable
        is created; this answers null and the caller refuses the notice.
@@ -180,6 +178,15 @@ function docRecordMeet(records) {
   return j;
 }
 
+/* The name of the document `name` was minted from, or null for a name with no creator component: the engine
+   names every document it creates or navigates to "<creator>.<n>" (solver/world.c's world_mint_doc), from the
+   creating document for a new navigable and from the navigable's current document for a navigation. */
+function docRecordNameParent(name) {
+  CHECK(typeof name === "string" && name !== "", "a document name's parent was asked of no name");
+  var m = /^(.+)\.[0-9]+$/.exec(name);
+  return m ? m[1] : null;
+}
+
 /* The record a request is judged against, from the asking document's name as the engine states it on the
    pending line. A document this zone provisioned answers with its own record. One the engine created inside
    its own heap (a same-origin child or popup, or the next document of a navigable) was never provisioned;
@@ -200,9 +207,8 @@ function docRecordOfAsker(name, lookup) {
       CHECK(_DOC_RECORDS.has(r), "an asker lookup answered something docRecord did not mint for " + n);
       return r;
     }
-    var m = /^(.+)\.[0-9]+$/.exec(n);
-    if (!m) return null;
-    n = m[1];
+    n = docRecordNameParent(n);
+    if (n === null) return null;
   }
 }
 
@@ -229,4 +235,5 @@ if (typeof self !== "undefined") {
   self.docRecordOpaque = docRecordOpaque;
   self.docRecordMeet = docRecordMeet;
   self.docRecordOfAsker = docRecordOfAsker;
+  self.docRecordNameParent = docRecordNameParent;
 }

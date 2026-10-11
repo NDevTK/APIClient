@@ -1053,15 +1053,6 @@ function frontierPlace(e, when) {
 function frontierProvenance(e) {
   return e.provenance === undefined ? PROVENANCE_DERIVED : e.provenance;
 }
-/* A top-level document provisioned by a navigation the instance `eng` issued (a swap, a navigation into a peer,
-   a declared route): the instance's record (lib/document-record.js) joined with the navigation's own words and
-   no flags of its own, so it keeps the navigable's flags, inherits every mark above it and can never be
-   stronger than the instance that created it. */
-function childDocRecord(eng, provenance, driven, pinned) {
-  DCHECK(docRecordIs(eng.doc), "a child document was recorded under an instance with no record of its own — " +
-                               "engineRoot writes one before the instance can issue anything");
-  return docRecordJoin(eng.doc, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
-}
 /* The record a request from instance `eng` is judged against, given the documents the engine names as asking
    it: the meet of their records (lib/document-record.js's docRecordOfAsker and docRecordMeet), or null when a
    name is not a document of `eng`, which refuses the request. A name another live instance holds is that
@@ -1076,6 +1067,24 @@ function askerRecord(eng, names) {
   };
   const recs = names.map((n) => docRecordOfAsker(n, lookup));
   return recs.indexOf(null) >= 0 ? null : docRecordMeet(recs);
+}
+/* The records a provisioning notice of instance `eng` is judged by. `issuer` is the issuing document (HTML
+   §7.4.2.2's sourceDocument, or the declaring document of a route), whose record the load is decided under.
+   `minted` is the new document's name for a navigation, which the engine mints from the navigable's current
+   document; that document's record joins the issuer's in `from`, so the new document keeps every flag and mark
+   its navigable carries. Null when either is not a document of `eng`. */
+function issuedRecords(eng, issuer, minted) {
+  const issuerDoc = askerRecord(eng, [issuer]);
+  if (issuerDoc === null || minted === null) return issuerDoc === null ? null : { issuerDoc, from: issuerDoc };
+  const outgoing = docRecordNameParent(minted);
+  const navDoc = outgoing === null ? null : askerRecord(eng, [outgoing]);
+  return navDoc === null ? null : { issuerDoc, from: docRecordJoin(issuerDoc, navDoc) };
+}
+/* A top-level document provisioned by a navigation (a swap, a navigation into a peer, a declared route): the
+   record `from` (issuedRecords) joined with the navigation's own words and no flags of its own, so it keeps the
+   navigable's flags, inherits every mark above it and can never be stronger than the documents that issued it. */
+function childDocRecord(from, provenance, driven, pinned) {
+  return docRecordJoin(from, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
 }
 /* The decline token for a request whose asker is no document of its instance: one word, so the egress
    histogram stays over a closed set. */
@@ -2146,8 +2155,7 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
    (`blocked-signal:`, `blocked-scheme:`, `blocked-local-network:`).
    Emptiness is not judged here: an OK zero-length body is an ordinary empty Document; refusing one is a seed's
    rule, stated at the seed. */
-/* `fromDoc` is this zone's record of the document issuing this navigation (lib/document-record.js; of its
-   instance, for a notice that names no issuer), distinct
+/* `fromDoc` is this zone's record of the document issuing this navigation (lib/document-record.js), distinct
    from `provenance` (the engine's word about this navigation act); safe-fetch.js reads both, the record as a
    floor. An omitted one is refused by `_docOf`. The produced document's record is the join of the two
    (childDocRecord), composed by whoever states that document's analyze record. */
@@ -2540,10 +2548,10 @@ function engineReserve(cluster, docId, msg, referenced) {
   /* The cold-tier lookup fields, null until engineRoot's frontier read decides them; a boot that dies first
      carries the nulls unchanged, which says when it died. */
   /* `records` is this zone's record of each document the instance holds (lib/document-record.js), which a
-     request is judged against by its asking document (askerRecord); `doc` is their join, read only by the
-     notices that name no issuing document. Both are written by engineRoot and engineJoin only. */
+     request or notice is judged against by its asking or issuing document (askerRecord); written by
+     engineRoot and engineJoin only. An instance has no record of its own. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
-                doc: null, records: new Map(),
+                records: new Map(),
                 groupId: msg.groupId, _resumed: null, referenced,
                 _coldLookup: null, _coldOther: null, _bundleId: null,
                 origin: msg.origin, _resolvers: [], _remoteAsked: new Set(),
@@ -2730,18 +2738,18 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "a document is being rooted with the arrival `" + String(msg.arrival) + "` beside the reach grade `" +
          String(msg.provenance) + "` — every composer of an AST_ANALYZE states both, the arrival's grade being " +
          "the reach (docRecordArrival)");
-  /* This zone's record of the document (lib/document-record.js), written once for the instance's life: the
-     arrival is its wire form, so the marks the engine starts every timeline with and the floor the chokepoint
-     holds the instance's requests to are one statement. Kept on the instance, since a Clear can drop it and
-     the browser's same document id can come back to a fresh one. */
-  CHECK(eng.doc === null && eng.records.size === 0,
-        "an instance's document record was written twice — it is written once, when the root is provisioned, " +
-        "and every request the instance makes is judged against it");
-  eng.doc = docRecordOfArrival(msg.arrival, msg.sandbox);
-  CHECK(creationSandboxFlags === docRecordSandbox(eng.doc),
+  /* This zone's record of the root document (lib/document-record.js), written once for the instance's life:
+     the arrival is its wire form, so the marks the engine starts every timeline with and the floor the
+     chokepoint holds the document's requests to are one statement. Kept on the instance, since a Clear can drop
+     it and the browser's same document id can come back to a fresh one. */
+  CHECK(eng.records.size === 0,
+        "an instance's root document record was written twice — it is written once, when the root is " +
+        "provisioned, and every request the document asks is judged against it");
+  const rootDoc = docRecordOfArrival(msg.arrival, msg.sandbox);
+  CHECK(creationSandboxFlags === docRecordSandbox(rootDoc),
         "a document is being rooted with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
-        "whose set is `" + docRecordSandbox(eng.doc) + "` — the engine is handed the record's set, one statement");
-  eng.records.set(eng.docId, eng.doc);
+        "whose set is `" + docRecordSandbox(rootDoc) + "` — the engine is handed the record's set, one statement");
+  eng.records.set(eng.docId, rootDoc);
   await rend.renderer.setArrival({ arrival: msg.arrival });
   /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
      one frontier entry. */
@@ -3016,8 +3024,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "which none of these three does, so honouring one here would hand a declined record to a consumer " +
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
-    /* `doc` is the issuing document's record: the creator's for a create, the asker's for a load
-       (askerRecord), the instance's for a notice that names no issuer. */
+    /* `doc` is the issuing document's record: the creator's for a create, the asker's for a load, the
+       issuer's for a swap or a navigation (askerRecord). */
     DCHECK(docRecordIs(doc), "a §7.4 document load was asked for with no issuing document's record");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, doc,
                                    refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg),
@@ -3355,14 +3363,13 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   /* The name enters the routing table only once the engine holds it; a delivery in between is refused by the
      post branch's assert rather than routed to an agent that has never heard the name. */
   eng.joinedDocIds.push(docName);
-  /* The joined document's record, written once, and the instance's narrowed to include it. */
-  CHECK(!eng.records.has(docName) && docRecordIs(eng.doc),
-        "a joined document's record was written twice, or into an instance with no record of its own");
+  /* The joined document's record, written once. */
+  CHECK(!eng.records.has(docName) && eng.records.size > 0,
+        "a joined document's record was written twice, or into an instance whose root has none");
   eng.records.set(docName, docRecordOfArrival(msg.arrival, msg.sandbox));
   CHECK(creationSandboxFlags === docRecordSandbox(eng.records.get(docName)),
         "a document is being joined with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
         "whose set is `" + docRecordSandbox(eng.records.get(docName)) + "` — the engine is handed the record's set");
-  eng.doc = docRecordJoin(eng.doc, eng.records.get(docName));
   /* The round ends here, so it records: a join copies a whole document in and seeds its scripts as flows, so
      both Level-1 facts moved. */
   await engineRecordFacts(eng);
@@ -3889,8 +3896,7 @@ async function hostNotice(eng, line) {
        §7.3.1.7 does not create at all under the creator's sandboxed auxiliary navigation flag; that notice is
        refused here, whatever the engine decided. */
     const _creatorDoc = askerRecord(eng, [f[C.creator]]);
-    if (_creatorDoc === null || !f[C.child].startsWith(f[C.creator] + ".") ||
-        !/^[0-9]+$/.test(f[C.child].slice(f[C.creator].length + 1))) {
+    if (_creatorDoc === null || docRecordNameParent(f[C.child]) !== f[C.creator]) {
       console.warn("[bridge] navigable.create " + f[C.child] + " is refused: " + (_creatorDoc === null
         ? "its creator " + f[C.creator] + " is no document of the creating instance"
         : "its name is not minted from its creator " + f[C.creator]));
@@ -4103,7 +4109,7 @@ async function hostNotice(eng, line) {
      the swap when the server answers the two requests differently. */
   if (f[0] === "navigable.swap") {
     DCHECK(f.length >= P.parts && !!f[P.document] && !!f[P.address] && !!f[P.provenance] && !!f[P.driven] &&
-           !!f[P.pinned],
+           !!f[P.pinned] && !!f[P.issuer],
            "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
            "address it is loading, the origin it computed and what the navigation that caused the swap is " +
            "EVIDENCE OF; a record missing either of the first two names a Document this zone cannot provision " +
@@ -4118,12 +4124,18 @@ async function hostNotice(eng, line) {
        an address this zone declined at `document.fetch`. */
     /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
        an empty Uint8Array. */
-    /* The record is the creating instance's joined with the notice's words: the swap notice names no issuing
-       document (engine/trusted.mjs's join arm states the residual). */
-    const _swapDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
+    /* The issuing document's record and the navigable's (issuedRecords) joined with the notice's words; a
+       notice naming a document that is not this instance's is refused, as a request is. */
+    const _swapFrom = issuedRecords(eng, f[P.issuer], f[P.document]);
+    if (_swapFrom === null) {
+      console.warn("[bridge] navigable.swap " + f[P.document] + " is refused: its issuer " + f[P.issuer] +
+                   " or its navigable's document is no document of the swapping instance");
+      return;
+    }
+    const _swapDoc = childDocRecord(_swapFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
     const swapped = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
                                               /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                              docRecordOpaque(_swapDoc), eng.doc);
+                                              docRecordOpaque(_swapDoc), _swapFrom.issuerDoc);
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -4172,18 +4184,24 @@ async function hostNotice(eng, line) {
      emitting engine's proxy names it. This zone loads the bytes, for the swap arm's reason. */
   if (f[0] === "navigable.navigate") {
     DCHECK(f.length >= P.parts && !!f[P.document] && !!f[P.address] && !!f[P.provenance] && !!f[P.driven] &&
-           !!f[P.pinned],
+           !!f[P.pinned] && !!f[P.issuer],
            "a navigable.navigate notice was short of its fields — the engine writes the new document's name, " +
-           "the address, the origin it computed, the navigation's provenance, its drive mark and its witness " +
-           "mark, and the load below is decided from the last three");
+           "the address, the origin it computed, the navigation's provenance, its drive mark, its witness " +
+           "mark and its issuing document, and the load below is decided from the last four");
     DCHECK(!hostHolderOf(f[P.document]),
            "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
-    /* The record is the creating instance's joined with the notice's words, as for a swap. */
-    const _navDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
+    /* The records, as for a swap. */
+    const _navFrom = issuedRecords(eng, f[P.issuer], f[P.document]);
+    if (_navFrom === null) {
+      console.warn("[bridge] navigable.navigate " + f[P.document] + " is refused: its issuer " + f[P.issuer] +
+                   " or its navigable's document is no document of the navigating instance");
+      return;
+    }
+    const _navDoc = childDocRecord(_navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
     const navd = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
                                            /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                           docRecordOpaque(_navDoc), eng.doc);
+                                           docRecordOpaque(_navDoc), _navFrom.issuerDoc);
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
@@ -4218,15 +4236,15 @@ async function hostNotice(eng, line) {
                        "none", navMsg.sandbox, 1)._readyP;
     return;
   }
-  /* `document.seed <address> <provenance> <driven> <pinned>` — an address the application declared is a page of itself, reached
+  /* `document.seed <address> <provenance> <driven> <pinned> <issuer>` — an address the application declared is a page of itself, reached
      when forced execution ran the bundle's own `history.pushState`/`replaceState` (solver/route_seed.h says what
      a declaration is). This branch spends no network: a declared route is a work item whose fetch is a cost the
      Level-1 order carries, so it records and `admit` loads (see `_seeds`). */
   if (f[0] === ROUTE_SEED_NOTICE) {
-    DCHECK(f.length >= 5 && !!f[1] && !!f[2] && (f[3] === DRIVEN_YES || f[3] === DRIVEN_NO) &&
-           (f[4] === "pinned" || f[4] === "unpinned"),
+    DCHECK(f.length === 6 && !!f[1] && !!f[2] && (f[3] === DRIVEN_YES || f[3] === DRIVEN_NO) &&
+           (f[4] === "pinned" || f[4] === "unpinned") && !!f[5],
            "a route declaration was short of its fields — the engine writes the ADDRESS, the PROVENANCE, " +
-           "the DRIVE MARK and the WITNESS MARK, " +
+           "the DRIVE MARK, the WITNESS MARK and the declaring document, " +
            "and a record missing either is a writer this zone no longer shares a grammar with: an absent " +
            "address is a page nothing can load, and an absent provenance is the one field the decision to " +
            "load it at all is made from");
@@ -4258,12 +4276,18 @@ async function hostNotice(eng, line) {
        navigation and stated as such. The principal is `eng.origin` (MessageSender.origin, the same value the
        seed carries as `principalOrigin`), never a URL-derived origin, which would answer `true` for a sandboxed
        document. */
-    /* `doc` is the declaring instance's record, not the join, since this asks about a request issued by that
-       document. */
+    /* `doc` is the declaring document's record (issuedRecords), since this asks about a request issued by that
+       document; a declaration naming a document that is not this instance's is refused, as a request is. */
+    const _seedFrom = issuedRecords(eng, f[5], null);
+    if (_seedFrom === null) {
+      console.warn("[bridge] a route declaration for `" + f[1] + "` is refused: its declaring document " + f[5] +
+                   " is no document of the declaring instance");
+      return;
+    }
     /* `actor: "page"`: the route was declared by this document's own code, as the load will state. */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: f[4],
-      doc: eng.doc, actor: "page", driven: f[3],
+      doc: _seedFrom.issuerDoc, actor: "page", driven: f[3],
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -4279,10 +4303,10 @@ async function hostNotice(eng, line) {
        vocabulary on the way out. */
     if (!_seeds.has(f[1]))
       /* The declaring document's reach grade travels with the item for the same reason. */
-      /* `doc` is the seed's own record, the declaring instance's joined with the declaration's words. */
+      /* `doc` is the seed's own record, the declaring document's joined with the declaration's words. */
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
-                         provenance: f[2], driven: f[3], pinned: f[4], fromDoc: eng.doc,
-                         doc: childDocRecord(eng, f[2], f[3], f[4]) });
+                         provenance: f[2], driven: f[3], pinned: f[4], fromDoc: _seedFrom.issuerDoc,
+                         doc: childDocRecord(_seedFrom.from, f[2], f[3], f[4]) });
     /* Nothing is kicked: this router runs inside serviceFetch within the one scheduling loop, so `_hostDriving`
        is true and a `_hostKick()` would return on its first line. `admit` ranks this entry next round. */
     return;

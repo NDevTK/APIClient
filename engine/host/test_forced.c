@@ -5286,7 +5286,7 @@ static int hostreq_answer_all(JSContext *ctx)
             !memcmp(nz, ROUTE_SEED_NOTICE "\t", sizeof(ROUTE_SEED_NOTICE))) {
             const char *addr = nz + sizeof(ROUTE_SEED_NOTICE);
             const char *tab = memchr(addr, '\t', len - sizeof(ROUTE_SEED_NOTICE));
-            const char *dtab, *wtab;
+            const char *dtab, *wtab, *itab;
             size_t alen;
             size_t plen;
             size_t dlen;
@@ -5298,17 +5298,18 @@ static int hostreq_answer_all(JSContext *ctx)
                    "having parted, and the field this host would read as an address is the whole record");
             if (!tab) { nz = end ? end + 1 : nz + len; continue; }
             alen = (size_t)(tab - addr);
-            /* …and the drive mark after the provenance, and the witness mark last. */
+            /* …and the drive mark after the provenance, the witness mark, and the declaring document last. */
             dtab = memchr(tab + 1, '\t', len - (size_t)(tab + 1 - nz));
             wtab = dtab ? memchr(dtab + 1, '\t', len - (size_t)(dtab + 1 - nz)) : NULL;
-            DCHECK(dtab != NULL && wtab != NULL,
-                   "a route declaration carried no DRIVE MARK or WITNESS MARK after its provenance — "
-                   "solver/route_seed.c writes `document.seed<TAB><address><TAB><provenance><TAB><driven><TAB>"
-                   "<pinned>` with one snprintf");
-            if (!dtab || !wtab) { nz = end ? end + 1 : nz + len; continue; }
+            itab = wtab ? memchr(wtab + 1, '\t', len - (size_t)(wtab + 1 - nz)) : NULL;
+            DCHECK(dtab != NULL && wtab != NULL && itab != NULL && itab + 1 < nz + len,
+                   "a route declaration carried no DRIVE MARK, WITNESS MARK or declaring document after its "
+                   "provenance — solver/route_seed.c writes `document.seed<TAB><address><TAB><provenance><TAB>"
+                   "<driven><TAB><pinned><TAB><issuer>` with one snprintf");
+            if (!dtab || !wtab || !itab) { nz = end ? end + 1 : nz + len; continue; }
             plen = (size_t)(dtab - (tab + 1));
             dlen = (size_t)(wtab - (dtab + 1));
-            wlen = len - (size_t)(wtab + 1 - nz);
+            wlen = (size_t)(itab - (wtab + 1));
             DCHECK((dlen == strlen(PENDING_DRIVEN_YES) && !memcmp(dtab + 1, PENDING_DRIVEN_YES, dlen)) ||
                    (dlen == strlen(PENDING_DRIVEN_NO) && !memcmp(dtab + 1, PENDING_DRIVEN_NO, dlen)),
                    "a route declaration stated a drive mark that is neither token engine.h declares");

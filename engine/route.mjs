@@ -725,7 +725,7 @@ async function drainNotices(e) {
       /* The provenance and the two marks of the navigation that caused the swap are the new instance's
          arrival. */
       if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
-          !f[P.pinned])
+          !f[P.pinned] || !f[P.issuer])
         fail(`a navigable.swap notice was short of its fields: ${n}`);
       if (holderOf(f[P.document]))
         fail(`§7.1.3.2's swap named a document an instance already holds: ${f[P.document]}`);
@@ -821,7 +821,7 @@ async function drainNotices(e) {
       if (f.length < 2 || !f[1]) fail(`a world.parked notice carried no vector: ${n}`);
       worldsParked.push(f[1]);
     }
-    /* `document.seed <address> <provenance> <driven> <pinned>` — an address a document declared is a page of its own application
+    /* `document.seed <address> <provenance> <driven> <pinned> <issuer>` — an address a document declared is a page of its own application
        (engine/host/solver/route_seed.h), reached whenever a fixture here calls `history.pushState` with a URL.
        THIS DRIVER REFUSES IT, AND THE REFUSAL IS ABOUT WHAT THIS DRIVER IS. It provisions the peer instances a
        CROSS-INSTANCE fixture needs — a create, a swap, a routed post — from records that name the document
@@ -832,11 +832,11 @@ async function drainNotices(e) {
        THE GRAMMAR IS STILL CHECKED, because a malformed record is a WRITER that changed and that is a defect
        whichever host reads it. */
     else if (f[0] === 'document.seed') {
-      if (f.length < 5 || !f[1] || !f[2] || (f[3] !== 'driven' && f[3] !== 'undriven') ||
-          (f[4] !== 'pinned' && f[4] !== 'unpinned'))
+      if (f.length !== 6 || !f[1] || !f[2] || (f[3] !== 'driven' && f[3] !== 'undriven') ||
+          (f[4] !== 'pinned' && f[4] !== 'unpinned') || !f[5])
         fail(`a document.seed notice was short of its fields — every declaration names the ADDRESS, the ` +
-             `PROVENANCE, the DRIVE MARK and the WITNESS MARK the trusted zone decides whether to load it ` +
-             `from: ${n}`);
+             `PROVENANCE, the DRIVE MARK, the WITNESS MARK and the declaring document the trusted zone ` +
+             `decides whether to load it from: ${n}`);
       if (f[2] !== 'derived' && f[2] !== 'forced')
         fail(`a document.seed notice carries the provenance \`${f[2]}\`, which is neither \`derived\` nor ` +
              `\`forced\` — a declaration is made by RUNNING the page's code and no load produces one, so ` +

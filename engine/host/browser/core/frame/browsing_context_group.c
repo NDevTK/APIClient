@@ -52,7 +52,7 @@ void browsing_context_group_release(void)
 
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
                                  SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
-                                 const char *pinned)
+                                 const char *pinned, const char *issuer)
 {
     uint32_t swapped;
     char *op;
@@ -115,8 +115,12 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
         [NAVIGABLE_PROVISION_PROVENANCE] = provenance,
         [NAVIGABLE_PROVISION_DRIVEN] = driven,
         [NAVIGABLE_PROVISION_PINNED] = pinned,
+        [NAVIGABLE_PROVISION_ISSUER] = issuer,
     };
 
+    DCHECK(issuer != NULL && *issuer, "§7.1.3.2's swap was reached with no sourceDocument — the load job carries "
+                                      "§7.4.2.2's initiator document on every path, and the zone judges the "
+                                      "navigation by that document's record");
     op = engine_notice_build("navigable.swap", fields, NAVIGABLE_PROVISION_N);
     engine_host_notify(ctx, op);
     free(op);

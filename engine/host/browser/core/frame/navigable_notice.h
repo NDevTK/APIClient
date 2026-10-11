@@ -50,7 +50,8 @@
     X(ORIGIN, origin, TOKEN)                   /* that address's origin, serialized */                           \
     X(PROVENANCE, provenance, TOKEN)           /* what the load is evidence of (PENDING_PROVENANCE_*) */         \
     X(DRIVEN, driven, TOKEN)                   /* the drive mark (PENDING_DRIVEN_*) */                           \
-    X(PINNED, pinned, TOKEN)                   /* the witness mark (PENDING_PINNED_*) */
+    X(PINNED, pinned, TOKEN)                   /* the witness mark (PENDING_PINNED_*) */                         \
+    X(ISSUER, issuer, TOKEN)                   /* HTML §7.4.2.2's sourceDocument, by its world name */
 
 enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_BASE64 };
 

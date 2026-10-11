@@ -9,11 +9,13 @@
 #include "solver/engine.h"   /* the one-way notice, the provenance vocabulary both ends of it read, and the
                                 ONE composition of that vocabulary from the running path */
 #include "solver/flow.h"     /* …and that there IS a path here at all, which is this file's own invariant */
+#include "solver/world.h"    /* the declaring document's world name */
+#include "core/dom/document.h"   /* …and which document of this realm that is */
 
 void route_seed_declare(JSContext *ctx, const char *previous, const char *address)
 {
     Flow *f;
-    const char *prov, *drv, *pin;
+    const char *prov, *drv, *pin, *issuer;
     char *op;
     size_t n;
 
@@ -59,6 +61,8 @@ void route_seed_declare(JSContext *ctx, const char *previous, const char *addres
     drv = engine_driven_token(engine_driven_of_running_path());
     /* …and whether its path chose a witness before it composed the address. */
     pin = engine_navigation_pinned_token();
+    /* …and which document declared it: the realm's, whose record the zone judges the seed by. */
+    issuer = world_doc_name(document_doc(ctx));
 
     /* THE RECORD SPLITS ON TAB, so a tab in either field shifts the other one — and the field that would be
        read in the wrong place is the PROVENANCE, which is the zone's whole firing decision. URL §3.2 "Host
@@ -70,10 +74,10 @@ void route_seed_declare(JSContext *ctx, const char *previous, const char *addres
            "percent-encodes one everywhere it can appear, so a byte that reached here is a serializer that "
            "stopped doing so, and the trusted zone would read the tail of this address as the provenance token "
            "its firing decision is made on");
-    n = strlen(ROUTE_SEED_NOTICE) + strlen(address) + strlen(prov) + strlen(drv) + strlen(pin) + 5;
+    n = strlen(ROUTE_SEED_NOTICE) + strlen(address) + strlen(prov) + strlen(drv) + strlen(pin) + strlen(issuer) + 6;
     op = malloc(n);
     CHECK(op != NULL, "route seed: OOM building the notice that declares a page of this application");
-    snprintf(op, n, "%s\t%s\t%s\t%s\t%s", ROUTE_SEED_NOTICE, address, prov, drv, pin);
+    snprintf(op, n, "%s\t%s\t%s\t%s\t%s\t%s", ROUTE_SEED_NOTICE, address, prov, drv, pin, issuer);
     engine_host_notify(ctx, op);
     free(op);
 }

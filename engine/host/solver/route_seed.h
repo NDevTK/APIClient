@@ -37,11 +37,13 @@
  * whose whole definition is an act only the trusted zone can take: solver/engine.h's one-way notice, which is
  * how core/frame/navigable.c already hands that zone an address to load.
  *
- * THE RECORD. `document.seed<TAB><address><TAB><provenance><TAB><driven><TAB><pinned>` — one line; the address
- * is asserted to contain no tab, because a shifted field would put an address where a token is read. `driven`
- * and `pinned` are solver/engine.h's PENDING_DRIVEN_* and PENDING_PINNED_* for the declaring flow. The ADDRESS is absolute and serialized (§7.4.4 is handed the result of §7.2.5 step 5's
- * encoding-parse against the document's own address, so nothing downstream re-resolves it), and URL §"C0
- * control percent-encode set" makes TAB unrepresentable in one — the assert is what says that is still true.
+ * THE RECORD. `document.seed<TAB><address><TAB><provenance><TAB><driven><TAB><pinned><TAB><issuer>` — one line;
+ * the address is asserted to contain no tab, because a shifted field would put an address where a token is read.
+ * `driven` and `pinned` are solver/engine.h's PENDING_DRIVEN_* and PENDING_PINNED_* for the declaring flow, and
+ * `issuer` the declaring document's world name, whose record the trusted zone judges the seed by. The ADDRESS
+ * is absolute and serialized (§7.4.4 is handed the result of §7.2.5 step 5's encoding-parse against the
+ * document's own address, so nothing downstream re-resolves it), and URL §"C0 control percent-encode set"
+ * makes TAB unrepresentable in one — the assert is what says that is still true.
  * The PROVENANCE is solver/engine.h's vocabulary, spelled there because the request this seed becomes is
  * decided by the same policy every other outbound request is.
  *

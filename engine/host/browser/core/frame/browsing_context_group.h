@@ -192,9 +192,10 @@ void browsing_context_group_release(void);
  * it, long after the operation that decided what this navigation is evidence of. */
 /* `driven` (solver/engine.h's PENDING_DRIVEN_*) rides beside `provenance` for the same reason: it is whose act
  * the navigation is, and the zone's `actor` row reads it. `pinned` (PENDING_PINNED_*) too: whether the path
- * chose a witness, which the zone's navigation default reads. */
+ * chose a witness, which the zone's navigation default reads. `issuer` too: HTML §7.4.2.2's sourceDocument by
+ * its world name, off the same job, which the zone judges the navigation by. */
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
                                  SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
-                                 const char *pinned);
+                                 const char *pinned, const char *issuer);
 
 #endif

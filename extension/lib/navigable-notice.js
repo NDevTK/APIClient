@@ -62,7 +62,8 @@ var NAVIGABLE_NOTICE = Object.freeze({
     provenance: 4,
     driven: 5,
     pinned: 6,
-    parts: 7,
+    issuer: 7,
+    parts: 8,
     encoding: Object.freeze({
       document: "token",
       address: "token",
@@ -70,6 +71,7 @@ var NAVIGABLE_NOTICE = Object.freeze({
       provenance: "token",
       driven: "token",
       pinned: "token",
+      issuer: "token",
     }),
   }),
   request: Object.freeze({

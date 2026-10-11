@@ -480,14 +480,15 @@ static bool child_in_this_agent(const Origin *child_origin)
 /* A TOP-LEVEL traversable's navigation whose response origin is another agent's, with §7.1.3.2 having kept the
    browsing context: the incoming Document is created in a peer instance of this browsing context group, and the
    navigable here becomes a remote one presenting it. The record is `navigable.navigate <new document> <url>
-   <origin> <provenance> <driven> <pinned>` — the address, what the load is evidence of, whose act it is and
-   whether its path chose a witness, never the bytes: the trusted zone
+   <origin> <provenance> <driven> <pinned> <issuer>` — the address, what the load is evidence of, whose act it
+   is, whether its path chose a witness and which document issued it (§7.4.2.2's sourceDocument), never the
+   bytes: the trusted zone
    loads the address and derives the principal from its own load (SECURITY.md). A top-level traversable has no
    parent, container or ancestor list, and its environments' top-level creation URL is its own address, so the
    zone derives those rather than being sent them. */
 static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
                                  SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
-                                 const char *pinned)
+                                 const char *pinned, const char *issuer)
 {
     uint32_t incoming;
     char *op;
@@ -500,6 +501,8 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
            "a navigation was sent to a peer with no drive mark — the zone's `actor` row reads it");
     DCHECK(pinned != NULL && (!strcmp(pinned, PENDING_PINNED_YES) || !strcmp(pinned, PENDING_PINNED_NO)),
            "a navigation was sent to a peer with no witness mark — the zone's navigation default reads it");
+    DCHECK(issuer != NULL && *issuer,
+           "a navigation was sent to a peer with no sourceDocument — the zone judges it by that document's record");
     DCHECK(final_sandbox_flags == 0,
            "a top-level navigation into a peer carries a non-empty final sandboxing flag set, and the "
            "`navigable.navigate` record carries no flag set — add the set to the record and hand it to the peer's "
@@ -515,6 +518,7 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
             [NAVIGABLE_PROVISION_PROVENANCE] = provenance,
             [NAVIGABLE_PROVISION_DRIVEN] = driven,
             [NAVIGABLE_PROVISION_PINNED] = pinned,
+            [NAVIGABLE_PROVISION_ISSUER] = issuer,
         };
 
         op = engine_notice_build("navigable.navigate", fields, NAVIGABLE_PROVISION_N);
@@ -2237,11 +2241,14 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 const char *swap_prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
                 const char *swap_drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
                 const char *swap_pin = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PINNED));
+                /* …and §7.4.2.2's sourceDocument, the document whose act the navigation is. */
+                const char *swap_iss = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_INITIATOR_DOCUMENT));
 
-                CHECK(swap_prov != NULL && swap_drv != NULL && swap_pin != NULL,
+                CHECK(swap_prov != NULL && swap_drv != NULL && swap_pin != NULL && swap_iss != NULL,
                       "navigable: OOM taking §7.1.3.2's provenance off the load job");
                 browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags, swap_prov, swap_drv,
-                                            swap_pin);
+                                            swap_pin, swap_iss);
+                JS_FreeCString(ctx, swap_iss);
                 JS_FreeCString(ctx, swap_pin);
                 JS_FreeCString(ctx, swap_drv);
                 JS_FreeCString(ctx, swap_prov);
@@ -2255,7 +2262,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        answer (never the bytes — SECURITY.md), and the host route that attaches a Document to a navigable whose
        parent and container stay here. */
     if (!swapped && !in_agent) {
-        const char *peer_prov, *peer_drv, *peer_pin;
+        const char *peer_prov, *peer_drv, *peer_pin, *peer_iss;
 
         DCHECK(window_proxy_is_top_level(proxy),
                "§7.4.5 determined a NESTED navigable's response origin and it is not this agent's, so its "
@@ -2266,9 +2273,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         peer_prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
         peer_drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
         peer_pin = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PINNED));
-        CHECK(peer_prov != NULL && peer_drv != NULL && peer_pin != NULL,
+        peer_iss = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_INITIATOR_DOCUMENT));
+        CHECK(peer_prov != NULL && peer_drv != NULL && peer_pin != NULL && peer_iss != NULL,
               "navigable: OOM taking the provenance off a load whose Document is a peer's");
-        nav_navigate_to_peer(ctx, proxy, dest_url, origin, final_flags, peer_prov, peer_drv, peer_pin);
+        nav_navigate_to_peer(ctx, proxy, dest_url, origin, final_flags, peer_prov, peer_drv, peer_pin, peer_iss);
+        JS_FreeCString(ctx, peer_iss);
         JS_FreeCString(ctx, peer_pin);
         JS_FreeCString(ctx, peer_drv);
         JS_FreeCString(ctx, peer_prov);

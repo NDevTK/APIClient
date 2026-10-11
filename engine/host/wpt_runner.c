@@ -1827,7 +1827,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
-    /* `document.seed <address> <provenance> <driven> <pinned>`: an address the document under test declared is a
+    /* `document.seed <address> <provenance> <driven> <pinned> <issuer>`: an address the document under test declared is a
        page of its own application (solver/route_seed.h), reached whenever a test calls `history.pushState` with a
        URL, as `html/browsers/browsing-the-web/history-*` and many `navigation-api` tests do. This host refuses it:
        a WPT run is the conformance oracle for one document, whose verdict is its own subtests, so there is no
@@ -1846,7 +1846,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
-    if (nf == 5 && !strcmp(f[0], ROUTE_SEED_NOTICE)) {
+    if (nf == 6 && !strcmp(f[0], ROUTE_SEED_NOTICE)) {
         DCHECK(*f[1] != '\0',
                "a route declaration named no address — solver/route_seed.c refuses an empty one at the "
                "emitting end, so a record that arrives with one is a writer this host no longer shares a "
@@ -1859,6 +1859,8 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                "a route declaration carries a drive mark that is neither token engine.h declares");
         DCHECK(!strcmp(f[4], PENDING_PINNED_YES) || !strcmp(f[4], PENDING_PINNED_NO),
                "a route declaration carries a witness mark that is neither token engine.h declares");
+        DCHECK(*f[5] != '\0', "a route declaration named no declaring document — solver/route_seed.c writes the "
+                               "realm's world name");
         free(whole);
         return;
     }
