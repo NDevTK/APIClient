@@ -4112,54 +4112,35 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
                is the crowd's receipt, and the hungriest bucket is already `br_us_max`. */
             g_wfq_census_crowd = br;
         }
-        /* …AND THE MINT PAIR, OVER THE SAME POPULATION AND INSIDE THE SAME GUARD, BECAUSE IT IS THE ORDER'S
-           RANGE AND NOT A RECEIPT. `sub_born` is what flow_branch_bonus divides by, so these two extrema ARE
-           the branch term's range and wfq_accounted_spread reads them as such. A member's weight is only ever
-           read for a member that is STANDING, and a member stands only in a bucket with a live count — so an
-           empty bucket contributes no weight to any comparison, and extrema taken over one describe a range
-           nobody spans. That is `br_live_min`'s own incident, and the reason it is repeated here rather than
-           cited is that the two pairs are folded by two statements and only a guard keeps them one population.
-           `br_born_max` MOVED INSIDE THIS GUARD IN THE DIFF THAT ADDED `br_born_min`, and that is a narrowing
-           of a published row rather than a new row's placement. It used to fold every bucket the walk took,
-           which made it disagree with its own declaration in flow.h ("the most members ever MINTED into one
-           live bucket") and with `br_live_max`, the row flow.h pairs it with. The `br_us_*` pair below
-           deliberately keeps EVERY taken bucket and that is not an inconsistency: RECEIPT is the question
-           those ask, a departed subtree really did receive its thread time, and the burn identity is over the
-           same population. Membership is not receipt, and a maximum that can be owned by a bucket holding
-           nobody is not a statement about the frontier the other row is a share of. */
+        /* And the mint pair, over the same population and inside the same guard, because it is the order's range,
+           not a receipt: `sub_born` is what flow_branch_bonus divides by, so these extrema are the branch term's
+           range (wfq_accounted_spread reads them so). A weight is read only for a standing member, and a member
+           stands only in a bucket with a live count, so extrema over an empty bucket describe a range nobody spans;
+           folded by separate statements, the two pairs are one population only through this guard. flow.h declares
+           `br_born_max` as "the most members ever MINTED into one live bucket", paired with `br_live_max`. The
+           `br_us_*` pair keeps every taken bucket, because receipt is a different question from membership. */
         if (out->br_born_min == 0 || br->sub_born < out->br_born_min) out->br_born_min = br->sub_born;
         if (br->sub_born > out->br_born_max) {
             out->br_born_max = br->sub_born;
-            /* …AND THE BUCKET ITSELF, RETAINED RATHER THAN COPIED, for the reason the crowd's pointer is:
-               writing the three minter rows HERE would put the maximum and its companions in one statement,
-               and `br_minter_live + br_minter_gone == br_born_max` would be an assignment compared with
-               itself. The pointer is dereferenced once, after the walk, so the left side of that identity is
-               a second reading of the bucket's own pair and the right side is this running maximum.
-               THE MINT COUNT IS THE SELECTOR AND THE LIVE COUNT IS NOT, which is the whole difference from
-               the pointer moved a few lines up: this names the arm that has TAKEN the most arms and that one
-               names the arm that HOLDS the most, and they are one bucket only while nothing has been shed.
-               STRICT `>` FOR THE SAME REASON THE CROWD'S IS: two buckets at one mint count leave the maximum
-               and the pointer both at the first, so they cannot name two different buckets. */
+            /* And the bucket itself, retained rather than copied, for the crowd pointer's reason:
+               `br_minter_live + br_minter_gone == br_born_max` then compares a second reading of the bucket's pair
+               (dereferenced once, after the walk) against this running maximum. The mint count is the selector, so
+               this names the arm that has taken the most arms and the crowd the arm that holds the most; they are
+               one bucket only while nothing has been shed. Strict `>`, as the crowd's, so the maximum and the
+               pointer stay at the first of two equal buckets. */
             g_wfq_census_minter = br;
         }
     } else {
-        /* THE EMPTY HALF, AND IT IS NOT A CORNER — branch_take's own note above says a bucket holding nobody
-           is the ORDINARY state of any frontier whose boot flow has finished, because the family-root door
-           takes exactly such a bucket on purpose to keep boot's burn inside the identity. That burn is real
-           receipt and it is what makes `br_us_sum` the wrong denominator for a live arm's share. */
-        /* …AND WHICH BUCKETS MAY BE HERE AT ALL, ASSERTED RATHER THAN ARGUED, BECAUSE IT IS WHAT MAKES
-           `branches` MINUS THE LIVE-BEARING COUNT A KNOWN QUANTITY INSTEAD OF A RESIDUE. The member door
-           passes `f->acct->branch` for a LIVE `f`, and that member's own mint has not been shed, so a bucket
-           reached that way holds at least one and cannot arrive here. Everything here therefore came through
-           the family-root door, where `Flow.family` names a ROOT (`up == NULL`, asserted at the dispatch) and
-           a root's bucket stands at the `sub_born == 1` flow_new wrote — so `live == 0` is its own flow having
-           departed, and acct_depart clears `owner` BEFORE it raises `sub_gone`, which is why both halves are
-           readable at one instant.
-           IT IS NOT THE PARTITION IDENTITY RESTATED, WHICH IS THE TEST THIS FILE APPLIES TO EVERY ADDED
-           ASSERTION. `br_live_sum == members` compares two SUMS and is satisfied by any COMPENSATING pair —
-           one bucket short a mint and another over by one sum correctly while a live member stands in a bucket
-           whose count says nobody does. That pair passes the partition, leaves `br_live_min` untouched (the
-           extrema are folded in the arm above and an empty bucket never reaches them), and fires here. */
+        /* The empty half, the ordinary state of a frontier whose boot flow has finished: the family-root door takes
+           such a bucket to keep boot's burn, real receipt, inside the identity, which is why `br_us_sum` is the wrong
+           denominator for a live arm's share.
+           Which buckets may be here at all, asserted: the member door passes `f->acct->branch` for a live `f` whose
+           own mint has not been shed, so it cannot reach this arm. Everything here came through the family-root
+           door, where `Flow.family` names a root (`up == NULL`, asserted at the dispatch) whose bucket stands at the
+           `sub_born == 1` flow_new wrote, so `live == 0` is its own flow having departed; acct_depart clears `owner`
+           before raising `sub_gone`, so both halves are readable at one instant. Unlike `br_live_sum == members`,
+           which compares two sums any compensating pair satisfies, this fires on a live member standing in a bucket
+           whose count says nobody does. */
         DCHECK(br->up == NULL && br->owner == NULL,
                "the census took a branch bucket with no live member that is not a departed family root — the "
                "member door only ever reaches a bucket it is itself counted in, so a NON-ROOT bucket here is a "
@@ -4182,90 +4163,67 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
 void flow_wfq_census(WfqCensus *out) {
     Flow *top;
     int i;
-    /* THE BEST WEIGHT ANY READY JOB HOLDER OFFERS — held as a separate maximum because `job_w_gap` is a
-       DIFFERENCE against a top the scan does not know until flow_best runs below, and because "no ready
-       holder" must not be spelled the same way as "a ready holder at weight zero". */
+    /* The best weight any ready job holder offers, held as a separate maximum because `job_w_gap` is a difference
+       against a top known only when flow_best runs below, and "no ready holder" must differ from "a ready holder
+       at weight zero". */
     double job_w_max = 0.0;
     int have_job_holder = 0;
-    /* …AND THE SAME PAIR FOR THE REPLY BACKLOG, held separately for the identical reason: `deliv_w_gap` is a
-       DIFFERENCE against a top this scan does not know until flow_best runs below, and "no ready holder" must
-       not be spelled the same way as "a ready holder at weight zero". */
+    /* And the same pair for the reply backlog, for the same reason (`deliv_w_gap`). */
     double deliv_w_max = 0.0;
     int have_deliv_holder = 0;
-    /* AND THE MEMBER ITSELF, because `deliv_w_gap`'s reading needs a TERM and a weight is a sum — see flow.h's
-       `deliv_w_gap_vis`. Held as a pointer rather than as a copied count so the row cannot come to be about a
-       different member than the maximum above it: one `if` writes both. */
+    /* And the member itself, because `deliv_w_gap`'s reading needs a term and a weight is a sum (flow.h's
+       `deliv_w_gap_vis`). A pointer rather than a copied count, written by the same `if` as the maximum. */
     const Flow *deliv_holder = NULL;
-    /* THE BEST WEIGHT ANY NEVER-DISPATCHED MEMBER OFFERS, held the same way and for the same reason as the job
-       holder's: `never_picked_gap` is a DIFFERENCE against a top this scan does not know until flow_best runs
-       below, and "no such member" must not be spelled the same way as "one standing at weight zero". */
+    /* The best weight any never-dispatched member offers, held as the job holder's is (`never_picked_gap`). */
     double never_w = 0.0;
     int have_never = 0;
-    /* …AND HOW MANY NEVER-DISPATCHED MEMBERS STAND AT THAT MAXIMUM, held beside it for the same reason the
-       maximum itself is held here: whether the plateau is AT THE FRONT is a question about a top this scan
-       does not know until flow_best runs below, so the width is COLLECTED here and only ATTRIBUTED to the
-       front there. It costs no weighing — the walk has already computed this member's weight. */
+    /* And how many never-dispatched members stand at that maximum: collected here and attributed to the front once
+       flow_best runs below. It costs no weighing; the walk has this member's weight. */
     long never_at_w = 0;
-    /* …AND THE DEEPEST ROW OF THE DOCUMENT'S PROGRAM TABLE ANY MEMBER IS STANDING AT, WITH THE BEST WEIGHT
-       OFFERED THERE AND HOW MANY STAND WITH IT — held here for the three maxima above's reason exactly:
-       `cur_deep_w_gap` is a DIFFERENCE against a top this scan does not know until flow_best runs below, so
-       the population is COLLECTED here and only ATTRIBUTED to the front there. The `have_` flag is what keeps
-       "no member standing" from being spelled the same way as "a member standing at row 0", which matters
-       here more than at the gaps above: row 0 is where every member of a fresh frontier is. */
+    /* And the deepest row of the document's program table any member stands at, with the best weight there and how
+       many stand with it, collected here for `cur_deep_w_gap` and attributed to the front below. The `have_` flag
+       keeps "no member standing" apart from "a member at row 0", where every member of a fresh frontier is. */
     int cur_deep = 0;
     long cur_deep_live = 0;
     double cur_deep_w = 0.0;
     int have_cur_deep = 0;
 
-    /* THE WEIGHINGS flow_best WILL PERFORM BELOW, READ BEFORE IT RUNS — the other half of what a sample costs,
-       and it is captured here rather than derived afterwards because FLOW_SCAN_OTHER is SHARED (the host's
-       best-weight read and the pager's tail run under it too), so the only way to know what THIS call spent is
-       to bracket it. It is the reference the identity at the end of this function is stated against. */
+    /* The weighings flow_best performs below, read before it runs: FLOW_SCAN_OTHER is shared (the host's best-weight
+       read and the pager's tail run under it), so bracketing is the only way to know what this call spent. The
+       identity at the end of this function is stated against it. */
     long other_before;
 
     DCHECK(out != NULL, "the WFQ was asked to report its ordering into nothing");
-    /* THIS WALK, COUNTED — see flow.h's FLOW_SCANS for why the report's own cost is a row rather than an
-       argument. Raised at the top for flow_pick's reason at its own counter: every exit of this function is one
-       walk performed, and a count taken at the end would miss whichever exit somebody adds next. */
+    /* This walk, counted (flow.h's FLOW_SCANS), at the top for flow_pick's reason: every exit is one walk. */
     g_scan_runs[FLOW_SCAN_CENSUS]++;
     other_before = g_scan_weights[FLOW_SCAN_OTHER];
     out->members = g_flows_n;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
     out->val_arrived = out->val_unplaced = 0;
-    /* THE CLOCK ITSELF, WHICH IS NOT A READING OF THIS WALK. It is the frontier's virtual time at the instant
-       the census is taken — the coordinate every unplaced account is standing at — so it is assigned here,
-       unconditionally, exactly as `nonreward_max` and `picks_lifetime` are: the same number on an empty scan
-       as on a full one. Without it `valMin` and `valUnplaced` are two halves of a sentence with no subject —
-       a reader cannot tell a floor that is TRACKING the clock from one that has been left behind by it. */
+    /* The clock itself, not a reading of this walk: the frontier's virtual time at the census, where every unplaced
+       account stands, assigned unconditionally as `nonreward_max` and `picks_lifetime` are. Without it a reader
+       cannot tell a `valMin` tracking the clock from one left behind by it. */
     out->vt = frontier_vt();
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
     out->never_picked_at_top = 0;
     out->picks_live = out->picks_max = 0;
-    /* THE LIFETIME HALF, WHICH IS NOT A READING OF THIS WALK AND IS ASSIGNED WHERE THAT IS OBVIOUS. It is the
-       count of dispatches this instance has EVER made, so it is unconditional on the frontier the way
-       `nonreward_max` is — the same number on an empty scan as on a full one — and it is the only one of the
-       three pick rows a reader may difference across two censuses. */
+    /* The lifetime half, not a reading of this walk: dispatches this instance has ever made, unconditional, and the
+       only one of the three pick rows a reader may difference across two censuses. */
     out->picks_lifetime = g_picks_total;
-    /* …AND THE SHARE OF IT THAT LEFT, ASSIGNED IN THE SAME BREATH FOR THE SAME REASON AND FOR ONE MORE: it is
-       the half of the distribution the two gauges above structurally cannot see, so publishing it beside them is
-       what makes their partition checkable from OUTSIDE this process, where the DCHECK below is compiled out. */
+    /* And the share of it that left: the half the two gauges cannot see, so publishing it makes their partition
+       checkable from outside the process, where the DCHECK below is compiled out. */
     out->picks_departed = g_picks_departed;
-    /* …AND ITS UNFRAMED SUBSET, ASSIGNED IN THE SAME BREATH AND FOR THE SAME REASON: it is a count of
-       dispatches this instance has made, not a reading of this walk, so it is the same number on an empty scan
-       as on a full one. Publishing the two together is what makes the containment below checkable from
-       outside this process on the document, where the DCHECK is compiled out. */
+    /* And its unframed subset, for the same reason: a count of dispatches, the same on an empty scan as a full one,
+       published so the containment below is checkable on the document. */
     out->unframed_picks_lifetime = g_unframed_picks_total;
-    /* …AND ITS READY SUBSET, ASSIGNED IN THE SAME BREATH FOR THE SAME REASON — a count of dispatches this
-       instance has made, not a reading of this walk, so publishing the three together is what makes both
-       containments checkable on the document where the DCHECKs are compiled out. */
+    /* And its ready subset, likewise, so both containments are checkable on the document. */
     out->ready_picks_lifetime = g_ready_picks_total;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
-    /* …AND THE TWO ROWS THAT SAY WHAT THE NOTCH ABOVE COSTS TO ASK, cleared beside it because they are read
-       over the same walk and off the same quantity (flow.c's flow_silence_phase). The residue map is cleared
-       HERE and not at its declaration, because it is a reading of THIS frontier and a byte surviving from the
-       previous sample would count a phase no member is standing at. */
+    /* And the two rows that price asking the notch, cleared beside it because they are read over the same walk off
+       the same quantity (flow_silence_phase). The residue map is cleared here, not at its declaration, because a
+       byte surviving from the previous sample would count a phase no member stands at. */
     out->sil_phases = out->sil_carry = 0;
     memset(g_phase_seen, 0, sizeof g_phase_seen);
     out->families = 0;
@@ -4279,25 +4237,20 @@ void flow_wfq_census(WfqCensus *out) {
     out->br_minter_live = out->br_minter_gone = 0;
     out->br_minter_us = 0;
     out->br_held_us = out->br_empty_us = 0;
-    /* AND THE RETAINED BUCKET, CLEARED BEFORE THE WALK AS WELL AS AFTER IT IS READ. A pointer surviving from
-       the previous census names a node this one may not reach and a later departure may already have freed,
-       so the crowd rows would be a reading of a bucket that is not this frontier's — or of memory that is no
-       longer a bucket at all. */
+    /* And the retained buckets, cleared before the walk as well as after they are read: a pointer from the previous
+       census may name a node this one does not reach and a later departure has freed. */
     g_wfq_census_crowd = NULL;
     g_wfq_census_minter = NULL;
     out->br_depth_max = 0;
     out->br_fan_max = out->br_fan_sum = 0;
     out->br_fan_depth = 0;
-    /* THE TWO INSTANCE TOTALS, WHICH ARE NOT READINGS OF THIS WALK — assigned unconditionally, exactly as
-       `picks_lifetime` and `nonreward_max` are, so they are the same numbers on an empty scan as on a full
-       one. They are the other two terms of the burn identity asserted at the end of this function, and
-       publishing all three is what makes that identity checkable from outside the process. */
+    /* The two instance totals, not readings of this walk, assigned unconditionally: the other two terms of the burn
+       identity asserted at the end of this function, published so it is checkable from outside the process. */
     out->br_retired_us = g_branch_retired_us;
     out->charged_us = g_charged_us;
-    /* A FRESH MARK FOR THE BUCKET WALK, sharing this scan's generation VALUE and using a mark of its own,
-       because a ROOT is both a family and a branch and one field cannot record being counted once as each. */
-    /* A FRESH MARK FOR THIS SCAN, PAST ZERO, so a node minted since the last census (calloc'd to 0) reads as
-       unmarked rather than as already counted. */
+    /* A fresh mark for this scan, past zero, so a node minted since the last census (calloc'd to 0) reads as
+       unmarked. The bucket walk shares this generation value with a mark of its own (`branch_gen`), because a root
+       is both a family and a branch and one field cannot record being counted once as each. */
     if (++g_wfq_census_gen == 0) g_wfq_census_gen = 1;
     out->vis_min = out->vis_max = 0;
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
@@ -4307,107 +4260,79 @@ void flow_wfq_census(WfqCensus *out) {
     out->w_top = out->w_min = out->cand_w_max = 0.0;
     out->top_svc = out->top_svc_fam = 0;
     out->top_forgiven = 0;
-    /* THE BOUND THE GAP ROWS ARE READ AGAINST, TAKEN FROM THE MACRO flow_nonreward ITSELF ASSERTS — not a
-       constant this scan chose, and not one a reader re-derives. It is unconditional because it is a property of
-       the FORMULA and not of the frontier: it is the same number on an empty scan as on a full one, which is
-       exactly why it can be trusted as the denominator of a reading about members. */
+    /* The bound the gap rows are read against, the macro flow_nonreward asserts: a property of the formula, the same
+       on an empty scan as a full one, which is why it can be the denominator of a reading about members. */
     out->nonreward_max = FLOW_NONREWARD_MAX;
     out->jobs_ready = out->jobs_framed = out->jobs_owed = out->vis_zero = 0;
-    /* …AND THE TWO HALVES OF THE READY ROW, ZEROED ON THEIR OWN LINE RATHER THAN CHAINED ONTO THAT ONE so the
-       partition they state is visible as one statement. A half left un-zeroed would accumulate across censuses
-       while the total it is a half of did not, which is exactly what the sum assert at the end of this scan
-       fires on — the reset and the identity are one contract. */
+    /* And the two halves of the ready row, zeroed on their own line so the partition is one statement; a half left
+       un-zeroed would accumulate across censuses and fire the sum assert at the end of this scan. */
     out->jobs_ready_task = out->jobs_ready_micro = 0;
     out->mem_unframed = 0;
     out->job_w_gap = 0.0;
     out->deliv_ready = out->deliv_framed = out->deliv_owed = 0;
     out->deliv_w_gap = 0.0;
-    /* …AND THE TWO ENDS OF THAT GAP, ZEROED BESIDE IT AND NOT SEPARATELY, because they are only ever WRITTEN
-       beside it: a frontier with no ready holder states no gap and states no counts, and a reader who found
-       one of the three set and the others not would be holding a gap about members this scan never found. */
+    /* And the two ends of that gap, zeroed beside it because they are only written beside it: a frontier with no
+       ready holder states no gap and no counts. */
     out->deliv_w_gap_vis = out->w_top_vis = 0;
-    /* …AND THE SAME SENTENCE FOR THE DOCUMENT-PROGRESS GAP AND ITS POPULATION, zeroed together for the reason
-       the delivery triple is: they are written in ONE branch below, so a reader who found the cursor set and
-       the gap not would be holding a distance to members this scan never found. */
+    /* And the same for the document-progress gap and its population, written in one branch below. */
     out->cur_deep = 0; out->cur_deep_live = 0; out->cur_deep_w_gap = 0.0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
-        /* …AND THE OTHER SIDE OF THE AWAY POPULATION'S IDENTITY, COMPUTED FROM THE ACCESSOR WHILE THE
-           MAINTAINED COUNT IS FOLDED A FEW LINES DOWN FROM THE FAMILY DOOR. This is the direct reading —
-           every member whose flow_own_silence is non-zero stands away from its family's epoch base — and it
-           is deliberately NOT the same route as `epoch_away_live`, which is four incremental statements at
-           four sites. Two maintainers, one walk, one instant: that is what makes the assertion at the end of
-           this function a check rather than a sum compared with its own summands, and what makes a fifth
-           transition site nobody found FIRE instead of drifting. */
+        /* And the other side of the away population's identity, computed from the accessor while the maintained
+           count is folded below from the family door: every member whose flow_own_silence is non-zero stands away
+           from its family's epoch base. A different route from `epoch_away_live` (four incremental statements at
+           four sites), so the assertion at the end is a check and a fifth transition site fires. */
         if (flow_own_silence(f) > 0) out->epoch_away_walk++;
-        /* THE SUM THE PICK USES, not only the terms it is made of — see flow.h for the reading that went wrong
-           without it. One call per member, and this scan still decides nothing. */
+        /* The sum the pick uses, not only its terms (flow.h says what went wrong without it). This scan decides
+           nothing. */
         double w = flow_weight(f);
-        /* …AND PRICED WHERE IT IS TAKEN, exactly as flow_pick prices its own — weight EVALUATIONS and not loop
-           trips, so the two rows are the same quantity and a reader may divide one by the other. This walk
-           skips nothing, so its count is the frontier's size per sample by construction, which is what makes
-           the identity below an assertion rather than a restatement. */
+        /* And priced where it is taken, as flow_pick prices its own: weight evaluations, so the rows are one
+           quantity. This walk skips nothing, so its count is the frontier's size per sample, which makes the
+           identity below an assertion. */
         g_scan_weights[FLOW_SCAN_CENSUS]++;
-        /* …AND WHERE THIS MEMBER STANDS IN THE DOCUMENT'S OWN PROGRAM TABLE, KEPT FOR THE DEEPEST ROW ANYBODY
-           IS AT — see flow.h. Rewritten WHOLESALE when a deeper member is met and accumulated when an equal
-           one is, because the population is "the members at the maximum" and the maximum is not known until
-           the walk ends; a running maximum that only ever climbed would leave the count summing every row it
-           passed through. It costs no weighing: `w` one line up is this member's, taken for `w_min` anyway.
-           `Flow.script_i` AND NOT A DERIVED DEPTH, deliberately: that is the same field cold.c's
-           `program_cursors` histogram buckets on, so the two rows are in ONE unit and a reader may check this
-           maximum against that histogram's top non-empty index. A second spelling of "how far has this member
-           got" would be two quantities one reader would subtract. */
+        /* And where this member stands in the document's program table, kept for the deepest row anybody is at
+           (flow.h). Rewritten when a deeper member is met and accumulated on an equal one, because the population
+           is the members at the maximum. It costs no weighing. `Flow.script_i`, the field cold.c's
+           `program_cursors` histogram buckets on, so this maximum can be checked against that histogram's top
+           non-empty index. */
         if (!have_cur_deep || f->script_i > cur_deep) {
             have_cur_deep = 1; cur_deep = f->script_i; cur_deep_live = 1; cur_deep_w = w;
         } else if (f->script_i == cur_deep) {
             cur_deep_live++;
             if (w > cur_deep_w) cur_deep_w = w;
         }
-        /* HOW MANY DECISIONS THIS FLOW STANDS ON, read from wherever its decision state currently lives: a
-           parked flow's blob, and decide.c's live globals for the one the scheduler is switched into — the
-           same split cold.c's census makes, because there is only one place each can be. Asked of EVERY
-           member and not only the candidates, because the candidates' figure is meaningless without it. */
+        /* How many decisions this flow stands on, read from where its decision state lives: a parked flow's blob,
+           or decide.c's live globals for the flow switched in (cold.c's census makes the same split). Asked of every
+           member, because the candidates' figure means nothing without it. */
         long dec = 0;
-        /* …AND THE POSITION ALONG IT, WHICH IS A DIFFERENT NUMBER AND WAS THE ONE `cand_dec_max` CLAIMED TO
-           BE. `dec` is the chain's LENGTH — decide.c's own accessor says "a caller that wants a DISTANCE
-           TRAVELLED must not take this number: it is the denominator" — and an @S candidate is seeded with the
-           whole detecting chain under a cursor of ZERO, so for a candidate the length is fixed from seeding
-           and the cursor is the only half that moves.
-           BOTH HALVES OF ONE QUANTITY, TAKEN FROM THE TWO PLACES IT LIVES. `Flow.dec_blob` is NULL exactly
-           while a flow is RUNNING (engine.c frees it at the switch-in), so a reading sourced from the blob
-           alone would report a real position for every parked member and ZERO for the incumbent — and that is
-           wrong in the direction that LOOKS LIKE A FIX WORKING, because a number that under-reads whoever
-           holds the thread makes the waiting tail appear to overtake it. The running flow's cursor is
-           decide_cursor(); the same split this loop already makes one line up for the length. */
+        /* And the position along it, a different number and the one `cand_dec_max` reports. `dec` is the chain's
+           length (decide.c: "a caller that wants a DISTANCE TRAVELLED must not take this number: it is the
+           denominator"), and an @S candidate is seeded with the whole detecting chain under a cursor of zero, so for
+           a candidate only the cursor moves. Both come from where the state lives: `Flow.dec_blob` is NULL exactly
+           while a flow runs (engine.c frees it at the switch-in), so a blob-only reading would report zero for the
+           incumbent, under-reading whoever holds the thread. The running flow's cursor is decide_cursor(). */
         long cur = 0;
 
         if (f->dec_blob) { decide_blob_stats(f->dec_blob, &dec, NULL); cur = decide_blob_cursor(f->dec_blob); }
         else if (f == g_running) { decide_live_stats(&dec, NULL); cur = decide_cursor(); }
         if (dec > out->dec_max) out->dec_max = dec;
-        /* A POSITION CANNOT LIE OUTSIDE THE PATH IT IS A POSITION ON, asserted where the two are in one hand
-           for the first time. Each source checks its own half — decide_blob_cursor against its blob's chain,
-           decide_live_stats and decide_cursor against the live vector — and neither can see the pair this loop
-           has just composed out of two calls, which is precisely where a future edit that takes the length
-           from one member and the cursor from another would land. */
+        /* A position cannot lie outside the path it is on, asserted where both are in one hand. Each source checks
+           its own half (decide_blob_cursor against its blob, decide_live_stats and decide_cursor against the live
+           vector), and neither sees the pair this loop composes from two calls. */
         DCHECK(cur >= 0 && cur <= dec,
                "the WFQ census composed a replay position outside the recorded path it is a position on — the "
                "length and the cursor were taken from one member by two calls, so this is those two calls "
                "having come to be about different flows, and every fraction built from the pair would exceed "
                "one or go negative");
 
-        /* THE REWARD ROWS READ THE TERM THE ORDER IS MADE OF, which is the FAMILY's — a census denominated in
-           a quantity the pick does not read is the shape flow.h's own paragraph describes, where a spread was
-           taken as "the reward term is ordering the frontier" on a run whose top weight the spread had nothing
-           to do with. Reached per MEMBER because a family has no member of its own to be asked, so a family
-           with N arms contributes its reward N times to these extrema — which is right for a SPREAD (it is the
-           range the pick can see across the members it ranks) and is exactly why `families` is reported beside
-           them: on a one-family frontier this spread is zero by the structure, and a non-zero one is a
-           statement about several accounts rather than about one page's branching.
-           NO MEMBER MAY HOLD MORE THAN ITS ACCOUNT DOES, asserted where both are in one hand. `Flow.val` is
-           what this ONE member emitted and every point of it was credited to its family in the same call, so a
-           member standing above its own family is one whose two writers came apart — and the only symptom
-           would be a `self_emit` row counting emissions the order never saw. */
+        /* The reward rows read the term the order is made of, the family's. Reached per member, so a family with N
+           arms contributes its reward N times to these extrema, which is right for a spread (the range the pick sees
+           across the members it ranks) and is why `families` is reported beside them: on a one-family frontier the
+           spread is zero by structure, and a non-zero one is about several accounts.
+           No member may hold more than its account: `Flow.val` is what this member emitted, every point of it
+           credited to its family in the same call, so a member above its family is one whose two writers came apart,
+           visible otherwise only as a `self_emit` row counting emissions the order never saw. */
         DCHECK(f->val <= acct_family_val(f) ||
                f->family == NULL,   /* departed members are not walked, but the read is stated as the pair */
                "a member of the frontier has emitted more than the fork family it is credited to holds — the "
@@ -4416,121 +4341,71 @@ void flow_wfq_census(WfqCensus *out) {
         if (i == 0 || acct_family_val(f) < out->val_min) out->val_min = acct_family_val(f);
         if (i == 0 || acct_family_val(f) > out->val_max) out->val_max = acct_family_val(f);
         if (acct_family_val(f) == 0.0) out->val_zero++;
-        /* …AND THE POPULATION THE ROW ABOVE STOPPED NAMING THE DAY AN ARRIVAL GOT A REWARD TAG — accounts that
-           have EARNED nothing, whatever coordinate they were placed at. The two were one test while a
-           from-baseline flow entered at zero; flow_arrive_at_virtual_time places it at the flow in service, so
-           an @S candidate session now stands at the leader's reward having emitted nothing, which is outside
-           the ceiling row and is exactly the population a pinned `val_min` is about. It is one field read
-           because FlowAcct's reward is two quantities — see there for why the ledger and the coordinate had to
-           be separable before this question could be asked at all. */
+        /* And accounts that have earned nothing, whatever coordinate they were placed at: an arrival stands at the
+           frontier's virtual time (flow_arrive_at_virtual_time), so an @S candidate session can stand at the
+           leader's reward having emitted nothing, outside the zero row and exactly the population a pinned
+           `val_min` is about. One field read, because FlowAcct's reward is two quantities. */
         if (f->family && f->family->earned == 0.0) out->val_arrived++;
-        /* …AND THE SUBSET OF THOSE WHOSE COORDINATE IS STILL A READING RATHER THAN A TAG, which is the one
-           question that separates a candidate the order has never reached from one it has served and passed.
-           Both answer `val_arrived`; only this one is still tracking `vt`, so `valArrived - valUnplaced` is
-           the population that HAS held the thread and emitted nothing with it — the members a search should be
-           mutated toward, rather than the members it has never been given. Read off the account for the reason
-           the row above is: placement is a fact about the account, and every arm of a family reads it through
-           the one pointer, so a fork cannot carry it differently. */
+        /* And the subset whose coordinate is still a reading rather than a tag, which separates a candidate the
+           order has never reached from one it served and passed: `valArrived - valUnplaced` is the population that
+           held the thread and emitted nothing, the members a search should be mutated toward. Read off the account,
+           since placement is a fact every arm reads through one pointer. */
         if (f->family && !f->family->placed) out->val_unplaced++;
-        /* …AND WHAT THIS MEMBER ITSELF PUT THERE, which is the one question the account cannot answer and the
-           reason `Flow.val` exists at all. It is not a subtraction any more: nothing is inherited, so a
-           member's own ledger IS what it emitted since it was born. */
+        /* And what this member itself put there, the question the account cannot answer: nothing is inherited, so a
+           member's ledger is what it emitted since birth. */
         if (f->val > 0.0) out->self_emit++;
-        /* HOW MANY MEMBERS STAND AT ZERO OF THE AGING'S OWN HALF — read through flow_own_silence, which is the
-           quantity the order is made of, and NOT off `Flow.cpu`, which is that quantity only while its window
-           mark is current. Reading the raw field was not a cosmetic difference: over the 71 censuses of the
-           run this row was last measured on it was nonzero exactly TWICE, both while the frontier was under a
-           thousand members, and ZERO for every census after it passed one — because past the first forks every
-           member carries a nonzero inherited burn and nothing but a dispatch ever clears it, which is exactly
-           the defect FlowAcct's `emit_gen` removes. */
+        /* How many members stand at zero of the aging's own half, read through flow_own_silence, the quantity the
+           order is made of, rather than `Flow.cpu`, which is that quantity only while its window mark is current. */
         if (flow_own_silence(f) == 0) out->unrun++;
-        /* …AND THE POPULATION THE ROW ABOVE CANNOT NAME, for the reason its own comment gives: zero own silence
-           is also what an emission by ANY arm of this member's family produces, so a member that has run and
-           whose account has PRODUCED is counted there. A member
-           that has never been handed the thread is the population §scheduler's razor says the ordering may
-           never create, and `picks` is the only field in this struct nothing resets. The best weight among
-           them is carried out to the gap below rather than reported raw: how far the most-favoured starved
-           member stands behind the flow the pick actually returned is the reading, and the count alone cannot
-           make it (flow.h). */
+        /* And the population the row above cannot name: zero own silence is also what an emission by any arm of the
+           family produces. A member never handed the thread is the population starvation is about, and `picks` is
+           the one field nothing resets. The best weight among them goes to the gap below: how far the most-favoured
+           starved member stands behind the pick is the reading, which the count cannot make (flow.h). */
         if (f->picks == 0) {
             out->never_picked++;
-            /* THE MAXIMUM AND THE WIDTH OF IT, TAKEN IN ONE PASS AND WITHOUT A SECOND WEIGHING. The width
-               RESETS with the maximum rather than accumulating beside it: a member that raises `never_w`
-               establishes a new plateau of one, and every later member reading EXACTLY that weight joins it.
-               EXACT `==` AND NO EPSILON, which is this file's established idiom rather than a shortcut — two
-               members standing at one another are reading ONE value twice (flow_queue_nonreward says so of the
-               arrival equality, and flow_fork_inherit's rank-neutrality check is an exact double equality over
-               flow_weight), so a tolerance here would admit members the PICK can already tell apart and would
-               report a plateau the ordering does not have. */
+            /* The maximum and its width in one pass, without a second weighing: the width resets with the maximum,
+               and every later member at exactly that weight joins it. Exact `==` with no epsilon, this file's idiom
+               (two members at one weight read one value twice), so the plateau is one the order has. */
             if (!have_never || w > never_w) { never_w = w; have_never = 1; never_at_w = 1; }
             else if (w == never_w) never_at_w++;
         }
-        /* …AND HOW THE DISPATCHES THAT DID HAPPEN WERE DISTRIBUTED OVER THE MEMBERS THAT GOT THEM, which is the
-           question `never_picked` structurally cannot ask and which takes OPPOSITE work from the one it can.
-           §scheduler's razor forbids a resume that "drops, starves, skips, reorders, or forgets ANY flow", and
-           `never_picked` climbing beside a growing `members` is the tail not being reached — but it is ONE
-           answer covering THREE states, which is the defect shape CLAUDE.md names in the instrument built to end
-           it. A frontier of M members, P of them ever chosen, and T dispatches spent is:
-             T / P near 1   the thread reached a FRESH member almost every time and the frontier is simply
-                            growing faster than one thread serves it. Nothing here is an ordering defect; the
-                            answer is throughput, and no weight change reaches it.
+        /* And how the dispatches that did happen were distributed over the members that got them, which
+           `never_picked` cannot ask. `never_picked` climbing beside `members` is one answer covering three states.
+           A frontier of M members, P of them ever chosen, and T dispatches spent is:
+             T / P near 1   the thread reached a fresh member almost every time and the frontier grows faster
+                            than one thread serves it: throughput, which no weight change reaches.
              T / P large,
              picks_max
-             near T / P     a REACHABLE COHORT is being swept over and over while the tail waits — the ordering
-                            is returning members it has already served ahead of members it has never served,
-                            which is the state a weight term has to answer for.
+             near T / P     a reachable cohort is swept repeatedly while the tail waits: the order returns members
+                            it has served ahead of members it has not, which a weight term must answer for.
              picks_max
-             near T         ONE member is holding the thread and the switches are it and one rival trading —
-                            a monopolizer the aging term is failing to sink, which is a different repair again.
-           Two of those three take a weight change and they take DIFFERENT weight changes, and the third takes
-           none at all; a report that cannot separate them is one a search cannot be directed by. `picks_live`
-           is the numerator (T restricted to the members still standing) and `picks_max` is what tells the
-           second state from the third; `members - never_picked` is P and is already on the same line.
-           IT IS A GAUGE AND IT SAYS SO — see `g_picks_total` for why the lifetime half is a separate quantity
-           held off the flows entirely, and flow.h's row for the identity that ties them. */
+             near T         one member holds the thread and the switches are it and one rival trading: a
+                            monopolizer the aging term fails to sink, a different repair.
+           `picks_live` is the numerator (T over standing members) and `picks_max` tells the second state from the
+           third; `members - never_picked` is P. A gauge; `g_picks_total` is the lifetime half, held off the flows,
+           and flow.h's row states the identity that ties them. */
         out->picks_live += f->picks;
         if (f->picks > out->picks_max) out->picks_max = f->picks;
-        /* THE OPTIMISM TERM'S OWN COORDINATE — completed units of work, which no service row can stand in for
-           (flow.h). `vis_max == 0` on a frontier of thousands is the statement that not one member has reached
-           the end of a program, and therefore that not one queued job can have run, whatever the switch and
-           fork counts say. It is the number that separates "being served fairly" from "finishing nothing". */
+        /* The optimism term's coordinate, completed units (flow.h). `vis_max == 0` on a frontier of thousands says no
+           member has reached the end of a program, so no queued job can have run, whatever the switch and fork
+           counts say. */
         if (i == 0 || f->visits < out->vis_min) out->vis_min = f->visits;
         if (f->visits > out->vis_max) out->vis_max = f->visits;
-        /* …AND HOW MANY MEMBERS STAND AT ZERO OF IT, which `vis_min` cannot say — see flow.h. */
+        /* And how many members stand at zero of it, which `vis_min` cannot say (flow.h). */
         if (f->visits == 0) out->vis_zero++;
-        /* AND HOW MANY HOLD NO FRAME, taken HERE rather than off the cold line so that it and `members` are
-           one sample from one walk — it is what separates `jobs_ready`'s two zeroes, and a count from another
-           instant cannot separate anything.
-           IT IS NOT THE JOB ARM'S PREDICATE AND HAS NOT BEEN SINCE THAT ARM WAS RE-SPELLED, WHICH IS WHY THIS
-           ROW'S OWN CLAIM IS REWRITTEN RATHER THAN DELETED. It read "spelled with the same predicate the job
-           arm below is written against, which is the whole content of the assert at the end of this scan",
-           and that was true only while the job split asked `frame` alone. The split asks flow_stack_empty now,
-           because HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3 has a SECOND half — a
-           row at the cursor marked DYN_POS_IMMEDIATE — and this row still counts `frame == NULL`. The two are
-           a CONTAINMENT and never an identity, which the scan's tail already says in its own words; a reader
-           who re-derives the retired sentence re-spells one of them to match the other, and `memUnframed` then
-           stops being the upper bound the ready rows are published against.
-           SO THE CONTAINMENT IS ASSERTED PER MEMBER, WHICH IS THE ONE THING THE TAIL ASSERTS CANNOT DO. Those
-           two are written over TOTALS (`jobs_ready == 0 || mem_unframed > 0`) and their messages rest on the
-           words "by construction" — a claim that flow_stack_empty's FIRST LINE and THIS line agree, held by
-           convention across five thousand lines of one file. Their own paragraph states what they gave up:
-           "what the assert stopped being able to catch is a re-spelling of `mem_unframed`". This catches it,
-           because the assert and the count read ONE expression: re-spell the count and the assert follows the
-           re-spelling, so a predicate that stops containing flow_stack_empty's population fires at the member
-           that breaks it rather than reaching the published rows as a bound that is not one.
-           ONE-SIDED, AND THE CONVERSE IS FALSE BY DESIGN RATHER THAN MERELY UNASSERTED — which is the clause a
-           reader needs before reaching for `==`. A member holding no frame whose cursor names a
-           DYN_POS_IMMEDIATE row is HTML §4.12.1.1 "Processing model"'s "Otherwise, immediately execute the
-           script element el, even if other scripts are already executing": it is inside `mem_unframed` and
-           flow_stack_empty refuses it, so an equality here would fire on every document that injects a
-           script from a script.
-           IT CANNOT FAIL AT THIS REVISION AND THAT IS THE POINT — it is a design invariant and not a test, in
-           §Offensive-programming's sense. What makes it a check rather than a tautology is that its two
-           operands live in two functions five thousand lines apart and are independently editable, which is
-           exactly the drift the tail's paragraph names and declines to cover.
-           HOW ITS ABSENCE WOULD SHOW: `jobsReady` or `delivReady` above zero beside a `memUnframed` that no
-           ready member is inside — a state both tail asserts PASS, because a total above zero satisfies them
-           whatever population it was taken over. */
+        /* And how many hold no frame, taken here so it and `members` are one sample from one walk; it separates
+           `jobs_ready`'s two zeroes. It is not the job arm's predicate: the split asks flow_stack_empty, which has a
+           second half (a row at the cursor marked DYN_POS_IMMEDIATE, HTML §8.1.4.4 "Calling scripts"' clean up after
+           running script step 3), while this row counts `frame == NULL`. The two are a containment, asserted per
+           member: the tail's asserts are over totals (`jobs_ready == 0 || mem_unframed > 0`) and cannot see a
+           re-spelling of `mem_unframed`, while here the assert and the count read one expression, so a predicate
+           that stops containing flow_stack_empty's population fires at the member that breaks it. One-sided by
+           design: a member holding no frame whose cursor names a DYN_POS_IMMEDIATE row is HTML §4.12.1.1
+           "Processing model"'s "Otherwise, immediately execute the script element el, even if other scripts are
+           already executing", inside `mem_unframed` and refused by flow_stack_empty, so `==` would fire on every
+           document that injects a script from a script. A design invariant whose operands live in two functions far
+           apart and are edited independently; its absence would show as `jobsReady` or `delivReady` above zero
+           beside a `memUnframed` that no ready member is inside, which both tail asserts pass. */
         {
             const int unframed = (f->frame == NULL);
             DCHECK(!flow_stack_empty(f) || unframed,
@@ -4543,127 +4418,28 @@ void flow_wfq_census(WfqCensus *out) {
                    "against, so from here it is a bound over a population neither ready arm is inside");
             if (unframed) out->mem_unframed++;
         }
-        /* THE JOB BACKLOG SPLIT BY WHAT IT IS WAITING ON — the three states flow.h names, decided by the two
-           predicates the engine already asks and in the order it asks them. flow_pick refuses a host-owed
-           member outright, so that question comes first; among the members the pick will consider, HTML
-           §8.1.4.4 "Calling scripts"'s clean up after running script step 3 ("If the JavaScript execution
-           context stack is now empty, perform a microtask checkpoint") is what every job arm of flow_step is
-           under. Whatever is left waits on RANK, and it is the only one of the three the ordering can move.
-           Written as if/else-if/else rather than three tests so the classes are disjoint and exhaustive BY
-           CONSTRUCTION: a member holding jobs has exactly one reason, and a fourth reason has nowhere to be
-           folded into.
-           AND `frame` IS NOT THAT STACK, WHICH IS THE RETIRED ARGUMENT AND IS REWRITTEN HERE RATHER THAN
-           DELETED BECAUSE IT IS THE ONE A READER RE-DERIVES. This arm read `f->frame` under a note saying so,
-           and the delivery split twenty lines down said the job rows read `frame` "because that is what THEIR
-           arms read". flow_run_one_job has exactly TWO call sites and NEITHER of them reads `frame` alone: the
-           checkpoint arm is guarded on flow_checkpoint_due, which is `flow_job_microtask && flow_stack_empty`,
-           and flow_stack_empty is this engine's own statement of HTML §8.1.4.4's sentence — a live frame OR
-           a row at the cursor marked DYN_POS_IMMEDIATE, that row being the synchronous tail of the program
-           that queued it, so the stack is not empty for it either. The quotation was right and the predicate
-           named for it was one conjunct short, which is the shape a reviewer passes: the spec sentence checks
-           out.
-           WHAT IT COST IS A ROW POINTING AT THE WRONG COMPONENT. `jobs_ready` is published as "waits on RANK
-           ALONE … the only one of the three the ordering can move", so a member the LADDER holds off was
-           reported as one the ORDER had not got to, and `job_w_gap` — taken over the same holders — then read
-           ~0 and said the backlog "is not an ordering problem at all". Those two sentences together close the
-           question, and they closed it toward the scheduler.
-           ASKED THROUGH THE ARM'S OWN GUARD AND NOT A SECOND SPELLING OF IT, which is also what keeps this
-           honest as the arm moves: flow_stack_empty is the function flow_checkpoint_due calls, so an edit to
-           the checkpoint's precondition reaches this census without anybody remembering to come here.
-           NAMED RESIDUAL — this row is CORRECT for a MICROTASK and NARROWER than the question for a TASK.
-           NOT COVERED: a member that satisfies flow_stack_empty and holds a job with JOB_TASK set while its
-           cursor names a row the flow CAN RUN. flow_step's task arm used to bind its `else` to
-           `f->script_i < f->dyn_n`, which made the uncovered population every member whose cursor named a row
-           AT ALL; it binds to `seq_compiles` now — `a program STARTS on this step` — so a member parked on an
-           external script row does reach its jobs and this row is exact for it. What is left is the member
-           whose next row is RUNNABLE: the sequence arm takes every such step, so no pick reaches that job and
-           this row still calls it ready. THAT HALF IS EXACT AND HAS BEEN MEASURED EXACT: on two independent
-           real-page runs every pick that ever reached an unframed member took the sequence arm and raised
-           `progStarts`, and `_jobsRun` stayed at zero — `progStarts` equals the number of frame-ends the run
-           consumed plus one (the boot flow, which had no prior frame-end) in BOTH runs, 22 against 21 and 17
-           against 16. Not one pick of this population has ever reached the job arm.
-           AND THAT POPULATION NOW HAS A COUNT RATHER THAN A DERIVATION: `jobs_ready_task`, raised in the arm
-           just below this one. This residual's NOT COVERED clause is a claim about the TASKS inside
-           `jobs_ready`, and until that row existed the only way to size it was the four-bucket step partition
-           plus the argument above. IT IS NOT RETIRED BY THAT ROW — the row measures the population, it does
-           not stop the population being reported as rank-ready — and what it buys is that the two halves of
-           this row's error are separable: the microtask half is exact, and the task half is exactly
-           `jobs_ready_task`.
-           NEXT DIFF: REWRITTEN TWICE NOW, AND THE SECOND REWRITE IS THE ONE WORTH READING, BECAUSE THE CLAUSE
-           THAT REPLACED THE FIRST WAS ITSELF REFUTED — BY THE ROW THE SAME PARAGRAPH ASKED FOR.
-           THE FIRST CLAUSE read: the per-source task queue that arm's own residual names — a source on a
-           `jobs` entry as it is now on a row — after which the arm's reachability stops depending on the
-           cursor at all and the ready/framed line is exact for both kinds.
-           THE SECOND CLAUSE said that one moves no number: `it decides WHICH ARM RUNS FOR A MEMBER THAT IS
-           PICKED, and this population is not being picked at all`, measured on two runs by the four-bucket
-           step partition — `units + midProgram + parked + checkpointOwed == steps` is asserted at
-           engine_frontier_census, and every bucket an unframed member's step could land in was held flat over
-           the interval (`progStarts` frozen, `jobsRun` 0, `run-a-task` 0, `microtask-checkpoint` 0,
-           `unitParked` 0, `unitCheckpointOwed` 0, `deliver-one-reply` flat at the reply count) — so the
-           population received ZERO of 21983 and 3554 dispatches while growing to 273 and 124 members.
-           THE PREMISE OF THE SECOND IS FALSE AND `ready_picks_lifetime` IS WHAT FALSIFIED IT, which is the
-           enumeration four paragraphs down working exactly as written: it names three readings, says `above
-           zero with _jobsRun flat` is the second of them — `the dispatch DOES take it and flow_step's LADDER
-           declines the job at an arm above the one that would run it` — and a real-application drive answered
-           `readyPicksLifetime 243` against `_jobsRun 0`, `jobsReadyTask 104` and `run-a-task 0`. The
-           population IS being picked. So the clause was not stale: it was an inference from a SUPERSET row
-           (`unframed_picks_lifetime`) standing in for a subset the tree could not then measure, and the very
-           row this paragraph asked for is the one that took it apart.
-           WHAT THAT COST AND WHAT IT DID NOT. Nothing was built to it, because the row landed first — which is
-           the mechanism working rather than luck, and is the whole argument for publishing a row instead of
-           an inference. What it WOULD have cost is exact and is worth stating, because the clause reads as a
-           refusal: a lane holding it declines the ladder fix and goes to flow_pick, which the same census
-           exonerates (`jobWGap` 0 at every census that has one — the order already ranks this population at
-           its front).
-           THE METHOD IS THE FINDING AND NOT THE SENTENCE. Both clauses were written from a step partition
-           whose buckets are counted over WHOLE RUNS and read as though they were counted over the population
-           in question; a bucket held flat says the population ran nothing, and `nothing was picked` and `what
-           was picked declined at an arm` produce the identical flat bucket. A reading that cannot separate
-           two states may not be spent naming one of them, which is this file's own three-states rule met on
-           the inside. The row that CAN separate them was already named here as the next diff; the clause
-           should have said `unknown until that row exists` and said `moves no number` instead.
-           THE LADDER FIX HAS NOW LANDED (engine.c's task ladder binds to ARRIVAL rather than to the carrier),
-           and it is NOT the first clause either: that one said one queue per source, and what the ladder
-           needed was one CLOCK across the carriers — strictly wider, since it orders a source no producer has
-           written yet. The `jobs` entry does carry a stamp now (flow.h's job-record bullet), so the half of
-           the first clause that was about plumbing is built and the half that was about per-source queues is
-           superseded rather than done.
-           WHAT IS UPSTREAM OF THE ARM ORDER IS THEREFORE THE QUESTION, AND THIS ROW'S OWN PAIR STATES IT AS AN
-           IMPOSSIBILITY RATHER THAN A MECHANISM. `job_w_gap` is `w_top` minus the best weight any member of
-           this population offers, both taken through `flow_weight` and `w_top` taken from flow_best's own
-           return — one function, one walk — so a gap of zero says the front of the order IS one of these
-           members. It reads zero at EVERY census of both runs that has one, and `cur_deep_w_gap` reads zero
-           beside it. THREE readings survive and they take opposite work: the order ranks this population at
-           its front and the dispatch does not take it; the dispatch DOES take it and flow_step's LADDER
-           declines the job at an arm above the one that would run it; or `w_top` and `job_w_max` are not the
-           quantities the dispatch compares at all. The third is written into the enumeration rather than
-           corrected beneath it, which is what this paragraph's own retirement asked for: a two-way choice
-           between a SCHEDULER fault and a COMPARATOR fault had no room for a LADDER fault, and the NOT COVERED
-           clause naming the ladder was six lines up while the pair below it went on sending the reader to
-           flow_pick.
-           THE FIRST TWO ARE A ROW NOW AND NOT AN INFERENCE — `ready_picks_lifetime`, published beside
-           `unframed_picks_lifetime`, whose legend in flow.h states the triple: zero here with the superset
-           non-zero is the first, above zero with `_jobsRun` flat is the second. `unframed_picks_lifetime`
-           alone could only refute `never taken` for the SUPERSET, which is why naming one arm on the strength
-           of it would have been the wrong-narrowing move this file refuses everywhere else. What IS
-           established is that the reading `jobs_ready` publishes — `waits on RANK ALONE` — is not an ordering
-           problem the weight can be shown to have, because the same census says these members are already at
-           the front of it.
-           HOW ITS ABSENCE SHOWS: a census publishing `jobsReady` above zero with `jobWGap` at zero, on a run
-           whose LIFETIME `_jobsRun` never leaves zero — a backlog standing at the front of the order that the
-           order cannot move, which is the pair this row exists to make impossible to say. IT HAS FIRED, on
-           every real-page census of both runs, which is why the paragraphs above exist: the clause was written
-           as a thing to watch for and it is a description of the ordinary state of this engine on a real
-           document. THE RETIREMENT CLAUSE THAT STOOD HERE IS SATISFIED AND THE ROW IT ASKED FOR IS
-           `unframedPicksLifetime`, raised in flow_credit_pick and published beside `memUnframed`. What that
-           retires is this paragraph's standing in for a MEASUREMENT: the two readings are separated by a row
-           now, and the legend that says which value means which lives at `unframed_picks_lifetime` in
-           flow.h, beside the gauge it is the counter for, where a reader who meets the number will be. THE ROW HAS NOW
-           BEEN READ AND THE READING IS AT THAT LEGEND, so what is left standing here is the analysis and not
-           the wait: a reader holding the digit needs the statement of what each outcome implies, and the
-           NOT COVERED clause above is the arm the answer turned out to be about. RETIREMENT: this paragraph
-           goes when the ladder's own arm order is settled, because the reachability question it exists to
-           frame is then answered at flow_step rather than inferred from a census here. */
+        /* The job backlog split by what it waits on, in the order the engine asks: flow_pick refuses a host-owed
+           member, so that comes first; among the rest, HTML §8.1.4.4 "Calling scripts"' clean up after running
+           script step 3 ("If the JavaScript execution context stack is now empty, perform a microtask checkpoint")
+           is what every job arm of flow_step is under; whatever is left waits on rank, the one class the order can
+           move. if/else-if/else, so the classes are disjoint and exhaustive. Asked through the arm's own guard:
+           flow_run_one_job's two call sites are guarded on flow_checkpoint_due (`flow_job_microtask &&
+           flow_stack_empty`) and the task arm, and flow_stack_empty is that sentence (a live frame or a
+           DYN_POS_IMMEDIATE row at the cursor), so an edit to the checkpoint's precondition reaches this census.
+           `job_w_gap` is `w_top` minus the best weight a ready holder offers, both through flow_weight from one
+           walk, so zero says the front of the order is one of these members. Three readings then take opposite
+           work: the dispatch does not take them; it takes them and flow_step's ladder declines the job at an arm
+           above the one that would run it; or `w_top` and `job_w_max` are not what the dispatch compares.
+           `ready_picks_lifetime`, beside `unframed_picks_lifetime`, separates the first two (zero with the superset
+           non-zero is the first; above zero with `_jobsRun` flat the second; flow.h's legend at
+           `unframed_picks_lifetime`).
+           Named residual. Not covered: this row is exact for a microtask and narrower than the question for a task.
+           A member satisfying flow_stack_empty that holds a task job while its cursor names a runnable row is
+           reached only in arrival order (flow_task_precedes, engine.c's task ladder), so this row calls the job
+           rank-ready while the ladder, not the rank, holds it; `jobs_ready_task` sizes that population. Next diff
+           builds: the ladder's arm order settled at flow_step, after which reachability is answered there rather
+           than inferred from this census. Absence shows as: a census with `jobsReady` above zero and `jobWGap` at
+           zero on a run whose lifetime `_jobsRun` never leaves zero, the ordinary state on real documents. */
         {
             int jn = flow_job_pending(f);
             if (jn > 0) {
@@ -4673,37 +4449,25 @@ void flow_wfq_census(WfqCensus *out) {
                     int jt, jm;
 
                     out->jobs_ready += jn;
-                    /* …AND SPLIT AGAIN ON THE ONE AXIS THAT DECIDES WHICH ARM OF flow_step CAN TAKE THE JOB —
-                       see flow.h. The split above says what a job WAITS ON; this says which arm DISPATCHES it,
-                       and a MICROTASK's arm (the checkpoint) stands ABOVE the program sequence while a TASK's
-                       stands below it, so `jobs_ready` calls rank-ready two populations of which one is also
-                       waiting on the ladder to reach its arm.
-                       TAKEN HERE, INSIDE THE ARM THAT ALREADY ADMITTED THIS MEMBER, so the queue walk it costs
-                       is paid only for the population `mem_unframed` bounds and never once per member — an
-                       instrument that ran at the frequency of the frontier would be measuring a different run.
-                       BOTH HALVES COME FROM flow_job_kinds AND NEITHER IS `jn` MINUS THE OTHER, because the
-                       sum asserted at the end of this scan is what states the partition, and a subtracted half
-                       makes that assert one whose two sides cannot disagree. */
+                    /* And split again on the axis that decides which arm of flow_step can take the job (flow.h): a
+                       microtask's arm (the checkpoint) stands above the program sequence and a task's below it, so
+                       `jobs_ready` calls rank-ready two populations of which one also waits on the ladder. Taken
+                       inside the arm that admitted this member, so the queue walk is paid only for the population
+                       `mem_unframed` bounds. Both halves come from flow_job_kinds, neither is `jn` minus the
+                       other, so the sum asserted at the end of this scan can fail. */
                     flow_job_kinds(f, &jt, &jm);
                     out->jobs_ready_task  += jt;
                     out->jobs_ready_micro += jm;
-                    /* THE BEST OF THEM, against which `job_w_gap` is taken below. A maximum and not a first
-                       hit: the question is how far the backlog's BEST claim stands from the front of the
-                       queue, and any other holder is further still. */
+                    /* The best of them, against which `job_w_gap` is taken: how far the backlog's best claim stands
+                       from the front of the queue. */
                     if (!have_job_holder || w > job_w_max) { job_w_max = w; have_job_holder = 1; }
                 }
             }
         }
-        /* AND THE SAME THREE QUESTIONS OF THE REPLY BACKLOG — see flow.h. Asked through the delivery arm's
-           OWN guard (flow_stack_empty) rather than through `frame` alone, because that is the predicate
-           engine.c's arm is written against and this row exists to say whether that arm can run. The job rows
-           above are now asked the same way and for the same reason; the clause that stood here saying they
-           read `frame` "because that is what THEIR arms read" was a claim about flow_step that flow_step does
-           not support, and its repair is written out at the job split itself. Same if/else-if/else shape, so
-           the three classes are disjoint and exhaustive by construction and a fourth reason has nowhere to
-           hide.
-           `pending_ready` and not `pending_deliverable_count`: the register is walked once per report by
-           cold_census for the DEBT, and what this needs is only whether this member holds one. */
+        /* And the same three questions of the reply backlog (flow.h), asked through the delivery arm's own guard
+           (flow_stack_empty), the predicate engine.c's arm is written against, as the job rows are. Same
+           if/else-if/else shape. `pending_ready` rather than `pending_deliverable_count`: cold_census walks the
+           register once per report for the debt, and this needs only whether this member holds one. */
         if (pending_ready(f->pending)) {
             if (flow_host_owed(f))        out->deliv_owed++;
             else if (!flow_stack_empty(f)) out->deliv_framed++;
