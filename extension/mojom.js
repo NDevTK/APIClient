@@ -765,6 +765,23 @@
                  "this zone decides, and then nobody is waiting. It is reported rather than swallowed because " +
                  "a zone that refuses requests nothing is parked on is a zone whose own pairing has drifted" },
           WORKING_SET] },
+
+      /* CSP §4.1.2 "Should request be blocked by Content Security Policy?" asked of a document this instance
+         holds, for its answer alone (main.c's qjs_check_request_policy): no report, no event, no flow. The
+         trusted zone holds no CSP matcher, so the instance holding the document is the one that answers. */
+      { ordinal: 25, name: "CheckRequestPolicy",
+        params: [
+          DOCUMENT_ID,
+          { name: "url", type: "string", retained: false,
+            why: "the request's URL as the zone's URL parser serialized it, which the engine's parser accepts " +
+                 "against no base" },
+          { name: "destination", type: "string", retained: false,
+            why: "Fetch §2.2.5's destination of the request, the string CSP §6.8.1 \"Get the effective " +
+                 "directive for request\" switches on; the empty string for a fetch()" }],
+        reply: [
+          { name: "verdict", type: "string",
+            why: "`allowed`, or `blocked` and a TAB and the CSP §6.8.4 directive that refused the request" },
+          WORKING_SET] },
     ],
   });
 

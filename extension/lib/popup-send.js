@@ -540,10 +540,39 @@ function renderSendUrl() {
     ". What is not stated is fetch's default (an unstated policy is strict-origin-when-cross-origin). " +
     "Cookie, Origin and Referer cannot be typed as headers: the browser owns them, and Origin and Referer " +
     "are stated only in their own fields below."]));
+  if (URL.canParse(sent)) renderSendPolicyVerdict(row, new URL(sent).href);
   row.appendChild(domElement("div", { class: "send-url-note" }, [
     "Not decided here: an API key whose learned location is the URL is attached downstream as a `key` " +
     "query parameter, from a key store this panel cannot read — whether that happens to this request is " +
     "UNKNOWN from here."]));
+}
+
+/* The frame's Content Security Policy verdict on a request to `url` (SEND_PANEL_POLICY, answered by the engine
+   instance holding the frame's document), as a line in `row`. It is shown and never enforced: the send is the
+   person's explicit act. The line is filled when the answer arrives, unless the row was re-rendered since. */
+var _sendPolicyAsked = 0;
+function renderSendPolicyVerdict(row, url) {
+  var asked = ++_sendPolicyAsked;
+  var documentId = currentReplayRequest !== null && currentReplayRequest.documentId
+    ? currentReplayRequest.documentId : currentDocumentId();
+  var line = domElement("div", { class: "send-url-note" }, ["Content Security Policy: asking the frame's document…"]);
+  row.appendChild(line);
+  var say = function (text) { if (asked === _sendPolicyAsked) line.textContent = "Content Security Policy: " + text; };
+  if (!documentId) { say("unknown — no document is targeted."); return; }
+  chrome.runtime.sendMessage({ type: "SEND_PANEL_POLICY", documentId: documentId, url: url }).then(function (r) {
+    DCHECK(!!r && typeof r.verdict === "string" && typeof r.directive === "string",
+           "SEND_PANEL_POLICY answered with no {verdict, directive} — lib/popup-handlers.js relays the host's");
+    if (r.verdict === "allowed") say("the frame's policy allows this request.");
+    else if (r.verdict === "blocked")
+      say("the frame's `" + r.directive + "` would block this request in the page. It is sent anyway, as your act.");
+    else if (r.verdict === "report-only")
+      say("only a report-only `" + r.directive + "` refuses it, so the page's own request would be sent and reported.");
+    else {
+      DCHECK(r.verdict === "unknown", "SEND_PANEL_POLICY answered the verdict " + JSON.stringify(r.verdict) +
+             ", which is none of allowed, blocked, report-only and unknown");
+      say("unknown — no running engine instance holds this frame's document.");
+    }
+  });
 }
 
 /* The request facts the Send panel sends besides its bytes. Mode, referrer and referrer policy are the

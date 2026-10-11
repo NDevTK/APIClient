@@ -864,6 +864,31 @@ CspRequestVerdict policy_should_block_request(CspReporter reporter, const Policy
     free(serialized);
     return result;
 }
+
+CspRequestVerdict policy_request_verdict(const PolicyContainer *p, const UrlRecord *url, const char *destination,
+                                         CspRequestMetadata metadata, int redirect_count,
+                                         const CspDirective **governing)
+{
+    const char *effective = csp_effective_directive_for_request(destination);
+    CspRequestVerdict verdict;
+    size_t i;
+
+    DCHECK(governing != NULL, "policy_request_verdict was asked for no governing directive out-parameter");
+    *governing = NULL;
+    verdict = policy_should_block_request(csp_reporter_none(), p, url, destination, metadata, redirect_count);
+    if (verdict == CSP_REQUEST_ALLOWED)
+        return verdict;
+    /* The same per-policy predicate §4.1.2's loop asked, so the first policy it finds violated is one of the
+       policies that made the answer Blocked. */
+    for (i = 0; i < p->csp.n_policies && !*governing; i++)
+        if (policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
+                                  p->csp.self_origin, redirect_count))
+            *governing = csp_policy_governing_directive(&p->csp.policies[i], effective);
+    DCHECK(*governing != NULL,
+           "CSP §4.1.2 answered Blocked and no policy of the list is violated under §6.7.2.1 — the two walks ask "
+           "one predicate of one list, and a violated policy always has the §6.8.4 directive that refused it");
+    return verdict;
+}
 /* NAMED RESIDUAL — WHAT IS NOT COVERED: §2.4.2 step 3 sets the violation's resource to "request's url" and
    its own note says why that is not the CURRENT url — "the latter might contain information about redirect
    targets to which the page must not be given access" — and the address handed over above is the CURRENT

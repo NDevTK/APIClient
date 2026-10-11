@@ -860,6 +860,62 @@ QJS_EXPORT void qjs_unload(const char *doc_id)
     engine_unload_document(doc);
 }
 
+/* CSP §4.1.2 "Should request be blocked by Content Security Policy?" for a request to `url` with Fetch §2.2.5
+ * destination `destination`, made by document `doc_id`, asked for its answer alone: the Send panel shows the
+ * frame's verdict on a request the person composed, and the trusted zone holds no CSP matcher. Nothing is
+ * reported and no event is queued (asserted), and no flow runs. The request is a fresh one whose creating
+ * algorithm states no CSP metadata (Fetch §5.4 "Request class") and has a redirect count of 0.
+ * Answers `allowed`, or `blocked<TAB>` and the §6.8.4 directive that refused it. The string is this entry's
+ * and stays valid until its next call.
+ * Not covered: a report-only policy. `Content-Security-Policy-Report-Only` is not delivered to this engine
+ * (core/frame/csp_directive_list.h), so no policy has disposition "report" and the `report-only` answer is
+ * never given. The next diff delivers that header as policies of disposition report and answers
+ * `report-only<TAB>directive` when only such a policy is violated. Its absence shows as `allowed` for a request
+ * that only a report-only policy refuses. */
+QJS_EXPORT const char *qjs_check_request_policy(const char *doc_id, const char *url, const char *destination)
+{
+    static char *answer;
+    const CspDirective *governing;
+    CspRequestVerdict verdict;
+    unsigned long reports_before;
+    UrlRecord rec;
+    uint32_t doc;
+
+    DCHECK(g_begun, "a request policy was asked of an engine whose frontier was never seeded");
+    DCHECK(doc_id != NULL && *doc_id && url != NULL && destination != NULL,
+           "a request policy was asked with no document, no URL or no destination");
+    DCHECK(*destination == '\0' || fetch_is_destination_type(destination),
+           "a request policy was asked for a destination outside Fetch §2.2.5's enumeration");
+    doc = world_doc_intern(doc_id);
+    url_record_init(&rec);
+    /* The zone sends a URL its own parser serialized, and a serialized URL parses against no base. */
+    if (!url_parse(&rec, url, strlen(url), NULL)) {
+        DFAIL("a request policy was asked for a URL the URL parser refuses — the zone sends `new URL(x).href`, "
+              "which parses against no base");
+        url_record_free(&rec);
+        return "unknown";
+    }
+    reports_before = csp_violation_reports();
+    verdict = policy_request_verdict(engine_document_policy(doc), &rec, destination,
+                                     csp_request_metadata_unstated(), /*redirect count*/ 0, &governing);
+    url_record_free(&rec);
+    DCHECK(csp_violation_reports() == reports_before,
+           "asking CSP §4.1.2 for its answer alone reached §5.5 \"Report a violation\" — the question changed "
+           "the document it asked about");
+    free(answer);
+    if (verdict == CSP_REQUEST_ALLOWED) {
+        answer = strdup("allowed");
+    } else {
+        answer = malloc(sizeof "blocked\t" + governing->name.n);
+        CHECK(answer != NULL, "OOM composing a request policy answer");
+        memcpy(answer, "blocked\t", sizeof "blocked\t" - 1);
+        memcpy(answer + sizeof "blocked\t" - 1, governing->name.p, governing->name.n);
+        answer[sizeof "blocked\t" - 1 + governing->name.n] = '\0';
+    }
+    CHECK(answer != NULL, "OOM composing a request policy answer");
+    return answer;
+}
+
 /* The frontier key's document half. Pure scan, so the host may ask the instant qjs_init returns. */
 QJS_EXPORT unsigned qjs_bundle_id(void)
 {

@@ -293,6 +293,10 @@ static JSValue csp_violation_target(JSContext *ctx, const lxb_dom_element_t *ele
      two `if policy's disposition is …` arms §4.1.2 and §4.2.3 already spell.
      HOW ITS ABSENCE WOULD SHOW: a document served BOTH headers fires one event where a browser fires two,
      and the one it fires reads `disposition: "enforce"` with no `"report"` event beside it. */
+static unsigned long g_csp_violation_reports;
+
+unsigned long csp_violation_reports(void) { return g_csp_violation_reports; }
+
 static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const char *effective_directive,
                                CspResourceKind kind, const char *resource_url,
                                const char *sample, size_t sample_len, const lxb_dom_element_t *element)
@@ -300,6 +304,8 @@ static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const ch
     SecurityPolicyViolationEventFields f;
     JSValue target, ev;
     char *document_uri, *blocked_uri, *original_policy, *sample_z;
+
+    g_csp_violation_reports++;   /* the ask, counted before step 4 decides whether anything is fired */
 
     /* §5.5 STEP 4's OWN CONDITION, ASKED BEFORE ANYTHING IS COMPOSED — "if target implements EventTarget,
        fire an event named securitypolicyviolation …". Steps 3.2 and 3.3 resolve a null target to the global's

@@ -100,4 +100,9 @@ void csp_report_violation_for_global(CspReporter r, const CspPolicy *policy, con
                                      CspResourceKind resource, const char *source, size_t source_len,
                                      const lxb_dom_element_t *element);
 
+/* How many times §5.5 "Report a violation" has been asked of a realm in this process: a lifetime counter of
+   the asks, each of which can queue a task. A caller that runs a CSP check for its answer alone asserts it
+   does not move. */
+unsigned long csp_violation_reports(void);
+
 #endif

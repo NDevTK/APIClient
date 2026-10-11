@@ -444,6 +444,14 @@ CspRequestVerdict policy_should_block_request(CspReporter reporter, const Policy
                                               const UrlRecord *url, const char *destination,
                                               CspRequestMetadata metadata, int redirect_count);
 
+/* CSP §4.1.2 asked for its answer alone, from outside any global object: policy_should_block_request under
+   csp_reporter_none, so no §5.5 report is made and no event is queued. `*governing` is set to the §6.8.4
+   governing directive of the first policy §6.7.2.1 finds violated, or NULL when the answer is Allowed, so a
+   surface can name the rule. `governing` may not be NULL. */
+CspRequestVerdict policy_request_verdict(const PolicyContainer *p, const UrlRecord *url, const char *destination,
+                                         CspRequestMetadata metadata, int redirect_count,
+                                         const CspDirective **governing);
+
 /* §7.1.5's CSP-DERIVED SANDBOXING FLAGS for a CSP list, which is the ONE thing a policy container contributes
  * to a Document's active sandboxing flag set. §7.4.5 builds navigationParams's final sandboxing flag set as
  * "the union of targetSnapshotParams's sandboxing flags and policyContainer's CSP list's CSP-derived

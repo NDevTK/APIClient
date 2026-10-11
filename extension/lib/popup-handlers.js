@@ -418,6 +418,22 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       return;
     }
 
+    /* The frame's CSP verdict on the request the Send panel will send, asked of the engine instance holding
+       that document through the host's one entry. It informs the person and refuses nothing: the send is their
+       explicit act. */
+    case "SEND_PANEL_POLICY": {
+      DCHECK(typeof self.astDispatch === "function",
+             "the trusted zone has no astDispatch to ask a request policy of — bridge.js did not load here");
+      DCHECK(typeof msg.documentId === "string" && msg.documentId !== "" && typeof msg.url === "string",
+             "SEND_PANEL_POLICY arrived with no documentId or no URL — the Send panel states both");
+      const reply = await self.astDispatch({ type: "AST_REQUEST_POLICY", documentId: msg.documentId, url: msg.url });
+      DCHECK(reply && reply.success === true && reply.result && typeof reply.result.verdict === "string" &&
+             typeof reply.result.directive === "string",
+             "the host answered a request-policy question with something other than {verdict, directive}");
+      sendResponse(reply.result);
+      return;
+    }
+
     /* THE PER-ORIGIN EXPLORATION WIDENING — read and set through the ONE entry into the host, exactly as
        the frontier's share is, and for the same reason: the decision lives in lib/safe-fetch.js and this is a
        relay carrying a person's answer to it. One case because it is one question — a grant answers with the

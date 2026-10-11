@@ -2958,6 +2958,27 @@ async function engineUnload(eng, docName, incomingDocName) {
   /* The round ends here, so it records: an unload attaches a job to every live timeline. */
   await engineRecordFacts(eng);
 }
+/* CSP §4.1.2 "Should request be blocked by Content Security Policy?" for a request to `url` the document
+   `documentId` would make with the empty destination (a fetch()), answered by the instance holding that
+   document (content.mojom.Renderer.CheckRequestPolicy) for its answer alone. Answers {verdict, directive}:
+   `allowed` or `blocked` with the directive that refused it, or `unknown` with "" when no running instance
+   holds the document, so a surface never shows an unasked policy as allowing.
+   Not covered: a document whose instance is booting or parked cold, which answers `unknown`. The next diff
+   waits for a booting instance's `_readyP` and resumes a cold one through its recipe. Its absence shows as
+   `unknown` for a frame whose document this zone has analysed but is not running now. */
+async function engineRequestPolicyVerdict(documentId, url) {
+  DCHECK(typeof documentId === "string" && documentId !== "" && typeof url === "string" && URL.canParse(url),
+         "a request policy was asked with no document name or an unparseable URL — the Send panel states both");
+  const eng = hostHolderOf(documentId);
+  if (eng === null || (eng.state !== "hot" && eng.state !== "fetching")) return { verdict: "unknown", directive: "" };
+  const r = await eng.r.renderer.checkRequestPolicy({ docId: documentId, url: new URL(url).href, destination: "" });
+  const [verdict, directive] = r.verdict.split("\t");
+  DCHECK((verdict === "allowed" && directive === undefined) ||
+         ((verdict === "blocked" || verdict === "report-only") && typeof directive === "string" && directive !== ""),
+         "CheckRequestPolicy answered " + JSON.stringify(r.verdict) + ", which is not `allowed` or a refusal " +
+         "naming its directive — main.c's qjs_check_request_policy writes one of those");
+  return { verdict, directive: directive === undefined ? "" : directive };
+}
 /* The Level-1 ranking's two facts (top-flow weight and working set), recorded at the end of every round this
    zone has with an instance (seed, step, service), because an instance behind the frame boundary answers only
    by message and there is no value to read on the line that ranks. hostSchedule ranks, advances the winner and
@@ -5316,15 +5337,19 @@ self.astDispatch = async function astDispatch(msg) {
        is a property of the rest of this function; it is the memoized read started at load, so it costs a
        microtask. */
     await egressPolicyReady();
-    /* Four types; any other is an unbuilt capability, so it aborts rather than reporting a false success to a
+    /* Five types; any other is an unbuilt capability, so it aborts rather than reporting a false success to a
        caller that will not look. */
     DCHECK(!!msg && (msg.type === "AST_ANALYZE" || msg.type === "AST_CLEAR" ||
-                     msg.type === "AST_FRONTIER_SHARE" || msg.type === "AST_EGRESS_POLICY"),
+                     msg.type === "AST_FRONTIER_SHARE" || msg.type === "AST_EGRESS_POLICY" ||
+                     msg.type === "AST_REQUEST_POLICY"),
            "the trusted zone dispatched a type this bridge does not answer: `" + (msg && msg.type) + "` — " +
            "every edge into the engine is built here, so an unanswered type is a capability that was asked " +
            "for and never made, not an option the caller may proceed without");
     if (!msg) return { success: false, error: "dispatch with no message" };   // release path under the assert
     if (msg.type === "AST_CLEAR") return { success: true, result: { cleared: await hostClear() } };
+    // The frame's CSP verdict on a request the Send panel composed. It is shown, never enforced.
+    if (msg.type === "AST_REQUEST_POLICY")
+      return { success: true, result: await engineRequestPolicyVerdict(msg.documentId, msg.url) };
     /* The one setting this surface carries: how much of the person's disk the frontier's stored documents may
        occupy. It is a knob on storage, never on work (an instance count or a throttle would be a bound): every
        recipe, counter and entry survives at every setting, including zero, and only whether a document is held

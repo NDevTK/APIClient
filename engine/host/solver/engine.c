@@ -2263,6 +2263,18 @@ void engine_unload_document(uint32_t doc)
     }
 }
 
+const PolicyContainer *engine_document_policy(uint32_t doc)
+{
+    DCHECK(g_sess_live,
+           "a document's policy container was asked of an instance with no live session — the zone asks only "
+           "an instance it has rooted, and before that the document has no realm to hold one");
+    DCHECK(world_doc_hosted(doc),
+           "a document's policy container was asked of an instance that does not host it — the zone routes the "
+           "question to the instance holding the document, and answering here would judge a request against "
+           "another document's policy");
+    return document_policy(doc_realm(doc));
+}
+
 /* The sibling this delivery forecloses: two arms of a sender's fork posting two messages belong to two
  * contradictory worlds, and merging them would fabricate a timeline neither sender was in. Minted at the delivery,
  * the one moment the receiving flow is switched in.

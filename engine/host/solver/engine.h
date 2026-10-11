@@ -620,6 +620,11 @@ char *engine_flow_addressee(JSContext *ctx, struct Flow *f, const char *doc_name
    agent does not carry; a cross-origin incoming document is a peer instance's anyway. */
 void engine_unload_document(uint32_t doc);
 
+/* The HTML §7.1.7 policy container of document `doc`, which this instance must host, read at host time for a
+   question the trusted zone asks about it (main.c's qjs_check_request_policy). A document's container is the
+   document record's, not a timeline's, so no flow is switched in to answer. */
+const PolicyContainer *engine_document_policy(uint32_t doc);
+
 /* Who asked for a request, a fact about the park: HTML §4.12.1.1 "Processing model" gives a parser-inserted
  * script a parser document, so `parser` names bytes the zone itself fetched, and every other park is made by
  * running code. It is one of the two facts the provenance is composed from (solver/pending.h's PROV_*, with
