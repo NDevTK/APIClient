@@ -909,20 +909,16 @@ static long g_flows_sold_flows, g_flows_sold_cands;
 static long g_reclaim_asks, g_reclaim_unarmed, g_reclaim_floor;
 
 int engine_take_paged_owed(void) {
-    /* BELOW ZERO IS THE IMPOSSIBLE STATE, and it is the only one this function can see. The credit is a count
-       of entries the host was shown and has not answered (engine_reclaim_tail) and this is its ONLY spender,
-       so a negative debt means either a second spender exists or one reply spent two credits — and from then
-       on the number is no longer "replies owed for flows this instance sold", so every later answer to "is
-       this reply explained by a sale?" is a guess wearing a measurement's name. */
+    /* The credit counts entries the host was shown and has not answered (engine_reclaim_tail), and this is its
+       only spender, so below zero means a second spender or one reply spending two credits; after that the
+       number no longer means "replies owed for flows this instance sold". */
     DCHECK(g_paged_owed >= 0,
            "the paged-reply debt went NEGATIVE — it is a count of unanswered entries that left with sold "
            "flows and this is its only spender, so more replies have been excused as sales than were ever "
            "sold, and qjs_provide's pairing assert is now excusing the host's real mispairings");
-    /* ZERO IS NOT A BROKEN INVARIANT, IT IS THE ANSWER. This is the question qjs_provide asks to tell a SALE
-       from the host's pairing being off, and "no sale explains this reply" is precisely the case its DFAIL
-       exists for — so aborting here would report the host's mispairing under the pager's message, which is the
-       "right crash for the wrong reason" g_paged_reqs was split off to stop. The test is `== 0` because the
-       assert above has made `< 0` unreachable. */
+    /* Zero is an answer, not a broken invariant: qjs_provide asks this to tell a sale from the host's pairing
+       being off, and "no sale explains this reply" is the case its DFAIL exists for. Aborting here would report
+       the host's mispairing under the pager's message. */
     if (g_paged_owed == 0)
         return 0;
     g_paged_owed--;
@@ -937,28 +933,24 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     DCHECK(f != NULL, "a synchronous host request was issued outside a flow — there would be nothing to "
                       "suspend and nothing to resume with the answer");
     DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
-    /* A SYNCHRONOUS CROSS-AGENT READ NAMES A REQUEST ID AND NO MARKUP AT ALL. */
+    /* A synchronous cross-agent read names a request id and no markup. */
     e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f), flow_path_pinned(f),
                      /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
-    id = mint_req();   /* the ASK half of the rate above — counted at the mint, which is the only place it is */
-    /* BOTH NAMES OF ONE RENDEZVOUS, EQUAL AT THE FIRST ASK AND NOT THE SAME FIELD. `PEND_REQ` is what this
-       function RETURNS and therefore what the asking machine stores in its own step state, inside a frame a
-       fork clones verbatim; `PEND_REQ_HOST` is what the host is shown and quotes back. They are written
-       together here because at the first ask there is one world and one asker, so there is nothing yet to
-       disagree about — and a single `mint_req()` for the pair is what keeps the ask counted once. See
-       solver/pending.h's REQ_HOST for why a branch fork moves one and not the other. */
+    id = mint_req();   /* the ask half of the rate above, counted at the mint */
+    /* Both names of one rendezvous, equal at the first ask and not the same field. `PEND_REQ` is what this
+       returns, so the asking machine stores it in its step state, inside a frame a fork clones verbatim;
+       `PEND_REQ_HOST` is what the host is shown and quotes back. At the first ask there is one world and one
+       asker, so one `mint_req()` serves both and the ask is counted once. solver/pending.h's REQ_HOST says why a
+       branch fork moves one and not the other. */
     pending_set_int(e, PEND_REQ, id);
     pending_set_int(e, PEND_REQ_HOST, id);
     JS_FreeValue(ctx, e);
-    /* THE MACHINE'S NAME IS UNIQUE ON ITS OWN REGISTER, WHICH IS WHAT MAKES IT A NAME AND NOT A HINT.
-       engine_host_answered and engine_host_take search THIS FLOW only and return the FIRST match, so a register
-       holding two HOSTREQs under one machine name would hand one machine the other's answer — and that is a
-       wrong value rather than a crash, which is the direction this file rates worst. It holds by construction
-       today (every name comes from `mint_req`, which is monotone, and a fork duplicates a register entry for
-       entry rather than merging two), and that is the point: this is what fires the day a second write to
-       PEND_REQ appears. Read under the dev guard and outside the DCHECK because `pending_count` interns an
-       atom, and check.h forbids a side effect in a condition. */
+    /* The machine's name is unique on its own register: engine_host_answered and engine_host_take search this
+       flow only and return the first match, so two HOSTREQs under one name would hand one machine the other's
+       answer, a wrong value rather than a crash. It holds by construction (`mint_req` is monotone; a fork copies
+       the register entry for entry), and this fires the day a second write to PEND_REQ appears. Computed under
+       the dev guard, outside the DCHECK, because `pending_count` interns an atom. */
 #if APICLIENT_DEV
     {
         int dups = 0, n = pending_count(f->pending);
@@ -973,43 +965,11 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
                            "hand one step machine another's answer with nothing to say so", id, dups);
     }
 #endif
-    /* THE REQUEST IS WHAT MAKES THE FLOW BLOCKED, AND THE YIELD THAT FOLLOWS IS ONLY A PARK BECAUSE OF IT.
-       Every caller of this returns JS_STEP_YIELD, whose contract is written at quickjs.c's own arm for it:
-       "I have more work; re-enter me." and, in the sentence immediately after, "It ASKS NOTHING, and that is
-       the point". The driver therefore re-enters a machine that yields IMMEDIATELY unless the preempt hook
-       says otherwise, so a machine using the yield to WAIT is a busy spin unless preempt_hook's clause (0)
-       sees this entry on the register.
-         THE ATTRIBUTION THAT STOOD HERE WAS CORRECT AND A LANDED REPAIR SAID IT WAS NOT, WHICH IS THE MORE
-       EXPENSIVE OF THE TWO ERRORS. This paragraph used to read `whose contract (quickjs-step.h) is "I have
-       more work; preempt me if you want"`, and it was rewritten on the stated ground that quickjs-step.h is
-       `a file that does not contain the sentence`. IT CONTAINS IT, on the line that introduces
-       `#define JS_STEP_YIELD`, in CAPITALS. The repair states its own evidence as a grep of the quoted words
-       at the file the comment named, and a grep is exactly the instrument that cannot see this: a
-       case-SENSITIVE search for the lowercase spelling answers 0 and a case-insensitive one answers 1. The
-       reader who found this ran the same wrong grep first and got the same 0. So an accusation of
-       mis-attribution was published against a comment that had named its source correctly — the shape
-       CLAUDE.md calls the mirror of a fabrication charge, made with less evidence than the citation it
-       attacked.
-         WHAT IS ACTUALLY THE CASE IS THAT ONE CONTRACT IS DECLARED IN TWO PLACES AND NOBODY HAS RECONCILED
-       THEM, and this comment does not pretend to. quickjs.c's arm for this code re-enters with JS_UNDEFINED
-       and says "It ASKS NOTHING, and that is the point", recording that the arm USED to ask and that the
-       asking was the defect — it made "the only C span this driver could be preempted inside the one a
-       machine explicitly declared", so a walk built out of keyed requests "had no rest point at all". The
-       header's headline says instead that the machine may ask to be preempted, while its own next paragraph
-       — return it with no request pending, re-entered immediately — agrees with quickjs.c. Whether those are
-       a CONTRADICTION or the machine-side and driver-side halves of ONE contract is NOT settled here, and was
-       not settled by the repair either; what is settled is that the sentence exists where the original
-       comment said it did. The register below is load-bearing either way, because the driver's arm asks
-       nothing whatever the header calls the offer.
-         THE CHECK THIS SITE HAD NEVER BEEN GIVEN NOW EXISTS, and it is what refuted the repair rather than
-       the repair's own method. `citegen.mjs`'s FORK-SOURCE channel takes a quotation whose nearest preceding
-       anchor is a file under engine/qjs that the audit does not read, opens THAT file, and answers HELD or
-       NOT-IN-THE-NAMED-FILE. It sees what two hand-greps could not because it compares TOKEN STREAMS: both
-       sides are lowercased and stripped of punctuation, so a capitalised headline and a lowercase quotation
-       of it are the same words, which is exactly the axis a grep is spelled on. Nothing else ties the two together: they are a step code in the engine
-       and a pending kind in the scheduler, and a pending kind added without pending_blocked's agreement would
-       turn every cross-instance read into a flow that burns the thread until the host answers — with the host
-       only asked BETWEEN steps, so the answer can never arrive. Asserted here because this is where the
+    /* The request is what makes the flow blocked. Every caller returns JS_STEP_YIELD, which the driver re-enters
+       immediately and asks nothing of (quickjs.c's arm for it), so the yield is a park only because
+       preempt_hook's clause (0) sees this entry on the register. A pending kind without pending_blocked's
+       agreement would turn every cross-instance read into a flow that burns the thread until the host answers,
+       and the host is asked only between steps, so the answer could never arrive. Asserted here, where the
        blocking is claimed. */
     DCHECK(flow_blocked(f), "a synchronous host request left its flow RUNNABLE — the caller is about to return "
                             "JS_STEP_YIELD, which re-enters immediately, so the flow would spin on a question "
@@ -1017,8 +977,8 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     return id;
 }
 
-/* HAS THE HOST ANSWERED `req`? The asking machine's re-entry read. The value is BORROWED — it stays on the
-   register until the machine takes it, so a re-entry that yields again can read it once more. */
+/* Has the host answered `req`? The asking machine's re-entry read. The value is borrowed: it stays on the register
+   until the machine takes it, so a re-entry that yields again can read it once more. */
 int engine_host_answered(uint32_t req, JSValueConst *out) {
     Flow *f = flow_running();
     DCHECK(req != 0, "a host request with no id was asked about");
@@ -1027,8 +987,7 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
         JSValue e = pending_entry(f->pending, i);
         if ((uint32_t)pending_get_int(e, PEND_REQ) == req) {
             int have = pending_get_int(e, PEND_HAVE_VALUE) != 0;
-            /* BORROWED, and the register is what holds it: the reference taken here is released before the
-               return, exactly as the field read did when the record was C — the entry still names the value,
+            /* Borrowed: the register holds the value, so the reference taken here is released before the return
                and a machine re-entered before it consumes may read it again. */
             if (have && out) { JSValue v = pending_get(e, PEND_VALUE); *out = v; JS_FreeValue(pending_ctx(), v); }
             JS_FreeValue(pending_ctx(), e);
@@ -1036,31 +995,16 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
         }
         JS_FreeValue(pending_ctx(), e);
     }
-    /* NOT ON THIS FLOW'S REGISTER AT ALL. A machine asking about an id it never issued, or issued before a
-       fork that re-issued it under the sibling's own world — either way, answering "no" would park the flow
-       forever on a question nothing is going to answer.
-     *
-     * THE TWO READINGS THE MESSAGE NAMES TAKE OPPOSITE WORK, AND FOR AS LONG AS THIS ABORT CARRIED NEITHER
-     * THE ASKED ID NOR THE REGISTER'S CONTENTS IT COULD NOT TELL THEM APART. `never issued` sends a reader to
-     * the MACHINE — a step that composed an id out of a field its own frame never wrote. `inherited across a
-     * fork` sends them to the SCHEDULER, where a sibling's frame still names the parent's id while the
-     * sibling's own COW'd register carries a different one. A reader holding only `file:line` can reason
-     * about both and measure neither, which is §A-DFAIL-OUTLIVES-THE-ABSENCE's remedy clause with the
-     * coordinate missing instead of wrong: the crash is correct, its instruction is correct, and there is
-     * nowhere to apply it. The register listing is the discriminator and it is FREE here, because the walk
-     * that just failed to find `req` had every entry in its hand.
-     *   HOW TO READ IT: a register holding a HOSTREQ at a DIFFERENT id is the FORK reading — the question was
-     * issued, and under another world. A register holding NO HOSTREQ at all is the MACHINE reading. An EMPTY
-     * register is the machine reading in its sharpest form, since nothing was ever issued on this flow. */
+    /* Not on this flow's register: the machine asks about an id it never issued, or one issued before a fork
+       re-issued it under the sibling's world. Answering "no" would park the flow forever. The two readings take
+       opposite work (the machine composed an id its frame never wrote, or the scheduler left a sibling's frame
+       naming the parent's id), so the dev abort lists the register: a HOSTREQ at a different id is the fork
+       reading; no HOSTREQ, or an empty register, is the machine reading. */
 #if APICLIENT_DEV
     {
-        /* COMPOSED AT THE CALL SITE AND NOT IN A HELPER, for the reason §AND-THE-SAME-LOCALITY-THAT-LETS-A-
-           MACRO-KNOW-THE-SIZE gives: `-Wformat-truncation` fires only where the destination's SIZE and the
-           format LITERAL are both visible at the call, so hoisting this write behind a function boundary
-           would take the compiler's only check off the one write that needs it — silently, with the code
-           reading better. The bound is a CHARACTER budget and the loop stops on the snprintf return rather
-           than on a length guess, so a register longer than the buffer truncates at an entry boundary and
-           `shown` says so beside `n`. */
+        /* Composed at the call site, not in a helper: `-Wformat-truncation` fires only where the destination's
+           size and the format literal are both visible. The loop stops on snprintf's return, so a long register
+           truncates at an entry boundary and `shown` says so beside `n`. */
         char reg[512];
         int off = 0, shown = 0, n = pending_count(f->pending);
         for (int i = 0; i < n; i++) {
@@ -1094,52 +1038,24 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
     return 0;
 }
 
-/* THE MACHINE TAKES ITS ANSWER and the request leaves the register. Separate from the read above because a
-   machine may be re-entered several times before it is ready to consume, and taking it early would leave the
-   next re-entry with nothing.
+/* The machine takes its answer and the request leaves the register. Separate from the read above because a
+ * machine may be re-entered several times before it is ready to consume.
  *
- * AND THIS REMOVAL IS THE CAUSE OF THE TWO ABORTS AT THE BOTTOM OF engine_host_answer, WHICH IS WHY THE
- * LIFETIME INVARIANT IS ASSERTED HERE AND NOT WHERE THE LOSS IS OBSERVED. A peer's document state IS its
- * flows, so one rendezvous has one answer per peer TIMELINE and all of them are true; the first of them ends
- * the entry every one of them lands on. An answer that arrives after this line reaches a register naming
- * nothing — which is the shape observed over there, one seam away from the line that produced it.
+ * This removal is what the two aborts at the bottom of engine_host_answer observe: one rendezvous has one true
+ * answer per peer timeline, the first ends the entry, and a later answer reaches a register naming nothing.
+ * What this line asserts is that the entry carries no answer nobody has forked over: flow_step takes one arm per
+ * recorded extra before it resumes this frame (flow_answer_fork), so `extra` is empty at every healthy take.
  *
- * WHAT THIS LINE CAN ASSERT is the half that holds under every design of the fix: an entry destroyed here
- * carries no answer NOBODY HAS FORKED OVER. flow_step takes one arm per recorded extra BEFORE it resumes the
- * frame this machine is re-entered from (flow_answer_fork), so `extra` is empty at every healthy take, and a
- * non-empty one is N peer timelines going into the free list with nothing to say so — the SILENT form of the
- * abort at the other end, and the one that would arrive the day an answer could be recorded between the fork
- * and the resume.
- *
- * NAMED RESIDUAL — the code below is CORRECT for the peer it covers and NARROWER than §Security's "a delivery
- * SEEDS a flow whose world is receiver-baseline ∧ the sender's vector", so there is nothing here to crash on.
- *   NOT COVERED: a peer holding MORE THAN ONE timeline whose answers do not all arrive before the asking flow
- *     is next resumed. The register then takes the first, this line removes the entry, and every later
- *     timeline's answer has nowhere to land.
- *   WHAT THE NEXT DIFF BUILDS — TWO things, and the abort over there asks for only one of them, which is why
- *     following it literally would fabricate a timeline rather than build the arm. (i) THE SUSPENSION, not
- *     just the entry: flow_answer_fork clones `f->frame`, and after this line that frame is PAST the call
- *     site, so an arm forked from it would carry answer k while continuing from a state computed with answer
- *     0 — a flow neither agent was ever in, which is worse than the drop it replaces. The clone has to be
- *     taken HERE, where the machine is still suspended at the read, and held with the entry. (ii) A RELEASE
- *     CRITERION, which the protocol does not carry: its vocabulary is `remoteop.answer` (one per answering
- *     timeline) and `remoteop.retracted` (the last holder PARKED, handing the question back), and neither
- *     says that every timeline holding a token has now answered. Without it "hold it while the peer may still
- *     answer" is undecidable at this end and the only readings left are hold-for-ever or a bound, and a bound
- *     is §NO BOUNDS'. The record to build is the peer's, it is one line of the answering side's existing
- *     arithmetic — flow_answer_perform clears the row's token, and `perform_token_held` is the same predicate
- *     engine_retract_span already decides the LAST-holder question with — and it must be scoped to the ASK
- *     rather than to the token's spelling, because a retraction re-asks under the token the zone already
- *     minted.
- *   HOW ITS ABSENCE SHOWS: a peer with two timelines answering one cross-instance read reaches
- *     engine_host_answer's door (3) with `extra` and `fixed` both zero — the asking flow took answer 0 through
- *     this line and no arm was ever forked — under a zone that relays each answer AS IT ARRIVES. A zone that
- *     holds a token's answers until the peer's own turn drains does not show it, and that batching is a
- *     property of a driver that owns both pumps rather than a guarantee this seam may be built on: RELAY ON
- *     ARRIVAL is what the protocol permits, so it is what the register must survive. */
-/* THE ROW A TAKEN CROSS-INSTANCE ANSWER OWES — declared here and defined with the OTHER commitment writer,
-   because the two are one block: what a receiving timeline has heard from is one question with one set of
-   rules, and a producer written beside its own call site is the second reader of a shape that then drifts. */
+ * Named residual. Not covered: a peer with more than one timeline whose answers do not all arrive before the
+ * asking flow resumes; later answers have nowhere to land. Next diff builds two things: (i) the suspension, cloned
+ * here while the machine is still at the read and held with the entry (an arm forked later from `f->frame`
+ * would carry answer k past a call site computed with answer 0); (ii) a release criterion the protocol lacks,
+ * since `remoteop.answer` and `remoteop.retracted` never say every token holder has answered: one line of the
+ * answering side's arithmetic (flow_answer_perform clears the row's token; `perform_token_held` already decides
+ * the last-holder question for engine_retract_span), scoped to the ask, not the token's spelling. Absence shows
+ * as: engine_host_answer's door (3) reached with `extra` and `fixed` both zero under a zone relaying on arrival. */
+/* The row a taken cross-instance answer owes, defined with the other commitment writer because what a receiving
+   timeline has heard from is one question with one set of rules. */
 static void answer_commit_taken(JSContext *ctx, Flow *f, const char *world);
 
 JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
@@ -1155,23 +1071,16 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
         if ((uint32_t)pending_get_int(e, PEND_REQ) == req) {
             JSValue c;
             DCHECK(pending_get_int(e, PEND_HAVE_VALUE), "a host answer was taken before it arrived");
-            /* THE TYPE AND THE VALUE ARE ONE WRITE (engine_host_answer), so an answered request with no type
-               is a delivery that went round this file — and reading it as a normal completion is exactly the
-               silent lie this field exists to make impossible. */
+            /* Type and value are one write (engine_host_answer), so an answered request without a type is a
+               delivery that went around this file; reading it as a normal completion would be a silent lie. */
             c = pending_get(e, PEND_COMPLETION);
             DCHECK(JS_IsNumber(c), "an answered host request carries no completion type");
             JS_FreeValue(ctx, c);
             *pcompletion = (int)pending_get_int(e, PEND_COMPLETION);
-            /* AND NO PEER TIMELINE IS BEING DESTROYED WITH IT — the one half of the entry's lifetime this
-               line can state, asserted where the entry dies rather than where a lost answer is noticed. Every
-               triple in `extra` is a real completion of a real timeline that no arm carries yet, and
-               pending_remove frees the list with the record; flow_step drains them into arms before the frame
-               this machine came back through was resumed, so a non-empty list here is that ordering having
-               come apart and the loss is silent in every other way.
-               COUNTED ON ITS OWN LINE, and inside the dev guard with it: pending_extra_count INTERNS this
-               file's field atoms, which is a side effect and therefore may not sit inside a DCHECK's
-               condition — the same rule that keeps the answering world's parse out of its check below, and
-               the same shape, so the count exists exactly where its reader is compiled. */
+            /* No peer timeline is destroyed with the entry: every triple in `extra` is a real completion that
+               no arm carries yet, and pending_remove frees the list with the record. flow_step drains them into
+               arms before resuming this frame, so a non-empty list is that ordering broken. Counted on its own
+               line in the dev guard because pending_extra_count interns field atoms. */
 #if APICLIENT_DEV
             {
                 int unforked = pending_extra_count(e);
@@ -1183,21 +1092,13 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
                        "the fork and the take have come apart");
             }
 #endif
-            /* …AND WHICH SENDING TIMELINE THIS FLOW IS NOW IN, recorded HERE because this is the line at
-               which it becomes true. A peer's answer is computed by ONE of that document's flows and is a
-               fact about that flow alone, so a receiver that consumes one is in that world from here on and
-               may not also hear from a timeline contradicting it — the same claim a routed delivery makes,
-               written by the same field, and answer_commit_taken says why the ARM differs.
-               BEFORE THE ENTRY DIES AND AFTER THE FORK: the assert above has just established that every
-               recorded extra was drained into an arm, so the arms exist and hold their OWN answers, and none
-               of them inherited this row — a clone taken before this line carries a record that does not name
-               a world it never received. That ordering is what makes the push a plain append with nothing to
-               correct afterwards, and it is flow_step's, not this function's, which is why it is read off the
-               assert rather than assumed.
-               A ZONE-COMPUTED ANSWER NAMES NO TIMELINE AND COMMITS THIS FLOW TO NOTHING. §7.4 step 14's load
-               and XHR §3.5.6's fetch are values the trusted zone produced, so there is no flow of anybody's
-               behind them and no world to be in; engine_host_answer asserts that the absence of a name and
-               the answer's SOURCE agree, so reading the field here is reading that same one fact. */
+            /* Which sending timeline this flow is now in, recorded where it becomes true: a peer's answer is a
+               fact about the one flow of that document that computed it, so a receiver that consumes it may not
+               hear from a contradicting timeline (the claim a routed delivery makes, by the same field;
+               answer_commit_taken says why the arm differs). After the fork, which the assert above
+               established, so no arm inherits this row and the push is a plain append. A zone-computed answer
+               (§7.4 step 14's load, XHR §3.5.6's fetch) names no timeline and commits the flow to nothing;
+               engine_host_answer asserts the missing name agrees with the answer's source. */
             {
                 JSValue wv = pending_get(e, PEND_ANSWER_WORLD);
 
@@ -1229,9 +1130,8 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
 
     DCHECK(presult != NULL, "a host completion was taken with nowhere to place its value");
     if (completion == ENGINE_COMPLETION_THROW) {
-        /* RE-RAISED AT THE CALL SITE THAT PARKED ON IT. The flow suspended inside the operation, so this is
-           where the peer's throw belongs — the page's own `try`/`catch` around the read, the write or the call
-           is the handler that runs, exactly as it would for a local one. JS_Throw consumes the value. */
+        /* Re-raised at the call site that parked on it, so the page's own `try`/`catch` around the read, write
+           or call handles it as it would a local throw. JS_Throw consumes the value. */
         *presult = JS_UNDEFINED;
         JS_Throw(ctx, v);
         return JS_STEP_ABRUPT;
@@ -1243,30 +1143,20 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
     return JS_STEP_DONE;
 }
 
-/* WITHDRAW THE RENDEZVOUS — see engine.h for which of Fetch §2 Infrastructure's two controller operations this
- * is and why the other one is a different function rather than a parameter.
+/* Withdraws the rendezvous; engine.h says which of Fetch §2 Infrastructure's two controller operations this is.
  *
- * IT WALKS THE FRONTIER AND NOT THE RUNNING FLOW, and that is not defensiveness. The two call sites this exists
- * for are both TEARDOWNS — a step machine's `fini` under an exception unwind, and a document being destroyed
- * (HTML §7.5.10 "Destroying documents") — and neither of those is a point at which `flow_running()` is
- * guaranteed to be the flow whose register holds the id. The walk is engine_host_answer's exactly, for the
- * identical reason it gives: an unanswered synchronous request is the ONE record a fork does not share
- * (engine_sibling_assemble calls pending_unshare and mints a fresh id, because its answer is computed under the
- * asking flow's world), so exactly one register can name this id and the first hit is the only hit.
+ * It walks the frontier, not the running flow: its two callers are teardowns (a step machine's `fini` under an
+ * exception unwind, and HTML §7.5.10 Destroying documents), where `flow_running()` need not hold the id. As in
+ * engine_host_answer, an unanswered synchronous request is the one record a fork does not share
+ * (engine_sibling_assemble unshares it and mints a fresh id), so exactly one register names the id.
  *
- * AN ANSWER ALREADY ON THE ENTRY IS DISCARDED, WHICH IS THE SPEC'S OWN WORD AND NOT A DROP THIS FILE IS
- * TAKING. A terminate can race a delivery: the zone answers between two steps and the machine that would have
- * taken the value is torn down before the flow runs again. The value's only reader is gone, so what is freed
- * here is a reply and never a work item — the flow keeps its snapshot, its remaining programs and its place in
- * the order, and it is UNBLOCKED by this line rather than by anything it could still have read. §3.5.1's step
- * 10 makes the same statement from the other end ("A fetch can be ongoing at this point") and §3.5.6's response
- * is set to a network error by the steps that follow it, which is a reply being thrown away by name.
+ * An answer already on the entry is discarded: a terminate can race a delivery, and the value's only reader is
+ * gone. What is freed is a reply, never a work item; the flow keeps its snapshot, programs and place, and is
+ * unblocked here. XHR §3.5.1 step 10 ("A fetch can be ongoing at this point") and §3.5.6's network-error response
+ * discard a reply by name in the same way.
  *
- * A SESSION THAT IS OVER IS REFUSED BEFORE THE WALK, exactly as a late answer is (see g_host_answers_late).
- * There is no scheduler left to pick the flow this would unblock, the flows are held only for the teardown to
- * free, and the notice would be appended to a buffer nothing will drain again — so touching either would be
- * bookkeeping about a frontier that has stopped existing. It is still COUNTED, because a refusal nobody can
- * see is a drop. */
+ * A session that is over is refused before the walk, as a late answer is (g_host_answers_late): no scheduler is
+ * left to pick the flow and no one will drain the notice. It is still counted. */
 void engine_host_terminate(JSContext *ctx, uint32_t req) {
     int held = 0;
 
@@ -1280,28 +1170,22 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
-            /* MATCHED ON THE HOST'S NAME, because `req` here came FROM the host (see pending.h's REQ_HOST).
-               The arm of an ANSWER fork shares the issuer's host name deliberately, which is what the
-               ANSWER_FIXED guard below is about; the arm of a BRANCH fork has its own, which is what makes a
-               withdrawal reach exactly the rendezvous the host is withdrawing. */
+            /* Matched on the host's name, because `req` came from the host (pending.h's REQ_HOST). An answer
+               fork's arm shares the issuer's host name (hence the ANSWER_FIXED guard below); a branch fork's arm
+               has its own, so a withdrawal reaches exactly the rendezvous the host withdraws. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 (uint32_t)pending_get_int(p, PEND_REQ_HOST) != req) { JS_FreeValue(ctx, p); continue; }
-            /* AN ARM'S ENTRY IS NOT THE ISSUER'S AND MUST NOT BE WITHDRAWN THROUGH ITS ID. An answer fork
-               leaves the arm holding the SAME rendezvous id (the id lives in the step state inside the frame
-               the arm is a clone of) with its answer FIXED — engine_host_answer skips exactly those — so a
-               terminate that took the first hit could unblock an arm while leaving the issuer parked, which is
-               the reverse of what it was asked to do and is silent at both ends. */
+            /* An arm's entry is not the issuer's: an answer fork leaves the arm holding the same id (in the step
+               state of the frame it cloned) with its answer fixed, so withdrawing the first hit could unblock an
+               arm and leave the issuer parked, silently at both ends. */
             DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
                    "a rendezvous was withdrawn through the register of an ARM rather than the ISSUER — the arm "
                    "carries the issuer's id with its answer already FIXED, so this would unblock a flow that "
                    "was never waiting and leave the one that is");
             JS_FreeValue(ctx, p);
             pending_remove(&f->pending, i);
-            /* AND THE FLOW IS ASKABLE AGAIN. This is the host event flow_set_host_owed's mark waits for, and
-               it is the whole point of the call: the mark lives until the host does something that could have
-               answered it, and a withdrawal is the host being told it never will. Without this line the entry
-               would be gone and the flow would still be skipped at every pick, which is the blocked-forever
-               state one indirection further in and harder to see. */
+            /* The flow is askable again: a withdrawal is the host event flow_set_host_owed's mark waits for.
+               Without this the entry would be gone and the flow still skipped at every pick. */
             flow_clear_host_owed(f);
             held = 1;
             break;
@@ -1309,13 +1193,10 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
         if (held) break;
     }
     g_host_terminated++;
-    /* AND THE ZONE IS ASKED TO STOP THE TRANSFER — §3.5.7 "The abort() method"'s "Cancels any network
-       activity", which is the half only the trusted zone can perform because the network is its alone. A
-       one-way notice and not a request: nothing here waits for it, the engine's own withdrawal is already
-       complete, and a transfer that lands anyway is refused harmlessly at engine_host_answer's
-       ENGINE_ANSWER_HOST arm. Sent whether or not a register held the id, because the transfer is the zone's
-       state and not this register's — a machine whose flow was already freed leaves exactly the same fetch
-       running. */
+    /* The zone is asked to stop the transfer: XHR §3.5.7 The abort() method's "Cancels any network activity",
+       which only the trusted zone can do. A one-way notice: the engine's withdrawal is already complete, and a
+       transfer that lands anyway is refused at engine_host_answer's ENGINE_ANSWER_HOST arm. Sent whether or not
+       a register held the id, since the transfer is the zone's state. */
     {
         char rec[48];
         snprintf(rec, sizeof rec, "hostreq.terminate\t%u", req);
@@ -1323,47 +1204,28 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
     }
 }
 
-/* Deliver an answer. Routed by id to the call site that asked — never broadcast the way a fetched body is,
-   because the answer was computed under the ASKING FLOW'S world.
+/* Delivers an answer, routed by id to the call site that asked; never broadcast like a fetched body, because it
+ * was computed under the asking flow's world.
  *
- * A SECOND ANSWER TO ONE QUESTION IS NOT A DUPLICATE — it is a SECOND PEER TIMELINE, and the asking side's half
- * of that is the fork this records for. A peer's document state IS its flows, so a cross-agent operation is
- * performed by every live timeline it has and each one completes with its own answer: `otherW.length` has N
- * answers for N peer timelines and they are all true. It is not hypothetical and it is not the peer host's
- * oversight — engine_sibling_assemble gives a sibling the answering program's row, rendezvous token and all
- * (flow.h's `dyn_token`), on purpose, because a branch inside the answering program is a real peer timeline in
- * which the answer differs, so N answers under one token is what that fork was built to produce. Taking the first and asserting on the rest picks a timeline; overwriting
- * picks the last, after the machine may already have read the first.
+ * A second answer to one question is a second peer timeline, not a duplicate. A peer's document state is its
+ * flows, so a cross-agent operation is performed by every live timeline and each completes with its own true
+ * answer (`otherW.length` has N answers for N timelines); engine_sibling_assemble gives a sibling the answering
+ * program's row, token and all (flow.h's `dyn_token`), because a branch there is a real peer timeline. Taking
+ * the first would pick a timeline; overwriting would pick the last after the machine may have read the first.
  *
- * WHICH IS WHY EVERY PEER ANSWER NAMES THE TIMELINE THAT COMPUTED IT, and why this entry takes that name as a
- * parameter rather than deriving anything from the arrival ORDER. "Another timeline answered" and "one
- * timeline's answer was delivered twice" are two different events with identical shapes, and until the world
- * rode the answer no zone and no engine could tell them apart: the first is a fork this flow owes, the second
- * is a relay defect that forks an arm into a peer timeline that is already being explored. Both were happening
- * — the routing zone kept one answer per token in a one-slot map and dropped the rest — and the symptom was a
- * page reading `w.closed` twice in one expression and being answered out of two contradictory timelines of one
- * document. The name is world_serialize's, so it is the same name the asking side already writes on its
- * requests and the peer already keys its segments on. A HOST answer names NO timeline (NULL): the trusted zone
- * computed it itself and there is exactly one of it, which is what `source` says.
+ * Every peer answer therefore names the timeline that computed it (world_serialize's name, the one the asker
+ * writes on its requests and the peer keys its segments on), so "another timeline answered" can be told from
+ * "one answer relayed twice". A host answer names none (NULL): the trusted zone computed it and there is one,
+ * which `source` states rather than anything sniffed from the request text.
  *
- * SO THE ANSWER IS RECORDED HERE AND THE FORK IS TAKEN IN flow_step, and that split is the whole design. This
- * entry runs BETWEEN scheduler steps: `flow_running()` still names whichever flow was last switched in,
- * `cow_delta_fork` would freeze the delta CURRENTLY APPLIED and `dom_cow_fork` would fork the LIVE DOM head, so
- * a fork on this line would clone a stranger's timeline and call it the asker's — the exact "two timelines
- * wearing one name" the world registry exists to prevent, with nothing to say so. What CAN be done between
- * steps is to write the completion onto the entry as a JS value, which is a property write the COW delta and
- * the cold tier already carry; flow_answer_fork then builds the arm with that flow switched in.
+ * The answer is recorded here and the fork is taken in flow_step. This runs between scheduler steps, where
+ * `flow_running()` names whichever flow was last switched in, so `cow_delta_fork` and `dom_cow_fork` would clone
+ * a stranger's timeline. Writing the completion onto the entry is a property write the COW delta and cold tier
+ * carry; flow_answer_fork builds the arm with that flow switched in.
  *
- * A HOST-COMPUTED ANSWER GENUINELY HAS ONE ANSWER — a fetch this zone performed — and answering one of those
- * twice is the zone's bug, which is what `source` is for and why it is not sniffed from the request's text.
- *
- * THE RETURN VALUE IS A STATEMENT ABOUT DELIVERY, AND IT USED TO BE A LIE. 1 means the answer was written onto
- * a register entry of a flow that CAN STILL CONSUME IT; 0 means it was not delivered. Those are not the same as
- * "an entry naming this id was found", which is what this used to answer: after a park closes the session the
- * flows are still allocated — cold_park writes their recipes and the instance teardown frees them — so the walk
- * below found the entry, wrote the value, cleared the flow's host-owed mark and reported success onto a flow
- * whose scheduler no longer exists (qjs_step latches g_done). The host was told its answer landed; nothing
- * would ever read it. */
+ * Returns 1 when the answer was written onto an entry of a flow that can still consume it, 0 when it was not
+ * delivered. After a park the flows are still allocated (cold_park writes recipes; teardown frees them), so the
+ * session-live test below is what keeps a found entry from counting as a delivery. */
 int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueConst value, int completion,
                        int source) {
     int extra = 0, fixed = 0;
@@ -1374,43 +1236,33 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
     DCHECK(source == ENGINE_ANSWER_HOST || source == ENGINE_ANSWER_PEER,
            "an answer arrived without saying who computed it — a value this zone computed has exactly one "
            "answer and a peer's has one per timeline, and only the deliverer knows which this is");
-    /* THE TWO SOURCES DIFFER EXACTLY IN WHETHER A TIMELINE PRODUCED THE ANSWER, so the name is required of one
-       and forbidden of the other. An anonymous PEER answer is the state this whole field exists to end: it
-       cannot be told from a duplicate, so the check below could not exist and the fork it guards would be taken
-       over a timeline that is already an arm. */
+    /* The two sources differ exactly in whether a timeline produced the answer, so the name is required of one
+       and forbidden of the other. An anonymous peer answer could not be told from a duplicate. */
     DCHECK((source == ENGINE_ANSWER_PEER) == (world != NULL && *world),
            "a cross-instance answer disagreed with its own source about whether a peer TIMELINE computed it — "
            "a peer answers BY RUNNING A PROGRAM on one of its flows and must name that flow's world, and a "
            "value the trusted zone computed itself has no flow to name");
-    /* PARSED ONLY WHERE THE ASSERT IS COMPILED. world_parse INTERNS the document names it reads, which is a
-       side effect and therefore may not sit inside a DCHECK's condition — and in release there is no reader for
-       the result, so the whole block goes with the check rather than leaving a name interned for nobody. */
+    /* Parsed only where the assert is compiled: world_parse interns the document names it reads, a side effect
+       that may not sit in a DCHECK's condition, and release has no reader for the result. */
 #if APICLIENT_DEV
     if (world) {
         WorldId w;
         const WorldId *anc;
         (void)world_parse(world, &w, &anc);
-        /* THE ANSWERING TIMELINE BELONGS TO A PEER. A world of a document THIS agent holds means the answer was
-           produced in this heap and relayed back in as if it had crossed — a routing loop, which would deliver
-           one of this instance's own flows' state to a call site that asked another agent, and would then be
-           forked over as a peer timeline that does not exist. It is the mirror of engine_perform's assert on
-           the ASKING world, and it is the same sentence: an operation on this agent's own object never leaves. */
+        /* The answering timeline belongs to a peer. A world of a document this agent holds is a routing loop
+           that would deliver this instance's own state to a call site that asked another agent, and fork over a
+           peer timeline that does not exist. Mirror of engine_perform's assert on the asking world. */
         DCHECK(!world_doc_hosted(w.doc),
                "a cross-instance answer was computed in a world of a document THIS agent holds — the operation "
                "was routed back to the instance whose flow asked it, so the value came from this heap and the "
                "arm forked over it would be a timeline of the asking agent wearing the peer's name");
     }
 #endif
-    /* THE SESSION IS OVER, SO THERE IS NOTHING HERE THAT CAN CONSUME AN ANSWER — and this is a HANDLED state,
-       not an asserted one, which is the whole difference between it and the two aborts at the bottom. The
-       registers below still exist (a park writes recipes and leaves the flows for the teardown to free), so the
-       walk would find the entry and write onto it; what does not exist is a scheduler to run the flow that
-       would read it. Refusing BEFORE the walk is what makes the return value true — the entry is not touched,
-       the flow's host-owed mark is not cleared, and `hostAnswered` is not credited for a delivery that did not
-       happen. It is not a drop either: the parked flow's recipe RE-ISSUES the request in the session that
-       resumes it and is answered with today's value (§Time-travel-resume), which is why the peer outliving the
-       asker's park is the ordinary shape of Level-1 eviction rather than a failure of it. Counted so the
-       refusal is visible — see g_host_answers_late and the @COLD census. */
+    /* The session is over, so nothing can consume an answer: a handled state, unlike the aborts at the bottom.
+       The registers still exist (a park leaves the flows for teardown), so refusing before the walk is what
+       keeps the entry, the host-owed mark and `hostAnswered` untouched. It is not a drop: the parked flow's
+       recipe re-issues the request when resumed and gets today's value, which is why a peer outliving the
+       asker's park is ordinary under Level-1 eviction. Counted in g_host_answers_late (@COLD census). */
     if (!g_sess_live) {
         g_host_answers_late++;
         return 0;
@@ -1418,7 +1270,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
-            /* MATCHED ON THE HOST'S NAME — `req` is the id this zone was shown and is quoting back. */
+            /* Matched on the host's name: `req` is the id this zone was shown and quotes back. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 (uint32_t)pending_get_int(p, PEND_REQ_HOST) != req) { JS_FreeValue(ctx, p); continue; }
             if (!pending_get_int(p, PEND_HAVE_VALUE)) {
@@ -1428,106 +1280,67 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
                        "that would wait for a question nobody was asked");
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
-                /* THE TIMELINE IS WRITTEN WITH THE VALUE, in the bracket the completion is written in and for
-                   the same reason: a flow that has taken an answer without knowing whose it is cannot address
-                   its NEXT operation to that same timeline, and cannot refuse the same one arriving again. */
+                /* The timeline is written with the value, so a flow that took an answer can address its next
+                   operation to that timeline and refuse the same one arriving again. */
                 pending_set(p, PEND_ANSWER_WORLD, world ? JS_NewString(ctx, world) : JS_NULL);
-                /* …AND `haveValue` LAST AND THROUGH THE REGISTER, because this write is the one that stops
-                   this flow being BLOCKED. The register carries the count `pending_blocked` answers from, and
-                   a record carries no way back to the registers naming it — so the register is stated here,
-                   by the walk that just found it, rather than looked for by a file that cannot look. The
-                   generic `pending_set` refuses this field on a synchronous record for that reason
-                   (solver/pending.h), so a future path that settles one without a register crashes here
-                   instead of leaving a flow reading as blocked with its answer already on it. */
+                /* `haveValue` last and through the register, because it is the write that unblocks the flow.
+                   The register carries the count `pending_blocked` answers from, and a record cannot find the
+                   registers naming it, so the walk that found the register states it. The generic `pending_set`
+                   refuses this field on a synchronous record (solver/pending.h), so a path settling one without
+                   a register crashes instead of leaving a flow blocked with its answer on it. */
                 pending_answer_sync(f->pending, p);
                 JS_FreeValue(ctx, p);
-                /* AND THE FLOW IS ASKABLE AGAIN. This is the event a flow parked on a synchronous request is
-                   waiting for — the one thing that can change the answer it gave the scheduler — so the mark
-                   comes off HERE, on the flow the answer reached, and not on a slice boundary that means
-                   nothing to it (flow.h). Without this line the answer would sit on the register while the pick
-                   kept skipping the flow that asked for it.
-                   THE FIRST ANSWER STOPS AT THE FIRST FLOW because an unanswered SYNCHRONOUS request is the one
-                   record a fork does NOT share: engine_sibling_assemble calls pending_unshare on it and mints a
-                   fresh rendezvous id, because its answer is computed under the ASKING FLOW'S world. So exactly
-                   one flow's register can name this id and the return below reaches every flow there is.
-                   THIS PARAGRAPH USED TO SAY THE OPPOSITE — that stopping here is right BECAUSE a fork shares
-                   records and "every arm that inherited this request observes it already" — which is the exact
-                   reasoning that made engine_provide skip the mark of every arm but the first, and left those
-                   timelines out of the pick for good. Sharing is the reason a per-record fact may not decide a
-                   per-flow one; it is never the reason a per-flow clear may stop early. */
+                /* The flow is askable again: this is the event a flow parked on a synchronous request waits
+                   for, so the mark comes off here, on the flow the answer reached (flow.h). The first answer
+                   stops at the first flow because an unanswered synchronous request is not shared by a fork
+                   (engine_sibling_assemble unshares it and mints a fresh id), so exactly one register names it.
+                   Sharing is never a reason for a per-flow clear to stop early: an arm that shared a record
+                   would still need its own mark cleared. */
                 flow_clear_host_owed(f);
-                g_host_answered++;   /* the PAY half of the rate above — every delivery that reached a flow */
+                g_host_answered++;   /* the pay half of the rate above: every delivery that reached a flow */
                 return 1;
             }
-            /* A `CHECK` AND NOT A DCHECK, and it became one when the answer started carrying its TIMELINE. A
-               zone-computed answer names no timeline (there is no flow of anybody's behind it), and everything
-               below this line is about recording ANOTHER TIMELINE'S answer — so a second HOST answer reaching
-               it would be recorded as a peer timeline with no name, and the asking flow would fork an arm into
-               a timeline of the answering document that does not exist. In release a DCHECK is not compiled at
-               all, so this would have been the one path where the missing name became a live record instead of
-               an abort. It is what CLAUDE.md's rule names: not-proceeding is required in production too. */
+            /* A CHECK, not a DCHECK: everything below records another timeline's answer, so a second host
+               answer reaching it would be recorded as an unnamed peer timeline and fork an arm into a timeline
+               that does not exist. Not proceeding is required in release too. */
             CHECK(source == ENGINE_ANSWER_PEER,
                   "the trusted zone answered one request TWICE. A value this zone computed — §7.4 step 14's "
                   "load, XHR §3.5.6's fetch — has exactly one answer, so the second is a delivery this zone "
                   "made after it had already made one, and the flow has by now run on the first");
-            /* AN ARM'S OWN ANSWER IS FIXED, and skipping it here is what keeps the frontier from doubling per
-               answer: the arm holds the SAME request id (the id lives in the step state inside the frame it is
-               a clone of), so without this a third answer would fork from the arm as well as from the issuer,
-               producing a timeline that answered B and then C at one call site. */
+            /* An arm's own answer is fixed. The arm holds the same request id (in the step state of the frame it
+               cloned), so without this skip a third answer would fork from the arm as well as the issuer, giving
+               a timeline that answered B and then C at one call site. */
             if (pending_get_int(p, PEND_ANSWER_FIXED)) { fixed++; JS_FreeValue(ctx, p); continue; }
-            /* AND THE SAME TIMELINE MAY NOT ANSWER ONE QUESTION TWICE. A peer performs the operation ONCE per
-               live flow (engine_perform attaches it to each) and spends the token off the row as it answers
-               (flow_answer_perform), so one timeline has exactly one completion for one rendezvous — a second
-               under that name is a RELAY that duplicated, and it is silent in every other way: the value is a
-               real value of a real timeline, so an arm forked over it explores a timeline an arm is already in
-               and the frontier grows a twin nothing can distinguish. This is the assert the world on the answer
-               exists to make possible, and it is why a duplicate must never be quietly dropped here — dropping
-               it would hide the relay defect that produced it, which is exactly how the routing zone came to
-               keep one answer per token and discard the peer's other timelines. */
+            /* The same timeline may not answer one question twice: a peer performs the operation once per live
+               flow (engine_perform) and spends the token off the row as it answers (flow_answer_perform), so a
+               second completion under one name is a relay that duplicated. Forking over it would grow a twin of
+               an existing arm. It is asserted, never dropped, because dropping hides the relay defect. */
             DCHECK(!pending_answer_world_seen(p, world),
                    "one peer TIMELINE answered one cross-instance request TWICE. Its flow spends the rendezvous "
                    "token off its row as it answers, so this instance was handed the same completion twice by "
                    "the zone that routes them — and the arm this would fork is a second flow exploring a "
                    "timeline of the answering document that another arm already holds");
-            /* …AND AN ANSWER BEYOND THE FIRST DOES NOT STOP AT THE FIRST FLOW, because it may not be written
-               onto a SHARED record. Every issuing timeline still holding this request — the flow that asked and
-               each of its BRANCH siblings, all of which observed the first answer — must fork over this peer
-               timeline's answer, and each of them DRAINS its own list to do it, so one shared list would let
-               whichever ran first take an answer the others were going to explore. The record therefore stops
-               being shared here, per flow, which is the same thing the branch fork does to the one field two
-               arms must disagree about. */
+            /* An answer beyond the first does not stop at the first flow, and is not written onto a shared
+               record: the asker and each branch sibling still holding the request must fork over it, each by
+               draining its own list, so the record is unshared here per flow, as a branch fork does. */
             JS_FreeValue(ctx, p);
             p = pending_unshare(f->pending, i);
             pending_extra_add(p, completion, JS_DupValue(ctx, value), world);
             JS_FreeValue(ctx, p);
             flow_clear_host_owed(f);
-            /* …AND THIS IS NOT A PAYMENT. The ask was SETTLED by the first answer — that is the delivery that
-               wrote the value and made this flow askable again — and what lands here is another peer TIMELINE
-               answering a question that already has an answer on the register. Crediting it to `hostAnswered`
-               made one ask read as N payments and destroyed the starvation rate the pair exists for. */
+            /* Not a payment: the first answer settled the ask, and this is another peer timeline answering. */
             g_host_answers_extra++;
             extra++;
         }
     }
     if (extra) return 1;
-    /* THE SESSION IS LIVE AND NO LIVE REGISTER TOOK THIS ANSWER. Three distinct states reach here and they had
-       ONE message between them, which is the failure this file is otherwise built to prevent: a reader sent to
-       the wrong door by a `(or …)` in an abort. They are separated below because they are observed differently,
-       even where two of them name one thing to build. */
+    /* The session is live and no live register took this answer. Three states reach here; each has its own
+       message because they are observed differently. */
 
-    /* (1) EVERY ENTRY NAMING IT IS AN ARM. The request IS on a register — it was deliberately skipped, because
-       an arm's answer is FIXED (it is the timeline that took answer k) — so what is missing is the ISSUER's
-       entry, and only the issuer's. It left at the take while the arms it forked live on, which is exactly the
-       shape that says the arms are being built correctly and the record they were forked from is not being
-       kept. Reachable for a PEER alone: a HOST answering an already-answered entry aborts one loop above.
-       WHAT TO BUILD IS NAMED IN engine_host_take, WHICH IS THE LINE THAT PRODUCED THIS. This abort used to end
-       "keep the issuer's entry alive past the take … and fork from it as flow_answer_fork already does", and
-       that instruction is WRONG in the way a confidently wrong DFAIL is worse than none: flow_answer_fork
-       clones `f->frame`, and by the take that frame is PAST the read, so an arm built by following this
-       sentence carries answer k while continuing from a state computed with answer 0 — a timeline neither
-       agent was in, arrived at by doing exactly what the crash asked for. The entry is half of it; the
-       SUSPENSION is the other half, and the release criterion for both is a protocol record that does not
-       exist. */
+    /* (1) Every entry naming the request is an arm, skipped because its answer is fixed. The missing entry is
+       the issuer's, which left at the take while its arms live on. Reachable for a peer only; a host answering
+       an answered entry aborts one loop above. What to build is engine_host_take's residual: the entry alone is
+       not enough, because flow_answer_fork clones `f->frame`, which by the take is past the read. */
     if (fixed)
         DFAIL("a PEER's answer arrived for a request whose only live entries are ARMS — each of those was "
               "forked over an earlier answer and its answer is FIXED, so the entry that could still take one is "
@@ -1540,30 +1353,18 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
               "holding the token has answered, which is perform_token_held's question and the one "
               "engine_retract_span already asks to decide a hand-back");
 
-    /* (2) NOTHING NAMES IT AT ALL, and for a value THIS ZONE computed that is innocent: the asking flow is gone
-       and nobody is waiting on the answer. */
+    /* (2) Nothing names it, which for a value this zone computed is innocent: the asker is gone. */
     if (source == ENGINE_ANSWER_HOST)
         return 0;
 
-    /* (3) …and for a PEER's it is the one gap, reached through THREE doors: the asking flow TOOK its first
-       answer (engine_host_take removes the entry), or it FINISHED, or it was SOLD to the cold tier while the
-       request was outstanding. The reader standing here cannot tell which door it was, and the sale is the one
-       this engine can say something about, so it says it in the abort rather than leaving the reader to guess.
-       (The zone does not drop a live asker's rendezvous — bridge.js keeps the token until the instance is
-       finalized precisely so every completion is relayed — so this is not a stale relay.)
-       THE FIRST DOOR IS THE ORDINARY ONE AND IT IS NOT A RARE ORDERING. A cross-instance read plus a peer
-       holding two timelines is the whole of it: the zone relays answer 0 the moment it arrives (which is what
-       a zone must do — it cannot know how many timelines the peer has, so holding one would be picking one),
-       the asker is resumed, engine_host_take drops the entry, and answer 1 lands here. It is invisible to a
-       driver that batches a token's answers until the peer's own turn drains, because that driver owns both
-       pumps and can hold the asker still; the protocol grants no such thing, so the register is what has to
-       survive relay-on-arrival.
-       AND THE THREE DOORS DO NOT WANT THE SAME FIX, which is why this no longer states one. Doors 2 and 3 —
-       finished, or sold — are a flow whose suspension is gone or written down as a recipe, and §Time-travel's
-       answer to the sale is already that the resumed recipe RE-ISSUES the request and is answered with today's
-       value. Door 1 is a flow that is still here and still has the call site, and it is the one this engine
-       can hold: see engine_host_take, which names the entry, the suspension clone, and the
-       `remoteop.exhausted` record that releases them. */
+    /* (3) For a peer's answer this is the one gap, reached through three doors: the asking flow took its first
+       answer (engine_host_take removes the entry), finished, or was sold while the request was outstanding.
+       The abort states the sale count, the one door this engine can speak to. The zone does not drop a live
+       asker's rendezvous (bridge.js keeps the token until the instance is finalized).
+       The first door is ordinary: a peer with two timelines, a zone relaying answer 0 on arrival (it cannot know
+       how many timelines the peer has), the asker resumed and its entry taken, then answer 1 lands here. A driver
+       batching a token's answers hides it, but the protocol permits relay on arrival. Doors 2 and 3 need no
+       fix (a resumed recipe re-issues the request); door 1 is engine_host_take's residual. */
     DFAILF("a PEER's answer arrived for a request NO register holds — the asking flow left and took the "
            "entry with it (it took its first answer, it finished, or it was paged out), so this timeline "
            "of the answering document has nowhere to land and the arm it would have forked is silently "
@@ -1577,19 +1378,16 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
     return 0;
 }
 
-/* WHAT THE HOST STILL OWES, as `id\top\n` records. Pulled each step like the pending URLs, and NOT deduped:
-   two identical questions from two flows are two questions, because each is answered under its own world. */
+/* What the host still owes, as `id\top\n` records. Pulled each step like the pending URLs and not deduplicated:
+   two identical questions from two flows are two questions, each answered under its own world. */
 const char *engine_host_requests(void) {
     static char *join;
     static size_t cap;
     size_t n_out = 0;
     Flow *f;
 
-    /* ONE PASS, NOT TWO. It measured and then wrote, which meant converting every record's text TWICE — and a
-       JS string's text is a conversion that allocates, where the C list's was a `strlen`. Two dom/ranges tests
-       crossed the gate's CPU budget on that alone, and the measuring pass existed only so `malloc` could be
-       given a size. A buffer that grows is the same answer with one conversion, and it also retires the DCHECK
-       that the two loops agreed: there is one loop. */
+    /* One pass with a growing buffer: converting a JS string's text allocates, so a measure-then-write pair
+       would convert every record twice. */
     if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the outstanding host requests"); }
     join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
@@ -1600,20 +1398,16 @@ const char *engine_host_requests(void) {
             size_t ol = 0;
             char idbuf[24];
             int idlen;
-            /* "CAN THE HOST STILL BE ASKED" AND NOT "IS THIS FLOW STILL WAITING" — routed to the one exported
-               predicate rather than spelled here, which is what this line used to do and why it was wrong. It
-               asked `PEND_HAVE_VALUE` alone, and that is TRUE of an entry the trusted zone has already
-               REFUSED: a refusal is an ANSWER to "will you make this request", so a declined rendezvous was
-               re-joined on the next round, declined again, and aborted at engine_host_decline's
-               `!pending_entry_declined`. The ADDRESS-keyed join one file over has carried exactly this filter
-               and exactly this argument the whole time ("WHICH IS WHAT KEEPS A DECLINE A FORK RATHER THAN A
-               SPIN"), so this was one defect repaired at one of its two sites. */
+            /* "Can the host still be asked", not "is this flow still waiting", via the one exported predicate.
+               `PEND_HAVE_VALUE` alone is also true of an entry the trusted zone refused (a refusal answers "will
+               you make this request"), so a declined rendezvous would be re-joined, declined again, and abort
+               at engine_host_decline's `!pending_entry_declined`. The address-keyed join applies the same filter,
+               which keeps a decline a fork rather than a spin. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 !pending_entry_host_owed(p)) { JS_FreeValue(pending_ctx(), p); continue; }
-            /* THE HOST'S NAME IS WHAT THE HOST IS SHOWN, and it is the whole of why the field exists: this
-               buffer is the only place an id leaves the engine, so every id the zone can ever quote back came
-               from this line. Emitting the machine's name here would hand the host two arms' identical names
-               and one answer would land in two contradictory worlds. */
+            /* The host's name is what the host is shown. This buffer is the only place an id leaves the engine,
+               so every id the zone can quote back comes from here; the machine's name would give the host two
+               arms' identical names and land one answer in two contradictory worlds. */
             idlen = snprintf(idbuf, sizeof idbuf, "%u\t", (uint32_t)pending_get_int(p, PEND_REQ_HOST));
             o = pending_get(p, PEND_OP);
             s = JS_ToCStringLen(pending_ctx(), &ol, o);
@@ -1634,19 +1428,15 @@ const char *engine_host_requests(void) {
     return join;
 }
 
-/* THE ONE-WAY LINE. A notice is not on a flow's pending register because nothing is waiting on it and because a
-   flow that finishes must not take it with it: the document it announces exists whatever becomes of the flow
-   that created it. One buffer, appended to and drained whole — a notice the host has read is gone. */
+/* The one-way line. A notice is not on a flow's pending register: nothing waits on it, and the document it
+   announces exists whatever becomes of the flow that created it. One buffer, appended to and drained whole. */
 static char  *g_notices;
 static size_t g_notices_n, g_notices_cap;
 
-/* …AND THE OTHER ONE-WAY LINE, WHICH IS AN INSTRUMENT'S AND NOT THE PLATFORM'S. A host-instrument program's
-   dumped completion value goes here and NOT onto the notices buffer above, which a reader may be tempted to
-   share because the two have the same shape. They are not the same thing: a notice is a PLATFORM EVENT the
-   trusted zone must route (a navigable was created, a world died), and routing an instrument's measurement
-   through it would put a test artifact into a production channel the zone acts on. It is also why this is not
-   folded into the result document — §What-the-tool-produces' surface is the product's FINDINGS, and an
-   artifact riding it is a measurement wearing a finding's clothes. One buffer, appended to and drained whole. */
+/* The other one-way line, an instrument's: a host-instrument program's dumped completion value. It is not the
+   notices buffer, which carries platform events the trusted zone acts on (a navigable created, a world died),
+   and not the result document, which carries the product's findings; a test artifact belongs in neither. One
+   buffer, appended to and drained whole. */
 static char  *g_dumps;
 static size_t g_dumps_n, g_dumps_cap;
 
@@ -1673,11 +1463,9 @@ void engine_host_notify(JSContext *ctx, const char *op) {
     g_notices[g_notices_n] = 0;
 }
 
-/* See engine.h. TWO WALKS OVER ONE ARRAY — the first sizes, the second writes — so the size is a FUNCTION of
-   the fields rather than a constant standing beside them. There is no format string here on purpose: a format
-   string is a second statement of the field count (one `%s` each) that a compiler checks against the ARGUMENT
-   list and never against the record's grammar, which is how a record can be well-formed C and still be
-   assembled one delimiter short. */
+/* See engine.h. Two walks over one array, the first sizing and the second writing, so the size is a function of
+   the fields. There is deliberately no format string: its `%s` count is checked against the argument list, never
+   against the record's grammar, so a record could compile and still be one delimiter short. */
 char *engine_notice_build(const char *op, const char *const *fields, size_t nfields)
 {
     size_t len, at, i, l;
@@ -1724,9 +1512,8 @@ char *engine_notice_build(const char *op, const char *const *fields, size_t nfie
     return rec;
 }
 
-/* THE DEATH OF A WORLD, ANNOUNCED — see engine.h. One notice per name, written HERE and nowhere else: two
-   spellings of this record would be two peers releasing different things, which is the same sentence
-   world_serialize carries about the vector it writes. */
+/* The death of a world, announced (engine.h). One notice per name, written only here: two spellings of the
+   record would be two peers releasing different things. */
 void engine_notify_worlds_gone(JSContext *ctx, const char *const *names, int n)
 {
     int i;
@@ -1745,9 +1532,9 @@ void engine_notify_worlds_gone(JSContext *ctx, const char *const *names, int n)
     }
 }
 
-/* See engine.h. The vector and not a bare name, because it is what the RESUME hands back to world_segment —
-   the ancestry is half of how a segment is materialized, so a record carrying only the head names a world the
-   rebuild would start from the baseline for. */
+/* See engine.h. The vector, not the bare name, because the resume hands it back to world_segment and the
+   ancestry is half of how a segment is materialized; a head alone names a world the rebuild starts from the
+   baseline. */
 void engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int n)
 {
     int i;
@@ -1765,8 +1552,8 @@ void engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int
     }
 }
 
-/* WHAT THE HAND-BACK DID — counted at the retraction itself, so the numbers cannot disagree with the notices
-   that left. See engine.h for what each one is a statement about. */
+/* What the hand-back did, counted at the retraction itself so the numbers agree with the notices that left.
+   engine.h says what each one states. */
 static long g_retract_flows, g_retract_started, g_retract_back;
 
 void engine_retract_census(long *flows, long *started, long *handed_back)
@@ -1776,7 +1563,7 @@ void engine_retract_census(long *flows, long *started, long *handed_back)
     *flows = g_retract_flows; *started = g_retract_started; *handed_back = g_retract_back;
 }
 
-/* HOW MANY PROGRAM ROWS ACROSS THE FRONTIER STILL CARRY A RENDEZVOUS TOKEN — see engine.h. Scanned, for
+/* How many program rows across the frontier still carry a rendezvous token (engine.h). Scanned, for
    flow_owes_answer's reason. */
 long engine_operations_started(void)
 {
@@ -1790,22 +1577,18 @@ long engine_operations_started(void)
     return n;
 }
 
-/* IS THIS QUESTION STILL SOMEBODY'S TO ANSWER — asked of every member of the frontier, of BOTH places a
-   question lives (queued on the arrival slot, or started with its token on a program's row).
+/* Is this question still somebody's to answer? Asked of every member of the frontier, in both places a question
+ * lives: queued on the arrival slot, or started with its token on a program's row.
  *
- * IT IS THE WHOLE OF WHY A HAND-BACK IS NOT PER FLOW. One operation is attached to EVERY live timeline
- * (engine_perform), because a document's state is its flows; the QUESTION is still one question and the zone
- * routes by token. So a notice sent while another timeline still holds the operation tells the zone to FORGET
- * a token that timeline is about to answer under — and the zone's own assert is what fires ("a peer answered a
- * cross-agent operation under a rendezvous token this zone never minted"), one seam away from the engine that
- * caused it. So the notice belongs to the LAST holder leaving, and this is the question that decides it —
- * asked AFTER the strip, which is why it takes no exclusion: a flow the hand-back has already emptied answers
- * `no` about itself.
+ * This is why a hand-back is not per flow. One operation is attached to every live timeline (engine_perform),
+ * but it is one question and the zone routes by token, so a notice sent while another timeline still holds it
+ * would make the zone forget a token that timeline is about to answer under (the zone then asserts "a peer
+ * answered a cross-agent operation under a rendezvous token this zone never minted"). The notice belongs to the
+ * last holder leaving. Asked after the strip, so it needs no exclusion: an emptied flow answers no about itself.
  *
- * SCANNED RATHER THAN COUNTED, for flow_owes_answer's reason exactly: a refcount is a second representation of
- * this fact and it drifts at the three sites hardest to keep in step — the fork (perform_q_fork shares the
- * entries, engine_sibling_assemble strdups the row's token), the start (the token MOVES from the queue to the
- * row) and the answer. */
+ * Scanned rather than counted, for flow_owes_answer's reason: a refcount would drift at the fork
+ * (perform_q_fork shares entries, engine_sibling_assemble strdups the row's token), the start (the token moves
+ * from the queue to the row) and the answer. */
 static int perform_token_held(JSContext *ctx, const char *token)
 {
     Flow *f;
@@ -1833,9 +1616,8 @@ static int perform_token_held(JSContext *ctx, const char *token)
     return 0;
 }
 
-/* THE DISTINCT QUESTIONS A HAND-BACK HAS TAKEN OFF ITS FLOWS — collected during the strip so the notices can
-   be decided once per QUESTION rather than once per holder. See engine_retract_span for why that is not an
-   optimisation but the difference between linear and quadratic in the size of the frontier. */
+/* The distinct questions a hand-back has taken off its flows, collected during the strip so notices are decided
+   once per question rather than once per holder (engine_retract_span: linear rather than quadratic). */
 static void retract_seen_add(char ***seen, int *n, int *cap, const char *token)
 {
     int j;
@@ -1854,33 +1636,23 @@ static void retract_seen_add(char ***seen, int *n, int *cap, const char *token)
     (*n)++;
 }
 
-/* HAND BACK EVERY QUESTION A SET OF FLOWS IS HOLDING — one member (`only`), or every member (`only` NULL). The
- * two callers are the two shapes of a park: the PAGER sells one flow while the instance keeps running, and the
- * whole-frontier park writes the residue and leaves. `only` selects WHICH members, never which implementation
- * — there is one implementation and no second body to fall back to.
+/* Hands back every question a set of flows holds: one member (`only`), or every member (`only` NULL). The pager
+ * sells one flow while the instance keeps running; the whole-frontier park writes the residue and leaves. `only`
+ * selects members, never an implementation.
  *
- * BOTH HALVES OF THE DEBT, AND THE STARTED ONE IS NOT A DIFFERENT KIND. cold.c's refusal asked for the
- * difference to be named: "state why a half-run peer program is different from every other suspended frame this
- * tier regenerates". It is not different, and the reason is OWNERSHIP. A started operation's partial work is
- * its flow's own COW delta, and the delta LEAVES WITH THE FLOW — so a program abandoned here has produced
- * nothing that outlives the park, exactly as every other suspended program's partial work does not. What the
- * peer is owed is not a stored value either: HTML §7.2.1.3.5 "CrossOriginGet ( O, P, Receiver )" ends "Return ?
- * Call(getter, Receiver)", so what this instance owes is a CALL, and a call abandoned before it completes has
- * been made zero times. The zone re-asks, the call is made once, and §7.2.2.2 "Indexed access on the Window
- * object" ("The length getter steps are to return this's associated Document's document-tree child navigables's
- * size") is why answering it later is the ordinary answer rather than a stale one — the value is read off the
- * active document at the moment of the call, which is §Time-travel-resume's "re-derives example VALUES from
- * CURRENT sources" said by the spec.
+ * A started operation is handed back like a queued one. Its partial work is its flow's own COW delta, which
+ * leaves with the flow, so nothing it did outlives the park. What the peer is owed is a call (HTML §7.2.1.3.5
+ * CrossOriginGet ( O, P, Receiver ) ends "Return ? Call(getter, Receiver)"), and an abandoned call has been made
+ * zero times: the zone re-asks and the call is made once. Answering later is the ordinary answer, since the
+ * value is read off the active document at the moment of the call (§7.2.2.2 Indexed access on the Window
+ * object's length getter).
  *
- * A ROW KEEPS ITS KIND AND LOSES ITS TOKEN, which is the state flow_answer_perform already leaves behind after
- * an answer — so nothing downstream learns a new shape, and a row that somehow ran anyway aborts in
- * flow_answer_perform naming the missing token rather than emitting an answer under a name the zone forgot.
+ * A row keeps its kind and loses its token, the state flow_answer_perform leaves after an answer, so a row that
+ * ran anyway aborts in flow_answer_perform naming the missing token.
  *
- * STRIP, THEN DECIDE, AND THE ORDER IS THE WHOLE COST. The notice belongs to the LAST holder leaving, and
- * asking that question per HOLDER means a walk of the frontier per flow — quadratic, on a frontier that is
- * routinely thousands, for an answer that is `no` every time but once. Asked per distinct QUESTION after the
- * strip, it is one walk per outstanding peer operation, and that number is not a function of the frontier's
- * size (engine_perform attaches ONE question to every timeline; the questions are the peer's, not ours). */
+ * Strip, then decide: the last-holder question asked per holder would walk the frontier per flow (quadratic,
+ * on frontiers of thousands); asked per distinct question it is one walk per outstanding peer operation, a
+ * number independent of the frontier's size. */
 static void engine_retract_span(JSContext *ctx, Flow *only)
 {
     char **seen = NULL;
@@ -1891,10 +1663,9 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
         int n, held = 0;
 
         if (only && f != only) continue;
-        /* THE FLOW MAY NOT BE THE ONE HOLDING THE THREAD. Both callers switch out first (the park before it
-           walks, the pager by construction), and it is asserted rather than assumed because the failure is
-           silent: a switched-in flow can still run its program to completion, and the row's token has just
-           been returned to the zone. */
+        /* The flow may not be the one holding the thread. Both callers switch out first (the park before it
+           walks, the pager by construction); asserted because a switched-in flow could still run its program to
+           completion against a row whose token was just returned to the zone. */
         DCHECK(f != flow_running(),
                "a cross-agent operation was handed back on the flow the scheduler is switched into — that flow "
                "can still run its program to completion, and the completion would find a row whose token this "
@@ -1915,10 +1686,10 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
             JS_FreeValue(ctx, e);
         }
         if (n) {
-            /* AND THE QUEUE IS EMPTY, which is what keeps cold.c's assert a statement rather than a tolerance.
-               Through the engine's write bracket for perform_q_take's reason — this is the scheduler's record
-               about a flow, written from outside any flow's delta, and a delta that captured it would restore
-               the entries the moment a sibling switched in. */
+            /* The queue is emptied, which keeps cold.c's assert a statement rather than a tolerance. Written in
+               the engine's write bracket for perform_q_take's reason: this is the scheduler's record about a
+               flow, written outside any flow's delta, and a delta that captured it would restore the entries
+               when a sibling switched in. */
             cow_engine_write_begin();
             JS_SetPropertyStr(ctx, f->perform_q, "length", JS_NewInt32(ctx, 0));
             cow_engine_write_end();
@@ -1935,17 +1706,16 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
             f->dyn_token[k] = NULL;
         }
         g_retract_flows += held;
-        /* THE POSTCONDITION, ASSERTED WHERE IT IS PRODUCED rather than only where cold.c reads it. Both
-           disjuncts of flow_owes_answer are addressed above, so a flow that still owes one here holds a token
-           in some THIRD place — and nothing downstream would ever find it. */
+        /* The postcondition, asserted where it is produced as well as where cold.c reads it: both disjuncts of
+           flow_owes_answer are addressed above, so a flow still owing one holds a token in a third place. */
         DCHECK(!flow_owes_answer(f),
                "a flow still owed a peer an answer after every question it held was handed back — a rendezvous "
                "token survives somewhere that is neither the arrival slot nor a program's row, so this flow "
                "parks with a debt the zone has been told is returned");
     }
     for (k = 0; k < seen_n; k++) {
-        /* THE LAST HOLDER, ASKED AFTER THE STRIP — every flow this call was given holds nothing by now, so a
-           hit is a member that is STAYING and will answer under this token. */
+        /* The last holder, asked after the strip: every flow this call was given now holds nothing, so a hit
+           is a member that stays and will answer under this token. */
         if (!perform_token_held(ctx, seen[k])) {
             size_t cap = strlen(seen[k]) + 20;   /* "remoteop.retracted" + TAB + the token + NUL */
             char *rec = malloc(cap);
@@ -1961,25 +1731,24 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
     free(seen);
 }
 
-/* ONE MEMBER — the pager's shape. */
+/* One member: the pager's shape. */
 static void engine_retract_flow(JSContext *ctx, Flow *f)
 {
     DCHECK(f != NULL, "a question was handed back on no flow at all");
     engine_retract_span(ctx, f);
 }
 
-/* See engine.h. Placed with the other two park-time announcements because the three are one statement about
-   what this instance is handing over: the residue (world.parked), the names it will never use again
-   (world.gone), and the questions it was asked and did not answer (this). */
+/* See engine.h. With the other two park-time announcements, which together say what this instance hands over:
+   the residue (world.parked), the names it will never use again (world.gone), and the questions it was asked
+   and did not answer (this). */
 void engine_retract_operations(JSContext *ctx)
 {
     engine_retract_span(ctx, NULL);
 }
 
-/* THE INBOUND HALF OF IT — see engine.h. It is deliberately NOT engine_route: a delivery becomes a work item of
-   every live timeline and a death is the end of one, so there is nothing to seed, no sender origin to stamp
-   (nothing here runs page code) and no target document (the zone broadcasts, because the sender does not track
-   which peers a flow reached). */
+/* The inbound half (engine.h). It is not engine_route: a delivery becomes a work item of every live timeline and
+   a death ends one, so there is nothing to seed, no sender origin to stamp (no page code runs) and no target
+   document (the zone broadcasts, because the sender does not track which peers a flow reached). */
 void engine_world_gone(JSContext *ctx, const char *world)
 {
     WorldId w;
@@ -1991,9 +1760,9 @@ void engine_world_gone(JSContext *ctx, const char *world)
            "parsed, and the segment released would be a live peer's timeline");
     n_anc = world_parse(world, &w, &anc);
     (void)anc;
-    /* A DEATH NAMES ONE WORLD. An ancestor is alive exactly while any descendant of it is, so a chain here
-       would release the very segments a still-running sibling arm's next arrival forks from — silently, since
-       the peer would then materialize an empty one and the arm would read a document missing its own writes. */
+    /* A death names one world. An ancestor is alive while any descendant is, so releasing a chain would drop
+       the segments a running sibling arm's next arrival forks from, and the peer would silently materialize an
+       empty one. */
     DCHECK(n_anc == 0,
            "a world-gone notice carried an ANCESTRY — a death names ONE world, and its ancestors are alive "
            "exactly while any descendant is; releasing them here drops the segments a live sibling arm's next "
@@ -2005,9 +1774,9 @@ void engine_world_gone(JSContext *ctx, const char *world)
     world_release(ctx, w);
 }
 
-/* THE WORLD FIELD OF A ROUTED RECORD, copied out NUL-terminated. Every routed record is
-   `<op>\t<doc>\t<worlds>\t<tail>` (engine_route takes the same three fields apart), and a queued entry holds
-   the whole text, so the one thing a second reader of it needs is stated once here. Caller frees. */
+/* The world field of a routed record, copied out NUL-terminated; caller frees. Every routed record is
+   `<op>\t<doc>\t<worlds>\t<tail>` (engine_route takes the same fields apart), and a queued entry holds the whole
+   text. */
 static char *record_worlds_dup(const char *record) {
     const char *doc, *worlds, *tail;
     char *out;
@@ -2026,47 +1795,29 @@ static char *record_worlds_dup(const char *record) {
     return out;
 }
 
-/* MAY THIS RECEIVING TIMELINE STILL HEAR FROM THE WORLD `vec`? — the question the commitment record beside a
- * flow's delivery queue exists to answer (flow.h's `deliver_world_q`), and the reason it is a fact about the
- * FLOW rather than about the queue.
+/* May this receiving timeline still hear from the world `vec`? The question the commitment record beside a
+ * flow's delivery queue answers (flow.h's `deliver_world_q`). It is a fact about the flow, not the queue: what a
+ * timeline has received constrains it, and a queue forgets that the instant it is consumed, so a pairwise check
+ * over queued records would answer differently depending on whether the router pumped between two records.
  *
- * IT REPLACES A PAIRWISE CHECK OVER THE QUEUE, WHICH WAS THE RIGHT TEST ASKED AT THE WRONG PLACE. That one
- * compared an arriving record against every record still QUEUED, so the identical pair was refused when both
- * were outstanding at once and accepted when the first had already been delivered — the schedule-dependent
- * answer §Testing's differential exists to catch, on the shortest path there is: a router that hands over one
- * record and pumps before handing over the next. What a timeline has RECEIVED is what constrains it, and a
- * queue forgets that the instant it is consumed.
+ * Two kinds of commitment refuse different things:
+ *   - received (taken): this timeline heard from that world, so it may not hear from an arm that contradicts
+ *     it; two arms of one sender branch delivered in sequence would be state merging on the receiving side.
+ *   - foreclosed: this timeline is the arm minted where its parent took that world, so nothing at or under it
+ *     is this timeline's; the parent receives it, so refusing here drops nothing.
+ * Independent is not a refusal: two peers posting to one page are in two forests (world.h).
  *
- * TWO KINDS OF COMMITMENT AND THEY REFUSE DIFFERENT THINGS.
- *   - RECEIVED (taken): this timeline heard from that world, so it may not also hear from an arm that
- *     CONTRADICTS it — two arms of one sender branch delivered in sequence hand the page a timeline neither
- *     sender was in, which is the state-merging §Solver-half bans, performed on the receiving side.
- *   - FORECLOSED: this timeline is the ARM minted where its parent took that world, so nothing AT OR UNDER it
- *     is this timeline's. That message is the parent's and is delivered there, which is why refusing it here
- *     drops nothing.
- * INDEPENDENT IS NOT A REFUSAL and that is the half a boolean could not state: two peers posting to one page
- * are in two forests that were never one (world.h), and a receiver split over that pair would be two timelines
- * each missing one sender's messages.
- *
- * AND THE SAME SENTENCE IS TRUE OF THIS FUNCTION'S OWN ANSWER, which is why it returns the census ROW rather
- * than a yes/no. The two kinds above refuse different things and defer to different flows — the RECEIVED arm
- * to a SIBLING deliver_fork_arm minted, the FORECLOSED arm to the PARENT that took the subtree — and only the
- * first of those can be absent, so a caller that knows only THAT a record was refused cannot say whether a
- * message reached any timeline at all. Returning the row is one fact with one writer: solver/step_unit.h is
- * the only place an arm is named, the answer this line computes IS which arm flow_deliver leaves through, and
- * a second refusal kind added here cannot be filed under the first without saying so at the `return`.
- * `STEP_UNIT_ROUTED_DELIVERY` is the admitting answer, and it is a real row rather than a sentinel: it is the
- * arm the delivery below actually takes, so no value this can return is out of the histogram's range. */
+ * It returns the census row rather than a boolean, because the two refusals defer to different flows (a sibling
+ * deliver_fork_arm minted; the parent that took the subtree) and only the first can be absent. The row is the
+ * arm flow_deliver leaves through (solver/step_unit.h names every arm); `STEP_UNIT_ROUTED_DELIVERY` is the
+ * admitting answer and a real row. */
 static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
 {
     int n = flow_world_commits(f), i;
     StepUnit verdict = STEP_UNIT_ROUTED_DELIVERY;
 
-    /* THE FIRST REFUSING COMMITMENT DECIDES, WHICH IS THE LOOP'S OWN BEHAVIOUR AND NOT A NEW CHOICE — it
-       stopped at the first `admits = 0` before this returned a row. What IS new is that the row inherits
-       that order: a flow holding both a contradicting RECEIVED world and a foreclosed subtree over one
-       record reports whichever commitment was pushed first, so the two rows partition the REFUSALS and not
-       the REASONS a refusal had. They are the same population only because one refusal ends the walk. */
+    /* The first refusing commitment decides, so a flow holding both a contradicting received world and a
+       foreclosed subtree reports whichever was pushed first: the rows partition refusals, not reasons. */
     for (i = 0; verdict == STEP_UNIT_ROUTED_DELIVERY && i < n; i++) {
         JSValue e = flow_world_commit_at(f, i);
         JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
@@ -2081,12 +1832,9 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
         DCHECK(JS_VALUE_GET_TAG(tv) == JS_TAG_INT,
                "a delivery-world commitment carried no small-integer RECEIVED/FORECLOSED flag — the two kinds "
                "refuse different things, so a missing one would be read as whichever the first test asked");
-        /* …AND THE THIRD ELEMENT IS ASKED FOR ON EVERY ROW, not only on the one the refusal below reads. A row
-           that carries none is a producer that was never given a member of the vocabulary, and the arm test
-           would then read JS_UNDEFINED as the integer 0 — which is FLOW_COMMIT_ARM_NONE, the value that
-           ABORTS: a missing field would fire the refusal's own assert and name the delivery seam for a defect
-           that is the pusher's. Asked where the row is read rather than only where it is used, so the producer
-           is named by the shape check instead of by the consequence. */
+        /* The minting mechanism is asked of every row, not only the one the refusal reads: a row without one
+           would read JS_UNDEFINED as 0, FLOW_COMMIT_ARM_NONE, and fire the refusal's assert naming the delivery
+           seam for a defect that is the pusher's. */
         DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
                "a delivery-world commitment carried no small-integer minting mechanism — every row states "
                "which mechanism minted the flow on the other side of its branch (flow.h's FlowCommitArm), and "
@@ -2097,121 +1845,31 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
         rel = world_vec_relate(vec, c);
         if (JS_VALUE_GET_INT(tv)) {
             if (rel == WORLD_REL_CONTRADICT) {
-                /* AND THE ARM THAT SHOULD TAKE IT EXISTS — asserted HERE because this is the one line that
-                   knows the record is being refused, and a refusal with no arm is a peer's message that no
-                   timeline of this document ever receives.
-                   THIS CONDITION IS SUFFICIENT NOW, AND IT WAS ONLY NECESSARY BEFORE — the change is not to
-                   the test, it is to the SECOND reason the arm could have been absent, which is gone. This
-                   paragraph used to read "that arm was minted at the delivery of `c` itself, OR at the
-                   delivery of an earlier world on the same branch when this timeline had already taken its
-                   side there (deliver_committed_at)", and that second clause was a whole population of
-                   refusals whose arm had never been minted at all: the suppression fired on a fact about this
-                   receiver's own commitments and left the branch uncovered, so the record was refused here
-                   with nothing anywhere to take it. deliver_commit_implied says what that cost and how it was
-                   measured. With the suppression retired the two gates are exactly these: a row is pushed iff
-                   `!deliver_commit_implied`, and an arm is minted iff `world_vec_fork_point` answers AND the
-                   same `!deliver_commit_implied` — one answer, because deliver_fork_arm puts its row on the
-                   SIBLING and leaves this flow's list untouched between the two calls. So among the rows that
-                   are HERE, the arm exists iff the vector names an ancestor, which is what this line reads and
-                   is a biconditional rather than a necessary condition.
-                   AND THAT BICONDITIONAL IS A PROPERTY OF ONE PRODUCER AND NOT OF THE LIST, which is exactly
-                   why this line reads the ROW rather than re-deriving it. answer_commit_taken pushes RECEIVED
-                   rows too, on a mechanism that mints its arm LATER or never, and no gate of the delivery
-                   path is asked at that push — so a reader that re-derived "an arm exists" from the vector
-                   would answer for a producer whose runs it has never seen. The paragraph above is kept
-                   because the argument is what a later reader re-derives, and it is scoped here rather than
-                   corrected: it is true of the rows the delivery path wrote and of no others. (The sentence that stood here named
-                   `world_vec_fork_point` as the row's gate too. The conclusion was right and the gate was not,
-                   and the gate is the half a later reader builds on — see below for what it cost.)
-                   AND IT IS THE ROW'S OWN STATEMENT AND NOT A READING OF ITS VECTOR, WHICH IS WHAT MAKES IT
-                   SOUND FOR A PRODUCER THIS LINE HAS NEVER MET. This used to read `strchr(c, ',')` — a proxy
-                   for `deliver_fork_arm` having run, exact for the ONE producer that pushes RECEIVED rows
-                   today and silently wrong for the next. The vector's shape answers "did the SENDING world
-                   come through a branch"; the question here is "did a mechanism mint a flow on the other side
-                   of this row", and those two agree only because one producer decides both. A cross-instance
-                   ANSWER is a commitment of exactly this kind (flow_answer_fork's block) and breaks the proxy
-                   in BOTH directions: a ROOT answer world carries no comma, so the old line ABORTED while the
-                   answer arm held the record and admitted it; and a comma'd answer world whose peer timeline
-                   answers AFTER the issuer took its first answer has NO arm — engine_host_take drops the entry
-                   and the late answer reaches engine_host_answer's arm for "a request NO register holds",
-                   which says in its own words that the arm it would have forked is silently missing — so the
-                   old line PASSED while the record was consumed and refused by every timeline there is. The
-                   second is the one that SHIPS, and `_routedZeroDelivery` read on a DRAINED receiver is the
-                   row it moves. NEITHER IS REACHABLE THROUGH A ROW, AND THE MEMBER THAT MAKES THAT TRUE IS
-                   NOW WRITTEN RATHER THAN OWED: a producer states a FlowCommitArm member or it does not
-                   compile, and an answer commitment states FLOW_COMMIT_ARM_ANSWER_OWED — an OBLIGATION, which
-                   is the one thing its producer knows at the push. The arm below reads it and neither aborts
-                   nor claims an arm; the sentence that stood here said this member did not exist and that the
-                   push which would write one was therefore not landed, and both halves went with it.
-                   AND THE ARM STILL HOLDS THIS RECORD — the other half of "an arm exists", scoped to the same
-                   population as the sentence above it and by a mechanism that is delivery-specific for the
-                   same reason: it is what makes the assert about a delivery rather than about a flow. The arm inherited this flow's
-                   delivery queue at the instant `c` was consumed (flow_deliver_fork), and a queue is FIFO, so
-                   every record this flow consumes after `c` — this one included — is one the arm was handed
-                   or is handed by engine_route's attach-to-every-live-flow. It cannot have been dropped in
-                   between: flow.c's release asserts that no flow leaves the frontier holding a routed
-                   delivery unless its recipe was written to the cold tier.
-                   THE VALUE IS READ OFF THE ROW RATHER THAN RE-DERIVED, which is also what keeps this
-                   condition side-effect-free as a DCHECK's must be: `world_vec_fork_point` allocates and
-                   `world_vec_relate` interns, and neither is asked here any more.
-                   FLOW_COMMIT_ARM_NONE IS A ROOT WORLD TODAY — a flow its instance created from the baseline,
-                   for which the delivery-time fork declined to mint. It is not SPELLED as one, deliberately:
-                   what this line needs is that no flow is on the other side, and a later mechanism may reach
-                   that state some other way.
-                   THE PAIR THIS BLOCK NAMED WAS IMPOSSIBLE AND THE REMEDY IT PRESCRIBED IS REFUSED BY AN
-                   ASSERT THAT ALREADY EXISTS. Both are recorded rather than quietly replaced, because a remedy
-                   clause is read ONCE, by somebody who has already decided to do the work, so a wrong one is
-                   not caught — it is executed. It read: "the sending document has two of those the moment the
-                   cold tier rebuilds one beside the boot flow: park_flow_add passes WORLD_NONE … Give a
-                   rebuilt flow the world its recipe was written under, so every timeline of one document meets
-                   every other at a fork point."
-                   THE BOOT FLOW AND A COLD-RESUMED RESIDUE ARE ALTERNATIVES, NOT NEIGHBOURS. This file's own
-                   session opener runs `if (recipes && *recipes) cold_resume(…); else flow_add(…, WORLD_NONE)`
-                   under a DCHECK that the frontier is EMPTY, because "adding a fresh boot flow beside them
-                   would explore the un-forked path a second time". The pair named above cannot occur.
-                   AND THE COLD TIER IS ONE GENERATOR OF FOUR, so a fix there does not retire this abort. Every
-                   `flow_add*(…, WORLD_NONE)` mints a root in THIS (document, generation) and `mint` stamps the
-                   AGENT's `g_doc` on all of them: this file's boot flow, a JOINED document's boot flow (whose
-                   root is in the SAME forest, not a second one), solve.c's @S candidate session, and each
-                   member a cold resume rebuilds. Two candidates, or a candidate beside the boot flow, are this
-                   pair with no park anywhere in it — so READ WHICH generator minted the pair in front of you
-                   before repairing any one of them; a reader sent from here to solver/cold.c finds nothing
-                   wrong there.
-                   "AS A CHILD OF THE WORLD ITS RECIPE WAS PARKED UNDER" IS REFUSED BY NAME. world_mint_child
-                   asserts `parent.session == g_session` — "a world minted in a PREVIOUS session of this
-                   document was forked here" — because a park BUMPS the generation (world_session_resume)
-                   exactly so the ended session's names cannot be minted under again, and world_vec_relate
-                   answers INDEPENDENT for two sessions of one document ON PURPOSE: "a resumed session's flows
-                   are re-derivations of the parked ones rather than the other arm of any branch". What a park
-                   loses is NOT a shape BETWEEN THE REBUILT MEMBERS, and the sentence that stood here said it
-                   was: two members of ONE frontier are never ancestor-and-descendant in any session, because a
-                   fork re-mints BOTH arms as children of the point it retires, so a live member's world is
-                   `held` and never `forked` while every ancestor is `forked` — which is (iii) below, "every
-                   live flow's world is a LEAF", said twenty-six lines from a sentence claiming the parked
-                   session had a tree. What a resume loses is one member's OWN ancestry, so its vector is a
-                   bare head and reaches THIS line rather than any relation. solver/cold.c's park_flow_add
-                   holds the refutation and the three asserts that refuse the record that clause asked for.
-                   AND THE DESIGN THAT WOULD ONCE HAVE DEFEATED THIS LINE NO LONGER REACHES IT, which is the
-                   point of reading the row rather than the vector and is recorded because a reader who
-                   re-derives the old shape will re-propose the old attack: hanging an ancestor off a root
-                   merely to put a comma in the vector used to make this line PASS while the arm it asserts
-                   did not exist. A comma is not read here now, so that design changes this answer not at all
-                   — it is refused for the reasons solver/cold.c's park_flow_add gives, and no longer for
-                   this one.
-                   RETIREMENT: this record goes when `flow_add*(…, WORLD_NONE)` has one caller, at which point
-                   naming the generator of a root pair is a grep rather than a paragraph. */
-                /* AN ARM THAT IS OWED RATHER THAN MINTED IS ITS OWN ANSWER, AND IT IS NEITHER OF THE
-                   NEIGHBOURS THIS LINE WOULD OTHERWISE FILE IT UNDER. A cross-instance answer records the
-                   timeline it TOOK (answer_commit_taken); the arm for the timeline it did not take is
-                   flow_answer_fork's and is built only if that other timeline answers. Aborting would fire on
-                   a peer that answered exactly ONCE — a peer behaving correctly, whose single timeline has
-                   nothing further to say — and treating it as DELIVERY_FORK would assert an arm no mechanism
-                   has built, which is the claim reading the row instead of the vector exists to stop.
-                   SO IT REFUSES AND SAYS WHICH REFUSAL IT WAS, and the loss, if there is one, is caught where
-                   every other lost delivery is: the exhaustion assert over `_routedZeroDelivery` is the only
-                   line that can see a record no timeline of this document admitted, and it names this case.
-                   Counting it apart from `routed-delivery-not-this-timeline` is the same split that row's own
-                   neighbour is made by — that one names a flow that holds the record and this one cannot. */
+                /* The arm that should take a refused record exists: asserted here, the one line that knows the
+                   record is refused. On the delivery path a row is pushed iff `!deliver_commit_implied`, and an
+                   arm is minted iff `world_vec_fork_point` answers and the same `!deliver_commit_implied` holds
+                   (deliver_fork_arm puts its row on the sibling, leaving this list untouched in between), so for
+                   those rows the arm exists iff the vector names an ancestor. That holds for one producer only:
+                   answer_commit_taken also pushes received rows, for a mechanism that mints its arm later or
+                   never. So the row states its own minting mechanism (flow.h's FlowCommitArm) and this reads it
+                   rather than the vector's shape, which also keeps the condition side-effect free
+                   (`world_vec_fork_point` allocates, `world_vec_relate` interns).
+                   The arm still holds this record: it inherited this flow's delivery queue when `c` was consumed
+                   (flow_deliver_fork), the queue is FIFO, and flow.c's release asserts that no flow leaves
+                   holding a routed delivery unless its recipe went to the cold tier.
+                   FLOW_COMMIT_ARM_NONE is today a root world, a flow created from the baseline for which the
+                   delivery-time fork declined to mint; it is not spelled as one because a later mechanism may
+                   reach "no flow on the other side" another way. Roots are minted by every
+                   `flow_add*(…, WORLD_NONE)`: this file's boot flow, a joined document's boot flow (same forest),
+                   solve.c's @S candidate session, and each member a cold resume rebuilds; read which minted the
+                   pair before repairing one. A rebuilt member cannot be minted as a child of its parked world
+                   (world_mint_child asserts `parent.session == g_session`; world_vec_relate answers independent
+                   across sessions on purpose); see solver/cold.c's park_flow_add. */
+                /* An arm owed rather than minted is its own answer. A cross-instance answer records the timeline
+                   it took (answer_commit_taken); the arm for the other timeline is flow_answer_fork's, built only
+                   if that timeline answers. Aborting would fire on a peer that correctly answered once, and
+                   filing it as a delivery fork would claim an arm nothing built. It refuses under its own row; a
+                   real loss is caught by the exhaustion assert over `_routedZeroDelivery`, which names this case. */
                 if (arm == FLOW_COMMIT_ARM_ANSWER_OWED) verdict = STEP_UNIT_ROUTED_ARM_OWED;
                 else {
                     DCHECK(arm != FLOW_COMMIT_ARM_NONE,
@@ -2232,9 +1890,9 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                 }
             }
         } else if (rel == WORLD_REL_SAME || rel == WORLD_REL_DESCENDANT) {
-            /* AT OR UNDER A SUBTREE THIS ARM FORECLOSED: the parent that took it delivers it. Its own row,
-               because that parent is ABOVE this flow and holds the record by construction — a refusal here
-               can never be a lost message, and the arm above can. */
+            /* At or under a subtree this arm foreclosed: the parent that took it delivers it. Its own row,
+               because that parent is above this flow and holds the record by construction, so this refusal can
+               never be a lost message, while the arm above can. */
             verdict = STEP_UNIT_ROUTED_PARENT_TOOK;
         }
         JS_FreeCString(ctx, c);
@@ -2246,81 +1904,32 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
     return verdict;
 }
 
-/* IS A COMMITMENT TO RECEIVING `vec` ALREADY IMPLIED BY THIS TIMELINE'S RECORD? — one predicate with two
- * callers below, and they are two uses of ONE fact rather than two questions: the arm this delivery forecloses
- * and the commitment it records are minted TOGETHER or not at all, so a single answer is what keeps them from
- * disagreeing about whether this delivery is new to this timeline.
+/* Is a commitment to receiving `vec` already implied by this timeline's record? One fact with two callers: the
+ * arm a delivery forecloses and the commitment it records are minted together or not at all.
  *
- * A world's ancestors are totally ordered, so a set of pairwise-comparable RECEIVED worlds is a chain, and a
- * commitment this world is at-or-above refuses everything this world would refuse — which makes the row
- * redundant and makes the arm ¬`vec` redundant with the arm minted for that deeper commitment, since ¬(deeper)
- * forecloses a SUBTREE containing `vec`. FORECLOSED rows are not read here: they are the other side of a
- * branch this timeline is not on, and being on the far side of some branch says nothing about whether this
- * delivery is the first this timeline has had from `vec`.
+ * A world's ancestors are totally ordered, so pairwise-comparable received worlds form a chain, and a commitment
+ * at or above `vec` refuses everything `vec` would; the row is redundant, and so is the arm ¬`vec`, since the arm
+ * minted for the deeper commitment forecloses a subtree containing `vec`. Foreclosed rows are not read: being on
+ * the far side of some branch says nothing about whether this is the first delivery from `vec`.
  *
- * IT REPLACES `deliver_committed_at`, WHICH WAS A WRONG NARROWING AND COST 97% OF EVERY MESSAGE A FORKING PEER
- * SENT. That predicate asked whether this timeline held ANY commitment strictly below the vector's nearest
- * named ancestor, and refused to mint the arm if it did — on the premise, written at it, that "a fork mints a
- * child for EXACTLY TWO arms and retires the point it branched at, so a receiver that has already committed at
- * a branch has foreclosed the only other side there is". That premise is true of the sender's real world
- * FOREST and false of the WIRE VECTOR, which is the only thing a receiver has: world_ancestry FILTERS the
- * chain to worlds that have themselves crossed as a head (`if (!g_minted[w.serial - 1].sent) continue;`), so
- * the nearest ancestor a vector names is not a fork point at all — it is the nearest ancestor that SENT, and
- * every sending world below it names it, however many binary forks lie between. Twenty siblings naming one
- * ancestor is the ordinary shape of a peer whose boot flow forks, not a corner.
- * SO THE ARM WAS RETIRED ON AN OBSERVATION THAT FALSIFIED NOTHING. §CLAUDE's test for an arm-retirement is
- * which observation falsified the premise of the arm being retired; the premise here is "the sender has a
- * timeline that received neither of these", the observation was a fact about the RECEIVER's own commitments,
- * and a fact merely CONSISTENT with an arm's premise is not evidence — so the retirement was the wrong pin one
- * level up, and §Solver-half's rule that uncertainty KEEPS the arm decides it.
- * MEASURED, at 22605dc4 and 332a0c50, one fixture, both frozen artifacts: 449 records routed to one receiving
- * document over 429 distinct sending worlds, 193 admitted, 33485 refused — and the admitted count did not move
- * when the record count moved 5.3x, because it is not a function of the traffic at all. Re-running
- * deliver_admits / deliver_fork_arm / deliver_commit_taken over that exact routed world sequence reproduces it
- * to the digit at five receiving timelines (delivered 195, refused 33410, flows 80 against a measured 80) and
- * says what the number is: EXACTLY TWO worlds per named ancestor reach a timeline — the first by the flow that
- * takes it and the second by the arm that flow minted — and the third onward reach none, cascading, since a
- * world nobody admitted mints no arm for its own children. 13 of 429 sending worlds were admitted. The same
- * simulation with this predicate in place admits 429 of 429, and admits them identically at both extremes of
- * the schedule (every record pumped to a stall before the next, and every record attached before any is
- * consumed), which is what says the loss was structural and not a starved timeline.
+ * The test is deliberately not "any commitment below the vector's nearest named ancestor": world_ancestry
+ * filters the chain to worlds that have themselves crossed as a head, so the nearest named ancestor is the
+ * nearest one that sent, not a fork point, and twenty siblings naming one ancestor is the ordinary shape of a
+ * peer whose boot flow forks. Suppressing on that would retire an arm on an observation about the receiver's own
+ * commitments, which falsifies nothing about the sender.
  *
- * NAMED RESIDUAL — THE ARM SET IS A SUPERSET OF THE SENDER'S TIMELINES, AND ITS SIZE IS THE COST OF THE
- * VECTOR'S POVERTY RATHER THAN OF THIS PREDICATE.
- *   WHAT IS NOT COVERED: with the nearest NAMED ancestor standing in for a fork point, k mutually-contradicting
- *   worlds under one of them produce an ELIMINATION CHAIN of k+1 arms where the sender's real binary forest has
- *   k leaves — so one of those arms received nothing at all and is a timeline no sender was in. It is minted
- *   because nothing in the vector can rule it out, and §Solver-half's rule is that uncertainty keeps the arm:
- *   the alternative that ruled it out is the one this predicate replaces, and it dropped 97% of the traffic.
- *   WHAT THE NEXT DIFF BUILDS: a vector that names the fork point a receiver actually needs — which is NOT
- *   "stop filtering". world.h gives the reason for the filter and it is a real one: unfiltered, the chain grows
- *   with the number of BRANCHES a flow has taken rather than with its fork DEPTH, which is unbounded on any
- *   page whose boot flow forks in a loop. What a receiver needs is narrower than the whole chain and wider than
- *   the sent-only one: a retired fork point belongs in the vector exactly when its OTHER subtree has sent
- *   something, because that is the pair a receiver has to be able to tell apart. With those named,
- *   world_vec_fork_point answers about a real branch, "has this timeline already taken a side at it" becomes a
- *   sound narrowing, and the chain collapses to the sender's own leaves.
- *   HOW ITS ABSENCE WOULD SHOW: the receiving instance's live flow count tracking the PEER'S distinct sent
- *   worlds rather than its own forking, and its refusal count growing as the product of the two — because
- *   engine_route attaches every record to every live flow. On the fixture measured above, simulated: flows 80
- *   -> 18945 and refusals 33485 -> ~4M for the same 449 records. That is the ceiling this makes visible, and
- *   naming it here is what stops the next reader reading it as this predicate being wrong. */
-/* …AND IT HANDS BACK THE COVERING ROW'S ARM, WHICH IS A SECOND QUESTION THE BOOLEAN WAS ANSWERING BY
- * ACCIDENT. `implied` decides whether to PUSH a row; the caller that mints the arm was using the same bit to
- * decide that an arm EXISTS, and spelled the answer as a constant — its own mechanism — on the argument that
- * the covering row was necessarily pushed by that same mechanism. That argument was EXACT while the delivery
- * path was the only producer of a RECEIVED row and is not a property of this predicate at all: a second
- * producer's row can cover a delivery, and the constant would then claim an arm that producer never minted.
- * This is the one-bit-two-questions shape CLAUDE.md names, and the repair is its: the BIT stays one fact and
- * each caller asks the question it actually has.
- * THE SHORT-CIRCUIT GOES WITH IT, because the arm is a property of the WHOLE covering set and not of whichever
- * row happens to sit first. Several RECEIVED rows may cover one vector — they are pairwise comparable, so they
- * are a chain, and any of them may have been pushed by any producer — so the answer is the WEAKEST arm among
- * them: a caller told DELIVERY_FORK by one row and ANSWER_OWED by another has an arm only if both hold, and
- * only the second can fail to. Reading the first match instead would make the answer depend on push ORDER,
- * which is the ordinal-over-a-mutable-set defect one list down.
- * `covering` MAY BE NULL for a caller that wants the bit alone (the row-suppression half), and it is written
- * only when the answer is 1 — there is no covering arm when nothing covers. */
+ * Named residual. Not covered: with the nearest named ancestor standing in for a fork point, k mutually
+ * contradicting worlds under it produce k+1 arms where the sender's forest has k leaves, so one arm is a timeline
+ * no sender was in; uncertainty keeps it. Next diff builds: a vector naming a retired fork point exactly when its
+ * other subtree has sent something (not an unfiltered chain, which world.h explains grows with branches taken
+ * rather than fork depth); then world_vec_fork_point answers about a real branch and the arms collapse to the
+ * sender's leaves. Absence shows as: the receiver's live flow count tracking the peer's distinct sent worlds,
+ * and refusals growing as their product, because engine_route attaches every record to every live flow.
+ *
+ * `covering`, when non-NULL, receives the weakest arm among the covering rows (written only when the answer
+ * is 1). Deciding to push a row needs the bit; deciding that an arm exists needs the arm, and a second producer's
+ * row (an answer commitment) can cover a delivery. Several received rows may cover one vector, so the answer is
+ * the weakest of them rather than the first match, which would depend on push order. */
 static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec, FlowCommitArm *covering)
 {
     int n = flow_world_commits(f), i, implied = 0;
@@ -2341,19 +1950,11 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
                "from, which is the message that then reaches no timeline at all");
         rel = world_vec_relate(vec, c);
         if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) {
-            /* THE COVERING ARM IS READ ONLY FOR A CALLER THAT ASKED FOR ONE, AND THAT SCOPE IS LOAD-BEARING
-               RATHER THAN A SAVING — it is what makes the assert below true. A ROOT sending world's row
-               carries NO arm (deliver_fork_arm declines to mint where there is no branch), and such a row
-               COVERS ITSELF: a second message from one root is WORLD_REL_SAME against it, so a reader that
-               demanded an arm on every covering row would abort on an ordinary repeated delivery. The one
-               caller that wants the arm — deliver_fork_arm — has already RETURNED for a root before it asks,
-               so a root's row is never a covering row in its question, which is the whole of why the value
-               can be asserted there and not here.
-               THE SENTENCE THAT STOOD HERE SAID A ROOT "CANNOT COVER A WORLD BELOW IT", which is true of the
-               ANCESTOR arm and says nothing about SAME — an enumeration of the ways a row can cover that was
-               short by the one that needs no ancestry at all. It is recorded rather than deleted because the
-               argument reads as complete and a reader who re-derives it will re-propose the unconditional
-               assert, whose cost is an abort on the commonest delivery shape there is. */
+            /* The covering arm is read only for a caller that asked, and that scope is what makes the assert
+               below true. A root sending world's row carries no arm (deliver_fork_arm declines to mint where
+               there is no branch) and covers itself: a second message from one root is WORLD_REL_SAME against
+               it, so demanding an arm on every covering row would abort an ordinary repeated delivery. The one
+               caller that wants the arm, deliver_fork_arm, has already returned for a root before it asks. */
             if (covering) {
                 JSValue av = JS_GetPropertyUint32(ctx, e, 2);
                 FlowCommitArm row_arm;
@@ -2387,33 +1988,26 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
     return implied;
 }
 
-/* THE PER-RECORD HALF OF THE DELIVERY CENSUS, declared here because the arrival is registered by
-   engine_route below and the ledger itself lives beside the two counters it cannot be derived from. */
+/* The per-record half of the delivery census, declared here because engine_route registers the arrival and the
+   ledger lives beside the two counters it cannot be derived from. */
 static void routed_rec_arrived(const char *record);
 
-/* THE INBOUND HALF OF THE ONE-WAY LINE — a record the trusted zone routed to THIS instance because it holds the
-   document the record names. It is the exact text the sending instance emitted as a notice, plus the SENDER's
-   ORIGIN, which only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a foreign
-   message is a forgery every `event.origin` check in every bundle would then trust).
+/* The inbound half of the one-way line: a record the trusted zone routed to this instance because it holds the
+ * named document. It is the exact text the sending instance emitted as a notice, plus the sender's origin, which
+ * only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a foreign message is a
+ * forgery every `event.origin` check would trust).
  *
- * IT BECOMES A FLOW, and that is the whole design rather than a detail of it. §CLAUDE's cross-document rule says
- * a delivery SEEDS a flow in the receiver whose world is receiver-baseline ∧ the sending flow's vector, and that
- * it is a work item on the ONE frontier. RECEIVER-BASELINE IS READ AS THE RECEIVING DOCUMENT'S OWN TIMELINES,
- * not as this instance's pre-boot baseline: a flow starting from the latter arrives where the page's `message`
- * listener was never registered, because the script that registered it ran in some flow's delta. The two
- * readings differ by exactly that, and only one of them delivers a message at all — so this creates a member
- * of every live timeline and returns. It does not deliver: delivering
- * here would run page code under whatever flow the scheduler last had switched in, against that flow's delta,
- * which is the "two timelines wearing one name" the world registry exists to prevent. The frontier IS the
- * inbound queue, so there is no second queue to drain and no second pump to drain it, and the delivery is
- * parkable, rankable and cross-session resumable for free because every flow is.
+ * It becomes a work item on the one frontier: a delivery seeds, in the receiver, a world of receiver baseline ∧
+ * the sending flow's vector, where the receiver baseline is the receiving document's own timelines (the page's
+ * `message` listener was registered by a script, so it lives in some flow's delta, not the pre-boot baseline).
+ * So this attaches the record to every live timeline and returns. Delivering here would run page code under
+ * whichever flow was last switched in. The frontier is the inbound queue, so the delivery is parkable, rankable
+ * and resumable like every flow.
  *
- * THE SEGMENT IS THE REGISTRY'S, AND ASKING FOR IT IS HALF THE DELIVERY'S WORLD. A world minted elsewhere has
- * one segment in this instance — whatever that world has written HERE — materialized on first arrival by
- * forking the nearest ancestor this instance already holds, which is the only thing the ancestry the record
- * carries is for. Asking for it here is what makes a later arrival from a world FORKED off this one inherit
- * these writes instead of starting from this instance's baseline; the registry owns it for the life of the
- * world, so no flow frees it. */
+ * The segment is the world registry's: a world minted elsewhere has one segment here (what it has written in
+ * this instance), materialized on first arrival by forking the nearest ancestor this instance holds, which is
+ * what the record's ancestry is for. Asking for it now lets a later arrival from a world forked off this one
+ * inherit these writes; the registry owns it for the world's life. */
 void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
 {
     char *dup, *doc, *worlds, *tail;
@@ -2423,24 +2017,20 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     DCHECK(sender_origin != NULL && *sender_origin,
            "a routed record arrived without the sender's origin — only the trusted zone can stamp one, and a "
            "delivery without it would have to invent the one field a page's check is written against");
-    /* TWO WAYS A SESSION ENDS AND THEY ARE TWO DIFFERENT FAILURES, so they are two asserts. One message for
-       both is how a reader is sent to the wrong file: the states are told apart by whether the frontier was
-       WRITTEN OUT, which this engine knows, and the fix is in a different place for each.
-       PARKED — the frontier is a set of recipes and this delivery is a work item that is not in any of them.
-       It cannot be re-derived by a replay the way an owed REQUEST can (the asking code re-issues that; nothing
-       in this document re-sends someone else's message), so it must either park as what it is or be refused
-       while one is in flight — which is exactly the pair cold.c's per-flow park already asserts for a delivery
-       a flow is HOLDING, arriving here from the other side. */
+    /* Two ways a session ends, two different failures, two asserts, told apart by whether the frontier was
+       written out. Parked: the frontier is recipes and this delivery is in none of them. Unlike an owed
+       request, which the asking code re-issues on replay, nothing in this document re-sends someone else's
+       message, so it must park as what it is or be refused while a park is in flight (cold.c's per-flow park
+       asserts the same pair for a delivery a flow holds). */
     DCHECK(g_sess_live || !engine_frontier_paged(),
            "a record was routed into an instance whose frontier was PARKED — the session is closed and its "
            "flows are recipes, so there is nothing to seed the delivery on and no replay that re-derives it: a "
            "message is not re-sent by the document that receives it. Build the inbound half of the cross-"
            "instance park — the record and the sender origin the trusted zone stamped are both TEXT and cross "
            "as text — or have the trusted zone hold the record until the instance it names is resumed");
-    /* DRAINED — every timeline of this document finished, which is a document that can no longer receive at
-       all. That is the state engine_set_referenced exists to prevent: a document a peer still holds a
-       WindowProxy for keeps its last timeline waiting instead of finishing, so a delivery has somewhere to
-       arrive. Reaching here means nothing told this instance it was still referenced. */
+    /* Drained: every timeline finished, so the document can no longer receive. engine_set_referenced exists to
+       prevent that (a document a peer holds a WindowProxy for keeps its last timeline waiting), so reaching here
+       means nothing told this instance it was still referenced. */
     DCHECK(g_sess_live,
            "a record was routed into an instance whose frontier had DRAINED — every timeline of the document "
            "finished, so there is no flow to seed the delivery on and no scheduler to run it. A document a peer "
@@ -2449,10 +2039,9 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            "that a peer holds a WindowProxy for its document — which is the one fact this engine cannot see for "
            "itself and the one the routing table has by construction");
 
-    /* EVERY ROUTED RECORD'S FIRST TWO FIELDS ARE THE TRANSPORT'S: the target DOCUMENT (which instance) and the
-       sending flow's WORLD (whose timeline). Everything after them belongs to the component named by the op,
-       which is the only thing that reads it. Stating that here is what lets a second op be routed without a
-       second router. */
+    /* Every routed record's first two fields are the transport's: the target document (which instance) and the
+       sending flow's world (whose timeline). The rest belongs to the component the op names, so a second op is
+       routed without a second router. */
     dup = strdup(record);
     CHECK(dup != NULL, "engine: OOM routing a record");
     doc = strchr(dup, '\t');
@@ -2466,14 +2055,11 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     DCHECK(tail != NULL, "a routed record carried nothing after its transport fields — there is no delivery in it");
     *tail = 0;   /* only to bound the vector for the checks here; flow_deliver re-splits its own copy */
 
-    /* ROUTED TO THE WRONG INSTANCE is the trusted zone's bug, not the page's, and it is silent in every other
-       form: delivering anyway would fire the message at THIS document's listeners, which is a message the page
-       never received arriving as if it had. */
-    /* WHICH of this agent's documents it names is NOT decided here, and the router does not need to know: an
-       instance is an ORIGIN-KEYED AGENT CLUSTER, so several documents are this one's, and the REALM that
-       delivers is selected where the delivery RUNS (flow_deliver) for the same reason the world segment is
-       asked for again there — a hosted navigable's realm is materialized by whichever flow first reads through
-       it (navigable.h), so which realm answers is a property of the run and not of the record's arrival. */
+    /* Routed to the wrong instance is the trusted zone's bug, and delivering anyway would fire a message the
+       page never received. Which of this agent's documents it names is not decided here: an instance is an
+       origin-keyed agent cluster with several documents, and the delivering realm is selected where the
+       delivery runs (flow_deliver), since a hosted navigable's realm is materialized by whichever flow first
+       reads through it (navigable.h). */
     DCHECK(world_doc_hosted(world_doc_intern(doc)),
            "a record was routed to an instance that does not hold the document it names — the offscreen is the "
            "only zone that knows which instance holds which document, and it sent this one to the wrong place");
@@ -2481,27 +2067,17 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
         WorldId w;
         const WorldId *anc;
         int n_anc = world_parse(worlds, &w, &anc);
-        /* AGAINST EVERY DOCUMENT THIS AGENT HOLDS, not against its root: an agent is an origin-keyed CLUSTER,
-           so a message from a SAME-ORIGIN child is delivered in this heap and never reaches a transport. */
+        /* Against every document this agent holds, not its root: a message from a same-origin child is
+           delivered in this heap and never reaches a transport. */
         DCHECK(!world_doc_hosted(w.doc), "a record was routed back to the instance whose flow sent it — a "
                                          "message to one's own document is delivered locally and never leaves");
-        /* RECEIVER-FLOW-WORLD ∧ SENDER-VECTOR, AS TWO REAL OBJECTS. The receiving half is the delta of the flow
-           that will make the delivery — the page's `message` listener was registered by a script, so it lives
-           in THAT flow's delta and in no baseline. The sending half is THIS INSTANCE'S SEGMENT for the sender's
-           world: what that world has already written here, materialized by forking the nearest ancestor of it
-           this instance holds. Both are chains rooted at this instance's baseline, and neither is an ancestor
-           of the other — so their conjunction is a JOIN, and a CowDelta is a LINEAR chain (frozen segments
-           under one head) that cannot express one.
-           IT IS THE IDENTITY EXACTLY WHEN THE SEGMENT IS EMPTY, which is the truth for a world that has only
-           ever POSTED: a world that has written nothing here constrains nothing here, so the conjunction is the
-           receiving flow's timeline unchanged and the delivery below is already it. That is asked rather than
-           assumed, because the answer changes the moment this instance answers a cross-document operation that
-           runs page code under a foreign world.
-           MATERIALIZED ON ITS OWN LINE, because it is not part of the question. A DCHECK vanishes in release,
-           so a segment created inside one would exist in dev and not in production — and the next arrival from
-           a world forked off this one would find no ancestor and start from the baseline instead of inheriting
-           it. That is two different timelines in two builds, which is precisely why check.h requires the
-           condition to be side-effect-free. */
+        /* Receiver flow world ∧ sender vector, as two real objects: the delta of the flow that will make the
+           delivery, and this instance's segment for the sender's world. Both are chains rooted at this baseline
+           and neither is an ancestor of the other, so their conjunction is a join, which a CowDelta (a linear
+           chain of frozen segments under one head) cannot express. It is the identity when the segment is empty,
+           the case for a world that has only posted; that is asserted because it stops holding once this
+           instance runs page code under a foreign world. The segment is materialized on its own line, outside
+           the DCHECK, so release and dev builds create the same segments. */
         CowDelta *seg = world_segment(ctx, w, anc, n_anc);
         (void)seg;
         DCHECK(cow_delta_empty(seg),
@@ -2516,19 +2092,12 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     }
     free(dup);
 
-    /* THE MESSAGE ARRIVES IN EVERY TIMELINE OF THE RECEIVING DOCUMENT, and that is what makes it arrive at all.
-       A delivery seeded as a FRESH flow from this instance's baseline was the first shape of this, and it is
-       wrong in a way that is completely silent: the receiving page registers its `message` listener from a
-       script, so the registration lives in the COW delta of the flow that ran that script, and a flow starting
-       from the baseline sees a document where it was never registered. The message is delivered, no handler
-       exists, and nothing distinguishes that from a page that registered none. A document's state IS its flows;
-       there is no other timeline to deliver into.
-       Attached rather than delivered here: this runs between scheduler steps, so the flow the record belongs to
-       is not the one switched in. Each flow makes its own delivery when it next steps, under its own delta,
-       and the task that produces lands on its own queue — which is the whole reason the job queue is per-flow. */
-    /* REGISTERED BEFORE IT IS ATTACHED, so a record whose attach loop aborts is still on the ledger as one no
-       timeline admitted — the alternative counts it nowhere, which is the shape that reports a loss as a
-       clean run. */
+    /* The message arrives in every timeline of the receiving document. A delivery seeded as a fresh flow from
+       the baseline would find no `message` listener (it was registered in some flow's delta) and fail silently.
+       Attached rather than delivered here because this runs between scheduler steps: each flow delivers when it
+       next steps, under its own delta, and the resulting task lands on its own queue.
+       Registered before attaching, so a record whose attach loop aborts is still on the ledger as one no
+       timeline admitted. */
     routed_rec_arrived(record);
     n = flow_count();
     DCHECK(n > 0, "a message was routed to a document whose every timeline had already finished — a document "
