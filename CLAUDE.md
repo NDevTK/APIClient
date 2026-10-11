@@ -183,7 +183,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 
 ## Security → SECURITY.md
 
-- Authorization keys on `sender.tab.url`; the credentialed-read principal is `MessageSender.origin`. Content script, website and the WASM bundle are untrusted. Every engine instance is a sandboxed renderer frame with an opaque origin. All network goes through `safe-fetch.js` or `pageContextFetch`; state lives in the offscreen document and IndexedDB, never `chrome.storage.local`.
+- Authorization keys on browser-stamped sender fields: `MessageSender.origin` for a document-to-document hop (an opaque `"null"` extension page gets nothing), `sender.url` only for the service worker's frameless hop; `sender.tab.url` authorizes nothing. The credentialed-read principal is `MessageSender.origin`. A reply the page's own code reads passes Fetch's CORS check whatever its credentials. Content script, website and the WASM bundle are untrusted. Every engine instance is a sandboxed renderer frame with an opaque origin. All network goes through `safe-fetch.js` or `pageContextFetch`; state lives in the offscreen document and IndexedDB, never `chrome.storage.local`.
 - One WASM instance per origin-keyed agent cluster. Cross-instance state crosses as serialized, typed text; synchronous cross-instance reads are suspend points; the cross-origin WindowProxy allowlist is declared beside the members; cross-document messages are emissions carrying the trusted-zone-stamped sender origin and the sender's world.
 
 ## Build and testing

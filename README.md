@@ -83,11 +83,11 @@ engine/
 
 All learned state lives in **IndexedDB in the offscreen document**, whose lifetime survives service-worker eviction. `chrome.storage.local` is not used.
 
-Trust is decided by `sender.tab.url`, never `sender.id`, and the principal for a credentialed read is `MessageSender.origin`. The content script, the website and the WASM engine are untrusted.
+Trust is decided by browser-stamped sender fields, never `sender.id`: `MessageSender.origin` for a message from an extension document, and `sender.url` only for the service worker, which has no frame. The principal for a credentialed read is `MessageSender.origin`. The content script, the website and the WASM engine are untrusted.
 
 All network goes through `lib/safe-fetch.js` or the page-context relay. The engine holds no network policy. Whether a request fires is a **per-origin setting**. By default an origin is loaded the way a browser loads it: what the page's markup names and its own code requests, and nothing else. Probes, discovery and requests built on forked values need that origin deliberately widened. The chokepoint shows each request's signals (method, credential state, provenance, URL-carried authority, destination) as separate rows with their reliability, and an undetermined signal reads `unknown` rather than being left out.
 
-Extension pages run under a CSP of `script-src 'self'` with `img-src 'self'` and `form-action 'none'`, so page-derived text shown in the popup cannot run script or send data.
+Extension pages run under a CSP of `script-src 'self' 'wasm-unsafe-eval'` with no inline script, so page-derived text shown in the popup cannot run script.
 
 The full threat model, every boundary and its known residuals are in [SECURITY.md](SECURITY.md). **Authorized security research only.**
 
