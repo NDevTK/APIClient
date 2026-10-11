@@ -1142,11 +1142,9 @@ static bool computed_border_width(lxb_dom_element_t *el, const char *name, int s
         }
         len = css_cv_px(css_px(px));
     }
-    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
-           "a `border-*-width` cascaded to a value that is neither one of §3.3's three keywords nor a length. "
-           "`<line-width> = <length [0,∞]> | thin | medium | thick` admits nothing else — no percentage and no "
-           "`auto` — so this is a declaration that reached the cascade without its grammar, which is exactly "
-           "what css_shorthand.c validates for the two shorthands lexbor's registry does not carry");
+    /* `<line-width> = <length [0,∞]> | thin | medium | thick` admits no `<percentage>` and no math function
+       carrying one. css_shorthand.c's grammar refuses a percentage at parse; a substitution can still hand one. */
+    if (len.kind != CSS_LENGTH_ABSOLUTE) return false;
     DCHECK(len.px.px >= 0.0,
            "a NEGATIVE `border-*-width` reached the computed value past computed_length's range clamp — "
            "css-backgrounds-3 §3.3's `<line-width>` is `<length [0,∞]>`, and the row's range is what clamps a "
