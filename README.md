@@ -97,7 +97,7 @@ Each permission in `extension/manifest.json` and what it is for:
 | `unlimitedStorage` | The IndexedDB store, which holds the cross-session frontier and cold snapshots. |
 | `<all_urls>` host access | The content scripts on every page, and `safeFetch`'s requests. |
 
-**Not used:** `webRequest`, `debugger` and a proxy. Traffic is captured in the page itself (`intercept.js`, which wraps `fetch`, XHR, WebSocket and EventSource in the main world). `webRequest` reports none of the offscreen document's own requests, so it cannot observe the zone's sends or their redirect hops. The `debugger` permission's `Fetch` domain could pause a redirect hop before it is sent, and this extension does not take it. [SECURITY.md](SECURITY.md) states what each of these leaves uncovered.
+**Not held:** `webRequest`, `debugger` and a proxy. The page's traffic is captured in the page itself (`intercept.js`, which wraps `fetch`, XHR, WebSocket and EventSource in the main world). Without `webRequest` the zone cannot read a reply's `Set-Cookie` or a redirect's `Location` on its own sends: `fetch`'s `redirect: "manual"` answers an opaque redirect with no headers. With the permission, `webRequest` does report the offscreen document's requests, so it is the route that would let the zone follow each redirect hop itself under every gate. [SECURITY.md](SECURITY.md) states what its absence leaves uncovered.
 
 ## Storage and security
 
