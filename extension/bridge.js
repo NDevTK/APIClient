@@ -2415,8 +2415,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      GET only (SECURITY.md), so answering a POST's key with a GET's reply would be a response the server never
      gave. On this seam the refusal is spelled `null`, because core/fetch builds any object into a Response,
      so a status-0 record would resolve `fetch()` with a status no server returns. fetchedXhr spells a network
-     refusal as an answer with no body, which xml_http_request.c's xhr_take_reply leaves as §3's network error,
-     and a decline as `{declined}`, which goes to `hostDecline`. */
+     refusal as an answer with no body, which xml_http_request.c's xhr_take_reply leaves as the initial network
+     error of XHR §3 "Interface XMLHttpRequest", and a decline as `{declined}`, which goes to `hostDecline`. */
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, credentials, mode) => {
@@ -2495,8 +2495,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          is the row the owner's value arm turns on. */
       /* `mode` is the request's own (Fetch §2.2.5 Requests), off the pending line, relayed: the engine states
          what the request IS, and the chokepoint's `_modeOf` CHECKs the word. */
+      /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
+         and a request on this seam is a GET, which §5.4 refuses a body. */
       const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
-                     credentials, actor: "page",
+                     credentials, actor: "page", useCorsPreflight: false,
                      docReach: msg.provenance, credentialed: false };
       const r = await self.safeFetch(abs, opts);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
@@ -2660,6 +2662,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       CHECK(typeof eng.origin === "string",
             "an XMLHttpRequest is about to be judged with no origin on the instance that made it — the zone " +
             "assigns every instance its cluster origin at creation");
+      CHECK(typeof q.useCorsPreflight === "boolean",
+            "the engine's xhr.send record states no use-CORS-preflight flag — xhr_request_op writes XHR " +
+            "§3.5.6 step 6's flag on every record, and the chokepoint decides from it whether to preflight");
       CHECK(q.mode === "cors",
             "XHR §3.5.6 \"The send() method\" builds every request in cors mode, and the engine's xhr.send " +
             "record states another (" + q.mode + "); a reply that returns to the page in any other mode would " +
@@ -2707,7 +2712,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination: "",
                                             mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                             docReach: msg.provenance, actor: "page",
-                                            credentialed: false,
+                                            credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",

@@ -867,6 +867,8 @@ async function main() {
         throw new Error(`the engine's xhr.send record states no \`${k}\` — xhr_request_op writes every field`);
     if (!Array.isArray(q.headers))
       throw new Error("the engine's xhr.send record carries no header list — xhr_request_op writes one");
+    if (typeof q.useCorsPreflight !== 'boolean')
+      throw new Error("the engine's xhr.send record states no use-CORS-preflight flag — xhr_request_op writes one");
     if (q.mode !== 'cors')
       throw new Error(`the engine's xhr.send record states the mode \`${q.mode}\` — XHR §3.5.6 "The send() ` +
                       'method" builds every request in cors mode');
@@ -876,7 +878,7 @@ async function main() {
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination: '',
                                             mode: q.mode, provenance: q.provenance, pinned: q.pinned,
                                             actor: 'page', docReach: e.docReach, credentialed: false,
-                                            credentials: q.credentials,
+                                            credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined });
     if (raw.refusal && raw.refusal.kind === 'decline') {
       e.ready.push(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
@@ -986,8 +988,10 @@ async function main() {
     /* THE MODE (Fetch §2.2.5 "Requests") IS RELAYED OFF THE LINE AND THE ORIGIN IS THIS ZONE'S OWN RECORD OF THE
        INSTANCE (`e.origin`, the origin of the URL this zone loaded for it), never a word the engine states: the
        chokepoint decides from the pair what the page may read of the reply (Fetch §4.1 "Main fetch"). */
+    /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
+       which a GET cannot carry. */
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination, mode,
-                                            provenance, pinned, credentials,
+                                            provenance, pinned, credentials, useCorsPreflight: false,
                                             actor: 'page',
                                             docReach: e.docReach, credentialed: false });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what

@@ -2205,6 +2205,10 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
        core/fetch/fetch.h's one spelling: the trusted zone runs Fetch §4.10 "CORS check" from it. */
     json_buf_raw(&b, ","); json_buf_key(&b, "mode");
     json_buf_str(&b, fetch_mode_token(FETCH_MODE_CORS));
+    /* §3.5.6 step 6's "use-CORS-preflight flag: Set if this's upload listener is true" — step 5 set the
+       listener flag on this record before the request was built. The zone preflights from it (Fetch §4.1). */
+    json_buf_raw(&b, ","); json_buf_key(&b, "useCorsPreflight");
+    json_buf_raw(&b, d->upload_listener ? "true" : "false");
     json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
     json_buf_str(&b, engine_provenance_token(xhr_request_prov(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "pinned");

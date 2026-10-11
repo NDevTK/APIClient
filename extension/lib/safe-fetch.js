@@ -461,7 +461,8 @@ function _actorOf(opts) {
    body reads, and the drift direction is safe: an option added to the body and not here aborts on its
    author's first call. */
 var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "mode", "provenance", "pinned", "docReach",
-                          "actor", "credentialed", "credentials", "headers", "signal", "onChunk"];
+                          "actor", "credentialed", "credentials", "headers", "useCorsPreflight", "identity",
+                          "signal", "onChunk"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
    words `fetch_credentials_token` writes on the pending line. Written here because this zone is the other
    party to that contract. */
@@ -1260,6 +1261,129 @@ function _corsFilteredHeaders(headers, credentialsMode) {
   }
   return out;
 }
+/* Fetch §2.2.1 "Methods": "A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`." */
+function _corsSafelistedMethod(m) { return m === "GET" || m === "HEAD" || m === "POST"; }
+/* Fetch §2.2.2 "Headers"' CORS-unsafe request-header byte: below 0x20 except HT, or one of `"():<>?@[\]{}`
+   and DEL. A header value here is a byte string, one code point per byte. */
+function _hasCorsUnsafeRequestHeaderByte(v) {
+  for (var i = 0; i < v.length; i++) {
+    var c = v.charCodeAt(i);
+    if ((c < 0x20 && c !== 0x09) || '"():<>?@[\\]{}\x7f'.indexOf(v[i]) >= 0) return true;
+  }
+  return false;
+}
+/* MIME Sniffing §4.4 "Parsing a MIME type", as far as the essence: a parameter never makes that algorithm fail,
+   so the essence (or null for failure) is decided by its steps before the parameters. */
+var _HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+function _mimeEssence(input) {
+  var s = input.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+  var slash = s.indexOf("/");
+  if (slash < 0) return null;
+  var rest = s.slice(slash + 1), semi = rest.indexOf(";");
+  var type = s.slice(0, slash), sub = (semi < 0 ? rest : rest.slice(0, semi)).replace(/[\t\n\r ]+$/, "");
+  if (!_HTTP_TOKEN.test(type) || !_HTTP_TOKEN.test(sub)) return null;
+  return (type + "/" + sub).toLowerCase();
+}
+/* Fetch §2.2.2's "parse a single range header value" with allowWhitespace false: [start, end] with null for an
+   absent bound, or null for failure. */
+function _singleRangeValue(v) {
+  var m = /^bytes=([0-9]*)-([0-9]*)$/.exec(v);
+  if (!m) return null;
+  var start = m[1] === "" ? null : Number(m[1]), end = m[2] === "" ? null : Number(m[2]);
+  if (start === null && end === null) return null;
+  if (start !== null && end !== null && start > end) return null;
+  return [start, end];
+}
+/* Fetch §2.2.2's CORS-safelisted request-header, given a name and a value. */
+function _corsSafelistedRequestHeader(name, value) {
+  if (value.length > 128) return false;
+  switch (name.toLowerCase()) {
+  case "accept":
+    return !_hasCorsUnsafeRequestHeaderByte(value);
+  case "accept-language":
+  case "content-language":
+    return /^[0-9A-Za-z *,\-.;=]*$/.test(value);
+  case "content-type": {
+    if (_hasCorsUnsafeRequestHeaderByte(value)) return false;
+    var essence = _mimeEssence(value);
+    return essence === "application/x-www-form-urlencoded" || essence === "multipart/form-data" ||
+           essence === "text/plain";
+  }
+  case "range": {
+    var r = _singleRangeValue(value);
+    return r !== null && r[0] !== null;
+  }
+  default:
+    return false;
+  }
+}
+/* Fetch §2.2.2's CORS-unsafe request-header names of a header list (`[name, value]` pairs), as the
+   sorted-lowercase set the spec returns: every unsafelisted name, and every name once the safelisted values
+   exceed 1024 bytes together. */
+function _corsUnsafeRequestHeaderNames(list) {
+  var unsafe = [], potentially = [], size = 0;
+  list.forEach(function (h) {
+    if (!_corsSafelistedRequestHeader(h[0], h[1])) unsafe.push(h[0]);
+    else { potentially.push(h[0]); size += h[1].length; }
+  });
+  if (size > 1024) unsafe = unsafe.concat(potentially);
+  var set = [];
+  unsafe.forEach(function (n) { n = n.toLowerCase(); if (set.indexOf(n) < 0) set.push(n); });
+  return set.sort();
+}
+/* Fetch §2.2.2's "extract header list values" for a `#method` or `#field-name` header (Fetch §3.3.4 "HTTP
+   new-header syntax"): undefined where the header is absent (the spec's null), null where its value is not
+   that list (the spec's failure), else the elements. `headers` is this file's lowercased map, whose repeated
+   fields are already joined with ", ", which is the same list. */
+function _extractTokenList(headers, name) {
+  if (headers[name] === undefined) return undefined;
+  var out = [], parts = String(headers[name]).split(",");
+  for (var i = 0; i < parts.length; i++) {
+    var e = parts[i].replace(/^[\t ]+|[\t ]+$/g, "");
+    if (e === "") continue;
+    if (!_HTTP_TOKEN.test(e)) return null;
+    out.push(e);
+  }
+  return out;
+}
+/* Fetch §4.8 "CORS-preflight fetch" for a request (`method`, `href`, `headerList`, credentials mode, use-CORS-
+   preflight flag), with the request's origin from `identity`. Answers null on success or the name of the step
+   that failed, which is a network error. The preflight is uncredentialed and does not follow a redirect: a 3xx
+   is not an ok status. This zone provides no CORS-preflight cache, so the step "If the user agent does not
+   provide for a cache, then return response" ends it and `Access-Control-Max-Age` is not read. */
+async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, identity, signal) {
+  var unsafe = _corsUnsafeRequestHeaderNames(headerList);
+  var h = [["Accept", "*/*"], ["Access-Control-Request-Method", method]];
+  if (unsafe.length) h.push(["Access-Control-Request-Headers", unsafe.join(",")]);
+  var init = { method: "OPTIONS", headers: h, credentials: "omit", redirect: "manual" };
+  if (signal) init.signal = signal;
+  var resp = await fetch(href, init);
+  var headers = {};
+  resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
+  if (resp.body) {
+    try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
+  }
+  var cors = _corsCheck(headers, identity.origin, credentialsMode);
+  if (cors) return "cors-check:" + cors;
+  if (!(resp.status >= 200 && resp.status <= 299)) return "status:" + resp.status;
+  var methods = _extractTokenList(headers, "access-control-allow-methods");
+  var headerNames = _extractTokenList(headers, "access-control-allow-headers");
+  if (methods === null) return "allow-methods-unparseable";
+  if (headerNames === null) return "allow-headers-unparseable";
+  if (methods === undefined && usePreflightFlag) methods = [method];
+  methods = methods || [];
+  headerNames = (headerNames || []).map(function (n) { return n.toLowerCase(); });
+  if (methods.indexOf(method) < 0 && !_corsSafelistedMethod(method) &&
+      (credentialsMode === "include" || methods.indexOf("*") < 0))
+    return "method-not-allowed:" + method;
+  for (var i = 0; i < headerList.length; i++)
+    if (headerList[i][0].toLowerCase() === "authorization" && headerNames.indexOf("authorization") < 0)
+      return "header-not-allowed:authorization";
+  for (var j = 0; j < unsafe.length; j++)
+    if (headerNames.indexOf(unsafe[j]) < 0 && (credentialsMode === "include" || headerNames.indexOf("*") < 0))
+      return "header-not-allowed:" + unsafe[j];
+  return null;
+}
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   /* CORB for a script-like load, over facts already computed, answering the rule that refused or null, so
      the status message names which of four rules fired. Same-origin: the page's own data is its to read, and
@@ -1559,6 +1683,15 @@ async function safeFetch(url, opts) {
         "safeFetch was asked for a `cors` request the analysed page made without its credentials mode — " +
         "Fetch §4.10 \"CORS check\" reads the request's credentials mode to decide whether `*` passes, so the " +
         "check would be decided by silence");
+  CHECK(actor !== "page" || mode !== "cors" || typeof opts.useCorsPreflight === "boolean",
+        "safeFetch was asked for a `cors` request the analysed page made without its use-CORS-preflight flag " +
+        "(Fetch §2.2.5 \"Requests\") — §4.1 \"Main fetch\" preflights a request with the flag set whatever " +
+        "its method and headers, so an unstated flag would decide by silence whether the server is asked first");
+  CHECK(opts.headers === undefined || (Array.isArray(opts.headers) && opts.headers.every(function (h) {
+          return Array.isArray(h) && h.length === 2 && typeof h[0] === "string" && typeof h[1] === "string";
+        })),
+        "safeFetch was handed a header list that is not `[name, value]` string pairs — the CORS-unsafe " +
+        "request-header names are computed over it, and a list this zone cannot read would be sent unjudged");
   var _pageOrigin = typeof opts.pageOrigin === "string" ? opts.pageOrigin : "";
   var parsed;
   try { parsed = new URL(String(url)); }
@@ -1652,7 +1785,30 @@ async function safeFetch(url, opts) {
     if (_dtok)
       return _refused("decline", "blocked-destructive:" + _dtok, [parsed.href], {});
   }
-  var init = { method: "GET", credentials: credentialed ? "include" : "omit", redirect: "follow" };
+  /* The one verb this transport sends; the preflight below and the request are built from it. */
+  var _method = "GET";
+  /* Fetch §4.1 "Main fetch": a `cors` request that is not same-origin with its origin, whose use-CORS-preflight
+     flag is set, or whose method is not CORS-safelisted, or whose header list has CORS-unsafe names, runs §4.4
+     "HTTP fetch" with makeCORSPreflight, and with no CORS-preflight cache §4.4 always runs §4.8 "CORS-preflight
+     fetch" first. Its failure is a network error, and the request itself is never sent. The request's origin
+     is `identity.origin`, the trusted zone's identity for this request, which must agree with `pageOrigin`. */
+  if (actor === "page" && mode === "cors" && !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin) &&
+      (opts.useCorsPreflight || !_corsSafelistedMethod(_method) ||
+       _corsUnsafeRequestHeaderNames(opts.headers || []).length > 0)) {
+    CHECK(opts.identity && typeof opts.identity === "object" && typeof opts.identity.origin === "string",
+          "safeFetch must CORS-preflight this request and was handed no request identity — Fetch §4.8's " +
+          "preflight carries the request's origin and is CORS-checked against it, and that origin is the " +
+          "trusted zone's `identityFor(request)`, which the caller passes as `opts.identity`");
+    CHECK(opts.identity.origin === (_isRealOrigin(_pageOrigin) ? _pageOrigin : "null"),
+          "the request identity's origin (" + opts.identity.origin + ") is not the page origin this zone " +
+          "judges the reply against (" + _pageOrigin + ") — two zone records of one request disagree, and the " +
+          "preflight and the reply would be CORS-checked as two different requesters");
+    var _pf = await _corsPreflight(parsed.href, _method, opts.headers || [], opts.credentials,
+                                   opts.useCorsPreflight, opts.identity, opts.signal);
+    if (_pf)
+      return _refused("network", "blocked-cors-preflight:" + _pf + ":" + parsed.origin, [parsed.href], {});
+  }
+  var init = { method: _method, credentials: credentialed ? "include" : "omit", redirect: "follow" };
   /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
      for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
      and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds auth headers; cookies,
