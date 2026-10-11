@@ -106,8 +106,8 @@ function check(cond, msg) { if (!cond) fail(msg); }
  *   is a property of the BOX and not of the member. `<div style="width:100px;height:50px">` under body's UA
  *   margin answers x 8, y 8, width 100, height 50, all concrete and all correct, and `documentElement`'s
  *   height answers 66. What is concolic is an auto-width block, whose used width is `{initialContainingBlock.
- *   width}`, and an auto-height block containing text, whose used height is `{defaultFontSize} & {fontAscent}
- *   & {fontDescent}` — the FONT family, which the old sentence did not name at all and which is the one a
+ *   width}`, and an auto-height block containing text, whose used height is `{defaultFontSize} &
+ *   {fontAscent.<face>} & {fontDescent.<face>}` — the FONT family, which the old sentence did not name at all and which is the one a
  *   comparison against a real browser will meet on every paragraph.
  *   AND IT IS NOT SILENT. The request goes out carrying the concolic's DISPLAY SHAPE, and the example is
  *   resolved: `fetch("/w=" + document.body.getBoundingClientRect().width)` reaches `qjs_pending` as

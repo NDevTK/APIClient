@@ -19,8 +19,8 @@
 
 #include "core/fonts/installed_font.h"
 
-/* The distinct installed faces a computed `font-family` names, in list order. A face appears once, so the
-   list is bounded by the installed set rather than by the family list. */
+/* The distinct installed faces a computed `font-family` names, in list order, or the default font alone when
+   it names none. A face appears once, so the list is bounded by the installed set, not by the family list. */
 typedef struct {
     unsigned n;
     InstalledFont face[INSTALLED_FONT_COUNT];
@@ -33,7 +33,7 @@ void font_matching_resolve(const char *computed_family, FontFallbackList *out);
 
 /* §5.2's first available font: "the first font for which the character U+0020 (space) is not excluded by a
    unicode-range, given the font families in the font-family list (or a user agent's default font if none are
-   available)". Installed faces have no unicode-range, so it is the list's first face or the default font. */
+   available)". Installed faces have no unicode-range, so it is the list's first face. */
 InstalledFont font_matching_first_available(const FontFallbackList *l);
 
 /* The face §5.2 renders `cp` with: the first face of `l` whose character map contains it, else the installed

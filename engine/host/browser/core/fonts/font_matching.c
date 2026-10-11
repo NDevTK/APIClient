@@ -146,12 +146,17 @@ void font_matching_resolve(const char *computed_family, FontFallbackList *out)
         if (k == out->n) out->face[out->n++] = face;
     }
     css_font_family_list_free(&list);
+    /* §5.2's "user agent's default font if none are available": a list that matched nothing renders with the
+       default font, its characters included, before the installed font fallback is asked. */
+    if (out->n == 0) out->face[out->n++] = FONT_MATCHING_DEFAULT;
 }
 
 InstalledFont font_matching_first_available(const FontFallbackList *l)
 {
-    DCHECK(l != NULL && l->n <= INSTALLED_FONT_COUNT, "a fallback list holds more faces than are installed");
-    return l->n > 0 ? l->face[0] : FONT_MATCHING_DEFAULT;
+    DCHECK(l != NULL && l->n > 0 && l->n <= INSTALLED_FONT_COUNT,
+           "a fallback list holds no face, or more than are installed — font_matching_resolve gives a list that "
+           "matched nothing the default font");
+    return l->face[0];
 }
 
 InstalledFont font_matching_font_for_character(const FontFallbackList *l, uint32_t cp)
