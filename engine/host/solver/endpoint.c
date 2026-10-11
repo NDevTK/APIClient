@@ -563,30 +563,20 @@ static int address_class_of(JSValueConst url) {
     return EPA_UNKNOWN;
 }
 
-/* THE PARAMS OF ONE OBSERVED REQUEST, in the order a reviewer meets them: path, then query, then body. Owned
-   until they are merged into the surface. */
-/* `excl`/`nexcl` are OWNED COPIES of what the running flow's path constraint held at the moment this param
-   was read. They are copied here rather than borrowed because the constraint is a growable head that a later
-   narrowing REALLOCS, and a borrowed row would then name freed memory — a lifetime rule this file would have
-   to keep true across every future edit to the two producers below. Copying makes it unbreakable. */
-/* …and `bnd` for the same reason, one step further: concolic_bound_read hands back BORROWED spellings that
-   live in the flow's constraint head, which the very next narrowing reallocs. */
-/* …and `pred` for the reason both of those are copied: concolic_strpred_read hands back a BORROWED row that
-   lives in the flow's constraint head, which the very next narrowing reallocs. */
-/* …and `leq` for the same reason a third time: concolic_looseeq_read hands back a BORROWED row out of that
-   same head. */
-/* …and `has_hole` is COPIED FROM NOTHING, because it is the one fact here the flow is not asked for: it is
-   whether the caller HAD a hole key to ask with, which is known at the call and nowhere else afterwards. */
+/* The params of one observed request, in the order a reviewer meets them (path, query, body), owned until merged
+   into the surface. `excl`, `bnd`, `pred` and `leq` are owned copies of what the running flow's path constraint held
+   when the param was read: the constraint is a growable head that a later narrowing reallocs, and
+   concolic_excluded, concolic_bound_read, concolic_strpred_read and concolic_looseeq_read hand back borrowed rows
+   from it, so copying keeps the lifetime safe across every future edit to the producers. `has_hole` is copied from
+   nothing: it is whether the caller had a hole key to ask with, known at the call and nowhere after. */
 typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; ParamBound bnd;
                  ConcolicPred *pred; int npred;
                  ConcolicLooseEq *leq; int nleq; int has_hole; } KV;
 typedef struct { KV *e; int n, cap; } KvBuf;
 
-/* ONE COPY AND ONE DISPOSER FOR A SET OF THEM. What a single ROW owns is concolic.c's to say
-   (concolic_pred_copy / concolic_pred_release) and is never re-spelled here — a field added to ConcolicPred
-   must have exactly one place it is copied and one where it is released, or one of the four holders silently
-   keeps half a fact. What THIS file owns is the ARRAY around the rows, which is the part that differs between
-   a holder and the constraint. */
+/* One copy and one disposer for a set of them. What a single row owns is concolic.c's to say (concolic_pred_copy /
+   concolic_pred_release) and is never re-spelled here, so a field added to ConcolicPred has one place it is copied
+   and one where it is released; this file owns the array around the rows. */
 static ConcolicPred *param_pred_copy(const ConcolicPred *src, int n) {
     ConcolicPred *out;
     int i;
@@ -604,9 +594,8 @@ static void param_pred_free(ConcolicPred *p, int n) {
     free(p);
 }
 
-/* THE SAME PAIR OVER THE LOOSE-EQUALITY ROW, and here for the reason the two above are here: what a single ROW
-   owns is concolic.c's to say (concolic_looseeq_copy / concolic_looseeq_release) and is never re-spelled here;
-   what THIS file owns is the ARRAY around the rows. */
+/* The same pair over the loose-equality row, for the same reason: concolic.c owns a row (concolic_looseeq_copy /
+   concolic_looseeq_release), this file the array. */
 static ConcolicLooseEq *param_leq_copy(const ConcolicLooseEq *src, int n) {
     ConcolicLooseEq *out;
     int i;
@@ -624,47 +613,40 @@ static void param_leq_free(ConcolicLooseEq *p, int n) {
     free(p);
 }
 
-/* WHICH TWO LOOSE EQUALITIES ARE ONE is asked at both ends — concolic.c dedups a repeat within a flow, this
-   file intersects across sightings — so it is asked of ONE speller (concolic_looseeq_same), for the reason
-   param_pred_same states of its own. */
+/* Which two loose equalities are one is asked at both ends (concolic.c dedups within a flow, this file intersects
+   across sightings), so it is asked of one speller, concolic_looseeq_same, for param_pred_same's reason. */
 static int param_leq_same(const ConcolicLooseEq *a, const ConcolicLooseEq *b) {
     return concolic_looseeq_same(a, (ConcolicLit)b->kind, b->tok);
 }
 
-/* WHICH TWO PREDICATES ARE ONE is asked at both ends — concolic.c dedups a repeat within a flow, this file
-   intersects across sightings — so it is asked of ONE speller (concolic_pred_same) and never re-derived here.
-   Two spellings of it are two rules free to disagree, and the direction they would disagree in is the one
-   that matters: an intersection that thought two identical predicates were different would drop, from the
-   record, a claim every observed path obeyed. */
+/* Which two predicates are one is asked at both ends (concolic.c dedups within a flow, this file intersects across
+   sightings), so it is asked of one speller, concolic_pred_same. Two spellings could disagree, and an intersection
+   that thought two identical predicates different would drop a claim every observed path obeyed. */
 static int param_pred_same(const ConcolicPred *a, const ConcolicPred *b) {
     return concolic_pred_same(a, b->method, (const char *const *)b->args, b->nargs, b->holds);
 }
 
-/* `hole` is the value's HOLE KEY — the name the flow's own equality gates recorded their domain under — or
-   NULL when this param's value is a concrete one the code computed and there is no domain to look up. It is
-   passed EXPLICITLY by each producer rather than derived here, because the two producers know it from
-   different places: a path param IS its hole (the name is the brace-stripped segment), while a query or body
-   param carries its hole inside the VALUE text. Deriving it from one of the two would silently answer NULL
-   for the other, and a NULL hole is indistinguishable from a hole with no constraint on it. */
+/* `hole` is the value's hole key (the name the flow's own equality gates recorded their domain under), or NULL when
+   the value is a concrete one the code computed. Passed explicitly by each producer, because they know it from
+   different places: a path param is its hole (the brace-stripped segment), while a query or body param carries its
+   hole inside the value text. Deriving it from one would answer NULL for the other, and a NULL hole is
+   indistinguishable from an unconstrained one. */
 static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, size_t vlen, EpLoc loc,
                    const char *hole) {
     DCHECK(nlen > 0, "an endpoint param was minted with no NAME — a nameless param cannot be substituted back "
                      "into a request, so every producer here must refuse the unnamed case at its own site "
                      "rather than emit a record keyed by the empty string");
-    /* WHERE IT LANDED IS ASSERTED AT THE MINT, not read back later. A param whose location is not one of the
-       three is a producer that learned to build a param and not to say what it is, and the consumer's own
-       `p.location || "query"` is what made that unfalsifiable for the whole life of this surface: the path
-       and body branches never ran once, and read as live the entire time. Every site that adds a param
-       passes through here, so there is no way to add one without answering. */
+    /* Where it landed is asserted at the mint: a param whose location is not one of the three is a producer that
+       built a param without saying what it is, and a consumer defaulting it (`p.location || "query"`) would hide
+       that. Every site that adds a param passes through here. */
     DCHECK(loc == EP_QUERY || loc == EP_PATH || loc == EP_BODY,
            "an endpoint param was minted with no LOCATION — a param the reviewer cannot place is a param "
            "that cannot be replayed, and a consumer defaulting it reads every one of them as a query param");
-    /* A PATH PARAM ALWAYS HAS A HOLE, ASSERTED HERE BECAUSE A READER DOWNSTREAM HAS BEEN RE-DERIVING IT.
-       `path_scan` mints a param only for a segment holding a brace and passes the brace-stripped segment AS
-       the hole key, so this holds by construction — which is exactly why it is worth asserting: it is what
-       makes a `location:"path"` row a denominator a consumer can trust without reading this file, and the
-       next producer of a path param has to keep it true. The query and body producers have no such invariant
-       (`concolic_hole_key` answers NULL for a brace-free value), which is what `has_hole` below is for. */
+    /* A path param always has a hole: `path_scan` mints a param only for a segment holding a brace and passes the
+       brace-stripped segment as the key, so this holds by construction, and asserting it makes a `location:"path"`
+       row a denominator a consumer can trust and holds the next producer of a path param to it. The query and body
+       producers have no such invariant (`concolic_hole_key` answers NULL for a brace-free value), which is what
+       `has_hole` is for. */
     DCHECK(loc != EP_PATH || hole != NULL,
            "a PATH param was minted with no hole key — path_scan mints one only for a braced segment and "
            "passes that segment's brace-stripped name as the key, so a path param with no hole is a second "
@@ -677,18 +659,14 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
     if (vlen) memcpy(b->e[b->n].val, val, vlen);
     b->e[b->n].val[vlen] = 0;
     b->e[b->n].loc = loc;
-    /* …AND WHETHER THERE WAS ANYTHING TO ASK WITH, WRITTEN BEFORE THE FOUR READS THAT DEPEND ON IT. Each of
-       them is gated on `hole`, so a NULL one makes all four silently answer nothing — and the emission spells
-       that silence as the positive statement that no gate of that kind held on every observed path. That
-       reading is true of a param whose hole was never narrowed and FALSE of a param that had no hole, and the
-       two take opposite work: the first is a fact about this run's gating and wants more gates observed, the
-       second is a fact about the param and wants nothing, however good the solver gets. Recording it here is
-       what lets a consumer tell them apart; it is the same `hole` the reads below use, so the flag and the
-       silence it explains cannot disagree. */
+    /* And whether there was anything to ask with, written before the four reads that depend on it. Each is gated
+       on `hole`, so a NULL one makes all four answer nothing, which the emission spells as "no gate of that kind
+       held on every observed path": true of a param whose hole was never narrowed (more gates wanted) and false of
+       a param that had no hole (nothing wanted). The flag lets a consumer tell them apart, and it is the same
+       `hole` the reads use, so they cannot disagree. */
     b->e[b->n].has_hole = hole ? 1 : 0;
-    /* THE DOMAIN IS READ HERE BECAUSE HERE IS WHERE THE FLOW STILL EXISTS. The path constraint is per-flow and
-       the serializer runs at the end of the run with no flow under it, so a domain fetched there would be
-       whichever flow happened to park last — or none. */
+    /* The domain is read here because the flow still exists here: the path constraint is per flow, and the
+       serializer runs at the end of the run with no flow under it. */
     b->e[b->n].excl = NULL;
     b->e[b->n].nexcl = 0;
     if (hole) {
@@ -704,10 +682,9 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
             b->e[b->n].nexcl = nex;
         }
     }
-    /* …AND THE INTERVAL, off the SAME flow at the SAME instant, for the same reason. A param whose gate was
-       `x > 5` and one nothing ordered at all render with identical bytes without this, and that silence is
-       read as the positive statement "anything goes" — §Solver-half calls it a wrong report, not a partial
-       one, and it is the second-largest gate class a real minified bundle contains. */
+    /* And the interval, off the same flow at the same instant: without it a param gated `x > 5` and one nothing
+       ordered render the same bytes, read as "anything goes", a wrong report rather than a partial one, for the
+       second-largest gate class in a real minified bundle. */
     memset(&b->e[b->n].bnd, 0, sizeof b->e[b->n].bnd);
     if (hole) {
         ConcolicBound cb;
@@ -725,11 +702,9 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
             }
         }
     }
-    /* …AND THE CALL PREDICATES, off the SAME flow at the SAME instant, for the same reason again. A param
-       whose only gate was `path.startsWith("/api")` and one nothing ever tested render with identical bytes
-       without this, and §@H calls that a WRONG report rather than a thin one — the silence about the gate is
-       read as the positive statement "anything goes". It is also the gate class §@H names in its own headline
-       example, and the one an equality's pin and an ordering's interval both structurally miss. */
+    /* And the call predicates, likewise: a param whose only gate was `path.startsWith("/api")` (@H's headline
+       example, the gate class an equality's pin and an ordering's interval both miss) would otherwise render as one
+       nothing tested. */
     b->e[b->n].pred = NULL;
     b->e[b->n].npred = 0;
     if (hole) {
@@ -740,11 +715,9 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
             b->e[b->n].npred = npr;
         }
     }
-    /* …AND THE LOOSE EQUALITIES THAT HELD, off the SAME flow at the SAME instant, for the same reason a fourth
-       time. It is the arm §7.2.13 IsLooselyEqual ( x, y ) leaves undetermined and concolic_pin therefore
-       refuses to pin: a param whose only gate was `x == 0` and one nothing ever tested render with identical
-       bytes without this, while that param's own SIBLING flow carries an exclusion — the two arms of one
-       observation disagreeing about whether a gate was seen at all. */
+    /* And the loose equalities that held, likewise: the arm §7.2.13 IsLooselyEqual ( x, y ) leaves undetermined,
+       which concolic_pin refuses to pin, so a param whose only gate was `x == 0` would render as untested while its
+       sibling flow carries an exclusion. */
     b->e[b->n].leq = NULL;
     b->e[b->n].nleq = 0;
     if (hole) {
@@ -758,8 +731,8 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
     b->n++;
 }
 
-/* ONE DISPOSER FOR ONE INTERVAL, because there are two places that hold one (a request's KV row and the
-   endpoint's merged Param) and a side added to ParamBound must be freed at both or one of them leaks. */
+/* One disposer for one interval, because two places hold one (a request's KV row and the endpoint's merged Param),
+   and a side added to ParamBound must be freed at both. */
 static void param_bound_free(ParamBound *b) {
     free(b->lo_txt); free(b->hi_txt);
     memset(b, 0, sizeof *b);
@@ -777,12 +750,11 @@ static void kv_free(KvBuf *b) {
     free(b->e); b->e = NULL; b->n = b->cap = 0;
 }
 
-/* ONE `name=value` PAIR of a `&`-separated list, READ IN PLACE. `p` is a position in the list; the return is
-   the position of the next pair, or NULL at the end. The name and the value are BORROWED spans: a pair with
-   no `=` has a zero-length value, which is what `?flag` sends, and an empty NAME is left for the caller to
-   refuse at its own site (kv_add asserts it).
-   IN PLACE BECAUSE THE TWO SPELLINGS OF ONE ADDRESS MUST BE WALKED TOGETHER, and `strtok` keeps its state in
-   the string it is destroying, so it cannot be asked about two lists at once. */
+/* One `name=value` pair of a `&`-separated list, read in place: `p` is a position in the list, and the return is the
+   next pair's position, or NULL at the end. Name and value are borrowed spans; a pair with no `=` has a zero-length
+   value (what `?flag` sends), and an empty name is left for the caller to refuse (kv_add asserts it). In place,
+   because the two spellings of one address are walked together and `strtok` keeps its state in the string it
+   destroys. */
 static const char *kv_pair_next(const char *p, const char **nm, size_t *nn, const char **vl, size_t *vn) {
     const char *amp, *eq;
     size_t plen;
@@ -799,14 +771,14 @@ static const char *kv_pair_next(const char *p, const char **nm, size_t *nn, cons
     return p + plen;
 }
 
-/* ONE `&`-SEPARATED PAIR OF ONE ADDRESS HALF, borrowed out of the string it was split from. `nm`/`vl` are the
-   name and value spans `kv_pair_next` reads; `end` is the byte after the pair's last, so a RUN of pairs is the
-   bytes from the first pair's value start to the last pair's `end` exactly as the code computed them. */
+/* One `&`-separated pair of one address half, borrowed out of the string it was split from. `nm`/`vl` are the spans
+   `kv_pair_next` reads; `end` is the byte after the pair's last, so a run of pairs is the bytes from the first pair's
+   value start to the last pair's `end`, exactly as the code computed them. */
 typedef struct { const char *end, *nm, *vl; size_t nn, vn; } Pair;
 
-/* THE PAIRS OF ONE ADDRESS HALF, malloc'd — ONE walk, so the aligner below and the emission that consumes its
-   answer index the same split and cannot disagree about where a pair ends. An empty list is ZERO pairs, and a
-   run of `&` is no pair at all, which is the arithmetic `kv_pair_next` already performs. */
+/* The pairs of one address half, malloc'd, from one walk, so the aligner below and the emission that consumes its
+   answer index the same split. An empty list is zero pairs and a run of `&` is no pair, the arithmetic
+   `kv_pair_next` performs. */
 static Pair *kv_split(const char *s, int *n_out) {
     int n = 0, i = 0;
     const char *p = s, *next;
@@ -834,10 +806,9 @@ static Pair *kv_split(const char *s, int *n_out) {
     return v;
 }
 
-/* THE END OF A RUN OF `npair` WHOLE PAIRS STARTING AT `b`, with the FIRST pair's name and value spans written
-   out. It walks the same splitter the alignment was built from so no build can read a pair boundary two ways:
-   a span this is asked for was proved against this same string, so a disagreement is a DCHECK to read rather
-   than a pointer to fall over in release. */
+/* The end of a run of `npair` whole pairs starting at `b`, with the first pair's name and value spans written out.
+   It walks the splitter the alignment was built from, so a pair boundary is read one way; a span asked for was
+   proved against this string, so a disagreement is a DCHECK. */
 static const char *kv_run_end(const char *b, int npair,
                               const char **nm, size_t *nn, const char **vl, size_t *vn) {
     const char *p = b;
@@ -862,59 +833,33 @@ static const char *kv_run_end(const char *b, int npair,
     return p;
 }
 
-/* DOES THE EXAMPLE'S QUERY LINE UP WITH THE SHAPE'S, AND IN EXACTLY ONE WAY? The question `path_align` asks of
-   the path, asked of the other half of the address and answered by the same table, because the two strings are
-   ONE concatenation rendered twice and a hole's value may be read across only where everything around it still
-   agrees. Every hole-free pair of the shape must stand over an example pair with the same NAME and the same
-   VALUE, and every pair whose VALUE holds a hole covers ONE OR MORE whole example pairs — one at least,
-   because a hole is a value the code computed and a value that computed to the empty string still occupies its
-   own pair; more than one wherever that value itself holds a `&`.
-   THE RUN'S FIRST PAIR CARRIES THE PARAM'S OWN NAME, which is the anchor the path half has no equivalent of
-   and the reason this walk refuses less than that one: `b={x}` over `b=p&q=r` reads the hole as `p&q=r` and
-   nothing else, because no other reading starts a `b` pair where the shape says one stands.
-   THE MULTI-PAIR HOLE IS THE PRODUCT'S OWN CASE RATHER THAN AN EDGE. `fetch("/s?" + new URLSearchParams(f))`
-   — a bundle that computes its own filter list — displays as `/s?q={f}` and computes `/s?q=a&page=2`, so its
-   one hole stands over two example pairs. Requiring equal counts answered "not aligned" for the WHOLE query,
-   and `kv_pairs` then emitted EVERY param on that address with no example under it, which is the failure
-   `path_align` was widened to end, one half of the address over.
-   AMBIGUITY IS A REFUSAL AND NEVER A GUESS, for §@H's reason: an invented value is a WRONG report rather than
-   a thin one. What is computed is the COUNT of readings, saturated at two, because "more than one" is the
-   whole of what a second reading has to say.
-   IT IS A STRICT EXTENSION OF THE MATCHER IT REPLACES, AND THAT IS ARITHMETIC: a literal pair covers exactly
-   one example pair and a hole at least one, so where the two pair counts are EQUAL every hole is FORCED to
-   exactly one and the only candidate reading is the 1:1 walk the old matcher took, whose per-pair test was
-   this one — name equality always, value equality only where the shape's value holds no brace. The recovery
-   below ASSERTS that forcing rather than restating it.
-   NAMED RESIDUAL — A HOLE IN A PAIR'S NAME IS STILL REFUSED.
-     WHAT IS NOT COVERED: a shape pair whose NAME holds a brace — `{k}=1`, what `"?" + key + "=1"` displays as.
-       Such a pair takes the literal arm, whose name comparison is byte-wise, so it matches no example pair and
-       the whole query aligns nowhere.
-     WHAT THE NEXT DIFF BUILDS: NOT the third arm on its own, WHICH IS WHAT THIS CLAUSE USED TO SAY AND IS
-       RECORDED HERE BECAUSE A NEXT-DIFF CLAUSE IS READ ONCE, BY SOMEBODY WHO HAS ALREADY DECIDED TO DO THE
-       WORK. It read: a third arm for a name-hole pair, covering a run whose LAST pair is anchored by the
-       shape's next literal pair instead of by its own name. The ALIGNER half of that is right and it is half
-       a diff: the CONSUMER sends a query parameter's NAME verbatim — lib/popup-form.js's collectFormValues
-       writes `params[result.name] = result.value` and the only hole substitution anywhere on that path is
-       applyPathParams, whose grammar runs over the PATH string and never over a parameter name. So an arm
-       that aligned `{k}=1` would emit a param NAMED `{k}`, and the request that went out would carry a
-       literal parameter called `{k}` — a FABRICATED request rather than a thin one, which is worse than the
-       refusal it replaces and is what §@H forbids. The landing unit is therefore the aligner arm AND a
-       consumer that can substitute a parameter NAME, and it is ONE LANDING rather than two ordered ones.
-       AN EARLIER FORM OF THIS SENTENCE SAID `together` AND THEN GAVE AN ORDER — consumer first, on the
-       ground that every query param already flows through that line — WHICH INVITES THE ONE READING THAT IS
-       A DEFECT: name substitution landed alone is a READER WITH NO WRITER, because nothing in this tree
-       emits a braced query param name and this walk is what would start. A set that cannot land except
-       together is ONE landing and is numbered as one, which is the rule the earlier sentence stated and
-       then broke in its own next clause.
-     HOW ITS ABSENCE WOULD SHOW: an address whose query params are all emitted with no example while its path
-       params carry theirs, on a record whose shape spells at least one param name inside braces.
-   Returns a malloc'd span per shape pair and writes the shape's pair count, or NULL when there is no reading
-   or more than one. A shape with NO pairs has the one empty reading and returns a non-NULL array. */
+/* Does the example's query line up with the shape's, in exactly one way? `path_align`'s question asked of the other
+ * half of the address and answered by the same table, because the two strings are one concatenation rendered twice
+ * and a hole's value may be read across only where everything around it agrees. Every hole-free shape pair must
+ * stand over an example pair with the same name and value, and every pair whose value holds a hole covers one or
+ * more whole example pairs: at least one, because a value that computed to the empty string still occupies its
+ * pair, and more than one wherever that value holds a `&`. The run's first pair carries the param's own name, the
+ * anchor the path half lacks: `b={x}` over `b=p&q=r` reads the hole as `p&q=r` and nothing else. The multi-pair
+ * hole is the product's own case: `fetch("/s?" + new URLSearchParams(f))` displays as `/s?q={f}` and computes
+ * `/s?q=a&page=2`. Ambiguity is a refusal, never a guess (an invented value is a wrong report); the count of
+ * readings is saturated at two. Where the pair counts are equal every hole is forced to one pair, so the only
+ * reading is the 1:1 walk (name equality, and value equality where the shape's value holds no brace), which the
+ * recovery asserts.
+ * Named residual. Not covered: a shape pair whose name holds a brace (`{k}=1`, what `"?" + key + "=1"` displays
+ * as) takes the literal arm, matches no example pair, and the query aligns nowhere. Next diff builds, as one
+ * landing: an aligner arm for a name-hole pair, whose run's last pair is anchored by the shape's next literal pair,
+ * and a consumer that substitutes a parameter name (lib/popup-form.js's collectFormValues sends a name verbatim,
+ * and applyPathParams substitutes only the path); the arm alone would emit a param named `{k}` and fabricate a
+ * request, and the consumer alone would be a reader with no writer. Absence shows as: an address whose query
+ * params are all emitted with no example while its path params carry theirs, on a record whose shape spells a
+ * param name inside braces.
+ * Returns a malloc'd span per shape pair and writes the shape's pair count, or NULL when there is no reading or
+ * more than one. A shape with no pairs has the one empty reading and returns a non-NULL array. */
 static int *query_align(const char *shape, const char *ex, int *nshape) {
     int n = 0, m = 0, i, j, k;
     Pair *S = kv_split(shape, &n);
     Pair *E = kv_split(ex, &m);
-    /* WAYS[i][j] — how many readings match the shape's pairs from `i` onward against the example's from `j`
+    /* ways[i][j]: how many readings match the shape's pairs from `i` onward against the example's from `j`
        onward, saturated at two. Filled backwards so each row reads only the row below it. */
     unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
     int *span = NULL;
@@ -945,8 +890,8 @@ static int *query_align(const char *shape, const char *ex, int *nshape) {
         for (i = 0; i < n; i++) {
             const unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
             const unsigned char *nxt = cur + (m + 1);
-            /* UNIQUENESS IS WHAT MAKES THIS WALK A READ RATHER THAN A CHOICE, so it is asserted at every step
-               and not once at the top — the same argument `path_align` states over its own table. */
+            /* Uniqueness is what makes this walk a read rather than a choice, so it is asserted at every step, as
+               in `path_align`. */
             DCHECK(cur[j] == 1,
                    "a query alignment with exactly one reading reached a state holding a different number of "
                    "them — this walk is then choosing between readings instead of following the one the "
@@ -968,8 +913,8 @@ static int *query_align(const char *shape, const char *ex, int *nshape) {
                    "never in question moving under a widening made only for the unequal case");
             j += span[i];
         }
-        /* THE PARTS SUM TO THE TOTAL — the one identity a reader of this array can check without re-deriving
-           the table, and what makes a span a fact about the example rather than a number. */
+        /* The parts sum to the total, the identity a reader of this array can check without re-deriving the
+           table, which makes a span a fact about the example. */
         DCHECK(j == m,
                "a query alignment's spans do not cover the example's pairs exactly — their sum is what says "
                "each hole's value is the bytes that stood under it, so a short or long total means some param "
@@ -980,22 +925,17 @@ static int *query_align(const char *shape, const char *ex, int *nshape) {
     return span;
 }
 
-/* `a=1&b=2` — the QUERY STRING's grammar, and `application/x-www-form-urlencoded`'s, which are the same
-   grammar. Nothing is percent-DECODED: §Solver-half puts the codecs in the engine's builtins and forbids the
-   solver hand-rolling one, and a value the page encoded is the value the page sends.
-   `ex` IS THE SAME LIST RENDERED FROM THE CONCRETE EXAMPLE, or NULL where the value carried none. A param's
-   two facts arrive from the two spellings and neither substitutes for the other: the HOLE KEY — which is what
-   the domain, the exclusions and the bounds are looked up by — is read off the SHAPE, and the VALUE emitted
-   is the EXAMPLE the interpreter computed where the shape holds a hole. That is not an invention: the example
-   is the real operation run on real operands (§Solver-half's third member of the triple, and concolic.h's
-   own rule that a result has none where any operand has none), so a gate-CONTRADICTED arm arrives exampleless
-   and falls back to the shape exactly as it did before. It is the same read path_scan already performs for a
-   path segment, which is why a templated PATH carried its value and a templated QUERY did not. */
+/* `a=1&b=2`: the query string's grammar and `application/x-www-form-urlencoded`'s, which are one grammar. Nothing
+   is percent-decoded: the codecs are the engine's builtins, and a value the page encoded is the value it sends.
+   `ex` is the same list rendered from the concrete example, or NULL where the value carried none. A param's hole
+   key (what the domain, exclusions and bounds are looked up by) is read off the shape, and the value emitted where
+   the shape holds a hole is the example the interpreter computed: the real operation on real operands, which has
+   no example where any operand has none (concolic.h), so a gate-contradicted arm arrives exampleless and falls
+   back to the shape. path_scan performs the same read for a path segment. */
 static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
     int npair = 0, i = 0;
-    /* NULL for BOTH of the two ways there is nothing to align against — no example at all, and an example with
-       no unique reading — because the two are one answer to this walk: it has no bytes it can attribute to a
-       hole. `query_align`'s own banner is where they are told apart. */
+    /* NULL for both ways there is nothing to align against (no example, or no unique reading), one answer to this
+       walk: it has no bytes to attribute to a hole. `query_align`'s banner tells them apart. */
     int *span = ex ? query_align(text, ex, &npair) : NULL;
     const char *a = text, *e = ex;
 
@@ -1007,10 +947,9 @@ static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
         na = kv_pair_next(a, &nm, &nn, &vl, &vn);
         if (!na) break;
         a = na;
-        /* THE TWO WALKS ARE ONE RULE AND THIS IS WHERE THEY ARE HELD TO IT. `query_align` established the
-           pairing with the SAME splitter; asserting it again here is what stops the alignment test and the
-           emission drifting into two readings of one list, which is the only way a value could be attributed
-           to the wrong param. */
+        /* The two walks are one rule, held to it here: `query_align` established the pairing with the same
+           splitter, and asserting it again stops the alignment test and the emission drifting into two readings
+           of one list, the only way a value could be attributed to the wrong param. */
         if (span) {
             DCHECK(i < npair,
                    "the shape walk ran past the pair count its own alignment was built from — `kv_split` and "
@@ -1021,9 +960,9 @@ static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
                    "an aligned example query's pair names a different param than the shape's at the same "
                    "position — the example value would be attributed to a param the code never computed it "
                    "for, which is a fabricated @H value and not a thin one");
-            /* THE RUN'S BYTES, NOT ITS FIRST PAIR'S VALUE. A hole standing over more than one example pair
-               computed a value holding the separator, so what it computed is every byte from its own value's
-               start to the end of the run — which is `evn` exactly when the span is one. */
+            /* The run's bytes, not its first pair's value: a hole over more than one example pair computed a value
+               holding the separator, so its value is every byte from its own value's start to the run's end, which
+               is `evn` when the span is one. */
             evn = (size_t)(ne - ev);
             e = ne;
             i++;
@@ -1033,7 +972,7 @@ static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
         CHECK(shapeval, "endpoint: OOM copying a query value's display form");
         if (vn) memcpy(shapeval, vl, vn);
         shapeval[vn] = 0;
-        hole = concolic_hole_key(shapeval);   /* the DOMAIN is a fact about the shape, whatever the value is */
+        hole = concolic_hole_key(shapeval);   /* the domain is a fact about the shape, whatever the value is */
         if (span && memchr(vl, '{', vn))
             kv_add(b, nm, nn, ev, evn, loc, hole);
         else
@@ -1056,11 +995,10 @@ static char *url_path_of(const char *disp) {
     return path;
 }
 
-/* THE CONCRETE URL THE CODE COMPUTED, beside the SHAPE that names its holes — §Solver-half's third member of
-   the triple. `url_display` above answers with the shape and threw this away, which is what left every
-   templated path a row of holes with no value under any of them. NULL means there is none to align against:
-   a concrete URL is its own address and has no holes, and a concolic one that has not computed an example yet
-   is honestly example-free. */
+/* The concrete URL the code computed, beside the shape that names its holes (the third member of the triple):
+   without it every templated path would be a row of holes with no value. NULL means there is none to align
+   against: a concrete URL is its own address with no holes, and a concolic one with no computed example is
+   example-free. */
 static char *url_example(JSContext *ctx, JSValueConst url) {
     JSValue ex;
     const char *s;
@@ -1069,10 +1007,10 @@ static char *url_example(JSContext *ctx, JSValueConst url) {
     if (!concolic_is(url)) return NULL;
     ex = concolic_example(ctx, url);
     if (JS_IsUndefined(ex)) { JS_FreeValue(ctx, ex); return NULL; }
-    /* The example is the ADDRESS the interpreter computed, so it is a primitive that converts. An object is
-       the `+` propagation having handed on a wrapper, and a symbol would THROW inside this conversion and
-       leave the exception on a context that has nobody to hand it to — both are this engine's own logic
-       being wrong, which is what a DCHECK asserts and why the conversion below cannot fail except on OOM. */
+    /* The example is the address the interpreter computed, so it is a primitive that converts: an object is the
+       `+` propagation having handed on a wrapper, and a symbol would throw inside the conversion with nobody to
+       hand the exception to. Both are this engine's logic being wrong, so it is asserted, and the conversion can
+       fail only on OOM. */
     DCHECK(!JS_IsObject(ex) && !JS_IsSymbol(ex),
            "a URL's concolic EXAMPLE is not a primitive — the example rides the value the interpreter "
            "actually computed, so a wrapper or a symbol here is that propagation having lost the address");
@@ -1085,12 +1023,12 @@ static char *url_example(JSContext *ctx, JSValueConst url) {
     return r;
 }
 
-/* ONE `/`-SEPARATED SEGMENT OF AN ADDRESS, borrowed out of the string it was split from. */
+/* One `/`-separated segment of an address, borrowed out of the string it was split from. */
 typedef struct { const char *p; size_t n; } Seg;
 
-/* THE SEGMENTS OF ONE ADDRESS HALF, malloc'd — ONE walk, so the aligner below and the scan that consumes its
-   answer index the same split and cannot disagree about where a segment ends. An address with no `/` is ONE
-   segment and an empty one is one EMPTY segment, which is the arithmetic the `strchr` walks already perform. */
+/* The segments of one address half, malloc'd, from one walk, so the aligner and the scan that consumes its answer
+   index the same split. An address with no `/` is one segment and an empty one is one empty segment, as the
+   `strchr` walks compute. */
 static Seg *seg_split(const char *s, int *n_out) {
     int n = 1, i = 0;
     const char *p = s, *e;
@@ -1115,10 +1053,9 @@ static Seg *seg_split(const char *s, int *n_out) {
     return v;
 }
 
-/* THE END OF A RUN OF `nseg` WHOLE SEGMENTS STARTING AT `b` — the separator that terminates it, or NULL when
-   the run reaches the end of the string. It COUNTS separators rather than chasing `strchr` results so that no
-   build can dereference a NULL here: a span this is asked for was proved against this same string, so the
-   disagreement is a DCHECK to read rather than a pointer to fall over in release. */
+/* The end of a run of `nseg` whole segments starting at `b`: the separator that terminates it, or NULL when the run
+   reaches the end of the string. It counts separators rather than chasing `strchr` results so that no build can
+   dereference a NULL; a span asked for was proved against this string, so a disagreement is a DCHECK. */
 static const char *seg_run_end(const char *b, int nseg) {
     const char *e;
 
@@ -1136,40 +1073,27 @@ static const char *seg_run_end(const char *b, int nseg) {
     return NULL;
 }
 
-/* DOES THE EXAMPLE'S PATH LINE UP WITH THE SHAPE'S, AND IN EXACTLY ONE WAY? The alignment is what makes a
-   hole's value a MEASUREMENT rather than a guess, so it is checked and not assumed: every hole-free segment
-   of the shape must be byte-equal to the example segment standing under it, and every HOLE covers ONE OR MORE
-   whole example segments — one at least, because a hole is a value the code computed and a value that
-   computed to the empty string still occupies its own segment; more than one wherever that value itself
-   holds a `/`.
-   THE MULTI-SEGMENT HOLE IS THE PRODUCT'S OWN CASE RATHER THAN AN EDGE, which is why the equal-count matcher
-   that stood here is replaced instead of guarded. `fetch(cfg.apiBase + "/v1/users/" + id)` — a bundle that
-   computes its own base — displays as `{cfg.apiBase}/v1/users/{id}` and computes
-   `https://api.acme.com/v1/users/42`, so its FIRST hole stands over three example segments. Requiring equal
-   counts answers "not aligned" for the whole address, and `param_add_val` then skips the empty value of
-   EVERY param on it — so the spelling a large real app uses reported its parameters with no example under any
-   of them, while `https://{cfg.host}/v1/users/{id}`, which differs only in where the hole starts, reported
-   them in full. The same refusal covered every path hole whose value holds a `/` at all.
-   AMBIGUITY IS A REFUSAL AND NEVER A GUESS. `{a}/{b}` over `x/y/z` has two readings and nothing at this layer
-   can know which one the code computed; §@H makes an invented value a WRONG report rather than a thin one, so
-   the alignment is taken only where the reading is UNIQUE and the address is otherwise left example-free
-   exactly as it was. What is computed is therefore the COUNT of readings, saturated at two, because "more
-   than one" is the whole of what a second reading has to say.
-   IT IS A STRICT EXTENSION OF THE MATCHER IT REPLACES, AND THAT IS ARITHMETIC RATHER THAN A SPOT-CHECK: a
-   literal covers exactly one segment and a hole covers at least one, so where the two segment counts are
-   EQUAL every hole is FORCED to exactly one and the only candidate reading is the 1:1 walk the old matcher
-   took. Every address that aligned before aligns to the same spans, every address that failed on a literal
-   mismatch still fails, and the only answers that move are the ones that were refused for the count alone.
-   The recovery below ASSERTS that forcing rather than restating it, so a later change to the table cannot
-   move an answer that was never in question.
-   Returns a malloc'd span per shape segment and writes the shape's segment count, or NULL when there is no
-   reading or more than one. */
+/* Does the example's path line up with the shape's, in exactly one way? The alignment is what makes a hole's value
+ * a measurement rather than a guess, so it is checked: every hole-free shape segment must be byte-equal to the
+ * example segment under it, and every hole covers one or more whole example segments, at least one because a value
+ * that computed to the empty string still occupies its segment, and more than one wherever that value holds a `/`.
+ * The multi-segment hole is the product's own case: `fetch(cfg.apiBase + "/v1/users/" + id)` displays as
+ * `{cfg.apiBase}/v1/users/{id}` and computes `https://api.acme.com/v1/users/42`, so its first hole stands over three
+ * example segments; an equal-count matcher would leave every param on the address example-free, while
+ * `https://{cfg.host}/v1/users/{id}`, which differs only in where the hole starts, would align.
+ * Ambiguity is a refusal, never a guess: `{a}/{b}` over `x/y/z` has two readings and nothing at this layer can know
+ * which the code computed, and an invented value is a wrong report, so the alignment is taken only where the
+ * reading is unique. The count of readings is saturated at two. Where the segment counts are equal every hole is
+ * forced to one segment, so the only reading is the 1:1 walk; the recovery asserts that, so a later change to the
+ * table cannot move an answer that was never in question.
+ * Returns a malloc'd span per shape segment and writes the shape's segment count, or NULL when there is no reading
+ * or more than one. */
 static int *path_align(const char *shape, const char *ex, int *nshape) {
     int n = 0, m = 0, i, j, k;
     Seg *S = seg_split(shape, &n);
     Seg *E = seg_split(ex, &m);
-    /* WAYS[i][j] — how many readings match the shape's segments from `i` onward against the example's from
-       `j` onward, saturated at two. Filled backwards so each row reads only the row below it. */
+    /* ways[i][j]: how many readings match the shape's segments from `i` onward against the example's from `j`
+       onward, saturated at two. Filled backwards so each row reads only the row below it. */
     unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
     int *span = NULL;
 
@@ -1197,11 +1121,9 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
         for (i = 0; i < n; i++) {
             const unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
             const unsigned char *nxt = cur + (m + 1);
-            /* UNIQUENESS IS WHAT MAKES THIS WALK A READ RATHER THAN A CHOICE, so it is asserted at every step
-               and not once at the top. `w[0] == 1` says the whole match has one reading, and every state on
-               that reading therefore has one too — a hole's `cur[j]` is the saturated sum over the states it
-               can hand on to, so a 1 there is exactly one live successor and the search below cannot be
-               picking between two. */
+            /* Uniqueness is what makes this walk a read rather than a choice, so it is asserted at every step:
+               `w[0] == 1` says the whole match has one reading, so every state on it has one too (a hole's `cur[j]`
+               is the saturated sum over the states it can hand on to, so a 1 is exactly one live successor). */
             DCHECK(cur[j] == 1,
                    "an address alignment with exactly one reading reached a state holding a different number "
                    "of them — this walk is then choosing between readings instead of following the one the "
@@ -1216,10 +1138,8 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
                        "the count and the recovery are two walks over one table that disagree");
                 span[i] = k - j;
             }
-            /* AND THE EQUAL-COUNT CASE IS STILL THE 1:1 WALK, ASSERTED RATHER THAN ARGUED. It is the whole of
-               why this matcher answers byte-identically to the equal-count one it replaces for every address
-               that already aligned, and an argument in a comment is exactly what a later table change would
-               not have to keep true. */
+            /* And the equal-count case is the 1:1 walk, asserted, since that is why this matcher answers
+               byte-identically to an equal-count one for every address such a matcher aligns. */
             DCHECK(n != m || span[i] == 1,
                    "an address whose shape and example hold the SAME number of segments aligned with a hole "
                    "standing over more than one of them — a literal covers exactly one and a hole at least "
@@ -1227,9 +1147,8 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
                    "never in question moving under a widening made only for the unequal case");
             j += span[i];
         }
-        /* THE PARTS SUM TO THE TOTAL — the one identity a reader of this array can check without re-deriving
-           the table, and what makes a span a fact about the example rather than a number. A walk that lost or
-           double-counted a segment hands `path_scan` a value starting or ending mid-run. */
+        /* The parts sum to the total, the identity a reader of this array can check without re-deriving the table:
+           a walk that lost or double-counted a segment would hand `path_scan` a value starting or ending mid-run. */
         DCHECK(j == m,
                "an address alignment's spans do not cover the example's segments exactly — their sum is what "
                "says each hole's value is the bytes that stood under it, so a short or long total means some "
@@ -1240,35 +1159,27 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
     return span;
 }
 
-/* AN UNKNOWN PATH SEGMENT IS ONE PATH PARAMETER, AND IT IS ATOMIC IN THE TEMPLATE. `/v1/users/{state}.id/posts`
-   has one, and its value is the RUN of example segments `path_align` proved it stands over — one segment for
-   that address (`42`), and more wherever the value the code computed itself holds a `/`. The TEMPLATE is the
-   same either way: it is built out of the SHAPE alone, so nothing the example does can move a hole's
-   boundaries, which is why widening the alignment cannot move the identity `endpoint_mark_asset` recomputes
-   through this same function with no example at all.
-   THE BRACES DO NOT DELIMIT THE UNKNOWN, which is the thing that makes this segment-wide rather than
-   brace-wide, and reading `concolic_exotic_get` is what says so: a member read composes its display as
-   `"%s.%s"` over the parent's, so `state.id` displays as `{state}.id` with the braces around the ROOT SOURCE
-   and the member path trailing OUTSIDE them. Treating `}` as the end of the unknown therefore asks the example
-   segment to end in a literal `.id` that is not in the address at all, and every such hole loses its value.
-   SO THE SEGMENT IS RE-SPELLED AS ONE HOLE — braces stripped from the shape, one pair put around the whole —
-   because the consumer's substitution grammar is `/\{([^}\/]+)\}/` (lib/popup-form.js's applyPathParams) and a
-   name it cannot match is a value the reviewer can fill and the request can never carry. `{state}.id` becomes
-   `{state.id}`: the same bytes, one brace moved, and now substitutable. A literal prefix inside the segment
-   (`u{state}.id`) is folded into the hole rather than split off, because where the literal ends is not
-   something this layer can see and the example carries the whole segment either way.
-   AN UNNAMEABLE HOLE (`{}`, what a concolic with no shape displays as) MINTS NOTHING and keeps its shape in
-   the address — lib/learn.js's own reconcile refuses the same segment for the same reason.
-   Returns the re-spelled path, malloc'd. */
+/* An unknown path segment is one path parameter, atomic in the template. `/v1/users/{state}.id/posts` has one, and
+   its value is the run of example segments `path_align` proved it stands over: one segment there (`42`), more
+   wherever the computed value holds a `/`. The template is built from the shape alone, so nothing the example does
+   moves a hole's boundaries, and the identity `endpoint_mark_asset` recomputes through this function with no
+   example cannot move either. The braces do not delimit the unknown: `concolic_exotic_get` composes a member read's
+   display as `"%s.%s"` over the parent's, so `state.id` displays as `{state}.id`, braces around the root source and
+   the member path outside them, and treating `}` as the unknown's end would ask the example segment to end in a
+   literal `.id`. So the segment is re-spelled as one hole (braces stripped, one pair around the whole), because the
+   consumer's substitution grammar is `/\{([^}\/]+)\}/` (lib/popup-form.js's applyPathParams): `{state}.id` becomes
+   `{state.id}`. A literal prefix in the segment (`u{state}.id`) is folded into the hole, since where the literal
+   ends is invisible at this layer and the example carries the whole segment. An unnameable hole (`{}`, a concolic
+   with no shape) mints nothing and keeps its shape in the address, as lib/learn.js's reconcile refuses the same
+   segment. Returns the re-spelled path, malloc'd. */
 static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
     int nseg = 0, i = 0;
-    /* NULL for BOTH of the two ways there is nothing to align against — no example at all, and an example
-       with no unique reading — because the two are one answer to this walk: it has no bytes it can attribute
-       to a hole. `path_align`'s own banner is where they are told apart. */
+    /* NULL for both ways there is nothing to align against (no example, or no unique reading), one answer to this
+       walk: it has no bytes to attribute to a hole. `path_align`'s banner tells them apart. */
     int *span = ex ? path_align(shape, ex, &nseg) : NULL;
     const char *a = shape, *b = ex;
-    /* core/json_buf.h's growing byte buffer, appended raw — a fourth private one in this file is the copy its
-       own header says it deleted twice. Nothing here is JSON: the emit quotes this string later. */
+    /* core/json_buf.h's growing byte buffer, appended raw (a private one here would be the copy that header
+       deleted); nothing here is JSON, and the emit quotes this string later. */
     JsonBuf p = { 0 };
 
     for (;;) {
@@ -1285,11 +1196,10 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
                    "segment here is this walk reading past the end of that array");
             be = seg_run_end(b, span[i]);
             bn = be ? (size_t)(be - b) : strlen(b);
-            /* THE EXAMPLE RUNS OUT EXACTLY WHEN THE SHAPE DOES, asserted here where the two walks are in one
-               hand and for the reason `kv_pairs` asserts the same of the query half: `path_align` proved the
-               spans cover every example segment, so the LAST shape segment's run reaches the end of the
-               example and no earlier one does. A run that ended early would hand this hole its neighbour's
-               bytes and leave the next one reading past them. */
+            /* The example runs out exactly when the shape does, asserted where the two walks are in one hand, as
+               `kv_pairs` does for the query half: `path_align` proved the spans cover every example segment, so the
+               last shape segment's run reaches the example's end and no earlier one does, and a run ending early
+               would hand this hole its neighbour's bytes. */
             DCHECK(!ae == !be,
                    "an aligned example path ran out of segments before its shape did, or held segments the "
                    "shape's last one did not cover — `path_align` proved the spans sum to the example's own "
@@ -1297,32 +1207,26 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
         }
         seg = malloc(an + 1); CHECK(seg, "endpoint: OOM copying a path segment");
         memcpy(seg, a, an); seg[an] = 0;
-        /* THE NAME *IS* THE HOLE KEY on this path, SO IT IS SPELLED BY THE ONE SPELLER AND NOT BESIDE IT.
-           This loop used to strip the braces itself and the comment below said the result was
-           concolic_hole_key's own rule — which is two right answers to one question, and the whole emission
-           rests on the string this produces being byte-identical to the one solver/decide.c filed the domain
-           under. Two independent loops agreeing TODAY is not that guarantee; routing to the speller is,
-           because there is then nothing left to drift. It also answers BOTH of the conditions this branch
-           used to ask separately: concolic_hole_key returns NULL for a brace-free segment and for the
-           unnameable `{}` whose strip is empty, which is exactly the pair the test below selected on. */
+        /* The name is the hole key on this path, so it is spelled by the one speller: the emission rests on this
+           string being byte-identical to the one solver/decide.c filed the domain under. concolic_hole_key also
+           answers both conditions this branch needs: NULL for a brace-free segment and for the unnameable `{}`
+           whose strip is empty. */
         name = concolic_hole_key(seg);
         if (!name) {
             json_buf_raw(&p, seg);   /* a literal segment, or a `{}` this surface cannot name */
         } else {
             nlen = strlen(name);
-            /* THE GRAMMAR THE CONSUMER SUBSTITUTES BY, ASSERTED AT THE MINT. The braces are stripped by the
-               speller above and a segment cannot hold a `/` because this walk split on one, so this holds by
-               construction — which is exactly why it is worth asserting: the next producer of a name has to
-               keep it true. */
+            /* The grammar the consumer substitutes by, asserted at the mint: the speller strips the braces and a
+               segment cannot hold a `/` because this walk split on one, so it holds by construction, and the next
+               producer of a name has to keep it true. */
             DCHECK(!strpbrk(name, "{}/"),
                    "a path param's NAME still holds a brace or a slash — the popup substitutes a hole by "
                    "matching /\\{([^}/]+)\\}/ against this path, so a name outside that grammar names a hole "
                    "no substitution can find");
             json_buf_raw(&p, "{"); json_buf_raw(&p, name); json_buf_raw(&p, "}");
-            /* …so a path param looks its domain up by the same string the popup substitutes it by AND by the
-               same string decide.c filed it under. The VALUE here is the concrete example aligned out of the
-               URL and carries no braces to read a hole out of; it MAY carry a `/`, because a hole stands over
-               the run of example segments its value occupied and that value is free to hold one. */
+            /* So a path param looks its domain up by the string the popup substitutes it by and decide.c filed it
+               under. The value is the concrete example aligned out of the URL, with no braces to read a hole out of;
+               it may carry a `/`, because a hole stands over the run of example segments its value occupied. */
             kv_add(out, name, nlen, span ? b : "", span ? bn : 0, EP_PATH, name);
         }
         free(seg); free(name);
@@ -1340,21 +1244,20 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
     return json_buf_take(&p);
 }
 
-/* THE VALUE OF ONE BODY FIELD, as the same STRING vocabulary every other value on this surface speaks: the
-   literal the code computed, or its `{shape}` where the code did not compute one. The parsed value came out
-   of JS_ParseJSON, so it holds no getter and no `toString` of the page's — which is why this conversion
-   cannot run the page's code and cannot throw. A field whose value is an OBJECT or an ARRAY is recorded by
-   NAME with no value: it is a real field of the request, and a nested document is not something a flat
-   name -> string record can carry without inventing a naming convention for its members. */
+/* The value of one body field in the string vocabulary every other value on this surface speaks: the literal the
+   code computed, or its `{shape}` where it computed none. The value came out of JS_ParseJSON, so it holds no getter
+   and no page `toString`, and this conversion cannot run page code or throw. A field whose value is an object or
+   array is recorded by name with no value: a real field, but a nested document cannot be carried by a flat
+   name -> string record without inventing a naming convention for its members. */
 static char *body_field_text(JSContext *ctx, JSValueConst v) {
     const char *s;
     char *r;
 
     if (JS_IsObject(v)) return NULL;
     s = JS_ToCString(ctx, v);
-    /* Every value JS_ParseJSON produces is a primitive or a plain object, and the objects left above, so this
-       conversion runs no page code and can only fail on allocation — which is why it is a CHECK and not a
-       DCHECK: a compiled-out assert here would hand `strdup` a NULL in release. */
+    /* Every value JS_ParseJSON produces is a primitive or a plain object, and objects left above, so this
+       conversion runs no page code and fails only on allocation: a CHECK, since a compiled-out assert would hand
+       `strdup` a NULL in release. */
     CHECK(s, "endpoint: OOM rendering a JSON request body's field value");
     r = strdup(s);
     CHECK(r, "endpoint: OOM copying a JSON request body's field value");
@@ -1362,31 +1265,17 @@ static char *body_field_text(JSContext *ctx, JSValueConst v) {
     return r;
 }
 
-/* THE REQUEST BODY, READ BACK IN ITS OWN FORMAT. §What-the-tool-produces wants the KEYS AND VALUES a call
-   sends, and half of a POST's are in its payload; without this the surface reported the address of a
-   `POST /v1/users` and nothing whatever about what it posts.
-   The format is decided by the request's own content-type and never by sniffing the bytes: a page that sends
-   JSON says so, and a body this engine has no reader for records no fields rather than a guess at some. */
-/* RETURNS HOW MANY FIELDS IT NAMED, because the caller's question is no longer "did this run" but "is there
-   anything left for the zone to read". It was void while the only answer to an unreadable body was silence. */
-/* THE FIELDS OF A BODY THE PAGE'S OWN SERIALIZER WROTE, NAMED OFF ITS SPANS — the RPC field keys and example
-   values of a real web app, which is what §What-the-tool-produces asks for by name, and the one answer to it
-   that needs no decoder. Each span is a byte range the run OBSERVED an unknown land in, so this walk makes no
-   inference at all: it prints what the engine recorded while the page's own code ran.
-   IT IS ASKED BEFORE THE CONTENT-TYPE, AND THAT IS THE WHOLE REASON IT IS A SEPARATE WALK. §5.2 BodyInit
-   unions gives a BufferSource NO type, so a protobuf payload handed to `fetch` as a Uint8Array with the page
-   setting no Content-Type reaches this file with `mime == NULL` — and the reader below returns at its first
-   line for exactly that. Its fields do not depend on a type, because nothing here reads the bytes.
-   THE NAME IS THE BYTE RANGE BECAUSE THE RANGE IS WHAT PLACES THE VALUE BACK. A query param is substituted by
-   its key and a path param by its segment; a byte body is substituted by SPLICING, so `body[17:23]` is this
-   param's address in the same sense `region` is a query param's. The end is exclusive.
-   THE VALUE IS THE EXAMPLE WHERE THERE IS ONE AND THE PROVENANCE WHERE THERE IS NOT, which is kv_pairs' rule
-   for a query param spelled again rather than a second convention: an example is what the code COMPUTED and a
-   shape is where the value ENTERED, and §@H's two-facts rule is closed by the DOMAIN travelling beside both —
-   read here off the same flow, under the same hole key, by the same kv_add.
-   A COALESCED RUN CARRIES NO EXAMPLE, AND THAT IS THE RESIDUAL BELOW RATHER THAN A CHOICE MADE HERE. The
-   capture drops it when a run grows past one element (core/fetch/body.c), because the example of a RANGE is
-   BYTES, and a param value is written by json_buf_str, which is NUL-terminated and must be UTF-8. */
+/* The fields of a body the page's own serializer wrote, named off its spans: the RPC field keys and example values
+   of a real web app, with no decoder needed. Each span is a byte range the run observed an unknown land in, so this
+   walk infers nothing: it prints what the engine recorded while the page's code ran. Asked before the content type,
+   which is why it is a separate walk: Fetch §5.2 BodyInit unions give a BufferSource no type, so a protobuf payload
+   handed to `fetch` as a Uint8Array with no Content-Type arrives with `mime == NULL`, where the reader below returns
+   at its first line. The name is the byte range, because the range is what places the value back: a byte body is
+   substituted by splicing, so `body[17:23]` is this param's address as `region` is a query param's (end exclusive).
+   The value is the example where there is one and the provenance where there is not, kv_pairs' rule for a query
+   param, with the domain read beside both off the same flow under the same hole key by kv_add. A coalesced run
+   carries no example (core/fetch/body.c drops it when a run grows past one element, since a range's example is
+   bytes and a param value is a NUL-terminated UTF-8 string); its bytes ride the record's `body_example_b64`. */
 static int body_spans_params(KvBuf *out, const EndpointBody *body) {
     int i, before = out->n;
 
@@ -1413,9 +1302,8 @@ static int body_spans_params(KvBuf *out, const EndpointBody *body) {
         DCHECK(nl > 0 && nl < (int)sizeof name,
                "a body span's name did not fit its buffer — the name is two decimal offsets into a body, so a "
                "truncation here would give two different ranges one param name");
-        /* THE DOMAIN IS LOOKED UP BY THE SAME KEY EVERY OTHER PARAM ON THIS SURFACE USES, composed HERE rather
-           than carried from the producer so that this file holds the only caller of concolic_hole_key for a
-           body and the two cannot spell one hole two ways. */
+        /* The domain is looked up by the key every other param on this surface uses, composed here rather than
+           carried from the producer, so this file is the only caller of concolic_hole_key for a body. */
         hole = concolic_hole_key(s->shape);
         val = s->example ? s->example : s->shape;
         kv_add(out, name, (size_t)nl, val, strlen(val), EP_BODY, hole);
@@ -1424,21 +1312,23 @@ static int body_spans_params(KvBuf *out, const EndpointBody *body) {
     return out->n - before;
 }
 
+/* The request body, read back in its own format: the keys and values a call sends, half of which a POST carries in
+   its payload. The format is decided by the request's own content type, never by sniffing the bytes: a page that
+   sends JSON says so, and a body this engine has no reader for records no fields rather than a guess. Returns how
+   many fields it named, because the caller asks whether anything is left for the zone to read. */
 static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     MimeType mt;
     char *text;
     int before = out->n;
 
-    /* THE SPANS FIRST AND UNCONDITIONALLY — see body_spans_params for why they cannot wait behind the type.
-       Its params are counted by this function's own `before`, so a body whose only fields are span-named is
-       still a body whose fields were READ, which is what the caller asks and what stops the raw-bytes store
-       from making a replay claim over an example. */
+    /* The spans first and unconditionally (see body_spans_params). Its params are counted by this function's own
+       `before`, so a body whose only fields are span-named is still a body whose fields were read, which is what
+       the caller asks and what stops the raw-bytes store from making a replay claim over an example. */
     body_spans_params(out, body);
     if (!body || !body->bytes) return out->n - before;
-    /* §4.4 "parse a MIME type" is the ONE reader of a Content-Type in this engine — never a `strcasecmp`
-       against a literal, which is the C locale's answer where the standard's is ASCII's, and never a private
-       essence split beside the record that already has one. A type that will not parse is §4.4's failure and
-       reads no fields. */
+    /* §4.4 "parse a MIME type" is the one reader of a Content-Type in this engine, never a `strcasecmp` against a
+       literal (the C locale's answer where the standard's is ASCII's) and never a private essence split. A type that
+       will not parse is §4.4's failure and reads no fields. */
     mime_type_init(&mt);
     if (!body->mime || !mime_type_parse(&mt, body->mime, strlen(body->mime))) {
         mime_type_free(&mt);
@@ -1448,21 +1338,17 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     text = malloc(body->len + 1); CHECK(text, "endpoint: OOM request body");
     memcpy(text, body->bytes, body->len); text[body->len] = 0;
 
-    /* `text/plain;charset=UTF-8` IS AN UNDECLARED BODY, NOT A BODY DECLARED AS TEXT, and reading it as one is
-       what makes this capability fire on real code rather than on fixtures that spell the header out. Fetch
-       §5.2 "BodyInit unions" gives a USVString body exactly that type, so `fetch(u, {method:"POST", body:
-       JSON.stringify(x)})` — the commonest POST in any bundle — arrives carrying a type the PAGE never chose.
-       So its bytes go through the real JSON parser and either are a name -> value document or are not; a
-       plain-text body that is not one simply fails to parse and records nothing, which is the same answer as
-       before. This is not sniffing: nothing branches on a
-       PATTERN in the bytes, the engine runs the real codec and uses what it returns (§A JS-engine encoding
-       builtin is modeled faithfully). A type the page DID declare is still the only thing consulted for it. */
+    /* `text/plain;charset=UTF-8` is an undeclared body, not one declared as text: Fetch §5.2 "BodyInit unions" gives
+       a USVString body that type, so `fetch(u, {method:"POST", body: JSON.stringify(x)})`, the commonest POST in a
+       bundle, carries a type the page never chose. Its bytes go through the real JSON parser and either are a
+       name -> value document or are not (a plain-text body fails to parse and records nothing). Not sniffing:
+       nothing branches on a pattern in the bytes; the real codec runs. A type the page did declare is still the
+       only thing consulted for it. */
     if (mime_type_is_json(&mt) || (mt.type && mt.subtype && !strcmp(mt.type, "text") && !strcmp(mt.subtype, "plain"))) {
         JSValue v = JS_ParseJSON(ctx, text, body->len, "<@H request body>");
-        /* A PAGE MAY SEND BYTES THAT ARE NOT THE JSON ITS HEADER CLAIMS, and that is the page's fact rather
-           than this engine's invariant (§offensive-programming exempts a flow throwing on page/attacker
-           input). The exception is discharged here because it belongs to nobody downstream: no field is
-           recorded, which is the true statement about a body whose fields could not be read. */
+        /* A page may send bytes that are not the JSON its header claims: the page's fact, not this engine's
+           invariant, so the exception is discharged here, and no field is recorded, the true statement about a
+           body whose fields could not be read. */
         if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); }
         else if (JS_IsObject(v) && !JS_IsArray(v)) {
             JSPropertyEnum *tab = NULL;
@@ -1491,96 +1377,53 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
         JS_FreeValue(ctx, v);
     } else if (mt.type && mt.subtype && !strcmp(mt.type, "application") &&
                !strcmp(mt.subtype, "x-www-form-urlencoded")) {
-        /* NO EXAMPLE LIST FOR A BODY — see the residual below. */
+        /* No example list for a body: see the residual below. */
         kv_pairs(out, text, NULL, EP_BODY);
     }
-    /* NAMED RESIDUAL — A BODY FIELD CARRIES ITS SHAPE WHERE A QUERY PARAM NOW CARRIES ITS EXAMPLE.
-       WHAT IS NOT COVERED: the value of a body field the page composed out of an unknown. Both arms above
-       read ONE byte sequence, and that sequence is the DISPLAY form — a concatenation carries its operands'
-       display forms into the result's — so a field whose value the interpreter computed is emitted as
-       `{…}` while the identical computation in the address's query half is emitted as the bytes. The
-       address's two halves stopped disagreeing when the query scan was given the example list; a request's
-       address and its body have not.
-       WHAT THE NEXT DIFF BUILDS: the concrete rendering beside the display one on `EndpointBody`
-       (solver/endpoint.h states `mime`, `bytes`, `len` and `kind` and nothing concrete), so this function can
-       walk the two as kv_pairs now walks a query and body_field_text can be asked for the example's field.
-       ITS PRODUCERS ARE OUTSIDE THIS COMPONENT — nothing here builds an EndpointBody — so the field and every
-       fill of it land together, and a fill that has no example states none rather than repeating the shape.
-       HOW ITS ABSENCE WOULD SHOW: an @H record whose query params carry concrete values and whose body fields
-       carry brace-spelled shapes, for ONE request whose two halves were built from the same computed
-       values — a reviewer can vary the address and not the payload. */
+    /* Named residual. Not covered: the value of a body field the page composed out of an unknown. Both arms above
+       read one byte sequence, the display form (a concatenation carries its operands' display forms into the
+       result), so a field whose value the interpreter computed is emitted as `{…}` while the same computation in
+       the query half is emitted as bytes. Next diff builds: the concrete rendering beside the display one on
+       `EndpointBody` (solver/endpoint.h states `mime`, `bytes`, `len` and `kind`, nothing concrete), so this
+       function walks the two as kv_pairs walks a query and body_field_text can be asked for the example's field;
+       its producers are outside this component, so the field and every fill land together, and a fill with no
+       example states none. The same field serves the string-composed body residual above body_b64_encode.
+       Absence shows as: an @H record whose query params carry concrete values and whose body fields carry
+       brace-spelled shapes, for one request whose two halves were built from the same computed values. */
     free(text);
     mime_type_free(&mt);
     return out->n - before;
 }
 
-/* THE BODY THE ENGINE COULD NOT NAME, CARRIED AS BYTES SO THE ZONE CAN. §What-the-tool-produces asks what a
-   request SENDS, and for a gRPC-Web or protobuf call that is the whole of the answer: this surface named the
-   address and nothing about the payload, so a reviewer got `POST /pkg.Service/Method` and no field.
-   IT FORWARDS AND NOTHING DECODES, AND THE SENTENCE THAT STOOD HERE SAID THE ZONE DID. It argued the forward
-   as a LAYERING choice — the trusted zone already holds a wire decoder, so a second one here would duplicate
-   it — and that argument is retired in both halves: the zone's decoder no longer reads these bytes, and the
-   reason is not layering. Reconstructing a field number out of a byte stream INFERS an answer the run already
-   had, because the page's own serializer executed with the real names and the real values in its hands; and
-   the MIME pattern that selected the decoder is the protocol-specific recognizer §Architecture bans, whose
-   next member is Connect, or grpc-web-text, or a framing invented next year. Rewritten rather than deleted
-   because the retired argument is the one a reader re-derives from the bytes being here at all.
-   WHAT NAMES A FIELD IS THE SHAPE, AND FOR A STRING-COMPOSED BODY IT ALREADY DOES. A concatenation carries its
-   operands' display forms into the result's, so a body the page builds by joining text reaches body_params
-   spelling its own holes and the JSON arm reads them as values. This function is what is left for a body the
-   page did NOT compose as a string.
-
-   NAMED RESIDUAL — the body a page builds in a typed array, which is the one this function is really about.
-   ITS BLOCKER IS BUILT AND THE CLAUSE THAT NAMED IT IS REWRITTEN RATHER THAN DELETED, because the reasoning
-   is what a reader re-derives and it was RIGHT: a binary serializer never produces a string, so there was
-   nothing for a span map to attribute in, and no amount of provenance carried through a concatenation could
-   have reached a body written byte by byte. That sentence is what commissioned the store; ECMAScript
-   §10.4.5.18 TypedArraySetElement ( obj, index, value ) now stores unknown external input, with the data
-   block holding an EXAMPLE and a span beside it carrying the FACT.
-   THAT RESIDUAL IS RETIRED AND ITS ARGUMENT IS REWRITTEN RATHER THAN DELETED, because the argument is what a
-   reader re-derives from the bytes being here at all. It asked for a byte body to arrive with its spans,
-   graded so as never to make a replay claim, with the fields named off them — and body_spans_params above is
-   that, reached through the engine's own element read rather than through a decoder. Its grade CONSTRAINT is
-   what now holds the whole design up and must not be re-derived as a preference: a span is recorded even
-   where NO BYTE was written, because an unknown may carry no example and writing `0` would invent a value
-   known only to satisfy a gate, so a body carrying spans has no bytes the request can be said to send and
-   must never be published as EPB_SENT. body_store asserts that rather than trusting it.
-
-   THAT RESIDUAL IS RETIRED AND ITS ARGUMENT IS REWRITTEN RATHER THAN DELETED, because what it was right
-   about is the thing the built mechanism rests on and a reader who re-derives it from the row alone gets the
-   safe half and not the constraint. It said: a single unknown ELEMENT carries its own example and
-   body_spans_params prints it, while a coalesced RUN does not and CANNOT, because the example of a range is
-   BYTES and a param value is written by json_buf_str, which is NUL-terminated and passes bytes above 0x7F
-   through on the promise that everything it is handed is already UTF-8. That is still exactly true, and it is
-   why the answer could never be a longer param value: the row for a run states WHERE those bytes came from
-   and what the flow proved about them, and no spelling of a C string states what the serializer emitted.
-   SO THE BYTES RIDE A KEY OF THEIR OWN AND THE PARAMS KEEP THEIRS, which is the one shape that says both
-   things without either standing in for the other — `body_example_b64` below, base64 through the engine's own
-   codec, EPB_EXAMPLE at the mint, `bodyExampleBase64` at the emit and lib/popup-form.js reading it. The span
-   params are the ADDRESSES and these are the CONTENT, and a consumer holding both can splice.
-   ITS GRADE CONSTRAINT IS WHAT HOLDS THE WHOLE DESIGN UP AND MUST NOT BE RE-DERIVED AS A PREFERENCE, which is
-   the sentence the retired residual above this one already spends itself on: a span is recorded even where NO
-   BYTE was written, so a spanned body has no bytes the request can be said to send, and the third key exists
-   precisely so that saying what the payload LOOKS LIKE is not the same act as claiming the request sends it.
-   THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
-   is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
-   re-implemented beside itself.
-
-   NAMED RESIDUAL — THE BYTES OF A BODY THE PAGE NEVER PUT IN A BUFFER.
-   WHAT IS NOT COVERED: a body composed as a STRING out of unknown input. Its bytes reach this file as the
-   engine's display spelling (§5.2's string arm over a concolic), so there is no example byte sequence anywhere
-   to encode and EPB_SHAPE's text is the whole of what is known — correct, and narrower than a reviewer wants,
-   because such a body's CONCRETE half (the literal characters the concatenation contributed around the hole)
-   is a real byte sequence this surface never renders.
-   WHAT THE NEXT DIFF BUILDS: an example rendering carried beside the display one on `EndpointBody`, which is
-   the same field solver/endpoint.c's body_params residual asks for and is ONE field answering both — so the
-   two land together or the second is a second spelling of the first.
-   HOW ITS ABSENCE WOULD SHOW: a Send panel that names the source composing a payload and shows no bytes at
-   all, for a request whose address bar half carries concrete values computed the same way. */
-/* THE CODEC, WITH NO CLAIM IN IT. Two fields make two different claims about one kind of bytes, and what must
-   NOT be shared between them is the PRECONDITION — so the assert stays at each caller, where it names the
-   field it is defending, and the encoding is written once. Answers NULL for a body with nothing in it, which
-   every caller reads as the absence it is. */
+/* The body the engine could not name, carried as bytes so the zone can: for a gRPC-Web or protobuf call the payload
+ * is the whole of what a request sends. It forwards and nothing decodes: reconstructing field numbers from a byte
+ * stream would infer an answer the run already had (the page's own serializer ran with the real names and values),
+ * and a MIME pattern selecting a decoder would be a protocol-specific recognizer. What names a field is the shape,
+ * and for a string-composed body it already does: a concatenation carries its operands' display forms, so a body
+ * the page builds by joining text reaches body_params spelling its own holes. This is what is left for a body not
+ * composed as a string.
+ *
+ * A body built in a typed array: ECMAScript §10.4.5.18 TypedArraySetElement ( obj, index, value ) stores unknown
+ * external input with the data block holding an example and a span beside it carrying the fact, and
+ * body_spans_params names the fields off the spans. A single unknown element carries its own example; a coalesced
+ * run cannot (a range's example is bytes, and json_buf_str writes a NUL-terminated string it trusts to be UTF-8),
+ * so the bytes ride their own key, `body_example_b64` (base64 by the engine's own codec, EPB_EXAMPLE at the mint,
+ * `bodyExampleBase64` at the emit, read by lib/popup-form.js): the span params are the addresses and these the
+ * content, and a consumer holding both can splice. The grade constraint holds the design up: a span is recorded
+ * even where no byte was written (an unknown may carry no example, and writing `0` would invent a value only to
+ * satisfy a gate), so a body carrying spans has no bytes the request can be said to send and is never published
+ * as EPB_SENT, which body_store asserts. The codec is the engine's own, for core/file/file_reader.c's reason:
+ * `btoa`'s codec is implemented here, and an encoding builtin is never re-implemented beside itself.
+ *
+ * Named residual. Not covered: the bytes of a body composed as a string out of unknown input. They reach this file
+ * as the engine's display spelling (§5.2's string arm over a concolic), so EPB_SHAPE's text is all that is known,
+ * and the concrete characters the concatenation contributed around the hole are never rendered. Next diff builds:
+ * the example rendering on `EndpointBody` that body_params' residual asks for, one field answering both. Absence
+ * shows as: a Send panel that names the source composing a payload and shows no bytes, for a request whose
+ * address half carries concrete values computed the same way. */
+/* The codec, with no claim in it: the two fields make different claims about one kind of bytes, so the
+   precondition stays at each caller, where it names the field it defends, and the encoding is written once. NULL
+   for an empty body, which every caller reads as the absence it is. */
 static char *body_b64_encode(const char *bytes, size_t len) {
     size_t cap, n;
     char *b64;
@@ -1595,17 +1438,13 @@ static char *body_b64_encode(const char *bytes, size_t len) {
     return b64;
 }
 
-/* THE REPLAY CLAIM. */
+/* The replay claim. */
 static char *body_bytes_b64(const EndpointBody *body) {
     if (!body || !body->bytes || body->len == 0) return NULL;
-    /* A SHAPE IS NOT A PAYLOAD, AND THIS FUNCTION USED TO TURN ONE INTO ONE. A body built out of unknown
-       external input arrives carrying the engine's DISPLAY SPELLING of that unknown, because there are no
-       bytes to carry; base64-ing it published the literal characters of a hole under the record's own claim
-       that the request sent exactly these bytes, which a reviewer REPLAYS.
-       IT IS ASSERTED HERE AND DECIDED AT ONE PLACE, which is body_store below. A silent `return NULL` stood
-       here for one revision and was a SECOND answer to a question that already has an owner — the caller
-       chooses the field, so a shape reaching this function is that choice having gone wrong, and the engine's
-       own logic being wrong is what a DCHECK is for rather than something to absorb. */
+    /* A shape is not a payload: a body built from unknown external input carries the engine's display spelling of
+       that unknown, and base64 of it would publish a hole's characters under the record's claim that the request
+       sent these bytes, which a reviewer replays. Asserted here and decided at one place, body_store: a shape
+       reaching this function is that choice having gone wrong. */
     DCHECK(body->kind == EPB_SENT,
            "the base64 of a request body was asked for a body that is NOT bytes the request sends — this "
            "function makes the record's replay claim, so running it over an unknown body's display spelling "
@@ -1614,12 +1453,10 @@ static char *body_bytes_b64(const EndpointBody *body) {
     return body_b64_encode(body->bytes, body->len);
 }
 
-/* AND THE OTHER CLAIM OVER THE SAME CODEC, WHICH IS WHY THE ASSERT IS HERE AND NOT IN IT. These bytes are what
-   the payload LOOKS LIKE and never what the request sends: inside a span stands an unknown's example where it
-   had one and a byte nobody wrote where it did not, and outside every span stands a byte the page computed.
-   Reaching this over an EPB_SENT body would be the mirror of the defect above — it would UNDERSTATE a
-   replayable payload as an example, so a reviewer would decline to replay a request the page really made,
-   which is a lost finding rather than a fabricated one and is still this file's logic being wrong. */
+/* And the other claim over the same codec, which is why the assert is here and not in it: these bytes are what the
+   payload looks like, never what the request sends (inside a span stands an unknown's example or a byte nobody
+   wrote, outside every span a byte the page computed). Reaching this over an EPB_SENT body would understate a
+   replayable payload as an example, a lost finding rather than a fabricated one. */
 static char *body_example_b64(const EndpointBody *body) {
     if (!body || !body->bytes || body->len == 0) return NULL;
     DCHECK(body->kind == EPB_EXAMPLE,
@@ -1630,43 +1467,27 @@ static char *body_example_b64(const EndpointBody *body) {
     return body_b64_encode(body->bytes, body->len);
 }
 
-/* WHICH OF THE THREE BODY FACTS THIS SIGHTING CARRIES, DECIDED ONCE. Everything above answers "what is this
-   body"; this is the only place that answers "so which field does it go in", and having exactly one such
-   place is what lets body_bytes_b64 and body_example_b64 each ASSERT its own precondition instead of
-   absorbing the other's body.
-   `body_named` IS NOT A SECOND SPELLING OF EMPTINESS — it says body_params already put this body's fields on
-   `params`. For a body whose fields were READ that is the better answer and the raw form is not carried
-   beside it: such a body is one the reviewer can VARY, and `body_b64`/`body_shape` are for the one whose
-   fields nobody could name.
-   AND THAT SENTENCE IS FALSE OF EXACTLY ONE POPULATION, WHICH IS WHY THE SPAN ARM IS ASKED FIRST — rewritten
-   rather than deleted because the rule is right everywhere else and a reader who re-derives it will put the
-   span arm behind the flag. A span param names a BYTE RANGE, so it is an address rather than a value: it says
-   where a reviewer edits and is silent about what stands there, and the bytes it addresses are the other half
-   of one answer instead of a worse version of it. `body_named` is non-zero for every spanned body (every span
-   mints a param), so a spanned body behind that flag records nothing at all — which is the SILENCE half of
-   §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES' pairing, the same trap the shape arm below already records.
-   FIRST BODY WINS AND IS NEVER OVERWRITTEN: a request body is ONE example of what this endpoint is sent, not
-   a set to be merged, and replacing it would swap one example for another with nothing on the record to say
-   so. A sighting at a different GRADE is already a different record (provenance is part of `same_identity`),
-   so this cannot mix a forced body into an observed one. */
+/* Which of the three body facts this sighting carries, decided once, so body_bytes_b64 and body_example_b64 can each
+   assert its own precondition. `body_named` says body_params already put this body's fields on `params`; for such
+   a body the reviewer can vary the fields and the raw form is not carried beside them. The span arm is asked first
+   because that rule is false of exactly one population: a span param names a byte range, an address silent about
+   what stands there, so the bytes it addresses are the other half of one answer, and `body_named` is nonzero for
+   every spanned body (every span mints a param), so behind that flag a spanned body would record nothing. First
+   body wins and is never overwritten: a request body is one example of what this endpoint is sent, and a sighting
+   at a different grade is already a different record (provenance is part of `same_identity`), so a forced body
+   cannot mix into an observed one. */
 static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
     if (!body || !body->bytes) return;
-    /* FIRST BODY WINS ACROSS ALL THREE FIELDS AND NOT PER FIELD, which is the same sentence this function's
-       header already makes about two of them and is what stops a second sighting recording a DIFFERENT body
-       under a key the first one left free. A record holding a spanned body's example AND another sighting's
-       display shape would be two bodies presented as one request's, with nothing on the record saying so. */
+    /* First body wins across all three fields, not per field, so a second sighting cannot record a different body
+       under a key the first left free; a record holding one sighting's spanned example and another's display shape
+       would present two bodies as one request's. */
     if (e->body_b64 || e->body_shape || e->body_example_b64) return;
     if (body->nspan > 0) {
-        /* THE SPANNED BODY, AND IT IS ASKED BEFORE `body_named` RATHER THAN BEHIND IT — the one place in this
-           function where named fields and raw bytes are not alternatives. `body_named` means body_params put
-           this body's fields on `params`, and for every OTHER body that is strictly the better answer, so the
-           raw form is not carried beside it. A span param is not that kind of field: `body[17:23]` is an
-           ADDRESS, and an address with nothing at it is a row on which a reviewer can change WHICH value a
-           range carries and cannot see what it currently carries. The two halves are one answer.
-           AND THE OTHER TWO ARMS ARE BOTH WRONG FOR IT, which is why this is a third field and not a widening
-           of either: `body_b64` promises a reviewer these are the bytes the request SENDS, and a spanned
-           body's are an unknown's example where it had one and a byte nobody wrote where it did not;
-           `body_shape` is a C string over bytes that may hold a NUL and may not be UTF-8. */
+        /* The spanned body, asked before `body_named`: here named fields and raw bytes are not alternatives, since
+           `body[17:23]` is an address, and an address with nothing at it lets a reviewer change which value a range
+           carries without seeing what it carries now. A third field rather than a widening of either other:
+           `body_b64` promises these are the bytes the request sends, and a spanned body's are an unknown's example
+           or a byte nobody wrote; `body_shape` is a C string over bytes that may hold a NUL and may not be UTF-8. */
         DCHECK(body_named,
                "a request body carrying unknown byte ranges was stored with none of its ranges named — every "
                "span mints a param, so this is the span walk having been skipped and these example bytes "
@@ -1675,32 +1496,23 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
     } else if (body_named) {
         return;
     } else if (body->kind == EPB_SHAPE) {
-        /* THE SHAPE TEXT ITSELF, WHICH IS A STATEMENT ABOUT A SOURCE AND NOT A PAYLOAD. `{cfg.payload}` names
-           WHO composes this body, which is strictly more than an empty panel tells a reviewer and is exactly
-           what a sniffer can never produce.
-           IT IS ALSO WHY REFUSING TO FAKE THE BYTES IS ONLY HALF A FIX. The refusal landed on its own for one
-           revision and recorded NOTHING for an unknown body, which traded a FABRICATION for a SILENCE — and
-           those are not one improvement, they are the two halves of §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES'
-           pairing: an ABSENT value and a ZERO value are different facts and must never be averaged. A record
-           that says nothing about a body reads as a request with no body, which is the same wrong answer the
-           base64 gave, pointing the other way. It is carried under its own key so that no consumer ever has to
-           decide which of the two it is holding. A MIME is attached only if there is one: §5.2's string arm
-           gives an unknown body `text/plain;charset=UTF-8`, which the PAGE never chose, so it is reported as
-           what it is rather than withheld — and the page's own declared type, where it set one, is the thing
-           a reviewer actually wants here. */
+        /* The shape text itself, a statement about a source rather than a payload: `{cfg.payload}` names who
+           composes this body, more than an empty panel tells a reviewer and nothing a sniffer can produce.
+           Recording nothing for an unknown body would trade a fabrication for a silence: a record that says nothing
+           about a body reads as a request with no body. Carried under its own key so no consumer has to decide
+           which it holds. A MIME is attached only if there is one; §5.2's string arm gives an unknown body
+           `text/plain;charset=UTF-8`, which the page never chose, so it is reported as what it is, and the page's
+           own declared type, where set, is what a reviewer wants. */
         e->body_shape = malloc(body->len + 1);
         CHECK(e->body_shape, "endpoint: OOM recording the display shape of an unknown request body");
         memcpy(e->body_shape, body->bytes, body->len);
         e->body_shape[body->len] = 0;
     } else if (body->mime) {
-        /* BYTES, WHICH ONLY MEAN ANYTHING BESIDE THE TYPE THAT SAYS HOW TO READ THEM — the pair `EndpointBody`
-           is one struct for. This is the arm that makes the record's replay claim.
-           THE EXAMPLE ARM ABOVE DELIBERATELY DOES NOT SHARE THIS TEST, AND THE DIFFERENCE IS WHAT THE SPANS
-           BUY. A type is what names the FIELDS of a payload nobody can otherwise address, so a replayable
-           body with none is bytes a reviewer can do nothing with; a spanned body is addressed by its own
-           span params, which §5.2 BodyInit unions makes the ordinary case rather than the exotic one — a
-           BufferSource arm supplies NO Content-Type, so the protobuf payload this whole capability exists for
-           arrives with `mime == NULL`. Requiring one here would have silenced exactly that population. */
+        /* Bytes, which mean something only beside the type that says how to read them (the pair `EndpointBody` is
+           one struct for); this arm makes the record's replay claim. The example arm does not share the test, and
+           the difference is what spans buy: a type names the fields of a payload nobody can otherwise address,
+           while a spanned body is addressed by its span params, and Fetch §5.2 BodyInit unions give a BufferSource
+           no Content-Type, so the protobuf payload this capability exists for arrives with `mime == NULL`. */
         e->body_b64 = body_bytes_b64(body);
     }
     if ((e->body_b64 || e->body_shape || e->body_example_b64) && body->mime) {
@@ -1709,7 +1521,7 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
     }
 }
 
-/* THE DOMAIN'S FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
+/* The domain's first observation: this endpoint's record takes the set the recording flow proved. */
 static void param_set_excl(Param *p, char *const *ex, int n) {
     int i;
     DCHECK(p->nexcl == 0 && p->excl == NULL,
@@ -1726,10 +1538,9 @@ static void param_set_excl(Param *p, char *const *ex, int n) {
     p->nexcl = n;
 }
 
-/* …AND EVERY LATER ONE NARROWS IT. A constraint the record still carries is one EVERY observed path to this
-   endpoint obeyed; a token this flow did not exclude is a token some path allowed, and the claim goes. The
-   set only ever shrinks, which is also why a merge earns the WFQ nothing: there is no later event here that
-   ADDS structure, and the endpoint's own first sighting already earned its point. */
+/* And every later one narrows it: a constraint the record still carries is one every observed path obeyed, and a
+   token this flow did not exclude is one some path allowed. The set only shrinks, so a merge earns the WFQ nothing;
+   the endpoint's first sighting already earned its point. */
 static void param_intersect_excl(Param *p, char *const *ex, int n) {
     int i, j, k = 0;
     for (i = 0; i < p->nexcl; i++) {
@@ -1741,9 +1552,8 @@ static void param_intersect_excl(Param *p, char *const *ex, int n) {
     p->nexcl = k;
 }
 
-/* THE INTERVAL'S FIRST OBSERVATION — this endpoint's record takes what the recording flow proved. The strings
-   are re-copied rather than moved because the KV row that carries them is freed by kv_free whether it was
-   merged or seeded, and one owner per string is the only rule that survives a new caller. */
+/* The interval's first observation. The strings are re-copied rather than moved because kv_free frees the KV row
+   whether it was merged or seeded, and one owner per string survives a new caller. */
 static void param_set_bound(ParamBound *d, const ParamBound *s) {
     DCHECK(!d->has_lo && !d->has_hi && !d->lo_txt && !d->hi_txt,
            "an endpoint param's interval was seeded twice — the first sighting takes it and every later one "
@@ -1755,14 +1565,12 @@ static void param_set_bound(ParamBound *d, const ParamBound *s) {
     if (s->has_hi) { d->hi_txt = strdup(s->hi_txt); CHECK(d->hi_txt, "endpoint: OOM recording a param's upper bound"); }
 }
 
-/* …AND EVERY LATER ONE WIDENS IT TO THE INTERVAL HULL. A bound the record still carries is one EVERY observed
-   path to this endpoint obeyed, so the surviving lower bound is the LOOSER of the two (and no lower bound at
-   all if this path had none), and likewise above. It is `param_intersect_excl`'s claim over an ordered domain
-   and not a second rule: intersecting exclusion sets is the complement of the UNION of the two paths' domains,
-   and the hull is the strongest interval containing that union.
-   ON A TIE AT THE SAME NUMBER THE INCLUSIVE SIDE WINS, which is the mirror of concolic.c's within-a-flow rule
-   where the EXCLUSIVE one does: there the two facts are conjoined and the tighter survives; here they are
-   hulled and the looser does. */
+/* And every later one widens it to the interval hull: a bound the record still carries is one every observed path
+   obeyed, so the surviving lower bound is the looser of the two (none if this path had none), and likewise above.
+   It is `param_intersect_excl`'s claim over an ordered domain: intersecting exclusion sets is the complement of the
+   union of the two domains, and the hull is the strongest interval containing that union. On a tie the inclusive
+   side wins, the mirror of concolic.c's within-a-flow rule (conjoined there, the tighter survives; hulled here, the
+   looser). */
 static void param_widen_bound(ParamBound *d, const ParamBound *s) {
     if (!s->has_lo) { free(d->lo_txt); d->lo_txt = NULL; d->has_lo = 0; }
     else if (d->has_lo && (s->lo < d->lo || (s->lo == d->lo && s->lo_incl && !d->lo_incl))) {
@@ -1778,7 +1586,7 @@ static void param_widen_bound(ParamBound *d, const ParamBound *s) {
     }
 }
 
-/* THE CALL PREDICATES' FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
+/* The call predicates' first observation: this endpoint's record takes the set the recording flow proved. */
 static void param_set_pred(Param *p, const ConcolicPred *src, int n) {
     DCHECK(p->npred == 0 && p->pred == NULL,
            "an endpoint param's call-predicate set was seeded twice — the first sighting takes the set and "
