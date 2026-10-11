@@ -30,10 +30,11 @@
    one activation spends. 32 defers once per 32 levels and keeps an activation to 32 bodies. */
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
-/* Boxes a resting drive lays out per rest point, 8. The floor is the cost of resting, which a body pays as one
-   staged walk. The ceiling is bound (2), measured by the scrolling-area bracket the drive runs inside; a cold
-   node's boxes run to a few hundred microseconds each. */
-#define REST_UNIT_LAYOUT_BOXES_N   8u
+/* Boxes a resting drive lays out per rest point, 4. The floor is the cost of resting, which a body pays as one
+   staged walk. The ceiling is bound (2), measured by the scrolling-area bracket the drive runs inside: a box
+   whose content is one inline formatting context pays that context's whole fill, up to about 2 ms of CPU in a
+   dev build, so eight such boxes overrun the slice. */
+#define REST_UNIT_LAYOUT_BOXES_N   4u
 
 /* Elements a resting drive's float search examines per rest point, 32. The floor is the rest's own cost,
    which a search pays as one held place; the ceiling is bound (2): an element whose cascaded style is built
