@@ -977,16 +977,44 @@ static void kv_free(KvBuf *b) {
    next pair's position, or NULL at the end. Name and value are borrowed spans; a pair with no `=` has a zero-length
    value (what `?flag` sends), and an empty name is left for the caller to refuse (kv_add asserts it). In place,
    because the two spellings of one address are walked together and `strtok` keeps its state in the string it
-   destroys. */
-static const char *kv_pair_next(const char *p, const char **nm, size_t *nn, const char **vl, size_t *vn) {
+   destroys. `hm` is the list's hole mask aligned with `base` (solver/concolic.h's concolic_shape_hole_mask): a `&` or
+   an `=` this engine spelled inside an unknown is no syntax of the page's. NULL for a list of the page's bytes only,
+   such as the example. */
+static int kv_is_page(const char *base, const unsigned char *hm, const char *p) {
+    return !hm || !hm[p - base];
+}
+
+/* Whether `[p, p + n)` of a list holds a hole: a byte the mask marks, or, with no mask, a brace — the one marker a
+   recorded address string still carries. Every hole this engine spells names one in braces (concolic_new asserts it
+   of a source, and a derivation spells its operands), which is asserted per run. */
+static int kv_has_hole(const char *base, const unsigned char *hm, const char *p, size_t n) {
+    size_t i = 0, s;
+    int any = 0;
+
+    if (!hm) return memchr(p, '{', n) != NULL;
+    while (i < n) {
+        if (!hm[p - base + i]) { i++; continue; }
+        for (s = i; i < n && hm[p - base + i]; i++) {}
+        DCHECK(memchr(p + s, '{', i - s) != NULL,
+               "a run of an address's bytes this engine spelled for an unknown names no `{`-delimited hole — "
+               "every shape derives from a source's braced name, so the hole mask and the shape it marks "
+               "have come apart");
+        any = 1;
+    }
+    return any;
+}
+
+static const char *kv_pair_next(const char *base, const unsigned char *hm, const char *p, const char **nm,
+                                size_t *nn, const char **vl, size_t *vn) {
     const char *amp, *eq;
     size_t plen;
 
-    while (*p == '&') p++;      /* `&&`, and a trailing `&`: no pair — the same runs strtok collapsed */
+    while (*p == '&' && kv_is_page(base, hm, p)) p++;   /* `&&`, and a trailing `&`: no pair */
     if (!*p) return NULL;
-    amp = strchr(p, '&');
-    plen = amp ? (size_t)(amp - p) : strlen(p);
-    eq = (const char *)memchr(p, '=', plen);
+    for (amp = p; *amp && !(*amp == '&' && kv_is_page(base, hm, amp)); amp++) {}
+    plen = (size_t)(amp - p);
+    for (eq = p; eq < p + plen && !(*eq == '=' && kv_is_page(base, hm, eq)); eq++) {}
+    if (eq == p + plen) eq = NULL;
     *nm = p;
     *nn = eq ? (size_t)(eq - p) : plen;
     *vl = eq ? eq + 1 : p + plen;
@@ -1002,18 +1030,18 @@ typedef struct { const char *end, *nm, *vl; size_t nn, vn; } Pair;
 /* The pairs of one address half, malloc'd, from one walk, so the aligner below and the emission that consumes its
    answer index the same split. An empty list is zero pairs and a run of `&` is no pair, the arithmetic
    `kv_pair_next` performs. */
-static Pair *kv_split(const char *s, int *n_out) {
+static Pair *kv_split(const char *s, const unsigned char *hm, int *n_out) {
     int n = 0, i = 0;
     const char *p = s, *next;
     const char *nm, *vl;
     size_t nn, vn;
     Pair *v;
 
-    while ((p = kv_pair_next(p, &nm, &nn, &vl, &vn)) != NULL) n++;
+    while ((p = kv_pair_next(s, hm, p, &nm, &nn, &vl, &vn)) != NULL) n++;
     v = malloc((size_t)(n ? n : 1) * sizeof *v);
     CHECK(v, "endpoint: OOM splitting an address half into query pairs");
     p = s;
-    while ((next = kv_pair_next(p, &nm, &nn, &vl, &vn)) != NULL) {
+    while ((next = kv_pair_next(s, hm, p, &nm, &nn, &vl, &vn)) != NULL) {
         DCHECK(i < n,
                "a query list split into more pairs than its own counting walk found — the count and the fill "
                "are two readings of one string and the array is sized by the first, so a further pair here "
@@ -1044,7 +1072,7 @@ static const char *kv_run_end(const char *b, int npair,
         const char *xn = NULL, *xv = NULL, *next;
         size_t xnn = 0, xvn = 0;
 
-        next = kv_pair_next(p, &xn, &xnn, &xv, &xvn);
+        next = kv_pair_next(b, NULL, p, &xn, &xnn, &xv, &xvn);
         DCHECK(next != NULL,
                "a query pair run ran off the end of its example — `query_align` proved this span against the same "
                "string, so this walk and that proof are reading two different addresses");
@@ -1077,10 +1105,10 @@ static const char *kv_run_end(const char *b, int npair,
  * param name inside braces.
  * Returns a malloc'd span per shape pair and writes the shape's pair count, or NULL when there is no reading or
  * more than one. A shape with no pairs has the one empty reading and returns a non-NULL array. */
-static int *query_align(const char *shape, const char *ex, int *nshape) {
+static int *query_align(const char *shape, const unsigned char *shm, const char *ex, int *nshape) {
     int n = 0, m = 0, i, j, k;
-    Pair *S = kv_split(shape, &n);
-    Pair *E = kv_split(ex, &m);
+    Pair *S = kv_split(shape, shm, &n);
+    Pair *E = kv_split(ex, NULL, &m);
     /* ways[i][j]: how many readings match the shape's pairs from `i` onward against the example's from `j`
        onward, saturated at two. Filled backwards so each row reads only the row below it. */
     unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
@@ -1091,7 +1119,7 @@ static int *query_align(const char *shape, const char *ex, int *nshape) {
     for (i = n - 1; i >= 0; i--) {
         unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
         const unsigned char *nxt = cur + (m + 1);
-        if (memchr(S[i].vl, '{', S[i].vn)) {
+        if (kv_has_hole(shape, shm, S[i].vl, S[i].vn)) {
             unsigned suf = 0;                        /* the saturated sum of nxt[j + 1 .. m] */
             for (j = m; j >= 0; j--) {
                 int anchored = j < m && S[i].nn == E[j].nn && !memcmp(S[i].nm, E[j].nm, S[i].nn);
@@ -1118,7 +1146,7 @@ static int *query_align(const char *shape, const char *ex, int *nshape) {
                    "a query alignment with exactly one reading reached a state holding a different number of "
                    "them — this walk is then choosing between readings instead of following the one the "
                    "count proved, and a hole would carry bytes another reading gives to its neighbour");
-            if (!memchr(S[i].vl, '{', S[i].vn)) {
+            if (!kv_has_hole(shape, shm, S[i].vl, S[i].vn)) {
                 span[i] = 1;
             } else {
                 for (k = j + 1; k <= m; k++) if (nxt[k]) break;
@@ -1153,19 +1181,20 @@ static int *query_align(const char *shape, const char *ex, int *nshape) {
    the shape holds a hole is the example the interpreter computed: the real operation on real operands, which has
    no example where any operand has none (concolic.h), so a gate-contradicted arm arrives exampleless and falls
    back to the shape. path_scan performs the same read for a path segment. */
-static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
+static void kv_pairs(KvBuf *b, const char *text, const unsigned char *thm, const char *ex, EpLoc loc) {
     int npair = 0, i = 0;
     /* NULL for both ways there is nothing to align against (no example, or no unique reading), one answer to this
        walk: it has no bytes to attribute to a hole. `query_align`'s banner tells them apart. */
-    int *span = ex ? query_align(text, ex, &npair) : NULL;
+    int *span = ex ? query_align(text, thm, ex, &npair) : NULL;
     const char *a = text, *e = ex;
 
     for (;;) {
         const char *nm, *vl, *en = NULL, *ev = NULL, *na, *ne = NULL;
         size_t nn, vn, enn = 0, evn = 0;
         char *shapeval, *hole;
+        int holed;
 
-        na = kv_pair_next(a, &nm, &nn, &vl, &vn);
+        na = kv_pair_next(text, thm, a, &nm, &nn, &vl, &vn);
         if (!na) break;
         a = na;
         /* The two walks are one rule, held to it here: `query_align` established the pairing with the same
@@ -1193,8 +1222,9 @@ static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
         CHECK(shapeval, "endpoint: OOM copying a query value's display form");
         if (vn) memcpy(shapeval, vl, vn);
         shapeval[vn] = 0;
-        hole = concolic_hole_key(shapeval);   /* the domain is a fact about the shape, whatever the value is */
-        if (span && memchr(vl, '{', vn))
+        holed = kv_has_hole(text, thm, vl, vn);
+        hole = holed ? concolic_hole_key(shapeval) : NULL;   /* the domain is a fact about the shape */
+        if (span && holed)
             kv_add(b, nm, nn, ev, evn, loc, hole);
         else
             kv_add(b, nm, nn, vl, vn, loc, hole);
@@ -1594,7 +1624,7 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     } else if (mt.type && mt.subtype && !strcmp(mt.type, "application") &&
                !strcmp(mt.subtype, "x-www-form-urlencoded")) {
         /* No example list for a body: see the residual below. */
-        kv_pairs(out, text, NULL, EP_BODY);
+        kv_pairs(out, text, NULL, NULL, EP_BODY);
     }
     /* Named residual. Not covered: the value of a body field the page composed out of an unknown. Both arms above
        read one byte sequence, the display form (a concatenation carries its operands' display forms into the
@@ -1874,12 +1904,24 @@ static int same_identity(Endpoint *e, const char *method, const char *path, int 
 static char *address_scan(JSContext *ctx, JSValueConst url, KvBuf *kvb) {
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);
-    char *shape_path = url_path_of(disp);
+    /* The shape's own `?` and `&` are the page's bytes only: a hole this engine spelled (an operator, a joint's
+       separator, a member path) is one unknown and no syntax, so the split reads the hole mask. A concrete address
+       has none and is split as it stands. */
+    unsigned char *dhm = concolic_shape_hole_mask(url);
+    const char *dq = disp;
+    while (*dq && !(*dq == '?' && kv_is_page(disp, dhm, dq))) dq++;
+    char *shape_path = strndup(disp, (size_t)(dq - disp));
     char *expath = ex ? url_path_of(ex) : NULL;
+    CHECK(shape_path, "endpoint: OOM copying an address's path half");
+    /* Named residual. Not covered: the path half is split on every `/`, so a hole whose spelling holds one (a
+       division, `{a}/{b}`) is cut into two segments. Next diff: path_scan and path_align read the same mask, and a
+       path param's name grammar (the popup's /\{([^}/]+)\}/) admits a hole key holding `/`. How its absence shows: a
+       record whose path has a segment that is half of a hole's spelling. */
     char *path = path_scan(kvb, shape_path, expath);
-    { const char *q = strchr(disp, '?'), *eq = ex ? strchr(ex, '?') : NULL;
-      if (q && q[1]) kv_pairs(kvb, q + 1, (eq && eq[1]) ? eq + 1 : NULL, EP_QUERY); }
-    free(disp); free(ex); free(expath); free(shape_path);
+    { const char *eq = ex ? strchr(ex, '?') : NULL;
+      if (*dq && dq[1])
+          kv_pairs(kvb, dq + 1, dhm ? dhm + (dq + 1 - disp) : NULL, (eq && eq[1]) ? eq + 1 : NULL, EP_QUERY); }
+    free(disp); free(dhm); free(ex); free(expath); free(shape_path);
     return path;
 }
 

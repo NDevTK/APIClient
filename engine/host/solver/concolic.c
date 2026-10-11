@@ -149,6 +149,11 @@ typedef struct {
     char *key_atom;
     /* The affine facet, or NULL. Written once, at the mint, by aff_attach; owned. */
     ConcolicAffine *aff;
+    /* Which bytes of `shape` this engine spelled for an unknown (concolic_shape_hole_mask): `hole_n` sorted,
+       disjoint `[start, end)` pairs in `hole_span`. Written only on a §13.15.3 string concatenation, whose
+       other bytes are the page's own; NULL on every other value, whose whole shape spells one unknown. Owned. */
+    int *hole_span;
+    int  hole_n;
 } Concolic;
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
@@ -1851,6 +1856,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     ident_list_free(c->conj, c->conj_n);
     free(c->key_atom);
     aff_free(c->aff);
+    free(c->hole_span);
     JS_FreeValueRT(rt, c->example);
     /* The second owned JSValue on this record. A field added to the struct is an obligation here and at
        concolic_gc_mark together. JS_UNINITIALIZED is not refcounted, so the never-asked case needs no test. */
@@ -5226,6 +5232,66 @@ static JSValue example_number_add(JSContext *ctx, JSValueConst exa, JSValueConst
    computed, so `concolic(5) + 3` gives 8, not "53". Steps 1.a and 1.b are not performed here (js_add_slow
    calls this before any coercion); the assert inside names the trampoline that owes them. The concolic result
    is the same either way: provenance, shape and identity, and a later branch still forks. */
+/* `v`'s hole spans shifted by `off`, written to `out` when it is not NULL; answers how many. A non-concolic
+   contributes none, and a value with no recorded spans is one unknown spelled by its whole shape. */
+static int hole_spans_of(JSValueConst v, size_t off, int *out)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    int i;
+
+    if (!c) return 0;
+    if (!c->hole_span) {
+        if (out) { out[0] = (int)off; out[1] = (int)(off + strlen(c->shape)); }
+        return 1;
+    }
+    if (out) for (i = 0; i < 2 * c->hole_n; i++) out[i] = c->hole_span[i] + (int)off;
+    return c->hole_n;
+}
+
+/* `r` is the string concatenation of `a`'s shape (`alen` bytes) and `b`'s: its holes are theirs, in order. */
+static void hole_spans_concat(JSValueConst r, JSValueConst a, size_t alen, JSValueConst b)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    int na, nb;
+
+    if (!c) return;   /* a candidate re-fire delivered the attacker's bytes, a plain String */
+    na = hole_spans_of(a, 0, NULL);
+    nb = hole_spans_of(b, alen, NULL);
+    DCHECK(na + nb >= 1 && c->hole_span == NULL,
+           "a concatenation over an unknown composed no hole, or composed its holes twice — one operand is a "
+           "concolic, so its shape is at least one hole of the result's");
+    c->hole_span = reclaim_malloc((size_t)(2 * (na + nb)) * sizeof *c->hole_span);
+    CHECK(c->hole_span, "concolic: OOM recording which bytes of a shape spell an unknown");
+    hole_spans_of(a, 0, c->hole_span);
+    hole_spans_of(b, alen, c->hole_span + 2 * na);
+    c->hole_n = na + nb;
+    DCHECK((size_t)c->hole_span[2 * c->hole_n - 1] <= strlen(c->shape),
+           "a concatenation's last hole ends past its own shape — the operands' shapes are the result's bytes");
+}
+
+unsigned char *concolic_shape_hole_mask(JSValueConst v)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    size_t n;
+    unsigned char *m;
+    int i;
+
+    if (!c) return NULL;
+    n = strlen(c->shape);
+    m = calloc(n + 1, 1);
+    CHECK(m, "concolic: OOM marking which bytes of a shape spell an unknown");
+    if (!c->hole_span) { memset(m, 1, n); return m; }
+    for (i = 0; i < c->hole_n; i++) {
+        int s = c->hole_span[2 * i], e = c->hole_span[2 * i + 1];
+
+        DCHECK(0 <= s && s <= e && (size_t)e <= n && (i == 0 || c->hole_span[2 * i - 1] <= s),
+               "a shape's hole spans are out of order or outside the shape — they are composed in operand "
+               "order by hole_spans_concat and nothing else writes them");
+        memset(m + s, 1, (size_t)(e - s));
+    }
+    return m;
+}
+
 int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
@@ -5282,6 +5348,9 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
         else
             example = example_number_add(ctx, exa, exb);
     }
+    /* Step 1.c is a disjunction, so one String operand decides the string arm whether or not the other has an
+       example; the result's shape is then the page's bytes around its operands' holes. */
+    int string_arm = op == JS_CONCOLIC_ADD_CONCAT || (hava && JS_IsString(exa)) || (havb && JS_IsString(exb));
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
 
     char *ident;
@@ -5313,6 +5382,7 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     JSValue result = concolic_derived(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example);
                                                               /* consumes example and ident */
     if (af) aff_attach(result, af);
+    if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
     free(sha); free(shb); free(shape); free(root);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;

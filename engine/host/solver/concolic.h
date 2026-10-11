@@ -122,6 +122,12 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
 /* Predicates + accessors — the ONLY concolic test is this domain-carrying one (never a binary know-nothing). */
 int         concolic_is(JSValueConst v);              /* 1 iff v is a concolic value */
 const char *concolic_shape_c(JSValueConst v);         /* display shape (NULL if not concolic) */
+/* WHICH BYTES OF THAT SHAPE THIS ENGINE SPELLED FOR AN UNKNOWN, as a malloc'd mask of `strlen(shape)` bytes the
+   caller frees: 1 inside a hole, 0 for a byte the page's own string contributed. A §13.15.3 concatenation is
+   the page's bytes around its operands' holes; every other value's whole shape spells one unknown, operators
+   and joint separators included. A consumer that parses a shape as page syntax (a URL's `?`, `&`, `=` and `/`)
+   reads the 0 bytes only. NULL for a value that is not concolic. */
+unsigned char *concolic_shape_hole_mask(JSValueConst v);
 const char *concolic_src_c(JSValueConst v);           /* INJECTION IDENTITY: which source (NULL if not concolic) */
 
 /* THE DELIVERY ROOT — WHICH SOURCE'S COMPONENT PHYSICALLY CARRIED THESE BYTES IN, and the third fact this
