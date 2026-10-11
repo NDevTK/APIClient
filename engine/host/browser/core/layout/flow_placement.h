@@ -132,6 +132,11 @@ bool flow_placement_run_peek(const lxb_dom_element_t *container, const lxb_dom_e
 void flow_placement_table_box_record(const lxb_dom_element_t *table, CssPx top);
 bool flow_placement_table_box_peek(const lxb_dom_element_t *table, CssPx *out);
 
+/* CSS 2.2 §9.5's first float in the block formatting context `root` establishes, NULL for none, as
+   block_flow_context_first_float finds it; keyed by the context root. */
+void flow_placement_first_float_record(const lxb_dom_element_t *root, lxb_dom_element_t *f);
+bool flow_placement_first_float_peek(const lxb_dom_element_t *root, lxb_dom_element_t **out);
+
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent, so each
    may be differenced across two samples. `asks` counts §9.4.1 stack positions asked, `served` those this
    record answered, `walks` those that ran the walk; `asks == served + walks` is asserted. `placements`

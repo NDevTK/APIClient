@@ -244,12 +244,10 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, BoxTreeChild
    IT COSTS A WALK OF THE WHOLE CONTEXT WHEN THE ANSWER IS `NULL`, AND THE CONTRACT SAYS SO RATHER THAN THE
    CALLERS GUESSING. A float ends the search where it is found, so a document that HAS one is answered out of
    the first few elements; a document that has NONE is a proof of absence, and there is no shorter proof than
-   the subtree, because a float reaching these line boxes may sit anywhere in the context. THIS ANSWER IS NOT
-   REMEMBERED. A caller that asks this per unit of work asks it once per unit of work; where that is a check
-   rather than a computation, `#if APICLIENT_DEV` is what keeps a release build from paying for a proof it
-   will not read.
-   It is not held because it is not a layout question (core/layout/layout_question.h): it is asked per line
-   box inside a walk that may be re-run, and only a question kind has an entry and a memo in the job.
+   the subtree, because a float reaching these line boxes may sit anywhere in the context. The answer is held
+   per context root in the current job's placement record (core/layout/flow_placement.h), whose validity
+   argument covers it, so the proof is paid once per context per job rather than once per line box fill; where
+   the caller is a check rather than a computation, `#if APICLIENT_DEV` keeps a release build from paying it.
    RETIREMENT: this paragraph goes when §9.5.1's placement is built and this entry's callers ask about a
    PLACED float rather than about the context holding one. */
 lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el);

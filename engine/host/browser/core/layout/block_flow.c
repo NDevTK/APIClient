@@ -289,7 +289,9 @@ lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el)
 
     DCHECK(el != NULL, "CSS 2.2 §9.5's population was asked about a formatting context with no box to name it");
     root = bf_context_root(el);
+    if (flow_placement_first_float_peek(root, &f)) return f;
     f = bf_subtree_float(lxb_dom_interface_node(root), true);
+    flow_placement_first_float_record(root, f);
     if (f == NULL) return NULL;
     /* ONE FACT REACHED TWO WAYS, ASSERTED AGAINST ITSELF. The walk DOWN decides membership by skipping every
        subtree whose root is on CSS 2.2 §9.4.1 "Block formatting contexts"' list; the walk UP decides it by

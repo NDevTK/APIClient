@@ -46,11 +46,13 @@ typedef struct FpEntry {
     FlowRunStart             run_first, run_after;
     /* CSS 2.1 §17.4's table box on this table element's wrapper stack. */
     CssPx                    table_box_top;
+    /* CSS 2.2 §9.5's first float in the context this box establishes, NULL for none. */
+    lxb_dom_element_t       *first_float;
     bool                     has_top;
     bool                     has_origin;
     bool                     has_cb_width;
     bool                     has_anon;
-    bool                     has_run_first, has_run_after, has_table_box;
+    bool                     has_run_first, has_run_after, has_table_box, has_first_float;
 } FpEntry;
 
 
@@ -465,6 +467,31 @@ void flow_placement_table_box_record(const lxb_dom_element_t *table, CssPx top)
             e->table_box_top.px, top.px);
     e->table_box_top = top;
     e->has_table_box = true;
+}
+
+void flow_placement_first_float_record(const lxb_dom_element_t *root, lxb_dom_element_t *f)
+{
+    FpEntry *e;
+
+    DCHECK(root != NULL, "a context's first float was recorded for no context root");
+    e = fp_entry_for_write(root);
+    if (e == NULL) return;
+    DCHECK(!e->has_first_float || e->first_float == f,
+           "one block formatting context reported two different first floats in one job; the search reads "
+           "only the tree and the cascade");
+    e->first_float = f;
+    e->has_first_float = true;
+}
+
+bool flow_placement_first_float_peek(const lxb_dom_element_t *root, lxb_dom_element_t **out)
+{
+    const FpEntry *e;
+
+    DCHECK(root != NULL && out != NULL, "a context's first float was asked for no root or with nowhere to put it");
+    e = fp_entry_peek(root);
+    if (e == NULL || !e->has_first_float) return false;
+    *out = e->first_float;
+    return true;
 }
 
 bool flow_placement_table_box_peek(const lxb_dom_element_t *table, CssPx *out)
