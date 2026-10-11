@@ -2277,9 +2277,15 @@ async function replayRequest(reqId, sourceTabId) {
      about the CAPTURE and not about whether the producer wrote the fields: a form submission whose
      navigation this log never saw the end of has null and 0, and says so. */
   if (req.responseBody !== null || req.status !== 0) {
+    /* renderResponse reads statusText on every response record; an HTTP log entry carries it
+       (offscreen-brain.js's _checkLogEntry), so it is copied, never defaulted. */
+    DCHECK(typeof req.statusText === "string",
+           "a replayed request record carries no statusText — offscreen-brain.js's _checkLogEntry asserts one " +
+           "on every HTTP entry, so this record is not that kind or its producer stopped writing it");
     const historicalResult = {
       ok: parseInt(req.status) < 400,
       status: req.status,
+      statusText: req.statusText,
       headers: req.responseHeaders,
       timing: 0,
       service: req.service,
