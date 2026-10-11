@@ -106,9 +106,9 @@ typedef struct XmlTreeBuild XmlTreeBuild;
  * the one caller who ever needs otherwise does not have to reach past this.
  *
  * `text` MUST already be UTF-8 with §4.3.3's encoding signature removed — core/xml/xml_char.h's own
- * precondition, restated here because this is the entry a consumer meets first. It must be a valid pointer
- * even when `len` is zero: an empty entity is a document that ends immediately, which §2.1's [1] has an answer
- * about (there is no element), and not the absence of a document.
+ * precondition, restated here because this is the entry a consumer meets first. The build copies it and frees
+ * the copy at either teardown, since a driver holds the build across suspensions. It must be a valid pointer
+ * even when `len` is zero: an empty entity is a document that ends immediately (§2.1's [1]: no element).
  *
  * `kind` IS CONSULTED, NOT STORED-AND-IGNORED, and it decides exactly one thing: WHICH CHOKEPOINT FAMILY every
  * node this build places goes through — see `xml_tree_place_created` below, which is the one place it is asked.

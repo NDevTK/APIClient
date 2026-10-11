@@ -23,7 +23,8 @@ struct XmlTreeBuild {
     lxb_dom_node_t     *current;       /* the innermost open element, or `root_parent` at depth 0 */
     lxb_dom_node_t     *closed;        /* the element the LAST step's end tag closed, or NULL — see the header */
     DomParseRootKind    kind;
-    XmlCharReader       r;
+    XmlCharReader       r;             /* walks `entity` */
+    char               *entity;        /* this build's own copy of the entity — see the header */
     XmlDocumentWalk    *walk;
     XmlNsScope         *scope;
     char               *text;          /* the §2.4/§4.1 run being coalesced — see the header */
@@ -242,7 +243,10 @@ XmlTreeBuild *xml_tree_build_create(lxb_dom_document_t *doc, lxb_dom_node_t *par
     b->root_parent = parent;
     b->current = parent;
     b->kind = kind;
-    xml_char_reader_init(&b->r, text, len);
+    b->entity = malloc(len ? len : 1);
+    CHECK(b->entity != NULL, "OOM copying the entity an XML tree build reads");
+    memcpy(b->entity, text, len);
+    xml_char_reader_init(&b->r, b->entity, len);
     b->walk = xml_document_walk_create();
     CHECK(b->walk != NULL, "OOM creating the XML §2.1 [1] document walk");
     b->scope = xml_ns_scope_create();
@@ -271,6 +275,7 @@ void xml_tree_build_destroy(XmlTreeBuild *b)
            "to and a declared root that no longer names the document");
     xml_document_walk_destroy(b->walk);
     xml_ns_scope_destroy(b->scope);
+    free(b->entity);
     free(b->text);
     free(b->tpl);
     free(b);
@@ -288,6 +293,7 @@ void xml_tree_build_abandon(XmlTreeBuild *b)
        ROOT owns, never nodes of its own. */
     xml_document_walk_abandon(b->walk);
     xml_ns_scope_abandon(b->scope);
+    free(b->entity);
     free(b->text);
     free(b->tpl);
     free(b);
