@@ -401,59 +401,9 @@ void xml_fragment_release(XmlFragmentParse *s)
 const char *xml_fragment_unforkable(const XmlFragmentParse *s)
 {
     if (s->parse != NULL)
-        return "an XML fragment parse cannot be forked mid-parse — this machine holds a core/xml/xml_parse.h "
-               "handle, which owns the entity bytes, the §2.11 \"End-of-Line Handling\" character reader's "
-               "position, the [1] `document` walk's own state and Namespaces in XML §6.1 \"Namespace "
-               "Scoping\"'s scope stack, and there is no operation that copies A PARSE HANDLE. "
-               "THE SUBJECT OF THAT ABSENCE IS THE HANDLE AND NEVER THE TREE, and it is spelled out rather "
-               "than left to the pronoun because a reader who meets this clause alone reads it as a claim "
-               "about `v->tree` — which EXISTS, and which xml_fragment_visit declares this machine's "
-               "`root` through. The tree half of this refusal is RETIRED and xml_fragment_unforkable's own "
-               "retired-clause paragraph carries it and why. BUILD IT: every one of those is engine C with "
-               "named state (unlike lexbor's "
-               "tokenizer, whose 182 state functions are raw code pointers, which is why the HTML half sheds "
-               "its parser as a cache instead), "
-               "so the copy is a deep clone of XmlParse plus a node->node map to re-point the open element and "
-               "the insertion point at the sibling's copy of the tree, which is the same map the tree-builder "
-               "half already needs. The same clone is what makes this machine PARK, because every field it "
-               "would copy has a name a later build can resume from. "
-               "THE PRICE, AGAINST A `{clone, destroy}` PAIR OVER A HOST ALLOCATION: this handle is the "
-               "CLOSEST THING IN THIS TREE TO ONE SUCH PAIR'S SUBJECT AND IT IS NOT ONE, and the property "
-               "that decides it is that ITS INTERIOR POINTS OUTSIDE ITSELF IN THREE DIRECTIONS. A pair is "
-               "written by the owner and receives the allocation and nothing else; a parsed header list holds "
-               "its own bytes and is answered by one. This holds (1) NODE SLOTS INTO THE DECLARED TREE — "
-               "core/xml/xml_tree.c's build carries `root_parent`, `current`, `closed` and a VARIABLE-LENGTH "
-               "`tpl` of the template-contents roots the insertion point is inside — which only the tree's "
-               "own node map can re-point, and quickjs-step.h says that map is a STACK-LIFETIME artifact of "
-               "the `tree` call and never crosses the boundary; (2) INTERIOR POINTERS INTO ITS OWN ARENAS, "
-               "which core/xml/xml_ns.c's own assert already states, in its own words, is NOT A BYTE COPY: "
-               "`a binding's prefix and namespace name are interior pointers into THIS stack's arena`, so a "
-               "copied binding names the original arm's bytes; and the §2.11 reader's `start`/`p`/`end` "
-               "are the same shape over the copied entity, rebased by offset exactly as the HTML tokenizer's "
-               "cursors are; (3) A FLOW, because the namespace scope and the [1] `document` walk each hold the "
-               "flow that created them and assert it at every operation, so a byte copy aborts at the "
-               "sibling's FIRST step rather than silently — which is the forcing function working and is the "
-               "one of the three that needs no new mechanism, only the sibling's own identity at the copy. "
-               "SO IT IS (b) WITH A SHAPE, AND THE SHAPE NEEDS NO NEW OPERATION — IT IS TWO CALLS OF THE ONE "
-               "THAT EXISTS, IN A FORCED ORDER. The handle is its own subject of that operation, with an ops "
-               "pair of its own (`xml_parse_clone`/`xml_parse_destroy`) and `ncursors` 0, which copies its "
-               "opaque remainder and writes the COPY back through the slot it was handed. Only then is the "
-               "TREE declared, and its cursors are the node slots INSIDE THAT COPY — the operation constrains "
-               "what a cursor's VALUE names (something inside the structure being cloned, which a node of this "
-               "tree is) and not where the slot LIVES, which is why `docel` on the step state is already an "
-               "admissible cursor and `&copy->current`, `&copy->closed` and each `&copy->tpl[i]` are too, the "
-               "instant core/xml/xml_tree.h exposes them. "
-               "THE ORDER IS FORCED IN BOTH DIRECTIONS AND IS THE WHOLE OF THE DESIGN: the handle must be "
-               "copied FIRST or the slots being re-pointed are the ORIGINAL arm's, and the tree must be cloned "
-               "SECOND because the node map that answers a cursor lives inside that one call and never crosses "
-               "the boundary. A handle copied AFTER the tree is unfixable rather than merely late";
-    /* THE SECOND CLAUSE IS GONE, and what it said is why the deletion is worth a sentence rather than a
-       silence: it said "no JSStepVisit operation declares a private DOM TREE", which was a claim about the
-       ENGINE and not about §14.4 — so the day that operation was built this clause went on refusing a fork for
-       a reason that had stopped being true, and a reader would have gone to build what was already there.
-       `root` is declared through `v->tree` now, with `docel` as its cursor, and the copy answers for this tree
-       in full: §14.4 runs neither the declarative-shadow conversion nor the media walk, so neither of the two
-       cases solver/dom_cow.c's copy crashes on can be in it, and §14.2's already-started stamp is carried by
-       DOM §4.4's cloning steps that copy performs per node. */
+        return "an XML fragment parse is mid-parse, inside HTML §8.5.4's one operation (§14.4 runs no page "
+               "code and builds a private tree), and this machine holds a core/xml/xml_parse.h handle no "
+               "operation copies — a fork waits for the parse to end (the decline fork asks "
+               "JS_FlowUnforkable first); a clone that reached this answer is a fork site that did not ask";
     return NULL;
 }

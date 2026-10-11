@@ -54426,6 +54426,43 @@ JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow) {
     return (JSValue *)c;
 }
 
+/* The first reason a step machine on `flow`'s chain gives for not being forked at this instant, or NULL. Asked by
+   a fork that may wait (engine/host/solver/engine.c's answer and decline forks) before it clones, so that a machine
+   standing inside an operation the spec makes atomic is forked at the operation's end rather than through a copy
+   of what it owns. A machine a step state holds through JSStepVisit's `machine` is asked at the clone and not
+   here. */
+const char *JS_FlowUnforkable(JSContext *ctx, JSValue *flow)
+{
+    JSAsyncFunctionState *s = (JSAsyncFunctionState *)flow;
+    TrampFrame *t;
+
+    (void)ctx;
+    for (t = (TrampFrame *)s->tramp_top; t; t = t->up) {
+        const JSStepHdr *h;
+        const char *why;
+
+        if (t->cont_kind != CONT_STEP && t->cont_kind != CONT_STEP_YIELD) continue;
+        h = t->cont_state;
+        if (h == NULL || h->def->unforkable == NULL) continue;
+        why = h->def->unforkable(h);
+        if (why) return why;
+    }
+    return NULL;
+}
+
+const char *JS_ParkedFlowsUnforkable(JSContext *ctx)
+{
+    struct list_head *el;
+
+    list_for_each(el, &ctx->rt->parked_flows) {
+        JSAsyncFunctionState *b = list_entry(el, JSAsyncFunctionState, park_link);
+        const char *why = JS_FlowUnforkable(ctx, (JSValue *)b);
+
+        if (why) return why;
+    }
+    return NULL;
+}
+
 
 /* Generators */
 

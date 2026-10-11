@@ -122,67 +122,29 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
     sanitizer_walk_visit(ctx, &s->san, v);
 }
 
-/* WHAT A FORK OF THIS MACHINE CANNOT TAKE YET: the tree the parse produced. Between two FRAG_FEED steps all of
-   it is declared — the markup, the parse as a shed cache, the placement's references — so the one refusal left
-   is a fork after the feed, while `frag` is owned, and the sentence the fork prints is the specification of
-   what to build. It is asked at the fork and not inside `visit`, since a machine must never learn which
-   consumer is visiting it. */
+/* WHY A FORK WAITS: after the feed this machine owns the tree the parse produced (`frag`, with `node` and the
+   sanitizer walk's cursors inside it). It is not copied, because no fork needs it: HTML §8.5.4's setter and the
+   members beside it run as one operation in one task, and between the end of the feed and FRAG_DONE nothing runs
+   the page's code — §4.2.3's insertion and removal steps enqueue custom element reactions, which run at the
+   member's [CEReactions] epilogue after this machine returns, and queue mutation records; the scripts placed are
+   Inert or land in a DocumentFragment; §7.5.10's destroy steps queue tasks. So a fork the scheduler takes here
+   (solver/engine.c's decline fork) is taken at the operation's end instead, through JS_FlowUnforkable, and a
+   clone that reaches this answer is a fork that did not ask or page code that ran inside the operation. Asked
+   at the fork and not inside `visit`, since a machine must never learn which consumer is visiting it. */
 const char *fragment_parse_unforkable(const void *st)
 {
     const FragmentParse *s = st;
     const char *why = xml_fragment_unforkable(&s->xf);
 
-    /* §14.4's HALF ANSWERS FOR ITSELF, because what it owns between two steps is its own — an XML parse handle
-       and a private tree — and a driver that listed those fields would be a second statement of another
-       component's ownership. Asked first because it is the half a flow standing in FRAG_XML is inside. */
+    /* §14.4's half answers for itself, since what it owns between two steps is its own. */
     if (why != NULL)
         return why;
     if (s->frag != NULL)
-        return "a fragment parse cannot be forked between its parse and its placement — this machine OWNS the "
-               "tree the parse produced (`frag`, which fragment_parse_release deep-destroys, with `node` the "
-               "cursor into it and §8.6.4 set and filter HTML's sanitizer walk standing inside it), and the "
-               "OPERATION that declares a private tree exists and its SUBTREE WALK is built (`v->tree`, and "
-               "solver/dom_cow.c's dom_private_tree_clone, which §14.4's half of this very machine already "
-               "declares its own tree through). What stops THIS tree is not the walk: it is the three things "
-               "this file's own FRAG_FEED boundary does to a fragment that §14.4's boundary does not. "
-               "A NODE'S PER-FLOW STATE LIVES ON ITS JS WRAPPER and not on the lexbor node, so a copy carries "
-               "it only where DOM §4.4 Interface Node's step 3 states cloning steps — which that walk "
-               "performs, and which is why a copied `<script>` keeps §13.4's Inert `already started` rather "
-               "than running markup this parse marked dead. Two of the three have no such steps to perform. "
-               "declarative_shadow_parsed can leave a SHADOW HOST here. THIS CLAUSE USED TO CALL THAT AN "
-               "ABRUPTNESS PROBLEM — §4.4 step 6's clone is `attach a shadow root`, which refuses and "
-               "therefore throws, and a visit cannot be abrupt — AND THAT WAS THE WRONG DIAGNOSIS: step 6 is "
-               "conditioned on the original root's `clonable`, so it is a LOSSY page-visible clone and "
-               "building the fork on it would have dropped a non-clonable root from the sibling in silence. A "
-               "fork's copy is not a clone and calls no attach, so nothing about it is abrupt; what it is "
-               "blocked on is WHO OWNS a shadow root inside a private tree, which solver/dom_cow.c now "
-               "crashes for at both ends (the copy and dom_cow_destroy_private) with core/html/sanitizer.c's "
-               "removal DCHECK as a third side of the same contract. media_element_parsed can leave a MEDIA "
-               "ELEMENT here whose §4.8.11 state is on its wrapper and whose resource-selection JOB is "
-               "already enqueued naming the ORIGINAL's wrapper, and §4.8.11 states no cloning steps at all. "
-               "Both crash by name in dom_private_tree_clone rather than being skipped, so BUILD THOSE TWO — "
-               "one owner for a private tree's shadow roots, and a fork's answer for a pending job that names "
-               "a node the fork has just copied. "
-               "Then fragment_parse_visit declares `frag` with `node` as its cursor, sanitizer_walk_visit "
-               "hands up its own seven cursors and its level stack's two-per-level, its `attr` cursor gets the "
-               "answer a node->node map does not carry (an attribute is not a node: it is the copy of "
-               "`cur`'s attribute at the same position), and this clause deletes. "
-               "AND NEITHER OF THE TWO IS A COPY PROBLEM, WHICH IS THE PRICE AND IS WHY A GENERALISED "
-               "`{clone, destroy}` PAIR OVER A HOST ALLOCATION DOES NOT REACH EITHER. Such a pair answers WHO "
-               "COPIES THESE BYTES, and both of these are questions about WHOSE A THING IS: a shadow root "
-               "inside a private tree has two candidate owners and the delta cannot be one of them, because a "
-               "step machine's tree is cloned BEFORE the fork freezes the head and the claim would land in a "
-               "base segment BOTH arms reference; and a resource-selection job NAMES THE ORIGINAL's wrapper, "
-               "so what is missing is a fork's answer for a pending job over a copied node and not a copy of "
-               "anything. Both therefore stay (c) — outside both mechanisms — for as long as those two "
-               "ownership questions are open, and both already crash BY NAME in dom_private_copy_one rather "
-               "than being skipped, which is the forcing function standing where the copy is. "
-               "THE THIRD THING IS NOT THIS FILE'S AND IS ONE PIECE OF WORK WITH THE DECLARATION: "
-               "core/html/sanitizer.c's sanitizer_walk_visit says in its own words that its DOM pointers are "
-               "undeclared ONLY while this tree is SHARED between the arms, and that a copy of the tree that "
-               "landed without them WOULD BE SILENT. So the declaration above and that component's cursors "
-               "land together or not at all, and §8.6.4's filter runs over an §14.4 tree too, which is why "
-               "`is_xml` is not a narrowing of this refusal either";
+        return "a fragment parse is between its parse and its placement, inside HTML §8.5.4's one operation, "
+               "and this machine owns the tree the parse produced — a fork waits for FRAG_DONE (the decline "
+               "fork asks JS_FlowUnforkable first); a clone that reached this answer is a fork site that did not "
+               "ask, or page code that ran inside the operation, which nothing between the feed and the "
+               "member's [CEReactions] epilogue may do";
     return NULL;
 }
 

@@ -84,7 +84,7 @@
  * pointers into THIS stack's arena, so a copied binding names the original arm's bytes — the self-reference
  * class JSStepVisit::reexec exists to re-point. The owed work is therefore a visit declaration for this state
  * in whatever step machine holds it, and core/html/xml_fragment.c's `xml_fragment_unforkable` is what stands in
- * until then: the fork ABORTS naming what to build rather than two arms sharing one structure.
+ * until then: a fork waits for the parse to end rather than two arms sharing one structure.
  *   SO THE CLAIM IS CHECKED, NOT ASSERTED IN PROSE. The stack records the flow that created it and every
  * operation DCHECKs that the running flow is still that one — one level below xml_fragment_unforkable and
  * unconditional, so it fires for any second flow however it got here, a fork that forgot to copy or a resume

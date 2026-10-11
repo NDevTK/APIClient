@@ -3361,6 +3361,11 @@ JS_EXTERN void    *JS_CloneParkedFlows(JSContext *ctx);
 /* Frame-snapshot fork: deep-copy a SUSPENDED flow into an INDEPENDENT clone that resumes from the same point.
    No fallback — an un-built frame shape (deep tramp chain / live closures) crashes loud. */
 JS_EXTERN JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow);
+/* Why a SUSPENDED flow (or the runtime's parked set) cannot be forked at this instant, or NULL: the first step
+   machine on its chain whose JSTrampStepDef.unforkable answers. A fork that may wait asks this before cloning
+   and waits for the operation to end; a clone of a flow that answers non-NULL aborts. */
+JS_EXTERN const char *JS_FlowUnforkable(JSContext *ctx, JSValue *flow);
+JS_EXTERN const char *JS_ParkedFlowsUnforkable(JSContext *ctx);
 /* if can_block is true, Atomics.wait() can be used */
 JS_EXTERN void JS_SetCanBlock(JSRuntime *rt, bool can_block);
 /* set the [IsHTMLDDA] internal slot */

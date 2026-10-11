@@ -5283,6 +5283,17 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
         DCHECK(!(in_program && in_job),
                "a flow is suspended in both homes at once (a program frame and a parked continuation) — clone both "
                "onto the arm, in the order flow_step resumes them");
+        /* A step machine inside an operation the spec makes atomic (HTML §8.5.4's fragment parsing and
+           placement, §14.4's XML fragment parse) answers why it cannot be forked yet, and this fork waits for a
+           later pick. No page code runs inside such an operation, and this request's outcome reaches the page
+           only through a job or a parked call site that resumes after it, so forking at the operation's end
+           is the same pair of arms. The answer fork cannot wait: its arm resumes the call site this one leaves. */
+        if ((in_program && JS_FlowUnforkable(ctx, (JSValue *)f->frame)) ||
+            (in_job && JS_ParkedFlowsUnforkable(ctx))) {
+            JS_FreeValue(ctx, reason);
+            JS_FreeValue(ctx, e);
+            continue;
+        }
         clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
         parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
         CHECK(!in_program || clone != NULL,

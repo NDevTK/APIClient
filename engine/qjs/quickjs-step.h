@@ -367,9 +367,9 @@ typedef struct JSTrampStepDef {
      * property of the ENGINE, and RAM pressure, cold-tier eviction and a cross-session resume never ask what
      * the page is doing.
      *
-     * IT IS A PREDICATE AND NOT A FLAG because the answer is about the STATE, not the definition: the same
-     * machine is forkable before it builds its parser and unforkable while it holds one. And it is asked at
-     * the FORK, which is the only consumer the answer is about. It must NOT be asserted inside `visit` — see
+     * IT IS A PREDICATE AND NOT A FLAG because the answer is about the STATE, not the definition: a machine
+     * inside an atomic operation answers until it ends. Asked at the FORK only: a fork that may wait asks first
+     * (JS_FlowUnforkable) and forks at the end, and the clone aborts. It must NOT be asserted inside `visit` — see
      * JSStepVisit's accumulator note: a machine must never learn which consumer is visiting it, and a `visit`
      * that DCHECKs "I was forked" fires on the teardown and on the fingerprint too, reporting an ordinary
      * abandoned walk as a fork. That is not hypothetical; it is what both of these did.
