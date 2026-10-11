@@ -145,9 +145,9 @@ typedef struct Document {
     PermissionsPolicy   *permissions_policy;
     /* Permissions Policy §10.1's report-only permissions policy: "Every Document has a report-only permissions
        policy, which is a permissions policy, which is initially empty", set by §9.6 with report-only true (the
-       `Permissions-Policy-Report-Only` header). A second policy, not a flag: §9.10 compares the two answers ("if
-       result is `Enabled` and report-only result is `Disabled`" is its report arm), and §9.6 re-runs §9.5 for it
-       so a report-only header never narrows the enforced answer. */
+       `Permissions-Policy-Report-Only` header). A second policy, not a flag: Permissions Policy §9.10 compares the
+       two answers ("if result is `Enabled` and report-only result is `Disabled`" is its report arm), and §9.6 re-runs
+       §9.5 for it so a report-only header never narrows the enforced answer. */
     PermissionsPolicy   *report_only_permissions_policy;
     /* HTML §7.1.5's active sandboxing flag set: a field of the Document, not the policy container (§7.5.1's creation
        table lists them on separate rows). Written once, by the install below; no standard writes it again, so it is
@@ -1304,8 +1304,8 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
 /* Bytes for a DOMString a factory is about to put in the tree, when the value may be unknown external input.
    Lexbor stores bytes, and quickjs's `js_force_tostring` asserts by design that a concolic never becomes a
    `const char *` ("the fix is never here"), so the edge that asked answers. The answer is the shape, as
-   core/dom/node.c's `js_cd_set_data` gives for §4.10's `CharacterData.data` ("Unknown external input has no bytes:
-   its SHAPE is what the node carries"), so a source parked in the tree as text reads back as that source. It
+   core/dom/node.c's `js_cd_set_data` gives for DOM §4.10's `CharacterData.data` ("Unknown external input has no
+   bytes: its SHAPE is what the node carries"), so a source parked in the tree as text reads back as that source. It
    invents nothing: a shape displays a value the run has, and solver/attr_shadow.c keeps the taint on the slot.
    `*owned` says who frees it: a shape is borrowed from the concolic, a converted string is this function's.
    Named residual. Not covered: §4.5's `createProcessingInstruction(target, data)` and `createCDATASection(data)`
@@ -1377,7 +1377,7 @@ static JSValue js_doc_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
 
 /* DOM §4.5 "Interface Document"'s `createCDATASection(data)` and `createProcessingInstruction(target, data)`: the
    node factories an XML document has and an HTML one does not (dom/common.js builds `paras[5]` from two CDATA
-   sections and `xmlDoc` from two processing instructions, so every §5 and §6 test file that includes it needs
+   sections and `xmlDoc` from two processing instructions, so every DOM §5 and §6 test file that includes it needs
    them). The processing-instruction arm is one call: "return the result of creating a processing instruction node
    given this, target, and data", the §4.13 algorithm core/dom/node.c owns (node_pi_create), shared with
    `new ProcessingInstruction(target, data)`. createCDATASection has its own HTML-document refusal and `]]>` test
@@ -1773,8 +1773,8 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
     /* Step 1: "if document is an iframe srcdoc document: assert document's about base URL is non-null; return
        document's about base URL." The condition is a class, so it reads a creation fact, not the address. HTML
        §4.8.5 "The `iframe` element" makes the class a membership rule ("the resulting Document must be considered
-       an iframe srcdoc document"), and its URL matching about:srcdoc is a consequence (§2.4.1's note: "the set of
-       all URLs that match about:srcdoc only vary in their fragment"), so the class is contained in the match set,
+       an iframe srcdoc document"), and its URL matching about:srcdoc is a consequence (HTML §2.4.1's note: "the set
+       of all URLs that match about:srcdoc only vary in their fragment"), so the class is contained in the match set,
        not equal to it; §2.4.3 names the class here and spells a URL match in step 2. See the record's field. */
     if (d->is_iframe_srcdoc) {
         DCHECK(d->base.about != NULL,
@@ -2403,7 +2403,7 @@ int document_lifecycle_step(JSContext *ctx)
            only while the element is fetching, and a fetching script is on one of the lists step 5 or step 7
            waits for until it has run.
            Named residual. Not covered: `img` (§4.8.4.3.5 "Updating the image data": "When delay load event is true,
-           fetching the image must delay the load event of the element's node document") and the media elements'
+           fetching the image must delay the load event of element's node document") and the media elements'
            §4.8.11.5 "Loading the media resource" delaying-the-load-event flag. Next diff builds: each as a flag its
            own element component raises and this predicate reads. How its absence would show: a document reaching
            `load` before such an element finished. */
@@ -2657,7 +2657,7 @@ static JSValue js_doc_html_members(JSContext *ctx, JSValueConst this_val, int ma
     lxb_dom_node_t *doc, *de;
 
     if (!d) return JS_EXCEPTION;
-    /* §7.2.2's defaultView getter steps: "If this's browsing context is null, then return null. Return this's
+    /* HTML §7.2.2's defaultView getter steps: "If this's browsing context is null, then return null. Return this's
        browsing context's WindowProxy object." A §4.5 Document has no browsing context, the same `proxy` absence
        `location` answers null for. */
     if (magic == DOC_DEFAULT_VIEW)
@@ -3716,8 +3716,8 @@ bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature)
        removing an ancestor `<iframe>` stops this document being fully active with nothing done to its navigable. */
     if (!document_fully_active(ctx))
         return false;
-    /* Step 3: §9.10 "on feature, document, and document's origin", so §9.10's `origin` is this document's own, and
-       `report` takes the default true. Step 4 is the other answer. */
+    /* Step 3: Permissions Policy §9.10 "on feature, document, and document's origin", so §9.10's `origin` is this
+       document's own, and `report` takes the default true. Step 4 is the other answer. */
     {
         const Origin *origin = window_proxy_origin(d->proxy);
 
@@ -4051,7 +4051,7 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     d->addr.value = JS_UNDEFINED;
     /* The record's first address. A NULL one is stored as the empty string, which readers test for. Its value is a
        plain string: a Document is created from a response, so its address is a concrete fact and `concolic_is` is
-       false for it. A Document whose address the run computed acquires it through document_set_url (§7.4.4 step
+       false for it. A Document whose address the run computed acquires it through document_set_url (HTML §7.4.4 step
        8). */
     d->addr.bytes = doc_addr_intern(d, url ? url : "");
     d->addr.value = JS_NewString(ctx, url ? url : "");
