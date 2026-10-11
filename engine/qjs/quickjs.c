@@ -55324,16 +55324,10 @@ static bool js_async_function_resume_as_flow(JSContext *ctx, JSAsyncFunctionData
            `list_empty(&rt->parked_flows)` check used to sit at that function's door and was NARROWED to the
            bytecode dispatch, because at the door "its condition is broader than the invariant": a JS_Call on a
            C-function callee arrives there having run no page code and reordered nothing, and aborted anyway.
-           This assert re-introduced the broad form at a different site, and §16.2.1.6.1.3.4
-           AsyncModuleExecutionFulfilled is where it came back: that operation IS a promise reaction, it walks
-           GatherAvailableAncestors and executes each available module body inside itself, and the spec does not
-           continue the reaction until that body completes or reaches its own suspend. js_execute_async_module
-           reproduces exactly that — it runs the body and the VERY NEXT STATEMENT drains the pump — so nothing
-           observable runs between this park and its resume and the transparency the assert protects is intact.
            SO THE CALLER DECLARES IT, because the caller is the only thing that can know. This is a contract
            declaration and not a fallback selector: it chooses no code — both answers park, through this one
            flow_park — and a caller that cannot make the promise gets the crash. The pump makes it because it
-           IS the drain; module evaluation makes it because the drain is its next line; a bare C JS_Call of an
+           IS the drain; a bare C JS_Call of an
            async function makes it for nothing, which is the shape that must still be routed onto the running
            flow's chain. */
         DCHECK(prev_base == NULL || caller_resumes_park,
@@ -55356,9 +55350,8 @@ static bool js_async_function_resume_as_flow(JSContext *ctx, JSAsyncFunctionData
         if (st == ASYNC_POST_AWAIT) {
             /* 27.10.5.3 Await ( arg ) as a CALL-ROOT FLOW: this context has no tramp chain to route it onto.
                TRUE means "the resume did what it owed", which for an Await is that the machine is running — the
-               continuation is the machine's business from here. Returning false on the success path made every
-               caller read a registered await as a FAILURE: 221 module tests went red because
-               js_execute_async_module took its `fail` branch on a perfectly ordinary top-level await. */
+               continuation is the machine's business from here, and a caller reading false treats a registered
+               await as a failure. */
             JSValue awfn = js_new_async_await(ctx, post.st);
             int ar;
             js_async_function_free(ctx->rt, post.st); post.st = NULL;
@@ -55598,13 +55591,12 @@ static JSValue js_async_function_start(JSContext *ctx, JSValueConst func_obj,
 }
 
 /* Run a started async call's body AS A FLOW: a loop/await PARKS at a back-edge and re-enters via the job pump —
-   never driven to completion (that resume is DELETED). This is the only caller path for module bodies
-   (js_execute_sync_module / js_execute_async_module), so module evaluation suspend/resumes on the flow
-   machinery; a parked body leaves its promise PENDING, which js_execute_sync_module treats as async evaluation.
-   Consumes the reference `js_async_function_start` handed out. */
-static bool js_async_function_run(JSContext *ctx, JSAsyncFunctionData *s, bool caller_resumes_park)
+   never driven to completion. Its one caller is the class `.call` slot, a C JS_Call of an async function, which
+   cannot promise to resume the park before anything else runs. Consumes the reference
+   `js_async_function_start` handed out. */
+static bool js_async_function_run(JSContext *ctx, JSAsyncFunctionData *s)
 {
-    if (!js_async_function_resume_as_flow(ctx, s, caller_resumes_park))
+    if (!js_async_function_resume_as_flow(ctx, s, false))
         return false;
     js_async_function_free(ctx->rt, s);
     return true;
@@ -55621,11 +55613,11 @@ static JSValue js_async_function_call(JSContext *ctx, JSValueConst func_obj,
     promise = js_async_function_start(ctx, func_obj, this_obj, argc, argv, &s);
     if (JS_IsException(promise))
         return promise;
-    /* FALSE, and it is the honest answer rather than a gap: this is the class `.call` slot, reached only by a
-       C JS_Call of an async function (every bytecode call shape goes to do_async_tramp_call), and a C caller
-       gets a pending promise back and carries on. There is no drain on the next line and nothing here can put
-       one there — the fix, when this fires, is to route that call site onto the running flow's chain. */
-    if (!js_async_function_run(ctx, s, false)) {
+    /* The class `.call` slot, reached only by a C JS_Call of an async function (every bytecode call shape goes
+       to do_async_tramp_call): a C caller gets a pending promise back and carries on, so a park here cannot be
+       promised transparent — the fix, when that fires, is to route that call site onto the running flow's
+       chain. */
+    if (!js_async_function_run(ctx, s)) {
         JS_FreeValue(ctx, promise);
         return JS_EXCEPTION;
     }
@@ -70835,8 +70827,7 @@ static int gather_available_ancestors(JSContext *ctx, JSModuleDef *module,
                    "§16.2.1.6.1.3.3 GatherAvailableAncestors ( module, execList ) read an async parent whose "
                    "[[CycleRoot]] is unset — a parent is appended during its own InnerModuleEvaluation, whose SCC "
                    "pop sets the field before any job can run, so in this flow's world that walk never reached its "
-                   "pop. The walk starts module bodies from C (js_execute_async_module), so a timeline that "
-                   "diverged inside one of them is the first candidate: find where this world's walk stopped");
+                   "pop: find where this world's walk (step_module_evaluate_run) stopped");
             if (!find_in_exec_module_list(exec_list, m) &&
                 !m->cycle_root->eval_has_exception) {
                 /* THE DECREMENT BELOW IS A WRITE TO m, not to the module whose promise settled, and it was the
@@ -70880,7 +70871,6 @@ static int exec_module_list_cmp(const void *p1, const void *p2, void *opaque)
         (m1->async_evaluation_timestamp < m2->async_evaluation_timestamp);
 }
 
-static int js_execute_async_module(JSContext *ctx, JSModuleDef *m);
 static int js_execute_sync_module(JSContext *ctx, JSModuleDef *m,
                                   JSValue *pvalue);
 
@@ -70950,74 +70940,149 @@ static JSValue js_async_module_execution_rejected(JSContext *ctx, JSValueConst t
     return JS_UNDEFINED;
 }
 
-static JSValue js_async_module_execution_fulfilled(JSContext *ctx, JSValueConst this_val,
-                                                   int argc, JSValueConst *argv, int magic,
-                                                   JSValueConst *func_data)
+static void js_module_eval_register(JSContext *ctx, JSModuleDef *m, JSValueConst promise);
+
+/* 16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled ( module ) as a step machine. Step 12 runs each available
+   ancestor's body inside its loop, so each body is a CALL request on the running flow's chain and the loop's
+   cursor lives here: a park or a fork inside a body carries the rest of the loop. The closure's data is
+   [module]; the completion is undefined. */
+typedef struct JSModuleFulfilled {
+    JSStepHdr hdr;              /* must be first */
+    ExecModuleList list;        /* step 11's sortedExecList; `tab` is OWNED and declared by the visit */
+    int i;                      /* step 12's cursor into it */
+    JSModuleDef *body;          /* the ancestor whose body CALL is in flight, NULL when none is */
+    JSValue cb[2];              /* that CALL's operands: [this = undefined, the ancestor's body] */
+    JSValue res;                /* its completion: the promise the async body returns */
+    uint8_t phase;              /* step_call_run's own cursor */
+    uint8_t started;
+} JSModuleFulfilled;
+_Static_assert(offsetof(JSModuleFulfilled, hdr) == 0, "JSStepHdr must be first in JSModuleFulfilled");
+
+#define MODFUL_STAGES(X) \
+    X(MODFUL_ANCESTORS, "16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled ( module ) step 12, resting at each " \
+                        "ancestor, whose 16.2.1.6.1.3.2 ExecuteAsyncModule ( module ) step 9 ExecuteModule is a " \
+                        "CALL of that module's own body")
+enum { MODFUL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_module_fulfilled_steps[] = { MODFUL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_module_fulfilled_step(JSContext *ctx, void *st, JSValue cb_result,
+                                    JSValue **out_cb, int *out_argc)
 {
-    JSModuleDef *module = JS_VALUE_GET_PTR(func_data[0]);
-    ExecModuleList exec_list_s, *exec_list = &exec_list_s;
-    int i;
+    JSModuleFulfilled *s = st;
+    JSCFunctionDataRecord *rec = JS_VALUE_GET_OBJ(s->hdr.func_obj)->u.c_function_data_record;
+    JSModuleDef *module, *m;
+    int r;
 
-    js_module_eval_capture(ctx, module);   /* this reaction is a WRITE to the module's evaluation state */
-    if (module->status == JS_MODULE_STATUS_EVALUATED) {
-        DCHECK(module->eval_has_exception, "module->eval_has_exception");
-        return JS_UNDEFINED;
-    }
-    DCHECK(module->status == JS_MODULE_STATUS_EVALUATING_ASYNC, "module->status == JS_MODULE_STATUS_EVALUATING_ASYNC");
-    DCHECK(!module->eval_has_exception, "!module->eval_has_exception");
-    DCHECK(module->async_evaluation, "module->async_evaluation");
-    module->async_evaluation = false;
-    js_set_module_evaluated(ctx, module);
+    DCHECK(JS_VALUE_GET_TAG(rec->data[0]) == JS_TAG_MODULE,
+           "AsyncModuleExecutionFulfilled's closure was handed something that is not the module record it "
+           "captures");
+    module = JS_VALUE_GET_PTR(rec->data[0]);
 
-    exec_list->tab = NULL;
-    exec_list->count = 0;
-    exec_list->size = 0;
+    STEP_DISPATCH(MODFUL_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
-    if (gather_available_ancestors(ctx, module, exec_list) < 0) {
-        js_free(ctx, exec_list->tab);
-        return JS_EXCEPTION;
-    }
+    STEP_ARM(MODFUL_ANCESTORS);
+        if (!s->started) {
+            /* every owned field before the first operation that can fail: the teardown visits them all */
+            s->list.tab = NULL;
+            s->list.count = s->list.size = 0;
+            s->i = 0;
+            s->body = NULL;
+            s->cb[0] = s->cb[1] = JS_UNDEFINED;
+            s->res = JS_UNDEFINED;
+            s->phase = 0;
+            s->started = 1;
+            JS_FreeValue(ctx, cb_result);
+            /* steps 1-11. This reaction writes the module's evaluation state, so the capture precedes the read. */
+            js_module_eval_capture(ctx, module);
+            if (module->status == JS_MODULE_STATUS_EVALUATED) {
+                DCHECK(module->eval_has_exception, "module->eval_has_exception");
+                return JS_STEP_DONE;
+            }
+            DCHECK(module->status == JS_MODULE_STATUS_EVALUATING_ASYNC, "module->status == JS_MODULE_STATUS_EVALUATING_ASYNC");
+            DCHECK(!module->eval_has_exception, "!module->eval_has_exception");
+            DCHECK(module->async_evaluation, "module->async_evaluation");
+            module->async_evaluation = false;
+            js_set_module_evaluated(ctx, module);
+            if (gather_available_ancestors(ctx, module, &s->list) < 0)
+                return JS_STEP_ABRUPT;
+            rqsort(s->list.tab, s->list.count, sizeof(s->list.tab[0]), exec_module_list_cmp, NULL);
+        } else if (s->phase != 0) {
+            /* the body CALL has completed: ExecuteAsyncModule's PerformPromiseThen on its promise. A throw does
+               not come back here; an async body's throw rejects its promise. */
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
+                              cb_result, &s->res, out_cb, out_argc);
+            DCHECK(r == 0,
+                   "an ancestor body's CALL request resumed and did not end — step_call_run's second phase "
+                   "always completes, so a step code here is a cursor that names a request nobody issued");
+            DCHECK(s->body != NULL && s->i < s->list.count && s->list.tab[s->i] == s->body,
+                   "an ancestor body's CALL completed for a module that is not step 12's current element");
+            js_module_eval_register(ctx, s->body, s->res);
+            JS_FreeValue(ctx, s->res);
+            s->res = JS_UNDEFINED;
+            s->body = NULL;
+            s->i++;
+            return JS_STEP_YIELD;
+        } else {
+            JS_FreeValue(ctx, cb_result);   /* re-entered from a JS_STEP_YIELD: the driver delivers undefined */
+        }
 
-    /* sort by increasing async_evaluation timestamp */
-    rqsort(exec_list->tab, exec_list->count, sizeof(exec_list->tab[0]),
-           exec_module_list_cmp, NULL);
-
-    for(i = 0; i < exec_list->count; i++) {
-        JSModuleDef *m = exec_list->tab[i];
+        if (s->i == s->list.count)
+            return JS_STEP_DONE;
+        m = s->list.tab[s->i];
+        js_module_eval_capture(ctx, m);
         if (m->status == JS_MODULE_STATUS_EVALUATED) {
+            /* step 12.a */
             DCHECK(m->eval_has_exception, "m->eval_has_exception");
         } else if (js_module_is_async_evaluated(m)) {
-            /* EVERY bytecode body is async-evaluated, top-level await or not, because a loop/await back-edge can
-               PARK it — the same rule step_module_evaluate_run applies, and the reason only a C init_func
-               module is synchronous here. Splitting on has_tla alone drove a parking body through
-               js_execute_sync_module and then marked it EVALUATED, settling its top-level capability while the
-               body was still suspended; the body's later completion re-entered this function on an
-               already-evaluated module and read its freed flow state. ASan found the use-after-free; the assert
-               that would have caught it is compiled out of the NDEBUG build the harness uses, which is why the
-               failure looked like an ENABLE_DUMPS-dependent hang. */
-            js_execute_async_module(ctx, m);
+            /* step 12.b. Every bytecode body is async-evaluated, top-level await or not, as
+               step_module_evaluate_run decides; only a C init_func module takes step 12.c. */
+            DCHECK(JS_VALUE_GET_TAG(m->func_obj) == JS_TAG_OBJECT,
+                   "an ancestor reached ExecuteAsyncModule with no body object — js_create_module_function "
+                   "builds one for every module of the graph before the link");
+            s->body = m;
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), m->func_obj, JS_UNDEFINED, 0, NULL,
+                              JS_UNDEFINED, &s->res, out_cb, out_argc);
+            DCHECK(r == JS_STEP_CALL,
+                   "an ancestor body's CALL request answered something other than a call — its cursor was "
+                   "already in flight, so the answer to the old request is about to be collected as this one's");
+            return r;
         } else {
+            /* step 12.c: a C init_func module, which runs no page code and cannot park */
             JSValue error;
             if (js_execute_sync_module(ctx, m, &error) < 0) {
                 JSValue m_obj = JS_NewModuleValue(ctx, m);
-                js_async_module_execution_rejected(ctx, JS_UNDEFINED,
-                                                   1, vc(&error),
-                                                   0, vc(&m_obj));
+                js_async_module_execution_rejected(ctx, JS_UNDEFINED, 1, vc(&error), 0, vc(&m_obj));
                 JS_FreeValue(ctx, m_obj);
                 JS_FreeValue(ctx, error);
             } else {
                 js_set_module_evaluated(ctx, m);
             }
         }
-    }
-    js_free(ctx, exec_list->tab);
-    return JS_UNDEFINED;
+        s->i++;
+        /* a rest with nothing to run, offered: sortedExecList is the page's size */
+        return JS_STEP_YIELD;
 }
 
+static void js_module_fulfilled_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSModuleFulfilled *s = st;
+    int k;
+    for (k = 0; k < 2; k++)
+        v->val(ctx, &s->cb[k]);
+    v->val(ctx, &s->res);
+    v->buf(ctx, (void **)&s->list.tab, (size_t)s->list.size * sizeof(*s->list.tab));
+}
+
+static const JSTrampStepDef js_module_fulfilled_def = {
+    sizeof(JSModuleFulfilled), js_module_fulfilled_step, NULL, 0,
+    .visit = js_module_fulfilled_visit,
+    .algorithm = "16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled ( module )",
+    .steps = js_module_fulfilled_steps
+};
+
 /* 16.2.1.6.1.3.2 ExecuteAsyncModule ( module )'s PerformPromiseThen: AsyncModuleExecutionFulfilled and
-   AsyncModuleExecutionRejected registered on the body's promise. Every arm of a fork inside the body must
-   register: the walk's CALL returns into its own machine in each arm, and the C entry below registers before it
-   runs the body, because a sibling forked there does not return into this function. */
+   AsyncModuleExecutionRejected registered on the body's promise. Both callers make the body a CALL request, so
+   the CALL returns into its machine in every arm of a fork inside the body and each arm registers. */
 static void js_module_eval_register(JSContext *ctx, JSModuleDef *m, JSValueConst promise)
 {
     JSValue m_obj, resolve_funcs[2];
@@ -71026,107 +71091,32 @@ static void js_module_eval_register(JSContext *ctx, JSModuleDef *m, JSValueConst
            "a module body's evaluation answered something that is not a promise — every bytecode module body "
            "is an async function, so its call returns one");
     m_obj = JS_NewModuleValue(ctx, m);
-    resolve_funcs[0] = JS_NewCFunctionData(ctx, js_async_module_execution_fulfilled, 0, 0, 1, vc(&m_obj));
+    resolve_funcs[0] = js_new_step_closure(ctx, &js_module_fulfilled_def, 0, 0, 1, vc(&m_obj));
     resolve_funcs[1] = JS_NewCFunctionData(ctx, js_async_module_execution_rejected, 0, 0, 1, vc(&m_obj));
+    CHECK(!JS_IsException(resolve_funcs[0]) && !JS_IsException(resolve_funcs[1]),
+          "a module body's evaluation could not build its continuations — the body would settle and reach "
+          "nobody, leaving its ancestors evaluating-async");
     JS_FreeValue(ctx, js_promise_then_native(ctx, promise, vc(resolve_funcs)));
     JS_FreeValue(ctx, m_obj);
     JS_FreeValue(ctx, resolve_funcs[0]);
     JS_FreeValue(ctx, resolve_funcs[1]);
 }
 
-static int js_execute_async_module(JSContext *ctx, JSModuleDef *m)
-{
-    JSValue promise;
-    JSAsyncFunctionData *s;
-
-    promise = js_async_function_start(ctx, m->func_obj, JS_UNDEFINED, 0, NULL, &s);
-    if (JS_IsException(promise))
-        return -1;
-    js_module_eval_register(ctx, m, promise);
-    JS_FreeValue(ctx, promise);
-    /* TRUE, and the loop immediately below is the promise being kept — the two lines are one statement about
-       ordering and must not drift apart. §16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled runs this walk INSIDE a
-       promise reaction and does not continue it until the body it started has completed or reached its own
-       suspend, so a park here is resumed before anything observable runs and the preempt stays transparent.
-       That is what the flag says, and it is the only reason this call is not the crash the C entry gets. */
-    if (!js_async_function_run(ctx, s, true))
-        return -1;
-    /* A PARKED BODY IS STILL EVALUATING, so finish it before this returns and the walk starts the next module.
-       §16.2.1.6.1.3.1 evaluates [[RequestedModules]] in source order, and a module with no top-level await must be
-       DONE before its sibling begins. Every bytecode body goes through this function precisely so a park is
-       possible, which means "started" and "finished" are no longer the same event — and the caller's loop over
-       available ancestors reads a parked body as finished and moves on. Two siblings then interleave and the
-       later one runs first: eval-rqstd-order evaluated its modules 123456798 rather than 123456789.
-       A forced preempt must be transparent to observable ordering, and module evaluation order is observable,
-       so this drains exactly as the host pump does before it starts a job — the same rule in the third place
-       that needed it. A real top-level AWAIT does not come through here: it registers on its promise and
-       returns without parking, so genuine asynchrony is untouched and only the forced preempt is absorbed.
-       AND THE DRAIN TAKES EACH COMPLETION, because this function has an error protocol of its own and dropping
-       one would report a module body that threw as one that evaluated. The body's abrupt completion normally
-       settles its evaluation promise inside the resume; one that escapes to here is this evaluation's, and
-       `-1` with the throw live is exactly how every other failure in this function leaves it. */
-    for (;;) {
-        JSValue pcv;
-        if (!JS_ResumeParkedFlow(ctx->rt, &pcv))
-            break;
-        if (JS_IsException(pcv))
-            return -1;
-        JS_FreeValue(ctx, pcv);
-    }
-    return 0;
-}
-
-/* return < 0 in case of exception. *pvalue contains the exception. */
+/* 16.2.1.6.1.3.1 step 13.a and 16.2.1.6.1.3.4 step 12.c, ExecuteModule for the one kind this engine evaluates
+   synchronously: a C init_func module, which runs no page code and cannot park. Every bytecode body is a CALL
+   request of its walk instead. return < 0 in case of exception; *pvalue contains the exception. */
 static int js_execute_sync_module(JSContext *ctx, JSModuleDef *m,
                                   JSValue *pvalue)
 {
-    if (m->init_func) {
-        /* C module init : no asynchronous execution */
-        if (m->init_func(ctx, m) < 0)
-            goto fail;
-    } else {
-        JSValue promise;
-        JSPromiseStateEnum state;
-
-        promise = js_async_function_call(ctx, m->func_obj, JS_UNDEFINED, 0, NULL, 0);
-        if (JS_IsException(promise))
-            goto fail;
-        state = JS_PromiseState(ctx, promise);
-        if (state == JS_PROMISE_FULFILLED) {
-            JS_FreeValue(ctx, promise);
-        } else if (state == JS_PROMISE_REJECTED) {
-            *pvalue = JS_PromiseResult(ctx, promise);
-            // rejection is propagated to module's evaluation promise; mark this internal
-            // promise as handled so it's not also surfaced as an unhandled rejection
-            js_promise_set_handled(ctx, promise);
-            JS_FreeValue(ctx, promise);
-            return -1;
-        } else {
-            /* PENDING here is a should-never-happen: both callers route a body that can park through
-               js_execute_async_module, so this path only ever runs a C init_func module (which cannot park) —
-               and marking a parked module EVALUATED afterwards is exactly the use-after-free this replaced. */
-            DFAIL("a module body PARKED on the synchronous execution path — route that caller through "
-                  "js_execute_async_module; settling its capability while the body is suspended frees the flow "
-                  "state its completion still reads");
-            JSValue m_obj, resolve_funcs[2], ret_val;
-            js_module_eval_capture(ctx, m);   /* the body ran since this record was announced */
-            m->async_evaluation = true;
-            m->async_evaluation_timestamp = ctx->rt->module_async_evaluation_next_timestamp++;
-            m_obj = JS_NewModuleValue(ctx, m);
-            resolve_funcs[0] = JS_NewCFunctionData(ctx, js_async_module_execution_fulfilled, 0, 0, 1, vc(&m_obj));
-            resolve_funcs[1] = JS_NewCFunctionData(ctx, js_async_module_execution_rejected, 0, 0, 1, vc(&m_obj));
-            JS_FreeValue(ctx, js_promise_then_native(ctx, promise, vc(resolve_funcs)));
-            JS_FreeValue(ctx, m_obj);
-            JS_FreeValue(ctx, resolve_funcs[0]);
-            JS_FreeValue(ctx, resolve_funcs[1]);
-            JS_FreeValue(ctx, promise);
-        }
+    DCHECK(m->init_func != NULL,
+           "a bytecode module body reached the synchronous ExecuteModule — both walks run it as a CALL request, "
+           "so this caller decided js_module_is_async_evaluated differently from them");
+    if (m->init_func(ctx, m) < 0) {
+        *pvalue = JS_GetException(ctx);
+        return -1;
     }
     *pvalue = JS_UNDEFINED;
     return 0;
-fail:
-    *pvalue = JS_GetException(ctx);
-    return -1;
 }
 
 /* spec: InnerModuleEvaluation. Return (index, JS_UNDEFINED) or (-1,
