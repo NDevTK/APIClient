@@ -1224,7 +1224,10 @@ static void kv_pairs(KvBuf *b, const char *text, const unsigned char *thm, const
         shapeval[vn] = 0;
         holed = kv_has_hole(text, thm, vl, vn);
         hole = holed ? concolic_hole_key(shapeval) : NULL;   /* the domain is a fact about the shape */
-        if (span && holed)
+        /* The example where it holds bytes. An empty one (`location.hash` on an address with no fragment) is a
+           value param_add_val records as no value at all, so the param would carry neither bytes nor the hole
+           they came through; the shape is that provenance, and it is what the param then carries. */
+        if (span && holed && evn > 0)
             kv_add(b, nm, nn, ev, evn, loc, hole);
         else
             kv_add(b, nm, nn, vl, vn, loc, hole);
