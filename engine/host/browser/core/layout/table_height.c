@@ -75,19 +75,15 @@ static void th_cell_vertical_edges_pair(lxb_dom_element_t *cell, CssPx *top, Css
         CssLength pad = css_computed_length(cell, PADDINGS[i]);
         CssLength bor;
 
-        if (pad.kind != CSS_LENGTH_ABSOLUTE)
-            DFAILF("%s: a table cell's `%s` is not an absolute length, and CSS 2.1 §17.5.3 Table height "
-                   "algorithms cannot resolve it. CSS 2.1 §8.4 \"Padding properties: 'padding-top', "
-                   "'padding-right', 'padding-bottom', 'padding-left', and 'padding'\" refers a padding "
-                   "percentage to the containing block's WIDTH — \"even for 'padding-top' and "
-                   "'padding-bottom'\" — and then names THIS case as the one it does not define: \"If the "
-                   "containing block's width depends on this element, then the resulting layout is undefined "
-                   "in CSS 2.1.\" For a cell that rectangle is the TABLE BOX's content width, and CSS 2.1 "
-                   "§17.5.2.2 Automatic table layout's MCW makes it depend on this very cell — so the "
-                   "resolution is a CYCLE and not a missing lookup, and it is the identical cycle "
-                   "core/layout/table_column_width.c refuses on the other axis. A KEYWORD cannot arrive here "
-                   "at all: CSS 2.1 §8.4's `Value:` line is `<padding-width> | inherit` and its `Computed "
-                   "value:` line is \"the percentage as specified or the absolute length\"",
+        /* A percentage is resolved by used_value_px against the cell's row width (CSS 2.1 §8.4 refers it to the
+           containing block's WIDTH "even for 'padding-top' and 'padding-bottom'"; core/layout/used_value.c
+           answers a cell's with the row). The columns that width is made of are §17.5.2's, where a percentage
+           padding contributed zero (css-sizing-3 §5.2.1), and they do not read a height, so this axis is not
+           a cycle. A `calc()` is still refused, as on the other axis. */
+        if (pad.kind != CSS_LENGTH_ABSOLUTE && pad.kind != CSS_LENGTH_PERCENTAGE)
+            DFAILF("%s: a table cell's `%s` is a `calc()` or a keyword. CSS 2.1 §8.4's `Computed value:` line is "
+                   "\"the percentage as specified or the absolute length\", and a `calc()` mixing the two needs "
+                   "core/layout/table_column_width.c's split of its percentage term first",
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
         if (collapsing) {
             /* §17.6.2 replaces the cell's own border with half the grid-line resolution: top, then bottom. */
