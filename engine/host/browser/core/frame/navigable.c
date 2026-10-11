@@ -807,6 +807,8 @@ typedef struct {
        between one OPERATION and the next. An item on the serialized struct and not on both of these is
        dropped for exactly the documents whose container is INHERITED rather than obtained from a response. */
     char *integrity_policy;
+    /* …and §7.1.7's referrer policy item, for the same two wires; NULL for a container that states none. */
+    char *referrer_policy;
     /* PERMISSIONS POLICY §9.1's TWO RESPONSE HEADER FIELD VALUES, copied for the same reason `csp` is: HTML
        §7.5.1 creates the Document from them and the creation is finished on the far side of however many
        suspensions the parse takes, by which time the header list this frame read them out of is gone. NULL for
@@ -859,6 +861,7 @@ static void nav_create_free(NavCreateWork *w)
     free(w->url); free(w->top_level_url); free(w->about_base_url);
     free(w->csp); free(w->self_origin); free(w->coep_endpoint); free(w->coep_report_only_endpoint);
     free(w->integrity_policy);
+    free(w->referrer_policy);
     free(w->permissions_policy); free(w->permissions_policy_report_only);
     free(w->decoded);
     free(w);
@@ -965,6 +968,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
     w->coep_endpoint            = nav_strdup(policy.embedder.endpoint);
     w->coep_report_only_endpoint = nav_strdup(policy.embedder.report_only_endpoint);
     w->integrity_policy         = nav_strdup(policy.integrity_policy);
+    w->referrer_policy          = nav_strdup(policy.referrer_policy);
     w->permissions_policy       = nav_strdup(permissions_policy.enforced);
     w->permissions_policy_report_only = nav_strdup(permissions_policy.report_only);
     w->coep_value               = policy.embedder.value;
@@ -1073,7 +1077,7 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
                                          serialized_embedder_policy(w->coep_value, w->coep_endpoint,
                                                                     w->coep_report_only_value,
                                                                     w->coep_report_only_endpoint),
-                                         w->integrity_policy);
+                                         w->integrity_policy, w->referrer_policy);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted at the begin. */
     /* HTML §7.4's ABOUT BASE URL TRAVELS WITH THE CREATION, which is why it is an argument of this call and
@@ -1313,6 +1317,7 @@ enum {
     NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT,
     NAV_LOAD_ARG_PROVENANCE,                   /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for it */
     NAV_LOAD_ARG_INTEGRITY,                    /* SRI §3.8's item of that container */
+    NAV_LOAD_ARG_REFERRER_POLICY,              /* …its referrer policy item, or JS_NULL for none stated */
     NAV_LOAD_ARG_DOCUMENT_RESOURCE,            /* §7.4.2.2's documentResource: §4.8.5's srcdoc text, or JS_NULL */
     NAV_LOAD_ARG_COUNT
 };
@@ -1481,6 +1486,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     SerializedPolicyContainer policy;
     const char *inherited_csp = NULL;
     const char *inherited_integrity = NULL;
+    const char *inherited_referrer_policy = NULL;
     const char *inherited_self = NULL;
     /* §7.1.4's EMBEDDER POLICY of the initiator's container, item by item, because the job carries the whole
        container and §7.1.7's clone moves every item at once. The two VALUES arrive as §7.1.4's own tokens
@@ -1511,6 +1517,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     /* SUBRESOURCE INTEGRITY §3.8.1 "Parse Integrity-Policy headers"' enforcing header, read off THIS response
        beside its CSP for the same reason and with the same ownership. */
     char *resp_integrity = NULL;
+    /* Referrer Policy §8.1's parse of this response's `Referrer-Policy`, owned. */
+    char *resp_referrer_policy = NULL;
     /* PERMISSIONS POLICY §9.1 step 1 and Fetch's half of its step 2, for BOTH names — §7.5.1 runs §9.6 with the
        enforced value and §10.1 inserts a second call with the report-only one, so one response feeds two
        policies and this frame reads both. Same ownership as `resp_csp`, and freed with it. */
@@ -1714,6 +1722,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            one map entry and could not express two `Content-Security-Policy` headers at all. */
         resp_csp = header_list_get(&response_headers, "content-security-policy");
         resp_integrity = header_list_get(&response_headers, "integrity-policy");
+        resp_referrer_policy = fetch_referrer_policy_of_response(&response_headers);
         /* THE SAME `get`, FOR THE HEADER THAT DECIDES WHAT THIS DOCUMENT MAY USE. It is read HERE, at the child
            navigable's own response, because §9.6 takes navigationParams's RESPONSE and this frame is where a
            child's response is read — the framing document's copy of this question is answered at
@@ -1836,6 +1845,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     inherited_coep_report_only_endpoint =
         JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT));
     inherited_integrity = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_INTEGRITY));
+    DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_REFERRER_POLICY)) ||
+           JS_IsNull(step_arg(&s->hdr, NAV_LOAD_ARG_REFERRER_POLICY)),
+           "a document load ran with neither a §7.1.7 referrer policy item nor the null for none on its job");
+    if (JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_REFERRER_POLICY)))
+        inherited_referrer_policy = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_REFERRER_POLICY));
     {
         EmbedderPolicyValue v = EMBEDDER_POLICY_UNSAFE_NONE, ro = EMBEDDER_POLICY_UNSAFE_NONE;
         /* §7.1.4's THREE STRINGS, READ BACK. A token this job carries was written by embedder_policy_value_token
@@ -1863,7 +1877,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        the documents whose container is INHERITED rather than obtained from a response — a `data:` or
        cross-origin child would load a script its creator's policy refuses while a SAME-INSTANCE sibling of
        the same document was refused it, and the two disagreeing was the only way to see it. */
-    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep, inherited_integrity);
+    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep, inherited_integrity,
+                                            inherited_referrer_policy);
     /* §7.4.2.2 "Beginning navigation"'s ABOUT BASE URL for THIS navigation. For a url that matches
        `about:blank` or is `about:srcdoc`, its step is "Set documentState's about base URL to
        initiatorBaseURLSnapshot" — which is why the INITIATOR's base URL rides the job and is used only when
@@ -1951,7 +1966,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     /* §2.2.2's pair for this load's own response: its policies and that self-origin, beside §7.1.4's item
        obtained just above. */
     response = serialized_policy_container(resp_csp, response_self,
-                                           serialized_embedder_policy_of(&response_ep), resp_integrity);
+                                           serialized_embedder_policy_of(&response_ep), resp_integrity,
+                                           resp_referrer_policy ? resp_referrer_policy : "");
     /* §7.1.7's DETERMINE NAVIGATION PARAMS POLICY CONTAINER, WHOSE FIRST ARGUMENT THE SECTION NAMES
        `responseURL` — "to determine navigation params policy container given a URL responseURL and four policy
        container-or-nulls". Its two remaining predicates are `responseURL is about:srcdoc` and `responseURL is
@@ -2145,6 +2161,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        producers of these pointers and none of them is conditional. */
     JS_FreeCString(ctx, inherited_csp);
     JS_FreeCString(ctx, inherited_integrity);
+    if (inherited_referrer_policy) JS_FreeCString(ctx, inherited_referrer_policy);
     JS_FreeCString(ctx, inherited_self);
     JS_FreeCString(ctx, inherited_coep);
     JS_FreeCString(ctx, inherited_coep_endpoint);
@@ -2157,6 +2174,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JS_FreeCString(ctx, resource);
     free(resp_csp);
     free(resp_integrity);
+    free(resp_referrer_policy);
     free(resp_pp);
     free(resp_pp_report_only);
     /* AND THE LIST ITSELF, HERE RATHER THAN BEFORE THE CREATION ABOVE — see the note at the site it moved
@@ -2466,7 +2484,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
        hand-written enumeration is two copies of one number with only one of them ever read. */
     JSValueConst argv[NAV_LOAD_ARG_COUNT];
     JSValue fn, url, org, csp, self, about, prov, res;
-    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ;
+    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
@@ -2537,6 +2555,9 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
        item from an empty one. */
     integ = JS_NewString(ctx, inherit_policy.integrity_policy ? inherit_policy.integrity_policy : "");
     CHECK(!JS_IsException(integ), "the document-load job's inherited integrity policy could not be allocated");
+    /* …AND ITS REFERRER POLICY ITEM, where "" is a stated policy and JS_NULL is a creator that states none. */
+    refpol = inherit_policy.referrer_policy ? JS_NewString(ctx, inherit_policy.referrer_policy) : JS_NULL;
+    CHECK(!JS_IsException(refpol), "the document-load job's inherited referrer policy could not be allocated");
     /* THE INITIATOR'S BASE URL, RESOLVED NOW AND NOT IN THE JOB — the same sentence the address above is
        resolved by: by the time the job runs, the document it would ask is the one being replaced. */
     DCHECK(about_base == NULL || *about_base,
@@ -2625,11 +2646,13 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT] = coep_ro_endpoint;
     argv[NAV_LOAD_ARG_PROVENANCE] = prov;
     argv[NAV_LOAD_ARG_INTEGRITY] = integ;
+    argv[NAV_LOAD_ARG_REFERRER_POLICY] = refpol;
     argv[NAV_LOAD_ARG_DOCUMENT_RESOURCE] = res;
     JS_EnqueueCallTask(ctx, fn, COUNTOF(argv), argv,
                        TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.2.2 step 21 */
     JS_FreeValue(ctx, res);
     JS_FreeValue(ctx, integ);
+    JS_FreeValue(ctx, refpol);
     JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);
     JS_FreeValue(ctx, coep_ro);

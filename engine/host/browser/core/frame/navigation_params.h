@@ -60,6 +60,9 @@ typedef struct {
        violations" over the Reporting standard, and §3.8.2 computes its BLOCK answer from the enforcing policy
        alone — so carrying it today would be a field whose consumer does not exist. */
     char        *integrity_policy;
+    /* §7.1.7's referrer policy item for this response: Referrer Policy §8.1's parse of its `Referrer-Policy`,
+       "" when it names none. Owned. */
+    char        *referrer_policy;
     /* §7.4.5's FINAL SANDBOXING FLAG SET — the union described above. */
     SandboxFlags sandbox_flags;
     /* §7.1.7's EMBEDDER POLICY, the container item obtained from this response (§7.1.4). */

@@ -344,6 +344,18 @@ const char *policy_container_referrer_policy(const PolicyContainer *p)
     return p->referrer_policy;
 }
 
+void policy_container_set_referrer_policy(PolicyContainer *p, const char *policy)
+{
+    char *copy;
+
+    DCHECK(p != NULL && fetch_is_referrer_policy(policy),
+           "a referrer policy was set on no container, or as a token Referrer Policy §3 does not define");
+    copy = strdup(policy);
+    CHECK(copy != NULL, "policy container: OOM copying a referrer policy");
+    free(p->referrer_policy);
+    p->referrer_policy = copy;
+}
+
 const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyContainer *p)
 {
     return p ? &p->integrity_policy : NULL;
@@ -351,7 +363,8 @@ const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyCont
 
 SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
                                                      SerializedEmbedderPolicy embedder,
-                                                     const char *integrity_policy)
+                                                     const char *integrity_policy,
+                                                     const char *referrer_policy)
 {
     SerializedPolicyContainer out;
 
@@ -369,6 +382,10 @@ SerializedPolicyContainer serialized_policy_container(const char *csp, const cha
     out.self_origin = self_origin;
     out.embedder = embedder;
     out.integrity_policy = integrity_policy;
+    DCHECK(referrer_policy == NULL || fetch_is_referrer_policy(referrer_policy),
+           "§7.1.7's referrer policy item was stated as a token Referrer Policy §3 does not define — every "
+           "producer states §8.1's parse, a live container's item, or NULL for none");
+    out.referrer_policy = referrer_policy;
     return out;
 }
 
@@ -389,12 +406,14 @@ SerializedPolicyContainer serialized_policy_container_none(void)
        above: every member is filled so that a reader who reaches one past the existence test gets the
        standard's initial value rather than uninitialized bytes. */
     out.integrity_policy = NULL;
+    out.referrer_policy = NULL;
     return out;
 }
 
 SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
                                                               SerializedEmbedderPolicy embedder,
-                                                              const char *integrity_policy)
+                                                              const char *integrity_policy,
+                                                              const char *referrer_policy)
 {
     /* THE ABSENCE IS AN ABSENT SELF-ORIGIN AND NEVER AN ABSENT POLICY. §2.2 gives every CSP list a self-origin
        whether or not it holds policies, so a relaying zone that has a container states one either way — and a
@@ -408,7 +427,7 @@ SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, c
            "both), so this is a relay that stopped writing the origin field and not a document with no "
            "container; `'self'` would resolve against this document's own address instead of the creator's");
     if (!(self_origin != NULL && *self_origin)) return serialized_policy_container_none();
-    return serialized_policy_container(csp, self_origin, embedder, integrity_policy);
+    return serialized_policy_container(csp, self_origin, embedder, integrity_policy, referrer_policy);
 }
 
 SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *p)
@@ -430,7 +449,8 @@ SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *
     return serialized_policy_container(policy_container_csp(p),
                                        origin_serialized(policy_container_self_origin(p)),
                                        serialized_embedder_policy_of(policy_container_embedder(p)),
-                                       p->integrity_policy_text);
+                                       p->integrity_policy_text,
+                                       policy_container_referrer_policy(p));
 }
 
 bool serialized_policy_container_exists(SerializedPolicyContainer c)

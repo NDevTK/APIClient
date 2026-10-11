@@ -6,6 +6,7 @@
 #include "check.h"
 #include "core/fetch/structured_fields.h"
 #include "core/frame/navigation_params.h"
+#include "core/fetch/fetch.h"   /* Referrer Policy §8.1's parse */
 #include "core/frame/policy_container.h"
 
 /* §7.5.1's requestsOAC, verbatim:
@@ -105,6 +106,9 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
     /* SRI §3.8.1 step 2's header, by the name that standard gives it. The report-only one its step 3 reads is
        deliberately not taken — see the field's own note. */
     out->integrity_policy               = header_list_get(headers, "integrity-policy");
+    /* §7.1.7's create-a-policy-container-from-a-fetch-response: "Set result's referrer policy to the result of
+       parsing the `Referrer-Policy` header given response". */
+    out->referrer_policy                = fetch_referrer_policy_of_response(headers);
 
     /* §7.1.4's obtain, which §7.1.7's create-a-policy-container-from-a-fetch-response step 4 makes the policy
        container's EMBEDDER POLICY item: "if environment is non-null, then set result's embedder policy to the
@@ -139,6 +143,8 @@ void navigation_params_free(NavigationParams *p)
     p->permissions_policy_report_only = NULL;
     free(p->integrity_policy);
     p->integrity_policy = NULL;
+    free(p->referrer_policy);
+    p->referrer_policy = NULL;
     embedder_policy_free(&p->embedder);
     opener_policy_free(&p->opener);
 }

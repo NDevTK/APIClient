@@ -35,6 +35,7 @@
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/html_base_element.h"   /* §4.2.3's frozen base URL, whose two facts this record holds */
 #include "core/html/html_meta_csp.h"       /* §4.2.5.3's pragma: what one `<meta>` delivers to this container */
+#include "core/html/html_meta_referrer.h"  /* §4.2.5.1's `referrer`: the referrer policy one `<meta>` sets */
 #include "core/url/url.h"                  /* §2.4.3's fallback base URL asks whether an address matches about: */
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
@@ -3616,6 +3617,30 @@ void document_meta_csp_inserted(lxb_dom_element_t *el)
     free(delivered);
 }
 
+void document_meta_referrer_changed(lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *n;
+    Document *d;
+    const char *policy;
+
+    DCHECK(el != NULL, "§4.2.5.1's referrer steps ran for no element");
+    n = lxb_dom_interface_node(el);
+    policy = html_meta_referrer_policy(n);
+    if (!policy) return;
+    d = doc_rec(n->owner_document);
+    DCHECK(d != NULL, "§4.2.5.1's referrer steps ran in a document with no record");
+    /* A Document of the second family (DOMParser, createHTMLDocument) has no container to set, as for
+       document_meta_csp_inserted; a realm's active document always has one. */
+    if (!d->policy) {
+        DCHECK(document_active_realm_of((const lxb_dom_node_t *)n->owner_document) == NULL,
+               "a `<meta name=referrer>` reached a Document that is a realm's ACTIVE document and holds no "
+               "§7.1.7 policy container — document_install builds one for every such Document");
+        return;
+    }
+    /* Step 6: "set element's node document's policy container's referrer policy to policy". */
+    policy_container_set_referrer_policy(d->policy, policy);
+}
+
 SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx)->sandbox_flags; }
 
 const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return doc_here(ctx)->permissions_policy; }
@@ -5049,6 +5074,20 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        contribution is the CSP `sandbox` directive, and which of the two algorithms unions that in is a fact
        about the operation that no inspection of the container could recover. */
     d->sandbox_flags = sandbox_flags;
+    /* §7.1.7's referrer policy item as the creating operation stated it (NULL keeps the initial default), then
+       HTML §4.2.5.1's meta `referrer` for each `<meta>` the parser inserted, in tree order, which is their
+       insertion order; "only the most-recently-inserted or most-recently-modified meta element in this state
+       has an effect". A meta a script inserts or edits later reaches document_meta_referrer_changed. */
+    if (policy.referrer_policy) policy_container_set_referrer_policy(d->policy, policy.referrer_policy);
+    {
+        lxb_dom_node_t *cur;
+        for (cur = lxb_dom_interface_node(dom)->first_child; cur; ) {
+            if (cur->type == LXB_DOM_NODE_TYPE_ELEMENT) document_meta_referrer_changed(lxb_dom_interface_element(cur));
+            if (cur->first_child) { cur = cur->first_child; continue; }
+            while (cur && !cur->next) cur = cur->parent;
+            if (cur) cur = cur->next;
+        }
+    }
     /* THE REALM'S ACTIVE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);

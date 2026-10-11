@@ -3108,6 +3108,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                and read here. HOW ITS ABSENCE SHOWS: a WPT test whose document is created from a relayed
                inherited container is judged without its creator's integrity policy, so an integrity-policy
                subtest that passes in-instance would fail across the process boundary. */
+            NULL,
+            /* §7.1.7's referrer policy item, not on this relay for the same reason. */
             NULL);
         /* §7.5.1's OPENER POLICY ROW for this root Document — §7.1.3's policy obtained from the same response
            the params above came from — and §7.3.1.3's PARENT, which for a `--document` child is a navigable in
@@ -3133,7 +3135,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            response step 4, obtained where the response is read and handed to the constructor here. */
         response = serialized_policy_container(np.csp, origin,
                                                serialized_embedder_policy_of(&np.embedder),
-                                               np.integrity_policy);
+                                               np.integrity_policy, np.referrer_policy);
         policy = policy_container_determine_navigation_params(g_base_url, response, inherited);
 
         wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_kind, policy,

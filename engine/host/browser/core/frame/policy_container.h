@@ -145,14 +145,13 @@ const EmbedderPolicy *policy_container_embedder(const PolicyContainer *p);
 struct IntegrityPolicy;
 const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyContainer *p);
 
-/* §7.1.7's referrer policy item, a Referrer Policy §3 referrer policy. BORROWED.
-   NAMED RESIDUAL. Not covered: §7.1.7's create-a-policy-container-from-a-fetch-response sets the item from the
-   response's `Referrer-Policy` header (Referrer Policy §8.1), and HTML §4.2.5.1 "Standard metadata names"' meta
-   `referrer` sets it on insertion; this engine sets it from neither, so every container holds the initial
-   default. Next diff: carry the parsed header through SerializedPolicyContainer as the integrity policy is
-   carried, and run the meta steps at insertion beside document_meta_csp_inserted. Its absence shows as a page
-   sending `Referrer-Policy: no-referrer` whose pending requests state `strict-origin-when-cross-origin`. */
+/* §7.1.7's referrer policy item, a Referrer Policy §3 referrer policy. BORROWED. */
 const char *policy_container_referrer_policy(const PolicyContainer *p);
+/* Set that item: §7.1.7's create-a-policy-container-from-a-fetch-response ("Set result's referrer policy to the
+   result of parsing the `Referrer-Policy` header given response") and HTML §4.2.5.1's meta `referrer` ("set
+   element's node document's policy container's referrer policy"). `policy` is a Referrer Policy §3 token and
+   is copied. The meta write has the container's per-flow residual stated at policy_container_enforce_policy. */
+void policy_container_set_referrer_policy(PolicyContainer *p, const char *policy);
 
 /* ---- HTML §7.1.7 "Policy containers" — THE CONTAINER IN THE FORM IT CROSSES A SEAM -------------------------
  *
@@ -213,6 +212,10 @@ typedef struct {
        wrong rather than broken. It travels as TEXT for `csp`'s reason: the parse points into bytes, and the
        receiving instance re-parses rather than being handed a structure from a heap it cannot see. */
     const char *integrity_policy;
+    /* §7.1.7's REFERRER POLICY item, a Referrer Policy §3 token: Referrer Policy §8.1's parse of the response's
+       `Referrer-Policy` ("" when it names none) for a container created from a response, and NULL for one
+       whose creator states none, which the container answers with "the default referrer policy". */
+    const char *referrer_policy;
 } SerializedPolicyContainer;
 
 /* A CONTAINER, stating every item. `self_origin` is REQUIRED and non-empty: a container that exists has a CSP
@@ -224,7 +227,8 @@ typedef struct {
    argument this function would then have to invent. */
 SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
                                                       SerializedEmbedderPolicy embedder,
-                                                      const char *integrity_policy);
+                                                      const char *integrity_policy,
+                                                      const char *referrer_policy);
 
 /* NO CONTAINER — §7.1.7's `null` for the initiator/parent/history containers its determine step tests against,
    which is a real state (a Document with no creator) and not a caller that forgot an argument. */
@@ -241,7 +245,8 @@ SerializedPolicyContainer serialized_policy_container_none(void);
    function exists to prevent. An absent container discards it, exactly as it discards the policy text. */
 SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
                                                               SerializedEmbedderPolicy embedder,
-                                                              const char *integrity_policy);
+                                                              const char *integrity_policy,
+                                                              const char *referrer_policy);
 
 /* THE SERIALIZATION OF A LIVE CONTAINER — §7.1.7's clone, in the form it crosses a seam. It reads EVERY item
    off `p`, so a container that grows grows here once and no caller has to be told: this is the one place a

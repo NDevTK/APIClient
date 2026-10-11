@@ -142,6 +142,9 @@ const char *fetch_mode_token(FetchMode m);
 
 /* Whether `p` is a Referrer Policy §3 referrer policy, the empty string included. */
 bool fetch_is_referrer_policy(const char *p);
+/* Referrer Policy §8.1 "Parse a referrer policy from a Referrer-Policy header" over a response's header list:
+   the last known policy it names, or the empty string. OWNED. */
+char *fetch_referrer_policy_of_response(const HeaderList *headers);
 /* A request's referrer as the pending line states it: "no-referrer" or a URL. "client" is resolved here, by
    Referrer Policy §8.3 "Determine request's Referrer"'s `client` arm against this realm's Document
    (document_referrer_source), because that environment is this engine's and not the trusted zone's; the

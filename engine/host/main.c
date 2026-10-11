@@ -380,6 +380,14 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
                                                   and read here. How its absence shows: such a child loads a
                                                   `<script src>` without `integrity` that its creator's policy
                                                   refuses, while a same-instance sibling is refused it. */
+                                               NULL,
+                                               /* Named residual: §7.1.7's referrer policy item is not on this
+                                                  entry either. Not covered: a child whose creator lives in
+                                                  another instance holds the default referrer policy. Next diff
+                                                  builds: the field on the same `navigable.create` notice. How
+                                                  its absence shows: such a child's requests carry a referrer its
+                                                  creator's policy strips, while a same-instance sibling's do
+                                                  not. */
                                                NULL);
 }
 
@@ -595,7 +603,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            `np`'s (core/frame/navigation_params.c); this file says which navigable and which realm. */
         SerializedPolicyContainer response =
             serialized_policy_container(np.csp, origin, serialized_embedder_policy_of(&np.embedder),
-                                        np.integrity_policy);
+                                        np.integrity_policy, np.referrer_policy);
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
 
@@ -774,7 +782,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
         navigable_root_ancestor_origins(cctx, proxy, ancestor_origins);
         SerializedPolicyContainer response =
             serialized_policy_container(np.csp, origin_serialized(origin_agent()),
-                                        serialized_embedder_policy_of(&np.embedder), np.integrity_policy);
+                                        serialized_embedder_policy_of(&np.embedder), np.integrity_policy,
+                                        np.referrer_policy);
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
 

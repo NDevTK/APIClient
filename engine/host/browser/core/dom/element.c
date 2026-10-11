@@ -2627,6 +2627,9 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
                    this seam's position, and it reads the inserted node's OWN document rather than the mutating
                    realm's active one. */
                 document_meta_csp_inserted(el);
+                /* HTML §4.2.5.1's meta `referrer`, which runs "if any meta element element is inserted into the
+                   document", here for the CSP pragma's reason above. */
+                document_meta_referrer_changed(el);
                 /* HTML §4.8.2 "The source element": "The source HTML element INSERTION steps, given
                    insertedNode, are: Let parent be insertedNode's parent. If parent is a media element that
                    has no src attribute…" — which is how a `<video>` with no `src` and only `<source>` children
@@ -3014,6 +3017,10 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        (`img.src = u`, `setAttribute`, `attributes.src.value = u`) and the IDL reflection's setter answers for
        exactly one of them, which is how `<img>` came to reflect its address without ever requesting it. */
     html_image_attr_changed(rctx, el, ns, local);
+    /* HTML §4.2.5.1's meta `referrer` also runs when the element "has its name or content attributes
+       changed". */
+    if (!(ns && *ns) && local && (!strcmp(local, "name") || !strcmp(local, "content")))
+        document_meta_referrer_changed(el);
     /* HTML §4.6.8.20's other appropriate times — the `rel` that CREATES the external resource link on an
        already-connected element, and the `href`/`as`/`type`/`media` changes. Here for the reason `img`'s `src`
        above is: a content attribute has more than one spelling (`l.href = u`, `setAttribute`,

@@ -881,7 +881,10 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
                                        it: this record outlives the call that built it, so a borrowed item would
                                        dangle by the time a deferred realm materializes. */
                                     creator_policy.integrity_policy && *creator_policy.integrity_policy
-                                        ? proxy_strdup(creator_policy.integrity_policy) : NULL);
+                                        ? proxy_strdup(creator_policy.integrity_policy) : NULL,
+                                    /* …and its referrer policy item, copied for the same reason. */
+                                    creator_policy.referrer_policy
+                                        ? proxy_strdup(creator_policy.referrer_policy) : NULL);
     /* §7.4's `let creatorBaseURL be null` is the absence of a creator, so NULL is a real state: the root navigable
        has no creator, and a navigable created with an address takes its Document from a response, which §2.4.3
        gives a null about base URL. */
@@ -1011,6 +1014,8 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
                                                        /* a top-level navigable created from no response states
                                                           no integrity policy, which SRI §3.8 answers with "a
                                                           new integrity policy" */
+                                                       NULL,
+                                                       /* …and no referrer policy: the container's default */
                                                        NULL),
                            NULL, tlus, tlo, parent, JS_NULL);
     JS_FreeCString(ctx, tlus);

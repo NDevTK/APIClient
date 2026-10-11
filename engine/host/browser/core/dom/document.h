@@ -578,6 +578,10 @@ const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom);
    policy is enforced upon the ELEMENT'S NODE DOCUMENT, never the running realm's active one — a `<meta>`
    inserted into a DOMParser tree says nothing whatever about the page. */
 void document_meta_csp_inserted(lxb_dom_element_t *el);
+/* HTML §4.2.5.1 "Standard metadata names"' `referrer`, run when a meta element "is inserted into the document,
+   or has its name or content attributes changed": sets the node document's policy container's referrer
+   policy to what html_meta_referrer_policy answers, if anything. */
+void document_meta_referrer_changed(lxb_dom_element_t *el);
 
 /* HTML §4.8.5 "The `iframe` element"'s ALLOWED TO USE, which is where the standard defines the phrase every
  * other section asks with: "To determine whether a Document object document is allowed to use the

@@ -199,6 +199,43 @@ bool fetch_is_referrer_policy(const char *p)
     return false;
 }
 
+char *fetch_referrer_policy_of_response(const HeaderList *headers)
+{
+    char *value = header_list_get(headers, "referrer-policy");
+    const char *policy = "";
+    char *out, *p, *tok;
+    bool ok = true;
+
+    if (value) {
+        /* "Let policy-tokens be the result of extracting header list values given `Referrer-Policy`": the
+           `1#(policy-token / extension-token)` list of Referrer Policy §4.1, where an extension-token is
+           `1*( ALPHA / "-" )`. A member outside that grammar makes the extraction a failure, which yields no
+           tokens. "For each token in policy-tokens, if token is a referrer policy and token is not the empty
+           string, then set policy to token": the last known one wins. */
+        for (p = value; ok && (tok = strsep(&p, ",")) != NULL; ) {
+            size_t n;
+            while (*tok == ' ' || *tok == '\t') tok++;
+            n = strlen(tok);
+            while (n && (tok[n - 1] == ' ' || tok[n - 1] == '\t')) tok[--n] = 0;
+            if (!n) continue;
+            if (strspn(tok, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-") != n) { ok = false; break; }
+        }
+        free(value);
+        value = ok ? header_list_get(headers, "referrer-policy") : NULL;
+        for (p = value; value && (tok = strsep(&p, ",")) != NULL; ) {
+            size_t n;
+            while (*tok == ' ' || *tok == '\t') tok++;
+            n = strlen(tok);
+            while (n && (tok[n - 1] == ' ' || tok[n - 1] == '\t')) tok[--n] = 0;
+            if (n && fetch_is_referrer_policy(tok)) policy = tok;
+        }
+    }
+    out = strdup(policy);
+    free(value);
+    CHECK(out != NULL, "fetch: OOM spelling a response's referrer policy");
+    return out;
+}
+
 char *fetch_referrer_for_wire(JSContext *ctx, const char *referrer)
 {
     char *out;

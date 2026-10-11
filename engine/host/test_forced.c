@@ -29039,7 +29039,8 @@ int main(int argc, char **argv) {
         tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test",
                          document_kind(/*is_xml*/false, "text/html"),
                          serialized_policy_container(NULL, "https://x.test",
-                                                     serialized_embedder_policy_new(), /*integrity policy*/ NULL),
+                                                     serialized_embedder_policy_new(), /*integrity policy*/ NULL,
+                                                     /*referrer policy*/ NULL),
                          /* NO RESPONSE, so Permissions Policy §9.1 step 3's empty ordered map — this fixture's
                             markup is a C string literal and no server said anything about its policy. */
                          serialized_response_permissions_policy(NULL, NULL), 0,
