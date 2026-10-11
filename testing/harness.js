@@ -310,6 +310,11 @@ async function cmdRestart(args, keepIdb) {
      deleting the logins the comment at the head of this function promises to keep. */
   try { await fsp.rm(path.join(PROFILE_DIR, "Default/Sessions"), { recursive: true, force: true }); log("cleared Default/Sessions (no tab of the previous run is restored)"); }
   catch (e) { /* absent dir is fine */ }
+  /* Service worker registrations and their script cache. Chrome keeps an unpacked extension's worker script
+     here across launches, so without this a restart runs the previous background.js against the current
+     extension. Not gated on `keepIdb`: a worker script is code, not the frontier. */
+  try { await fsp.rm(path.join(PROFILE_DIR, "Default/Service Worker"), { recursive: true, force: true }); log("cleared Default/Service Worker (the extension's worker script is reloaded)"); }
+  catch (e) { /* absent dir is fine */ }
   await cmdStart(args);
 }
 
