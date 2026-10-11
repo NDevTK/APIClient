@@ -12669,7 +12669,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/click",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
         { "/api/cascade",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
         { "/api/cssinline",  "isinline"},   /* inline layers over the author cascade */
-        { "/api/cssua",      "isua"    },   /* the UA default, and the initial value below it */
+        { "/api/cssua",      "isua"    },   /* the UA default, the initial value, and "" off the tree */
         /* css-fonts-4 §2.5's computed font-size, and css-values-4 §6.1.1's two font-size-relative units. The
            `larger`, the `150%` and the `1.5em` INSIDE font-size are all a ratio of the PARENT's size, while
            the `2em` in a margin is a ratio of the element's OWN — §6.1.1's font-affecting rule is the whole of

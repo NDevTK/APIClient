@@ -405,10 +405,14 @@ static const char HTML_PLATFORM[] =
     "fetch('/api/cascade?v=' + (csc.display === 'block' ? 'isspec' : 'wrong'));"
     "fetch('/api/cssinline?v=' + (csc.marginTop === '4px' && cs.style.marginTop === '4px' &&"
     " cs.style.display === '' ? 'isinline' : 'wrong'));"
-    /* The UA default reaches an element no rule names, and an undeclared property reads its INITIAL value. */
+    /* The UA default reaches an element no rule names, and an undeclared property reads its INITIAL value —
+       on a connected element. CSSOM §7.2 "Extensions to the Window Interface" fills the declarations only if
+       "elt is connected, part of the flat tree", so a detached element's are empty and read as "". */
     "var csp = document.createElement('p'); document.body.appendChild(csp);"
-    "fetch('/api/cssua?v=' + (getComputedStyle(csp).display === 'block' &&"
-    " getComputedStyle(document.createElement('span')).display === 'inline' ? 'isua' : 'wrong'));"
+    "var csn = document.createElement('span'); document.body.appendChild(csn);"
+    "var csnd = getComputedStyle(csn).display; csn.remove();"
+    "fetch('/api/cssua?v=' + (getComputedStyle(csp).display === 'block' && csnd === 'inline' &&"
+    " getComputedStyle(document.createElement('span')).display === '' ? 'isua' : 'wrong'));"
     /* AND SO DOES AN UNDECLARED BACKGROUND LONGHAND, which is the same sentence one property family over and
        was the one place it was not true. Seven of css-backgrounds-3 §2.10 "Backgrounds Shorthand: the
        background property"'s eight longhands are in NO property registry, so css-cascade-5 §7.1 "Initial
