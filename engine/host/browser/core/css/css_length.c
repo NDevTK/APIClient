@@ -145,6 +145,23 @@ static int css_px_mono_cmp(const void *x, const void *y)
    result was carried to both places. */
 static unsigned g_css_px_atom;
 
+/* `out`'s form becomes one fresh atom: an opaque function of the facts in `out.env`, named so that every place
+   this one result is carried to can still subtract it. */
+static void css_px_form_atom(CssPx *out)
+{
+    DCHECK(out->env != CSS_ENV_NONE, "an atom was minted for a length derived from no fact");
+    DCHECKF(isfinite(out->px), "an atom was minted over the non-finite example %g, which no form evaluates to",
+            out->px);
+    DCHECK(g_css_px_atom != UINT_MAX, "the atom counter ran out of names");
+    out->form.known = true;
+    out->form.n = 1;
+    out->form.c = 0.0;
+    memset(&out->form.m[0], 0, sizeof out->form.m[0]);
+    out->form.m[0].atom = ++g_css_px_atom;
+    out->form.m[0].k = 1.0;
+    out->form.m[0].aval = out->px;
+}
+
 /* Whether known `a` has a monomial over fact `f`, which is when its `val[f]` is written. */
 static bool css_px_uses(CssPx a, int f)
 {
@@ -319,20 +336,13 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     else if (hi <= 0.0) win = want_hi ? &b : &a;
     /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
        atom so that every place this one result is carried to can still subtract it.
-       Named residual. Not covered: the other opaque results (css_px_opaque's writers, a snap, a quotient by a
-       derived length, a product with an atom) still leave no form. Next diff: each mints an atom here the same
-       way. How its absence shows: two lengths downstream of one such result that differ by a constant and still
-       cross the `long` boundary as two forks. */
+       Named residual. Not covered: the other opaque results (css_px_opaque's writers, a quotient by a derived
+       length, a product with an atom, a form too wide) still leave no form. Next diff: each mints an atom
+       through css_px_form_atom. How its absence shows: two lengths downstream of one such result that differ
+       by a constant and still cross the `long` boundary as two forks. */
     if (win == NULL) {
         DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
-        DCHECK(g_css_px_atom != UINT_MAX, "the atom counter ran out of names");
-        out.form.known = true;
-        out.form.n = 1;
-        out.form.c = 0.0;
-        memset(&out.form.m[0], 0, sizeof out.form.m[0]);
-        out.form.m[0].atom = ++g_css_px_atom;
-        out.form.m[0].k = 1.0;
-        out.form.m[0].aval = out.px;
+        css_px_form_atom(&out);
         return out;
     }
     tol = 1e-9 * fmax(1.0, fmax(fabs(a.px), fabs(b.px)));
@@ -936,6 +946,7 @@ bool css_length_is_length_percentage(const char *value)
 CssPx css_length_snap_line_width(JSContext *realm, CssPx len)
 {
     double ratio, device, snapped, out;
+    CssPx res;
 
     DCHECK(len.px == len.px && len.px * 0.0 == 0.0,
            "CSS Values §6's snap-as-a-line-width was handed a length that is not a FINITE number — every "
@@ -968,7 +979,12 @@ CssPx css_length_snap_line_width(JSContext *realm, CssPx len)
     else if (device > -1.0 && device < 1.0)   snapped = device > 0.0 ? 1.0 : -1.0;
     else                                      snapped = trunc(device);
     out = snapped / ratio;
-    return css_px_combine(len, css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, realm, out), out);
+    /* The three steps are a step function of the ratio, which no polynomial states: the result is one atom,
+       and a computed value is derived once per cascade record (core/css/css_computed_style.h), so every
+       reader of this width under one record subtracts the same one. */
+    res = css_px_combine(len, css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, realm, out), out);
+    css_px_form_atom(&res);
+    return res;
 }
 
 /* THE SHORTEST DECIMAL THAT NAMES THIS DOUBLE, as its digits and its decimal exponent: the value is
