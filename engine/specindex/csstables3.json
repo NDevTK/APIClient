@@ -1,0 +1,497 @@
+{
+ "spec": "CSS Table Module Level 3",
+ "key": "csstables3",
+ "base": "https://drafts.csswg.org/css-tables-3/",
+ "specUpdated": "8 October 2026",
+ "fetched": "2026-10-11",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Content Model",
+   "page": "",
+   "id": "content-model"
+  },
+  "3": {
+   "title": "Layout",
+   "page": "",
+   "id": "layout"
+  },
+  "4": {
+   "title": "Absolute Positioning",
+   "page": "",
+   "id": "abspos"
+  },
+  "5": {
+   "title": "Rendering",
+   "page": "",
+   "id": "rendering"
+  },
+  "6": {
+   "title": "Fragmentation",
+   "page": "",
+   "id": "fragmentation"
+  },
+  "7": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "8": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "9": {
+   "title": "List of bugs being tracked",
+   "page": "",
+   "id": "bug-list"
+  },
+  "10": {
+   "title": "Appendices",
+   "page": "",
+   "id": "appendices"
+  },
+  "11": {
+   "title": "(link here for missing sections)",
+   "page": "",
+   "id": "TODO"
+  },
+  "12": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Table Structure",
+   "page": "",
+   "id": "table-structure"
+  },
+  "2.1.1": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "2.2": {
+   "title": "Fixup",
+   "page": "",
+   "id": "fixup"
+  },
+  "2.2.1": {
+   "title": "Fixup Algorithm",
+   "page": "",
+   "id": "fixup-algorithm"
+  },
+  "2.2.2": {
+   "title": "Characteristics of fixup boxes",
+   "page": "",
+   "id": "fixup-boxes"
+  },
+  "2.2.3": {
+   "title": "Examples",
+   "page": "",
+   "id": "fixup-examples"
+  },
+  "3.1": {
+   "title": "Core layout principles",
+   "page": "",
+   "id": "layout-principles"
+  },
+  "3.2": {
+   "title": "Table layout algorithm",
+   "page": "",
+   "id": "table-layout-algorithm"
+  },
+  "3.3": {
+   "title": "Dimensioning the row/column grid",
+   "page": "",
+   "id": "dimensioning-the-row-column-grid"
+  },
+  "3.3.1": {
+   "title": "HTML Algorithm",
+   "page": "",
+   "id": "dimensioning-the-row-column-grid--step1"
+  },
+  "3.3.2": {
+   "title": "Track merging",
+   "page": "",
+   "id": "dimensioning-the-row-column-grid--step2"
+  },
+  "3.4": {
+   "title": "Missing cells fixup",
+   "page": "",
+   "id": "missing-cells-fixup"
+  },
+  "3.5": {
+   "title": "Table layout modes",
+   "page": "",
+   "id": "layout-modes"
+  },
+  "3.5.1": {
+   "title": "The Table-Layout property",
+   "page": "",
+   "id": "table-layout-property"
+  },
+  "3.5.2": {
+   "title": "The Border-Collapse property",
+   "page": "",
+   "id": "border-collapse-property"
+  },
+  "3.5.2.1": {
+   "title": "The Border-Spacing property",
+   "page": "",
+   "id": "border-spacing-property"
+  },
+  "3.5.3": {
+   "title": "The Caption-Side property",
+   "page": "",
+   "id": "caption-side-property"
+  },
+  "3.6": {
+   "title": "Style overrides",
+   "page": "",
+   "id": "style-overrides"
+  },
+  "3.6.1": {
+   "title": "Overrides applying in all modes",
+   "page": "",
+   "id": "global-style-overrides"
+  },
+  "3.6.2": {
+   "title": "Overrides applying in collapsed-borders mode",
+   "page": "",
+   "id": "collapsed-style-overrides"
+  },
+  "3.7": {
+   "title": "Border-collapsing",
+   "page": "",
+   "id": "border-collapsing"
+  },
+  "3.7.1": {
+   "title": "Conflict Resolution for Collapsed Borders",
+   "page": "",
+   "id": "conflict-resolution-for-collapsed-borders"
+  },
+  "3.7.1.1": {
+   "title": "Conflict Resolution Algorithm for Collapsed Borders",
+   "page": "",
+   "id": "border-conflict-resolution-algorithm"
+  },
+  "3.7.1.2": {
+   "title": "Harmonization Algorithm for Collapsed Borders",
+   "page": "",
+   "id": "border-style-harmonization-algorithm"
+  },
+  "3.7.1.3": {
+   "title": "Specificity of a border style",
+   "page": "",
+   "id": "border-specificity"
+  },
+  "3.8": {
+   "title": "Computing table measures",
+   "page": "",
+   "id": "content-measure"
+  },
+  "3.8.1": {
+   "title": "Computing Undistributable Space",
+   "page": "",
+   "id": "computing-undistributable-space"
+  },
+  "3.8.2": {
+   "title": "Computing Cell Measures",
+   "page": "",
+   "id": "computing-cell-measures"
+  },
+  "3.8.3": {
+   "title": "Computing Column Measures",
+   "page": "",
+   "id": "computing-column-measures"
+  },
+  "3.9": {
+   "title": "Available Width Distribution",
+   "page": "",
+   "id": "width-distribution"
+  },
+  "3.9.1": {
+   "title": "Computing the table width",
+   "page": "",
+   "id": "computing-the-table-width"
+  },
+  "3.9.2": {
+   "title": "Core distribution principles",
+   "page": "",
+   "id": "width-distribution-principles"
+  },
+  "3.9.2.1": {
+   "title": "Rules",
+   "page": "",
+   "id": "width-distribution-principles-rN"
+  },
+  "3.9.2.2": {
+   "title": "Available sizings",
+   "page": "",
+   "id": "width-distribution-principles-rR"
+  },
+  "3.9.3": {
+   "title": "Distribution algorithm",
+   "page": "",
+   "id": "width-distribution-algorithm"
+  },
+  "3.9.3.1": {
+   "title": "Changes to width distribution in fixed mode",
+   "page": "",
+   "id": "width-distribution-in-fixed-mode"
+  },
+  "3.9.3.2": {
+   "title": "Distributing excess width to columns",
+   "page": "",
+   "id": "distributing-width-to-columns"
+  },
+  "3.10": {
+   "title": "Available Height Distribution",
+   "page": "",
+   "id": "height-distribution"
+  },
+  "3.10.1": {
+   "title": "Computing the table height",
+   "page": "",
+   "id": "computing-the-table-height"
+  },
+  "3.10.2": {
+   "title": "Row layout (first pass)",
+   "page": "",
+   "id": "row-layout"
+  },
+  "3.10.3": {
+   "title": "Row layout (second pass)",
+   "page": "",
+   "id": "row-relayout"
+  },
+  "3.10.4": {
+   "title": "Core distribution principles",
+   "page": "",
+   "id": "height-distribution-principles"
+  },
+  "3.10.5": {
+   "title": "Distribution algorithm",
+   "page": "",
+   "id": "height-distribution-algorithm"
+  },
+  "3.10.6": {
+   "title": "Table-cell content layout (second pass)",
+   "page": "",
+   "id": "table-cell-content-relayout"
+  },
+  "3.11": {
+   "title": "Positioning of cells, captions and other internal table boxes",
+   "page": "",
+   "id": "bounding-box-assignment"
+  },
+  "4.1": {
+   "title": "With a table-root as containing block",
+   "page": "",
+   "id": "abspos-boxes-in-table-root"
+  },
+  "4.2": {
+   "title": "With a table-internal as containing block",
+   "page": "",
+   "id": "abspos-boxes-in-table-internal"
+  },
+  "4.3": {
+   "title": "With a table-internal box as non-containing block parent",
+   "page": "",
+   "id": "static-position"
+  },
+  "5.1": {
+   "title": "Paint order of cells",
+   "page": "",
+   "id": "paint-order"
+  },
+  "5.2": {
+   "title": "Empty cell rendering (separated-borders mode)",
+   "page": "",
+   "id": "empty-cell-rendering"
+  },
+  "5.3": {
+   "title": "Drawing backgrounds and borders",
+   "page": "",
+   "id": "drawing-backgrounds-and-borders"
+  },
+  "5.3.1": {
+   "title": "Drawing table backgrounds and borders",
+   "page": "",
+   "id": "drawing-table-backgrounds-and-borders"
+  },
+  "5.3.1.1": {
+   "title": "Changes in collapsed-borders mode",
+   "page": "",
+   "id": "drawing-collapsed-borders-1"
+  },
+  "5.3.2": {
+   "title": "Drawing cell backgrounds",
+   "page": "",
+   "id": "drawing-cell-backgrounds"
+  },
+  "5.3.3": {
+   "title": "Drawing cell borders",
+   "page": "",
+   "id": "drawing-cell-borders"
+  },
+  "5.3.3.1": {
+   "title": "Changes in collapsed-borders mode",
+   "page": "",
+   "id": "drawing-collapsed-borders-2"
+  },
+  "5.3.4": {
+   "title": "Border styles (collapsed-borders mode)",
+   "page": "",
+   "id": "border-style-overrides"
+  },
+  "5.4": {
+   "title": "Rendering for visibility: collapse",
+   "page": "",
+   "id": "visibility-collapse-rendering"
+  },
+  "5.4.1": {
+   "title": "Rendering a visibility: collapse table cell",
+   "page": "",
+   "id": "visibility-collapse-cell-rendering"
+  },
+  "5.4.2": {
+   "title": "Rendering a visibility: collapse table-track or table-track-group",
+   "page": "",
+   "id": "visibility-collapse-track-rendering"
+  },
+  "6.1": {
+   "title": "Breaking across fragmentainers",
+   "page": "",
+   "id": "breaking-rules"
+  },
+  "6.2": {
+   "title": "Repeating headers across pages",
+   "page": "",
+   "id": "repeated-headers"
+  },
+  "10.1": {
+   "title": "Mapping between CSS & HTML attributes",
+   "page": "",
+   "id": "mapping"
+  }
+ },
+ "dfns": {
+  "auto column": [
+   "3.9.3"
+  ],
+  "baseline of a table root": [
+   "3.10.2"
+  ],
+  "border collapse": [
+   "3.5.2"
+  ],
+  "border spacing": [
+   "3.5.2.1"
+  ],
+  "caption side": [
+   "3.5.3"
+  ],
+  "empty cells": [
+   "5.2"
+  ],
+  "max content width of a table": [
+   "3.1"
+  ],
+  "min content width of a table": [
+   "3.1"
+  ],
+  "percent column": [
+   "3.9.3"
+  ],
+  "pixel column": [
+   "3.9.3"
+  ],
+  "proper table child": [
+   "2.1.1"
+  ],
+  "proper table row parent": [
+   "2.1.1"
+  ],
+  "table grid": [
+   "2.1.1"
+  ],
+  "table grid box": [
+   "2.1.1"
+  ],
+  "table internal": [
+   "2.1.1"
+  ],
+  "table layout": [
+   "3.5.1"
+  ],
+  "table non root": [
+   "2.1.1"
+  ],
+  "table root": [
+   "2.1.1"
+  ],
+  "table track": [
+   "2.1.1"
+  ],
+  "table track group": [
+   "2.1.1"
+  ],
+  "table wrapper box": [
+   "2.1.1"
+  ],
+  "tabular container": [
+   "2.1.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "border collapse": {
+   "12": 2
+  },
+  "border spacing": {
+   "12": 2,
+   "3.11": 3
+  },
+  "caption side": {
+   "12": 2,
+   "3.11": 2
+  },
+  "empty cells": {
+   "12": 2
+  },
+  "proper table child": {
+   "2.2.1": 2
+  },
+  "table grid box": {
+   "12": 3
+  },
+  "table layout": {
+   "12": 2
+  },
+  "table non root": {
+   "2.2.1": 2
+  },
+  "table root": {
+   "12": 2,
+   "2.2.1": 5,
+   "3.6.2": 4,
+   "3.7.1.1": 3,
+   "3.9.1": 2,
+   "5.3.1.1": 2
+  },
+  "table wrapper box": {
+   "12": 4
+  }
+ }
+}
