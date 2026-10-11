@@ -2265,9 +2265,8 @@ void engine_unload_document(uint32_t doc)
 
 const PolicyContainer *engine_document_policy(uint32_t doc)
 {
-    DCHECK(g_sess_live,
-           "a document's policy container was asked of an instance with no live session — the zone asks only "
-           "an instance it has rooted, and before that the document has no realm to hold one");
+    /* Not gated on a live session: a frontier that has drained still holds its documents until qjs_teardown,
+       and the zone may ask in the round between the last step and the finish. */
     DCHECK(world_doc_hosted(doc),
            "a document's policy container was asked of an instance that does not host it — the zone routes the "
            "question to the instance holding the document, and answering here would judge a request against "
