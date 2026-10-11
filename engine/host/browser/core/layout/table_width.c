@@ -173,94 +173,28 @@ static bool tw_declared_content_width(lxb_dom_element_t *table, CssPx edges, Css
    boxes), so no padding, border or declared `width`. "Outer" is css-sizing-3 §2.2 "Intrinsic Size
    Contributions"' outer size ("auto margins are treated as zero"); a caption's margins apply (CSS 2.1 §8.3
    "Margin properties"), asked of the component that owns that line. */
-typedef struct {
-    CssPx surround;   /* the caption's own horizontal padding and border */
-    CssPx margins;    /* its horizontal margins, css-sizing-3 §2.2's `auto` read as zero */
-} TwCaptionEdges;
-
-/* One of the six edge terms, under css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes".
-   Every percentage here is cyclic (a caption's containing block is the wrapper, sized from this algorithm's
-   output), and §5.2.1 says "For the min size properties, as well as for margins and paddings (and gutters), a
-   cyclic percentage is resolved against zero for determining intrinsic size contributions". That is not the
-   used-value rule, so this does not call core/layout/used_value.h. */
-static CssPx tw_caption_term(lxb_dom_element_t *caption, const char *name, bool margin)
+/* ONE caption's "minimum caption outer width", over core/layout/intrinsic_size.h's §5.2 terms. Every
+   percentage here is cyclic (a caption's containing block is the wrapper, sized from this algorithm's output),
+   so css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" applies: one on a margin or a
+   padding resolves against zero, one on `width` is treated as `auto`. MCW is the width at which "the formatted
+   content may span any number of lines but may not overflow the cell box", so a declared caption `width` above
+   its min-content size raises it, as step 1 does for a cell. A recorded reading: §5.2 would let a declared
+   width replace the content size and overflow; the two differ only for a width narrower than the longest word. */
+static CssPx tw_caption_outer_min(lxb_dom_element_t *caption)
 {
-    CssLength len = css_computed_length(caption, name);
-    char nbuf[160];
-
-    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
-    /* §5.2.1's cyclic percentage, and css-values-4 §10.11 "Computed Value"'s residue that still carries one. */
-    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) return css_px(0.0);
-    /* §2.2's "auto margins are treated as zero"; `auto` is the only keyword either grammar admits (a margin's
-       `<length> | <percentage> | auto`, a padding's `<length> | <percentage>`). */
-    if (margin && len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0) return css_px(0.0);
-    DFAILF("%s: CSS 2.1 §17.5.2.2 Automatic table layout's CAPMIN is the caption's OUTER width, and its `%s` "
-           "computed to a value neither CSS 2.1 §8.3 \"Margin properties\"' nor §8.4 \"Padding properties: "
-           "'padding-top', 'padding-right', 'padding-bottom', 'padding-left', and 'padding'\"' grammar admits "
-           "beside a length, a percentage and (for a margin) `auto`. Both sections give the computed value as "
-           "the percentage as specified or the absolute length, so nothing in the cascade can produce this",
-           box_subject(caption, nbuf, sizeof nbuf), name);
-    return css_px(0.0);
-}
-
-static TwCaptionEdges tw_caption_edges(lxb_dom_element_t *caption)
-{
-    TwCaptionEdges e;
+    IntrinsicInlineSizes inner;
+    CssPx declared;
 
     DCHECK(css_property_applies(caption, "margin-left") && css_property_applies(caption, "margin-right"),
            "CSS 2.1 §17.5.2.2's CAPMIN is a caption's OUTER width and css-sizing-3 §2.2 \"Intrinsic Size "
            "Contributions\" makes an outer size include the margins, and CSS 2.1 §8.3 \"Margin properties\"' "
            "Applies-to line now says the horizontal margins do NOT apply to a caption box — so either that "
            "line changed or this box is not a caption, and CAPMIN would be reported by two margins too small");
-    e.surround = css_px_add(css_px_add(tw_caption_term(caption, "padding-left", false),
-                                       tw_caption_term(caption, "padding-right", false)),
-                            css_px_add(tw_caption_term(caption, "border-left-width", false),
-                                       tw_caption_term(caption, "border-right-width", false)));
-    e.margins = css_px_add(tw_caption_term(caption, "margin-left", true),
-                           tw_caption_term(caption, "margin-right", true));
-    DCHECK(e.surround.px >= 0.0,
-           "a caption's padding and border summed NEGATIVE. CSS 2.1 §8.4 states that padding values cannot be "
-           "negative and css-backgrounds-3 §3.3 \"Line Thickness: the border-width properties\"' <line-width> "
-           "is a non-negative <length>, so this is arithmetic that lost a sign rather than a document");
-    return e;
-}
-
-/* ONE caption's "minimum caption outer width". */
-static CssPx tw_caption_outer_min(lxb_dom_element_t *caption)
-{
-    TwCaptionEdges e = tw_caption_edges(caption);
-    IntrinsicInlineSizes sizes = intrinsic_inline_sizes(caption);
-    CssPx inner = sizes.min_content;
-    CssLength w = css_computed_length(caption, "width");
-    char nbuf[160];
-
-    /* MCW is the width at which "the formatted content may span any number of lines but may not overflow the
-       cell box", so a declared caption `width` above its min-content size raises it, as step 1 does for a
-       cell. A recorded reading: css-sizing-3 §5.2 "Intrinsic Contributions" would let a declared width replace
-       the content size and overflow; the two differ only for a width narrower than the longest word. */
-    if (w.kind == CSS_LENGTH_ABSOLUTE) {
-        CssPx declared = css_px_max(w.px, css_px(0.0));
-        char *sizing = tw_computed(caption, "box-sizing");
-        bool border_box = strcmp(sizing, "border-box") == 0;
-
-        free(sizing);
-        if (border_box) declared = css_px_max(css_px_sub(declared, e.surround), css_px(0.0));
-        inner = css_px_max(inner, declared);
-    } else if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED) {
-        /* css-sizing-3 §5.2.1: a cyclic percentage in a preferred size property "is treated, for the purpose of
-           calculating the box's intrinsic size contributions only, as that property's initial value" (`auto`),
-           a different rule from the zero for margins and paddings. */
-        inner = sizes.min_content;
-    } else if (!(w.kind == CSS_LENGTH_KEYWORD && strcmp(w.keyword, "auto") == 0)) {
-        DFAILF("%s: CSS 2.1 §17.5.2.2 Automatic table layout's CAPMIN measures a caption whose computed `width` "
-               "is neither a length, a percentage nor `auto`. css-sizing-3 §3.1.1 \"Preferred Size Properties: "
-               "the width and height properties\" carries the intrinsic sizing keywords in that grammar and "
-               "each names its own rule over the pair core/layout/intrinsic_size.h has just answered — BUILD "
-               "each keyword's arm here rather than reading it as `auto`, which would drop an author's "
-               "declaration out of a FLOOR under the whole table's width",
-               box_subject(caption, nbuf, sizeof nbuf));
-    }
-    return css_px_add(css_px_add(inner, e.surround), e.margins);
+    inner = intrinsic_inline_sizes(caption);
+    if (intrinsic_declared_sizing_px(caption, INTRINSIC_AXIS_HORIZONTAL, "width", "auto", &declared))
+        inner.min_content = css_px_max(inner.min_content, declared);
+    inner.max_content = inner.min_content;
+    return intrinsic_outer_contribution(caption, inner).min_content;
 }
 
 static CssPx tw_capmin(lxb_dom_element_t *table)
