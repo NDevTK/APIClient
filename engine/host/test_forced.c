@@ -12101,24 +12101,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        nothing else. `cl-unknown-src` is the control `loc-hash-param` is for `idb-record-taint`: the same
        source reaching the same param list with no DOMTokenList in between, so a `v` carrying no shape is
        charged to DOM §7.1 Interface DOMTokenList rather than to a source that reaches no @H param at all. `cl-unknown` is the claim —
-       the answer is an unknown NAMING ITS SOURCE, which is what keeps `if (classList.contains(x))` a fork.
-       A COLLAPSE IS NOT AN ABSENCE HERE, and that is why the SHAPE is the term rather than the endpoint: a
-       decided answer emits a perfectly healthy record whose `v` reads `false`, so a row asking only whether
-       the endpoint arrived would read 1 for the defect it exists to catch.
-       AND THE CLAIM IS THE DERIVED SHAPE, NOT THE SOURCE INSIDE IT — the two rows below were asking the same
-       bytes of two different params, and a containment test cannot tell the answer this member OWES from the
-       one failure it must refuse. `contains` derives its result through solver/concolic.c's builtin hook,
-       whose shape is composed as `"%s.%s()"` over the OPERAND's, with the operation core/dom/dom_token_list.c
-       names at the call — so `v` is the source's shape with this member's name appended, and `h` is the bare
-       source. Asked as containment, BOTH rows read 1 for a member that simply handed its argument back
-       unchanged: the control and the claim would then carry identical bytes, and the whole point of having
-       both is that they do not. The hook's own DCHECK says why the operation is in the shape — it "is what
-       tells two derivations from one operand apart" — so a probe that erases it is asking the weaker
-       question the engine deliberately refuses to answer. */
+       the answer is an unknown naming its source, which is what keeps `if (classList.contains(x))` a fork. A
+       collapse is not an absence: a decided answer emits a healthy record whose `v` reads `false`, so the
+       claim is `valueClass: unknown` (the param holds a hole) beside the value DOM §7.1's contains steps give
+       for the token's own example — `location.hash` is "" here, which is in no token set, so `false`. An
+       emission that carried the shape instead would be the example withheld, not the hole kept. */
     int clunk_ran_tt = param_value_only(js, "/api/clunknown", "c", "true");
     int clunk_src_tt = param_value_is(js, "/api/clunknown", "h", LOCATION_HASH_SHAPE);
-    int clunk_tt     = param_value_is(js, "/api/clunknown", "v",
-                                      LOCATION_HASH_SHAPE ".DOMTokenList.contains()");
+    int clunk_tt     = emitted_record_has(js, "/api/clunknown",
+                                          "\"name\":\"v\",\"location\":\"query\",\"valueClass\":\"unknown\"") &&
+                       param_value_is(js, "/api/clunknown", "v", "false");
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one

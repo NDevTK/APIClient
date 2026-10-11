@@ -535,6 +535,26 @@ static const IdlStepDecl TL_ITEM_DECL = {
     TL_ITEM_ALGORITHM, TL_ITEM_STEPS, 0, NULL
 };
 
+/* The DOMString an unknown token's own example converts to, owned (free with JS_FreeCString), or NULL where it
+   carries no example this flow may believe. A builtin's example is its algorithm run on its operand's example
+   (solver/concolic.h's concolic_builtin_hook), never on the shape token_bytes names the unknown by: that shape is
+   nobody's token, so an answer computed over it is a value no world holds. */
+static const char *token_example_bytes(JSContext *ctx, JSValueConst v, size_t *len)
+{
+    ConcolicExState st = concolic_example_state(v);
+    JSValue ex;
+    const char *s;
+
+    if (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED) return NULL;
+    ex = concolic_example(ctx, v);
+    DCHECK(!JS_IsObject(ex) && !JS_IsSymbol(ex),
+           "an unknown token's example is not a primitive a DOMString conversion takes without running page code");
+    s = JS_ToCStringLen(ctx, len, ex);
+    JS_FreeValue(ctx, ex);
+    CHECK(s, "DOMTokenList: OOM converting an unknown token's example");
+    return s;
+}
+
 static JSValue js_tl_contains(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     const char *attr, *v, *tok;
@@ -545,20 +565,21 @@ static JSValue js_tl_contains(JSContext *ctx, JSValueConst this_val, int argc, J
 
     (void)magic;
     if (!el || argc < 1) return JS_FALSE;
+    v = list_value(el, attr, &vlen);
+    /* An unknown token is an unknown answer: the domain permits both, and a concrete one here would decide
+       `if (el.classList.contains(x))` for the flow and delete the other arm, which is where a bundle gates its
+       admin UI. Its example is §7.1's steps run on the token's own example, and absent where it has none. */
+    if (concolic_is(argv[0])) {
+        tok = token_example_bytes(ctx, argv[0], &tlen);
+        out = tok ? JS_NewBool(ctx, value_has(v, vlen, tok, tlen)) : JS_UNDEFINED;
+        if (tok) JS_FreeCString(ctx, tok);
+        return concolic_builtin_hook(ctx, argv[0], "DOMTokenList.contains", out);
+    }
     tok = token_bytes(ctx, argv[0], &tlen, NULL);
     if (!tok) return JS_EXCEPTION;
-    v = list_value(el, attr, &vlen);
     has = value_has(v, vlen, tok, tlen);
     JS_FreeCString(ctx, tok);
-    out = JS_NewBool(ctx, has);
-    /* AN UNKNOWN TOKEN IS AN UNKNOWN ANSWER, for the reason `supports` states one member up: the membership
-       was decided against the SHAPE, which is a real string and is nobody's class, so the concrete example is
-       `false` — but the DOMAIN still permits both, and a concrete `false` here would decide
-       `if (el.classList.contains(x))` for the flow and delete the true arm. That arm is the whole point: a
-       bundle gates its admin UI on exactly this call. */
-    if (concolic_is(argv[0]))
-        out = concolic_builtin_hook(ctx, argv[0], "DOMTokenList.contains", out);
-    return out;
+    return JS_NewBool(ctx, has);
 }
 
 /* §7.1 `boolean supports(DOMString token)` — "Let result be the return value of validation steps called with
@@ -597,8 +618,8 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
     if (!el)
         return JS_ThrowTypeError(ctx, "supports called on a receiver that is not a DOMTokenList with an "
                                       "associated element");
-    /* An unknown token denotes its SHAPE, the same rule `value =` and `contains` follow — one spelling, in
-       token_bytes, because three members answering the same question three times is three chances to differ. */
+    /* An unknown token denotes its SHAPE here, the rule `value =` follows, spelled once in token_bytes; it decides
+       only step 1, which the token does not enter (the example below is the token's own). */
     tok = token_bytes(ctx, argv[0], &tlen, NULL);
     if (!tok) return JS_EXCEPTION;
     /* Validation step 2: "Let lowercaseToken be token, in ASCII lowercase." */
@@ -618,14 +639,26 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
     if (supported == HTML_TOKENS_UNDEFINED)
         return JS_ThrowTypeError(ctx, "no supported tokens are defined for the `%s` attribute of this element",
                                  attr);
-    out = JS_NewBool(ctx, supported == HTML_TOKENS_PRESENT);
-    /* AN UNKNOWN TOKEN IS AN UNKNOWN ANSWER. The membership was decided against the shape, which is a real
-       string and is no keyword, so the concrete example is `false` — but the DOMAIN still permits both, and a
-       concrete `false` here would decide `if (list.supports(x))` for the flow and delete the true arm. The
-       result therefore carries the operand's source, exactly as every other builtin over unknown input does. */
-    if (concolic_is(argv[0]))
-        out = concolic_builtin_hook(ctx, argv[0], "DOMTokenList.supports", out);
-    return out;
+    if (!concolic_is(argv[0])) return JS_NewBool(ctx, supported == HTML_TOKENS_PRESENT);
+    /* An unknown token is an unknown answer, carrying the operand's source as every builtin over unknown input
+       does. Step 1 above is decided by the element and the attribute name alone, so the shape could answer it;
+       steps 2 to 4 are about the token, so the example is those steps run on the token's own example, and absent
+       where it has none. */
+    tok = token_example_bytes(ctx, argv[0], &tlen);
+    out = JS_UNDEFINED;
+    if (tok) {
+        lower = malloc(tlen + 1);
+        CHECK(lower != NULL, "DOMTokenList: OOM lowercasing a supports() token's example");
+        for (i = 0; i < tlen; i++) {
+            char c = tok[i];
+            lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+        }
+        lower[tlen] = 0;
+        JS_FreeCString(ctx, tok);
+        out = JS_NewBool(ctx, html_supported_token(el, attr, lower, tlen) == HTML_TOKENS_PRESENT);
+        free(lower);
+    }
+    return concolic_builtin_hook(ctx, argv[0], "DOMTokenList.supports", out);
 }
 
 /* ONE TOKEN ARGUMENT, held as the bytes the walk compares against. A list of these is what makes `add` and
