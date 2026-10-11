@@ -2016,6 +2016,7 @@ async function main() {
     }
     console.error(`[trusted] peer instance [${i.tag}] flow base: ${saw}`);
   }
+  routedPostJoin(instances);
 
   /* AND THE DENOMINATION IS SAID OUT LOUD BESIDE THE FINDINGS, because every total in the document this
      process is about to print was taken under it, and CLAUDE.md's rule is that an instrument measuring a
@@ -2142,6 +2143,51 @@ async function main() {
      is exactly the ordering `@RESULT`-then-teardown makes possible — left this process exiting 0 while the
      assert that fired was on its own stderr. The signal is the fact, so it decides the status. */
   process.exitCode = root.signal ? 1 : root.exit;
+}
+
+/* THE ROUTED-POST JOIN: a receiver's finding over `message.data:<id>[.path]` (its whole routed `data`, minted per
+   delivery) joined to the sender's `routedPosts` record of that id, which names the sender's own source at each
+   path. The sender origin is stamped here, from this zone's record of the instance, because the engine may not
+   state its own (SECURITY.md). A receiver path is covered by the sender symbol at its longest prefix: a member
+   read below a sender's unknown derives from it. One `@JOIN` line per distinct (receiver, id, path); an id no
+   sender indexed is said, never dropped. A child's document is untrusted, so an unreadable one is skipped
+   here, where the flow-base report above has already said so. */
+function routedPostJoin(instances) {
+  const docOf = (i) => {
+    if (i.result === null) return null;
+    try { const d = JSON.parse(i.result); return d && typeof d === 'object' ? d : null; } catch { return null; }
+  };
+  const posts = new Map();
+  for (const i of instances) {
+    const d = docOf(i);
+    if (!d || !Array.isArray(d.routedPosts)) continue;
+    for (const p of d.routedPosts)
+      if (p && typeof p.id === 'string' && Array.isArray(p.symbols))
+        posts.set(p.id, { sender: i.tag, senderOrigin: i.origin, post: p });
+  }
+  const seen = new Set();
+  const ref = /message\.data:([0-9a-f]{16})\}?((?:\.[^\s"{}\[\].]+)*)/g;
+  for (const i of instances) {
+    const d = docOf(i);
+    if (!d) continue;
+    const text = JSON.stringify([d.fetchCallSites, d.securitySinks]);
+    for (const m of text.matchAll(ref)) {
+      const key = `${i.tag} ${m[1]} ${m[2]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const s = posts.get(m[1]);
+      if (!s) {
+        console.error(`[trusted] @JOIN ${JSON.stringify({ receiver: i.tag, id: m[1], path: m[2], sender: null })}`);
+        continue;
+      }
+      const sym = s.post.symbols.filter((x) => typeof x.path === 'string' && m[2].startsWith(x.path))
+                                .sort((a, b) => b.path.length - a.path.length)[0] ?? null;
+      console.error(`[trusted] @JOIN ${JSON.stringify({
+        receiver: i.tag, id: m[1], path: m[2], sender: s.sender, senderOrigin: s.senderOrigin,
+        relation: s.post.relation, targetOrigin: s.post.targetOrigin,
+        source: sym ? sym.source : null, shape: sym ? sym.shape : null })}`);
+    }
+  }
 }
 
 await main();
