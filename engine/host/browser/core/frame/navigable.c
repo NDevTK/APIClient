@@ -3327,7 +3327,11 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
     {
         JSValue entry_resource = session_history_active_entry_resource(ctx);
         const char *resource = JS_IsString(entry_resource) ? JS_ToCString(ctx, entry_resource) : NULL;
-        /* §7.4.3's reload re-populates the entry under its document state's request referrer policy. */
+        /* §7.4.3's reload re-populates the entry under its document state's request referrer policy.
+           Known interop divergence, kept to the spec: for `frames[0].location.reload()` of a
+           `referrerpolicy="origin"` child, Chrome 148 sends the child's own full URL as Referer, where this
+           sends the stored policy's, its origin. The spec's own text beside the field asks "or should this be the
+           referrerPolicy that was passed to navigate?" (§7.4.2.3.2's javascript: URL navigation). */
         char *entry_policy = session_history_active_entry_request_referrer_policy(ctx);
 
         CHECK(!JS_IsString(entry_resource) || resource != NULL,
