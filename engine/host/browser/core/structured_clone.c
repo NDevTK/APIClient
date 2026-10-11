@@ -915,6 +915,42 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
     }
 }
 
+int structured_examples_serialize(JSContext *ctx, const StructuredWithTransfer *in, StructuredData *out)
+{
+    uint32_t ns = structured_transfer_len(ctx, in->symbols), i;
+    JSValue values, v;
+    int rc;
+
+    DCHECK(structured_transfer_len(ctx, in->holders) == 0,
+           "a record with data holders was asked for its examples-only bytes — a holder is a moved object and "
+           "has no example to stand for it");
+    values = JS_NewArray(ctx);
+    CHECK(!JS_IsException(values), "structured clone: OOM building a record's example resolution");
+    for (i = 0; i < ns; i++) {
+        JSValue rec = JS_GetPropertyUint32(ctx, in->symbols, i);
+        JSValue ex = JS_GetPropertyUint32(ctx, rec, SY_EXAMPLE);
+
+        JS_FreeValue(ctx, rec);
+        DCHECK(!concolic_is(ex), "a symbol record's example is itself a concolic — the writer stores "
+                                 "concolic_example's concrete value, so the two halves of this format disagree");
+        JS_DefinePropertyValueUint32(ctx, values, i, ex, JS_PROP_C_W_E);
+    }
+    {
+        /* The writer's one numbering with no holders: symbol k is index k (structured_serialize_transfer). */
+        SCReadMemory back = { values, ns, 0, JS_UNDEFINED };
+        JSTransferReadHook hook;
+
+        hook.value_at = sc_memory_value;
+        hook.count = ns;
+        hook.opaque = &back;
+        v = sc_deserialize(ctx, &in->data, &hook);
+    }
+    JS_FreeValue(ctx, values);
+    rc = structured_serialize(ctx, v, out);
+    JS_FreeValue(ctx, v);
+    return rc;
+}
+
 void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d)
 {
     structured_data_free(ctx, &d->data);

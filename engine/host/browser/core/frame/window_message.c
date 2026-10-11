@@ -430,25 +430,9 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     JSValue holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
     uint32_t nheld = structured_transfer_len(ctx, holders);
     JSValue syms = JS_GetPropertyUint32(ctx, entry, PQ_SYMBOLS);
-    uint32_t nsym = structured_transfer_len(ctx, syms);
+    StructuredData plain = { NULL, 0 };
 
     JS_FreeValue(ctx, holders);
-    JS_FreeValue(ctx, syms);
-    /* A TRIPLE DOES NOT CROSS AN INSTANCE EITHER, AND IT IS ITS OWN REFUSAL RATHER THAN THE HOLDER'S. The
-       assert below names a MessagePort handle and an ArrayBuffer's bytes as what to build, which would be a
-       plausible and WRONG diagnosis for a concolic -- the engine would send a reader hunting a transferable
-       that is not in the message. What is missing here is named instead: the triple is already written AS DATA
-       in this record's `symbols`, so what a routed record needs is a FIELD on the wire format to carry it and
-       a read of that field where the arriving entry is built. Until then the bytes would arrive with the
-       example alone and the receiving flow would DECIDE a branch the sender forked, which is a wrong answer
-       rather than a lossy one -- §Solver's own test. */
-    DCHECK(nsym == 0,
-           "postMessage sent a CONCOLIC to ANOTHER INSTANCE — the triple is written as data in this record's "
-           "`symbols` and the routed wire format has no field to carry it, so the delivered value would stand "
-           "for its example alone and a branch on it would be DECIDED where this flow forked. Build the "
-           "cross-instance arm: one more field on the routed record, read where the arriving entry sets "
-           "PQ_SYMBOLS");
-    (void)nsym;   /* the count is the assert's, and the assert is compiled out of a release build */
     /* A TRANSFER DOES NOT CROSS AN INSTANCE YET, AND A DROPPED ONE IS WORSE THAN A THROW. §2.7.7 has already
        DETACHED every object in the transfer list by the time this runs — the page no longer has its port or its
        buffer — so sending the bytes without the holders delivers a message whose `ports` is empty and destroys
@@ -466,6 +450,24 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     DCHECK(f != NULL, "a cross-instance post was made outside a flow — there would be no world to carry");
     bytes = JS_GetArrayBuffer(ctx, &blen, buf);
     DCHECK(bytes != NULL, "a queued window message held something that is not the bytes it stored");
+    /* The triples cross as their examples, the bytes a browser without the solver sends. Every routed sender
+       is cross-origin to its receiver (an instance is one origin-keyed agent cluster of one browsing context
+       group, and a WindowProxy does not leave its group), so window_message_deliver_remote mints the whole of
+       `data` as attacker input and forks every branch on it; a sender's source name minted in that heap would
+       name the receiver's own input of the same name.
+       Named residual. Not covered: the receiver's finding parked on a sender demand cannot name which of
+       this sender's sources reached it. Next diff builds: the emission index, keeping each routed record's
+       triples here under the record's identity so the producer resolves `message.data:<id>.<path>`. Absence
+       shows as: a sink reached through a routed message that only a forged sender ever fires. */
+    if (structured_transfer_len(ctx, syms) > 0) {
+        StructuredWithTransfer rec = { { bytes, blen }, JS_UNDEFINED, syms };
+
+        CHECK(structured_examples_serialize(ctx, &rec, &plain) == 0,
+              "window message: a queued message's examples could not be serialized again");
+        bytes = plain.buf;
+        blen = plain.len;
+    }
+    JS_FreeValue(ctx, syms);
     head = engine_record_head("windowproxy.post", world_doc_name(window_proxy_doc(target)), f);
 
     b64_cap = JS_Base64EncodedSize(blen) + 1;
@@ -489,6 +491,7 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     free(head);
     free(op);
     free(b64);
+    if (plain.buf) structured_data_free(ctx, &plain);
     if (want_s) JS_FreeCString(ctx, want_s);
     JS_FreeValue(ctx, want);
     JS_FreeValue(ctx, buf);
@@ -581,11 +584,8 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
        dropping one, so a routed record carrying holders cannot exist. The empty list is that fact, not a
        default — when the cross-instance holder is built, it is read here. */
     JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_UNDEFINED);
-    /* AND NO SYMBOLS, for the same reason and with the same shape: window_message_send_remote aborts on a
-       record carrying triples rather than sending the bytes without them, so a routed record carrying symbols
-       cannot exist. The empty list is that fact and not a default -- a routed message's own `data` is already
-       unknown input by §9.3.3 step 8.2's principal test below, which is a DIFFERENT fact from a triple the
-       SENDING page's own code had narrowed. */
+    /* And no symbols: window_message_send_remote writes each triple as its example, because this delivery's
+       `data` is unknown input as a whole by §9.3.3 step 8.2's principal test below. */
     JS_SetPropertyUint32(ctx, entry, PQ_SYMBOLS, JS_UNDEFINED);
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN,
                          (target_origin && strcmp(target_origin, "*")) ? JS_NewString(ctx, target_origin)
@@ -598,8 +598,8 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
      * arbitrary events … to objects in other origins". So a message from a document that is NOT same origin
      * with this agent is, from the receiver's side, indistinguishable from one an attacker sent — the attacker
      * registers a domain and posts from it, which is a capability every cross-origin sender already has — and
-     * its `data` and its `origin` are both unknown external input. A SAME-ORIGIN sender is this app: an agent
-     * is origin-keyed, so its bytes are the app's own values and concretising them is right.
+     * its `data` and its `origin` are both unknown external input. Every routed sender is one: a same-origin
+     * document of this browsing context group is a realm of this instance, never a peer.
      *
      * THE STAMPED ORIGIN IS THE EXAMPLE AND NOT THE ANSWER. It is a real measurement — the trusted zone made
      * it, and SECURITY.md is why this engine may not — so the concolic carries it and a branch marks the arm
@@ -615,10 +615,11 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
      * an opaque agent is same origin with nothing, another "null" included; un-recreatable-from-its-
      * serialization is why the tuple test is the only side of this that can be asked with one operand still in
      * bytes. */
-    if (origin_is_serialized_tuple(origin_agent(), sender_origin)) {
-        JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, sender_origin));
-        JS_SetPropertyUint32(ctx, entry, PQ_DATA_SRC, JS_NULL);
-    } else {
+    DCHECK(!origin_is_serialized_tuple(origin_agent(), sender_origin),
+           "a message was routed here from a sender same origin with this agent — an instance is the one "
+           "origin-keyed agent cluster of its browsing context group, so that sender is a realm of this "
+           "instance and its post is the local path; the trusted zone provisioned two instances for one cluster");
+    {
         char dsrc[64], osrc[64], oshape[68];
         JSValue org;
 

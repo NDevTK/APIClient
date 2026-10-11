@@ -228,6 +228,11 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
    it instead of drifting from it. A second stored count would be the second copy §AN-AUDITOR-DERIVES-THE-RULE
    forbids, and it is the copy a resolver never reads. */
 uint32_t structured_moved_len(JSContext *ctx, const StructuredWithTransfer *in, JSValueConst values);
+/* The record's bytes with every symbol reference written as its triple's example: the bytes a browser with no
+   solver would have serialized. For bytes leaving this instance, where no symbol identity may follow
+   (core/frame/window_message.c says why). `in` carries no holders. Returns 0 with `*out` owned, or -1 with the
+   "DataCloneError" live. */
+int  structured_examples_serialize(JSContext *ctx, const StructuredWithTransfer *in, StructuredData *out);
 void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d);
 
 #endif
