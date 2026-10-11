@@ -5816,10 +5816,10 @@ static long g_prog_queued_cand;
    reused (solver/flow.h's `dyn_id`).
    Named residual. Not covered: the element reads this park makes (script_csp_meta's nonce slot and `integrity`, and
    Fetch §4.3's `blob:` lookup) are answered under whichever DOM delta is applied when the row is created, which for
-   an @S candidate flow (created at the pick with the outgoing flow still switched in) and engine_join_document's
-   boot flow (created by the flow that built the navigable) is not the new flow's own. The policy half is
-   unaffected: a policy container is written once at creation and not COW-captured. Next diff builds: creation at
-   baseline for those two sites, as the session's seeding and cold_resume have. Absence shows as: a page that writes
+   an @S candidate flow (created at the pick with the outgoing flow still switched in) is not the new flow's own.
+   engine_join_document's boot flow is created at baseline (qjs_join asks engine_host_baseline first). The policy
+   half is unaffected: a policy container is written once at creation and not COW-captured. Next diff builds:
+   creation at baseline for the candidate site, as the session's seeding and cold_resume have. Absence shows as: a page that writes
    `s.integrity` or `s.nonce` onto a markup `<script src>` and reaches a detected sink, where the candidate's
    request is admitted or refused on an attribute value its own baseline run never had. */
 static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
@@ -10007,6 +10007,17 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
  * This member takes none of them, so everything queued below is its whole program order, at cursor 0. The order
  * is the document's, and engine_seed_scripts lays it down from the same rows the root's seed reads, schedule and
  * refusals included. */
+void engine_host_baseline(void) {
+    DCHECK(g_sess_live, "the baseline was asked for outside a live session");
+    DCHECK(cow_current() == NULL && JS_FlowGen() == 0,
+           "the baseline was asked for while a slice is open — the held flow is switched out only across the "
+           "host's own time, where the capture route is down and the stamp is zero");
+    if (g_sess_cur) { flow_switch_out(g_sess_ctx, g_sess_cur); g_sess_cur = NULL; }
+    /* The slice re-opens with captures routed nowhere, as the first one does; the saved route was the delta
+       just unapplied. */
+    g_slice_delta = NULL;
+}
+
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
                           int n, EngineArrival arrival) {

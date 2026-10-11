@@ -696,6 +696,9 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "a joined document's bytes carry no guard byte at their stated length — the ABI placement writes "
            "one past the sequence so that a length and a C read cannot disagree silently");
 
+    /* At the baseline, as the root document is built: the realm's time origin, its tree and its boot flow are the
+       agent's, not the held flow's whose delta a yield leaves applied. */
+    engine_host_baseline();
     /* The principal, before anything is built from the bytes: §7.1.1's same origin of the agent's record against
        this document's address, asked first because the parse into the agent's arenas, the realm and the flow
        cannot be undone once done. */

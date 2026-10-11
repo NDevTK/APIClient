@@ -404,6 +404,14 @@ void engine_sched_end(void);
  * entry i's §4.12.1.1 schedule (required, asserted). `els[i]` is entry i's `script` element, borrowed, because
  * it names a node of the handed-over tree, which outlives the rows. `arrival` is how this document was reached
  * (engine_set_arrival), so its boot flow carries that navigation's marks. */
+/* Puts the heap and the document back at the agent's baseline for a host act that builds there: the flow
+ * the scheduler holds across a yield (engine_sched_slice returns without switching it out) is switched out,
+ * and the next slice picks as a session's first one does. A host-handed document's realm, tree and time
+ * origin are baseline facts; built over a held flow's applied delta they would read that flow's writes (its
+ * event-loop clock among them) while the document's boot flow runs over the baseline. Requires a live session
+ * and no flow running (the host's own time). */
+void engine_host_baseline(void);
+
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
                           int n, EngineArrival arrival);
