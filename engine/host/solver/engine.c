@@ -650,9 +650,9 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
 }
 
 /* A peer holds a reference into this document (engine.h's engine_set_referenced). It belongs to the instance,
-   not a session: set once by the host that provisioned the instance, it survives every session boundary. It is
-   read by flow_step (a timeline that may not finish) and by the slice (a frontier that may not be declared
-   exhausted). */
+   not a session: raised by the host that provisioned the instance or by the document creating a navigable another
+   agent hosts, it survives every session boundary. It is read by flow_step (a timeline that may not finish), by
+   the slice (a frontier that may not be declared exhausted) and by the ABI (engine_referenced). */
 static int g_referenced;
 
 /* The browser layer's document-load lifecycle, asked when a flow has run everything the document gave it. */
@@ -9755,14 +9755,18 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
 }
 
 void engine_set_referenced(int referenced) {
+    /* A reference is never given back: a peer that holds a WindowProxy for this document holds it for as long as
+       the peer exists, and nothing tells this instance when that ends. Raising the flag makes no resting flow
+       askable, so there is no host-owed mark to clear. */
+    DCHECKF(referenced == 0 || referenced == 1, "a peer reference of %d — the flag has two values", referenced);
+    DCHECKF(referenced >= g_referenced,
+            "the peer-reference flag was lowered from %d to %d — it is raised by the provisioning host and by "
+            "this document creating a navigable another agent hosts, and neither fact can be retracted",
+            g_referenced, referenced);
     g_referenced = referenced;
-    /* And every member is askable again, because this flag is one of the answers: a flow with nothing left to run
-       reports host-owed instead of finishing while it is set (flow_step's referenced return), so clearing it lets
-       those flows finish, a change the host made naming no flow, which is the whole-frontier clear (flow.h).
-       Unconditional rather than on the 1→0 edge: a mark cleared a step early costs one step, a mark kept after its
-       fact has gone costs the flow its ending. */
-    flow_clear_host_owed_all();
 }
+
+int engine_referenced(void) { return g_referenced; }
 
 static double g_yield_floor = -1.0 / 0.0;
 void engine_set_yield_floor(double w) { g_yield_floor = w; }

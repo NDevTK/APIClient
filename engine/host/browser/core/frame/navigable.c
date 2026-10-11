@@ -4183,6 +4183,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                           (is_child || (feat && feat->noopener)) ? JS_NULL
                                                                                  : document_window_proxy(ctx));
         CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
+        /* The peer that will host this navigable's document holds a WindowProxy for this one: its `parent`
+           (§7.3.1.3) for a child, its `opener` (§7.2.2.1) for an auxiliary navigable without `noopener`. So this
+           document may not run its timelines out before the peer reads it; the creator is the only party that
+           knows this at the moment it becomes true, before any host round. The setter asserts the flag only
+           rises. */
+        if (is_child || !(feat && feat->noopener)) engine_set_referenced(1);
     }
     /* §7.3.1.3's create-a-new-child-navigable: "Set element's content navigable to navigable." The ELEMENT's
        half of that link is the wrapper slot core/html/html_iframe.c writes when this returns; this is the

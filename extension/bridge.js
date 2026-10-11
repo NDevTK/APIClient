@@ -3352,6 +3352,14 @@ async function hostNotice(eng, line) {
        field added last is the one a stale count would let arrive as `undefined`. */
     DCHECK(f.length >= 17, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
+    /* The creator is referenced from now on: the peer hosting this navigable holds a WindowProxy for it (its
+       `parent`, or its `opener`), and the engine raised its own flag at the emission (core/frame/navigable.c).
+       This is the zone's record of that, read when the instance is re-rooted and by the join arms below.
+       Named residual. Not covered: an auxiliary navigable created with `noopener` has no opener, so its creator
+       is not referenced and this record overstates it; the notice does not say which. Next diff builds: the
+       notice carrying whether the new navigable has an opener. Absence shows as: a creator re-rooted after a
+       `noopener` popup stalling as referenced instead of finishing. */
+    eng.referenced = 1;
     /* Field 15 is the engine's word for what this navigation is evidence of; navigationLoad and the chokepoint
        decide on it, and this arm passes it through without testing it. */
     /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
@@ -3495,18 +3503,17 @@ async function hostNotice(eng, line) {
              "it failed to boot, so this child has an agent that does not exist rather than one it can join, " +
              "and every read through its proxy would park forever");
       /* The joined document is referenced (the creating engine minted this name because its page holds a
-         WindowProxy under it), so its instance may not be one whose timelines may run out; the flag is stated
-         only before `qjs_begin`, so an unreferenced holder is refused rather than told late. It is reachable
-         through nesting that returns to an origin a top-level document already runs in this group (A embeds
-         cross-origin B, B embeds A). What to build: an entry that states the flag for a live frontier, a
-         different ABI entry from the one whose `!g_begun` assert exists. */
+         WindowProxy under it), so its instance may not be one whose timelines may run out. Every instance of a
+         group other than its top-level one was provisioned for a navigable a peer created, and the top-level
+         one is referenced as soon as it creates a navigable another instance hosts (the record at the top of
+         this arm), so a holder reached through nesting that returns to its origin (A embeds cross-origin B, B
+         embeds A) is A, the creator of B. */
       DCHECK(holder.referenced === 1,
-             "a cross-origin child was joined to an instance that never declared a peer reference — the create " +
-             "notice is itself the proof that one exists (the creating engine minted this name because its " +
-             "page holds a WindowProxy under it), so this agent may not let its timelines run out, and the " +
-             "flag that says so can only be stated before the frontier is seeded; this instance's was seeded " +
-             "for a document nothing held a proxy for, and the first read through the new child's proxy will " +
-             "arrive at a heap entitled to have finished");
+             "a cross-origin child was joined to an instance that holds no peer reference — the create notice is " +
+             "itself the proof that one exists (the creating engine minted this name because its page holds a " +
+             "WindowProxy under it), and every instance of a group either was provisioned for a peer's " +
+             "navigable or created one, so this holder came from neither and the first read through the new " +
+             "child's proxy will arrive at a heap entitled to have finished");
       /* The bytes are on the message here, the one caller for which that holds: `msg` is the object this zone
          composed for the announced child. */
       await engineJoin(holder, msg.pageHtml, msg, f[1], f[5], inherited, parentNavigable, containerPolicy,
@@ -3625,9 +3632,9 @@ async function hostNotice(eng, line) {
     if (navHolder) {
       if (navHolder.state === "booting") await navHolder._readyP;
       DCHECK(navHolder.referenced === 1,
-             "a top-level navigation into a peer joined an instance that never declared a peer reference — the " +
+             "a top-level navigation into a peer joined an instance that holds no peer reference — the " +
              "navigating engine's proxy names this document, so that instance may not let its timelines run " +
-             "out, and the flag can only be stated before its frontier is seeded");
+             "out, and every instance of a group either was provisioned for a peer's navigable or created one");
       /* No creator: the join's grammar for that is the empty CSP pair and the new embedder policy, as for a
          tab's top-level navigation joining its cluster. */
       await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[1], navd.url,

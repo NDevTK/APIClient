@@ -107,11 +107,6 @@ static JSRuntime           *g_rt;
 static JSContext           *g_ctx;
 static int                  g_begun;
 static int                  g_done;
-/* What the provisioning zone stated about this instance (see qjs_set_referenced). It is the ABI's record of
- * having been handed the fact, distinct from solver/engine.c's scheduler reading of it, which lets the stall
- * assert below tell a bill from a document waiting to be asked something. Whether a peer holds a WindowProxy for
- * this document is a property of the instance's provisioning, not of one run, so qjs_teardown does not clear it. */
-static int                  g_referenced;
 
 /* The document this instance last answered with. `result_json` returns a fresh malloc'd document per call
  * (solver/result.h: "caller frees"), and the trusted zone's binding copies the C string and drops the address, so
@@ -886,8 +881,16 @@ QJS_EXPORT void qjs_set_referenced(int referenced)
            "a peer reference was declared with something that is neither of the two answers — the host either "
            "provisioned this instance for a navigable another agent created or it did not, and a third value "
            "would be read by whichever arm the scheduler's test happens to be written as");
-    g_referenced = referenced;
     engine_set_referenced(referenced);
+}
+
+/* Whether a peer holds a reference into this instance's document, read off solver/engine.c's one flag. It is
+   raised by qjs_set_referenced and by the engine itself when this document creates a navigable another agent
+   hosts (core/frame/navigable.c). A native host's stall arm asks this. */
+QJS_EXPORT int qjs_referenced(void)
+{
+    DCHECK(g_ctx != NULL, "qjs_referenced was asked before qjs_init built the context");
+    return engine_referenced();
 }
 
 /* Phase 2: seed the frontier. */
@@ -950,11 +953,12 @@ QJS_EXPORT int qjs_step(void)
            "YIELD and STALLED, so a fourth value reaches it as whichever branch happens to be the fallback");
     /* A stall is a bill, so it names what is owed: the two registers this ABI's host can read. There are two stall
        causes. engine_sched_step stalls for engine_host_owes (both registers' union; its dev walk asserts every
-       outstanding entry is tellable through one) and for engine_set_referenced, a document a peer references,
-       whose last timeline waits for a question arriving through qjs_perform or qjs_route and owes no register
-       entry. The host tells them apart because it made that statement (qjs_set_referenced), so the third disjunct
-       is `g_referenced`. An unreferenced instance stalling with both registers empty is the failure named. */
-    DCHECK(r != ENGINE_STEP_STALLED || g_referenced ||
+       outstanding entry is tellable through one) and for a referenced document, whose last timeline waits for a
+       question arriving through qjs_perform or qjs_route and owes no register entry. The third disjunct is the
+       engine's reference flag, raised by qjs_set_referenced or by the engine when this document created a
+       navigable another agent hosts. An unreferenced instance stalling with both registers empty is the failure
+       named. */
+    DCHECK(r != ENGINE_STEP_STALLED || engine_referenced() ||
            *engine_pending_fetches() != '\0' || *engine_host_requests() != '\0',
            "the scheduler asked this host to PAY and named nothing owed — a stall reaches the host as a bill "
            "over qjs_pending and qjs_host_requests, and with both empty there is no record to answer, so every "

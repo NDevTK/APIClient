@@ -314,10 +314,13 @@ int engine_frontier_settled(void);
    timelines may not run out: a peer can ask it something at any time, and a fresh flow seeded from the
    baseline would answer about a document in which none of the page's scripts ran. The last timeline reports
    itself host-owed (flow.h) instead of finishing and the session stalls instead of closing; a host-owed flow
-   is out of the pick, so nothing spins, and the arriving operation resumes it. Set by the host, because
-   provisioning (another agent created this instance's navigable) is invisible to the engine; it belongs to
-   the instance and survives session boundaries. */
+   is out of the pick, so nothing spins, and the arriving operation resumes it. Raised by the host, which sees
+   provisioning (another agent created this instance's navigable), and by core/frame/navigable.c when this
+   document creates a navigable another agent hosts, whose `parent` or `opener` is then a proxy for it. It
+   belongs to the instance, survives session boundaries and only rises (asserted). */
 void engine_set_referenced(int referenced);
+/* The flag above, for the ABI's readers. It is the one copy. */
+int  engine_referenced(void);
 
 /* Install how the host pays what it owes, for the one-call driver (engine_run), which has no caller to return a
    stall to. The provider fills what engine_pending_fetches and engine_host_requests name and answers how many

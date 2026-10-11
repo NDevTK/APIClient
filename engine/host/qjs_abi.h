@@ -94,6 +94,7 @@ QJS_EXPORT int qjs_host_decline(unsigned req, const char *reason);
    decides whether this instance's last timeline may finish at all. Everything below it is a record arriving at
    a document that is still there to receive one; without it there eventually is not. */
 QJS_EXPORT void qjs_set_referenced(int referenced);
+QJS_EXPORT int qjs_referenced(void);
 QJS_EXPORT void qjs_route(const char *record, const char *sender_origin);
 QJS_EXPORT void qjs_world_gone(const char *world);
 QJS_EXPORT void qjs_perform(const char *token, const char *record);

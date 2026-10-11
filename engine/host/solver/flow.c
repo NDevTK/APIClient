@@ -3291,7 +3291,7 @@ void flow_clear_host_owed_all(void) {
         g_owed_gen = 1;
     }
     /* The whole-frontier form: every member just became eligible, the largest ranking change one call makes. The
-       host reaches this between slices (engine_set_referenced and the provider's own edges), so the yield request is
+       host reaches this between slices (the provider's own edges), so the yield request is
        read at the first opcode of the next slice, when the new set first matters. */
     frontier_rank_changed();
 }
