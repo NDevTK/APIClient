@@ -286,8 +286,8 @@ const char *endpoint_razor_class_token(int cls);
     /* a flow stood and its path had chosen no witness: nothing this run pinned can be under this    \
        address, so `unproven` here really is the run having proved nothing. */                       \
     X(EPW_NO_WITNESS,  "no-witness")                                                                \
-    /* a flow stood whose path had determined a source's value on an arm its own concrete example    \
-       contradicted (solver/flow.h's `path_pinned`). The address may rest on bytes this engine       \
+    /* a flow stood whose path had determined a source's value on an arm no example confirmed       \
+       (solver/flow.h's `path_pinned`). The address may rest on bytes this engine                    \
        chose rather than bytes a server sent; a may, because the pin is a fact about the path and    \
        this row does not say the address read that source. */                                       \
     X(EPW_MAY_REST_ON, "may-rest-on")

@@ -1059,6 +1059,11 @@ int flow_path_driven(const Flow *f) {
     return f->orphan || f->cand_src != NULL;
 }
 
+FlowPathMarks flow_path_marks(const Flow *f) {
+    FlowPathMarks m = { flow_path_forced(f), flow_path_pinned(f) };
+    return m;
+}
+
 int flow_path_forced(const Flow *f) {
     DCHECK(f != NULL, "a flow's path was asked whether it stood on a forced arm, of no flow");
     DCHECK(f->path_forced == 0 || f->path_forced == 1,
@@ -1067,20 +1072,11 @@ int flow_path_forced(const Flow *f) {
     return f->path_forced;
 }
 
-/* The narrower fact about the same path; flow.h's field says why it is recorded at the choice of a witness and not
-   at the address that spends it. The guard argument of flow_mark_forced_arm holds here: the one caller, decide.c's
-   branch seam, reaches it only having just marked the same path forced. */
+/* flow.h's field says why it is recorded at the choice of a witness and not at the address that spends it. */
 void flow_mark_pinned_value(void) {
     DCHECK(g_running != NULL,
            "a determined witness was recorded with no flow running — the determination is a fact about one flow's "
            "path");
-    /* The nesting, asserted at the write and not only at the park. flow.h states this bit is strictly inside
-       `path_forced`, and the park's composition asserts the pair, but a mark on an unmarked path would fire that
-       assert far from the seam that caused it, naming a park rather than the decision. */
-    DCHECK(g_running->path_forced == 1,
-           "a flow recorded a determined value on a contradicted arm while its path is not marked forced — "
-           "`path_pinned` is nested inside `path_forced`, and its one caller is reached only after decide.c marks "
-           "the path");
     g_running->path_pinned = 1;
 }
 
@@ -1089,9 +1085,6 @@ int flow_path_pinned(const Flow *f) {
     DCHECK(f->path_pinned == 0 || f->path_pinned == 1,
            "a flow's determined-witness mark is neither set nor clear — it is written in exactly one place, "
            "as a constant, so any other value is memory this field does not own");
-    DCHECK(!f->path_pinned || f->path_forced,
-           "a flow's path is marked pinned and not forced — flow.h declares the pinned set nested inside the forced "
-           "set");
     return f->path_pinned;
 }
 
@@ -1366,9 +1359,15 @@ int flow_stack_empty(const Flow *f) {
  * emitted themselves, emitted as @WFQ beside @PROGRESS and @COLD, and a spread above 1.0 is a statement about
  * several families. The family join below carries both the reward and the aging's family half: a fork chain is one
  * monopolizer wearing N names, so it enters, is charged and is credited as one thing. See FlowAcct. */
-void flow_fork_inherit(Flow *sib, const Flow *parent) {
+void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     DCHECK(sib != NULL && parent != NULL && sib != parent,
            "a fork's accounting was inherited from nobody, or from itself");
+    /* The marks are monotone, so the parent holds every mark it held at the branch; one it has gained since is
+       its own arm's (decide.c marks after the fork takes its blobs) and is not the sibling's. */
+    DCHECK(at_branch.forced <= parent->path_forced && at_branch.pinned <= parent->path_pinned &&
+           (at_branch.forced == 0 || at_branch.forced == 1) && (at_branch.pinned == 0 || at_branch.pinned == 1),
+           "a fork handed its sibling a path mark its parent does not hold — the marks are read off the parent at "
+           "the branch and only grow, so this is a mark read off another flow or a bit that is not one");
     /* Nothing may have been credited or charged first, because the inheritance assigns both terms: a sibling run or
        credited before receiving its account ran at a rank nobody chose, and the assignment would erase the result. */
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
@@ -1492,12 +1491,14 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        this solver forced, and uses it to label, never to order. A weight term reading it would differ across the two
        arms of a forced branch (the arm taken against the example is marked, its sibling is not) and fire the
        equality below, so ordering by it is a decision about what fork-neutrality covers, every arm or every arm the
-       run did not contradict, to be made in the scheduler's rule and not inside a weight term. */
-    sib->path_forced = parent->path_forced;
-    /* And the narrower fact with it, for the same reason: a witness the parent had chosen is one the arm computes
+       run did not contradict, to be made in the scheduler's rule and not inside a weight term.
+       Read at the branch (`at_branch`), not off the parent now: a snapshot fork is assembled after the parent's
+       branch has marked its own arm. */
+    sib->path_forced = at_branch.forced;
+    /* And the witness mark with it, for the same reason: a witness the parent had chosen is one the arm computes
        from too, and a sibling born clean of it would claim its addresses rest on the document's own bytes. Not in
        the equality, for `path_forced`'s reason. */
-    sib->path_pinned = parent->path_pinned;
+    sib->path_pinned = at_branch.pinned;
     /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral. At the instant it is born the sibling is
        worth exactly what its parent is worth. The equality fires the moment anything enters flow_weight that a fork
        does not carry, which is the shape of every banned fix (a depth bonus, a script-index term, a separate visit

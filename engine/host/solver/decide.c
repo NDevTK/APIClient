@@ -1409,7 +1409,9 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
  * timeout negative where the example is 500) contradicts that observation in the same sense. An operand carries no
  * `cmp_subj_ident`, so the second contradiction stays silent; the operand is already named by its own identity. */
 /* It answers whether it marked, the one spelling of "this arm contradicts its example" the rest of decide_branch
-   reads, so the pin below records `path_pinned` off the same fact rather than re-deriving it. */
+   reads, so the pin below records `path_pinned` off the same fact rather than re-deriving it. An unobserved
+   arm is not marked: its values are computed from inputs and stay `derived`, and only a pin on it is the
+   engine's choice. */
 static int decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
     const char *ident;
 
@@ -1483,13 +1485,15 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     if (src && tok && eq_holds) {
         /* concolic_pin pins `src` only where the compared value is that source; a derivation of it pins nothing. */
         pinned = concolic_pin(cond);
-        /* The path records that it has chosen a witness on an arm this run's own example contradicts. From here
-           concolic_new's pin arm answers every read of `src` with `tok`, so addresses composed from that source
-           carry bytes this engine picked, which the trusted zone's firing decision must tell apart from observed
-           ones. It is recorded at the choice because the composed URL is a bare string by then (`pin_mint`
-           answers with a primitive and `concolic_add_hook` derives nothing from two); solver/flow.h's field has
-           the full reading. Gated on `pinned`: a loose equality or a derived subject determined no value. */
-        if (pinned && forced_arm) flow_mark_pinned_value();
+        /* The path records that it has chosen a witness on an arm no example of this run confirmed: one the
+           example contradicts, or one over a source with no example (`location.hash`, absent server state),
+           where the fork and not an observation chose the arm. From here concolic_new's pin arm answers every
+           read of `src` with `tok`, so addresses composed from that source carry bytes this engine picked,
+           which the trusted zone's firing decision must tell apart from observed ones. It is recorded at the
+           choice because the composed URL is a bare string by then (`pin_mint` answers with a primitive and
+           `concolic_add_hook` derives nothing from two); solver/flow.h's field has the full reading. Gated on
+           `pinned`: a loose equality or a derived subject determined no value. */
+        if (pinned && (forced_arm || real == REAL_ARM_UNOBSERVED)) flow_mark_pinned_value();
     }
     /* The other arm, which is an observation, not an absence: forced execution runs both arms of every
        `x === "admin"`, and the sibling has proved the value is not the token. Without this it would emit its

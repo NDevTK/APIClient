@@ -148,17 +148,12 @@ int pending_prov_compose(int kind, int path_forced, int parser_inserted);
    register enumerates, so a kind that reaches the abort is a kind somebody defined without classifying it —
    never a capability this engine has yet to build. */
 int pending_kind_is_program(int kind);
-/* …AND THE NARROWER FACT THE SAME PARK STAMPS BESIDE IT: may this request's ADDRESS rest on a value the
- * parking flow itself DETERMINED on an arm nothing observed? Composed here rather than read off the flow at
- * the join for `pending_prov_compose`'s reason exactly — the walk that joins the register runs arbitrarily
- * later, over a flow that may have pinned a source since, and a request built before that pin cannot carry its
- * bytes.
- * IT ASSERTS THE NESTING, WHICH IS THE ONE INVARIANT ITS CONSUMER RESTS ON. solver/flow.h declares this bit
- * strictly inside `path_forced`; that is what makes the trusted zone's reading of it a NARROWING of the forced
- * set rather than a reach outside it, so a pair that disagreed would have the chokepoint decide a request the
- * path bit refuses. Both halves arrive here together, from one park, which is the only place they can be
- * compared at all. */
-int pending_pinned_compose(int kind, int path_forced, int path_pinned);
+/* …and the fact the same park stamps beside it: may this request's address rest on a value the parking flow
+ * determined on an arm no example confirmed (`flow_path_pinned`)? Stamped at the push rather than read off the
+ * flow at the join for `pending_prov_compose`'s reason: the join runs later, over a flow that may have pinned a
+ * source since, and a request built before that pin cannot carry its bytes. It is independent of the
+ * provenance (solver/flow.h's `path_pinned`). `kind` is taken for the assert's message. */
+int pending_pinned_compose(int kind, int path_pinned);
 /* …and whether the parking flow is driven by this tool (`flow_path_driven`: a drive of uncalled code or a
  * candidate session), which makes the request this tool's act. It is not a provenance word: provenance grades what the values are worth
  * and a drive that forced no arm computes them from real inputs, so the two facts travel side by side and the
@@ -365,7 +360,7 @@ int pending_driven_compose(int kind, int path_driven);
       JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced, parser_inserted))) \
     /* …and whether the ADDRESS may rest on a witness this engine chose, which PROV cannot say */ \
     X(PINNED,     "pinned",    PEND_SHARE,                                             \
-      JS_NewBool(pend_ctx(), pending_pinned_compose(kind, path_forced, path_pinned)))  \
+      JS_NewBool(pend_ctx(), pending_pinned_compose(kind, path_pinned)))              \
     /* …and whose act it is: set when this tool drives the parking flow (flow_path_driven: an orphan \
        drive or a candidate). Independent of PROV: a drive that forced no arm computes real values. */ \
     X(DRIVEN,     "driven",    PEND_SHARE,                                             \

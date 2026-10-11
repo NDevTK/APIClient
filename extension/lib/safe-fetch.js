@@ -405,17 +405,16 @@ function safeFetchReachJoin(outer, own) {
    positively states that every byte came from the document, the server or the bundle's own text. A CHECK
    for the provenance reason. */
 /* `unstated` is this zone's third word, for an act whose record carries no mark; writing `unpinned` there
-   would be false exactly where it matters. The rule a caller follows: an act whose provenance is a literal
-   `observed` or `derived` cannot carry an engine-chosen witness (the mark is nested inside `path_forced`), so
-   it may state `unpinned`; an act whose provenance is a variable or `forced` states `unstated` unless its
-   record carries a mark. An absent mark still aborts, so `unstated` is always typed by a caller that means it,
-   and `unstated` and `unpinned` are separate rows a person permits separately.
+   would be false exactly where it matters. A caller states `unpinned` only for an address no engine path
+   composed, or from its record's mark; any other act states `unstated`. The mark is independent of the
+   provenance, so a `derived` act may rest on a witness. An absent mark still aborts, so `unstated` is always
+   typed by a caller that means it, and `unstated` and `unpinned` are separate rows a person permits separately.
    Named residual. Not covered: the navigation notices (core/frame/navigable.c) and the route declaration
-   (solver/route_seed.c) reach here with a provenance that may be `forced` and no mark. Next diff: write the
-   mark into those notices and relay it through `bridge.js`'s navigation and route-declaration relays. Its
-   absence shows as `witness=unstated` on the document rows of a run whose `fetch()` and XHR rows at the same
-   host carry `pinned` or `unpinned`. No default arm reads `witness` for a navigation, so this changes what a
-   person sees and permits at an origin, not what fires by default. */
+   (solver/route_seed.c) reach here with no mark, so the navigation default arm reads no `witness` and admits
+   a `derived` navigation whose path pinned a witness. Next diff: write the mark into those notices, relay it
+   through `bridge.js`'s navigation and route-declaration relays, and add `witness=unpinned` to that arm. Its
+   absence shows as a document row firing at the default whose path pinned a witness, and as `witness=unstated`
+   on the document rows of a run whose `fetch()` and XHR rows at the same host carry a mark. */
 var _PINNED_MARKS = ["pinned", "unpinned", "unstated"];
 function _pinnedOf(opts) {
   CHECK(_PINNED_MARKS.indexOf(opts.pinned) >= 0,
@@ -920,9 +919,9 @@ var _DEFAULT_ARMS = [
      is one only this engine asked for, so `provenance: derived` keeps the forced path refused.
      No `observed` twin: `engine_prov_of_running_path` answers only `forced` or `derived`, and the one act
      stating `observed` for a navigation is the ambient seed, which states `actor: tool` and fires through the
-     observed arm. No `witness` conjunct: navigation notices state `unstated` today, and `derived` already
-     excludes a pinned address by the nesting `_firingRefusal` asserts. No `doc-reach` conjunct: frames must
-     nest (a grandchild reads `derived`), and a forced-reach parent exists only where a person widened.
+     observed arm. No `witness` conjunct: navigation notices state `unstated` today (`_pinnedOf`'s residual).
+     No `doc-reach` conjunct: frames must nest (a grandchild reads `derived`), and a forced-reach parent exists
+     only where a person widened.
      No same-origin conjunct, and not because the SOP check covers it (that runs only when credentialed): the
      caller's `navigationCarriesSession` asks for cookies only same-origin, so a cross-origin child loads as an
      uncredentialed GET, narrower than a browser, through every other gate. The deny list does apply to a
@@ -1168,16 +1167,7 @@ function safeFetchPermitted(origin) {
    makes. Wherever this refuses, the address is still derived in full and reported. */
 function _firingRefusal(facts) {
   var v, i, s;
-  /* `_signalVector` requires the facts, so the vector is computed first and the nesting CHECK below prints
-     validated operands. */
   v = _signalVector(facts);
-  /* The nesting, asserted at the consumer: solver/flow.h declares `path_pinned` strictly inside
-     `path_forced`, so a request that is not `forced` cannot carry a witness this engine chose
-     (`pending_pinned_compose` asserts the other end). */
-  CHECK(facts.provenance === "forced" || facts.pinned !== "pinned",
-        "a request states that its address may rest on a witness this engine DETERMINED, while stating a " +
-        "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
-        "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
   /* No pairing of `provenance` with `doc-reach` is asserted. `observed` with a `forced` reach is the tempting
      one to forbid, and it is exactly a page this tool chose to open making its own `fetch()`, which the
      engine correctly grades `observed`. All nine pairs are reachable and distinct: the request's grade is the

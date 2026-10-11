@@ -2320,7 +2320,7 @@ const PolicyContainer *engine_document_policy(uint32_t doc)
  * mapping crosses a park in the commitment record (flow.h) and is not carried across a re-run of the document.
  * `f` makes the delivery in this same step; at most one arm per delivery. */
 static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
-                                     void *dec_blob, void *pin_blob);
+                                     void *dec_blob, void *pin_blob, FlowPathMarks marks);
 /* What the step names itself (defined with the scheduler below). A refusal is a step that consumed a record and
    delivered nothing, and it says so. */
 static StepUnit g_step_unit;
@@ -2355,7 +2355,7 @@ static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
     sib = engine_sibling_assemble(ctx, f, NULL,
                                   decide_fork_same_path("(a cross-document message arrived from one arm of a "
                                                         "sender's branch — no predicate was asked)"),
-                                  concolic_pins_suspend());
+                                  concolic_pins_suspend(), flow_path_marks(f));
     /* The one thing that makes the arm a different timeline, written after assembly so the arm's inherited
        record is the parent's as of before this delivery. Its other side is `f`, so the arm value is this same
        mechanism: a foreclosed row defers to the parent, and the parent is here. */
@@ -3058,19 +3058,15 @@ const char *engine_pinned_token(int pinned)
                 "zone's firing decision reads this field", pinned);
 }
 
-/* See engine.h for why the flow-less arm is not free to be the safe word. It is 0 because
-   engine_prov_of_running_path answers `derived` on the same state and `path_pinned` is nested inside
-   `path_forced`; a 1 would compose a pair on which safe-fetch.js's `_firingRefusal` kills the fetch path in
-   release, where this DCHECK cannot name the caller first. */
+/* See engine.h. The flow-less release arm answers `pinned`, the word that fires nothing at the default. */
 int engine_pinned_of_running_path(void)
 {
     const Flow *f = flow_running();
 
     DCHECK(f != NULL,
            "a request built by the page's code asked whether its address rests on a witness this engine chose, with "
-           "no flow standing — the witness is a fact about one path, and an answer of `unpinned` here would let a "
-           "widened origin spend the act");
-    return f != NULL && flow_path_pinned(f);
+           "no flow standing — the witness is a fact about one path, so the caller has lost the flow it acts for");
+    return f == NULL || flow_path_pinned(f);
 }
 
 /* See engine.h. */
@@ -3372,12 +3368,8 @@ const char *engine_pending_fetches(void) {
                         size_t v_at = (size_t)(t5 + 1 - join), v_len = (size_t)(t6 - (t5 + 1));
                         size_t c_at = (size_t)(t6 + 1 - join), c_len = (size_t)(t7 - (t6 + 1));
                         /* The (provenance, witness) pair folds as a pair, taking one member's whole, so it
-                           cannot state a pair no member held. The facts are nested (solver/flow.h declares
-                           `path_pinned` inside `path_forced`; `pending_pinned_compose` asserts it), so the legal
-                           pairs are (observed|derived|forced, unpinned) and (forced, pinned). Folding each by its
-                           own extremum could give (derived, pinned), on which extension/lib/safe-fetch.js's
-                           `_firingRefusal` CHECK kills the fetch path for the session; a candidate re-fire
-                           (forced and pinned, re-running the explorer's fetches) generates exactly such a set.
+                           cannot state a pair no member held: folding each by its own extremum could give
+                           (observed, unpinned) from (observed, pinned) and (forced, unpinned) members.
                            The order is lexicographic, provenance first, so the provenance still folds toward
                            most observed, and the witness mark is read off the member that won. Taking the
                            cleanest member is sound for the mark: it is an over-approximation recorded at the
@@ -3390,17 +3382,6 @@ const char *engine_pending_fetches(void) {
                         int take_new = prov_v < cur_prov || (prov_v == cur_prov && !pinned_v);
                         int mo_prov = take_new ? prov_v : cur_prov;
                         int mo_pinned = take_new ? pinned_v : cur_pinned;
-                        /* The nesting is checked where the pair is made, the one place able to compose a pair
-                           neither the park nor the chokepoint saw; it fails if either field is again folded by
-                           an extremum of its own. */
-                        DCHECKF(!mo_pinned || mo_prov == PROV_FORCED,
-                                "this join folded a (provenance, witness) pair no park can hold — provenance "
-                                "%d with the witness mark SET, where solver/flow.h declares `path_pinned` "
-                                "strictly inside `path_forced`. The fold takes ONE member's pair whole for "
-                                "exactly this reason, so a pair that disagrees is a field folded by an "
-                                "extremum of its own again, and extension/lib/safe-fetch.js's "
-                                "`_firingRefusal` CHECK kills the fetch path on the line this writes",
-                                mo_prov);
                         int mo_parser = ini_is_parser(join + i_at, i_len) || ini_is_parser(ini, il);
                         int widen_dst = destination_is_script_like(d, dl) &&
                                         !destination_is_script_like(join + d_at, d_len);
@@ -4505,6 +4486,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
 /* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision and pins here at a forking branch; the
    interpreter then clones the frame and calls engine_fork_finalize, which assembles the sibling. */
 static void *g_fork_dec = NULL, *g_fork_pins = NULL;
+/* …and the parent's path marks at that instant, since the branch marks its own arm before the clone. */
+static FlowPathMarks g_fork_marks;
 /* Who is asking: the interpreter and the step driver hold a resume point and clone it just after asking, a plain
    C body holds none, and all call the same two symbols. The two wrappers below raise this across their call and
    nothing else does, so raised means "a clone is coming" and clear means "there is no activation here". It is the
@@ -4544,7 +4527,7 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
                    "a restartable fork was asked for with page code on the stack (a queued job's callback, a "
                    "listener in a rendering step) — the sibling would resume at a step that does not re-reach the "
                    "ask");
-            engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob);
+            engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob, flow_path_marks(f));
             return 0;
         }
         /* A C body mid-algorithm has neither: it is inside its own activation, with no machine state to snapshot
@@ -4582,7 +4565,7 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
     DCHECK(g_fork_dec == NULL && g_fork_pins == NULL,
            "a sibling's snapshot state was prepared while a previous one was unconsumed — the branch that prepared "
            "it never reached its fork hook");
-    g_fork_dec = dec_blob; g_fork_pins = pin_blob;
+    g_fork_dec = dec_blob; g_fork_pins = pin_blob; g_fork_marks = flow_path_marks(f);
     return 1;
 }
 
@@ -4614,9 +4597,10 @@ static int engine_reclaim_set(int v);
  * from JS_FlowNewCall). All need the same construction: the frame, the O(1) delta and DOM-segment fork, the
  * generator swaps, the inherited chunks, jobs and register, and a child world of the parent's so a peer can
  * materialize the arm's segment by forking the asker's. Only the decision state differs, so it is a parameter.
- * `dec_blob` and `pin_blob` are consumed; they become the sibling's. */
+ * `dec_blob` and `pin_blob` are consumed; they become the sibling's. `marks` is the parent's path marks read
+ * where the blobs were taken. */
 static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
-                                     void *dec_blob, void *pin_blob) {
+                                     void *dec_blob, void *pin_blob, FlowPathMarks marks) {
     DCHECK(parent != NULL, "a sibling was assembled with no parent flow — every field below is copied from one");
     DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — every branch its parent took would be "
                              "re-asked");
@@ -4651,7 +4635,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     parent->world = world_mint_child(fork_point);
     /* Its account is a child of the parent's too: the WFQ's two terms, taken over at the branch. First, because
        it decides where the flow enters the queue. */
-    flow_fork_inherit(sib, parent);
+    flow_fork_inherit(sib, parent, marks);
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
     sib->frame = clone;               /* the frame snapshot taken at the branch; NULL for a fork between tasks */
     sib->script_i = parent->script_i; /* same position in the script sequence */
@@ -4933,7 +4917,7 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
        is a real peer timeline. */
     dec = g_fork_dec; g_fork_dec = NULL;
     pins = g_fork_pins; g_fork_pins = NULL;
-    engine_sibling_assemble(ctx, parent, clone, dec, pins);
+    engine_sibling_assemble(ctx, parent, clone, dec, pins, g_fork_marks);
 }
 
 /* One arm per distinct answer: the asking side of a peer document with more than one timeline, and why
@@ -5015,7 +4999,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         sib = engine_sibling_assemble(ctx, f, clone,
                                       decide_fork_same_path("(a peer's answer arrived — no predicate was "
                                                             "asked)"),
-                                      concolic_pins_suspend());
+                                      concolic_pins_suspend(), flow_path_marks(f));
         /* The arm's own continuation goes on the slot a switched-out flow keeps it in: its first switch-in hands
            it to the pump, and flow_step's resume arm re-enters it before anything else, where it reads the answer
            written below. The assembly takes a frame but not a park; a third caller needing a park would be the
@@ -5125,7 +5109,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
         sib = engine_sibling_assemble(ctx, f, clone,
                                       decide_fork_same_path("(the trusted zone declined this request — no "
                                                             "predicate was asked)"),
-                                      concolic_pins_suspend());
+                                      concolic_pins_suspend(), flow_path_marks(f));
         DCHECK(sib->parked == NULL,
                "a freshly assembled arm already holds parked continuations — the assembly builds a flow that "
                "has never run, so a set on it came from somewhere that is not this fork");
@@ -5621,7 +5605,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     sib = engine_sibling_assemble(ctx, f, base,
                                   decide_fork_same_path("(a function the page never called was driven — no "
                                                         "predicate was asked)"),
-                                  concolic_pins_suspend());
+                                  concolic_pins_suspend(), flow_path_marks(f));
     sib->orphan = 1;
     /* The function it drives, flow.h's `fn`, so a walk of the frontier can say which functions are being driven.
        The assembly dup'd the parent's (undefined), which is given back here. */

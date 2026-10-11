@@ -286,7 +286,7 @@ typedef struct Flow {
      * request this flow builds must declare: the value's bytes are the same either way, so the fact is recorded
      * where it happens. It is the contradiction, not the fork: forced execution forks both arms of nearly every
      * branch, while this marks an arm the concrete example disagrees with (an example-less branch marks nothing).
-     * One writer, flow_mark_forced_arm, reached by three acts:
+     * One writer, flow_mark_forced_arm, reached by four acts:
      *   - a branch whose arm the concrete example contradicts (solver/decide.c);
      *   - a request the trusted zone declined, whose failure arm runs the page's `catch` over an outcome nobody
      *     sent (solver/engine.c's flow_decline_fork);
@@ -297,21 +297,19 @@ typedef struct Flow {
      * asserts it). Not cold-tier state: a resumed flow re-observes each contradiction against current examples
      * as its replay re-reaches it. */
     int   path_forced;
-    /* Whether this path pinned a value on one of those arms: a strictly narrower fact answering a different
-     * question. `path_forced` says what a reply is worth; this says whether an address composed afterwards may
-     * rest on bytes this engine chose, which decides whether fetching it may be spent. Set where decide.c pins a
-     * source (concretize-on-pin) on the holding arm of an equality the flow's concrete example contradicts, and
-     * where a witness verification delivers such a pinned value (solver/concolic.c's concolic_deliver).
+    /* Whether this path pinned a value the fork chose rather than an example: a separate fact answering a
+     * different question. `path_forced` says what a reply is worth; this says whether an address composed
+     * afterwards may rest on bytes this engine chose, which decides whether fetching it may be spent. Set where
+     * decide.c pins a source (concretize-on-pin) on the holding arm of an equality whose example contradicts
+     * that arm or does not exist (REAL_ARM_UNOBSERVED: `location.hash`, absent server state), and where a
+     * witness verification delivers a pinned value (solver/concolic.c's concolic_deliver).
+     * It is not nested inside `path_forced`. A pin on an unobserved arm leaves the grade `derived`, since every
+     * value is computed from inputs and the pinned one is a literal the page's own equality spelled, so the
+     * pair (derived, pinned) is an offerable example whose request the person must widen to fire.
      * It cannot be read off the address: `pin_mint` (solver/concolic.c) returns a bare primitive and
      * `concolic_add_hook` returns 0 when neither operand is concolic, so a URL built from a pinned value is a
-     * plain string; recovering the link would need a taint tracker. Strictly nested inside `path_forced` (its
-     * writer runs only where decide_note_forced_arm has just marked the path); pending_prov_compose asserts it
-     * at the park. Monotone, fork-carried, never a weight term.
-     * Named residual. Not covered: decide_note_forced_arm returns early on REAL_ARM_UNOBSERVED, so a pin over a
-     * source this run never observed leaves both bits clear. Next diff builds: a third state on this field and
-     * the arm of decide_real_arm that answers it (it already reads concolic_example_state). Absence shows as: a
-     * request graded forced by a later unrelated gate, with this bit clear, firing an address that holds the
-     * earlier witness. */
+     * plain string; recovering the link would need a taint tracker. Monotone, fork-carried, never a weight
+     * term. */
     int   path_pinned;
     /* The document's load stage is not here: a flow reaches several Documents in its agent cluster and each has
        its own readiness, so it lives on each Document (document.c's readiness slot), isolated per flow by the
@@ -1508,16 +1506,20 @@ void  flow_observe_survival(Flow *f, double frac);
    Monotone and ordered: it raises `cand_rung`, never lowers it, and refuses a rung whose predecessor this flow
    has not stood on. */
 void  flow_observe_rung(Flow *f, int rung);
+/* A flow's two path marks, `path_forced` and `path_pinned`, read at one instant. */
+typedef struct { int forced, pinned; } FlowPathMarks;
 /* The running flow just took an arm its concrete example contradicts: `path_forced`'s one writer. Idempotent and
    monotone. Not a credit or a charge: a fork is rank-neutral, so it does not bump the frontier generation. */
 void  flow_mark_forced_arm(void);
 /* Has this flow's path stood on one? Read at the park, because a parked request is a work item that takes its
    provenance with it: it was built on the path the flow had then. */
 int   flow_path_forced(const Flow *f);
-/* The running flow just determined a source's value on an arm its own example contradicts: `path_pinned`'s one
-   writer, idempotent and monotone. Called where decide.c's decide_note_forced_arm has just answered that it
-   marked the path, so the nesting is structural and "did this arm contradict its example" has one spelling, and
-   where a witness verification delivers that value, right after it marks the path forced (concolic_deliver). */
+/* Both path marks of `f` at one instant: what a fork hands its sibling, read where it takes the blobs. */
+FlowPathMarks flow_path_marks(const Flow *f);
+/* The running flow just determined a source's value on an arm no example confirmed: `path_pinned`'s one writer,
+   idempotent and monotone. Called where decide.c's pin determined a value on an arm decide_note_forced_arm
+   marked or decide_real_arm answered REAL_ARM_UNOBSERVED for, and where a witness verification delivers a
+   pinned value (concolic_deliver). */
 void  flow_mark_pinned_value(void);
 /* Has this flow determined a value on such an arm? Read at the park, beside flow_path_forced and for its reason. */
 int   flow_path_pinned(const Flow *f);
@@ -1537,8 +1539,9 @@ void  flow_age_running(int64_t us);
    edge that sends the thread time the arm burns to its family. Without it an arm would read zero reward and
    the full never-run bonus and outrank every flow that ever had a turn. Called by the fork only; a
    from-baseline flow (the first flow, a candidate session, a cold resume) keeps the constructor's zeros. Asserts
-   the fork is rank-neutral (reasoning at the definition). */
-void  flow_fork_inherit(Flow *sib, const Flow *parent);
+   the fork is rank-neutral (reasoning at the definition). `at_branch` is the parent's path marks read where the
+   fork took the sibling's decision and pin blobs. */
+void  flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch);
 
 /* Release a flow the scheduler is not switched into: the one teardown for a frontier member, and the primitive
  * the partial self-park to the cold tier needs. It removes the flow and returns its RAM: its suspended frames,

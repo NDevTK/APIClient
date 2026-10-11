@@ -1084,11 +1084,11 @@ static char *paint_world_name(Flow *f)
  * caller cannot read it as "is this the browser's picture", and a fourth state fits without a type change.
  * Named residual. Not covered: `unforced` does not separate a path whose examples agreed from one that branched over
  * an example-free value (external input, absent server state), where decide_real_arm answers REAL_ARM_UNOBSERVED
- * and both siblings answer `unforced`. Next diff builds: the mechanism solver/flow.h names at `path_pinned`'s
- * residual, an arm separating "the example contradicts this" from "there is no example", recorded beside
- * `path_forced` and answered here as a fourth word; `flow_path_pinned` is nested inside `flow_path_forced`, so
- * neither answers it today. How its absence would show: two images of one document both graded `unforced`, so a
- * reference comparison cannot tell "this engine is wrong" from "this question has no answer here".
+ * and both siblings answer `unforced`. Next diff builds: an arm separating "the example contradicts this" from
+ * "there is no example", recorded beside `path_forced` and answered here as a fourth word; `flow_path_pinned`
+ * covers only an unobserved arm that pinned a value. How its absence would show: two images of one document
+ * both graded `unforced`, so a reference comparison cannot tell "this engine is wrong" from "this question has
+ * no answer here".
  * No allocation: every arm answers one of this file's constants, so the `#` comment line needs no newline check. */
 static const char *paint_forced_word(Flow *f)
 {

@@ -2080,14 +2080,14 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        the running flow, which nothing below may re-ask. */
     int wcls = witness_class_now();
     /* …and what that flow assumed, read at the same instant from the same flow. A path that chose a witness on
-       a contradicted arm (`may-rest-on`) holds the pin it chose. */
+       an arm no example confirmed (`may-rest-on`) holds the pin it chose. */
     Witness wit = witness_now();
     DCHECK((wcls == EPW_UNASKED) == !wit.asked,
            "the witness class and the witness disagree about whether a flow stood at this sighting — both ask "
            "flow_running at one instant");
     DCHECK(wcls != EPW_MAY_REST_ON || witness_has_pin(&wit),
-           "a sighting's path pinned a value on a contradicted arm (`may-rest-on`) and its pin store holds no "
-           "pin — the pin and the path bit are written on one line of decide.c and both ride the fork");
+           "a sighting's path pinned a value on an arm no example confirmed (`may-rest-on`) and its pin store "
+           "holds no pin — the pin and the path bit are written on one line of decide.c and both ride the fork");
     /* And which sources the address's bytes entered through, copied here: `concolic_root_c` points into the value's
        own record, borrowed for this call, and the record below outlives it. NULL for a non-concolic value and for
        one whose bytes entered through nothing minted as a source; `addr_class` tells them apart (see the struct). */

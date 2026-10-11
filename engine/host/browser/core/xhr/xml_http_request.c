@@ -163,10 +163,8 @@ typedef struct {
        `engine_pinned_of_running_path`. A SECOND field and never a fourth word on the one above: the provenance
        says what a REPLY IS WORTH and this says whether the ACT MAY BE SPENT, and CLAUDE.md
        §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is what one token carrying both would be.
-       ASKED BESIDE THE PROVENANCE AND NEVER SEPARATELY, WHICH IS THE WHOLE OF WHY IT IS A FIELD. The two are
-       strictly nested (`pinned` implies `forced`) and the consumer CHECKs that pair — fatally, in release — so
-       two reads of the running path at two instants are two rules free to compose a pair no park can hold. One
-       line reads both, this stores the answer, and every consumer below takes it from here.
+       It is asked on the provenance's line so both describe the path as it stood when the request was
+       composed, and every consumer below takes it from here.
        -1 FOR THE SENTINEL, for the field above's reason and not merely for symmetry: `calloc` leaves 0, and 0
        is `unpinned`, which is the word that lets a widened origin SPEND the act. An ungraded request would be
        fired rather than refused. */
@@ -2713,25 +2711,6 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            carry the fact. */
         d->request_pinned = (int8_t)engine_pinned_of_running_path();
         d->request_driven = (int8_t)engine_driven_of_running_path();
-        /* THE NESTING, ASSERTED WHERE BOTH HALVES ARE IN ONE HAND AND NOWHERE ELSE THEY COULD BE. solver/flow.h
-           declares `path_pinned` strictly inside `path_forced`; the park asserts the pair it composes and
-           safe-fetch.js's `_firingRefusal` CHECKs the pair it consumes — fatal in release — and this is the
-           third party that composes one, out of two reads of the running path. It is not vacuous: the two
-           accessors agree only because these two lines are adjacent, so it fails the day a read moves or the
-           flow-less arms stop being one decision, which is exactly the regression that would kill the fetch
-           path in a build with no DCHECKs in it.
-           IT IS WRITTEN IN THE TOKEN VOCABULARY AND NOT THE NUMERIC ONE, which is a fact about this component
-           rather than a preference: `PROV_*` is solver/pending.h's and this file includes no solver-internal
-           header, so the only spelling of a grade it can say is the one solver/engine.h exports — which is also
-           the spelling the chokepoint's own CHECK compares, so the two ends of the contract are asserted in one
-           language. */
-        DCHECKF(!d->request_pinned ||
-                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_FORCED),
-                "an XMLHttpRequest composed a (provenance, witness) pair no park can hold — provenance `%s` "
-                "with the witness mark SET, where solver/flow.h declares the mark strictly inside the "
-                "forced-path bit. Both come from the running path on adjacent lines, so a disagreement is one "
-                "of the two accessors having stopped answering about the same flow",
-                engine_provenance_token(d->request_prov));
         /* §3.5.6 step 6's request record, onto the @H surface, before §4.1 chooses who answers it. */
         xhr_record_endpoint(ctx, d);
         /* Fetch §4.1: main fetch decides WHO answers. A request this agent answers itself — a port §2.9 blocks,

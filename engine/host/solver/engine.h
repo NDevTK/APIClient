@@ -659,13 +659,15 @@ uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op);
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
  * because provenance grades what a reply is worth while this decides whether the act may be spent, and a
  * fourth word would hide `forced` from every consumer that reads it. `pinned` means the parking flow, before
- * building the request, determined some source's value on an arm its concrete example contradicts
- * (solver/flow.h's `path_pinned`), after which concretize-on-pin answers reads with the chosen spelling.
+ * building the request, determined some source's value on an arm no example confirmed (solver/flow.h's
+ * `path_pinned`), after which concretize-on-pin answers reads with the chosen spelling. Any provenance word
+ * may stand beside either mark.
  * `unpinned` means every byte came from the document, the server or the page's own text.
  *   It is a property of the path, a may-rest-on: a pinned read yields a bare primitive (`pin_mint`,
  * solver/concolic.c) and concolic_add_hook derives nothing from bare operands, so tracing bytes into the URL
- * would need a taint tracker, which the design bans. A deduped set states `pinned` if any member's path was,
- * the opposite direction to provenance, because under-claiming here fires an act. */
+ * would need a taint tracker, which the design bans. A deduped set states one member's pair whole: the most
+ * observed, and among those one with the mark clear, since a member that composed the same bytes unpinned
+ * refutes the mark for this address (solver/engine.c's join). */
 #define PENDING_PINNED_YES "pinned"     /* the path determined a witness before building this address */
 #define PENDING_PINNED_NO  "unpinned"   /* it had not: every byte of the address came from outside this engine */
 
@@ -696,12 +698,9 @@ const char *engine_provenance_token(int prov);
 /* The witness mark (`PENDING_PINNED_*`) for a request built by running the page's code, read off the running
  * flow; core/xhr/xml_http_request.c's §3.5.6 "The send() method" request is the caller it was written for. It
  * reads the flow itself, as engine_prov_of_running_path does, so a caller cannot pass a different one.
- *   With no running flow the answer is `unpinned`, although `pinned` is the safe word elsewhere: `path_pinned`
- * is nested inside `path_forced`, engine_prov_of_running_path answers `derived` on the same state, and
- * extension/lib/safe-fetch.js's `_firingRefusal` CHECKs against `pinned` beside `derived`, fatally in release.
- * A flow-less call is a broken invariant at every caller (DCHECKed here), and `unpinned` alone fires nothing.
- * The zone's third word, `unstated`, is what a reader composes for a record with no mark; this never spells
- * it. */
+ *   A flow-less call is a broken invariant at every caller (DCHECKed here); the release answer is `pinned`, the
+ * word under which the data-request default fires nothing. The zone's third word, `unstated`, is what a reader
+ * composes for a record with no mark; this never spells it. */
 int engine_pinned_of_running_path(void);
 
 /* The witness mark's wire spelling, shared by every writer of the field so the two words are one vocabulary

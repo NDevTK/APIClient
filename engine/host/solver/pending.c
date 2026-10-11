@@ -623,23 +623,14 @@ int pending_kind_is_program(int kind)
     return 0;
 }
 
-/* See pending.h. IT IS THE PARK'S OWN READING OF A PAIR OF FLOW FACTS AND COMPUTES NOTHING FROM THE KIND —
-   `kind` is taken so that the assert below can name the park that carried a broken pair, which is the one
-   coordinate a reader of this abort would otherwise have to reconstruct. A PROGRAM park and a DATA park are
-   equally able to compose an address out of a determined witness; what differs is what the reply BECOMES, and
-   that is Fetch §2.2.5's destination and the trusted zone's question rather than this one. */
-int pending_pinned_compose(int kind, int path_forced, int path_pinned)
+/* See pending.h. A program park and a data park are equally able to compose an address out of a determined
+   witness; what differs is what the reply becomes, which is Fetch §2.2.5's destination and the trusted zone's
+   question rather than this one. */
+int pending_pinned_compose(int kind, int path_pinned)
 {
-    DCHECK(path_pinned == 0 || path_pinned == 1,
-           "a park stated a determined-witness mark that is neither set nor clear — it comes from "
-           "flow_path_pinned, which asserts the same thing at the other end, so a third value is a caller that "
-           "computed this somewhere else");
-    DCHECKF(!path_pinned || path_forced,
-            "a park of kind %d states that its address may rest on a value the flow DETERMINED on a "
-            "contradicted arm, while stating that its path stood on no contradicted arm — solver/flow.h "
-            "declares the second bit strictly nested inside the first, and the trusted zone reads the pair as "
-            "a NARROWING of the forced set, so this park would have the chokepoint decide a request the "
-            "provenance beside it refuses", kind);
+    DCHECKF(path_pinned == 0 || path_pinned == 1,
+            "a park of kind %d stated a determined-witness mark that is neither set nor clear — it comes from "
+            "flow_path_pinned, so a third value is a caller that computed it somewhere else", kind);
     return path_pinned;
 }
 
