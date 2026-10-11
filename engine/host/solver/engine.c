@@ -6733,36 +6733,13 @@ static int preempt_hook(int kind) {
         if (gap_now - g_gap_last_us > g_gap_max_us) g_gap_max_us = gap_now - g_gap_last_us;
         g_gap_last_us = gap_now;
     }
-    /* THE *WALL* GAP CENSUS IS THE SEAM MESSAGE'S, SO IT IS COMPILED OUT WITH IT — AND NEITHER THE COUNT NOR
-       THE SLICE-MEASURE GAP ABOVE IS, WHICH
-       IS THE ONE THING THIS PARAGRAPH GOT WRONG BY GROUPING THREE STATICS UNDER ONE GUARD. It read "Every one
-       of these three statics is read only inside this file's `#if APICLIENT_DEV` seam assertion", which was
-       TRUE WHEN WRITTEN and is retired by that count becoming a published census row: solver/result.c reads it
-       in every build. The paragraph's REASON was right and was never about the increment — it is the CLOCK.
-       `engine_now_ms()` at EVERY suspend-point consultation fed numbers nothing would ever print, and on the
-       host that matters most that reading is not a vDSO call at all: emscripten answers clock_gettime by
-       calling into JS. So the clock and the two statics built from it stay inside the guard and the count
-       comes out. It is kept rather than deleted because a reader who re-derives "these are diagnostics, so
-       they belong under the guard" will move the count back, and the row's denominator goes silent in exactly
-       the build nobody runs a gate in.
-       AND THE SAME ARGUMENT NOW HOLDS OF A CLOCK, WHICH IS THE HALF THIS PARAGRAPH REASONED ITS WAY TO AND
-       COULD NOT HAVE APPLIED. Its reason is not "a clock is expensive" — it is that THESE numbers were
-       fed to nothing, and the host that matters most answers clock_gettime from JS. The second half is
-       unchanged and is why the WALL pair stays here. The first is retired for the SLICE-MEASURE pair
-       above, which solver/result.c publishes per arm in every build, and the cost of that one is argued
-       at its own declaration off what quantum_expired() already reads on each branch rather than off
-       anybody's estimate. Two gap censuses, two clocks, two populations — the wall one reports a
-       SEAMLESS turn's whole duration beside the work count because a wall number is what says whether
-       the box was loaded, and the other reports the widest interval between two offers of a turn that
-       made some. Deleting either loses a reading that nothing else in this file takes.
-       WHAT IT COSTS IN RELEASE IS ONE INCREMENT, which is what solver/flow.c already spends per scan for this
-       same reason and states in the same words ("the increment below is a WRITE in every build") — and this
-       hook already performs two flow_weight calls, plus an O(members) walk on a cache miss, so the add is not
-       the term anybody is paying here. This is the mirror of the defect the aging charge had — that one was a
-       real policy left inside a DEV guard, this one a DEV diagnostic left outside it — and both are the same
-       question asked once per hook: is this number something the ENGINE decides on, or something a developer
-       reads? The answer for the two clocks is still "a developer reads it"; the answer for the count changed
-       when a census started publishing it. */
+    /* The wall gap census belongs to the seam message and is compiled out with it; the count and the
+       slice-measure gap above are not, because solver/result.c publishes them in every build. `engine_now_ms()`
+       per consultation feeds only a developer's message, and on the host that matters most emscripten answers
+       clock_gettime from JS, so it stays under the guard. The two gap censuses measure two populations: the wall
+       one reports a seamless turn's whole duration beside the work count (a wall number says whether the box was
+       loaded); the other the widest interval between offers of a turn that made some. In release the count costs
+       one increment, in a hook already performing two flow_weight calls. */
 #if APICLIENT_DEV
     {
         int64_t now = engine_now_ms();
@@ -6770,59 +6747,36 @@ static int preempt_hook(int kind) {
         g_last_ask = now;
     }
 #endif
-    /* THE RIVAL IS ONE THE THREAD CAN ACTUALLY BE HANDED TO. A flow that has told the scheduler it can make no
-       progress until the host answers is not a candidate: yielding to it hands the thread straight back, and
-       with one outranking the running flow the two thrashed — the hook demanded a yield at every back-edge and
-       the loop's pick returned the same flow, so it advanced one back-edge per scheduler iteration. It is the
-       SAME question the pick asks (flow.h), which is why it is the same call.
-       THE CACHE MAY NOT LAG A MARK, AND THE PARAGRAPH THAT SAID IT COULD IS WHAT HID A REAL DEFECT FOR AS
-       LONG AS IT STOOD. It read: "Marks are made during a slice and cleared only at its top, so a cached rival
-       can be one that has SINCE been marked — a yield the loop then declines by re-picking the same flow, at
-       the cost of one iteration. A mark can never make a flow wrongly ELIGIBLE, which is the direction that
-       would cost a yield that mattered." Both halves were false. Its premise — that clears happen only at the
-       top of a slice — describes a line that had already been DELETED; marks are now cleared by whatever host
-       event answers them, including during a step (flow_deliver_one_reply settles the shared document-script slot
-       for every flow waiting on one address). And its conclusion reasoned about marks being LAID DOWN and
-       never about them being CLEARED, which is precisely the direction it declared impossible: a clear makes a
-       flow ELIGIBLE that the loop's pick could not consider, so the hook's next rescan returns a rival the pick
-       was never shown, and the yield fires against a flow the scheduler chose one step earlier with nothing
-       whatever having changed about it. That aborted the smoke at the value-yield assertion below, which is the
-       assertion doing its job. The fix is at the origin: a mark change IS a ranking change and now raises the
-       frontier generation (flow.c), so this rescan condition covers it and the eligible set the hook ranks
-       against is the same one the pick used. */
-    /* THE KEY IS A DISJUNCTION AND THE TWO HALVES ARE READ APART, because a count of MISSES cannot say which
-       of the two it is a count of and the two take opposite diffs — see solver/engine.h's EngineRivalMiss.
-       Captured BEFORE the assignments below, which overwrite exactly the two quantities the condition asked
-       about: read afterwards, both would be false at every miss and the partition would be a count of zero. */
+    /* The rival is one the thread can be handed to: a flow that told the scheduler it cannot progress until the
+       host answers is not a candidate, since yielding to it hands the thread straight back and the two would
+       thrash. It is the same question the pick asks (flow.h), so it is the same call. The cache cannot lag a
+       mark: a mark change, laid or cleared (a clear happens at whatever host event answers it, even mid-step, e.g.
+       flow_deliver_one_reply's shared document-script slot), raises the frontier generation (flow.c), so the
+       rescan below covers it and the hook ranks against the set the pick used.
+       The key is a disjunction whose halves are read apart (solver/engine.h's EngineRivalMiss), captured before
+       the assignments below overwrite them. */
     const int rival_gen_moved = (flow_frontier_gen() != g_seen_gen);
     const int rival_cur_moved = (cur != g_seen_cur);
     if (rival_gen_moved || rival_cur_moved) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
-        /* UNDER THE SAME `cur` TEST AS THE WALK ITSELF, which is what makes these a partition of
-           `scanRivalRuns` rather than of consultations: a miss with NO incumbent does not call flow_rival_of
-           at all, so it raises no scan run and must raise nothing here either. The identity is asserted at
-           the census (solver/result.c), where all four rows are in one hand. */
+        /* Under the walk's own `cur` test, so these partition `scanRivalRuns`, not consultations: a miss with no
+           incumbent calls no flow_rival_of. The identity is asserted at the census (solver/result.c). */
         if (cur) {
             if (rival_gen_moved && rival_cur_moved) g_rival_miss_both++;
             else if (rival_gen_moved)               g_rival_miss_gen++;
             else                                    g_rival_miss_cur++;
         }
         g_rival = cur ? flow_rival_of(cur) : NULL;
-        /* THE CACHED POINTER'S WHOLE SAFETY ARGUMENT, ASSERTED WHERE IT IS ESTABLISHED. It is read at every
-           consultation until the generation moves, so it is live only because a member LEAVING the frontier is
-           a membership change that raises the generation and forces this rescan. Asked here and not at the
-           read: membership is an O(flows) scan and the read is per-opcode, so putting it there would make the
-           dev build's hot path linear in the frontier — the same reason flow_weight may not walk. */
+        /* The cached pointer's safety argument, asserted where it is established: it stays live only because a
+           departure raises the generation. Not at the read, which is per opcode, where an O(flows) membership scan
+           would make the dev hot path linear in the frontier. */
         DCHECK(g_rival == NULL || flow_is_member(g_rival),
                "the value yield cached a rival that is not in the frontier — the pointer is read until the "
                "generation next moves, so a departure that did not raise the generation leaves this hook "
                "ranking against freed memory");
-        /* THE RIVAL'S OWN TERMS, FROZEN WITH THE POINTER, AND AFTER THE MEMBERSHIP ASSERT ABOVE RATHER THAN
-           BEFORE IT: these four readings DEREFERENCE the pointer, so they may not run ahead of the one line
-           that says the pointer is a member of the frontier at all — see the block where these are declared. The OWN
-           service notch and not the silence notch: the silence sums the member's own with its FAMILY's, and
-           the family half advances on every step of whoever holds the thread, so asserting the sum would fire
-           on the one movement this interval is supposed to permit. */
+        /* The rival's own terms, frozen with the pointer after the membership assert, since they dereference it.
+           The own service notch, not the silence notch: the silence adds the family's half, which advances on
+           every step of whoever holds the thread, the one movement this interval permits. */
         if (g_rival) {
             g_rival_own_notch = flow_service_notch(g_rival); g_rival_visits = g_rival->visits;
             g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
@@ -6830,70 +6784,25 @@ static int preempt_hook(int kind) {
             g_rival_w = flow_weight(g_rival);
         }
     }
-    /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
-       progress no matter how it ranks, and the answer cannot arrive while it holds the thread — the host is
-       only asked between steps. Deciding this by weight would re-enter it immediately and spin. */
+    /* (0) Blocked beats both rankings: a flow holding an unanswered synchronous host request cannot progress, and
+       the answer cannot arrive while it holds the thread (the host is asked only between steps). */
     if (cur && flow_blocked(cur)) return 1;
-    /* BOTH SIDES EVALUATED HERE, WHICH IS WHAT MAKES THIS THE SAME QUESTION THE PICK ANSWERS. What the cache
-       holds is WHICH flow the rival is; what this line computes is what the two are worth right now. The
-       rival's weight was cached once, on the reasoning that a parked flow's weight cannot move — see the
-       cache's own declaration for why that is false, and for the abort it produced. */
-    /* NOTHING BUT THE AGING MOVED UNDER THE CACHED RIVAL — asserted here rather than at the rescan because
-       here is where the interval has ELAPSED. Reaching this line means neither the generation nor `cur`
-       differs from what the block above recorded (both are that block's own condition), so the rival is the
-       member those four readings were taken of, and every one of them is a term of flow_weight that the
-       frontier generation claims to speak for. `flow_service_notch` is the member's OWN silence: it moves
-       only when flow_age_running charges it, and flow_age_running charges `g_running`, which this member is
-       not. What is deliberately absent is the FAMILY notch and the carry bit, which are the aging's shared
-       half and the one quantity that is allowed to move here (solver/flow.c's flow_silence_phase).
-       DEV-ONLY AND O(1), which is the whole reason it can stand in a per-opcode hook at all: the walk the
-       equivalent claim over the frontier would cost is precisely the walk this assertion exists to make
-       replaceable.
-       THE BRANCH BONUS IS THE FIFTH CLAUSE AND IT USED TO BE A NAMED RESIDUAL HERE. That residual said the
-       term was omitted because flow_branch_bonus is file-static to solver/flow.c and publishing an accessor
-       was a wider diff than this assertion — never because the term was exempt — and it named the next diff
-       as "that accessor, and a fifth clause here reading it". Both halves were exactly right and both are
-       built, which is worth recording because this file mostly records the other outcome: a remedy clause is
-       a claim about this tree written by somebody guessing at what fills a gap, and CLAUDE.md rates it a
-       HYPOTHESIS for that reason. This one was checked before it was obeyed — `FlowAcct` really is private to
-       flow.c, `sub_born` really has exactly two writers (its initialisation at flow_new and the join in
-       flow_fork_inherit), and no accessor existed.
-       WHAT IT COST WHILE IT STOOD WAS NOTHING THAT HAD BEEN SHOWN, AND THAT IS STILL TRUE — the raise sits in
-       flow_fork_inherit, one statement after the flow_new that bumps the generation, and no interpreter opcode
-       runs between them, so this hook cannot observe the pair out of order on any path that exists today. The
-       clause is here for the path that does not: a bucket minted into WITHOUT passing flow_new re-ranks a
-       whole arm with the generation standing still, and every row in this hook and in the census would agree
-       that nothing had changed — the same silence the host-owed mark produced before a mark became a rank
-       change, and the one state this assertion is otherwise written to make loud.
-       IT READS IN EVERY BUILD AND ADDS NO EXPOSURE THIS DECISION DID NOT ALREADY HAVE: flow_weight reaches the
-       same two indirections through flow_branch_bonus for EVERY member of EVERY pick, so the dereference this
-       line makes of the one member the hook is already holding is one the order performs anyway. */
-    /* AND IT NAMES WHICH OF THE FIVE, BECAUSE THE REMEDY IT CARRIES HAS NO OBJECT WITHOUT THAT. The
-       condition below is unchanged — the same five terms, the same population, the same abort — and the
-       message was a DISJUNCTION being read as a diagnosis: five candidate movers behind one answer, under an
-       instruction to raise the rank change "at whichever writer moved it" that names an action with no site.
-       Every writer of every one of those terms is in another component, so a reader who meets this has to
-       re-derive all of them by hand before the instruction means anything, which is the shape
-       CLAUDE.md's §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE is about, arriving as five states behind one
-       answer rather than as a missing file:line.
-       THE SIXTH READING IS THE ONE THE DISJUNCTION HID AND IT IS NOT A TERM MOVE AT ALL. This pointer is
-       cached across opcodes and a departure FREES the flow, so a rival that has left answers 0 for its reward
-       and 0 for its own notch through the two early returns that ask `family` — and reports here as a term
-       that moved. Those two take opposite work: one is a missing raise at a writer, the other is a departure
-       the cache outlived, and no reading of the five pairs alone separates them. flow_is_member is the
-       question that does, and it is free on the passing path because DCHECKF evaluates its arguments only
-       inside the branch the condition has already failed — which is what lets a walk of the frontier stand in
-       a per-opcode hook at all, and is why the membership claim at the rescan above may stay where it is.
-       WHAT WAS ESTABLISHED BEFORE WRITING THIS, so the next reader starts from it rather than from the
-       enumeration: every writer in solver/flow.c of the fields these five accessors read raises the rank
-       change inside the SAME C call, with no interpreter opcode between the write and the raise — including
-       the branch bucket's mint count, whose one increment sits in flow_fork_inherit and whose sole caller
-       has already been through the flow_new that raised. The one weight term whose writer raises nothing is
-       the completed-unit count at flow_credit_visit, and its sole caller credits the flow the hook is holding
-       as `cur`, which forces the rescan above by the second half of its own condition. So the pair printed
-       below is the evidence nobody had, and the enumeration is not it.
-       RETIREMENT: this record goes when the hook holds no POINTER across a generation — an index that names a
-       member by identity rather than by address states both facts at its own update site. */
+    /* Both sides are evaluated here, which makes this the question the pick answers: the cache holds which flow
+       the rival is, and this computes what both are worth now.
+       Nothing but the aging moved under the cached rival, asserted here, where the interval has elapsed: neither
+       the generation nor `cur` changed, so the rival is the member the readings were taken of, and each reading
+       is a flow_weight term the generation claims to speak for. `flow_service_notch` is the member's own silence,
+       charged by flow_age_running only to `g_running`. The family notch and carry bit, the aging's shared half
+       (flow.c's flow_silence_phase), are deliberately absent. Dev-only and O(1). The branch bucket's mint count is
+       the fifth clause (`sub_born`'s two writers are flow_new and flow_fork_inherit, and the raise in
+       flow_fork_inherit follows flow_new's bump with no opcode between); it guards a bucket minted into without
+       flow_new, which would re-rank an arm silently.
+       The message names which term moved, and whether the rival is still a member: a departure the cache outlived
+       reads as a moved term (a freed flow answers 0 through the early returns that ask `family`), and the two
+       take opposite diffs. flow_is_member is free on the passing path, since DCHECKF evaluates its arguments only
+       when the condition failed. Every writer in solver/flow.c of these terms raises the rank change in the same C
+       call, except flow_credit_visit's completed-unit count, whose sole caller credits `cur`, which forces the
+       rescan by its second half. */
     DCHECKF(!g_rival ||
             (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
              flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
@@ -6914,12 +6823,9 @@ static int preempt_hook(int kind) {
             g_rival_dist, flow_distance(g_rival),
             g_rival_branch_born, flow_is_member(g_rival) ? flow_branch_born(g_rival) : -1L,
             flow_is_member(g_rival));
-    /* …AND THE SAME CLAIM OVER THE WHOLE WEIGHT, ORDERED AFTER THE FIVE SO THAT A FIRE HERE IS A MOVEMENT THE
-       ENUMERATION HAS NO NAME FOR. Any member-half move trips the clauses above first and they say WHICH term
-       it was, which is what that message exists for and is not a thing this one could do; what reaches this
-       line has five matching terms and a weight that nevertheless ROSE, and the only quantity that can do that
-       is the half the five deliberately omit. See the declaration for the state and for why the bound is
-       one-sided. */
+    /* The same claim over the whole weight, after the five so that a fire here is a movement the five have no
+       name for: five matching terms and a weight that rose, which only the omitted family half can do. See the
+       declaration for the state and the one-sided bound. */
     DCHECKF(!g_rival || flow_weight(g_rival) <= g_rival_w,
             "the cached RIVAL's weight ROSE while the frontier generation stood still — cached %.17g against "
             "current %.17g. Between two generations a non-running member's member half is fixed (the five "
@@ -6936,53 +6842,21 @@ static int preempt_hook(int kind) {
             "and this is the SIGN. Raise frontier_rank_changed() at whichever writer sent the silence back",
             g_rival_w, flow_weight(g_rival));
     if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */
-        /* THE VALUE YIELD MAY ONLY FIRE ON A RANK CHANGE, AND THIS IS WHERE THAT IS EITHER TRUE OR A SENTENCE
-           IN CLAUDE.md. §scheduler says the yield fires "the moment a parked flow outranks (or on an emit/fork/
-           suspension that changes ranks)" and that "a top-ranked flow runs on at ~zero switch cost" — so a flow
-           that was picked to run, and against which NOTHING has since changed, must still be running.
-           WHAT CAN CHANGE THE ANSWER IS EXACTLY WHAT IS SNAPSHOTTED AT THE SWITCH-IN: the
-           frontier GENERATION (a fork or a finish added or removed a member, and an emission bumps it too), the
-           running flow's SILENCE NOTCH (its own thread time since its last emission plus its fork family's,
-           crossing a whole COOPERATIVE QUANTUM's worth — flow.c), its COMPLETED-UNIT COUNT (the optimism term's
-           whole quantity, which moves at no clock's instants), and its own REWARD. Nothing else moves either
-           side of the comparison: a parked flow
-           burns no CPU, and its `val` cannot change without it running, which cannot happen while this one
-           holds the thread. So the comparison is a pure function of those, and a yield with all of them
-           unchanged means the WFQ answered two different things about one unchanged state.
-           THE LIST IS RE-DERIVED EVERY TIME THE FORMULA MOVES, AND EACH REVISION IS WHY THIS ASSERTION IS WORTH
-           HAVING. It was three clauses when the aging read the running flow's OWN service, four when the aging
-           moved to the fork family (one arm's charge advances the family's notch on a schedule of its own, so
-           the weight could move with the arm's own notch standing still), and it is four again now that the two
-           service clauses have collapsed into ONE silence notch and the optimism term has become a count of
-           completed units. Each of those edits would have made this fire on a perfectly legitimate rank change
-           had the clause not moved with it, which is precisely the discipline it exists to enforce: the
-           assertion is about a STATE, and a state is whatever the weight is currently a function of.
-           AND ONE TERM IS NOT A WEIGHT AT ALL — IT IS THE ELIGIBLE SET, which is why counting weight
-           terms could never have found it. This clause list is complete for `flow_weight(cur)`, which is a pure
-           function of the FAMILY's reward, the completed-unit count, the silence notch and the fitness distance
-           — four, not the three this sentence used to name, and the fourth is in the DCHECK below because the
-           distance was added to the weight and the enumeration here was not moved with it; the comparison is
-           `best-eligible-OTHER > cur`, and the SET that "eligible" ranges over is a term of that answer exactly
-           as the four weights are. A host-owed mark decides membership of it, and neither laying one nor
-           clearing one raised the frontier generation — so a clear during the running flow's first step handed
-           the rescan above a rival the loop's pick had never been shown, and this fired with all four terms
-           correctly unchanged. It is FIXED AT THE ORIGIN rather than named as a fifth clause here: a mark change
-           now calls frontier_rank_changed() (flow.c), so it arrives through the generation, which is clause one.
-           A fifth clause would have made this assertion pass while the HOOK went on ranking against a set the
-           scheduler had not used — the assertion would have been silenced and the defect kept.
-           IT FIRES ON THE TREE THIS FIXES, which is the whole reason it is worth writing. The optimism term
-           quantised service with a CEILING, so the first MICROSECOND a flow was ever charged moved its notch
-           from 0 to 1 and cost it half the entire bonus — the notch changed, so this assertion would have
-           permitted it, and the flow was then strictly outranked by every never-run sibling at its next
-           back-edge. What this catches is the version of that defect with no published change at all: a tie
-           handed on by the pick's registry order, a rival recomputed against a stale cache, a weight term that
-           moves with something this list does not name. Any of those is a swap of two COW deltas bought with
-           nothing, and at 512 flows that was 1.28 million of them for one document. */
-        /* THE REWARD CLAUSE READS flow_reward AND NOT `cur->val`, because the term flow_weight is a function of
-           is the flow's fork FAMILY's account and `cur->val` is one member's own ledger, which ranks nothing.
-           Keyed on the ledger this clause would go on agreeing across exactly the change it exists to permit —
-           a SIBLING's emission raising the account every arm of the family is ranked by — and the assertion
-           would fire on a legitimate rank change with all four terms reported unchanged. */
+        /* The value yield may fire only on a rank change: a flow picked to run, against which nothing has changed,
+           must still be running ("a top-ranked flow runs on at ~zero switch cost"). What can change the answer is
+           exactly what is snapshotted at switch-in: the frontier generation (a fork or finish, and an emission, bump
+           it), the running flow's silence notch (its own and its family's thread time since emission, in whole
+           cooperative quanta), its completed-unit count, its family's reward, and its fitness distance. A parked
+           flow burns no CPU and its `val` cannot change without running. The list is re-derived whenever
+           flow_weight's formula changes; a term left off makes this fire on a legitimate rank change.
+           The eligible set is also an input (the comparison is best-eligible-other > cur), and host-owed marks
+           decide membership of it; a mark change calls frontier_rank_changed() (flow.c), so it arrives through the
+           generation, clause one, rather than as a separate clause that would silence this while the hook ranked
+           against a set the pick never used. What this catches with no published change: a tie handed on by the
+           pick's registry order, a rival recomputed against a stale cache, a weight term moving with something not
+           listed; each is a COW delta swap bought with nothing.
+           The reward clause reads flow_reward, the family's account flow_weight uses, not `cur->val`, one member's
+           ledger, which a sibling's emission does not move. */
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
                flow_silence_notch(cur) != g_ranked_silence ||
                cur->visits != g_ranked_visits || flow_reward(cur) != g_ranked_val ||
@@ -6994,107 +6868,61 @@ static int preempt_hook(int kind) {
                "different ways and every swap this buys is a COW delta swap for no ranking decision at all");
         return 1;
     }
-    /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value. The same expiry the scheduler loop returns to
-       the host on, asked at both levels so a flow that parks on it and a step that returns on it are one event
-       seen twice. Nothing is dropped, starved or reordered across it: the flow parks and the SAME flow resumes
-       byte-identically unless the WFQ says otherwise. */
+    /* (2) Cooperative-quantum floor: thread-sharing, not value. The same expiry the scheduler loop returns to the
+       host on, so a flow parking on it and a step returning on it are one event seen twice. Nothing is dropped,
+       starved or reordered: the same flow resumes byte-identically unless the WFQ says otherwise. */
     return quantum_expired();
 }
 
-/* MAY THE RUNNING FLOW GO ON TO THE NEXT SUB-STEP OF THE EVENT-LOOP TURN IT IS ALREADY IN — the scheduler's
- * GRANULARITY input, and it is ONE call of the policy directly above rather than a second policy or a constant.
+/* May the running flow go on to the next sub-step of the event-loop turn it is in? The scheduler's granularity
+ * input: one call of the policy above, not a second policy or a constant.
  *
- * THE UNIT IS THE SPEC'S AND IT IS NOT A CHOICE THIS FILE MAKES. HTML §8.1.7.3 "Processing model" step 2 holds
- * exactly one nested list, whose sub-steps run 2.1 through 2.8; 2.6 is "Perform oldestTask's steps" and 2.8 is
- * "Perform a microtask checkpoint", and §8.1.7.3 "Processing model"' perform a microtask checkpoint is a loop —
- * "While the event loop's microtask queue is not empty". So ONE ITERATION OF STEP 2 IS ONE TASK PLUS THE
- * CHECKPOINT THAT DRAINS AFTER IT, and that is the unit an event loop rests at.
+ * The unit is the spec's: HTML §8.1.7.3 Processing model step 2's nested list runs 2.1 to 2.8, where 2.6 is
+ * "Perform oldestTask's steps" and 2.8 is "Perform a microtask checkpoint", itself a loop "While the event loop's
+ * microtask queue is not empty". So one iteration of step 2 is one task plus the checkpoint after it, and a pick
+ * that reaches the delivery arm carries the whole turn rather than resting at every rung.
  *
- * WHAT THE LADDER RESTED AT INSTEAD WAS ONE RUNG, WHICH IS FINER THAN ANY SENTENCE OF THE STANDARD. Every arm
- * of flow_step RETURNED, so a reply delivery cost one scheduler visit and each microtask its own — one
- * iteration of step 2 spread over 1 + N picks of a frontier that shares its picks among every member, so the
- * drain ran at a FRACTION of one entry per pick. That is the half this call retires and the reason it exists:
- * a pick that reaches the delivery arm now carries the whole turn, so it is one entry per pick. The retired
- * reason is kept rather than deleted because a reader who re-derives it will re-introduce the rung.
+ * This changes the drain rate, not the size of the debt: the backlog is Θ(records × registers naming them), because
+ * a fork copies a flow's undelivered backlog (engine_sibling_assemble's `pending_fork` shares the record and copies
+ * the naming, solver/pending.h) and §8.1.4.4 Calling scripts' empty-execution-context-stack guard (flow_stack_empty)
+ * forbids delivering while a program runs. That counts namings over every live register; the networking-first
+ * arm's bound is the length of one register, which a fork duplicates rather than lengthens, so neither bounds or
+ * refutes the other.
  *
- * WHAT IT DOES NOT RETIRE IS THE SIZE OF THE DEBT, AND THE TWO ARE DIFFERENT POPULATIONS — which is the whole
- * reason this paragraph now says which. The debt is Θ(records × registers naming them) because a fork COPIES a
- * flow's undelivered backlog (engine_sibling_assemble's `pending_fork`, which shares the RECORD and copies the
- * NAMING — solver/pending.h) and §8.1.4.4 "Calling scripts"' empty-execution-context-stack guard
- * (flow_stack_empty) rightly forbids delivering while a program runs, so the backlog is multiplied before it is
- * drained once. Every clause of that is present tense and true of this tree; only the drain RATE above moved.
- *
- * AND THE POPULATION IT IS Θ() OF IS THE FRONTIER'S, NEVER ONE MEMBER'S, which is the sentence whose absence
- * made this paragraph read as a refutation of the networking-first arm below. This counts the NAMINGS summed
- * over every live register; that arm's bound is the length of ONE register, and a fork DUPLICATES a register
- * rather than lengthening one. Neither figure bounds the other and neither refutes the other: they share the
- * noun "the backlog" and nothing else. The arm states its own half at its own site.
- *
- * IT IS A GRANULARITY AND NOT A BOUND, WHICH IS A TEST AND NOT A CLAIM. A bound decides work will not happen;
- * this decides only how often a flow OFFERS to rest, and every offer it declines costs exactly one predicate —
- * this one. Nothing is dropped, starved, skipped, reordered or forgotten: every rung of the ladder is
- * re-derived from the flow's own state at each entry, so a step that ends here and a step that ends at a return
- * leave IDENTICAL state and the next entry takes the identical arm. Set the policy to refuse every continuation
- * and the engine is byte-for-byte the one that stood here before.
- *
- * AND IT IS THE SAME QUESTION THE PER-OPCODE HOOK ASKS, ASKED FROM THE OTHER LEVEL — one policy with two
- * consumers, never two policies that have to be kept in step. That is the whole reason it is a call of
- * preempt_hook rather than a re-spelling of its three clauses: the flow yields the instant a parked flow
- * outranks it (clause 1), the instant its cooperative quantum is spent (clause 2), and the instant it is
- * blocked on the host (clause 0), because those ARE the clauses. A second copy of them here is the drift
- * solver/pending.h refuses for the word "owed".
- *
- * JS_PREEMPT_HOST IS THE HONEST KIND. quickjs.h defines it as the source with "no bytecode shape behind it at
- * all", which is exactly what this is: the scheduler asking between two sub-steps of an algorithm, not a
- * back-edge, a call or a fork. The hook ignores the kind today and the DEV seam census counts the ask, which is
- * correct rather than incidental — `points asked` is how many suspend points the path OFFERED, and this is one.
- */
+ * A granularity, not a bound: every declined offer costs one predicate, every rung is re-derived from the flow's
+ * state at each entry, and a step ending here leaves the same state as one ending at a return. A policy refusing
+ * every continuation reproduces the per-rung engine exactly. It is preempt_hook's question asked from the other
+ * level, so the flow yields when outranked (clause 1), when its quantum is spent (clause 2) and when blocked on the
+ * host (clause 0). JS_PREEMPT_HOST is the right kind ("no bytecode shape behind it at all"); the seam census counts
+ * it as an offered suspend point. */
 static int turn_continues(void) {
     return !preempt_hook(JS_PREEMPT_HOST);
 }
 
-/* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
-   0 when it yielded mid-execution (resume it later). Each <script>/chunk is its OWN program (JS_FlowNew) run
-   in document order in the shared context, under f's COW delta (set by the caller). */
-/* ASYNC-AS-FLOW job-enqueue hook (installed as JS_SetJobEnqueueHook): route a promise reaction / microtask to
-   the ENQUEUING flow's own queue instead of the global list, so it runs later under that flow's live COW. */
-/* HOW MANY JOBS THIS DOCUMENT QUEUED AND HOW MANY IT RAN, published beside the other cost numbers for the
-   same reason they are: a run whose reactions never fire and a page that queued none are indistinguishable
-   from outside, and the difference is most of a modern bundle. */
+/* Advance flow `f` by up to one quantum. Returns 1 when the flow has finished all its scripts and lazy chunks, 0
+   when it yielded mid-execution (resume it later). Each <script>/chunk is its own program (JS_FlowNew), run in
+   document order in the shared context under f's COW delta (set by the caller). */
+/* Async-as-flow job-enqueue hook (installed as JS_SetJobEnqueueHook): routes a promise reaction or microtask to the
+   enqueuing flow's own queue instead of the global list, so it runs later under that flow's live COW delta. */
+/* How many jobs this document queued and ran, published with the other cost numbers: a run whose reactions never
+   fire and a page that queued none look the same from outside. */
 static long g_jobs_q, g_jobs_run;
 long engine_jobs_queued(void) { return g_jobs_q; }
 long engine_jobs_run(void) { return g_jobs_run; }
-/* NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: neither of those two totals is split by the
-   queue's KIND, and the two kinds are dispatched from opposite sides of one ladder, so no share can be taken
-   over either. The RUN side is split in effect — a step named `run-a-task` runs exactly one TASK and one named
-   `microtask-checkpoint` runs only microtasks, because job_pick_index takes the first non-task entry and the
-   checkpoint arm is due only while one exists — so `run-a-task` IS the task-run count and `jobsRun` minus it is
-   the microtask one. The QUEUED side has no such split at all, and `is_task` is in hand on the line that raises
-   `g_jobs_q`. WHAT THE NEXT DIFF BUILDS: that one discriminator, as `jobsQueuedTask`/`jobsQueuedMicro` beside
-   `_jobsQueued` on the work line, whose sum is `_jobsQueued` and is asserted where all three are in one hand.
-   HOW ITS ABSENCE WOULD SHOW: a reader holding a document's `run-a-task` count and unable to say whether it is
-   most of the tasks the page queued or a fraction of a per cent of them — which is §a-coverage-figure-states-
-   what-it-is-a-fraction-of over the one carrier every platform edge that becomes a work item lands on. */
-/* …AND THE PRECONDITION FOR RUNNING ONE, WHICH IS WHY `jobsRun: 0` NEEDED A SECOND NUMBER BESIDE IT. Every job
-   arm of flow_step is under `frame == NULL` — HTML §8.1.4.4 "Calling scripts" step 3 of clean up after running
-   script, "if the JavaScript execution context stack is now empty" — so a run with jobs queued and none run has
-   TWO opposite readings and the pair above states neither: either flows are reaching that boundary and finding
-   nothing to do, or NO FLOW EVER REACHES IT, which means no program in the document has finished and the
-   reaction pump was never eligible to run at all. Those need opposite fixes and one zero was the evidence for
-   both. Measured on four live sites at 90 s each: jobsQueued climbed past 29000 with jobsRun flat at 0, and
-   nothing in the document could say which of the two it was.
-   IT ANSWERED, AND THE ANSWER WAS THE FIRST ONE: excalidraw.com over three runs reported 3500-4067 units
-   against 2657-2923 jobs queued and jobsRun 0, so the boundary was reached thousands of times per run by flows
-   that held nothing to do there. The reading the pair made possible is that the flows REACHING the boundary
-   and the flows HOLDING the jobs were disjoint sets — and they were disjoint because the credit itself was
-   what separated them: it is a demotion (the optimism term is 1/(1+visits)) taken at the exact instant a
-   flow's own queued reactions became eligible. flow_credit_visit now asserts the rest of §8.1.4.4's boundary
-   at the origin so that cannot be reintroduced.
-   IT IS THE SAME QUANTITY THE OPTIMISM TERM COUNTS — flow_credit_visit's "completed unit of work" — counted
-   once for the whole instance rather than per flow, and incremented at that credit's own site so the two
-   cannot come to mean different things. A boundary reached with a checkpoint still owed is deliberately NOT
-   one of them: the turn is not over there, and the step that follows it is the one that runs the job, so it is
-   `jobsRun` that reads it. */
+/* Named residual. Not covered: neither total is split by the queue's kind. The run side is split in effect (a
+   `run-a-task` step runs exactly one task, a `microtask-checkpoint` step only microtasks, since job_pick_index takes
+   the first non-task entry and the checkpoint arm is due only while one exists), so `jobsRun` minus `run-a-task` is
+   the microtask count; the queued side has no split although `is_task` is in hand where `g_jobs_q` is raised. Next
+   diff builds: `jobsQueuedTask`/`jobsQueuedMicro` beside `_jobsQueued` on the work line, their sum asserted equal.
+   Absence shows as: a document's `run-a-task` count that cannot be read as most or a tiny fraction of the tasks the
+   page queued. */
+/* Completed units of work, the precondition for running a job: every job arm of flow_step is under `frame == NULL`
+   (HTML §8.1.4.4 Calling scripts' clean up after running script step 3, "if the JavaScript execution context stack
+   is now empty"), so jobs queued and none run reads two ways: flows reach that boundary and hold nothing there, or no
+   flow ever reaches it (no program finished). This separates them. It is the quantity the optimism term counts
+   (flow_credit_visit's completed unit), counted once per instance at that credit's own site; flow_credit_visit
+   asserts the rest of §8.1.4.4's boundary. A boundary reached with a checkpoint still owed is not one: the turn is
+   not over, and the next step runs the job (`jobsRun` reads it). */
 static long g_units_done;
 long engine_units_done(void) { return g_units_done; }
 
@@ -7106,16 +6934,11 @@ void engine_orphan_claims(long *met, long *unmet) {
     *unmet = g_orphan_claims_unmet;
 }
 
-/* THE OTHER CARRIER'S §8.1.7.1 DECLARATION, WHICH IS WHAT MAKES THE ONE-SOURCE-ONE-QUEUE QUESTION ASKABLE OF A
-   FLOW AT ALL. engine_queue_into asserts the same field for the `dyn` carrier and stores nothing, so the answer
-   for programs is a grep for the enumerator; this is the same assert for `jobs`, and with both in place the
-   answer for a whole flow is a grep rather than a reading of every call site. The value is not recorded on the
-   flow's job record: nothing reads it there yet, and a field written with no reader is the defect
-   §A-FIELD-A-CONSUMER-DEFAULTS names. It IS recorded on the runtime's entry, because `baseline_call_list` hands
-   a task to this hook LATER and a fact the entry does not carry is one the handover loses.
-   THE SENTINEL IS THE ONE VALUE THE TWO TYPE SYSTEMS SHARE, so it is asserted here rather than believed: the
-   fork carries an opaque scalar (quickjs.h's JSTaskSource) and this file's enum is where the values live, and
-   the only thing that could put them out of step is the zero. */
+/* The `jobs` carrier's §8.1.7.1 declaration, so whether one source sits in one queue can be asked of a whole flow:
+   engine_queue_into asserts the field for `dyn` and stores nothing; this asserts it for `jobs`. It is not stored on
+   the flow's job record, which has no reader for it, but is on the runtime's entry, because `baseline_call_list`
+   hands a task to this hook later. The sentinel is the one value the two type systems share (quickjs.h's opaque
+   JSTaskSource and this file's enum), so it is checked statically. */
 _Static_assert((int)TASK_SOURCE_UNSTATED == JS_TASK_SOURCE_UNSTATED,
                "the fork's never-stated task source and this engine's differ — quickjs carries the scalar "
                "without interpreting it and states only the zero, so a disagreement here makes every microtask "
@@ -7123,87 +6946,51 @@ _Static_assert((int)TASK_SOURCE_UNSTATED == JS_TASK_SOURCE_UNSTATED,
 
 static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task,
                               JSTaskSource raw_src, JSTaskHandle handle) {
-    /* THE HOOK'S SIGNATURE IS THE FORK'S, AND THE CONVERSION IS HERE BECAUSE THIS IS WHERE THE TWO VOCABULARIES
-       MEET. quickjs carries an opaque scalar it never interprets (quickjs.h's JSTaskSource) and this engine's
-       enum is where the values are named, so a hook declared with the enum would be a DIFFERENT function
-       pointer type — an enum's underlying type is the compiler's choice — and the install would not compile,
-       which is the loud version of two ends disagreeing about a field's width. */
+    /* The hook's signature is the fork's: quickjs carries an opaque scalar (quickjs.h's JSTaskSource) and this
+       engine's enum names the values, and declaring the hook with the enum would be a different function pointer
+       type (an enum's underlying type is the compiler's choice), so the conversion is here. */
     TaskSource src = (TaskSource)raw_src;
-    /* THE OWNER IS NAMED WHEN THE USER AGENT IS THE QUEUER — see g_enqueue_owner, declared beside the one
-       bracket that sets it. Everywhere else the callback belongs to the flow whose program queued it. */
+    /* The owner is named when the user agent is the queuer (g_enqueue_owner, beside the one bracket that sets
+       it); otherwise the callback belongs to the flow whose program queued it. */
     Flow *f = g_enqueue_owner;
     g_jobs_q++;
     if (!f)
         f = flow_running();
     else
-        /* HOST TIME IS "NO SLICE OPEN", NEVER "NO FLOW RUNNING", AND THOSE ARE NOT THE SAME STATEMENT.
-           This asserted `flow_running() == NULL` on the premise that a bracket set between two steps names an
-           owner "precisely because there is none" — and engine_sched_step's contract says the opposite in its
-           own words one screen down: the cooperative-quantum yield RETURNS WITHOUT SWITCHING THE RUNNING FLOW
-           OUT, because §scheduler requires the same flow to resume byte-identically on the frontier it left.
-           The stamp therefore stays up across the host's own time BY DESIGN, so the premise is false on the
-           only return a busy engine ever makes, and an assert is false exactly when the engine is working.
-           WHAT IT COST IS THE PRODUCT PATH IT STOOD ON. A navigation reported to a HOT engine aborted the
-           instance and wedged the one scheduler for the rest of the session, so continuous browsing survived
-           exactly ONE navigation per browser — the second one died, on unrelated origins alike, which is the
-           shape of a false invariant rather than of a site.
-           THE MISROUTING IT NAMED IS REAL AND IS ALREADY FORECLOSED ABOVE, which is why the answer is a truer
-           assert and not a deleted one: a callback landing on the wrong timeline's queue is prevented by
-           PRECEDENCE — a named owner wins outright, so the queue reached is the named flow's whatever
-           `flow_running()` says. The three marks the host's time does have to have down (the flow stamp, the
-           DOM capture, the capture route) are suspended and restored by engine_sched_step's wrapper and
-           re-asserted at the ABI boundary by qjs_step; `g_running` is deliberately not one of them, because a
-           yielded flow's COW delta is still APPLIED to the heap and clearing the stamp would be a claim about
-           that heap which is not true.
-           WHAT IS LEFT TO ASSERT IS THE PROPERTY THAT WOULD ACTUALLY BREAK THIS: not that no flow holds the
-           thread, but that none is EXECUTING. A slice open here means the interpreter reached this line on the
-           scheduler's own time while a host-time bracket named an owner — two queuers claiming one callback,
-           which is the overlap the old reason was reaching for and the only form of it that can happen. It is
-           the same predicate preempt_hook asks above and qjs_step asserts on every exit, so host time has ONE
-           spelling in this file instead of two that disagree. */
+        /* Host time is "no slice open", not "no flow running": engine_sched_step returns the quantum yield without
+           switching the running flow out, so it can resume byte-identically, and the stamp stays up across the
+           host's time by design (a yielded flow's COW delta is still applied). The named owner wins by precedence,
+           so the queue reached is the named flow's whatever `flow_running()` says. What would break this is a flow
+           executing while a host-time bracket names an owner, two queuers for one callback, which is the slice
+           being open: the predicate preempt_hook asks and qjs_step asserts on every exit. */
         DCHECK(!quantum_slice_open(),
                "a host-time bracket named the owner of a queued callback while a scheduler SLICE was open — an "
                "owner is named only between two steps, so an open slice means a flow is EXECUTING and two "
                "queuers claim one callback: the named one wins and the running flow's own reaction is filed "
                "under a timeline that never caused it");
-    /* THERE IS NO GLOBAL DRAIN. Declining here hands the job to quickjs's global list, and nothing in this
-       engine ever runs that list — so the job is not "deferred to the default", it is DROPPED. Every task
-       source goes through here: a window message, a port delivery, a broadcast, a timer callback, a custom
-       element reaction. A dropped one is a handler the page registered and this engine never entered, which is
-       invisible from the outside and looks exactly like a page that does nothing on message. */
+    /* There is no global drain: declining would hand the job to quickjs's global list, which nothing runs, so it
+       would be dropped. Every task source comes through here (a window message, a port delivery, a broadcast, a
+       timer callback, a custom element reaction), and a dropped one is a handler the page registered and this
+       engine never entered. */
     DCHECK(f != NULL, "a job was enqueued with no flow running — there is no global drain, so it would be "
                       "dropped: seed it as a flow on the frontier instead of declining it here");
     if (!f) return 0;
     DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 5 removes a destroyed document's tasks "
                         "by comparing this, so a job without one outlives its document");
-    /* THE NAME ARRIVES WITH THE JOB AND IS RECORDED, never defaulted: the host that takes ownership is the only
-       thing that can find this callback again, so a record that dropped it is a task no tracker can remove and
-       a `toggle` event that fires twice. Every runtime enqueue path allocates one (js_enqueue asserts it), so a
-       job arriving here without one is the runtime's own contract broken and not a shape to tolerate. */
+    /* The handle arrives with the job and is recorded, never defaulted: it is the only way the host can find this
+       callback again, and without it a tracker could not remove the task (a `toggle` that fires twice). Every
+       runtime enqueue path allocates one (js_enqueue asserts it). */
     DCHECK(handle != JS_TASK_HANDLE_NONE,
            "a job reached the scheduler under the never-issued handle — quickjs mints one at every enqueue and "
            "carries it across the baseline handover, so a job without a name has come from a path that does "
            "not, and nothing could ever take it back off this flow's queue");
-    /* WHICH TASK SOURCE PUT IT HERE — HTML §8.1.7.1's `source`, asserted at the ONE site that takes ownership
-       of a queued callback, exactly as engine_queue_into asserts it at the one site that creates a row. The
-       pair is what the ordering question needs: §8.1.7.1 requires that "For each event loop, every task source
-       must be associated with a specific task queue", a flow's work is split across carriers that partition by
-       what a work item IS rather than by where it came from, and until both carriers STATED a source the only
-       answer to "is any one source in two of them" was prose beside each call — which a producer added later
-       does not write and nothing notices.
-       IT IS TWO-SIDED AND THE TWO SIDES CAN DISAGREE, which is the whole of why it is an assert and not a
-       field. A producer that never thought about the question reaches a TASK queue carrying the never-written
-       sentinel and this fires; a caller that states a source for a MICROTASK is caught one level down, in
-       js_enqueue, because that is where the fork knows which queue it is about to use. Neither direction can
-       be satisfied by omission.
-       WHAT IS DELIBERATELY NOT ASSERTED IS `task_source_is_task(src)`, and the reason is a population rather
-       than a doubt: this engine QUEUES AS A TASK several fires whose standard states them as bare synchronous
-       steps of an algorithm already running — core/events/event_target.h says so in its own words at
-       `event_target_fire`, and names the request reach those callers belong on. Each of those honestly declares
-       TASK_SOURCE_NOT_A_TASK, so the stricter assert would abort on a state this tree already knows about and
-       already records, rather than on anything a diff got wrong. The declaration makes that population
-       GREPPABLE, which is what it is for: `TASK_SOURCE_NOT_A_TASK` at a JS_EnqueueCallTask call site IS the
-       list, and it cannot go stale behind a producer added later the way the prose could. */
+    /* Which task source put it here (HTML §8.1.7.1's `source`), asserted at the one site that takes ownership of a
+       queued callback, as engine_queue_into asserts it where rows are made, so each carrier states its source.
+       Two-sided: a producer that never stated one reaches a task queue with the sentinel and fires here; a source
+       stated for a microtask is caught in js_enqueue, which knows which queue it uses. `task_source_is_task(src)` is
+       deliberately not asserted: this engine queues as tasks several fires its standard states as synchronous
+       steps of a running algorithm (core/events/event_target.h at `event_target_fire`), and each declares
+       TASK_SOURCE_NOT_A_TASK, so that population is greppable at the JS_EnqueueCallTask call sites. */
     DCHECKF(!is_task || task_source_stated(src),
             "a callback was queued as a TASK without saying which task source, if any, put it there — HTML "
             "§8.1.7.1 gives a task a source so that one source is in one queue, and a job that states none "
@@ -7213,22 +7000,14 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
     return 1;   /* host owns it */
 }
 
-/* THE THIRD PART OF THAT OWNERSHIP (installed as JS_SetJobRemoveHook): HTML §4.11.4 "The dialog element"'s
-   "Remove element's dialog toggle task tracker's task from its task queue" — §4.11.1 "The details element"
-   and §6.12 "The popover attribute" hold the same tracker and the same sentence — for a job THIS scheduler
-   took. quickjs's own two queues and its baseline list are walked by JS_RemoveQueuedTask before this is asked;
-   what this scheduler holds is what nothing else can reach.
-   IT IS THE RUNNING FLOW'S QUEUE AND CANNOT BE A GLOBAL SEARCH. A fork gives every arm its own Array naming
-   the SAME records, so after a branch N flows hold N queued copies of ONE handle — N timelines' copies of one
-   queued task, each of which the corresponding arm's own tracker names. Sweeping every flow would delete a
-   sibling's task out of the sibling's timeline on the strength of a removal made in this one, which is exactly
-   the shared-state bug the per-flow queues exist to make impossible. §7.5.10's drop is the running flow's for
-   the SAME reason and not the opposite one — a destruction is a fact in the timeline that performed it, and
-   the version of this sentence that said a destroyed document is destroyed in every timeline at once was
-   wrong: engine_unload_document exists precisely because a destruction every timeline must perform has to be
-   fanned out to each of them, one operation per flow.
-   FINDING NOTHING IS ORDINARY — the task already ran, is running now (a `toggle` listener that closes the
-   dialog again asks for the removal of the very task dispatching it), or went with its document. */
+/* The third part of that ownership (installed as JS_SetJobRemoveHook): HTML §4.11.4 The dialog element's "Remove
+   element's dialog toggle task tracker's task from its task queue" (§4.11.1 The details element and §6.12 The
+   popover attribute hold the same tracker), for a job this scheduler took. JS_RemoveQueuedTask walks quickjs's
+   own two queues and baseline list first. It is the running flow's queue, never a global search: after a fork N
+   flows hold copies of one handle, each named by its own arm's tracker, and sweeping every flow would delete a
+   sibling's task from a timeline where the removal never happened. Finding nothing is ordinary: the task already
+   ran, is running (a `toggle` listener that closes the dialog again removes the task dispatching it), or went
+   with its document. */
 static int engine_remove_job(JSTaskHandle handle) {
     Flow *f = flow_running();
 
@@ -7240,22 +7019,13 @@ static int engine_remove_job(JSTaskHandle handle) {
     return flow_job_remove(f, handle);
 }
 
-/* THE OTHER HALF OF engine_enqueue_job (installed as JS_SetJobDropHook): HTML §7.5.10 "Destroying documents"
-   step 5, for the jobs this scheduler TOOK. Nothing else can do it — declining to register this hook would
-   leave every destroyed document's reactions queued on whichever flow enqueued them, and each one would later
-   run in a Document whose browsing context is null.
-   IT IS THE RUNNING FLOW'S QUEUE AND NO OTHER, for the reason JSJobRemoveHook's own contract states one line
-   down in quickjs.h: a flow IS a timeline, a fork gives each arm its own copy of the parent's queued jobs, and
-   a destruction is a fact in the timeline that performed it. §7.5.10 step 5 removes tasks from the event loop
-   whose task it is running inside; a sibling flow is a different timeline in which this Document may not be
-   destroyed at all — a `<iframe>` removed in one arm is still in the document in the other — so sweeping its
-   queue deletes work from a world where the removal never happened. That is the shared-state write this
-   engine's per-flow queues exist to make impossible, and it is not a small one: it is also what would make the
-   STANDARD'S queue home unusable, since §7.5.9 step 6 puts every timeline's unload task on the OUTGOING
-   document's own global and the first flow to reach its step 20 would take all the others with it.
-   A DESTRUCTION EVERY TIMELINE MUST PERFORM IS FANNED OUT AT THE SEAM THAT REPORTS IT, never here:
-   engine_unload_document gives each flow its own unload, and each one's step 5 then removes its own queue's
-   tasks. That is one operation per timeline rather than one timeline's operation applied to all of them. */
+/* The other half of engine_enqueue_job (installed as JS_SetJobDropHook): HTML §7.5.10 Destroying documents step 5
+   for the jobs this scheduler took; without it a destroyed document's reactions would later run in a Document
+   whose browsing context is null. The running flow's queue only, for JSJobRemoveHook's reason (quickjs.h): a
+   destruction is a fact in the timeline that performed it (an `<iframe>` removed in one arm is still there in the
+   other), and §7.5.9 step 6 puts every timeline's unload task on the outgoing document's global, so a sweep would
+   let the first flow reaching step 20 take the others' tasks too. A destruction every timeline performs is fanned
+   out by engine_unload_document, one per flow. */
 static int engine_drop_jobs(JSContext *ctx) {
     Flow *f = flow_running();
     int dropped;
@@ -7265,111 +7035,71 @@ static int engine_drop_jobs(JSContext *ctx) {
            "performed by a timeline (§7.5.9's unload task is a job of one), so a caller here is a platform edge "
            "reaching for a queue that belongs to a timeline it is not in");
     if (!f) return 0;   /* release path under the assert: nothing this hook can honestly reach */
-    /* NOT WHILE THIS WALK HOLDS THE FLOW. It runs inside a flow step, where the allocator's refusal edge is
-       armed to page a member of the frontier out — and the registry removes by swapping its last member into
-       the hole, so a reclaim inside this walk can move the Flow record it is holding an index into. A refusal
-       across this walk is simply a refusal; the step's next allocation is armed again. */
+    /* Not while this walk holds the flow: the step's allocator refusal edge can page a member out, and the
+       registry removes by swapping its last member into the hole, which could move the Flow this walk indexes.
+       A refusal here is just a refusal; the next allocation is armed again. */
     int prev_reclaim = engine_reclaim_set(0);
     dropped = flow_job_drop_realm(ctx, f, ctx);
     engine_reclaim_set(prev_reclaim);
     return dropped;
 }
 
-/* Run ONE of the flow's queued jobs under its currently-applied COW; free its args + result.
-   THE PICK IS HTML 8.1.7's MICROTASK CHECKPOINT, not a FIFO pop. Within a queue the order is arrival order, but
-   a TASK may not begin while this flow still holds a microtask — a plain FIFO ran `setTimeout(f, 0)` in the
-   middle of a promise chain, which is the one ordering the event loop exists to forbid. */
+/* Runs one of the flow's queued jobs under its applied COW delta, then frees its result. The pick is HTML §8.1.7's
+   microtask checkpoint, not a FIFO pop: arrival order within a queue, but no task may begin while this flow holds
+   a microtask, so `setTimeout(f, 0)` cannot run in the middle of a promise chain. */
 static void flow_run_one_job(JSContext *ctx, Flow *f) {
     JSValue job = flow_job_take(ctx, f);   /* the pick IS the checkpoint rule — see flow.h */
     g_jobs_run++;
     JSValue r = flow_job_run(ctx, job);    /* the reaction runs in this flow's timeline */
-    /* A JOB THAT THREW IS A PAGE ERROR, exactly like a script that threw, and this dropped it. A promise
-       reaction, a queueMicrotask callback and a delivered message all run here — so an uncaught throw inside
-       any of them vanished: no report, no result entry, nothing to say the page's own code had failed. It also
-       made every observable this engine has blind to jobs, which is why "does the microtask run at all" could
-       not be answered from outside. §8.1.4.6 Runtime script errors' "report an exception" is the same hook a
-       script uses — see core/events/report_exception.h, which cites it too. (§8.1.7.5 stood here and is
-       "Dealing with the event loop from other specifications".) */
+    /* A job that threw is a page error, as a script that threw is: a promise reaction, a queueMicrotask callback
+       or a delivered message reports through §8.1.4.6 Runtime script errors' "report an exception", the same hook a
+       script uses (core/events/report_exception.h). */
     if (JS_IsException(r)) {
         JSValue e = JS_GetException(ctx);
         result_page_error_value(ctx, e);
         JS_FreeValue(ctx, e);
     }
     JS_FreeValue(ctx, r);
-    /* THE RECORD'S REFERENCE, NOT ITS CONTENTS. A fork gives every arm an Array naming the same records, so
-       the arguments belong to the record and go when the LAST arm's reference does — an arm that freed them
-       here would empty a job its sibling has not run yet. */
+    /* The record's reference, not its contents: forked arms name the same records, so the arguments go with the
+       last arm's reference; freeing them here would empty a job a sibling has not run. */
     JS_FreeValue(ctx, job);
 }
 
-/* flow_stack_empty IS solver/flow.h'S NOW, AND THE MOVE IS THE POINT RATHER THAN TIDYING. It is a question
-   about a FLOW — its frame and the position column of its own sequence — and it had a SECOND consumer that
-   could not reach it: cold_census, which reports what the frontier is standing in. The delivery arm below is
-   guarded on it, so a census that cannot state it cannot say whether a debt of hundreds of thousands of
-   answered replies is held by members that COULD take them or by members that could not, and those two take
-   opposite work. Restating the test in cold.c would have been a second spelling of one spec sentence — the
-   drift solver/pending.h refuses for the word "owed" — so the predicate is exported and this file is one of
-   its callers instead of its owner. */
+/* flow_stack_empty is solver/flow.h's: it is a question about a flow (its frame and its sequence's position
+   column), and cold_census needs it too, since the delivery arm is guarded on it and a census must say whether a
+   member can take its answered replies. One exported predicate, not a second spelling in cold.c. */
 
-/* IS A MICROTASK CHECKPOINT DUE BEFORE THIS FLOW'S NEXT PROGRAM? — the stack being empty, and a microtask to
-   run. §8.1.7.3 "Processing model" performs the checkpoint at the END of each task, so every task of this
-   flow comes after it, and that is the whole of the answer.
-   THIS USED TO BE ASKED ONLY AFTER THE SEQUENCE WAS EXHAUSTED, which is why it is a function now. The job arm
-   sat below the arms that compile a program, so it was reachable only once the cursor had passed the last row
-   — no microtask of any kind ran until every document script and every queued row had run, and
-   `<script>Promise.resolve().then(() => fetch('/a'))</script><script>fetch('/b')</script>` produced /b before
-   /a. No browser does that, and nothing in the engine could say so: the checkpoint END hook (engine_step)
-   already read §8.1.4.4's precondition correctly while the checkpoint itself did not run there at all. */
+/* Is a microtask checkpoint due before this flow's next program? The stack is empty and a microtask is queued.
+   §8.1.7.3 Processing model performs the checkpoint at the end of each task, so every later task of this flow
+   comes after it, including the next program: `<script>Promise.resolve().then(() => fetch('/a'))</script>
+   <script>fetch('/b')</script>` issues /a before /b. */
 static int flow_checkpoint_due(const Flow *f) {
     if (!flow_job_microtask(f)) return 0;
     return flow_stack_empty(f);
 }
 
-/* ONE UNIT OF WORK, THEN RETURN — flow_step is a step, and it used to be a drain.
-   Every branch below that finished something looped back inside this call instead of returning: a completed
-   script advanced to the next one and ran it, a drained fetch ran the continuation, a fired load stage ran its
-   listeners, a candidate that failed to compile went straight to the next candidate. So a flow holding many
-   short programs — none of them long enough to hit a back-edge preempt — ran ALL of them back-to-back with no
-   return to the scheduler, which is a drive-to-completion at the C level even though every individual program
-   was perfectly preemptible. The scheduler could not interleave, could not re-rank, and could not honour its
-   own wall-clock quantum, because none of them are consulted until this returns.
-   Making each unit a return puts the scheduler back in charge of the pump, which is what §scheduler requires of
-   it, and costs only loop iterations: the switch counter moves when a DIFFERENT flow is picked, so re-picking
-   the same flow is the same execution with the scheduler given the chance to choose otherwise. Nothing is
-   dropped, skipped or reordered by it — every branch that returns here made progress first. */
-/* WHICH UNIT, when one of them turns out to have no suspend point. The scheduler's assertion can say that a
-   flow ran too long but not what it was doing, and "one of seven branches" is not a localisation — the label is
-   set by the branch that is about to run, so a step with no seam names itself. */
+/* One unit of work, then return: flow_step is a step, not a drain. Every branch that finishes something returns
+   instead of looping on to the next program, chunk, listener or candidate, so a flow holding many short programs
+   (none long enough to reach a back-edge preempt) cannot run them back to back without the scheduler interleaving,
+   re-ranking or honouring its quantum. It costs only loop iterations (the switch counter moves only when a
+   different flow is picked); every returning branch made progress first. */
+/* Which unit: set by the branch about to run, so a step that turns out to have no suspend point names itself in
+   the scheduler's assertion. */
 static StepUnit g_step_unit = STEP_UNIT_NONE;
 
-/* HOW MANY TIMES EACH ARM HAS RUN, over this instance's whole life — and it answers the OPPOSITE question to
-   the row `Flow.step_unit` carries, which is why both exist and neither replaces the other.
-   `Flow.step_unit` is WHERE A MEMBER IS STANDING, so solver/cold.c's histogram over it is a census of the
-   frontier AT THE INSTANT it is taken: `run-a-task: 0` there says nobody is sitting in that arm right now.
-   This is a count of STEPS, so `run-a-task: 0` here says the ladder has never once reached that arm at all.
-   The two zeroes are the two diagnoses a reader has to choose between — "the arm is never entered" against
-   "it is entered constantly and the flow has left it again before every census" — and they take OPPOSITE
-   work: the first is a ladder whose rungs above this one never run out, the second is a member that reaches
-   this rung and cannot get past it. One number could not say which, and the per-member census is the number
-   that could not: it is a gauge, and a gauge read between two steps says nothing about the traffic through a
-   rung a flow does not rest on. That is the axis this file had no instrument for.
-   IT IS A COUNTER FOR REPORTING AND IT IS NEVER A GATE — §NO BOUNDS, said where the counter is because a
-   lifetime per-arm total is exactly the shape the next reader reaches for to build one. Nothing may branch
-   on it: not a fixpoint over "this arm stopped moving", not a no-progress detector, not a cap on how often an
-   arm may run, not a seen-set over arms, not an abandon rule for a member that keeps taking one. Its only
-   consumers are solver/result.c's census and the diagnostics; a consumer that DECIDES on it is the violation,
-   and it is a violation whatever the decision is, because a scheduler that reads this has stopped ordering by
-   value-of-information and started ordering by how often something has already happened.
-   NOT RESET AT A SESSION BOUNDARY, for `g_finished`'s and `g_switches`'s reason exactly: neither is on
-   engine_session_close's path, the host wants the INSTANCE's total, and a counter cleared under
-   engine_sched_begin would report the last session's ladder as the document's. */
+/* How many times each arm has run over this instance's life, the opposite question to `Flow.step_unit`.
+   `Flow.step_unit` is where a member stands, so solver/cold.c's histogram over it is a gauge of the frontier at an
+   instant (`run-a-task: 0` there: nobody stands in that arm now); this counts steps (`run-a-task: 0` here: the
+   ladder never reached it). Those take opposite work: rungs above that never run out, or a member that reaches
+   the rung and cannot get past it. A report, never a gate: nothing may branch on it (no fixpoint over an arm that
+   stopped moving, no progress detector, no cap, no seen-set), because ordering by how often something happened is
+   not ordering by value of information. Not reset at a session boundary, like `g_finished` and `g_switches`: the
+   host wants the instance's total. */
 static long g_step_unit_runs[STEP_UNIT_N];
-/* …AND THE SAME LIST RESTRICTED TO THE TURNS THAT OVERRAN THE SLICE — see solver/engine.h's `over_arms`. Two
-   histograms over one list: runs says how OFTEN an arm is taken, this says how often taking it cost a whole
-   slice, and an arm whose two counts are EQUAL is a step that cannot be preempted rather than a hot one. */
+/* The same list restricted to turns that overran the slice (solver/engine.h's `over_arms`): an arm whose two counts
+   are equal is a step that cannot be preempted, not merely a hot one. */
 static long g_step_unit_over[STEP_UNIT_N];
-/* ITS OWN SUM, WALKED RATHER THAN CARRIED — a running total beside the rows would be a second copy of one
-   fact, agreeing with them only while somebody remembers both. Pure, and vanishes with the asserts. */
+/* Its own sum, walked rather than carried beside the rows (a second copy of one fact). Pure; used by the asserts. */
 static inline long step_unit_over_total(void)
 {
     long t = 0;
@@ -7378,25 +7108,16 @@ static inline long step_unit_over_total(void)
     for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over[i];
     return t;
 }
-/* …AND THE SAME LIST RESTRICTED ONE STEP FURTHER — the overrunning turns that offered NOT ONE suspend point.
-   THE TWO ROWS IT SITS BETWEEN CANNOT BE JOINED, WHICH IS THE WHOLE REASON IT EXISTS. `g_step_unit_over` says
-   WHICH ARM overran and `g_over_seamless` says HOW MANY overrunning turns were seamless, and the second is a
-   SCALAR — so a reader holding one arm at three quarters of all overruns and a seamless count at three
-   quarters of all overruns cannot say whether they are the same turns. Those take OPPOSITE work:
-   solver/engine.h's `over_arms` banner states it — a seamless stretch is "a C activation that declares no step
-   boundary, which is a step-machine conversion (§C-stack) in whichever component owns that call", and a
-   stretch that offered points and ran anyway is "the page choosing a back-edge-free stretch, which no ordering
-   reaches and which §NO BOUNDS forbids capping".
-   MEASURED, AND THE JOIN WAS THE THING A READER WANTED AND COULD NOT HAVE: over three drives of one release
-   artifact on one real app, `seed-one-orphan-flow` overran 36 of 55, 100 of 121 and 122 of 140 of its own runs
-   — 51%, 72% and 76% of ALL overrunning turns — while the seamless count stood at 55%, 75% and 78% of the same
-   total. Two numbers that move together over three passes and no row anywhere that could say they are one
-   population rather than two that happen to be the same size.
-   RAISED AT THE SAME LINE AS THE SCALAR, from the same turn's arm and the same turn's consultation delta, so
-   `sum == g_over_seamless` and the per-arm containment against `g_step_unit_over` are both exact THERE and are
-   asserted there. It decides nothing and bounds nothing (§NO BOUNDS), in every build for its scalar's reason. */
+/* The same list restricted further: overrunning turns that offered not one suspend point. `g_step_unit_over` says
+   which arm overran and the scalar `g_over_seamless` how many overrunning turns were seamless, and the two cannot be
+   joined (an arm at three quarters of all overruns beside a seamless count at three quarters may or may not be the
+   same turns). The cases take opposite work (solver/engine.h's `over_arms`): a seamless stretch is a C activation
+   declaring no step boundary, a step-machine conversion in its owning component; a stretch that offered points and
+   ran anyway is the page choosing a back-edge-free stretch, which nothing may cap. Raised at the scalar's line from
+   the same turn's arm and delta, so `sum == g_over_seamless` and containment in `g_step_unit_over` are asserted
+   there. Decides and bounds nothing; raised in every build. */
 static long g_step_unit_over_seamless[STEP_UNIT_N];
-/* ITS OWN SUM, WALKED RATHER THAN CARRIED, for `step_unit_over_total`'s reason exactly. */
+/* Its own sum, walked, for `step_unit_over_total`'s reason. */
 static inline long step_unit_over_seamless_total(void)
 {
     long t = 0;
@@ -7405,12 +7126,11 @@ static inline long step_unit_over_seamless_total(void)
     for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over_seamless[i];
     return t;
 }
-/* …AND THE POINTS THE NON-SEAMLESS TURNS OF EACH ARM OFFERED — see solver/engine.h's `over_ask_arms` for what
-   the scalar it partitions destroys and why the denominator is NOT this arm's overrun count. Raised in the
-   `else` of the same branch the seamless histogram is raised in, from the same delta, one statement from its
-   own identity. */
+/* The points the non-seamless overrunning turns of each arm offered (solver/engine.h's `over_ask_arms`, which says
+   why the denominator is not the arm's overrun count). Raised in the `else` of the seamless histogram's branch,
+   from the same delta. */
 static long g_step_unit_over_asks[STEP_UNIT_N];
-/* ITS OWN SUM, WALKED RATHER THAN CARRIED, for `step_unit_over_seamless_total`'s reason exactly. */
+/* Its own sum, walked, for the same reason. */
 static inline long step_unit_over_asks_total(void)
 {
     long t = 0;
@@ -7419,16 +7139,12 @@ static inline long step_unit_over_asks_total(void)
     for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over_asks[i];
     return t;
 }
-/* …AND THE WORST NO-SUSPEND-POINT STRETCH ANY NON-SEAMLESS OVERRUNNING TURN OF EACH ARM CONTAINED — see
-   solver/engine.h's `over_gap_arms` for why the density beside it is a MEAN and what a mean cannot tell apart.
-   Raised in the same `else` as the ask row, from the same turn, one statement from its own identity.
-   NOT A PARTITION, WHICH IS THE ONE THING IT DOES NOT SHARE WITH THE THREE ROWS ABOVE IT: a sum of maxima is a
-   quantity no turn produced, so this row has no `_total` and its identity is a MAX against the scalar. */
+/* The worst no-suspend-point stretch any non-seamless overrunning turn of each arm contained (solver/engine.h's
+   `over_gap_arms`: the density beside it is a mean). Raised in the same `else` as the ask row. Not a partition: a
+   sum of maxima is a quantity no turn produced, so its identity is a max against the scalar. */
 static long g_step_unit_over_gap[STEP_UNIT_N];
-/* ITS OWN MAXIMUM, WALKED RATHER THAN CARRIED, for `step_unit_over_asks_total`'s reason exactly — and it is a
-   max and not a sum because that is the identity this row HAS. A fold over an empty history answers 0, which
-   is the same thing every arm reads before the first non-seamless overrunning turn and is why the scalar it is
-   checked against starts there too. */
+/* Its own maximum, walked; a fold over an empty history answers 0, as every arm and the scalar read before the
+   first such turn. */
 static inline long step_unit_over_gap_max(void)
 {
     long m = 0;
@@ -7437,121 +7153,56 @@ static inline long step_unit_over_gap_max(void)
     for (i = 0; i < STEP_UNIT_N; i++) if (g_step_unit_over_gap[i] > m) m = g_step_unit_over_gap[i];
     return m;
 }
-/* …AND THE STEPS THEMSELVES, COUNTED WHERE THE HISTOGRAM ABOVE IS NOT, which is the whole of what makes the
-   identity between the two an assertion rather than an arithmetic tautology. This is incremented where
-   flow_step RESETS the name — its entry — and the histogram is incremented where the scheduler RECORDS the
-   name, at the convergence point after flow_step has returned. So `sum(g_step_unit_runs) == g_steps` states
-   that every entry into flow_step reached the one point that records its arm. That is true by inspection
-   while there is one call site and one record, and it is exactly what a second call site, a step driven from
-   somewhere else, or an early return added between the two would break — the §AN-ASSERT-THAT-NAMES-A-REMEDY
-   lesson made checkable rather than restated. A total incremented on the line beside the bucket would be
-   equal by construction and would assert nothing at all. */
+/* The steps themselves, counted where the histogram is not: incremented at flow_step's entry, while the histogram
+   is incremented where the scheduler records the arm after flow_step returns. So `sum(g_step_unit_runs) == g_steps`
+   says every entry reached the one point that records its arm, which a second call site, a step driven from
+   elsewhere, or an early return between the two would break. */
 static long g_steps;
-/* …AND HOW MANY OF THOSE STEPS GOT AS FAR AS THE WORK LADDER — see solver/engine.h's `unframed_steps` for
-   what it separates, why no row already on the document composes it, and why it is NOT `unframed_picks_
-   lifetime`. It is raised at the one line that ENTERS flow_step's `if (!f->frame)` block, which is the
-   ladder's whole precondition: a step taken on a framed member asks none of the ladder's conditions and is
-   therefore invisible in every one of them, including the orphan ask this row is the denominator of.
-   PER PASS AND NOT PER ENTRY, DELIBERATELY, which is why it may not be compared with `g_steps` above. The
-   loop body iterates (the turn continuation at the reply delivery) and `g_steps` is raised once at the
-   function's entry; the orphan ask is raised per pass inside this same block, so the pair this row belongs to
-   is counted on one basis and the containment between them is exact.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS) — nothing reads it to decide anything. */
+/* How many of those steps reached the work ladder (solver/engine.h's `unframed_steps` says what it separates and
+   why it is not `unframed_picks_lifetime`). Raised at the line entering flow_step's `if (!f->frame)` block, the
+   ladder's precondition: a framed step asks none of the ladder's conditions, the orphan ask included. Per pass, not
+   per entry (the turn continuation iterates the loop body), so it is not comparable with `g_steps`; the orphan ask
+   is raised per pass in the same block, so their containment is exact. A report only. */
 static long g_unframed_steps;
-/* …AND WHICH ARM TOOK THE STEP OF A MEMBER THAT WAS HOLDING A RUNNABLE TASK. These four turn
-   `readyPicksLifetime`'s second reading from a hand-off into a count: that legend ends "flow_step declines the
-   job at an arm ABOVE the one that would run it, which sends the reader to the ladder", and these are what the
-   ladder answers when a reader gets there. Until they existed the answer was an inference over
-   `g_step_unit_runs`, which is a histogram over EVERY step and therefore cannot say that the member whose step
-   an arm took was holding a task at all — two documents with the same arm histogram and opposite job backlogs
-   are one row there.
-
-   A TASK AND NOT A JOB, AND IT IS ASSERTED RATHER THAN NAMED. Both raise sites stand BELOW the checkpoint arm,
-   whose guard is `flow_job_microtask && flow_stack_empty`, and at both `flow_stack_empty(f)` is true — so a
-   non-empty queue there holds no microtask, and `flow_job_pending(f) > 0` IS "a task is runnable". A DCHECK at
-   each site is what makes that true by construction rather than by this paragraph.
-
-     `g_task_held_deliv`  — the REPLY-DELIVERY arm took the step. WHAT IT SIZES HAS CHANGED AND THE RETIRED
-       WORDING IS KEPT, because a reader who finds the row large will otherwise re-derive the old reading: it
-       said the arm "stands above the whole arrival chain and is not in it: a reply register entry carries no
-       stamp, so a delivery precedes every row and every queued callback of the flow whatever their ages",
-       and that this row was the size of the chain's NOT COVERED clause. The entry carries a stamp now
-       (PEND_WORK_SEQ) and the arm asks flow_task_precedes with it, so a delivery no longer precedes a
-       QUEUED CALLBACK that arrived first. IT STILL PRECEDES EVERY ROW, which is the half the arm's own
-       paragraph records as a deadlock rather than an omission.
-       SO THE ROW IS NOW THE SIZE OF THE ARM GOING IN FRONT OF A **YOUNGER** TASK, which is the arrival order
-       working, and its old reading — the exclusion — is what a near-zero now means. A reader comparing it
-       across that diff is comparing two quantities, and the discriminator is whether PEND_WORK_SEQ exists at
-       the revision the artifact was built at (`git grep -c PEND_WORK_SEQ <stamp> -- engine/host`).
-     `g_task_held_seq`    — the PROGRAM-SEQUENCE arm took it (`seq_compiles && !job_precedes`) with a task
-       runnable, which is the arrival comparison answering NO: the queued task is YOUNGER than the row at the
-       cursor. It is the only row that says so, because flow_task_precedes' answer is a local nothing else reads.
-     `g_task_arm_older`   — the TASK arm ran because that comparison answered YES. The mechanism working.
-     `g_task_arm_no_row`  — the TASK arm ran with no program to start at all (`seq_compiles` 0), so the
-       comparison was never made. A member standing past the last row of its own sequence is in this arm at
-       every step, and `programCursors`' top bucket is how many members that is.
-
-   THE IDENTITY IS `g_task_arm_older + g_task_arm_no_row == g_step_unit_runs[STEP_UNIT_RUN_TASK]`, and it can
-   fail: the two halves are raised INSIDE the arm at the choice, and the total is raised at the convergence
-   point after flow_step has RETURNED, so a second writer of that arm or a return added between the choice and
-   that point breaks it. Asserted at the accessor, where all three are in one hand.
-
-   WHAT THEY DO NOT COVER. Three arms stand above the delivery one — link-connected time, a routed delivery and
-   a peer's parked operation — and a step one of those took while a task was runnable is in no row here. The
-   checkpoint arm is not counted and CANNOT be: a checkpoint is due only while a microtask is held, so "a task
-   is runnable" is false there by the same reasoning that makes it true below, and the row that sizes that
-   population is `jobsReadyMicro` on the same census line. HOW THAT ABSENCE SHOWS: `run-a-task` plus these four
-   failing to account for a document's unframed steps while `jobsReadyTask` stands above zero throughout.
-   AND NO ROW HERE REACHES THE QUEUE'S OWN DEPTH, which is the second half of why one particular task never
-   runs. job_pick_index takes the OLDEST entry within the kind rules, so a task enqueued late stands behind
-   every task its flow queued earlier; these four say which arm took a step and never how many steps that
-   member's queue still needs. A document whose task arm is reached freely can still never reach one task.
-
-   LIFETIME COUNTS over the instance, released by nothing, so they may be differenced — and none is a gauge: an
-   arm taken is an event and the member it was taken from may leave. A REPORT AND NEVER A BOUND (§NO BOUNDS):
-   nothing branches on one, no arm is narrowed by one, and "how often this arm declined a task" is precisely
-   the shape a fairness cap would be built out of.
-   RETIREMENT — MET IN PART AND RE-KEYED, THE OLD WORDING KEPT BECAUSE IT IS WHAT A READER RE-DERIVES. It
-   read: this record goes when the delivery arm is IN the arrival chain — a stamp on a `pending` entry at its
-   push, which is what the chain's own next-diff clause names — because `g_task_held_deliv` is then a count of
-   an ordering that cannot happen. The stamp is built and the TASK ordering cannot happen any more, so for the
-   queued-callback half the row is exactly that: a count of nothing. The ROW ordering still can, and that is
-   what the row now sizes.
-   RETIREMENT: this record goes when the oldest RUNNABLE ROW's stamp is computed above the delivery arm, so
-   all three carriers are one arrival order and `g_task_held_deliv` is a count of an ordering that cannot
-   happen at all — MEASURED ABSENT with the command, so this condition is not born met:
-   `grep -c 'seq_compiles' engine/host/solver/engine.c` answers its occurrences all BELOW the arm's line,
-   which `grep -n 'uint64_t deliv_seq = flow_stack_empty' engine/host/solver/engine.c` prints for comparison. */
+/* Which arm took the step of a member holding a runnable task, answering what `readyPicksLifetime`'s second reading
+   hands to the ladder ("flow_step declines the job at an arm above the one that would run it"); `g_step_unit_runs`
+   covers every step and cannot say the member held a task. Both raise sites stand below the checkpoint arm, whose
+   guard is `flow_job_microtask && flow_stack_empty`, and `flow_stack_empty(f)` holds at both, so a non-empty queue
+   there holds no microtask and `flow_job_pending(f) > 0` means a task is runnable (a DCHECK at each site).
+     `g_task_held_deliv`: the reply-delivery arm took the step. The entry carries a stamp (PEND_WORK_SEQ) and the arm
+       asks flow_task_precedes, so a delivery no longer precedes an older queued callback, but it still precedes
+       every row (its arm records that as a deadlock it avoids). So this sizes the arm going ahead of a younger task.
+       Comparing it across the stamp's introduction compares two quantities: `git grep -c PEND_WORK_SEQ <stamp> --
+       engine/host` says which an artifact measures.
+     `g_task_held_seq`: the program-sequence arm took it (`seq_compiles && !job_precedes`): the queued task is younger
+       than the row at the cursor. The only record of that answer.
+     `g_task_arm_older`: the task arm ran because the comparison said the task is older.
+     `g_task_arm_no_row`: the task arm ran with no program to start (`seq_compiles` 0); a member past the end of its
+       sequence is here at every step (`programCursors`' top bucket counts them).
+   Identity, asserted at the accessor: `g_task_arm_older + g_task_arm_no_row == g_step_unit_runs[STEP_UNIT_RUN_TASK]`;
+   the halves are raised at the choice and the total after flow_step returns, so a second writer or an early return
+   breaks it. Not covered: the three arms above delivery (link-connected time, a routed delivery, a peer's parked
+   operation), visible as `run-a-task` plus these four not accounting for unframed steps while `jobsReadyTask` stays
+   above zero; the checkpoint arm (no task is runnable there; `jobsReadyMicro` sizes it); and queue depth
+   (job_pick_index takes the oldest, so a late task waits behind earlier ones). Lifetime counts, a report only.
+   Named residual. Not covered: rows are still not in the arrival chain above the delivery arm. Next diff builds:
+   the oldest runnable row's stamp computed above the delivery arm, putting all three carriers in one arrival
+   order, after which `g_task_held_deliv` counts nothing. Absence shows as: `g_task_held_deliv` above zero (today
+   every use of `seq_compiles` is below the line `grep -n 'uint64_t deliv_seq = flow_stack_empty'` prints). */
 static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_no_row;
-/* …AND WHY A TURN DID NOT END A UNIT OF WORK, WHICH IS THE THREE-STATE ANSWER BEHIND `g_units_done`'s
-   ONE-STATE ZERO. The unit boundary in the dispatch loop is a CONJUNCTION of three clauses — no live frame, no
-   parked continuation on the runtime, no microtask checkpoint still owed — and `g_units_done` counts only the
-   turns where all three held. When it reads low, nothing says WHICH clause refused, and the three take
-   OPPOSITE work:
-
-     a LIVE FRAME says the member is inside a program and the turn advanced it; the trial is still running and
-       this is the state `resume-program` is the arm of. A frontier of forks is framed by construction
-       (engine_sibling_assemble copies the frame taken AT the branch), so this clause refusing in bulk is the
-       frame gate showing up in a throughput row and NOT a thread that did nothing.
-     a PARKED CONTINUATION says the member is suspended on an await or a host reply — a question about what the
-       flow is waiting for, one component away from the scheduler.
-     a CHECKPOINT STILL OWED says the turn is not over: §8.1.4.4 "Calling scripts"' clean up after running
-       script step 3 performs a microtask checkpoint when the stack empties, and the unit ends when the QUEUE
-       does, so the flow's own reactions are eligible and unrun.
-
-   THE RECORDING POINT CANNOT MOVE, WHICH IS WHY THIS IS A SECOND FIELD AND NOT A RELOCATION. `g_units_done` is
-   raised beside `flow_credit_visit`, whose credit IS §scheduler's optimism denominator — a visit is a
-   COMPLETED unit — so hoisting it ahead of the gate would give the number a different meaning and leave the
-   old one unread. What a gated count owes instead is its DISCRIMINATOR published beside it.
-
-   AND THEY PARTITION `g_steps` EXACTLY, which is what makes them counters rather than three more numbers. The
-   boundary is evaluated once per dispatch, on a straight line between flow_step's return and the credit — no
-   `continue`, `break` or `return` stands between them — and `g_steps` is raised at flow_step's own entry, so
-   every turn lands on exactly one of these four. The identity is asserted at the credit, where all four are in
-   one hand: the DOCUMENT carries `_unitsDone` and `steps` in two different objects, so a reader composing the
-   split across them is composing it across two censuses that share no identity unless this line holds it.
-   KEYED SO AN OLD QUERY CANNOT SILENTLY GAIN THEM: the names below fall outside `stepUnit*` and `_unitsDone`,
-   so a script keyed on either measures exactly what it measured before these rows existed. */
+/* Why a turn did not end a unit of work, the three readings behind a low `g_units_done`. The unit boundary in the
+   dispatch loop is a conjunction of three clauses, and these count which refused:
+     a live frame: the member is inside a program and the turn advanced it (`resume-program`'s state); a frontier
+       of forks is framed by construction (engine_sibling_assemble copies the frame), so bulk refusal here is not an
+       idle thread;
+     a parked continuation: the member is suspended on an await or a host reply;
+     a checkpoint still owed: §8.1.4.4 Calling scripts' clean up after running script step 3 checkpoints when the
+       stack empties, and the unit ends when the queue does, so the flow's own reactions are eligible and unrun.
+   `g_units_done` stays beside `flow_credit_visit`, whose credit is the optimism term's denominator (a completed
+   unit), so its discriminators are published beside it rather than moving it. With it they partition `g_steps`
+   exactly: the boundary is evaluated once per dispatch on a straight line between flow_step's return and the
+   credit, and the identity is asserted at the credit (the document carries `_unitsDone` and `steps` in two
+   different objects). Named outside `stepUnit*` and `_unitsDone`, so existing queries measure what they did. */
 static long g_unit_mid_program;      /* …the member held a live frame: inside a program, the trial continues */
 static long g_unit_parked;           /* …the runtime held a parked continuation: suspended on an await/reply */
 static long g_unit_checkpoint_owed;  /* …the flow still owed its microtask checkpoint: the turn is not over */
