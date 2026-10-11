@@ -69,6 +69,8 @@
     X(NONE,               "none")                                                 \
     /* the arms that PERFORM work — a step here is progress by definition */      \
     X(FORK_PEER_ANSWER,   "fork-over-a-peer-answer")                              \
+    X(LEAVE_ANSWER_STANDBY, "leave-a-standby-for-later-peer-answers")             \
+    X(RETIRE_EXHAUSTED_ASK, "retire-a-request-no-peer-timeline-answers")          \
     X(FORK_DECLINED_REQ,  "fork-over-a-declined-request")                         \
     X(RESUME_PARKED,      "resume-parked-continuation")                           \
     X(LINK_CONNECTED,     "link-connected-time")                                  \

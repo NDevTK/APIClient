@@ -310,6 +310,9 @@ const retracted = [];
    out of two CONTRADICTORY timelines of one document. Every entry carries the WORLD that computed it, because
    that is the only thing that tells a second timeline from one answer relayed twice. */
 const answers = new Map();
+/* The tokens whose answering instance said no timeline will answer again (`remoteop.exhausted`), relayed to the
+   asker after that token's answers so its waiting standby retires. */
+const exhaustedTokens = new Set();
 const answersFor = (token) => {
   if (!answers.has(token)) answers.set(token, []);
   return answers.get(token);
@@ -571,6 +574,11 @@ async function service(e) {
         paid++;
       }
       answers.delete(key);
+      if (exhaustedTokens.has(key)) {
+        e.M.ccall('qjs_host_answers_exhausted', 'void', ['number'], [id]);
+        exhaustedTokens.delete(key);
+        paid++;
+      }
       reads.get(key).answered = true;
       reads.get(key).by = all.map((a) => a.world);
       console.log(`  [${e.tag}] answered by ${all.length} peer timeline(s): ${all.map((a) => a.world).join(' ')}`);
@@ -774,6 +782,12 @@ async function drainNotices(e) {
        ordinary state: those answers are real, and the timelines that never ran are handed back. What would be
        a defect is a SECOND retraction of one token — that is a hand-back repeated per holder, which is the
        thing the last-holder rule exists to prevent — and that is what is checked instead. */
+    else if (f[0] === 'remoteop.exhausted') {
+      if (f.length < 2 || !f[1]) fail(`a remoteop.exhausted notice carried no token: ${n}`);
+      if (!reads.get(f[1])) fail(`an exhausted token names no read this zone asked: ${f[1]}`);
+      if (exhaustedTokens.has(f[1])) fail(`one token was exhausted twice: ${f[1]}`);
+      exhaustedTokens.add(f[1]);
+    }
     else if (f[0] === 'remoteop.retracted') {
       if (f.length < 2 || !f[1]) fail(`a remoteop.retracted notice carried no token: ${n}`);
       const r = reads.get(f[1]);

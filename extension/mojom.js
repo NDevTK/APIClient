@@ -664,6 +664,14 @@
                  "says so at the other end" }],
         reply: [WORKING_SET] },
 
+      { ordinal: 28, name: "HostAnswersExhausted",
+        params: [
+          { name: "request", type: "int32", retained: false,
+            why: "the host-request id of the flow that asked, recovered from the token of a " +
+                 "`remoteop.exhausted` notice: no timeline of the answering document will answer it again, so " +
+                 "the standby the asking family keeps for later timelines' answers retires" }],
+        reply: [WORKING_SET] },
+
       { ordinal: 20, name: "WorldGone",
         params: [
           { name: "world", type: "string", retained: false,

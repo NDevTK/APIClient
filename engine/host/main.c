@@ -1722,6 +1722,15 @@ QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const ch
     JS_FreeValue(g_ctx, v);
 }
 
+/* The peer's word that no timeline holding the asking flow's rendezvous will answer again, relayed off the
+ * `remoteop.exhausted` notice by the zone, which recovers `req` from its token. It retires the asking family's
+ * waiting standby (engine_host_exhausted). */
+QJS_EXPORT void qjs_host_answers_exhausted(unsigned req)
+{
+    DCHECK(g_begun, "a peer's exhaustion was delivered to an engine that never ran");
+    engine_host_exhausted(g_ctx, (uint32_t)req);
+}
+
 QJS_EXPORT double qjs_top_weight(void)
 {
     DCHECK(g_begun, "qjs_top_weight was asked of an engine whose frontier was never seeded");

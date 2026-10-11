@@ -1996,6 +1996,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                               "wpt: OOM reading the timeline that answered a cross-agent operation");
                         v = remote_completion_decode(ctx, msep + 1, &completion);
                         engine_host_answer(ctx, id, world, marks, v, completion, ENGINE_ANSWER_PEER);
+                        /* The child asserts a second completion cannot exist on this channel, so this one is the
+                           last and the asking family's standby has nothing left to wait for. */
+                        engine_host_exhausted(ctx, id);
                         free(world);
                         free(marks);
                         answered = true;
@@ -2830,6 +2833,13 @@ static void wpt_child_emit_notices(const char *token)
                 p = end + 1;
                 continue;
             }
+        }
+        /* The in-flight token's exhaustion is this channel's own fact: it carries one answer per question, so the
+           parent retires the asker's standby with that answer (wpt's engine_host_exhausted call). */
+        if (token && n == 19 + strlen(token) && !strncmp(p, "remoteop.exhausted\t", 19) &&
+            !memcmp(p + 19, token, strlen(token))) {
+            p = end + 1;
+            continue;
         }
         fputs("N\t", stdout);
         fwrite(p, 1, n, stdout);

@@ -1508,6 +1508,18 @@ async function main() {
       flush();
       return;
     }
+    /* `remoteop.exhausted <token>` — no timeline of the answering instance holds the operation any more, and the
+       last one let it go by answering or refusing, so no answer follows. The asker retires the standby its
+       family keeps for later timelines' answers; the token is spent. */
+    if (f[0] === 'remoteop.exhausted') {
+      if (f.length < 2 || !f[1]) throw new Error(`a remoteop.exhausted notice carried no token: ${record}`);
+      const r = reads.get(f[1]);
+      if (!r) throw new Error(`an exhausted token names no operation this zone asked: ${f[1]}`);
+      reads.delete(f[1]);
+      r.asker.ready.push(['exhausted', String(r.id)].join('\t'));
+      flush();
+      return;
+    }
     /* `remoteop.retracted <token>` — an operation handed BACK, because the instance holding it parked while
        still holding it. The record and the token do not have one lifetime and that is the whole reason this
        arm exists: the record is text whose names are global, while the TOKEN is a name in THIS zone's

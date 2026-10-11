@@ -153,6 +153,10 @@ METRIC(host_asked, "hostAsked", LIFETIME, "rendezvous", PROCESS, "solver/engine.
 METRIC(host_answered, "hostAnswered", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
 METRIC(host_answers_extra, "hostAnswersExtra", LIFETIME, "answer", PROCESS, "solver/engine.c", INT)
 METRIC(host_answers_late, "hostAnswersLate", LIFETIME, "answer", PROCESS, "solver/engine.c", INT)
+/* A standby is left before a peer answer is taken and waits for a later peer timeline's answer; the
+   retired count is the flows the peer's exhaustion ended. Left minus retired is the standbys still waiting. */
+METRIC(answer_standbys, "answerStandbys", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)
+METRIC(answer_standbys_retired, "answerStandbysRetired", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)
 METRIC(host_terminated, "hostTerminated", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
 /* The four ends of the reply door, together because the asked/answered gap means nothing without
    the other two: a gap may be refusals of the page's own requests, where the door owes nothing.

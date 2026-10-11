@@ -521,6 +521,10 @@ enum { ENGINE_ANSWER_HOST, ENGINE_ANSWER_PEER };
    arrival word (engine_arrival_token), present exactly when `world` is; the arm that takes the answer takes it. */
 int      engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const char *marks, JSValueConst value,
                             int completion, int source);
+/* The peer's word that no timeline holding the rendezvous `req` names will answer again (`remoteop.exhausted`).
+   Marks every entry of the request; an unanswered one, a standby or an issuer nothing answered, retires at its
+   flow's next step. Returns how many waiting entries it reached. */
+int      engine_host_exhausted(JSContext *ctx, uint32_t req);
 /* What the host still owes, as `id<TAB>asker<TAB>op` lines, `asker` naming the asking document as the fetch
    bill's ASKERS does. Pulled each step and not deduped (see engine_retract_operations). */
 const char *engine_host_requests(void);
@@ -1091,6 +1095,8 @@ typedef struct {
     long claims_unmet;      /* …and one that finished never having been handed one: the round trip's verdict */
     long host_asked;         /* rendezvous ids this instance minted: every one the host is shown and must pay */
     long host_answered;      /* …and the one delivery that settled each: `answered <= asked` is asserted */
+    long answer_standbys;    /* standbys left before a peer answer was taken (flow_answer_standby) */
+    long answer_standbys_retired; /* flows retired on a peer's exhaustion (engine_host_exhausted) */
     long host_answers_extra; /* answers landing on an already-settled request, one per extra peer timeline;
                               * not a payment, so never added into `host_answered` */
     long host_answers_late;  /* answers refused because the session had already closed */

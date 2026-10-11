@@ -1569,7 +1569,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        The smoke host's give-up path fires this: a provider that answers nothing ends run_scheduler, main.c tears the
        instance down, and flow_registry_free releases survivors suspended mid-frame with replies outstanding. The
        abort names the flows a run threw away at the moment it threw them. */
-    DCHECK(f->paged || (f->parked == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
+    DCHECK(f->paged || f->retired || (f->parked == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
            "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
            "owed to it, or a routed message) without being written to the cold tier — nothing replays it, so the "

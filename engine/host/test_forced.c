@@ -27868,6 +27868,17 @@ static int abi_pay(void)
             qjs_host_answer_remote((unsigned)id, world, marks, comp);
             free(comp);
             paid++;
+        } else if (!strcmp(verb, "exhausted")) {
+            /* The peer's word that no timeline will answer this request again, after its last answer. */
+            const char *id_f = abi_take(&p, "request id");
+            char *end;
+
+            CHECKF(p == NULL, "a peer's exhaustion carries a field after its id. trailing=[%s]", p ? p : "");
+            id = strtoul(id_f, &end, 10);
+            CHECKF(*id_f != '\0' && *end == '\0', "a peer's exhaustion names a request id that is not a number: "
+                   "`%s`", id_f);
+            qjs_host_answers_exhausted((unsigned)id);
+            paid++;
         } else if (!strcmp(verb, "world-gone")) {
             /* A WORLD OF ANOTHER INSTANCE IS FINISHED WITH, so the COW segment this one materialized for it can
                go. BROADCAST by the zone, because the sending engine deliberately does not record which peers a

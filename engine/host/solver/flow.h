@@ -49,6 +49,8 @@ typedef struct FlowAcct FlowAcct;
 #define FLOW_STEP_MORE  0
 #define FLOW_STEP_DONE  1
 #define FLOW_STEP_OWED  2
+/* The flow is a timeline that does not exist (a peer request no timeline will answer): it leaves unfinished. */
+#define FLOW_STEP_RETIRED 3
 
 typedef struct Flow {
     /* This flow's slot in the frontier's array, so locating a member is a load rather than a walk. It names a
@@ -212,6 +214,10 @@ typedef struct Flow {
        continuation on a written flow is replayed next session; one on an unwritten flow is dropped), and
        cold_park_flow sets it and refuses a flow that already carries it. */
     int paged;
+    /* Is this flow a timeline that does not exist: one waiting at a cross-instance read no peer timeline will
+       answer (engine.c's FLOW_STEP_RETIRED arm sets it)? Its work items belong to no timeline, so flow_release
+       frees them as it frees a paged flow's. */
+    int retired;
 
     /* Has this flow told the scheduler it can make no progress? A flow answers FLOW_STEP_OWED when all it has
        left belongs to the host (an unanswered fetch, a document script whose text has not arrived, an

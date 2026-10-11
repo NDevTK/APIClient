@@ -4363,6 +4363,21 @@ async function hostNotice(eng, line) {
     }
     return;
   }
+  /* `remoteop.exhausted <token>` — no timeline of this instance holds the question any more and the last one let
+     it go by answering or refusing, so no answer follows. The asker retires the standby its family keeps for
+     later timelines' answers, and the token is spent. */
+  if (f[0] === "remoteop.exhausted") {
+    DCHECK(f.length >= 2 && !!f[1], "a remoteop.exhausted notice carried no rendezvous token");
+    const done = _remoteOps.get(f[1]);
+    DCHECK(done !== undefined,
+           "an engine exhausted a cross-agent operation under a rendezvous token this zone never minted, or one " +
+           "already spent — the asking family's standby would wait for an answer nothing will send");
+    if (!done) return;
+    _remoteOps.delete(f[1]);
+    done.asker._remoteAsked.delete(done.req);
+    await done.asker.r.renderer.hostAnswersExhausted({ request: done.req });
+    return;
+  }
   /* `remoteop.retracted <token>` — an instance is parking with a question it was asked and hands it back,
      started or not: a half-run answering program's work is the parking flow's own delta, and what was asked
      for was a call (HTML §7.2.1.3.5 CrossOriginGet ( O, P, Receiver ) ends "Return ? Call(getter, Receiver)"),

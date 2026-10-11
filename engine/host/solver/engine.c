@@ -920,6 +920,8 @@ static long g_host_answered;
  * read as a host paying more than it was asked. Counted because it is the only number saying how many peer
  * timelines this instance was answered out of. */
 static long g_host_answers_extra;
+/* Standbys left before a peer answer was taken, and those the peer's exhaustion retired. */
+static long g_answer_standbys, g_answer_standbys_retired;
 /* Answers that arrived when nothing was left to consume them. A peer answers by running a program on its own
  * timeline, relayed by a zone that cannot know what became of the asker, and Level-1 eviction makes a peer
  * outliving the asker's park the ordinary case. The asking flow is a recipe whose replay re-issues the request
@@ -1106,19 +1108,9 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
 /* The machine takes its answer and the request leaves the register. Separate from the read above because a
  * machine may be re-entered several times before it is ready to consume.
  *
- * This removal is what the two aborts at the bottom of engine_host_answer observe: one rendezvous has one true
- * answer per peer timeline, the first ends the entry, and a later answer reaches a register naming nothing.
- * What this line asserts is that the entry carries no answer nobody has forked over: flow_step takes one arm per
- * recorded extra before it resumes this frame (flow_answer_fork), so `extra` is empty at every healthy take.
- *
- * Named residual. Not covered: a peer with more than one timeline whose answers do not all arrive before the
- * asking flow resumes; later answers have nowhere to land. Next diff builds two things: (i) the suspension, cloned
- * here while the machine is still at the read and held with the entry (an arm forked later from `f->frame`
- * would carry answer k past a call site computed with answer 0); (ii) a release criterion the protocol lacks,
- * since `remoteop.answer` and `remoteop.retracted` never say every token holder has answered: one line of the
- * answering side's arithmetic (flow_answer_perform clears the row's token; `perform_token_held` already decides
- * the last-holder question for engine_retract_span), scoped to the ask, not the token's spelling. Absence shows
- * as: engine_host_answer's door (3) reached with `extra` and `fixed` both zero under a zone relaying on arrival. */
+ * The entry carries no answer nobody has forked over: flow_step takes one arm per recorded extra before it
+ * resumes this frame (flow_answer_fork), so `extra` is empty at every healthy take. A later peer answer lands on
+ * the standby flow_answer_standby left before this resume, not on this entry. */
 /* The row a taken cross-instance answer owes, defined with the other commitment writer because what a receiving
    timeline has heard from is one question with one set of rules. */
 static void answer_commit_taken(JSContext *ctx, Flow *f, const char *world);
@@ -1349,6 +1341,13 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                 DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
                        "a request whose answer was fixed by an answer fork is unanswered — the arm is built from the "
                        "answer it took, so the two are written together");
+                /* A standby takes a later peer timeline's answer as its own delivery, as a routed post is
+                   delivered to a timeline still able to receive it. */
+                DCHECK(!pending_get_int(p, PEND_ANSWER_STANDBY) ||
+                       (source == ENGINE_ANSWER_PEER && !pending_answer_world_seen(p, world) &&
+                        !pending_get_int(p, PEND_ANSWER_EXHAUSTED)),
+                       "a standby took an answer that is not a new peer timeline's — a zone answer, one its family "
+                       "already took, or one arriving after the peer said every timeline had answered");
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
                 /* The timeline is written with the value, so a flow that took an answer can address its next
@@ -1361,7 +1360,6 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                    refuses this field on a synchronous record (solver/pending.h), so a path settling one without
                    a register crashes instead of leaving a flow blocked with its answer on it. */
                 pending_answer_sync(f->pending, p);
-                JS_FreeValue(ctx, p);
                 /* The flow is askable again: this is the event a flow parked on a synchronous request waits
                    for, so the mark comes off here, on the flow the answer reached (flow.h). The first answer
                    stops at the first flow because an unanswered synchronous request is not shared by a fork
@@ -1369,7 +1367,11 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                    Sharing is never a reason for a per-flow clear to stop early: an arm that shared a record
                    would still need its own mark cleared. */
                 flow_clear_host_owed(f);
-                g_host_answered++;   /* the pay half of the rate above: every delivery that reached a flow */
+                /* The pay half of the rate above. A standby's answer is another peer timeline answering an ask
+                   its family's first answer already settled, so it is counted with the extras. */
+                if (pending_get_int(p, PEND_ANSWER_STANDBY)) g_host_answers_extra++;
+                else g_host_answered++;
+                JS_FreeValue(ctx, p);
                 return 1;
             }
             /* A CHECK, not a DCHECK: everything below records another timeline's answer, so a second host
@@ -1382,6 +1384,9 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                cloned), so without this skip a third answer would fork from the arm as well as the issuer, giving
                a timeline that answered B and then C at one call site. */
             if (pending_get_int(p, PEND_ANSWER_FIXED)) { fixed++; JS_FreeValue(ctx, p); continue; }
+            /* An entry that has left a standby hands every later answer to it: recording one here as well would
+               deliver one peer timeline to two asking timelines. */
+            if (pending_get_int(p, PEND_STANDBY_LEFT)) { fixed++; JS_FreeValue(ctx, p); continue; }
             /* The same timeline may not answer one question twice: a peer performs the operation once per live
                flow (engine_perform) and spends the token off the row as it answers (flow_answer_perform), so a
                second completion under one name is a relay that duplicated. Forking over it would grow a twin of
@@ -1406,33 +1411,50 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
     /* The session is live and no live register took this answer. Three states reach here; each has its own
        message because they are observed differently. */
 
-    /* (1) Every entry naming the request is an arm, skipped because its answer is fixed. The missing entry is
-       the issuer's, which left at the take while its arms live on. Reachable for a peer only; a host answering
-       an answered entry aborts one loop above. What to build is engine_host_take's residual: the entry alone is
-       not enough, because flow_answer_fork clones `f->frame`, which by the take is past the read. */
+    /* (1) Every entry naming the request has its answer or has left a standby, and no standby waits: a family
+       keeps one standby until the peer says it is exhausted (engine_host_exhausted), so this is a standby lost. */
     if (fixed)
-        DFAIL("a peer's answer arrived for a request whose only live entries are arms with fixed answers, so this "
-              "timeline has nowhere to land. Build what engine_host_take's residual names: keep the issuer's entry "
-              "and a clone of its suspension at the take, released on a `remoteop.exhausted` record the protocol "
-              "does not yet carry");
+        DFAIL("a peer's answer arrived for a request whose live entries all hold an answer and no standby waits — "
+              "flow_answer_standby leaves one before every peer answer is taken and only exhaustion retires it");
 
     /* (2) Nothing names it, which for a value this zone computed is innocent: the asker is gone. */
     if (source == ENGINE_ANSWER_HOST)
         return 0;
 
-    /* (3) For a peer's answer this is the one gap, reached through three doors: the asking flow took its first
-       answer (engine_host_take removes the entry), finished, or was sold while the request was outstanding.
-       The abort states the sale count, the one door this engine can speak to. The zone does not drop a live
-       asker's rendezvous (bridge.js keeps the token until the instance is finalized).
-       The first door is ordinary: a peer with two timelines, a zone relaying answer 0 on arrival (it cannot know
-       how many timelines the peer has), the asker resumed and its entry taken, then answer 1 lands here. A driver
-       batching a token's answers hides it, but the protocol permits relay on arrival. Doors 2 and 3 need no
-       fix (a resumed recipe re-issues the request); door 1 is engine_host_take's residual. */
-    DFAILF("a peer's answer arrived for a request no register holds, so this timeline has nowhere to land. If the "
-           "asking flow is live it took its first answer: build engine_host_take's residual (keep the entry and a "
-           "suspension clone until a `remoteop.exhausted` record); this session sold %ld flow(s) owing %ld "
-           "synchronous request(s)", g_flows_sold, g_paged_reqs);
+    /* (3) For a peer's answer: no register names the request. A family's standby lives until exhaustion, so the
+       asking family left by a sale (a resumed recipe re-issues the request), or the zone relayed an answer after
+       the exhaustion that retired the standby. The abort states the sale count, the door this engine can see. */
+    DFAILF("a peer's answer arrived for a request no register holds — the asking family's standby was sold or "
+           "already retired by the peer's exhaustion; this session sold %ld flow(s) owing %ld synchronous "
+           "request(s)", g_flows_sold, g_paged_reqs);
     return 0;
+}
+
+int engine_host_exhausted(JSContext *ctx, uint32_t req) {
+    int n = 0;
+
+    DCHECK(ctx != NULL && req != 0, "a peer's exhaustion was delivered with no context or no request id");
+    if (!g_sess_live) {
+        g_host_answers_late++;
+        return 0;
+    }
+    for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
+        for (int i = 0, m = pending_count(f->pending); i < m; i++) {
+            JSValue p = pending_entry(f->pending, i);
+
+            if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ &&
+                (uint32_t)pending_get_int(p, PEND_REQ_HOST) == req) {
+                DCHECK(!pending_get_int(p, PEND_ANSWER_EXHAUSTED),
+                       "a peer's exhaustion arrived twice for one request — the answering side sends it once, "
+                       "when the last timeline holding the rendezvous lets it go");
+                pending_set(p, PEND_ANSWER_EXHAUSTED, JS_TRUE);
+                /* An unanswered entry now waits for nothing: its flow is picked again and retires at its step. */
+                if (!pending_get_int(p, PEND_HAVE_VALUE)) { flow_clear_host_owed(f); n++; }
+            }
+            JS_FreeValue(ctx, p);
+        }
+    }
+    return n;
 }
 
 /* The name of the document a register entry asks for (PEND_DOC), as the trusted zone knows it: the token a
@@ -1478,7 +1500,11 @@ const char *engine_host_requests(void) {
                at engine_host_decline's `!pending_entry_declined`. The address-keyed join applies the same filter,
                which keeps a decline a fork rather than a spin. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
-                !pending_entry_host_owed(p)) { JS_FreeValue(pending_ctx(), p); continue; }
+                !pending_entry_host_owed(p) || pending_get_int(p, PEND_ANSWER_STANDBY)) {
+                /* A standby's rendezvous is the one its family already asked; the zone holds it in flight. */
+                JS_FreeValue(pending_ctx(), p);
+                continue;
+            }
             DCHECK(pending_get_int(p, PEND_ADDRESS) != FETCH_ADDRESS_UNKNOWN,
                    "a rendezvous whose address has no bytes is about to be shown to a host — the scheduler refuses "
                    "it after the step that opened it (host_requests_decline_unaddressed), before the slice returns");
@@ -1689,6 +1715,24 @@ static int perform_token_held(JSContext *ctx, const char *token)
             if (f->dyn_token[k] && !strcmp(f->dyn_token[k], token)) return 1;
     }
     return 0;
+}
+
+/* The answering side's other last-holder edge: a timeline let `token` go by answering under it or by refusing it,
+   and when no timeline holds it any more no further answer follows, which the asker hears as `remoteop.exhausted`
+   (engine_host_exhausted). A retraction is the last-holder edge that re-asks, so it never reaches here. */
+static void perform_token_spent(JSContext *ctx, const char *token)
+{
+    size_t cap;
+    char *rec;
+
+    DCHECK(token != NULL && *token, "a rendezvous was spent with no token");
+    if (perform_token_held(ctx, token)) return;
+    cap = strlen(token) + 20;   /* "remoteop.exhausted" + TAB + the token + NUL */
+    rec = malloc(cap);
+    CHECK(rec != NULL, "engine: OOM announcing that every timeline answered a cross-agent operation");
+    snprintf(rec, cap, "remoteop.exhausted\t%s", token);
+    engine_host_notify(ctx, rec);
+    free(rec);
 }
 
 /* The distinct questions a hand-back has taken off its flows, collected during the strip so notices are decided
@@ -5168,6 +5212,14 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         /* Taken from the parent first, so the parent cannot fork over this answer again; the arm's inherited
            copy of the list is cleared below. */
         completion = pending_extra_pop(e, &av, &aw, &am);
+        {
+            const char *w = JS_ToCString(ctx, aw);
+
+            CHECK(w != NULL, "engine: OOM recording the peer timeline an answer arm takes");
+            /* Taken by the arm, so the standby this entry leaves refuses it arriving again. */
+            pending_answer_seen_add(e, w);
+            JS_FreeCString(ctx, w);
+        }
         JS_FreeValue(ctx, e);
 
         /* The arm is a clone of whichever home holds the suspension (the asserts above established exactly one).
@@ -5214,6 +5266,85 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         return 1;
     }
     return 0;
+}
+
+/* The standby a peer answer leaves behind: before a flow resumes on an answer one of a peer's timelines computed,
+ * a sibling is forked at the same call site holding the request unanswered, so a later timeline's answer is its own
+ * delivery to a timeline still at the read, as a routed post is delivered to every timeline able to receive it.
+ * The standby takes that answer and leaves the next standby in turn; engine_host_exhausted retires the last one when
+ * the peer says no timeline will answer again. Runs where flow_answer_fork does, after it, one per step.
+ * Named residual. Not covered: a standby written to the cold tier, whose recipe re-issues the request on resume so
+ * every peer timeline answers it again, including those its family took before the park. Next diff builds: the
+ * taken timelines carried in the recipe beside the request, refused at the resumed answer. Absence shows as: after
+ * a park and resume, one asking family exploring more arms over a read than the peer has timelines. */
+static int flow_answer_standby(JSContext *ctx, Flow *f) {
+    int n = pending_count(f->pending), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(f->pending, i), wv, se;
+        JSValue *clone;
+        void *parked;
+        int in_program, in_job;
+        const char *w;
+        Flow *sib;
+
+        if (pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ || !pending_get_int(e, PEND_HAVE_VALUE) ||
+            pending_get_int(e, PEND_ANSWER_FIXED) || pending_get_int(e, PEND_STANDBY_LEFT) ||
+            pending_get_int(e, PEND_ANSWER_EXHAUSTED)) { JS_FreeValue(ctx, e); continue; }
+        wv = pending_get(e, PEND_ANSWER_WORLD);
+        if (!JS_IsString(wv)) { JS_FreeValue(ctx, wv); JS_FreeValue(ctx, e); continue; }   /* a zone answer */
+        DCHECK(pending_extra_count(e) == 0,
+               "a standby was about to be left while answers beyond the first wait for arms — flow_answer_fork runs "
+               "first in flow_step, so the arms and the standby would split one timeline between them");
+        DCHECK(flow_running() == f && f->parked == NULL,
+               "a standby was forked with another flow switched in, or with parked continuations off the runtime");
+        in_program = f->frame != NULL;
+        in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
+        DCHECK(in_program != in_job,
+               "a flow holding a peer's answer is suspended in neither home or in both — the standby clones the one "
+               "call site the answer is read at");
+        w = JS_ToCString(ctx, wv);
+        CHECK(w != NULL, "engine: OOM reading the peer timeline a standby's parent takes");
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+        CHECK(!in_program || clone != NULL,
+              "engine: a flow at a cross-instance read could not be cloned — a later peer timeline would have "
+              "no timeline to answer");
+        CHECK(!in_job || parked != NULL,
+              "engine: a flow parked on a cross-instance read inside a job could not have its continuation cloned");
+        sib = engine_sibling_assemble(ctx, f, clone,
+                                      decide_fork_same_path("(a peer's answer is taken; its later timelines wait "
+                                                            "— no predicate was asked)"),
+                                      concolic_pins_suspend(), flow_path_marks(f));
+        DCHECK(sib->parked == NULL, "a freshly assembled standby already holds parked continuations");
+        sib->parked = parked;
+        se = pending_answer_standby(sib->pending, i, w);
+        JS_FreeValue(ctx, se);
+        /* It waits for the zone, as its parent did before the first answer. */
+        flow_set_host_owed(sib);
+        pending_set(e, PEND_STANDBY_LEFT, JS_TRUE);
+        g_answer_standbys++;
+        JS_FreeCString(ctx, w);
+        JS_FreeValue(ctx, wv);
+        JS_FreeValue(ctx, e);
+        return 1;
+    }
+    return 0;
+}
+
+/* Whether this flow waits on a peer request the peer has exhausted: no timeline will answer it, so the timeline
+   this flow would continue does not exist. */
+static int flow_answer_exhausted(const Flow *f) {
+    int n = pending_count(f->pending), i, hit = 0;
+
+    for (i = 0; i < n && !hit; i++) {
+        JSValue e = pending_entry(f->pending, i);
+
+        hit = pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(e, PEND_HAVE_VALUE) &&
+              pending_get_int(e, PEND_ANSWER_EXHAUSTED);
+        JS_FreeValue(pending_ctx(), e);
+    }
+    return hit;
 }
 
 /* One arm per declined request: the fork a refusal owes. The trusted zone grades each refusal on one axis: would a
@@ -6768,11 +6899,13 @@ static void flow_perform(JSContext *ctx, Flow *f)
                "object-valued member through the program route below");
         perform_answer_notify(ctx, ctx, f, token, ENGINE_COMPLETION_NORMAL, answer);
         JS_FreeValue(ctx, answer);
+        perform_token_spent(ctx, token);
     } else if (deliver_admits(ctx, f, remote_op_worlds(op)) != STEP_UNIT_ROUTED_DELIVERY) {
         /* The program route receives the asking world as a delivery does, so a timeline committed against it
            neither runs the program nor answers; the timeline on the other side of that commitment holds its own
            copy of the entry (perform_q_fork) and answers. */
         g_step_unit = STEP_UNIT_CROSS_AGENT_OP_NOT_MINE;
+        perform_token_spent(ctx, token);
     } else {
         /* The entry is spent and the token survives it: the record has become a program, and the token is copied
            onto the program's row, because the answer is the program's completion. Copied, not moved: a forked arm
@@ -6928,7 +7061,9 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
     /* The row stops owing, not the flow: the flow's other rows are other questions with their own tokens. The kind
        stays DYN_CROSS_AGENT_OP (it is what the program is, and the cursor advances past it), so from here an
        answered row asserts that nothing asks it for a token again. */
-    free(f->dyn_token[row]); f->dyn_token[row] = NULL;
+    f->dyn_token[row] = NULL;
+    perform_token_spent(ctx, token);
+    free(token);
 }
 
 /* Preempt hook: two orthogonal yield decisions at the one per-opcode suspend point.
@@ -7845,8 +7980,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
            step already named for the task it performed, or `deliver-one-reply` would be credited only to
            deliveries whose `turn_continues()` answered no. `turn_task_done` is that settled-name predicate: its only
            writer is the reply-delivery arm, meaning this step performed its §8.1.7.3 step 2.6 task. */
+        if (!turn_task_done && flow_answer_exhausted(f)) {
+            g_step_unit = STEP_UNIT_RETIRE_EXHAUSTED_ASK;
+            return FLOW_STEP_RETIRED;
+        }
         if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
         if (flow_answer_fork(ctx, f)) return 0;
+        if (!turn_task_done) g_step_unit = STEP_UNIT_LEAVE_ANSWER_STANDBY;
+        if (flow_answer_standby(ctx, f)) return 0;
         /* One arm per declined request, beside it for the same reason: a fork over a value that arrived (the zone
            will not ask, two feasible outcomes and no observation, flow_decline_fork), built from the same frame,
            delta and DOM head. */
@@ -10886,6 +11027,16 @@ static int engine_sched_slice(void) {
                 }
                 solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL;
             }
+            else if (r == FLOW_STEP_RETIRED) {
+                /* A timeline that does not exist leaves without finishing: nothing it did is an outcome. Switched
+                   out first, as the pager's sale, since the release frees what a parked flow holds. */
+                if (flow_paint_owed(cur)) flow_clear_paint_owed(cur);
+                flow_switch_out(ctx, cur);
+                cur->retired = 1;
+                flow_release(ctx, cur);
+                cur = NULL;
+                g_answer_standbys_retired++;
+            }
             else if (r == FLOW_STEP_OWED) {
                 /* This flow can make no progress until the host answers, and the scheduler records that on the
                  * flow. It is not skipped or removed: it keeps its WFQ weight and every work item, and is picked
@@ -11310,6 +11461,8 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_asked        = g_host_asked;
     out->host_answered      = g_host_answered;
     out->host_answers_extra = g_host_answers_extra;
+    out->answer_standbys    = g_answer_standbys;
+    out->answer_standbys_retired = g_answer_standbys_retired;
     out->host_answers_late  = g_host_answers_late;
     out->host_terminated    = g_host_terminated;
     out->paged_reqs         = g_paged_reqs;

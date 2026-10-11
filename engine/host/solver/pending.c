@@ -939,6 +939,51 @@ void pending_extra_add(JSValueConst e, int completion, JSValue value, const char
 /* HAS THIS PEER TIMELINE ALREADY ANSWERED — the first answer's own world and then every triple. Read-only and
    allocation-free apart from the string compare, because engine_host_answer asks it on the delivery path of
    every cross-instance answer there is. */
+void pending_answer_seen_add(JSValueConst e, const char *world)
+{
+    JSValue old, next;
+    int n, i;
+
+    DCHECK(world != NULL && *world, "a peer timeline was recorded as taken with no name");
+    pend_atoms();
+    old = pend_own(e, g_field[PEND_ANSWER_SEEN]);
+    DCHECK(JS_IsNull(old) || JS_IsArray(old), "a request's taken peer timelines are neither absent nor a list");
+    n = JS_IsNull(old) ? 0 : pend_len(old);
+    /* A new array rather than an append: the record may be shared, and its other holders took no new timeline. */
+    next = JS_NewArray(pend_ctx());
+    CHECK(!JS_IsException(next), "engine: OOM recording a taken peer timeline");
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(pend_ctx(), next, (uint32_t)i, JS_GetPropertyUint32(pend_ctx(), old, (uint32_t)i));
+    JS_SetPropertyUint32(pend_ctx(), next, (uint32_t)n, JS_NewString(pend_ctx(), world));
+    JS_FreeValue(pend_ctx(), old);
+    pend_set_field(e, PEND_ANSWER_SEEN, next);
+}
+
+JSValue pending_answer_standby(JSValueConst reg, int i, const char *taken)
+{
+    JSValue src = pending_entry(reg, i), dst;
+    int owed;
+
+    DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ && pending_get_int(src, PEND_HAVE_VALUE) &&
+           !pending_get_int(src, PEND_ANSWER_FIXED) && !pending_get_int(src, PEND_ANSWER_EXHAUSTED),
+           "a standby was made from an entry that is not an answered peer request awaiting further answers");
+    JS_FreeValue(pend_ctx(), src);
+    dst = pending_unshare(reg, i);
+    pend_set_field(dst, PEND_VALUE, JS_UNDEFINED);
+    pend_set_field(dst, PEND_COMPLETION, JS_UNDEFINED);
+    pend_set_field(dst, PEND_ANSWER_WORLD, JS_NULL);
+    pend_set_field(dst, PEND_ANSWER_MARKS, JS_NULL);
+    pend_set_field(dst, PEND_EXTRA, JS_NULL);
+    pend_set_field(dst, PEND_ANSWER_STANDBY, JS_TRUE);
+    pend_set_field(dst, PEND_STANDBY_LEFT, JS_FALSE);
+    pending_answer_seen_add(dst, taken);
+    /* Unanswered again, so the register counts it: the transition pending_answer_sync takes back down. */
+    owed = pend_sync_owed(reg);
+    pend_set_field(dst, PEND_HAVE_VALUE, JS_FALSE);
+    pend_sync_owed_set(reg, owed + 1);
+    return dst;
+}
+
 int pending_answer_world_seen(JSValueConst e, const char *world)
 {
     JSValue w, list;
@@ -947,6 +992,19 @@ int pending_answer_world_seen(JSValueConst e, const char *world)
     DCHECK(world != NULL && *world, "a request was asked whether an UNNAMED timeline had answered it — the "
                                     "question is only meaningful about a named one");
     pend_atoms();
+    list = pend_own(e, g_field[PEND_ANSWER_SEEN]);
+    n = JS_IsArray(list) ? pend_len(list) : 0;
+    for (i = 0; i < n && !seen; i++) {
+        JSValue tw = JS_GetPropertyUint32(pend_ctx(), list, (uint32_t)i);
+        const char *s = JS_ToCString(pend_ctx(), tw);
+
+        CHECK(s != NULL, "engine: OOM reading a taken peer timeline");
+        seen = !strcmp(s, world);
+        JS_FreeCString(pend_ctx(), s);
+        JS_FreeValue(pend_ctx(), tw);
+    }
+    JS_FreeValue(pend_ctx(), list);
+    if (seen) return 1;
     w = pend_own(e, g_field[PEND_ANSWER_WORLD]);
     if (JS_IsString(w)) {
         const char *s = JS_ToCString(pend_ctx(), w);

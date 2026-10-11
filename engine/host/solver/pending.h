@@ -348,6 +348,13 @@ int pending_driven_compose(int kind, int path_driven);
     X(EXTRA,      "extra",     PEND_STRUCT, JS_NULL)                                   \
     /* this flow ISSUED the request, so it is the one that forks an arm per answer */  \
     X(ANSWER_FIXED, "answerFixed", PEND_SHARE, JS_FALSE)                               \
+    /* a peer request's later answers: the standby that waits for them (engine.c's     \
+       flow_answer_standby), whether this entry has left one, the peer timelines the    \
+       family has taken, and the peer's word that no timeline will answer again */       \
+    X(ANSWER_STANDBY, "answerStandby", PEND_SHARE, JS_FALSE)                           \
+    X(STANDBY_LEFT, "standbyLeft", PEND_SHARE, JS_FALSE)                               \
+    X(ANSWER_SEEN, "answerSeen", PEND_SHARE, JS_NULL)                                  \
+    X(ANSWER_EXHAUSTED, "answerExhausted", PEND_SHARE, JS_FALSE)                       \
     X(URL,        "url",       PEND_SHARE,  JS_NULL)                                   \
     X(HAVE_VALUE, "haveValue", PEND_SHARE,  JS_FALSE)                                  \
     X(KIND,       "kind",      PEND_SHARE,  JS_NewInt32(pend_ctx(), kind))             \
@@ -802,6 +809,14 @@ int  pending_extra_count(JSValueConst e);
    exploring one peer timeline. */
 int  pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld, JSValue *pmarks);
 
+/* Records `world` as a peer timeline this request's family has taken (`answerSeen`), so a standby forked from
+   this entry refuses it arriving again. */
+void pending_answer_seen_add(JSValueConst e, const char *world);
+/* Turns slot `i` of `reg`, a peer request this flow's sibling inherited answered, into the sibling's standby:
+   its own unanswered copy under the same rendezvous id, waiting for a later peer timeline's answer, which the
+   host's request join does not list again. `taken` is the answer the parent takes, added to the copy's seen
+   timelines. Raises the register's count of unanswered synchronous requests. Returns the copy, owned. */
+JSValue pending_answer_standby(JSValueConst reg, int i, const char *taken);
 /* HAS THIS PEER TIMELINE ALREADY ANSWERED THIS REQUEST — asked of the first answer's `answerWorld` and of every
    triple in `extra`. It is the question that separates the two things an arriving answer can be: another of the
    peer's N timelines, which is a fork the asking flow owes, and the SAME timeline's answer delivered twice,
