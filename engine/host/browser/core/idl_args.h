@@ -830,6 +830,10 @@ typedef struct {
        retire together when it is built; find them by grepping for `unforkable` initializers, both positional
        and designated, rather than from a list here. */
     const char *(*unforkable)(const void *state);
+    /* Why the page's code must not run while this member's body stands at `stage`, or NULL (see
+       JSTrampStepDef.script_forbidden). Asked only at the body's own stages, never the pool's or the
+       [CEReactions] epilogue's. */
+    const char *(*script_forbidden)(int stage, const void *state);
 } IdlStepDecl;
 
 /* Declare where the optional arguments start. Per §3.6, `undefined` passed for an optional argument with no

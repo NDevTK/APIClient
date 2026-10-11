@@ -811,7 +811,8 @@ static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragmentPar
                                               fragment_parse_visit, fragment_parse_release,
                                               "HTML §8.5.4/§8.5.5 innerHTML/outerHTML setter, §8.5.2 "
                                               "setHTMLUnsafe (over §8.6.4 set and filter HTML's set and filter HTML)",
-                                              EL_SET_HTML_STEPS, .unforkable = fragment_parse_unforkable };
+                                              EL_SET_HTML_STEPS, .unforkable = fragment_parse_unforkable,
+                                              .script_forbidden = fragment_parse_script_forbidden };
 
 const IdlStepDecl *element_set_html_decl(void)
 {
@@ -1015,7 +1016,8 @@ static const char *const EL_ADJACENT_HTML_STEPS[] = { FRAG_STAGES(JS_STEP_STAGE_
 
 static const IdlStepDecl EL_ADJACENT_HTML_STEP = {
     js_el_insert_adjacent_html, sizeof(FragmentParse), fragment_parse_visit, fragment_parse_release,
-    "HTML §8.5.6 Element.insertAdjacentHTML", EL_ADJACENT_HTML_STEPS, .unforkable = fragment_parse_unforkable
+    "HTML §8.5.6 Element.insertAdjacentHTML", EL_ADJACENT_HTML_STEPS, .unforkable = fragment_parse_unforkable,
+    .script_forbidden = fragment_parse_script_forbidden
 };
 
 /* §4.9 insertAdjacentElement / insertAdjacentText — the two that take a node the caller already has, or a

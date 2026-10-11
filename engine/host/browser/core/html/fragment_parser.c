@@ -148,6 +148,18 @@ const char *fragment_parse_unforkable(const void *st)
     return NULL;
 }
 
+const char *fragment_parse_script_forbidden(int stage, const void *st)
+{
+    (void)st;
+    if (stage == FRAG_FEED || stage == FRAG_XML || stage == FRAG_PLACE || stage == FRAG_CLEAR ||
+        (stage >= SAN_CHILD && stage <= SAN_POP))
+        return "HTML §8.5.4's fragment parse and placement run no page code between FRAG_START and FRAG_DONE "
+               "(§13.2.6.1's willExecuteScript is false under a fragment context, and DOM §4.2.3 insert runs the "
+               "post-connection steps only after every node is inserted), and the decline fork's wait relies on "
+               "it — so the page's code reached from here ran inside the operation";
+    return NULL;
+}
+
 /* WHAT NO DECLARATION NAMES: THE PARSE'S OWN TREE.
    `compliant`, the sanitizer's `config`, the markup copy, the sanitizer walk's level stack and the created
    parse context are all named by fragment_parse_visit — the two buffers as `buf`, which is why they are

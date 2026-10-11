@@ -3366,6 +3366,9 @@ JS_EXTERN JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow);
    and waits for the operation to end; a clone of a flow that answers non-NULL aborts. */
 JS_EXTERN const char *JS_FlowUnforkable(JSContext *ctx, JSValue *flow);
 JS_EXTERN const char *JS_ParkedFlowsUnforkable(JSContext *ctx);
+/* The same walk asking JSTrampStepDef.script_forbidden: why the page's code must not run on this flow now. */
+JS_EXTERN const char *JS_FlowScriptForbidden(JSContext *ctx, JSValue *flow);
+JS_EXTERN const char *JS_ParkedFlowsScriptForbidden(JSContext *ctx);
 /* if can_block is true, Atomics.wait() can be used */
 JS_EXTERN void JS_SetCanBlock(JSRuntime *rt, bool can_block);
 /* set the [IsHTMLDDA] internal slot */

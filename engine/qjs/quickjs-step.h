@@ -377,6 +377,12 @@ typedef struct JSTrampStepDef {
      * The reason is the machine's own words and it is what the fork's abort prints, so the message names the
      * object rather than the mechanism. Zero for a machine that may always be forked. */
     const char *(*unforkable)(const void *state);
+    /* WHY THE PAGE'S CODE MUST NOT RUN WHILE THIS MACHINE STANDS IN THE STATE IT IS IN NOW, or NULL — Blink's
+       ScriptForbiddenScope, asked of the state. A machine inside an operation its standard runs no script in
+       (HTML §8.5.4's fragment parse and placement) answers, and the driver's request check refuses every
+       request it makes while it does, so the precondition the decline fork's wait relies on fails where it
+       breaks. NULL for a machine whose every stage may call the page. */
+    const char *(*script_forbidden)(const void *state);
 } JSTrampStepDef;
 
 /* ONE DECLARATION OF A MACHINE'S STAGES — the enum and the labels, from one list, so neither can move without

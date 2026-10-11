@@ -3663,6 +3663,23 @@ static const char *js_idl_args_unforkable(const void *st)
     return m->step->unforkable(idl_body_state_const(m, st));
 }
 
+/* MAY THE PAGE'S CODE RUN WHILE THIS MEMBER STANDS WHERE IT IS — forwarded the same way. The epilogue's stages
+   are numbered after the body's own, so a member whose list is shorter than the body machine's (insertAdjacentHTML
+   declares no FRAG_CLEAR) would otherwise be asked about an epilogue stage under a body stage's number, and the
+   epilogue is where §4.13.6's reactions run the page's code. */
+static const char *js_idl_args_script_forbidden(const void *st)
+{
+    const JSIdlArgsState *s = st;
+    const IdlMember *m;
+
+    DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n,
+           "an IDL member was asked whether script may run with no pool entry behind it");
+    m = idl_member(s->hdr.arg);
+    if (!m->step || !m->step->script_forbidden) return NULL;
+    if (s->hdr.stage < IDL_STEP_FIRST || s->hdr.stage >= IDL_STEP_FIRST + m->nsteps) return NULL;
+    return m->step->script_forbidden((int)s->hdr.stage, idl_body_state_const(m, st));
+}
+
 static void idl_free_vec(JSContext *ctx, JSValue *vec, int n)
 {
     int k;
@@ -6505,6 +6522,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_def(idx)->arg   = idx;
     idl_def(idx)->visit = js_idl_args_visit;
     idl_def(idx)->unforkable = js_idl_args_unforkable;
+    idl_def(idx)->script_forbidden = js_idl_args_script_forbidden;
     /* EVERY DECLARED MEMBER CATCHES, AND IT CATCHES IN EXACTLY ONE PLACE. §4.13.6 step 1.3.1 says an upgrade
        reaction's throw is CAUGHT AND REPORTED and a callback reaction is invoked "with \"report\"" — so the
        epilogue every member ends through has an abrupt completion that is its own VALUE, and without this

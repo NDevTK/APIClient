@@ -150,6 +150,10 @@ typedef struct {
 void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v);
 void fragment_parse_release(JSContext *ctx, void *st);
 const char *fragment_parse_unforkable(const void *st);
+/* Why the page's code must not run at `stage`: every stage between FRAG_START and FRAG_DONE is inside HTML
+   §8.5.4's operation, whose parse runs no script and whose placement runs the page's code only in DOM §4.2.3
+   insert's post-connection steps, after every node is inserted — that is, after FRAG_DONE. */
+const char *fragment_parse_script_forbidden(int stage, const void *st);
 
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
    context, under §13.2.4.5's `scripting` mode. `html` is COPIED because the JSString it came from is released

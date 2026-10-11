@@ -8150,6 +8150,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    it `microtask-checkpoint` would leave `deliver-one-reply` counting only deliveries whose turn the
                    policy cut short. A step that runs microtasks and no task is named for them. */
                 if (!turn_task_done) g_step_unit = STEP_UNIT_MICROTASK;
+                /* A job runs the page's code beside, not inside, whatever the parked set holds, so none of it
+                   may stand in an operation that forbids script — the resume above takes a parked chain first. */
+                DCHECKF(JS_ParkedFlowsScriptForbidden(ctx) == NULL,
+                        "a microtask checkpoint ran while a parked continuation forbids script: %s",
+                        JS_ParkedFlowsScriptForbidden(ctx));
                 flow_run_one_job(ctx, f);
                 if (flow_blocked(f)) return FLOW_STEP_OWED;
                 /* The checkpoint is a loop: §8.1.7.3 Processing model's perform a microtask checkpoint runs "While

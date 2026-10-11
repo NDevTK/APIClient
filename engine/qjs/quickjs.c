@@ -29617,6 +29617,24 @@ static void step_request_check(JSContext *ctx, const JSStepHdr *h, int st, bool 
        needs a later re-entry to land in. A machine that is DONE or ABRUPT has no later site and takes no arm
        anywhere — its sibling still holds the arm it was forked for — so firing there would accuse a machine of
        a completion the standard gave it. */
+    /* NO REQUEST FROM A MACHINE THAT FORBIDS SCRIPT. Every request a machine makes (any positive code but a
+       yield, a fork or an unknown completion) is something the driver performs on its behalf and may run the
+       page's code, and a step function never re-enters the driver, so a frame above a machine standing in
+       such a state exists only if this check passed over a request it made there. */
+    if (st > 0 && st != JS_STEP_YIELD && st != JS_STEP_FORK && st != JS_STEP_UNKNOWN &&
+        h->def->script_forbidden != NULL) {
+        const char *forbidden = h->def->script_forbidden(h);
+
+        if (forbidden != NULL) {
+            char why[1024];
+
+            snprintf(why, sizeof why,
+                     "%s returned step code %d at stage %u (%s), asking the driver to run code while it forbids "
+                     "script: %s",
+                     h->def->algorithm, st, (unsigned)h->stage, step_stage_label(h, h->stage), forbidden);
+            DFAIL(why);
+        }
+    }
     if (st > 0 && step_fork_pending(h) && h->fork_stage != h->stage) {
         const char *at = step_stage_label(h, h->stage);
         /* SIZED OVER THE FORMAT'S MINIMUM PLUS THE `%s`/`%d` — see step_fork_inflight's. */
@@ -54426,41 +54444,65 @@ JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow) {
     return (JSValue *)c;
 }
 
-/* The first reason a step machine on `flow`'s chain gives for not being forked at this instant, or NULL. Asked by
-   a fork that may wait (engine/host/solver/engine.c's answer and decline forks) before it clones, so that a machine
-   standing inside an operation the spec makes atomic is forked at the operation's end rather than through a copy
-   of what it owns. A machine a step state holds through JSStepVisit's `machine` is asked at the clone and not
-   here. */
-const char *JS_FlowUnforkable(JSContext *ctx, JSValue *flow)
+/* The first answer a step machine on `flow`'s stashed chain gives to one of JSTrampStepDef's two state
+   questions, `unforkable` or `script_forbidden`, or NULL. A machine a step state holds through JSStepVisit's
+   `machine` is not on the chain and is asked at the clone instead. */
+static const char *flow_chain_answer(JSAsyncFunctionState *s, bool forbidden)
 {
-    JSAsyncFunctionState *s = (JSAsyncFunctionState *)flow;
     TrampFrame *t;
 
-    (void)ctx;
     for (t = (TrampFrame *)s->tramp_top; t; t = t->up) {
         const JSStepHdr *h;
+        const char *(*ask)(const void *);
         const char *why;
 
         if (t->cont_kind != CONT_STEP && t->cont_kind != CONT_STEP_YIELD) continue;
         h = t->cont_state;
-        if (h == NULL || h->def->unforkable == NULL) continue;
-        why = h->def->unforkable(h);
+        if (h == NULL) continue;
+        ask = forbidden ? h->def->script_forbidden : h->def->unforkable;
+        if (ask == NULL) continue;
+        why = ask(h);
         if (why) return why;
     }
     return NULL;
 }
 
-const char *JS_ParkedFlowsUnforkable(JSContext *ctx)
+static const char *parked_flows_answer(JSContext *ctx, bool forbidden)
 {
     struct list_head *el;
 
     list_for_each(el, &ctx->rt->parked_flows) {
         JSAsyncFunctionState *b = list_entry(el, JSAsyncFunctionState, park_link);
-        const char *why = JS_FlowUnforkable(ctx, (JSValue *)b);
+        const char *why = flow_chain_answer(b, forbidden);
 
         if (why) return why;
     }
     return NULL;
+}
+
+/* Asked by the decline fork before it clones, so that a machine standing inside an operation the spec makes
+   atomic is forked at the operation's end rather than through a copy of what it owns. */
+const char *JS_FlowUnforkable(JSContext *ctx, JSValue *flow)
+{
+    (void)ctx;
+    return flow_chain_answer((JSAsyncFunctionState *)flow, false);
+}
+
+const char *JS_ParkedFlowsUnforkable(JSContext *ctx)
+{
+    return parked_flows_answer(ctx, false);
+}
+
+/* Asked by the scheduler before it runs the page's code on a flow's behalf other than by resuming the chain. */
+const char *JS_FlowScriptForbidden(JSContext *ctx, JSValue *flow)
+{
+    (void)ctx;
+    return flow_chain_answer((JSAsyncFunctionState *)flow, true);
+}
+
+const char *JS_ParkedFlowsScriptForbidden(JSContext *ctx)
+{
+    return parked_flows_answer(ctx, true);
 }
 
 

@@ -1019,6 +1019,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragfork.h"
 #include "fixture/fragplace.h"
 #include "fixture/fragxml.h"
+#include "fixture/fragce.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
 
@@ -1442,6 +1443,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "fragfork", HTML_FRAGFORK },
     { "fragplace", HTML_FRAGPLACE },
     { "fragxml", HTML_FRAGXML },
+    { "fragce", HTML_FRAGCE },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
 };
@@ -11622,6 +11624,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&fragxml_tt, &fragxml_why,
              param_value_is(js, "/api/fragxml", "v", "50001") && param_value_is(js, "/api/fragxml", "t", "tail"),
              "the /api/fragxml record does not carry the whole XML parse — an arm finished it with items missing");
+    /* A defined custom element written through a connected element's innerHTML: its constructor runs at the
+       setter's [CEReactions] epilogue, after the placement, so it sees every child and the element is upgraded. */
+    const char *fragce_why = NULL; int fragce_tt = 1;
+    fold_row(&fragce_tt, &fragce_why, !!strstr(js, "\"/api/fragce\""),
+             "NOT REACHED: there is no /api/fragce record at all, so no arm finished the setter");
+    fold_row(&fragce_tt, &fragce_why,
+             param_value_is(js, "/api/fragce", "v", "3") && param_value_is(js, "/api/fragce", "u", "true"),
+             "the /api/fragce record does not say the constructor ran once, after all three children were placed, "
+             "and upgraded the element");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15428,6 +15439,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "frag-fork", fragfork_tt, "/api/fragfork", SESS_EXPLORE, fragfork_why },
         { "frag-place", fragplace_tt, "/api/fragplace", SESS_EXPLORE, fragplace_why },
         { "frag-xml", fragxml_tt, "/api/fragxml", SESS_EXPLORE, fragxml_why },
+        { "frag-ce", fragce_tt, "/api/fragce", SESS_EXPLORE, fragce_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },

@@ -1688,7 +1688,7 @@ static const char *const RANGE_CONTEXTUAL_FRAGMENT_STEPS[] = { FRAG_STAGES(JS_ST
 static const IdlStepDecl RANGE_CONTEXTUAL_FRAGMENT = {
     js_range_contextual_fragment, sizeof(FragmentParse), fragment_parse_visit, fragment_parse_release,
     "HTML §8.5.7 Range.createContextualFragment(string)", RANGE_CONTEXTUAL_FRAGMENT_STEPS,
-    .unforkable = fragment_parse_unforkable
+    .unforkable = fragment_parse_unforkable, .script_forbidden = fragment_parse_script_forbidden
 };
 
 /* ---- CSSOM VIEW §9 "Extensions to the Range Interface" ---------------------------------------------------
