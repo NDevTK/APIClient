@@ -1035,7 +1035,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
           if (_cm.parameters) for (const _pn in _cm.parameters) { if (!m.parameters[_pn]) m.parameters[_pn] = _cm.parameters[_pn]; }
           if (_cm.response && !m.response) m.response = _cm.response;
           if (_cm.request && !m.request) m.request = _cm.request;
-          if (_cm._stats && !m._stats) m._stats = _cm._stats;
+          if (_cm._stats && !m._stats) { m._stats = _cm._stats; m._statsByDoc = _cm._statsByDoc; }
           delete _bucket.methods[_key];
         }
       }
@@ -1217,6 +1217,19 @@ function _matchTemplatedMethodAcrossHost(tab, hostname, httpMethod, pathname) {
     }
   }
   return null;
+}
+
+/* A method's counts from the document `documentId`, created on its first request: the record lib/merge.js
+   sums into the method's `_stats`, and which the moat's own record of the method shares. */
+function methodOwnStats(m, documentId) {
+  DCHECK(typeof documentId === "string" && documentId !== "",
+         "a request's statistics were asked for with no document — they are filed per contributing document");
+  DCHECK(!m._stats || !!m._statsByDoc,
+         "a method carries summed statistics with no contributor records — every sum is derived from them, " +
+         "and a sum with none would be raised by no one and replaced by this document's counts alone");
+  if (!m._statsByDoc) m._statsByDoc = {};
+  if (!m._statsByDoc[documentId]) m._statsByDoc[documentId] = { requestCount: 0, params: {}, bodyFields: {} };
+  return m._statsByDoc[documentId];
 }
 
 function learnFromRequest(documentId, interfaceName, entry, headers) {
@@ -1594,8 +1607,10 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
   // ─── Statistics collection ───────────────────────────────────────────────
   // Only real network traffic reaches here — AST fetch call sites go
   // through learnFromAstCallSite directly (no synthetic entries).
-  if (!m._stats) m._stats = { requestCount: 0, params: {}, bodyFields: {} };
-  m._stats.requestCount++;
+  /* This document's own counts live in its contributor record, `_statsByDoc[documentId]`, the one record a
+     request raises; `_stats` is only ever their sum (lib/merge.js `_sumStats`), derived after the raise. */
+  const _own = methodOwnStats(m, documentId);
+  _own.requestCount++;
   /* ONE SET FOR THIS REQUEST, SHARED BY ALL THREE COLLECTORS BELOW, so `observedCount` counts REQUESTS
      CONTAINING a parameter rather than OCCURRENCES of it — see updateParamStats for what that cost. It spans
      query, path and body deliberately: they write into DIFFERENT stats objects, and the set is keyed on the
@@ -1607,8 +1622,8 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
     url.searchParams.forEach((value, name) => {
       if (name === "key" || name === "api_key") return;
       if (name === "$httpHeaders" || name === "$ct") return;
-      if (!m._stats.params[name]) m._stats.params[name] = createParamStats();
-      updateParamStats(m._stats.params[name], value, _seenThisRequest);
+      if (!_own.params[name]) _own.params[name] = createParamStats();
+      updateParamStats(_own.params[name], value, _seenThisRequest);
     });
   }
 
@@ -1629,8 +1644,8 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
         if (t.startsWith("{") && t.endsWith("}")) {
           const paramName = t.slice(1, -1);
           if (!paramName) continue;
-          if (!m._stats.params[paramName]) m._stats.params[paramName] = createParamStats();
-          updateParamStats(m._stats.params[paramName], reqSegs[i], _seenThisRequest);
+          if (!_own.params[paramName]) _own.params[paramName] = createParamStats();
+          updateParamStats(_own.params[paramName], reqSegs[i], _seenThisRequest);
         }
       }
     }
@@ -1664,9 +1679,9 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
      field values. This census measures the DECODE, not the collector's own narrower gate. NEXT DIFF: a
      second pair of counters raised at that gate, or the JSPB/protobuf trees routed into the collector.
      ABSENCE SHOWS AS: a method whose census reports every body decoded and whose `bodyFields` is empty. */
-  if (!m._stats.body) m._stats.body = { present: 0, decoded: 0, undecoded: 0, undecodedTypes: {}, uncounted: 0 };
+  if (!_own.body) _own.body = { present: 0, decoded: 0, undecoded: 0, undecodedTypes: {}, uncounted: 0 };
   if (entry.rawBodyB64) {
-    const _b = m._stats.body;
+    const _b = _own.body;
     _b.present++;
     if (entry.decodedBody) {
       _b.decoded++;
@@ -1696,11 +1711,13 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
     const flat = flattenObjectValues(entry.decodedBody);
     for (const [fieldPath, value] of Object.entries(flat)) {
       if (typeof value === "string" || typeof value === "number") {
-        if (!m._stats.bodyFields[fieldPath]) m._stats.bodyFields[fieldPath] = createParamStats();
-        updateParamStats(m._stats.bodyFields[fieldPath], String(value), _seenThisRequest);
+        if (!_own.bodyFields[fieldPath]) _own.bodyFields[fieldPath] = createParamStats();
+        updateParamStats(_own.bodyFields[fieldPath], String(value), _seenThisRequest);
       }
     }
   }
+
+  m._stats = _sumStats(m._statsByDoc);
 
   // Apply stats-derived metadata back to parameters AND body-field schemas
   applyStatsToMethod(m, doc);

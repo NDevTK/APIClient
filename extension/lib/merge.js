@@ -680,25 +680,11 @@ function _mergeParamInto(ep, np) {
   else if (np._astValueClass === "concrete" && ep._astValueClass !== "unknown") ep._astValueClass = "concrete";
 }
 
-/* THE PER-METHOD STATS UNION — `lib/stats.js`'s `mergeParamStats`, WHICH HAD NO CALLER.
-   Forty lines that add two observation counts, union two value histograms under the same 50-value cap, take
-   the min/max of two numeric ranges and add two format-hint tallies: written for exactly this merge and never
-   wired to it, so every cumulative-moat method carried whichever page's traffic reached the global store
-   first. A helper with no caller is the same broken contract as a reader with no writer — the code reads as
-   if the moat accumulates, and it did not.
-
-   AND IT IS SUMMED OVER CONTRIBUTORS, NOT ADDED ON ARRIVAL, BECAUSE THIS MERGE IS NOT CALLED ONCE.
-   `mergeToGlobal(tab)` runs on every analysis, every probe outcome and every captured response, and each run
-   presents the DOCUMENT'S OWN CUMULATIVE `_stats` again — so `global += tab` counts the same requests once
-   per merge. MEASURED, in the change that first wrote it that way: two probe pages that had made ONE request
-   each reported `requestCount: 8`. An inflating counter is a fabricated measurement, which is the same defect
-   as the dropped field this function exists to fix, pointing the other way.
-   So the global keeps WHO CONTRIBUTED WHAT — `_statsByDoc`, keyed by the contributing document — and derives
-   `_stats` from it. Re-merging a document REPLACES that document's entry, so the operation is idempotent no
-   matter how many times it runs, and two different documents genuinely add. `correlations` is DERIVED
-   (detectCorrelations over the summed distribution) rather than picked from one contributor: a correlation is
-   a claim about a set of observations, and carrying one document's answer over another's data is a statement
-   about a distribution that was never observed. */
+/* A method's statistics summed over its contributor records, `_statsByDoc`, keyed by contributing document.
+   lib/learn.js raises only the requesting document's record and re-derives `_stats` from the map, and the moat
+   merge copies contributor records rather than adding totals, so re-merging a document is idempotent and two
+   documents add. The sum shares no child with a contributor (lib/stats.js `mergeParamStats`), because the
+   contributors go on being raised under it. `correlations` is derived over the summed distribution. */
 function _sumStats(byDoc) {
   const out = { requestCount: 0, params: {}, bodyFields: {},
                 body: { present: 0, decoded: 0, undecoded: 0, undecodedTypes: {}, uncounted: 0 } };
@@ -760,10 +746,13 @@ function _sumStats(byDoc) {
    as-is — a real discovery document's methods carry server-authored fields (scopes, parameterOrder, flatPath)
    that this file must not have to enumerate, so the rule is "fill what is missing", never an allowlist that
    would silently drop what it had not heard of. */
-function _mergeMethodInto(em, nm, docKey) {
+function _mergeMethodInto(em, nm) {
+  DCHECK(!nm._stats || !!nm._statsByDoc,
+         "a document's method reached the moat merge carrying summed statistics with no contributor records — " +
+         "lib/learn.js files every request under its document and derives the sum, so this sum was written elsewhere");
   for (const k in nm) {
-    if (k === "parameters" || k === "_stats" || k === "_astInferred" || k === "_astRazorClasses" ||
-        k === "_astWitnesses") continue;
+    if (k === "parameters" || k === "_stats" || k === "_statsByDoc" || k === "_astInferred" ||
+        k === "_astRazorClasses" || k === "_astWitnesses") continue;
     if (em[k] === undefined || em[k] === null) em[k] = nm[k];
   }
   if (nm._astInferred) em._astInferred = true;
@@ -795,37 +784,10 @@ function _mergeMethodInto(em, nm, docKey) {
   }
 }
 
-/* WHO OBSERVED THIS TRAFFIC, STAMPED BEFORE ANY ADOPTION CAN LOSE IT. Three paths adopt a record whole — a
-   service the moat has never seen (the doc), a bucket it has never seen, a method it has never seen — and each
-   would file that document's requests under nobody, so the next document's merge would report only its own.
-   Stamping the incoming doc first makes all three carry their contributor, and makes `_mergeMethodInto` a
-   union of two contributor MAPS rather than of a total and a document. Idempotent: a record already carrying
-   its map (the global doc is aliased to the first tab doc that produced it) is left alone, and the entry
-   ALIASES the DocView's live `_stats`, so a later request through that document is already counted. */
-function _seedStatsContributors(res, docKey) {
-  for (const bk in res) {
-    const b = res[bk];
-    if (!b) continue;
-    if (b.methods) {
-      for (const mk in b.methods) {
-        const m = b.methods[mk];
-        if (!m._stats || m._statsByDoc) continue;
-        DCHECK(typeof docKey === "string" && docKey,
-               "a method carrying _stats reached the global merge with no contributing document key — " +
-               "mergeToGlobal passes the DocView's own documentId, and without it the same document's " +
-               "traffic would be added again on every merge instead of replacing its own contribution");
-        m._statsByDoc = { [docKey]: m._stats };
-      }
-    }
-    if (b.resources) _seedStatsContributors(b.resources, docKey);
-  }
-}
-
-function _mergeDocInto(existingDoc, newDoc, docKey) {
-  if (newDoc && newDoc.resources) _seedStatsContributors(newDoc.resources, docKey);
+function _mergeDocInto(existingDoc, newDoc) {
   if (!existingDoc || !existingDoc.resources) return newDoc || existingDoc || null;
   if (!newDoc || !newDoc.resources) return existingDoc;
-  _mergeResourcesInto(existingDoc.resources, newDoc.resources, docKey);
+  _mergeResourcesInto(existingDoc.resources, newDoc.resources);
   if (newDoc.schemas) { existingDoc.schemas = existingDoc.schemas || {}; for (const sk in newDoc.schemas) if (!existingDoc.schemas[sk]) existingDoc.schemas[sk] = newDoc.schemas[sk]; }
   return existingDoc;
 }
@@ -843,7 +805,7 @@ function _mergeDocInto(existingDoc, newDoc, docKey) {
    whatever this file mints — which is why the repair here is the READ and the WRITE rather than the mint.
    `eres["constructor"]` was the `Object` CONSTRUCTOR, so `!eb` was false, `eb.methods = {}` assigned onto the
    global constructor, and the whole bucket that page learned merged into it and was lost from the moat. */
-function _mergeResourcesInto(eres, nres, docKey) {
+function _mergeResourcesInto(eres, nres) {
   for (const bk in nres) {
     const nb = nres[bk];
     if (!nb) continue;
@@ -866,12 +828,12 @@ function _mergeResourcesInto(eres, nres, docKey) {
           em = strangerKeyHeld(eb.methods, key) ? eb.methods[key] : null;
         }
         if (!em) { strangerKeySet(eb.methods, key, nm); continue; }   // distinct endpoint from another page -> keep both
-        _mergeMethodInto(em, nm, docKey);
+        _mergeMethodInto(em, nm);
       }
     }
     if (nb.resources) {
       if (!eb.resources) eb.resources = strangerKeyedMap();
-      _mergeResourcesInto(eb.resources, nb.resources, docKey);
+      _mergeResourcesInto(eb.resources, nb.resources);
     }
   }
 }
@@ -1151,7 +1113,7 @@ function mergeToGlobal(tab) {
         url: v.url,
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
-        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc, tab.documentId) || null,   // UNION, not replace: keep every page's methods
+        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc) || null,   // UNION, not replace: keep every page's methods
         grouping: v.grouping,
         pageUrls: _mergedPageUrls,
         frameOrigins: _mergedFrameOrigins,

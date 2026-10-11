@@ -453,9 +453,12 @@ function pickExampleValue(field, stats) {
   return null;
 }
 
+/* The union of two parameters' statistics, or of one with none, as a new record that shares nothing with
+   either input: a sum is read while its contributors go on being raised, so a shared child would grow under
+   a total that does not. */
 function mergeParamStats(a, b) {
-  if (!a) return b;
-  if (!b) return a;
+  if (!a) a = createParamStats();
+  if (!b) b = createParamStats();
 
   const merged = createParamStats();
   merged.observedCount = a.observedCount + b.observedCount;
@@ -484,7 +487,8 @@ function mergeParamStats(a, b) {
       max: Math.max(a.numericRange.max, b.numericRange.max),
     };
   } else {
-    merged.numericRange = a.numericRange || b.numericRange;
+    const r = a.numericRange || b.numericRange;
+    merged.numericRange = r ? { min: r.min, max: r.max } : null;
   }
 
   // Merge format hints

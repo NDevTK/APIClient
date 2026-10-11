@@ -56,7 +56,7 @@ function mergeVirtualParts(newDoc, oldDoc) {
             }
           }
           // Carry stats and chains
-          if (oldM._stats && !newM._stats) newM._stats = oldM._stats;
+          if (oldM._stats && !newM._stats) { newM._stats = oldM._stats; newM._statsByDoc = oldM._statsByDoc; }
           if (oldM._chains && !newM._chains) newM._chains = oldM._chains;
         }
       }
