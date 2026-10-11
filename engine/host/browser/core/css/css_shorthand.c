@@ -12,8 +12,10 @@
 #include "core/css/css_counter_style.h"
 #include "core/css/css_font_shorthand.h"
 #include "core/css/css_image.h"
+#include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_pending_substitution.h"
+#include "core/css/css_property_id.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_var.h"
 
@@ -138,6 +140,15 @@ static const char *css_sh_keyword(const char *const *set, unsigned n, const char
     return NULL;
 }
 
+/* The same answer over a core/css/css_keyword.h set, for a longhand whose `Value:` line is a row of
+   core/css/css_property_id.h's table: the grammar the computed value is typed by is the one parsed here. */
+static const char *css_sh_keyword_in(CssKeywordSet set, const char *w, size_t len)
+{
+    CssKeyword k = css_keyword_of(w, len);
+
+    return css_keyword_set_has(set, k) ? css_keyword_name(k) : NULL;
+}
+
 bool css_shorthand_number(const char *w, size_t n, double *out)
 {
     char buf[64];
@@ -254,15 +265,6 @@ static const char *const OVERFLOW_KEYWORDS[] = {
     "visible", "hidden", "clip", "scroll", "auto", "overlay"
 };
 
-/* css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property" and §5.2 "Flex Line Wrapping: the
-   flex-wrap property", each entire and in its own `Value:` line's order. THE TWO SETS ARE DISJOINT and that is
-   what makes §5.3 "Flex Direction and Wrap: the flex-flow shorthand"'s `||` decidable one word at a time: a
-   word is a `<'flex-direction'>` or a `<'flex-wrap'>` or the declaration is invalid, and no word can be both,
-   so the expansion below needs no backtracking and no ORDER. A `||` whose terms shared a keyword would need
-   both — which is why this is asserted by construction here rather than assumed at the call. */
-static const char *const FLEX_DIRECTION_KEYWORDS[] = { "row", "row-reverse", "column", "column-reverse" };
-static const char *const FLEX_WRAP_KEYWORDS[] = { "nowrap", "wrap", "wrap-reverse" };
-
 /* css-align-3 §7.3 "Default Alignment Shorthand: the place-items property"' and css-align-3 §6.3
    "Self-Alignment Shorthand: the place-self property"' COMPONENT GRAMMARS. THE FIRST COMPONENT IS THIS ENGINE'S `align-items`
    RATHER THAN css-align-3's, AND THAT IS THE SHORTHAND'S OWN DEFINITION RATHER THAN A NARROWING OF IT: both
@@ -324,9 +326,9 @@ static const char *const JUSTIFY_CONTENT_KEYWORDS[] = {
     "flex-start", "flex-end", "center", "space-between", "space-around"
 };
 
-/* css-backgrounds-3 §3.2's `<line-style>`, entire and in the spec's own order, and §3.3's three `<line-width>`
-   keywords. THESE GRAMMARS HAVE TO BE HERE, unlike `<margin-width>`: lexbor's property registry carries no
-   `border-width` and no `border-style` (it has `border`, the four `border-<side>` shorthands and the four
+/* css-backgrounds-3 §3.2's `<line-style>`, entire and in the spec's own order; §3.3's `<line-width>` keywords
+   are its row's set (core/css/css_keyword.c). THESE GRAMMARS HAVE TO BE HERE, unlike `<margin-width>`:
+   lexbor's property registry carries no `border-width` and no `border-style` (it has `border`, the four `border-<side>` shorthands and the four
    `border-*-color` longhands, and nothing else of the border), so those two declarations reach the cascade as
    a `__CUSTOM` holding the name and the RAW TOKENS with nothing having validated them. CSS Syntax DROPS an
    invalid declaration, and dropping it is what these two lists decide — a `border-style: nope` that flowed
@@ -334,31 +336,13 @@ static const char *const JUSTIFY_CONTENT_KEYWORDS[] = {
 static const char *const LINE_STYLE_KEYWORDS[] = {
     "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
 };
-static const char *const LINE_WIDTH_KEYWORDS[] = { "thin", "medium", "thick" };
 
-/* CSS 2.1 §17 Tables' FOUR TABLE PROPERTIES, whose grammars are here for exactly the reason the two border
-   lists above are, and the reason is the same sentence about the same registry: lexbor carries NONE of these
-   four, so `caption-side: bottom` reaches the cascade as a `__CUSTOM` holding the name and the RAW TOKENS with
-   nothing having validated them and nothing having lower-cased them. A `caption-side: BOTTOM` would then fail
-   to compare equal to the keyword it is, and a `table-layout: nope` would reach the computed value as a
-   keyword no grammar admits — which is the state every one of the four is in until this row exists.
-   THE THREE KEYWORD-VALUED ONES SHARE A TABLE AND `border-spacing` DOES NOT, and the split is their own
-   `Value:` lines rather than a convenience: CSS 2.1 §17.4.1 Caption position and alignment gives
-   `caption-side` `top | bottom`, CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property gives
-   `table-layout` `auto | fixed`, and CSS 2.1 §17.6 Borders gives `border-collapse` `collapse | separate` —
-   three two-keyword choices with no multiplier — while CSS 2.1 §17.6.1 The separated borders model gives
-   `border-spacing` `<length> <length>?`, which is a multiplier over a production and a member of no set.
-   `inherit` is on all four `Value:` lines and is NOT in these sets: CSS Cascade §7.3's keywords are a value
-   for every property in CSS and are handled once, ahead of every property's own grammar, below. */
-static const char *const CAPTION_SIDE_KEYWORDS[] = { "top", "bottom" };
-static const char *const TABLE_LAYOUT_KEYWORDS[] = { "auto", "fixed" };
-static const char *const BORDER_COLLAPSE_KEYWORDS[] = { "collapse", "separate" };
-
-static const struct { const char *name; const char *const *kw; unsigned n; } TABLE_KEYWORD_LONGHANDS[] = {
-    { "caption-side", CAPTION_SIDE_KEYWORDS, CSS_SH_N(CAPTION_SIDE_KEYWORDS) },
-    { "table-layout", TABLE_LAYOUT_KEYWORDS, CSS_SH_N(TABLE_LAYOUT_KEYWORDS) },
-    { "border-collapse", BORDER_COLLAPSE_KEYWORDS, CSS_SH_N(BORDER_COLLAPSE_KEYWORDS) },
-};
+/* The four table properties' grammars are here for the border lists' reason: lexbor's registry carries none
+   of them, so a declaration reaches the cascade as a `__CUSTOM` with raw, unvalidated tokens. The three
+   keyword-valued ones (css-tables-3 §3.5.1-§3.5.3, one keyword, no multiplier) are parsed over their rows'
+   keyword sets; `border-spacing`'s `<length> <length>?` is a multiplier over a production, in no set. CSS
+   Cascade §7.3's keywords are handled once, ahead of every property's own grammar, below. */
+static const char *const TABLE_KEYWORD_LONGHANDS[] = { "caption-side", "table-layout", "border-collapse" };
 
 /* The row `longhand` names in the table above, or -1. */
 static int table_keyword_longhand_index(const char *longhand)
@@ -366,7 +350,7 @@ static int table_keyword_longhand_index(const char *longhand)
     unsigned i;
 
     for (i = 0; i < CSS_SH_N(TABLE_KEYWORD_LONGHANDS); i++)
-        if (strcmp(TABLE_KEYWORD_LONGHANDS[i].name, longhand) == 0) return (int)i;
+        if (strcmp(TABLE_KEYWORD_LONGHANDS[i], longhand) == 0) return (int)i;
     return -1;
 }
 
@@ -713,7 +697,7 @@ static int border_part_index(const char *longhand, int *pside)
    core/css/css_color.h owns. */
 static int border_term_of(const char *w, size_t n)
 {
-    if (css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w, n)) return 0;
+    if (css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w, n)) return 0;
     if (css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w, n)) return 1;
     if (n > 0 && (isdigit((unsigned char)w[0]) || w[0] == '.' || w[0] == '+' || w[0] == '-')) return 0;
     return 2;
@@ -760,7 +744,7 @@ static bool border_part_component_valid(CssBorderPart part, const char *w, size_
 
         return css_color_parse(w, n, &c);
     }
-    if (css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w, n)) return true;
+    if (css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w, n)) return true;
     if (n > 0 && w[0] == '-') return false;   /* §3.3: "Negative values are invalid" */
     /* §3.3's `<line-width>` through the entry that answers CSS's production — see `sh_length_component`.
        THIS SITE IS WHY THAT ENTRY IS SHARED AND THE LESSON IS ABOUT THE REPAIR RATHER THAN THE DEFECT: the
@@ -795,7 +779,7 @@ static char *border_four_side_component(const char *value, int side, CssBorderPa
        value, and which of `red` / `#f00` / `rgb(255 0 0)` was written is what §6.7.2 "Serializing CSS Values"
        serializes back. */
     kw = (part == CSS_BORDER_PART_WIDTH)
-             ? css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w[comp], wl[comp])
+             ? css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w[comp], wl[comp])
              : (part == CSS_BORDER_PART_STYLE)
                    ? css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[comp], wl[comp])
                    : NULL;
@@ -820,9 +804,12 @@ static char *flex_flow_component(const char *value, const char *longhand)
 
     if (n < 1 || n > 2) return NULL;
     for (i = 0; i < n; i++) {
-        const char *d = css_sh_keyword(FLEX_DIRECTION_KEYWORDS, CSS_SH_N(FLEX_DIRECTION_KEYWORDS), w[i], wl[i]);
-        const char *p = css_sh_keyword(FLEX_WRAP_KEYWORDS, CSS_SH_N(FLEX_WRAP_KEYWORDS), w[i], wl[i]);
+        const char *d = css_sh_keyword_in(CSS_KEYWORDS_FLEX_DIRECTION, w[i], wl[i]);
+        const char *p = css_sh_keyword_in(CSS_KEYWORDS_FLEX_WRAP, w[i], wl[i]);
 
+        /* §5.1's and §5.2's sets are disjoint, which is what makes §5.3's `||` decidable one word at a time
+           with no backtracking and no order. */
+        DCHECKF(d == NULL || p == NULL, "`%s` is in both flex-direction's and flex-wrap's keyword sets", d);
         if (d != NULL) { if (dir != NULL) return NULL; dir = d; continue; }
         if (p != NULL) { if (wrap != NULL) return NULL; wrap = p; continue; }
         return NULL;
@@ -1475,7 +1462,7 @@ static char *table_longhand_value(const char *longhand, const char *value)
         /* Each of the three `Value:` lines is a two-keyword choice carrying NO multiplier, so a second
            component value is an invalid declaration, which the split reports by refusing to write past `max`. */
         if (css_shorthand_components(value, w, wl, 1) != 1) return NULL;
-        kw = css_sh_keyword(TABLE_KEYWORD_LONGHANDS[idx].kw, TABLE_KEYWORD_LONGHANDS[idx].n, w[0], wl[0]);
+        kw = css_sh_keyword_in(css_property_keywords(css_property_id_of(longhand)), w[0], wl[0]);
         return kw ? css_sh_strdup(kw) : NULL;
     }
     DCHECK(strcmp(longhand, "border-spacing") == 0,
@@ -1598,7 +1585,7 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
         kw = css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[0], wl[0]);
         return kw ? css_sh_strdup(kw) : NULL;
     }
-    kw = css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w[0], wl[0]);
+    kw = css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w[0], wl[0]);
     if (kw) return css_sh_strdup(kw);
     if (wl[0] > 0 && w[0][0] == '-') return NULL;   /* §3.3: "Negative values are invalid" */
     /* §3.3's `<line-width>` is a `<length [0,∞]>`, asked through the entry that answers CSS's production —

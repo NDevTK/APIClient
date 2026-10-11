@@ -36,23 +36,8 @@ typedef struct {
 
 bool table_border_collapse_selected(lxb_dom_element_t *table)
 {
-    char *collapse;
-    bool collapsed, separated;
-
     DCHECK(table != NULL, "CSS 2.1 §17.6 Borders' border model was asked for of no element");
-    collapse = css_computed_value(table, "border-collapse");
-    DCHECK(collapse != NULL,
-           "the cascade produced no computed value for `border-collapse`, which is in lexbor's registry with "
-           "an initial value of `separate`, so the last layer always answers");
-    collapsed = strcmp(collapse, "collapse") == 0;
-    separated = strcmp(collapse, "separate") == 0;
-    free(collapse);
-    DCHECK(collapsed || separated,
-           "a `border-collapse` computed to something that is neither of the two keywords CSS 2.1 §17.6 "
-           "Borders' `collapse | separate | inherit` grammar admits, and §17.6 gives it `Computed value: as "
-           "specified` over a keyword-only value — so nothing between the declaration and here had a rule that "
-           "could produce a third one");
-    return collapsed;
+    return css_computed_keyword_is(table, "border-collapse", CSS_KEYWORD_COLLAPSE);
 }
 
 /* ---- One grid line's candidates ---------------------------------------------------------------------------

@@ -2040,23 +2040,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        computed. They are also what CSS 2 §10.8's step 2 will read when its line boxes exist ("the inline-level
        boxes are aligned vertically according to their `vertical-align` property"), and that step needs the
        ALIGNMENT BASELINE and the SHIFT apart, which is exactly the split §4.2 makes.
-       CSS 2.1 §17.4.1 "Caption position and alignment" (`caption-side`, `top | bottom`), §17.5.2 "Table width
-       algorithms: the 'table-layout' property" (`table-layout`, `auto | fixed`) and §17.6 "Borders"
-       (`border-collapse`, `collapse | separate`) each state `Computed value: as specified` over a keyword-only
-       `Value:` line, so the as-specified arm is the whole of their rule too. THEY ARE HERE BECAUSE THREE
-       ALGORITHMS ASK FOR ONE OF THEM BY NAME AND COULD NOT: §17.5.2 cannot choose between §17.5.2.1 "Fixed
-       table layout" and §17.5.2.2 "Automatic table layout" without `table-layout` — the property the section is
-       titled after, and the one input that decides which of its two algorithms runs at all; §17.6 cannot say
-       which of its two border models a table is in without `border-collapse`, which is what §17.6.1 "The
-       separated borders model" and §17.6.2 "The collapsing border model" are the two arms of; and §17.4's
-       table wrapper box cannot order its children — "the wrapper contains the table box itself and any caption
-       boxes (in document order)" — without `caption-side`, whose two values are the whole of "Positions the
-       caption box above the table box" and "Positions the caption box below the table box".
-       LEXBOR'S PROPERTY REGISTRY CARRIES NONE OF THE THREE, which is why each needed two rows elsewhere before
-       this one meant anything: core/css/css_shorthand.c owns their `Value:` grammars, as it owns the eight
-       border longhands' for the identical reason, and core/css/css_style_declaration.c states their `Initial:`
-       values, without which §7.1 had nothing to fall to and the cascade answered NULL for every element that
-       declares none — which is every element on almost every page.
        css-flexbox-1 §7.2.1 "The flex-grow property" and §7.2.2 "The flex-shrink property" say `Computed value:
        specified number` and `Computed value: specified value` over a `Value:` line of `<number [0,∞]>`, which is the
        as-specified rule under two spellings — a `<number>` has no unit, no percentage and no environment fact,
@@ -2086,9 +2069,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     case CSS_PROPERTY_WHITE_SPACE:
     case CSS_PROPERTY_ALIGNMENT_BASELINE:
     case CSS_PROPERTY_BASELINE_SOURCE:
-    case CSS_PROPERTY_CAPTION_SIDE:
-    case CSS_PROPERTY_TABLE_LAYOUT:
-    case CSS_PROPERTY_BORDER_COLLAPSE:
     case CSS_PROPERTY_VISIBILITY:
     case CSS_PROPERTY_Z_INDEX:
     case CSS_PROPERTY_BORDER_TOP_STYLE:

@@ -1488,20 +1488,14 @@ static size_t bf_wrapper_boxes(lxb_dom_element_t *table, lxb_dom_element_t ***ou
 {
     lxb_dom_element_t **caps = NULL, **v;
     size_t n = table_box_captions(table, &caps), i, k = 0;
-    char nbuf[160], vbuf[64];
 
     v = malloc((n + 1) * sizeof *v);
     CHECK(v != NULL, "out of memory listing one table wrapper box's children");
-    for (i = 0; i < n; i++) {
-        DCHECKF(bf_computed_is(caps[i], "caption-side", "top") || bf_computed_is(caps[i], "caption-side", "bottom"),
-                "%s, computed `caption-side` `%s`: CSS 2.1 §17.4.1's `Value:` line is `top | bottom`",
-                box_subject(caps[i], nbuf, sizeof nbuf),
-                box_subject_computed(caps[i], "caption-side", vbuf, sizeof vbuf));
-        if (bf_computed_is(caps[i], "caption-side", "top")) v[k++] = caps[i];
-    }
+    for (i = 0; i < n; i++)
+        if (css_computed_keyword_is(caps[i], "caption-side", CSS_KEYWORD_TOP)) v[k++] = caps[i];
     v[k++] = NULL;
     for (i = 0; i < n; i++)
-        if (bf_computed_is(caps[i], "caption-side", "bottom")) v[k++] = caps[i];
+        if (css_computed_keyword_is(caps[i], "caption-side", CSS_KEYWORD_BOTTOM)) v[k++] = caps[i];
     free(caps);
     *out = v;
     return k;

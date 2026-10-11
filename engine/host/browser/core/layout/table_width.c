@@ -23,15 +23,6 @@
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
 
-static char *tw_computed(lxb_dom_element_t *el, const char *name)
-{
-    char *v = css_computed_value(el, name);
-
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
-                      "them is in lexbor's registry with an initial value, so the last layer always answers");
-    return v;
-}
-
 /* ---- §17.6 Borders' two models, asked once at the entry ---------------------------------------------------
    Two terms here belong to §17.6.1 The separated borders model alone. The cell spacing ("The lengths specify
    the distance that separates adjoining cell borders") is zero under §17.6.2 The collapsing border model,
@@ -526,7 +517,6 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
 {
     CssBorderSpacing spacing;
     CssPx used_spacing, edges, declared = css_px(0.0), check_sum, slack;
-    char *layout;
     bool fixed, has_declared, collapsing;
     size_t i;
 
@@ -550,14 +540,7 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
            "negative reaching here is arithmetic that lost a sign rather than a document");
     used_spacing = tw_used_spacing(spacing.horizontal, collapsing);
     edges = tw_table_edges(table, collapsing);
-    layout = tw_computed(table, "table-layout");
-    fixed = strcmp(layout, "fixed") == 0;
-    DCHECK(fixed || strcmp(layout, "auto") == 0,
-           "a `table-layout` computed to something that is neither of the two keywords CSS 2.1 §17.5.2 Table "
-           "width algorithms: the 'table-layout' property's `auto | fixed | inherit` grammar admits, and that "
-           "section gives it `Computed value: as specified` over a keyword-only value — so nothing between the "
-           "declaration and here had a rule that could produce a third one");
-    free(layout);
+    fixed = css_computed_keyword_is(table, "table-layout", CSS_KEYWORD_FIXED);
     has_declared = tw_declared_content_width(table, edges, &declared);
     /* The dispatch is a conjunction: the fixed algorithm is mandatory when selected ("except when the fixed
        layout algorithm is selected"), but §17.5.2.1 hands a `width: auto` table to the automatic one, which

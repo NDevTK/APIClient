@@ -151,6 +151,15 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     case CSS_KEYWORDS_WRITING_MODE:
         return k == CSS_KEYWORD_HORIZONTAL_TB || k == CSS_KEYWORD_VERTICAL_RL || k == CSS_KEYWORD_VERTICAL_LR ||
                k == CSS_KEYWORD_SIDEWAYS_RL || k == CSS_KEYWORD_SIDEWAYS_LR;
+    /* css-tables-3 §3.5.1 "The Table-Layout property": `auto | fixed`. */
+    case CSS_KEYWORDS_TABLE_LAYOUT:
+        return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_FIXED;
+    /* css-tables-3 §3.5.2 "The Border-Collapse property": `separate | collapse`. */
+    case CSS_KEYWORDS_BORDER_COLLAPSE:
+        return k == CSS_KEYWORD_SEPARATE || k == CSS_KEYWORD_COLLAPSE;
+    /* css-tables-3 §3.5.3 "The Caption-Side property": `top | bottom`. */
+    case CSS_KEYWORDS_CAPTION_SIDE:
+        return k == CSS_KEYWORD_TOP || k == CSS_KEYWORD_BOTTOM;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;
