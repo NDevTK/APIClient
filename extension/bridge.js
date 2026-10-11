@@ -2170,7 +2170,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
      recognised rather than given a second instance; a peer-created document arrives named (`docName`); a
      rehydrated recipe takes the counter. */
   const docId = docName || (msg && msg.documentId ? String(msg.documentId) : String(++nextDocumentId));
-  const eng = engineReserve(cluster, docId, msg, cold, referenced);
+  const eng = engineReserve(cluster, docId, msg, referenced);
   /* The provisioning, the only part that suspends. The promise says when, never carries the instance (the
      caller already holds the record), and settles on both outcomes because hostSchedule's wait arm waits on
      it: an engine abort resolves it, recorded through engineBootFailed, which also removes the reservation;
@@ -2197,7 +2197,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
    unrepresentable (a node inserted across them, a closure neither can call). The second arrival finds the
    record and joins it. The record carries only what is known without asking the instance: `residentBytes`
    and `topWeight` are absent until engineRecordFacts states them, and readers check `state` first. */
-function engineReserve(cluster, docId, msg, cold, referenced) {
+function engineReserve(cluster, docId, msg, referenced) {
   /* `_readyP` is null here and filled by engineCreate on the next line; a placeholder promise would settle at
      a different moment from the provisioning. The wait arm asserts it is present. */
   /* `joinedDocIds` is the host's half of main.c's `g_joined_ctx`/`g_joined_dom`, declared empty: an instance
