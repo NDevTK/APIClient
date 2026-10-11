@@ -1093,6 +1093,15 @@ static void ev_map_through_transforms(lxb_dom_element_t *el, CssPx *x, CssPx *y,
     CssPx cx[4], cy[4], min_x, min_y, max_x, max_y;
     unsigned i;
 
+    /* An axis-aligned matrix that flips neither axis (the identity, a translation, a positive scale) maps the
+       origin to the enclosing rectangle's corner and scales each extent, which is that rectangle exactly
+       without `(y + h) - y`, a difference IEEE arithmetic need not return as `h`. */
+    if (ctm.b == 0.0 && ctm.c == 0.0 && ctm.a >= 0.0 && ctm.d >= 0.0 && w->px >= 0.0 && h->px >= 0.0) {
+        css_transform_matrix_map(ctm, *x, *y, x, y);
+        *w = css_px_scale(*w, ctm.a);
+        *h = css_px_scale(*h, ctm.d);
+        return;
+    }
     css_transform_matrix_map(ctm, *x, *y, &cx[0], &cy[0]);
     css_transform_matrix_map(ctm, css_px_add(*x, *w), *y, &cx[1], &cy[1]);
     css_transform_matrix_map(ctm, css_px_add(*x, *w), css_px_add(*y, *h), &cx[2], &cy[2]);
