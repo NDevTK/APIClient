@@ -258,33 +258,15 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
    the realm its scripts run in, and hand both to §7.2.3's replace. Answers the SAME proxy (owned), because a
    navigation does not make a new one — that is the whole reason WindowProxy exists — or JS_UNDEFINED when the
    address does not parse, which §7.4 turns into a SyntaxError at the call site. */
-/* EVERY NAVIGABLE OF THIS AGENT, IN TREE ORDER — a container before what it contains, siblings in the tree
-   order of their navigable containers. As an Array of WindowProxy (owned).
- *
- * "OF THIS AGENT" IS THE BROWSING CONTEXT GROUP'S TOP-LEVEL TRAVERSABLES AND THEIR TREES, NOT ONE TREE. HTML
- * §8.1.1 gives a similar-origin window agent ONE event loop, and all three consumers of this list are facts
- * about that loop rather than about a document's frames — §8.1.7.3 step 2's document list, §8.7's timer task
- * source, §13.2.7's per-document load lifecycle. An AUXILIARY navigable (§7.3.1.7 step 8's, what
- * `window.open()` makes) is its OWN top-level traversable, reachable from the group and from no tree, so a
- * single-tree answer left every popup out of all three at once: its document stayed at "loading" for ever, with
- * no DOMContentLoaded, no `load`, no `pageshow`, no timers and no rendering opportunities.
- *
- * IT IS HERE BECAUSE THE TREE IS, and a second copy of this walk is the second answer that is always subtly
- * wrong: nav_find_in_tree below is a third, breadth-first, because §7.1 wants the NEAREST match rather than the
- * outermost. Each caller applies its OWN filters to this list; what they share is the ORDER, which is the
- * spec's and not theirs.
- *
- * THE WALK IS ITERATIVE over an explicit worklist, for the reason nav_find_in_tree's is: a self-call would be
- * C-to-C recursion whose depth is the PAGE's iframe nesting, which is the page's to choose.
- *
- * A NAVIGABLE THIS INSTANCE HAS NOT MATERIALIZED IS NOT IN THE LIST, and neither is a peer's or a destroyed
- * one. An unmaterialized navigable holds the initial about:blank Document §7.4 created it with; that Document
- * has no scripts, so it has no lifecycle to run and nothing below it to walk — "not materialized" and "no
- * children" are the same answer (window_proxy.h), and materializing every navigable a forced-execution
- * frontier ever created in order to ask is the heap exhaustion navigable.c's deferral exists to avoid.
- * The roots are the asking document's top-level traversable, the group's other top-level traversables, and
- * every navigable this instance was rooted in under a peer's parent (navigable_root), whose subtrees no walk
- * from a top-level traversable reaches. */
+/* Every navigable of this agent whose document it holds, in tree order (a container before what it contains,
+ * siblings in their containers' tree order), as an Array of WindowProxy (owned). HTML §8.1.1 gives a
+ * similar-origin window agent one event loop, so the consumers (§8.1.7.3's document list, §8.7's timer source,
+ * the load lifecycle) ask about the agent, not one tree. The roots are the asking document's top-level
+ * traversable, the group's other top-level traversables (an auxiliary navigable is its own), and every
+ * navigable this instance was rooted in under a peer's parent (navigable_root), which no walk from a top-level
+ * traversable reaches. Each caller applies its own filters; the order is the spec's. A peer's, destroyed or
+ * unmaterialized navigable is not listed (an unmaterialized one holds §7.4's script-less about:blank). The walk
+ * is iterative, since its depth is the page's iframe nesting. */
 JSValue navigable_tree_order(JSContext *ctx);
 
 /* `document_resource` is HTML §7.4.2.2 "Beginning navigation"'s own third input, declared in the algorithm's
