@@ -90,6 +90,10 @@ typedef enum {
     X(TABLE_LAYOUT,        "table-layout",        LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, TABLE_LAYOUT)    \
     X(BORDER_COLLAPSE,     "border-collapse",     LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, BORDER_COLLAPSE) \
     X(VISIBILITY,          "visibility",          LXB_CSS_PROPERTY_VISIBILITY,     KEYWORD, ALL, VISIBILITY)      \
+    X(BORDER_TOP_STYLE,    "border-top-style",    LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LINE_STYLE)      \
+    X(BORDER_RIGHT_STYLE,  "border-right-style",  LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LINE_STYLE)      \
+    X(BORDER_BOTTOM_STYLE, "border-bottom-style", LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LINE_STYLE)      \
+    X(BORDER_LEFT_STYLE,   "border-left-style",   LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LINE_STYLE)      \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -114,11 +118,7 @@ typedef enum {
     X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(LIST_STYLE_POSITION, "list-style-position", LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
-    X(LIST_STYLE_IMAGE,    "list-style-image",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
-    X(BORDER_TOP_STYLE,    "border-top-style",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
-    X(BORDER_RIGHT_STYLE,  "border-right-style",  LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
-    X(BORDER_BOTTOM_STYLE, "border-bottom-style", LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
-    X(BORDER_LEFT_STYLE,   "border-left-style",   LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)
+    X(LIST_STYLE_IMAGE,    "list-style-image",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)
 
 typedef enum {
 #define CSS_PROPERTY_ID_ROW(id, name, lxb, shape, range, keywords) CSS_PROPERTY_##id,

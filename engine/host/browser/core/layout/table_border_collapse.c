@@ -63,7 +63,6 @@ static TbcEdge tbc_edge_empty(void)
 static void tbc_meet(TbcEdge *e, lxb_dom_element_t *el, int side)
 {
     char name[32];
-    char *style;
     CssLength w;
 
     DCHECK(e != NULL, "a §17.6.2.1 candidate was added to no edge");
@@ -72,12 +71,7 @@ static void tbc_meet(TbcEdge *e, lxb_dom_element_t *el, int side)
            "four — TBC_SIDES and this range are one list and have come apart");
     if (el == NULL) return;
     snprintf(name, sizeof name, "border-%s-style", TBC_SIDES[side]);
-    style = css_computed_value(el, name);
-    DCHECK(style != NULL,
-           "the cascade produced no computed value for a `border-*-style`, which is in lexbor's registry with "
-           "an initial value of `none`, so the last layer always answers");
-    if (strcmp(style, "hidden") == 0) e->hidden = true;
-    free(style);
+    if (css_computed_keyword_is(el, name, CSS_KEYWORD_HIDDEN)) e->hidden = true;
     snprintf(name, sizeof name, "border-%s-width", TBC_SIDES[side]);
     w = css_computed_length(el, name);
     DCHECK(w.kind == CSS_LENGTH_ABSOLUTE,

@@ -333,9 +333,6 @@ static const char *const JUSTIFY_CONTENT_KEYWORDS[] = {
    a `__CUSTOM` holding the name and the RAW TOKENS with nothing having validated them. CSS Syntax DROPS an
    invalid declaration, and dropping it is what these two lists decide — a `border-style: nope` that flowed
    through would reach the computed value as a keyword no grammar admits. */
-static const char *const LINE_STYLE_KEYWORDS[] = {
-    "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
-};
 
 /* The four table properties' grammars are here for the border lists' reason: lexbor's registry carries none
    of them, so a declaration reaches the cascade as a `__CUSTOM` with raw, unvalidated tokens. The three
@@ -698,7 +695,7 @@ static int border_part_index(const char *longhand, int *pside)
 static int border_term_of(const char *w, size_t n)
 {
     if (css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w, n)) return 0;
-    if (css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w, n)) return 1;
+    if (css_sh_keyword_in(CSS_KEYWORDS_LINE_STYLE, w, n)) return 1;
     if (n > 0 && (isdigit((unsigned char)w[0]) || w[0] == '.' || w[0] == '+' || w[0] == '-')) return 0;
     return 2;
 }
@@ -738,7 +735,7 @@ typedef enum { CSS_BORDER_PART_WIDTH = 0, CSS_BORDER_PART_STYLE = 1, CSS_BORDER_
 static bool border_part_component_valid(CssBorderPart part, const char *w, size_t n)
 {
     if (part == CSS_BORDER_PART_STYLE)
-        return css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w, n) != NULL;
+        return css_sh_keyword_in(CSS_KEYWORDS_LINE_STYLE, w, n) != NULL;
     if (part == CSS_BORDER_PART_COLOR) {
         CssColor c;
 
@@ -781,7 +778,7 @@ static char *border_four_side_component(const char *value, int side, CssBorderPa
     kw = (part == CSS_BORDER_PART_WIDTH)
              ? css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w[comp], wl[comp])
              : (part == CSS_BORDER_PART_STYLE)
-                   ? css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[comp], wl[comp])
+                   ? css_sh_keyword_in(CSS_KEYWORDS_LINE_STYLE, w[comp], wl[comp])
                    : NULL;
     return kw ? css_sh_strdup(kw) : css_sh_dupn(w[comp], wl[comp]);
 }
@@ -1582,7 +1579,7 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     n = css_shorthand_components(value, w, wl, 1);
     if (n != 1) return NULL;
     if (part == 1) {
-        kw = css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[0], wl[0]);
+        kw = css_sh_keyword_in(CSS_KEYWORDS_LINE_STYLE, w[0], wl[0]);
         return kw ? css_sh_strdup(kw) : NULL;
     }
     kw = css_sh_keyword_in(CSS_KEYWORDS_LINE_WIDTH, w[0], wl[0]);

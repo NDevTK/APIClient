@@ -810,7 +810,8 @@ static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *e
               "gives it `Value: mixed | upright | sideways`, `Initial: mixed`, `Inherited: yes` and `Computed "
               "value: specified value`, and lexbor's property registry carries it — so this is ONE ROW of "
               "core/css/css_property_id.h's table, KEYWORD-shaped over a keyword set of its own, and one of "
-              "css_shorthand_complete_for, exactly as `writing-mode` and `direction` are. `sideways` and `mixed`-when-sideways then take the "
+              "css_shorthand_complete_for, exactly as `writing-mode` and `direction` are. `sideways` and "
+              "`mixed`-when-sideways then take the "
               "HORIZONTAL advance and not a rotated vertical one — css-writing-modes-4 §5.1.1 \"Vertical "
               "Typesetting and Font Features\" defines sideways typesetting as character units \"typeset as a "
               "run rotated 90° clockwise from their upright orientation, USING HORIZONTAL METRICS and "
@@ -1115,15 +1116,12 @@ static bool computed_length(lxb_dom_element_t *el, const char *name, char *spec,
  * `border-style` had to be modelled before `border-width` could be. */
 static bool css_border_width_off(lxb_dom_element_t *el, int side)
 {
-    char *style;
-    bool off;
+    CssKeyword style;
 
     DCHECK(side >= 0 && side < 4, "the `border-*-width` computed-value rule was asked for a side that is not "
                                   "one of the four");
-    style = css_computed_value(el, css_property_name((CssPropertyId)(CSS_PROPERTY_BORDER_TOP_STYLE + side)));
-    off = css_cv_is(style, "none") || css_cv_is(style, "hidden");
-    free(style);
-    return off;
+    style = css_computed_keyword(el, css_property_name((CssPropertyId)(CSS_PROPERTY_BORDER_TOP_STYLE + side)));
+    return style == CSS_KEYWORD_NONE || style == CSS_KEYWORD_HIDDEN;
 }
 
 /* §8.5.1's SECOND CLAUSE applied to a width that is already a number — the half of the rule that is about THIS
@@ -2022,11 +2020,10 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     case CSS_PROPERTY_LIST_STYLE_IMAGE:
         return computed_list_style_image(spec);
     /* `float` (CSS2 §9.5.1) states "Computed value: as specified", and a keyword has no absolutization to do —
-       so the specified value IS the answer here rather than a stand-in for one. css-backgrounds-3 §3.2
-       gives `border-*-style` the same line ("specified keyword"), which is what lets `border-top-width`'s rule
-       above read its sibling with no second derivation in between. css-text-3's `white-space` carries the same
-       line ("Computed value: specified keyword") and is asked for by CSS 2.1 §9.2.2.1's question about which
-       inter-element white space is collapsed away — the one the block-flow walk asks of a text child. css-text-4
+       so the specified value IS the answer here rather than a stand-in for one. css-text-3's `white-space`
+       carries the same line ("Computed value: specified keyword") and is asked for by CSS 2.1 §9.2.2.1's
+       question about which inter-element white space is collapsed away — the one the block-flow walk asks of a
+       text child. css-text-4
        redefines it as a shorthand of `white-space-collapse`/`text-wrap-mode`, neither of which lexbor's property
        registry carries, so §16.6's longhand is the one this engine can answer.
        css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand" (`auto | first | last`)
@@ -2062,10 +2059,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     case CSS_PROPERTY_ALIGNMENT_BASELINE:
     case CSS_PROPERTY_BASELINE_SOURCE:
     case CSS_PROPERTY_Z_INDEX:
-    case CSS_PROPERTY_BORDER_TOP_STYLE:
-    case CSS_PROPERTY_BORDER_RIGHT_STYLE:
-    case CSS_PROPERTY_BORDER_BOTTOM_STYLE:
-    case CSS_PROPERTY_BORDER_LEFT_STYLE:
     /* A `<number>` is carried as text with nothing lost, so the consumer compares the number, never the text:
        `0.0` and `0e0` are zero. */
     case CSS_PROPERTY_FLEX_GROW:

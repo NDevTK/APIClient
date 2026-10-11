@@ -297,54 +297,34 @@ static bool bp_background_color(BpState *st, lxb_dom_element_t *el)
     return bp_background_color_at(st, el, rect);
 }
 
-/* CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style',
- * 'border-left-style', and 'border-style'"' COMPUTED KEYWORD FOR ONE SIDE, as the ink vocabulary's enumerator.
- * THE KEYWORD TABLE IS §8.5.3's `<border-style>` IN §8.5.3's ORDER, so the index IS the enumerator and the two
- * cannot come apart by a rotation — the same device `CSS_BORDER_SIDES` uses one component over.
- * IT IS A SECOND LIST OF THOSE TEN NAMES AND THAT IS A DECISION. core/css/css_shorthand.c holds the first, as
- * a GRAMMAR: it decides what the parser admits, so that CSS Syntax drops a `border-style: nope` before it can
- * reach a computed value. That list is `static` and the component does not export it, and a painter is not
- * where an export to `core/css/` belongs. What keeps the two from drifting is the crash below rather than a
- * shared array: the grammar filters every declaration, so a computed style outside these ten is this engine's
- * GRAMMAR and this engine's VOCABULARY disagreeing and is not a keyword any document wrote — which is exactly
- * the line CLAUDE.md draws for what a DCHECK may stand on, and is the same standing core/layout/used_value.c's
- * `box-sizing` and `border-*-width` asserts have over the same road.
- * THE RELEASE ARM IS `none`, WHICH PAINTS NOTHING. A style this engine cannot name is one whose ink it cannot
- * draw, so the two available answers are no ink and a guess; §8.5.3's own initial value is `none` and no ink
- * is the one of the two that cannot put the WRONG thing on a page. */
+/* css-backgrounds-3 §3.2 "Line Patterns: the border-style properties"' computed keyword for one side, as the
+   ink vocabulary's enumerator. The keyword is typed by its row's `<line-style>` set, so the switch is total
+   over what the cascade can answer and its default arm is a guard. */
 static DisplayBorderStyle bp_border_style(lxb_dom_element_t *el, int side)
 {
     static const char *const NAMES[4] = {
         "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
     };
-    static const char *const KEYWORDS[] = {
-        "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
-    };
-    char *v;
-    unsigned i;
+    CssKeyword k;
 
-    DCHECK(side >= 0 && side < 4, "CSS 2.1 §8.5.3's line style was asked for a box side outside CSS 2.1 §8.1 "
-                                  "\"Box dimensions\"' four");
-    v = css_computed_value(el, NAMES[side < 0 ? 0 : side]);
-    DCHECK(v != NULL, "the cascade produced no computed value for a `border-*-style`. CSS 2.1 §8.5.3's "
-                      "`Initial:` line is `none` and core/css/css_style_declaration.c carries that initial for "
-                      "all four sides, so CSS Cascade §7.1's last defaulting layer always answers");
-    for (i = 0; v != NULL && i < sizeof KEYWORDS / sizeof KEYWORDS[0]; i++) {
-        if (strcmp(v, KEYWORDS[i]) == 0) {
-            free(v);
-            return (DisplayBorderStyle)i;
-        }
+    DCHECK(side >= 0 && side < 4, "a line style was asked for a box side outside CSS 2.1 §8.1 \"Box "
+                                  "dimensions\"' four");
+    k = css_computed_keyword(el, NAMES[side < 0 ? 0 : side]);
+    switch (k) {
+    case CSS_KEYWORD_NONE:   return DISPLAY_BORDER_STYLE_NONE;
+    case CSS_KEYWORD_HIDDEN: return DISPLAY_BORDER_STYLE_HIDDEN;
+    case CSS_KEYWORD_DOTTED: return DISPLAY_BORDER_STYLE_DOTTED;
+    case CSS_KEYWORD_DASHED: return DISPLAY_BORDER_STYLE_DASHED;
+    case CSS_KEYWORD_SOLID:  return DISPLAY_BORDER_STYLE_SOLID;
+    case CSS_KEYWORD_DOUBLE: return DISPLAY_BORDER_STYLE_DOUBLE;
+    case CSS_KEYWORD_GROOVE: return DISPLAY_BORDER_STYLE_GROOVE;
+    case CSS_KEYWORD_RIDGE:  return DISPLAY_BORDER_STYLE_RIDGE;
+    case CSS_KEYWORD_INSET:  return DISPLAY_BORDER_STYLE_INSET;
+    case CSS_KEYWORD_OUTSET: return DISPLAY_BORDER_STYLE_OUTSET;
+    default:
+        DFAILF("a `border-*-style` computed to keyword %u, outside the row's `<line-style>` set", (unsigned)k);
+        return DISPLAY_BORDER_STYLE_NONE;
     }
-    free(v);
-    DFAIL("a `border-*-style` computed to a keyword outside CSS 2.1 §8.5.3 \"Border style: "
-          "'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style', and "
-          "'border-style'\"' `<border-style>` value type. That type is a CLOSED list of ten and "
-          "core/css/css_shorthand.c validates every `border-*-style` declaration against it, dropping the ones "
-          "that do not match — so this is not a keyword a document wrote. Either that grammar admitted a value "
-          "it should have dropped, or CSS 2.1 §8.5.3 gained a value and core/paint/display_list.h's "
-          "`DisplayBorderStyle` was not grown with it. BUILD the missing enumerator in that vocabulary and add "
-          "its keyword to the table above, which is the same ten in the same order");
-    return DISPLAY_BORDER_STYLE_NONE;
 }
 
 /* CSS 2.1 §E.2's "border of element" — the THIRD item of its step 2 and step 4 block arms, and ONE mark for

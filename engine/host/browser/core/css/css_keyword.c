@@ -163,6 +163,13 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-display-3 §4 "Invisibility: the visibility property": `visible | hidden | collapse`. */
     case CSS_KEYWORDS_VISIBILITY:
         return k == CSS_KEYWORD_VISIBLE || k == CSS_KEYWORD_HIDDEN || k == CSS_KEYWORD_COLLAPSE;
+    /* css-backgrounds-3 §3.2 "Line Patterns: the border-style properties": `<line-style> = none | hidden |
+       dotted | dashed | solid | double | groove | ridge | inset | outset`. */
+    case CSS_KEYWORDS_LINE_STYLE:
+        return k == CSS_KEYWORD_NONE || k == CSS_KEYWORD_HIDDEN || k == CSS_KEYWORD_DOTTED ||
+               k == CSS_KEYWORD_DASHED || k == CSS_KEYWORD_SOLID || k == CSS_KEYWORD_DOUBLE ||
+               k == CSS_KEYWORD_GROOVE || k == CSS_KEYWORD_RIDGE || k == CSS_KEYWORD_INSET ||
+               k == CSS_KEYWORD_OUTSET;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

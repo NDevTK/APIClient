@@ -99,7 +99,15 @@
     X(SEPARATE,           "separate") \
     X(COLLAPSE,           "collapse") \
     X(VISIBLE,            "visible") \
-    X(HIDDEN,             "hidden")
+    X(HIDDEN,             "hidden") \
+    X(DOTTED,             "dotted") \
+    X(DASHED,             "dashed") \
+    X(SOLID,              "solid") \
+    X(DOUBLE,             "double") \
+    X(GROOVE,             "groove") \
+    X(RIDGE,              "ridge") \
+    X(INSET,              "inset") \
+    X(OUTSET,             "outset")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -147,7 +155,8 @@ typedef enum {
     CSS_KEYWORDS_TABLE_LAYOUT,
     CSS_KEYWORDS_BORDER_COLLAPSE,
     CSS_KEYWORDS_CAPTION_SIDE,
-    CSS_KEYWORDS_VISIBILITY
+    CSS_KEYWORDS_VISIBILITY,
+    CSS_KEYWORDS_LINE_STYLE
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it
