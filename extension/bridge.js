@@ -2610,8 +2610,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
             "an XMLHttpRequest is about to be judged with no origin on the instance that made it — the zone " +
             "assigns every instance its cluster origin at creation");
       CHECK(q.mode === "cors",
-            "the engine's xhr.send record states the mode `" + q.mode + "` — XHR §3.5.6 The send() method " +
-            "builds every request in `cors` mode, and a reply that returns to the page in any other mode would " +
+            "XHR §3.5.6 \"The send() method\" builds every request in cors mode, and the engine's xhr.send " +
+            "record states another (" + q.mode + "); a reply that returns to the page in any other mode would " +
             "skip the CORS check the chokepoint runs for it");
       /* @security-finding: `headers` come from the untrusted bundle and are read by the chokepoint. That is
          within the model for an uncredentialed GET to a public host (the browser strips forbidden header names),

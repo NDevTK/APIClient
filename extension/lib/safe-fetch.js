@@ -1214,8 +1214,8 @@ function safeFetchSignalVector(facts) {
                          credentialed: facts.credentialed, headers: facts.headers });
 }
 /* Fetch §4.10 "CORS check", over the reply's own headers: "Let origin be the result of getting
-   `Access-Control-Allow-Origin` from response's header list. If origin is null, then return failure. If
-   request's credentials mode is not "include" and origin is `*`, then return success. If the result of
+   `Access-Control-Allow-Origin` from response's header list. If origin is null, then return failure. Null is not
+   `null`. If request's credentials mode is not "include" and origin is `*`, then return success. If the result of
    byte-serializing a request origin with request is not origin, then return failure. If request's credentials
    mode is not "include", then return success. Let credentials be the result of getting
    `Access-Control-Allow-Credentials` from response's header list. If credentials is `true`, then return
