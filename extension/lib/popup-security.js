@@ -93,11 +93,12 @@ function _blockerNames(blockers) {
 // for it, so a source that carries the attacker's bytes to the page UNTOUCHED — the strongest fact this field
 // has, and the reason a raw-fragment JS-context breakout is real — read exactly like a source the engine never
 // declared. Returns HTML (it emits <code>), so callers place it WITHOUT esc().
+// Returns a node list; an empty one for a source that declares no percent-encode set.
 function _encodeSentence(item) {
-  if (typeof item.sourceEncodes !== "string") return "";   // undeclared source — _deliverySentence states that
+  if (typeof item.sourceEncodes !== "string") return [];   // undeclared source — _deliverySentence states that
   if (item.sourceEncodes === "")
-    return "the browser percent-encodes <strong>nothing</strong> in this source — the bytes reach the page "
-         + "exactly as the attacker wrote them";
+    return ["the browser percent-encodes ", domElement("strong", {}, ["nothing"]), " in this source — the bytes "
+            + "reach the page exactly as the attacker wrote them"];
   // AND THE DECLARATION IS A PRIOR, NOT AN OUTCOME — solve.h says so at `sourceDelivers` in those words, and
   // this sentence stated the prior AS the outcome ("so a candidate needing those bytes arrives escaped") on
   // every card that carried one. On a FIRED card that is a flat contradiction of the finding printed two lines
@@ -149,29 +150,31 @@ function _encodeSentence(item) {
   // carries, which is true of a record from either engine and is the strongest claim this side is entitled
   // to. It must not say "yet" — that word fabricates a pending measurement for a search that may hold nothing
   // to measure with.
-  var enc = "the browser percent-encodes <code>" + esc(item.sourceEncodes) + "</code> in this source";
+  var enc = ["the browser percent-encodes ", domElement("code", {}, [item.sourceEncodes]), " in this source"];
+  var strong = function (text) { return domElement("strong", {}, [text]); };
   if (typeof item.sourceDelivers !== "string") {
     if (item.deliveryProbed > 0)
-      return enc + ", and a delivery probe of this search REACHED a sink " + item.deliveryProbed + " time"
-           + (item.deliveryProbed === 1 ? "" : "s") + " and <strong>not one</strong> of its tokens was in "
-           + "what arrived — the page destroyed the instrument itself, so the source's own transform is the "
-           + "whole of the failure and no re-derivation reaches past it. A finished answer, not a distance";
+      return [enc, ", and a delivery probe of this search REACHED a sink " + item.deliveryProbed + " time"
+              + (item.deliveryProbed === 1 ? "" : "s") + " and ", strong("not one"), " of its tokens was in "
+              + "what arrived — the page destroyed the instrument itself, so the source's own transform is the "
+              + "whole of the failure and no re-derivation reaches past it. A finished answer, not a distance"];
     if (item.deliveryProbed === 0)
-      return enc + ", so a candidate needs those bytes to survive the way in — this search HOLDS a delivery "
-           + "probe and it has not reached a sink yet, so whether they do is unmeasured and this is a "
-           + "scheduling state, not an answer about the source";
-    return enc + ", so a candidate needs those bytes to survive the way in — this record states no delivery "
-         + "probe arrival at all, so whether they do is unmeasured here and nothing on it says a probe was "
-         + "ever run";
+      return [enc, ", so a candidate needs those bytes to survive the way in — this search HOLDS a delivery "
+              + "probe and it has not reached a sink yet, so whether they do is unmeasured and this is a "
+              + "scheduling state, not an answer about the source"];
+    return [enc, ", so a candidate needs those bytes to survive the way in — this record states no delivery "
+            + "probe arrival at all, so whether they do is unmeasured here and nothing on it says a probe was "
+            + "ever run"];
   }
   if (item.sourceDelivers === "")
-    return enc + " and a run MEASURED that <strong>none</strong> of them arrives — the source's own transform "
-         + "is the whole of the failure, and no re-derivation reaches past it";
+    return [enc, " and a run MEASURED that ", strong("none"), " of them arrives — the source's own transform "
+            + "is the whole of the failure, and no re-derivation reaches past it"];
   if (item.sourceDelivers === item.sourceEncodes)
-    return enc + ", and a run MEASURED that <strong>all</strong> of them arrive anyway — the page performs the "
-         + "round trip that undoes it, so the encode set defeats nothing here";
-  return enc + ", and a run MEASURED <code>" + esc(item.sourceDelivers) + "</code> of them arriving anyway — "
-       + "the page undoes part of the transform, and an escape is constructed out of exactly that subset";
+    return [enc, ", and a run MEASURED that ", strong("all"), " of them arrive anyway — the page performs the "
+            + "round trip that undoes it, so the encode set defeats nothing here"];
+  return [enc, ", and a run MEASURED ", domElement("code", {}, [item.sourceDelivers]), " of them arriving "
+          + "anyway — the page undoes part of the transform, and an escape is constructed out of exactly that "
+          + "subset"];
 }
 
 // WHICH QUESTION A PARKED SEARCH IS STUCK ON, which is the whole content of the parked card and which one
@@ -611,7 +614,7 @@ function _parkedProgress(item) {
 
 // WHAT THE SEARCH ACTUALLY RAN, which is the field of the four that is not a count — and the state a parked
 // search is most often in (arrived, did not fire) is a question about the BYTES that no quantity answers.
-// Returns HTML (it emits <code>), so callers place it WITHOUT esc().
+// Returns a node list, empty when the search holds no payload.
 //
 // AN EMPTY LIST IS A POSITIVE STATEMENT AND NOT A HOLE. solve.c raises `tried` for a COLD-RESUMED candidate
 // (solve_resume_candidate) whose payload rides the resumed flow rather than this session's record, and its own
@@ -622,13 +625,20 @@ function _parkedProgress(item) {
 // carrying no marker, and the marker vocabulary is the engine's; guessing it from the ORDER ("entry 0") would
 // be this view restating a producer fact it cannot check, which is the drift the whole card exists to end.
 function _payloadList(item) {
-  if (!item.payloads.length) return "";
-  var out = '<div class="card-poc"><span class="poc-lbl" title="the candidates this search has run, as the '
-          + 'search built them — never as the browser delivers them; the source\'s own transform is stated '
-          + 'separately, beside this">candidates run</span>';
-  for (var i = 0; i < item.payloads.length; i++)
-    out += ' <code class="poc-payload">' + esc(item.payloads[i]) + '</code>';
-  return out + '</div>';
+  if (!item.payloads.length) return [];
+  return [domElement("div", { class: "card-poc" }, [
+    domElement("span", { class: "poc-lbl", title: "the candidates this search has run, as the search built them " +
+                         "— never as the browser delivers them; the source's own transform is stated " +
+                         "separately, beside this" }, ["candidates run"]),
+    item.payloads.map(function (p) { return [" ", domElement("code", { class: "poc-payload" }, [String(p)])]; }),
+  ])];
+}
+
+// The finding's script: a link when its address is http(s), its label otherwise.
+function _secSourceLink(e) {
+  return e.sourceUrl && /^https?:\/\//i.test(e.sourceUrl)
+    ? domLink(e.sourceUrl, { title: e.sourceUrl }, [e.srcLabel])
+    : e.srcLabel;
 }
 
 // Stable key for a FIRED finding card within a tab. The engine emits one record per (sink, source); key by
@@ -656,7 +666,7 @@ function renderSecurityPanel() {
   // serializeTabData broken: `mergedSecurityFindings` returns an array on every path, so there is no run in
   // which the field is missing, and defaulting it to [] renders "nothing has been reported" for a document
   // whose findings were dropped in transit — the "safe" verdict §@S forbids, arrived at by a `||`.
-  if (!tabData) { container.innerHTML = ""; empty.style.display = "block"; return; }
+  if (!tabData) { container.replaceChildren(); empty.style.display = "block"; return; }
   DCHECK(Array.isArray(tabData.securityFindings),
          "GET_STATE answered without a securityFindings array — serializeTabData builds one on every path "
          + "(lib/serialize.js -> mergedSecurityFindings), so its absence is that serializer broken and this "
@@ -770,7 +780,7 @@ function renderSecurityPanel() {
     }
   }
 
-  if (!allItems.length && !parked.length) { container.innerHTML = ""; empty.style.display = "block"; return; }
+  if (!allItems.length && !parked.length) { container.replaceChildren(); empty.style.display = "block"; return; }
   empty.style.display = "none";
 
   // THE HEADING IS A CLAIM TOO. "Working XSS PoCs" was written over a list that includes every breakout the
@@ -780,24 +790,24 @@ function renderSecurityPanel() {
   // policy verdict, so the heading says the first and counts the second.
   var blockedCount = 0;
   for (var bi = 0; bi < allItems.length; bi++) if (_policyBlockers(allItems[bi].item).length) blockedCount++;
-  var html = allItems.length
-    ? '<div class="section-header">Breakouts the engine FIRED <span class="badge badge-status">' + allItems.length + '</span>'
-      + (blockedCount
-          ? ' <span class="badge badge-medium" title="the sink is REAL and the breakout fired in the model, but the page\'s own policy kills the vector on real Chrome — each needs a policy-permitted vector">'
-            + blockedCount + ' policy-blocked</span>'
-          : "")
-      + '</div>'
-    : "";
+  var cards = [];
+  if (allItems.length)
+    cards.push(domElement("div", { class: "section-header" }, [
+      "Breakouts the engine FIRED ", domElement("span", { class: "badge badge-status" }, [String(allItems.length)]),
+      blockedCount
+        ? [" ", domElement("span", { class: "badge badge-medium", title: "the sink is REAL and the breakout fired " +
+                                     "in the model, but the page's own policy kills the vector on real Chrome — " +
+                                     "each needs a policy-permitted vector" }, [blockedCount + " policy-blocked"])]
+        : [],
+    ]));
 
   for (var i = 0; i < allItems.length; i++) {
     var entry = allItems[i];
     var item = entry.item;
 
-    var srcLink = entry.sourceUrl && /^https?:\/\//i.test(entry.sourceUrl)
-      ? '<a href="' + esc(entry.sourceUrl) + '" target="_blank" title="' + esc(entry.sourceUrl) + '">' + esc(entry.srcLabel) + '</a>'
-      : esc(entry.srcLabel);
+    var srcLink = [_secSourceLink(entry)];
     if (entry.pageUrl && entry.pageUrl !== entry.sourceUrl)
-      srcLink += ' <span class="page-context" title="' + esc(entry.pageUrl) + '">in ' + esc(_shortUrl(entry.pageUrl)) + '</span>';
+      srcLink.push(" ", domElement("span", { class: "page-context", title: entry.pageUrl }, ["in " + _shortUrl(entry.pageUrl)]));
 
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
@@ -841,10 +851,12 @@ function renderSecurityPanel() {
     // NO `|| "?"` BESIDE AN ASSERTED FIELD. The DCHECK above states that sink/source/poc are all present on a
     // fired record; a placeholder beside it is the release-build behaviour of a contract that has already
     // been declared, and it is what lets a drifted record render a card that looks complete.
-    var srcHtml = '<div class="card-value" title="the attacker-controlled source whose bytes reach this sink">'
-      + 'source: <code>' + esc(item.source) + '</code></div>';
-    var pocHtml = '<div class="card-poc"><span class="poc-lbl">breakout input</span> <code class="poc-payload">'
-      + esc(item.poc) + '</code></div>';
+    var srcRow = domElement("div", { class: "card-value", title: "the attacker-controlled source whose bytes reach this sink" },
+                            ["source: ", domElement("code", {}, [item.source])]);
+    var pocRow = domElement("div", { class: "card-poc" }, [
+      domElement("span", { class: "poc-lbl" }, ["breakout input"]), " ",
+      domElement("code", { class: "poc-payload" }, [item.poc]),
+    ]);
 
     // §@S(d): EVERY PoC CARRIES ITS REPRODUCTION ENVELOPE — what makes it fire, whether it is stored, and the
     // CSP/Trusted-Types state it needs — because a payload without those is not reproducible by the person
@@ -855,30 +867,30 @@ function renderSecurityPanel() {
     // with a plausible default — that is how it used to badge every finding HIGH.
     var blockers = _policyBlockers(item);
     var policyClause = blockers.length
-      ? '<strong>the page\'s own policy blocks this vector</strong> — '
-        + blockers.map(function (b) {
-            return b.what === "CSP"
-              ? 'CSP <code>' + esc(b.detail) + '</code>'
-              : 'Trusted Types: the document requires a trusted type for the <code>' + esc(b.detail)
-                + '</code> sink group, so the assignment throws before the payload is ever parsed unless a '
-                + 'policy stringifies it';
-          }).join(' &middot; and ')
-      : 'the page CSP permits this vector, and no Trusted-Types requirement reaches this sink';
-    var encClause = _encodeSentence(item);   // already HTML — see _encodeSentence
-    var envHtml = '<div class="card-dims">reproduction envelope: '
-      + '<strong>' + esc(_FIRES_ON[item.firesOn]
-          || ('the engine reports this vector as `' + item.firesOn + '`, which this view has no sentence for'))
-        + '</strong>'
-      + ' · ' + policyClause
-      + ' · ' + esc(_deliverySentence(item))
-      + (encClause ? ' · ' + encClause : "")
+      ? [domElement("strong", {}, ["the page's own policy blocks this vector"]), " — ",
+         blockers.map(function (b, bj) {
+           return [bj === 0 ? "" : " · and ", b.what === "CSP"
+             ? ["CSP ", domElement("code", {}, [String(b.detail)])]
+             : ["Trusted Types: the document requires a trusted type for the ", domElement("code", {}, [String(b.detail)]),
+                " sink group, so the assignment throws before the payload is ever parsed unless a policy " +
+                "stringifies it"]];
+         })]
+      : "the page CSP permits this vector, and no Trusted-Types requirement reaches this sink";
+    var encClause = _encodeSentence(item);
+    var envRow = domElement("div", { class: "card-dims" }, [
+      "reproduction envelope: ",
+      domElement("strong", {}, [_FIRES_ON[item.firesOn]
+          || ("the engine reports this vector as `" + item.firesOn + "`, which this view has no sentence for")]),
+      " · ", policyClause,
+      " · " + _deliverySentence(item),
+      encClause.length ? [" · ", encClause] : [],
       // THE COST, because a reader deciding how much to trust a finding wants to know whether the tool found
       // it or stumbled on it. One candidate run is the first written-down vector firing; a larger number is a
       // context probe, a derivation and that many re-runs of the page — which is the work no other tool does.
-      + ' · ' + esc(item.searched === 1
-          ? 'solved on the first candidate run'
-          : 'solved after ' + item.searched + ' candidate runs of the real page')
-      + '</div>';
+      " · " + (item.searched === 1
+          ? "solved on the first candidate run"
+          : "solved after " + item.searched + " candidate runs of the real page"),
+    ]);
 
     // ENGINE AGREEMENT verify: run the engine's EXACT poc against the REAL page in a sandboxed attacker
     // window; the sink firing apiclientsink is ground truth. WHETHER the delivery can be PERFORMED is
@@ -896,7 +908,7 @@ function renderSecurityPanel() {
     // engine field the record legitimately omits is omitted here too, so the receiver's DCHECKs see the
     // record's real shape rather than this view's normalisation of it.
     var key = _findingKey(entry);
-    var verifyHtml = "";
+    var verifyRow;
     if (entry.pageUrl) {
       var probeObj = { poc: item.poc, source: item.source, sinkName: item.sink,
                        sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key };
@@ -919,27 +931,41 @@ function renderSecurityPanel() {
       if (item.principalDemand) probeObj.principalDemand = item.principalDemand;
       if (item.principalGates)  probeObj.principalGates = item.principalGates;
       var probe = JSON.stringify(probeObj);
-      verifyHtml = '<div class="verify-row">'
-        + '<button class="verify-btn" data-probe=\'' + esc(probe) + '\' data-key="' + esc(key) + '">Verify in real Chrome</button>'
-        + '<span class="verify-hint">loads the real page with the engine’s EXACT payload in a sandboxed attacker window, under the page’s real CSP/Trusted-Types. A relayed <code>apiclientsink</code> call from the delivered document (origin/tab/frame browser-matched) means the payload’s code RAN there — what a fired sink produces, and what the model predicts. It is not proof the SINK produced it: the hook lives in the page’s own world.</span>'
-        + '<div class="verify-result" data-key="' + esc(key) + '"></div></div>';
+      var verifyBtn = domElement("button", { class: "verify-btn", "data-probe": probe, "data-key": key },
+                                 ["Verify in real Chrome"]);
+      verifyBtn.addEventListener("click", function (ev) { _handleVerify(ev.currentTarget); });
+      verifyRow = domElement("div", { class: "verify-row" }, [
+        verifyBtn,
+        domElement("span", { class: "verify-hint" }, [
+          "loads the real page with the engine’s EXACT payload in a sandboxed attacker window, under the page’s " +
+          "real CSP/Trusted-Types. A relayed ", domElement("code", {}, ["apiclientsink"]), " call from the " +
+          "delivered document (origin/tab/frame browser-matched) means the payload’s code RAN there — what a " +
+          "fired sink produces, and what the model predicts. It is not proof the SINK produced it: the hook " +
+          "lives in the page’s own world."]),
+        domElement("div", { class: "verify-result", "data-key": key }),
+      ]);
     } else {
-      verifyHtml = '<div class="verify-na">no page url recorded for this finding — live verify delivers the payload to the page the sink was observed on</div>';
+      verifyRow = domElement("div", { class: "verify-na" }, ["no page url recorded for this finding — live verify " +
+                                                              "delivers the payload to the page the sink was observed on"]);
     }
 
     // POLICY-RELATIVE severity, over BOTH policy facts the engine emits — see _policyBlockers for why reading
     // only `cspBlocks` here was the same live defect as reading a name the engine never wrote.
     var sevBadge = blockers.length
-      ? '<span class="badge badge-medium" title="' + esc('broke out and fired in the model, but the page\'s own policy ('
-          + _blockerNames(blockers) + ') kills THIS vector on real Chrome — the sink is REAL and needs a '
-          + 'policy-permitted vector') + '">POLICY-BLOCKED · ' + esc(_blockerNames(blockers)) + '</span>'
-      : '<span class="badge badge-high">HIGH</span>';
-    html += '<div class="card" data-finding-key="' + esc(key) + '">'
-      + '<div class="card-label"><span class="badge badge-xss">XSS PoC</span> ' + sevBadge + ' ' + esc(item.sink) + '</div>'
-      + srcHtml + pocHtml + envHtml
-      + '<div class="card-meta">' + srcLink + '</div>'
-      + verifyHtml
-      + '</div>';
+      ? domElement("span", { class: "badge badge-medium",
+                             title: "broke out and fired in the model, but the page's own policy (" +
+                                    _blockerNames(blockers) + ") kills THIS vector on real Chrome — the sink is " +
+                                    "REAL and needs a policy-permitted vector" },
+                   ["POLICY-BLOCKED · " + _blockerNames(blockers)])
+      : domElement("span", { class: "badge badge-high" }, ["HIGH"]);
+    cards.push(domElement("div", { class: "card", "data-finding-key": key }, [
+      domElement("div", { class: "card-label" }, [
+        domElement("span", { class: "badge badge-xss" }, ["XSS PoC"]), " ", sevBadge, " ", item.sink,
+      ]),
+      srcRow, pocRow, envRow,
+      domElement("div", { class: "card-meta" }, srcLink),
+      verifyRow,
+    ]));
   }
 
   // PARKED SEARCHES — reached, searched this far, not broken out of YET. Shown because the alternative is
@@ -948,7 +974,8 @@ function renderSecurityPanel() {
   // fact that tells a reader what would change the answer (an app that decodes its fragment breaks out with a
   // candidate that is parked here). It is deliberately not a severity: there is no verdict to render.
   if (parked.length) {
-    html += '<div class="section-header">Reached, search parked <span class="badge badge-status">' + parked.length + '</span></div>';
+    cards.push(domElement("div", { class: "section-header" },
+                          ["Reached, search parked ", domElement("span", { class: "badge badge-status" }, [String(parked.length)])]));
     for (var pi = 0; pi < parked.length; pi++) {
       var pe = parked[pi], pit = pe.item;
       // THE FOUR PROGRESS FIELDS ARE ASSERTED BESIDE `tried`, BECAUSE THE CARD'S SENTENCE IS COMPUTED FROM ALL
@@ -1281,13 +1308,13 @@ function renderSecurityPanel() {
         + "whose breakout becomes a QUEUED program, and its absence is the statement that this class evaluates "
         + "its own argument; anything else is a third meaning this card has no sentence for (sink=" + pit.sink
         + " fires=" + JSON.stringify(pit.fires) + ")");
-      var pEnc = _encodeSentence(pit);   // already HTML — see _encodeSentence
-      var pSrc = pe.sourceUrl && /^https?:\/\//i.test(pe.sourceUrl)
-        ? '<a href="' + esc(pe.sourceUrl) + '" target="_blank" title="' + esc(pe.sourceUrl) + '">' + esc(pe.srcLabel) + '</a>'
-        : esc(pe.srcLabel);
-      html += '<div class="card">'
-        + '<div class="card-label"><span class="badge badge-status" title="an attacker source reaches this sink; no breakout has fired yet — this is NOT a finding that the sink is safe">PARKED</span> '
-        + esc(pit.sink) + ' &larr; <code>' + esc(pit.source) + '</code></div>'
+      var pEnc = _encodeSentence(pit);
+      cards.push(domElement("div", { class: "card" }, [
+        domElement("div", { class: "card-label" }, [
+          domElement("span", { class: "badge badge-status", title: "an attacker source reaches this sink; no " +
+                               "breakout has fired yet — this is NOT a finding that the sink is safe" }, ["PARKED"]),
+          " " + pit.sink + " \u2190 ", domElement("code", {}, [pit.source]),
+        ]),
         // No `|| 0` beside `tried`: the DCHECK above states it is a number, and 0 is a real value this card
         // must be able to say (a sink reached but not yet searched) rather than one a default manufactures.
         //
@@ -1297,25 +1324,24 @@ function renderSecurityPanel() {
         // line above had not already said. What the reader needs is WHICH of the four states this is, because
         // they take opposite work — that is _parkedProgress, computed from the fields the engine has been
         // emitting all along.
-        + '<div class="card-dims">' + esc(String(pit.tried)) + ' candidate' + (pit.tried === 1 ? "" : "s")
-        + ' seeded &middot; ' + esc(_parkedProgress(pit))
-        + (pEnc ? ' — ' + pEnc : "")
-        + '</div>'
+        domElement("div", { class: "card-dims" }, [
+          String(pit.tried) + " candidate" + (pit.tried === 1 ? "" : "s") + " seeded \u00b7 " + _parkedProgress(pit),
+          pEnc.length ? [" — ", pEnc] : [],
+        ]),
         // THE BYTES, because the state this search is most often in is a question about them — see
         // _payloadList for why an empty list is a statement rather than a gap.
-        + _payloadList(pit)
+        _payloadList(pit),
         // The parked entry carries the SOURCE DECLARATION, not an envelope: there is no PoC yet, so there is
         // no firing vector or policy verdict to state about one. What it can say is how the attacker would
         // have to reach the victim if a candidate ever fires — which is the same declared fact the fired card
         // renders, from the same field.
-        + '<div class="card-dims">' + esc(_deliverySentence(pit)) + '</div>'
-        + '<div class="card-meta">' + pSrc + '</div>'
-        + '</div>';
+        domElement("div", { class: "card-dims" }, [_deliverySentence(pit)]),
+        domElement("div", { class: "card-meta" }, [_secSourceLink(pe)]),
+      ]));
     }
   }
 
-  container.innerHTML = html;
-  container.querySelectorAll(".verify-btn").forEach(function (b) { b.addEventListener("click", function () { _handleVerify(b); }); });
+  domReplaceChildren(container, cards);
 }
 
 // ── ENGINE-AGREEMENT live verify ─────────────────────────────────────────────
@@ -1430,7 +1456,7 @@ async function _handleVerify(btn) {
   // than about the attribute that failed to round-trip.
   DCHECK(typeof btn.dataset.probe === "string" && btn.dataset.probe.length > 0,
          "a verify button carries no data-probe — renderSecurityPanel writes one on every button it creates, "
-         + "so an empty one is that attribute failing to survive the innerHTML round trip");
+         + "so an empty one is that write missing");
   var probe = JSON.parse(btn.dataset.probe);
   var card = btn.closest(".card");
   var resultEl = card ? card.querySelector(".verify-result") : null;

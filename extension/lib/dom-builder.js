@@ -74,8 +74,9 @@
     try { parsed = new URL(url); } catch (_) { parsed = null; }
     if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:"))
       return g.domElement("span", attrs, children);
+    // The attribute is the string that parsed; an absolute URL resolves to `parsed` against any base.
     const a = g.domElement("a", attrs, children);
-    a.setAttribute("href", parsed.href);
+    a.setAttribute("href", url);
     a.setAttribute("target", "_blank");
     return a;
   };
