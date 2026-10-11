@@ -61,6 +61,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *arrival);
 QJS_EXPORT void qjs_unload(const char *doc_id);
 QJS_EXPORT const char *qjs_check_request_policy(const char *doc_id, const char *url, const char *destination);
+QJS_EXPORT const char *qjs_referrer_policy(const char *doc_id);
 QJS_EXPORT unsigned qjs_bundle_id(void);
 
 /* PHASE 2 — seed the frontier, then step it a cooperative quantum at a time. */

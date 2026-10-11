@@ -794,6 +794,16 @@
           { name: "verdict", type: "string",
             why: "`allowed`, or `blocked` and a TAB and the CSP §6.8.4 directive that refused the request" },
           WORKING_SET] },
+
+      /* HTML §7.1.7's referrer policy item of a document this instance holds, as its parse left it (main.c's
+         qjs_referrer_policy): Referrer Policy §8.1 over the response, then HTML §4.2.5.1's meta `referrer`. The
+         zone asks after `Begin` or `Join` and before any step, for a load that speaks as that document. */
+      { ordinal: 27, name: "GetReferrerPolicy",
+        params: [DOCUMENT_ID],
+        reply: [
+          { name: "referrerPolicy", type: "string",
+            why: "a Referrer Policy §3 policy, or the empty string for a container that states none" },
+          WORKING_SET] },
     ],
   });
 

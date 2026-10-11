@@ -917,6 +917,19 @@ QJS_EXPORT const char *qjs_check_request_policy(const char *doc_id, const char *
     return answer;
 }
 
+/* HTML §7.1.7 Policy containers' referrer policy item of document `doc_id`'s container, as this instance built it:
+ * §7.1.7's "create a policy container from a fetch response" sets it from Referrer Policy §8.1 over the response,
+ * and the install runs HTML §4.2.5.1's `referrer` steps for each `<meta>` the parse inserted
+ * (core/dom/document.c). The trusted zone asks right after `Begin` or `Join` returns, before any step, so the
+ * answer is the parse's and no script's. "" is a container stating no policy. The string is the container's and
+ * stays valid until the item is next set. */
+QJS_EXPORT const char *qjs_referrer_policy(const char *doc_id)
+{
+    DCHECK(g_begun, "a document's referrer policy was asked of an engine whose frontier was never seeded");
+    DCHECK(doc_id != NULL && *doc_id, "a document's referrer policy was asked with no document name");
+    return policy_container_referrer_policy(engine_document_policy(world_doc_intern(doc_id)));
+}
+
 /* The frontier key's document half. Pure scan, so the host may ask the instant qjs_init returns. */
 QJS_EXPORT unsigned qjs_bundle_id(void)
 {

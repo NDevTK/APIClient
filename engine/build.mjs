@@ -8559,7 +8559,8 @@ if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt;
    asserted about — `qjs_perform` and `qjs_host_answer_remote` (the peer's half of the cross-instance seam, the
    only entries by which one instance is ASKED to perform another's operation) were written, linked and left
    off it, and no gate said a word. */
-const QJS_ABI = ["qjs_init", "qjs_join", "qjs_unload", "qjs_check_request_policy", "qjs_bundle_id", "qjs_begin",
+const QJS_ABI = ["qjs_init", "qjs_join", "qjs_unload", "qjs_check_request_policy", "qjs_referrer_policy",
+                 "qjs_bundle_id", "qjs_begin",
                  "qjs_step",
                  "qjs_result", "qjs_teardown",
                  "qjs_pending", "qjs_provide", "qjs_decline", "qjs_top_weight", "qjs_set_yield_floor",

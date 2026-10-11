@@ -1800,17 +1800,40 @@ function documentSpeaker(msg) {
   };
 }
 
-/* HTML §7.1.7 Policy containers' "create a policy container from a fetch response" sets the referrer policy
-   from Referrer Policy §8.1 over the response. For each live document whose seed this zone loaded itself,
-   by the browser's documentId, this holds the promise of that policy over the zone's own reply, or of null
-   where the load delivered no document. An entry lives as long as the document's DocData. */
+/* HTML §7.1.7 Policy containers' referrer policy item of each live document's container, by the browser's
+   documentId, as the instance that installed that seed's bytes states it (`GetReferrerPolicy`): Referrer
+   Policy §8.1 over the response, then HTML §4.2.5.1's meta `referrer` for each `<meta>` the parse inserted.
+   Each entry is {promise, settle}, opened by the document's AST_ANALYZE and settled once: with the policy by
+   engineRoot or engineJoin, or with null where the seed's bytes are installed nowhere (no document delivered,
+   a sub-frame whose embedder's instance builds its Document under its own name, a cleared or failed boot). An
+   entry lives as long as the document's DocData. */
 const _seedReferrerPolicies = new Map();
 
-/* The referrer policy, "" included, of the policy container this zone's own load of `documentId` creates;
-   null when this zone did not load that document. */
+/* Opens `documentId`'s entry; a re-delivery of the same document keeps the first dispatch's. */
+function seedPolicyOpen(documentId) {
+  if (_seedReferrerPolicies.has(documentId)) return;
+  let settle = null;
+  const promise = new Promise((resolve) => { settle = resolve; });
+  _seedReferrerPolicies.set(documentId, { promise, settle });
+}
+
+/* Settles `documentId`'s entry with `policy` (a Referrer Policy §3 policy, "" for none stated, or null for no
+   installed document); the first settle decides it. */
+function seedPolicySettle(documentId, policy) {
+  const e = _seedReferrerPolicies.get(documentId);
+  DCHECK(e !== undefined, "a seed's referrer policy was settled for a document no AST_ANALYZE opened (" +
+                          documentId + ")");
+  DCHECK(policy === null || policy === "" || REFERRER_POLICIES.indexOf(policy) >= 0,
+         "a seed's referrer policy was settled as " + JSON.stringify(policy) + ", which is not a Referrer Policy " +
+         "§3 policy — qjs_referrer_policy answers its container's item, which policy_container.c asserts is one");
+  e.settle(policy);
+}
+
+/* The referrer policy, "" included, of `documentId`'s container as its installing instance states it; null
+   when no instance installed that seed's bytes. */
 async function seedReferrerPolicy(documentId) {
-  const p = _seedReferrerPolicies.get(documentId);
-  return p === undefined ? null : await p;
+  const e = _seedReferrerPolicies.get(documentId);
+  return e === undefined ? null : await e.promise;
 }
 
 /* seedSpeaker: the seed of the live document `msg`, re-loading what the browser's navigation loaded. A
@@ -1819,11 +1842,12 @@ async function seedReferrerPolicy(documentId) {
    "navigate an iframe or frame" navigates using the element's node document, whose policy container Fetch
    §4.1 Main fetch reads for a request stating ""). A top-level navigation's initiator is not recorded, so the
    document speaks as itself with no referrer.
-   Named residual. Not covered: a top-level document's initiator; a parent policy set by a `<meta
-   name=referrer>` (HTML §4.2.5.1 Standard metadata names) or narrowed by the container's `referrerpolicy`;
-   and a parent this zone did not load. The next diff has the engine state, with the seed's analysis, the
-   policy its parse of this zone's bytes left in the Document's policy container. Their absence shows as a
-   seed load's Referer and Sec-Fetch-Site differing from the browser's navigation of that document. */
+   Named residual. Not covered: a top-level document's initiator; the container's `referrerpolicy`; the
+   parent's policy as it stood when the container was inserted rather than after its whole parse; and a parent
+   whose seed no instance installed (itself a sub-frame). The next diff keys the parent instance's own
+   `document.fetch` request facts by address, and a sub-frame seed of that address speaks with them. Their
+   absence shows as a seed load's Referer and Sec-Fetch-Site differing from the browser's navigation of that
+   document. */
 function seedSpeaker(msg) {
   return async () => {
     const frames = await swRpc("webNavigation.getAllFrames", { tabId: msg.groupId });
@@ -2488,6 +2512,14 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      never both, so "" is this zone's own statement that nothing was resumed. */
   const _residue = (prior && prior.recipes) ? prior.recipes : "";
   await rend.renderer.begin({ recipes: _residue });
+  /* A live seed's policy, read after Begin and before any step so it is the parse's (seedReferrerPolicy). Only
+     an AST_ANALYZE carries `seedUrl`, and its root keeps the browser's documentId as its name (engineCreate). */
+  if (msg && typeof msg.seedUrl === "string") {
+    DCHECK(String(msg.documentId) === eng.docId,
+           "a live seed was rooted under a name that is not its browser documentId — engineCreate keeps that " +
+           "name for a reported root, and the seed's referrer policy entry is keyed by it");
+    seedPolicySettle(eng.docId, (await rend.renderer.getReferrerPolicy({ docId: eng.docId })).referrerPolicy);
+  }
   /* The engine's half: `cold_resume` prints `@RESUMED <n>`, and every reply drains the output with it (mojo.js
      `_envelope`), so the line is in `lines` when this await resolves and never again. It is read once here and
      linesToAnalysis reads the field. */
@@ -3034,6 +3066,13 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");
+  /* A live seed joined by a tab navigation, read before any step, as engineRoot reads a rooted one. */
+  if (typeof msg.seedUrl === "string") {
+    DCHECK(String(msg.documentId) === docName,
+           "a live seed was joined under a name that is not its browser documentId — the navigation arm joins " +
+           "it as the group's new top under that name, and the seed's referrer policy entry is keyed by it");
+    seedPolicySettle(docName, (await eng.r.renderer.getReferrerPolicy({ docId: docName })).referrerPolicy);
+  }
   /* The name enters the routing table only once the engine holds it; a delivery in between is refused by the
      post branch's assert rather than routed to an agent that has never heard the name. */
   eng.joinedDocIds.push(docName);
@@ -5037,6 +5076,9 @@ const _hostOps = {
                "attaching this caller here reports the page that was replaced");
         cluster._resolvers.push(job);
         _waiting.splice(i, 1);
+        /* No instance installs this arrival's bytes unless the cluster already holds the document by its own
+           name (a re-delivery of its root, which settles the entry itself). */
+        if (hostHolderOf(docId) === null) seedPolicySettle(docId, null);
         if (cluster.state === "booting") _reserveStats.joinedBooting++; else _reserveStats.joinedRooted++;
         continue;
       }
@@ -5048,7 +5090,7 @@ const _hostOps = {
          The browser's `documentId` joins the cluster (above) instead. `_isRealOrigin` exempts the opaque case: a
          sandboxed sub-frame's per-document principal is something no embedder's notice can state (the create
          arm's residual), so it is a cluster of one and roots here. */
-      if (!isTop && _isRealOrigin(job.msg.origin)) { i++; continue; }
+      if (!isTop && _isRealOrigin(job.msg.origin)) { seedPolicySettle(docId, null); i++; continue; }
       i++;
     }
     /* (1b) The navigation is performed here, outside the walk, because it suspends and the walk must not: the
@@ -5627,6 +5669,7 @@ self.astDispatch = async function astDispatch(msg) {
     DCHECK(!!msg.documentId,
            "an AST_ANALYZE for a live document carried no documentId — it is the name the pool answers " +
            "\"which instance holds this document?\" by, so without it a re-delivered document is seated twice");
+    seedPolicyOpen(String(msg.documentId));
     /* And its agent cluster, both halves browser-stated, asserted where the facts are born: a missing group or
        origin would merge documents into one heap behind one principal while looking like the design working.
        `frameId` is asserted for presence, since 0 is the top frame. */
@@ -5674,8 +5717,7 @@ self.astDispatch = async function astDispatch(msg) {
        the request this zone is about to make, which is this tool, from an address an observer reported
        (safe-fetch.js's `_actorOf`: a request this tool composed at a person's direction is still `tool`).
        engine/trusted.mjs's command-line seed states the same word. */
-    const _asked = originOf(msg.sourceUrl);
-    const seeded = navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
+    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
                                         /* `none`: this seed can report an unavailability through
                                            `onNavigationOutcome` but not a decline, since offscreen-brain.js's
                                            `_PAGE_SOURCE_KINDS` (status/empty/network) all say a load was
@@ -5689,13 +5731,8 @@ self.astDispatch = async function astDispatch(msg) {
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
-                                        seedSpeaker(msg))
-      .then((loaded) => ({ loaded, unavailable: seedUnavailable(loaded, _asked) }));
-    /* A sub-frame seed speaks under this document's policy (seedSpeaker), so it is filed before the load is
-       awaited: a child dispatched while this load is in flight waits for it. */
-    _seedReferrerPolicies.set(msg.documentId, seeded.then((s) =>
-      s.unavailable === null ? referrerPolicyOfResponse(s.loaded.headers) : null));
-    const { loaded, unavailable } = await seeded;
+                                        seedSpeaker(msg));
+    const unavailable = seedUnavailable(loaded, originOf(msg.sourceUrl));
     /* The outcome is reported the instant the load settles, so a person opening the popup over an empty panel
        can tell "failed" from "nothing yet" while the analysis runs. */
     DCHECK(typeof self.onNavigationOutcome === "function",
@@ -5703,6 +5740,7 @@ self.astDispatch = async function astDispatch(msg) {
            "the ONLY writer of a document's page-source record now that the load happens here, so without it " +
            "a page whose seed could not be loaded is a silence in the only zone that renders one");
     if (unavailable !== null) {
+      seedPolicySettle(String(msg.documentId), null);
       self.onNavigationOutcome(msg.documentId, Object.assign({ state: "unavailable" }, unavailable));
       /* No engine runs, so there is no result document, the one analysis that legitimately has none. The reason
          is on the page-source record above. */
@@ -5720,9 +5758,17 @@ self.astDispatch = async function astDispatch(msg) {
     /* The waiter carries both settlers, so a Clear can reject a document never seated with "cleared", which
        _dispatchDocument reads to abandon its tail without recording a page failure. No `code` is carried: no
        producer reaching this entry writes one. */
-    const result = await new Promise((resolve, reject) => { _waiting.push({ html: loaded.bytes, msg, persist, resolve, reject }); _hostKick(); });
+    /* The caller is answered at the instance's finalize, after any install has settled the referrer policy entry;
+       a document no instance installed (cleared, failed boot) settles it here. */
+    let result;
+    try { result = await new Promise((resolve, reject) => { _waiting.push({ html: loaded.bytes, msg, persist, resolve, reject }); _hostKick(); }); }
+    finally { seedPolicySettle(String(msg.documentId), null); }
     return { success: true, result };   // fetchCallSites is already deduped by the engine
   } catch (e) {
+    /* A dispatch that threw installed nothing, so a referrer policy entry it opened is settled before anything
+       else, or a sub-frame seed waiting on it would wait for ever. */
+    if (msg && msg.type === "AST_ANALYZE" && _seedReferrerPolicies.has(String(msg.documentId)))
+      seedPolicySettle(String(msg.documentId), null);
     /* An invariant abort is not an analysis failure: this catch reports a failed dispatch (`_astError`), right
        for a page that could not be analysed and wrong for a broken contract, which is rethrown. */
     RETHROW_FATAL(e);

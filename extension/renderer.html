@@ -190,6 +190,7 @@
     setReferenced:    { fn: "qjs_set_referenced",     ret: null,     out: null },
     setArrival:       { fn: "qjs_set_arrival",        ret: null,     out: null },
     checkRequestPolicy: { fn: "qjs_check_request_policy", ret: "string", out: "verdict" },
+    getReferrerPolicy: { fn: "qjs_referrer_policy",     ret: "string", out: "referrerPolicy" },
   };
 
   /* ONE ABI CALL, WALKED OFF THE INTERFACE'S OWN PARAMETER LIST. The `PLACEABLE` map that stood here — which
