@@ -234,12 +234,20 @@ typedef struct {
     CssPxMonomial m[CSS_PX_FORM_MAX];
 } CssPxForm;
 
+/* A length is its example, its facts and, where it has facts, its form. The form is IMMUTABLE and INTERNED in
+   its realm's form table (css_length_init), so copying a length copies a pointer and two lengths with one form
+   share it; a writer of `px` outside this file goes through css_px_atom. */
 typedef struct {
-    double      px;      /* THE EXAMPLE — the modelled number, always present, and what C compares */
-    CssEnvSet   env;
-    JSContext  *realm;   /* the realm whose environment `env` names; NULL exactly when `env` is CSS_ENV_NONE */
-    CssPxForm   form;    /* see CssPxForm; a writer of `px` outside this file goes through css_px_atom */
+    double           px;     /* THE EXAMPLE — the modelled number, always present, and what C compares */
+    CssEnvSet        env;
+    JSContext       *realm;  /* the realm whose environment `env` names; NULL exactly when `env` is CSS_ENV_NONE */
+    const CssPxForm *form;   /* NULL exactly when `env` is CSS_ENV_NONE; owned by `realm`'s form table */
 } CssPx;
+
+/* The per-realm form table: its class and slot are declared once per agent (core/platform.c's `css_length`
+   row), each realm's install creates its table, and the realm's teardown frees it with every form in it. */
+void css_length_init(JSContext *ctx);
+void css_length_free(void);
 
 /* A length the cascade and the layout determined. */
 CssPx css_px(double px);

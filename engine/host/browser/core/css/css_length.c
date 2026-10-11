@@ -10,15 +10,158 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/agent_state.h"
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
 #include "core/frame/viewport.h"
+#include "core/realm.h"
 
 static char *css_len_strdup(const char *s)
 {
     char *out = strdup(s);
     CHECK(out != NULL, "cssom: OOM serializing a used length — a dropped one would read as undeclared");
     return out;
+}
+
+/* ---- the per-realm form table ------------------------------------------------------------------------------
+   A form names facts of exactly one realm (css_px_combine asserts it), so the realm owns it: each realm's table
+   holds every form a length of that realm was given, and the realm's teardown frees the table with it. Forms
+   are immutable, so a form one flow interns is shared with its forked siblings, and a discarded flow's forms
+   live until their realm is torn down: reclamation bounded by the realm's lifetime, since the forms a run makes
+   are not bounded by the program's expressions (their constants are numbers the layout computes). */
+typedef struct {
+    CssPxForm **slot;   /* open-addressed, a power of two long, at most half full; NULL is empty; each OWNED */
+    size_t      cap, n;
+} CssPxFormTable;
+
+static JSClassID g_css_px_form_table_class;
+static JSClassID g_css_px_form_table_slot;
+
+/* The one form every opaque length shares: it names no fact, so no realm owns it. */
+static const CssPxForm CSS_PX_FORM_OPAQUE = { false, 0, 0.0, { { 0 } } };
+
+static void css_px_form_table_finalizer(JSRuntime *rt, JSValue v)
+{
+    CssPxFormTable *t = JS_GetOpaque(v, g_css_px_form_table_class);
+    size_t i;
+
+    (void)rt;
+    if (t == NULL) return;
+    for (i = 0; i < t->cap; i++) free(t->slot[i]);
+    free(t->slot);
+    free(t);
+}
+
+static void css_length_install_realm(JSContext *ctx)
+{
+    JSValue obj = JS_NewObjectClass(ctx, (int)g_css_px_form_table_class);
+    CssPxFormTable *t;
+
+    CHECK(!JS_IsException(obj), "css_length: OOM creating a realm's form table");
+    t = calloc(1, sizeof *t);
+    CHECK(t != NULL, "css_length: OOM creating a realm's form table");
+    JS_SetOpaque(obj, t);
+    realm_value_set(ctx, g_css_px_form_table_slot, obj);
+}
+
+void css_length_init(JSContext *ctx)
+{
+    JSClassDef def = { "CssPxFormTable", .finalizer = css_px_form_table_finalizer };
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    DCHECK(g_css_px_form_table_slot == JS_INVALID_CLASS_ID, "css_length_init ran twice — the form table's class "
+                                                            "and slot are the agent's");
+    JS_NewClassID(rt, &g_css_px_form_table_class);
+    CHECK(JS_NewClass(rt, g_css_px_form_table_class, &def) == 0, "css_length: the form table's class could not "
+                                                                  "be declared");
+    g_css_px_form_table_slot = realm_value_declare(ctx, "css_length.h's per-realm table of interned length forms");
+    agent_state_class("css_length", &g_css_px_form_table_class, "the per-realm form table's class");
+    agent_state_realm_slot("css_length", &g_css_px_form_table_slot, "the per-realm form table's slot");
+    realm_declare_intrinsic(css_length_install_realm);
+}
+
+void css_length_free(void)
+{
+    g_css_px_form_table_slot = JS_INVALID_CLASS_ID;
+    g_css_px_form_table_class = 0;
+}
+
+/* A form's identity, over exactly the fields equality reads: the constant and each monomial's atom, exponents,
+   coefficient and atom value, a zero of either sign hashed as one. */
+static uint64_t css_px_form_hash(const CssPxForm *f)
+{
+    uint64_t h = 1469598103934665603ull;
+    int i;
+
+#define CSS_PX_HASH_BYTES(p_, n_)                                                    \
+    do {                                                                             \
+        const unsigned char *b_ = (const unsigned char *)(p_);                       \
+        size_t j_;                                                                   \
+        for (j_ = 0; j_ < (n_); j_++) h = (h ^ b_[j_]) * 1099511628211ull;           \
+    } while (0)
+#define CSS_PX_HASH_DOUBLE(d_)                                                       \
+    do {                                                                             \
+        double x_ = (d_) == 0.0 ? 0.0 : (d_);                                        \
+        CSS_PX_HASH_BYTES(&x_, sizeof x_);                                           \
+    } while (0)
+    CSS_PX_HASH_BYTES(&f->n, sizeof f->n);
+    CSS_PX_HASH_DOUBLE(f->c);
+    for (i = 0; i < f->n; i++) {
+        CSS_PX_HASH_BYTES(&f->m[i].atom, sizeof f->m[i].atom);
+        CSS_PX_HASH_BYTES(f->m[i].e, sizeof f->m[i].e);
+        CSS_PX_HASH_DOUBLE(f->m[i].k);
+        CSS_PX_HASH_DOUBLE(f->m[i].aval);
+    }
+#undef CSS_PX_HASH_DOUBLE
+#undef CSS_PX_HASH_BYTES
+    return h;
+}
+
+static bool css_px_form_equal(const CssPxForm *a, const CssPxForm *b)
+{
+    int i;
+
+    if (a->n != b->n || a->c != b->c) return false;
+    for (i = 0; i < a->n; i++)
+        if (a->m[i].atom != b->m[i].atom || memcmp(a->m[i].e, b->m[i].e, sizeof a->m[i].e) != 0 ||
+            a->m[i].k != b->m[i].k || a->m[i].aval != b->m[i].aval)
+            return false;
+    return true;
+}
+
+/* `realm`'s one copy of the known form `f`. */
+static const CssPxForm *css_px_form_intern(JSContext *realm, const CssPxForm *f)
+{
+    JSValue obj;
+    CssPxFormTable *t;
+    size_t i;
+
+    DCHECK(realm != NULL && f->known, "a form was interned with no realm to own it, or opaque");
+    obj = realm_value_get(realm, g_css_px_form_table_slot);
+    t = JS_GetOpaque(obj, g_css_px_form_table_class);
+    JS_FreeValue(realm, obj);
+    CHECK(t != NULL, "css_length: a realm's form table is missing — its install runs at every realm's creation");
+    if (2 * (t->n + 1) > t->cap) {
+        size_t cap = t->cap ? 2 * t->cap : 64, j;
+        CssPxForm **grown = calloc(cap, sizeof *grown);
+
+        CHECK(grown != NULL, "css_length: OOM growing a realm's form table");
+        for (j = 0; j < t->cap; j++) {
+            if (t->slot[j] == NULL) continue;
+            for (i = css_px_form_hash(t->slot[j]) & (cap - 1); grown[i]; i = (i + 1) & (cap - 1)) {}
+            grown[i] = t->slot[j];
+        }
+        free(t->slot);
+        t->slot = grown;
+        t->cap = cap;
+    }
+    for (i = css_px_form_hash(f) & (t->cap - 1); t->slot[i]; i = (i + 1) & (t->cap - 1))
+        if (css_px_form_equal(t->slot[i], f)) return t->slot[i];
+    t->slot[i] = malloc(sizeof *f);
+    CHECK(t->slot[i] != NULL, "css_length: OOM interning a form");
+    *t->slot[i] = *f;
+    t->n++;
+    return t->slot[i];
 }
 
 /* ---- the CSS pixel, and the environment fact it may derive from (see css_length.h) ------------------------ */
@@ -44,6 +187,7 @@ CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px)
            "dimensions), and a length carrying one without the other could not be turned into a domain");
     out.env = CSS_ENV_BIT(fact);
     out.realm = realm;
+    out.form = &CSS_PX_FORM_OPAQUE;
     return out;
 }
 
@@ -52,12 +196,16 @@ CssPx css_px_fact(CssEnvFact fact, JSContext *realm)
     double value = viewport_env_fact_value(realm, fact);
     CssPx out = css_px_env(fact, realm, value);
 
+    CssPxForm f;
+
     DCHECK(isfinite(value), "an environment fact's own value is not finite — every fact is a picked size or "
                             "ratio of the modelled device, and a NaN or an infinity has no polynomial form");
-    out.form.known = true;
-    out.form.n = 1;
-    out.form.m[0].e[fact] = 1;
-    out.form.m[0].k = 1.0;
+    memset(&f, 0, sizeof f);
+    f.known = true;
+    f.n = 1;
+    f.m[0].e[fact] = 1;
+    f.m[0].k = 1.0;
+    out.form = css_px_form_intern(realm, &f);
     return out;
 }
 
@@ -81,8 +229,12 @@ static CssPx css_px_combine(CssPx a, CssPx b, double px)
            "facts are different questions under one member name — and §10.1's containing-block chain walks one "
            "document, so this is arithmetic spanning two. BUILD the realm into the fact set (a realm per member "
            "rather than one per length) at the point a length is allowed to cross a document boundary");
+    DCHECK((a.env == CSS_ENV_NONE) == (a.form == NULL) && (b.env == CSS_ENV_NONE) == (b.form == NULL),
+           "a length reached the arithmetic with facts and no form, or a form and no facts — a form is written "
+           "only beside the facts it names");
     out.env = a.env | b.env;
     out.realm = a.realm ? a.realm : b.realm;
+    out.form = out.env == CSS_ENV_NONE ? NULL : &CSS_PX_FORM_OPAQUE;
     return out;
 }
 
@@ -90,13 +242,13 @@ static CssPx css_px_combine(CssPx a, CssPx b, double px)
 
 static bool css_px_is_known(CssPx a)
 {
-    return a.env == CSS_ENV_NONE || a.form.known;
+    return a.env == CSS_ENV_NONE || a.form->known;
 }
 
 /* `a`'s constant term: a determined length is its own constant. */
 static double css_px_form_c(CssPx a)
 {
-    return a.env == CSS_ENV_NONE ? a.px : a.form.c;
+    return a.env == CSS_ENV_NONE ? a.px : a.form->c;
 }
 
 /* A form being composed, before it is sorted, merged and checked against CSS_PX_FORM_MAX. */
@@ -120,7 +272,7 @@ static void css_px_poly_axpy(CssPxPoly *p, double k, CssPx a)
 
     p->c += k * css_px_form_c(a);
     if (a.env == CSS_ENV_NONE) return;
-    for (i = 0; i < a.form.n; i++) css_px_poly_add(p, &a.form.m[i], k * a.form.m[i].k);
+    for (i = 0; i < a.form->n; i++) css_px_poly_add(p, &a.form->m[i], k * a.form->m[i].k);
 }
 
 static int css_px_mono_cmp(const void *x, const void *y)
@@ -232,19 +384,21 @@ static void css_px_key_poly(FILE *f, double c, const CssPxMonomial *m, int n)
    has no form and stays opaque. */
 static void css_px_form_atom_named(CssPx *out, char *key, const char *op, const CssPxAtomArg *args, int nargs)
 {
+    CssPxForm f;
+
     DCHECK(out->env != CSS_ENV_NONE, "an atom was minted for a length derived from no fact");
-    out->form.known = false;
     if (!isfinite(out->px)) {
         free(key);
+        out->form = &CSS_PX_FORM_OPAQUE;
         return;
     }
-    out->form.known = true;
-    out->form.n = 1;
-    out->form.c = 0.0;
-    memset(&out->form.m[0], 0, sizeof out->form.m[0]);
-    out->form.m[0].atom = css_px_atom_intern(key, op, args, nargs);
-    out->form.m[0].k = 1.0;
-    out->form.m[0].aval = out->px;
+    memset(&f, 0, sizeof f);
+    f.known = true;
+    f.n = 1;
+    f.m[0].atom = css_px_atom_intern(key, op, args, nargs);
+    f.m[0].k = 1.0;
+    f.m[0].aval = out->px;
+    out->form = css_px_form_intern(out->realm, &f);
 }
 
 /* `out`'s form becomes the atom that is `op` over `args`: an opaque function of the facts in `out.env`, named by
@@ -259,8 +413,8 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
     int i;
 
     for (i = 0; i < nargs; i++)
-        if (args[i].env != CSS_ENV_NONE && !args[i].form.known) {
-            out->form.known = false;
+        if (args[i].env != CSS_ENV_NONE && !args[i].form->known) {
+            out->form = &CSS_PX_FORM_OPAQUE;
             return;
         }
     def = calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *def);
@@ -269,9 +423,9 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
         def[i].determined = args[i].env == CSS_ENV_NONE;
         def[i].px = args[i].px;
         if (!def[i].determined) {
-            def[i].c = args[i].form.c;
-            def[i].n = args[i].form.n;
-            def[i].m = args[i].form.m;
+            def[i].c = args[i].form->c;
+            def[i].n = args[i].form->n;
+            def[i].m = args[i].form->m;
         }
     }
     f = open_memstream(&key, &len);
@@ -280,7 +434,7 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
     for (i = 0; i < nargs; i++) {
         if (i) fputc(';', f);
         if (args[i].env == CSS_ENV_NONE) fprintf(f, "%a", args[i].px);
-        else css_px_key_poly(f, args[i].form.c, args[i].form.m, args[i].form.n);
+        else css_px_key_poly(f, args[i].form->c, args[i].form->m, args[i].form->n);
     }
     fputc(')', f);
     CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
@@ -304,6 +458,7 @@ CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px)
 static void css_px_form_set(CssPx *out, CssPxPoly *p)
 {
     int i = 0, n = 0;
+    CssPxForm f;
 
     qsort(p->m, (size_t)p->n, sizeof p->m[0], css_px_mono_cmp);
     while (i < p->n) {
@@ -336,10 +491,12 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p)
         css_px_form_atom_named(out, key, "poly", &def, 1);
         return;
     }
-    out->form.known = true;
-    out->form.n = n;
-    out->form.c = p->c;
-    memcpy(out->form.m, p->m, (size_t)n * sizeof p->m[0]);
+    memset(&f, 0, sizeof f);
+    f.known = true;
+    f.n = n;
+    f.c = p->c;
+    memcpy(f.m, p->m, (size_t)n * sizeof p->m[0]);
+    out->form = css_px_form_intern(out->realm, &f);
 }
 
 /* `out`'s form becomes `ka·a + kb·b`, over two known operands. */
@@ -363,12 +520,12 @@ double css_px_form_eval(CssPx a)
     DCHECK(css_px_is_known(a), "an opaque length's form was evaluated");
     v = css_px_form_c(a);
     if (a.env == CSS_ENV_NONE) return v;
-    for (i = 0; i < a.form.n; i++) {
-        double t = a.form.m[i].k;
+    for (i = 0; i < a.form->n; i++) {
+        double t = a.form->m[i].k;
 
-        if (a.form.m[i].atom) t *= a.form.m[i].aval;
+        if (a.form->m[i].atom) t *= a.form->m[i].aval;
         for (f = 0; f < CSS_ENV_FACT_COUNT; f++)
-            if (a.form.m[i].e[f]) t *= pow(viewport_env_fact_value(a.realm, (CssEnvFact)f), a.form.m[i].e[f]);
+            if (a.form->m[i].e[f]) t *= pow(viewport_env_fact_value(a.realm, (CssEnvFact)f), a.form->m[i].e[f]);
         v += t;
     }
     return v;
@@ -396,7 +553,7 @@ CssPx css_px_scale(CssPx a, double k)
     CssPx out = a;
 
     out.px = a.px * k;
-    if (a.env != CSS_ENV_NONE && a.form.known) css_px_form_lin(&out, a, k, css_px(0.0), 0.0);
+    if (a.env != CSS_ENV_NONE && a.form->known) css_px_form_lin(&out, a, k, css_px(0.0), 0.0);
     return out;
 }
 
@@ -432,18 +589,18 @@ static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
 
     *lo = *hi = css_px_form_c(d);
     if (d.env == CSS_ENV_NONE) return;
-    DCHECK(d.form.known, "the difference of two known lengths has an opaque form");
-    for (i = 0; i < d.form.n; i++) {
-        double k = d.form.m[i].k, mlo = 1.0, mhi = 1.0;
+    DCHECK(d.form->known, "the difference of two known lengths has an opaque form");
+    for (i = 0; i < d.form->n; i++) {
+        double k = d.form->m[i].k, mlo = 1.0, mhi = 1.0;
 
         /* An atom is a function the form cannot state, so nothing bounds it. */
-        if (d.form.m[i].atom) { *lo = -INFINITY; *hi = INFINITY; return; }
+        if (d.form->m[i].atom) { *lo = -INFINITY; *hi = INFINITY; return; }
         for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
-            if (!d.form.m[i].e[f]) continue;
+            if (!d.form->m[i].e[f]) continue;
             DCHECK(CSS_ENV_RANGE[f].lo >= 0.0, "a fact's range reaches below zero, so its monomials are not "
                                                "monotone and their ranges are not their facts' products");
-            mlo *= pow(CSS_ENV_RANGE[f].lo, d.form.m[i].e[f]);
-            mhi *= pow(CSS_ENV_RANGE[f].hi, d.form.m[i].e[f]);
+            mlo *= pow(CSS_ENV_RANGE[f].lo, d.form->m[i].e[f]);
+            mhi *= pow(CSS_ENV_RANGE[f].hi, d.form->m[i].e[f]);
         }
         *lo += k > 0.0 ? k * mlo : k * mhi;
         *hi += k > 0.0 ? k * mhi : k * mlo;
@@ -517,29 +674,29 @@ CssPx css_px_mul(CssPx a, CssPx b)
     p.c = css_px_form_c(a) * css_px_form_c(b);
     p.n = 0;
     if (b.env != CSS_ENV_NONE)
-        for (j = 0; j < b.form.n; j++) css_px_poly_add(&p, &b.form.m[j], css_px_form_c(a) * b.form.m[j].k);
+        for (j = 0; j < b.form->n; j++) css_px_poly_add(&p, &b.form->m[j], css_px_form_c(a) * b.form->m[j].k);
     if (a.env != CSS_ENV_NONE)
-        for (i = 0; i < a.form.n; i++) css_px_poly_add(&p, &a.form.m[i], css_px_form_c(b) * a.form.m[i].k);
+        for (i = 0; i < a.form->n; i++) css_px_poly_add(&p, &a.form->m[i], css_px_form_c(b) * a.form->m[i].k);
     if (a.env != CSS_ENV_NONE && b.env != CSS_ENV_NONE)
-        for (i = 0; i < a.form.n; i++)
-            for (j = 0; j < b.form.n; j++) {
+        for (i = 0; i < a.form->n; i++)
+            for (j = 0; j < b.form->n; j++) {
                 CssPxMonomial m;
 
                 /* A monomial holds one atom, so a product of two is one atom of its own. */
-                if (a.form.m[i].atom && b.form.m[j].atom) {
+                if (a.form->m[i].atom && b.form->m[j].atom) {
                     CssPx ab[2] = { a, b };
 
                     css_px_form_atom(&out, "mul", ab, 2);
                     return out;
                 }
                 memset(&m, 0, sizeof m);
-                m.atom = a.form.m[i].atom ? a.form.m[i].atom : b.form.m[j].atom;
-                m.aval = a.form.m[i].atom ? a.form.m[i].aval : b.form.m[j].aval;
+                m.atom = a.form->m[i].atom ? a.form->m[i].atom : b.form->m[j].atom;
+                m.aval = a.form->m[i].atom ? a.form->m[i].aval : b.form->m[j].aval;
                 for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
-                    DCHECK(a.form.m[i].e[f] + b.form.m[j].e[f] <= 255, "a monomial's exponent overflowed");
-                    m.e[f] = (unsigned char)(a.form.m[i].e[f] + b.form.m[j].e[f]);
+                    DCHECK(a.form->m[i].e[f] + b.form->m[j].e[f] <= 255, "a monomial's exponent overflowed");
+                    m.e[f] = (unsigned char)(a.form->m[i].e[f] + b.form->m[j].e[f]);
                 }
-                css_px_poly_add(&p, &m, a.form.m[i].k * b.form.m[j].k);
+                css_px_poly_add(&p, &m, a.form->m[i].k * b.form->m[j].k);
             }
     css_px_form_set(&out, &p);
     return out;
@@ -561,7 +718,7 @@ CssPx css_px_div(CssPx a, CssPx b)
         CssPx ab[2] = { a, b };
 
         css_px_form_atom(&out, "div", ab, 2);
-    } else if (a.env != CSS_ENV_NONE && a.form.known) {
+    } else if (a.env != CSS_ENV_NONE && a.form->known) {
         css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
     }
     return out;

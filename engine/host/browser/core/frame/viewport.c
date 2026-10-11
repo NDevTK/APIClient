@@ -429,7 +429,7 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
     char *term;
     JSValue out;
 
-    if (len.env == CSS_ENV_NONE || !len.form.known) return viewport_env_derived(len, computed);
+    if (len.env == CSS_ENV_NONE || !len.form->known) return viewport_env_derived(len, computed);
     n = viewport_env_members(len, &m);
     /* The form evaluated at this realm's facts is the example the layout computed: a writer that replaced the
        number and kept the form would fail here (css_px_atom is the route that replaces it). */
@@ -440,15 +440,15 @@ JSValue viewport_env_derived_long(CssPx len, JSValue computed)
             "example", len.px, at);
     JS_ToFloat64(len.realm, &ex, computed);
     /* No fact moves the length: it is `round(c)` in every world, which is the example. */
-    if (len.form.n == 0) {
-        DCHECKF(ex == floor(len.form.c + 0.5),
-                "a length whose form is the constant %.17g crossed as the `long` %.17g", len.form.c, ex);
+    if (len.form->n == 0) {
+        DCHECKF(ex == floor(len.form->c + 0.5),
+                "a length whose form is the constant %.17g crossed as the `long` %.17g", len.form->c, ex);
         return computed;
     }
-    n_int = floor(len.form.c);
-    r = len.form.c - n_int;
+    n_int = floor(len.form->c);
+    r = len.form->c - n_int;
     for (i = 0; i < n; i++) keys[m.fact[i]] = m.srcs[i];
-    term = ve_spell_poly("cssom-long-round", r, len.form.m, len.form.n, keys);
+    term = ve_spell_poly("cssom-long-round", r, len.form->m, len.form->n, keys);
     out = concolic_source_wrap_joint_affine(len.realm, m.shapes, m.srcs, n, term, n_int, computed);
     free(term);
     return out;
