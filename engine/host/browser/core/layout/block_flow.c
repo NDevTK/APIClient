@@ -1276,7 +1276,10 @@ static void bf_require_float_does_not_reach_this_stack(lxb_dom_element_t *el, bo
            `clear` to read and is not one of these — which is why the walk is over the BOX LIST's element
            members and the anonymous runs are skipped rather than asked. */
         if (b->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        if (!bf_computed_is(lxb_dom_interface_element(b), "clear", "none")) { cleared = b; break; }
+        if (!css_computed_keyword_is(lxb_dom_interface_element(b), "clear", CSS_KEYWORD_NONE)) {
+            cleared = b;
+            break;
+        }
     }
     if (!root_height && cleared == NULL) return;
     fl = block_flow_context_first_float(el);
@@ -1309,7 +1312,7 @@ static void bf_require_float_does_not_reach_this_stack(lxb_dom_element_t *el, bo
            "offset below it on this stack. The clearance is measured from the float's BOTTOM OUTER EDGE: "
            "BUILD §9.5.1 \"Positioning the float: the 'float' property\"' placement, which "
            "core/layout/flow_position.c crashes for. `clear` itself is RECORDED "
-           "(core/css/css_computed_value.c's as-specified arm and css_shorthand_complete_for, with CSS 2.1 "
+           "(a KEYWORD row of core/css/css_property_id.h and css_shorthand_complete_for, with CSS 2.1 "
            "§9.5.2's `both` restored to lexbor's parser), so the property is not the blocker",
            box_subject_node(cleared, nbuf, sizeof nbuf),
            box_subject_computed(cleared == NULL ? NULL : lxb_dom_interface_element(cleared),

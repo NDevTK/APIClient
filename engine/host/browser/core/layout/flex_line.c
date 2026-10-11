@@ -255,7 +255,7 @@ static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const c
            and never reaches here. */
         declared = css_length_resolve_pct(len, inner_main);
     }
-    if (fl_computed_is(el, "box-sizing", "border-box"))
+    if (css_computed_keyword_is(el, "box-sizing", CSS_KEYWORD_BORDER_BOX))
         declared = css_px_max(css_px_sub(declared, fl_main_border_padding(el, vertical)), css_px(0.0));
     *out = css_px_max(declared, css_px(0.0));
     return true;

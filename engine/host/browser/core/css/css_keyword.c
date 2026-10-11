@@ -85,6 +85,16 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     case CSS_KEYWORDS_POSITION:
         return k == CSS_KEYWORD_STATIC || k == CSS_KEYWORD_RELATIVE || k == CSS_KEYWORD_ABSOLUTE ||
                k == CSS_KEYWORD_STICKY || k == CSS_KEYWORD_FIXED;
+    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property": `content-box | border-box`. */
+    case CSS_KEYWORDS_BOX_SIZING:
+        return k == CSS_KEYWORD_CONTENT_BOX || k == CSS_KEYWORD_BORDER_BOX;
+    /* css-page-floats-3 §4 "The clear property": `inline-start | inline-end | block-start | block-end | left |
+       right | top | bottom | both-inline | both-block | both | none`. */
+    case CSS_KEYWORDS_CLEAR:
+        return k == CSS_KEYWORD_INLINE_START || k == CSS_KEYWORD_INLINE_END || k == CSS_KEYWORD_BLOCK_START ||
+               k == CSS_KEYWORD_BLOCK_END || k == CSS_KEYWORD_LEFT || k == CSS_KEYWORD_RIGHT ||
+               k == CSS_KEYWORD_TOP || k == CSS_KEYWORD_BOTTOM || k == CSS_KEYWORD_BOTH_INLINE ||
+               k == CSS_KEYWORD_BOTH_BLOCK || k == CSS_KEYWORD_BOTH || k == CSS_KEYWORD_NONE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

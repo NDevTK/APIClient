@@ -173,20 +173,13 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
                box_subject(cell, nbuf, sizeof nbuf));
     if (w.kind == CSS_LENGTH_ABSOLUTE) {
         CssPx declared = w.px;
-        char *box_sizing;
         bool border_box;
 
         /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property": under `border-box` the declared
            length is the border box's, so the content-box operand is that length less padding and border,
            floored at zero. Paraphrased on purpose: the section's editions word the floor differently, and
            engine/citegen.mjs checks quotations against one edition's corpus. */
-        box_sizing = css_computed_value(cell, "box-sizing");
-        DCHECK(box_sizing != NULL,
-               "the cascade produced no computed `box-sizing` — css-sizing-3 §3.3 \"Box Edges for Sizing: the "
-               "box-sizing property\" gives it an initial value of `content-box`, so the cascade's last layer "
-               "always answers");
-        border_box = strcmp(box_sizing, "border-box") == 0;
-        free(box_sizing);
+        border_box = css_computed_keyword_is(cell, "box-sizing", CSS_KEYWORD_BORDER_BOX);
         if (border_box) declared = css_px_max(css_px_sub(declared, edges), css_px(0.0));
         /* "If the specified 'width' (W) of the cell is greater than MCW, W is the minimum cell width." */
         min_content = css_px_max(min_content, declared);

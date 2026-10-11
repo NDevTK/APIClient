@@ -30,7 +30,18 @@
     X(RELATIVE,    "relative")             \
     X(ABSOLUTE,    "absolute")             \
     X(STICKY,      "sticky")               \
-    X(FIXED,       "fixed")
+    X(FIXED,       "fixed")                \
+    X(CONTENT_BOX, "content-box")          \
+    X(BORDER_BOX,  "border-box")           \
+    X(INLINE_START, "inline-start")        \
+    X(INLINE_END,  "inline-end")           \
+    X(BLOCK_START, "block-start")          \
+    X(BLOCK_END,   "block-end")            \
+    X(LEFT,        "left")                 \
+    X(RIGHT,       "right")                \
+    X(BOTH_INLINE, "both-inline")          \
+    X(BOTH_BLOCK,  "both-block")           \
+    X(BOTH,        "both")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -56,7 +67,9 @@ typedef enum {
     CSS_KEYWORDS_INSET,
     CSS_KEYWORDS_BASELINE_SHIFT,
     CSS_KEYWORDS_FLEX_BASIS,
-    CSS_KEYWORDS_POSITION
+    CSS_KEYWORDS_POSITION,
+    CSS_KEYWORDS_BOX_SIZING,
+    CSS_KEYWORDS_CLEAR
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

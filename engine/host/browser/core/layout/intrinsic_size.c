@@ -562,7 +562,6 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, con
 {
     CssLength len = css_computed_length(ch, name);
     CssPx declared, surround;
-    char *box_sizing;
     bool border_box;
 
     if (len.kind == CSS_LENGTH_KEYWORD) {
@@ -591,13 +590,7 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, con
        core/layout/table_column_width.c). The surround is the intrinsic one (§5.2.1's zero basis), not
        used_value.h's, which answers the determined-width question. */
     declared = len.px;
-    box_sizing = css_computed_value(ch, "box-sizing");
-    DCHECK(box_sizing != NULL,
-           "the cascade produced no computed `box-sizing` — css-sizing-3 §3.3 \"Box Edges for Sizing: the "
-           "box-sizing property\" gives it an initial value of `content-box`, so the cascade's last layer "
-           "always answers");
-    border_box = strcmp(box_sizing, "border-box") == 0;
-    free(box_sizing);
+    border_box = css_computed_keyword_is(ch, "box-sizing", CSS_KEYWORD_BORDER_BOX);
     if (border_box) {
         surround = css_px_add(is_intrinsic_pad_border_px(ch, axis, false),
                               is_intrinsic_pad_border_px(ch, axis, true));

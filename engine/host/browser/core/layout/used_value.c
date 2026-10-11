@@ -713,15 +713,7 @@ static CssPx uv_surround_total(UvSurround s)
    a not-content-box value happened to fall into. */
 static bool uv_is_border_box(lxb_dom_element_t *el)
 {
-    char *v = uv_computed(el, "box-sizing");
-    bool border = strcmp(v, "border-box") == 0;
-
-    DCHECK(border || strcmp(v, "content-box") == 0,
-           "a `box-sizing` computed to something that is neither of the two keywords css-sizing-3 §3.3's "
-           "`content-box | border-box` grammar admits, and its `Computed value:` line is `specified keyword` — "
-           "so nothing between the declaration and here had a rule that could produce a third one");
-    free(v);
-    return border;
+    return css_computed_keyword_is(el, "box-sizing", CSS_KEYWORD_BORDER_BOX);
 }
 
 /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property", and the one sentence in it that decides

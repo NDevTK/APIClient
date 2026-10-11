@@ -46,7 +46,8 @@ typedef enum {
  * `flex-basis` (css-flexbox-1 §7.2.3 "The flex-basis property") take the first rows' rule whole but are neither
  * box-model lengths nor limits: a baseline shift's percentage refers to the used `line-height`, which no cascade
  * step holds, so it survives to the computed value; a flex basis adds `content` to `width`'s keywords.
- * `position` is css-position-3 §2's `Computed value: specified keyword`, held as its ID. */
+ * `position`, `box-sizing` and `clear` are css-position-3 §2's, css-sizing-3 §3.3's and css-page-floats-3 §4's
+ * `Computed value: specified keyword`, each held as its ID. */
 #define CSS_PROPERTY_LIST(X)                                                                          \
     X(MARGIN_TOP,          "margin-top",          LXB_CSS_PROPERTY_MARGIN_TOP,     LENGTH, ALL, MARGIN)           \
     X(MARGIN_RIGHT,        "margin-right",        LXB_CSS_PROPERTY_MARGIN_RIGHT,   LENGTH, ALL, MARGIN)           \
@@ -76,6 +77,8 @@ typedef enum {
     X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT, NON_NEGATIVE, NONE) \
     X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING, NON_NEGATIVE, NONE) \
     X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       KEYWORD, ALL, POSITION)        \
+    X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     KEYWORD, ALL, BOX_SIZING)      \
+    X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          KEYWORD, ALL, CLEAR)           \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -85,8 +88,6 @@ typedef enum {
     X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     TEXT, ALL, UNTYPED)            \
     X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        TEXT, ALL, UNTYPED)            \
     X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT, ALL, UNTYPED)            \
-    X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          TEXT, ALL, UNTYPED)            \
-    X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     TEXT, ALL, UNTYPED)            \
     X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT, ALL, UNTYPED)            \
     X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      TEXT, ALL, UNTYPED)            \
     X(WRITING_MODE,        "writing-mode",        LXB_CSS_PROPERTY_WRITING_MODE,   TEXT, ALL, UNTYPED)            \

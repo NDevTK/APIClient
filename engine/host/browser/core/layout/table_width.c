@@ -109,15 +109,7 @@ static CssPx tw_table_edges(lxb_dom_element_t *table, bool collapsing)
    `<table style="display: inline-table">` is). */
 static bool tw_declared_width_is_border_box(lxb_dom_element_t *table)
 {
-    char *sizing = tw_computed(table, "box-sizing");
-    bool border_box = strcmp(sizing, "border-box") == 0;
-
-    DCHECK(border_box || strcmp(sizing, "content-box") == 0,
-           "a `box-sizing` computed to something that is neither of the two keywords css-sizing-3 §3.3 \"Box "
-           "Edges for Sizing: the box-sizing property\"'s `content-box | border-box` grammar admits, and its "
-           "`Computed value:` line is `specified keyword`");
-    free(sizing);
-    return border_box || lxb_html_tree_node_is(lxb_dom_interface_node(table), LXB_TAG_TABLE);
+    return css_computed_keyword_is(table, "box-sizing", CSS_KEYWORD_BORDER_BOX) || lxb_html_tree_node_is(lxb_dom_interface_node(table), LXB_TAG_TABLE);
 }
 
 /* ---- The table's own `width`, as a content width -----------------------------------------------------------
@@ -492,11 +484,10 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
            the result at zero" read from the outside). */
         {
             CssPx cell_edges = table_cell_border_edges(cell->element);
-            char *sizing = tw_computed(cell->element, "box-sizing");
-
-            if (strcmp(sizing, "border-box") == 0) width = css_px_max(width, cell_edges);
-            else width = css_px_add(width, cell_edges);
-            free(sizing);
+            if (css_computed_keyword_is(cell->element, "box-sizing", CSS_KEYWORD_BORDER_BOX))
+                width = css_px_max(width, cell_edges);
+            else
+                width = css_px_add(width, cell_edges);
         }
         DCHECK(cell->col + cell->colspan <= n,
                "CSS 2.1 §17.5.2.1's step 2 found a first-row cell spanning past the grid's own column count. "
