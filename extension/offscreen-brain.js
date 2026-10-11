@@ -926,19 +926,22 @@ function stripJsonp(text) {
    A function outlives the frame that made it (`probeApiEndpoint` and `discoverServiceInfo` call it once per
    content type), so making one asserts the person's grade and carries the extension-document `sender` the operator tier
    CHECKs. A caller with no person behind it uses `safeFetch` instead. A probe was composed, not observed, so
-   it states PAGE_CONTEXT_COMPOSED_INIT. */
+   it states PAGE_CONTEXT_COMPOSED_INIT, and nobody typed an Origin or Referer for it (PAGE_CONTEXT_STATED_NONE). */
 function makePageGetFn(tabId, documentId, initiator, sender) {
   pageContextRequireUserInitiated(initiator, "makePageGetFn (document " + documentId + ")");
   return (url, headers) => operatorSendAsFrame(sender, tabId, documentId, initiator, url,
-    { method: "GET", headers: headers || {}, body: null, bodyEncoding: null, requestInit: PAGE_CONTEXT_COMPOSED_INIT });
+    { method: "GET", headers: headers || {}, body: null, bodyEncoding: null, requestInit: PAGE_CONTEXT_COMPOSED_INIT,
+      stated: PAGE_CONTEXT_STATED_NONE });
 }
 
 function makePageFetchFn(tabId, documentId, initiator, sender) {
   pageContextRequireUserInitiated(initiator, "makePageFetchFn (document " + documentId + ")");
   return (url, opts) => {
-    DCHECK(!("requestInit" in opts), "a probe fn caller stated a requestInit; the fn states it for every probe");
+    DCHECK(!("requestInit" in opts) && !("stated" in opts),
+           "a probe fn caller stated a requestInit or stated headers; the fn states both for every probe");
     return operatorSendAsFrame(sender, tabId, documentId, initiator, url,
-                               Object.assign({}, opts, { requestInit: PAGE_CONTEXT_COMPOSED_INIT }));
+                               Object.assign({}, opts, { requestInit: PAGE_CONTEXT_COMPOSED_INIT,
+                                                         stated: PAGE_CONTEXT_STATED_NONE }));
   };
 }
 
@@ -2397,6 +2400,9 @@ async function buildExportRequest(msg) {
   ) {
     headers["Content-Type"] = msg.contentType;
   }
+  // The Origin and Referer the person stated replace the frame's on the send, so the export carries them too.
+  if (msg.stated.origin !== null) headers["Origin"] = msg.stated.origin;
+  if (msg.stated.referer !== null) headers["Referer"] = msg.stated.referer;
 
   /* API key: the user's explicit choice from the Send panel's key selector, which the popup posts with every
      export. THERE IS NO ENDPOINT ARM. `else if (ep?.apiKey) { ep.apiKeySource === "url" ? … }` stood here and

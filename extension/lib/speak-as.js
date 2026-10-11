@@ -79,9 +79,10 @@ function _speakAsMintId() {
 }
 
 /* Runs `send()` (the zone's fetches of `url`) under one rule per entry of `rules` ({method, headers}) for the
-   identity `origin`, and removes them when the send settles. Rules a previous offscreen document left are
-   removed before this document's first send. */
-async function withSpeakAsRules(origin, url, rules, send) {
+   identity `origin`, and removes them when the send settles. `stated` is the operator tier's person-typed
+   {origin, referer}, or null; speak-as-rule.js admits an Origin or Referer outside the identity only as it.
+   Rules a previous offscreen document left are removed before this document's first send. */
+async function withSpeakAsRules(origin, url, rules, stated, send) {
   if (_speakAsCleared === null) _speakAsCleared = swRpc("speakAs.clearFamily");
   await _speakAsCleared;
   const u = new URL(url);
@@ -96,7 +97,7 @@ async function withSpeakAsRules(origin, url, rules, send) {
   const minted = rules.map((r) => ({ ruleId: _speakAsMintId(), method: r.method, headers: r.headers }));
   const ids = minted.map((r) => r.ruleId);
   try {
-    const installed = await swRpc("speakAs.install", { url: key, origin, rules: minted });
+    const installed = await swRpc("speakAs.install", { url: key, origin, stated, rules: minted });
     CHECK(installed.length === ids.length && ids.every((id) => installed.indexOf(id) >= 0),
           "the speak-as rules installed for " + key + " are " + JSON.stringify(installed) + ", not exactly " +
           JSON.stringify(ids) + " — another rule would set another identity's headers on this send");

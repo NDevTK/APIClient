@@ -790,6 +790,10 @@ function _checkSendPanelRequest(msg, command) {
            msg.requestInit[k] === null || typeof msg.requestInit[k] === "string"),
          command + " arrived with no requestInit — lib/popup-send.js's sendPanelRequestInit writes the four " +
          "members (null where unstated) on every send, and without them nobody chose the credentials mode");
+  DCHECK(!!msg.stated && typeof msg.stated === "object" &&
+         ["origin", "referer"].every((k) => msg.stated[k] === null || typeof msg.stated[k] === "string"),
+         command + " arrived with no stated {origin, referer} — lib/popup-send.js's sendPanelStatedHeaders " +
+         "writes both (null for the frame's own) on every send");
 }
 
 /* A body is bytes when its type is a binary wire format; JSPB (json+protobuf) is text. */
@@ -804,16 +808,17 @@ function _isBinaryContentType(ct) {
 /* An operator send: a request the person composed, sent from this zone as the frame `documentId` names
    (lib/request-identity.js's frameIdentity, browser-stamped), through safe-fetch.js's operator tier, which
    CHECKs that `sender` is an extension document. `opts` is {method, headers (a map), body (string or null),
-   bodyEncoding (null or "base64"), requestInit}. Answers {error} or {ok, status, statusText, headers, body,
-   bodyEncoding?}, where `body` is text or, for a binary type, base64.
+   bodyEncoding (null or "base64"), requestInit, stated}, where `stated` is the Send panel's typed
+   {origin, referer} (PAGE_CONTEXT_STATED_NONE for a probe). Answers {error} or {ok, status, statusText,
+   headers, body, bodyEncoding?}, where `body` is text or, for a binary type, base64.
    Not covered: the frame's own referrer policy is not observable from this zone, so a request that states
    none uses Referrer Policy §3's default. The next diff reads the policy the engine parsed when it loaded
    that document. Its absence shows as a Referer differing from the frame's own for a page that sets a policy. */
 async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, opts) {
   pageContextRequireUserInitiated(initiator, "operatorSendAsFrame (document " + documentId + ")");
   DCHECK(!!opts && typeof opts.method === "string" && opts.method !== "" && !!opts.headers &&
-         (opts.body === null || typeof opts.body === "string") && !!opts.requestInit,
-         "an operator send named no method, header map, body statement or requestInit");
+         (opts.body === null || typeof opts.body === "string") && !!opts.requestInit && !!opts.stated,
+         "an operator send named no method, header map, body statement, requestInit or stated headers");
   if (!URL.canParse(url)) return { error: "blocked: invalid URL" };
   const identity = await frameIdentity(tabId, documentId);
   if (identity === null) return { error: "the frame this request speaks as is gone (document " + documentId + ")" };
@@ -821,11 +826,18 @@ async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, op
   const mode = opts.requestInit.mode === null ? "cors" : opts.requestInit.mode;
   const body = opts.body === null ? null : opts.bodyEncoding === "base64" ? base64ToUint8(opts.body) : opts.body;
   const r = await safeFetchOperator(url, { sender, identity: facts, method: opts.method, mode, body,
-                                          headers: Object.keys(opts.headers).map((k) => [k, String(opts.headers[k])]) });
+                                          headers: Object.keys(opts.headers).map((k) => [k, String(opts.headers[k])]),
+                                          stated: opts.stated });
   if (r.refusal && r.refusal.reason.startsWith("forbidden-request-header:"))
     return { error: "refused: `" + r.refusal.reason.slice("forbidden-request-header:".length) + "` is a " +
                     "forbidden request-header (Fetch §2.2.2 Headers) — the browser sets it itself, so remove it " +
                     "from the request" };
+  if (r.refusal && r.refusal.reason.startsWith("stated-origin-not-an-origin:"))
+    return { error: "refused: the stated Origin is not a serialized http(s) origin (scheme://host[:port], or " +
+                    "null), which is all an Origin header carries" };
+  if (r.refusal && r.refusal.reason.startsWith("stated-referer-not-a-url:"))
+    return { error: "refused: the stated Referer is not an absolute http(s) URL as the URL parser writes it, " +
+                    "with no fragment" };
   if (r.refusal) return { error: r.refusal.kind + ": " + r.refusal.reason };
   const ct = r.headers["content-type"] || "";
   if (_isBinaryContentType(ct))
@@ -1045,7 +1057,7 @@ async function executeSendRequest(documentId, msg, sender) {
   try {
     resp = await operatorSendAsFrame(sender, tabId, documentId, PAGE_CONTEXT_USER_INITIATED, url,
                                      { method: msg.httpMethod, headers, body, bodyEncoding,
-                                       requestInit: msg.requestInit });
+                                       requestInit: msg.requestInit, stated: msg.stated });
   } catch (err) {
     RETHROW_FATAL(err);
     return { error: `fetch_exception: ${err.message}`, timing: Date.now() - startTime };

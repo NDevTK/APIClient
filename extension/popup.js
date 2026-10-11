@@ -680,6 +680,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         body,
         apiKeyOverride: currentKeyOverride,
         requestInit: sendPanelRequestInit(),
+        stated: sendPanelStatedHeaders(),
       });
     } catch (e) {
       /* An invariant abort travels ON (extension/check.js RETHROW_FATAL): `null` here is the ONE state the

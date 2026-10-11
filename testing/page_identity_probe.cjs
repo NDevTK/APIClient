@@ -99,7 +99,8 @@ async function main() {
       type: "SEND_REQUEST", tabId: rt.tabId, documentId: rt.documentId, endpointKey: "", service: null,
       methodId: null, url: u, httpMethod: o.method || "GET", contentType: "", headers: o.headers || {},
       body: o.body === undefined ? null : { mode: "raw", rawBody: o.body, formData: null },
-      frameId: 0, apiKeyOverride: null, requestInit: o.requestInit })
+      frameId: 0, apiKeyOverride: null, requestInit: o.requestInit,
+      stated: o.stated || { origin: null, referer: null } })
       .then((x) => (x && x.error ? { error: x.error } : { status: x && x.status })), route, url, init);
     else if (how === "off" || how === "dnr") {
       if (how === "dnr") await setRule(rule(url), { "Origin": A, "Referer": A + "/page?x=secret",
@@ -155,6 +156,15 @@ async function main() {
     }
   }
   await fire("send.forbidden", "B", "send", Object.assign(ri("include"), { headers: { "Cookie": "x=1" } }));
+  // The Send panel's stated Origin and Referer, in place of the frame's: on the request and on its preflight.
+  const evil = { origin: "https://evil.example", referer: "https://evil.example/csrf?x=1" };
+  await fire("send.stated", "B", "send", Object.assign(ri("include"), { stated: evil }));
+  await fire("send.stated.post", "B", "send", Object.assign(riPost("include"), { stated: evil }));
+  await fire("send.stated.refonly", "A", "send", Object.assign(ri("include"), { stated: { origin: null,
+                                                                                         referer: evil.referer } }));
+  // A stated Origin that is not an origin is refused, never sent.
+  await fire("send.stated.bad", "B", "send", Object.assign(ri("include"), { stated: { origin: evil.referer,
+                                                                                      referer: null } }));
   if (hasDnr) {
     const cond = (extra) => (url) => Object.assign({ urlFilter: "|" + url + "|", tabIds: [-1],
       initiatorDomains: [extId], requestMethods: ["get"], resourceTypes: ["xmlhttprequest", "other"] }, extra);
@@ -187,7 +197,8 @@ function zoneSend(off, spec) {
     // A preflighted send: the OPTIONS rule rides with the request's, as Fetch §4.8 sends it first.
     if (s.preflightUnsafe) rules.push({ method: "OPTIONS",
       headers: speakAsPreflightHeaders(facts, s.method, "", s.url, s.preflightUnsafe) });
-    return withSpeakAsRules(facts.origin, s.url, rules, async () => {
+    if (s.forceOrigin) rules[0].headers.Origin = s.forceOrigin;
+    return withSpeakAsRules(facts.origin, s.url, rules, null, async () => {
       if (s.pageFetchDuring) await new Promise((r) => setTimeout(r, 1500));   // the tab's own fetch lands here
       if (s.preflightUnsafe) await fetch(s.url, { method: "OPTIONS", credentials: "omit" });
       const r = await fetch(s.url, { method: s.method, credentials: c.wire, headers: s.headers, body: s.body });
@@ -221,6 +232,9 @@ async function zoneRows({ browser, page, sw, off, extId, route, results }) {
   results["zone.engine.crossref.B"] = await zoneSend(off, { engine: { origin: A, docUrl: A + "/page?x=secret" },
     url: echo("B", "zone.engine.crossref.B"), method: "GET",
     requestInit: ri("include", { referrer: "http://evil.example/x" }), documentPolicy: "unsafe-url" });
+  // A rule whose Origin is another site's, with no stated Origin: the service worker's CHECK refuses it.
+  results["zone.forcedorigin.B"] = await zoneSend(off, asTop("B", "zone.forcedorigin.B",
+                                                              { forceOrigin: "https://evil.example" }));
   // Two concurrent sends of one URL as two identities: each must arrive with its own Origin.
   const same = B + "/echo?id=zone.concurrent";
   const [r1, r2] = await Promise.all([

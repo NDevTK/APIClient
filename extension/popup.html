@@ -259,6 +259,17 @@
             <option value="include">include</option>
           </select>
         </div>
+        <!-- An Origin and a Referer the person states in place of the frame's own, for testing a server's
+             CORS or CSRF checks. Empty sends the frame's own; sendPanelStatedHeaders (lib/popup-send.js) reads
+             both on every send and export. -->
+        <div class="send-url-row">
+          <label class="send-url-label" for="send-stated-origin">Origin</label>
+          <input id="send-stated-origin" type="text" spellcheck="false" placeholder="the frame's own">
+        </div>
+        <div class="send-url-row">
+          <label class="send-url-label" for="send-stated-referer">Referer</label>
+          <input id="send-stated-referer" type="text" spellcheck="false" placeholder="the frame's own">
+        </div>
         <button id="btn-send" type="button">Send Request</button>
         <div class="export-row">
           <span class="export-label">Export:</span>

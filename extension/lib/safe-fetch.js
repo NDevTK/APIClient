@@ -1347,11 +1347,12 @@ function _extractTokenList(headers, name) {
   return out;
 }
 /* Fetch §4.8 "CORS-preflight fetch" for a request (`method`, `href`, `headerList`, credentials mode, use-CORS-
-   preflight flag), with the request's origin from `identity`. Answers null on success or the name of the step
-   that failed, which is a network error. The preflight is uncredentialed and does not follow a redirect: a 3xx
-   is not an ok status. This zone provides no CORS-preflight cache, so the step "If the user agent does not
-   provide for a cache, then return response" ends it and `Access-Control-Max-Age` is not read. */
-async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, identity, signal) {
+   preflight flag), CORS-checked against `origin`, the Origin the request carries. Answers null on success or
+   the name of the step that failed, which is a network error. The preflight is uncredentialed and does not
+   follow a redirect: a 3xx is not an ok status. This zone provides no CORS-preflight cache, so the step "If
+   the user agent does not provide for a cache, then return response" ends it and `Access-Control-Max-Age` is
+   not read. */
+async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, origin, signal) {
   var unsafe = _corsUnsafeRequestHeaderNames(headerList);
   /* `Access-Control-Request-Method` and `-Headers` are forbidden request-headers (§2.2.2), which a script's
      fetch cannot set; the OPTIONS rule speakAsPreflightHeaders composes (lib/speak-as.js) supplies both. */
@@ -1363,7 +1364,7 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
   if (resp.body) {
     try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
   }
-  var cors = _corsCheck(headers, identity.origin, credentialsMode);
+  var cors = _corsCheck(headers, origin, credentialsMode);
   if (cors) return "cors-check:" + cors;
   if (!(resp.status >= 200 && resp.status <= 299)) return "status:" + resp.status;
   var methods = _extractTokenList(headers, "access-control-allow-methods");
@@ -1387,9 +1388,10 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
 /* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send` under
    lib/speak-as.js's rules: one for its own method and, when `preflightNames` is a list, one for its OPTIONS
    request. Its cookies are the identity's (cookieHeaderFor, which also sets `init.credentials`) only where
-   this zone is willing (`credentialed`); otherwise it carries none. A request with no identity runs `send`
-   as this extension. */
-async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, init, send) {
+   this zone is willing (`credentialed`); otherwise it carries none. `stated` is null, or the operator tier's
+   person-typed {origin, referer}, each of which replaces the identity's header on every rule of the send. A
+   request with no identity runs `send` as this extension. */
+async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
   if (!identity) return send();
   CHECK(typeof withSpeakAsRules === "function",
         "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
@@ -1400,7 +1402,12 @@ async function _speakAs(identity, href, method, mode, destination, credentialed,
   var rules = [{ method: method, headers: speakAsHeaders(facts, method, mode, destination, href, cookie) }];
   if (preflightNames !== null)
     rules.push({ method: "OPTIONS", headers: speakAsPreflightHeaders(facts, method, destination, href, preflightNames) });
-  return withSpeakAsRules(identity.origin, href, rules, send);
+  if (stated !== null)
+    rules.forEach(function (r) {
+      if (stated.origin !== null) r.headers["Origin"] = stated.origin;
+      if (stated.referer !== null) r.headers["Referer"] = stated.referer;
+    });
+  return withSpeakAsRules(identity.origin, href, rules, stated, send);
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   /* CORB for a script-like load, over facts already computed, answering the rule that refused or null, so
@@ -1833,10 +1840,10 @@ async function safeFetch(url, opts) {
   /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one unit. A request with an
      identity speaks as it (`_speakAs`); its failure is a network error and the request is never sent. */
   var _sent = await _speakAs(opts.identity, parsed.href, _method, mode, destination, credentialed,
-                             _preflight ? _unsafeNames : null, init, async function () {
+                             _preflight ? _unsafeNames : null, null, init, async function () {
     if (_preflight) {
       var _pf = await _corsPreflight(parsed.href, _method, opts.headers || [], opts.credentials,
-                                     opts.useCorsPreflight, opts.identity, opts.signal);
+                                     opts.useCorsPreflight, opts.identity.origin, opts.signal);
       if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + parsed.origin,
                                           [parsed.href], {}) };
     }
@@ -2078,7 +2085,11 @@ function fetchForbiddenRequestHeader(pairs) {
    showed them, and a token list there would veto their act. What a browser refuses still applies: the
    scheme, credentials in the URL, a forbidden request-header, a same-origin-mode request to another origin,
    and Fetch §4.8's preflight. The reply is returned whole, whether or not Fetch §4.10's CORS check would let
-   the frame's own script read it. */
+   the frame's own script read it.
+   `opts.stated` is the Origin and Referer the person typed into the Send panel ({origin, referer}, each null
+   for the frame's own), for testing a server's CORS or CSRF checks. This is the one tier that passes it to
+   the speak-as rule; the preflight is then CORS-checked against the stated Origin, which is what the server
+   was sent. Cookies and `Sec-Fetch-*` stay the frame's. */
 async function safeFetchOperator(url, opts) {
   CHECK(typeof senderIsExtensionDocument === "function" && senderIsExtensionDocument(opts.sender),
         "an operator send arrived from " + JSON.stringify(opts.sender && opts.sender.origin) + " — only an " +
@@ -2090,6 +2101,20 @@ async function safeFetchOperator(url, opts) {
         (opts.body === null || typeof opts.body === "string" || opts.body instanceof Uint8Array) &&
         ["cors", "no-cors", "same-origin"].indexOf(opts.mode) >= 0,
         "an operator send is missing its method, header pairs, body statement or mode");
+  CHECK(!!opts.stated && ["origin", "referer"].every(function (k) {
+          return opts.stated[k] === null || typeof opts.stated[k] === "string"; }),
+        "an operator send states no {origin, referer} — lib/send.js passes the Send panel's fields, or " +
+        "PAGE_CONTEXT_STATED_NONE for a probe");
+  var stated = opts.stated;
+  // The person's typing is input: a value that is not what the header carries is refused, never sent.
+  if (stated.origin !== null && stated.origin !== "null" &&
+      !(URL.canParse(stated.origin) && /^https?:$/.test(new URL(stated.origin).protocol) &&
+        new URL(stated.origin).origin === stated.origin))
+    return _refused("network", "stated-origin-not-an-origin:" + stated.origin, [], {});
+  if (stated.referer !== null &&
+      !(URL.canParse(stated.referer) && /^https?:$/.test(new URL(stated.referer).protocol) &&
+        new URL(stated.referer).href === stated.referer && !stated.referer.includes("#")))
+    return _refused("network", "stated-referer-not-a-url:" + stated.referer, [], {});
   var parsed;
   try { parsed = new URL(String(url)); } catch (e) { return _refused("network", "bad-url", [], {}); }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
@@ -2107,13 +2132,13 @@ async function safeFetchOperator(url, opts) {
   var init = { method: opts.method, headers: opts.headers, redirect: "follow" };
   if (opts.body !== null) init.body = opts.body;
   var sent = await _speakAs(opts.identity, parsed.href, opts.method, opts.mode, "", true, preflight ? unsafe : null,
-                            init, async function () {
+                            stated, init, async function () {
     /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant abort
        travels on. */
     try {
       if (preflight) {
         var pf = await _corsPreflight(parsed.href, opts.method, opts.headers, opts.identity.credentials, false,
-                                      opts.identity, undefined);
+                                      stated.origin !== null ? stated.origin : opts.identity.origin, undefined);
         if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + parsed.origin,
                                            [parsed.href], {}) };
       }

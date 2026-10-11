@@ -1944,6 +1944,7 @@ async function sendRequest() {
     frameId: replayFrameId,
     apiKeyOverride: currentKeyOverride,
     requestInit: sendPanelRequestInit(),
+    stated: sendPanelStatedHeaders(),
   };
 
   try {

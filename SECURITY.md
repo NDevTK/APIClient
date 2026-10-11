@@ -211,10 +211,16 @@ renderer, so a compromised renderer can neither read nor forge an operator's rep
   on a substring match.
 - The reply is the trusted zone's own fetch, returned whole whether or not the frame's own script could
   have read it under CORS.
-- Not built: a custom `Origin` or `Referer`, for testing a server's CORS or CSRF checks. Today an operator
-  send speaks only as the frame's own identity. The next member adds an explicit, visible Send-panel field.
-  It is reachable from an extension document only, never from an engine send, and the service worker's
-  identity CHECK names it.
+- A stated `Origin` or `Referer`, for testing a server's CORS or CSRF checks: the Send panel's Origin and
+  Referer fields, visible beside the credentials mode and named in the panel's note. Empty sends the frame's
+  own. `safeFetchOperator` refuses a value that is not a serialized http(s) origin (or `null`), or a
+  canonical fragment-less http(s) URL, and puts the stated value on the request's rule and its preflight's.
+  The preflight is CORS-checked against the stated Origin. Cookies and `Sec-Fetch-*` stay the frame's. An
+  export carries the stated headers too.
+  - Only the operator tier passes `stated` to the speak-as rule. `safeFetch` passes null, and its closed
+    option set refuses a `stated` option, so neither an engine send nor the tool's own sends can reach it.
+  - The service worker's CHECK admits an `Origin` or `Referer` outside the identity only when it equals
+    `stated`, and its message names that field.
 
 Measured with `testing/page_identity_probe.cjs`. The oracle is the page's own fetch from
 `http://localhost:18431` (`Referrer-Policy: unsafe-url`, a `connect-src` naming one cross-site origin, a
@@ -262,7 +268,8 @@ Neither a message nor the engine can state an identity.
   sends the computed headers with the identity's origin. The service worker CHECKs that `Origin` equals that
   origin (or is `null`), and that `Referer` is absent or same-origin with it. A send can therefore speak
   only as an origin a document has. It cannot name an arbitrary site, which a bare rule can: measured, a
-  rule set `Origin: https://bank.example`.
+  rule set `Origin: https://bank.example`. The one exception is an operator send's stated `Origin` or
+  `Referer` (above), which the install names as `stated`.
 - The zone runs one send per URL at a time. That send's rules are installed together, the zone CHECKs that
   they are exactly the rules installed for the URL, and they are removed in a `finally`. So a preflight and
   its request are one unit, and two identities never share a rule.
@@ -304,7 +311,7 @@ surface that shows them the bytes, and what it owes is a destination this zone c
 | Channel | Destination chosen by | Credentials | Enforcement |
 |---------|----------------------|-------------|-------------|
 | Analyzer HTTP (`safeFetch`) | what the bundle computed, or a seed the browser stated | cookies only on a same-origin document load | the chokepoint, above |
-| Operator sends as a frame (`safeFetchOperator`) | the person, in the popup | the frame's own, by its partition and the request's credentials mode | the popup-sender CHECK; the initiator grade; Fetch's own refusals and §4.8 preflight; forbidden request-headers refused |
+| Operator sends as a frame (`safeFetchOperator`) | the person, in the popup | the frame's own, by its partition and the request's credentials mode | the popup-sender CHECK; the initiator grade; Fetch's own refusals and §4.8 preflight; forbidden request-headers refused; a stated Origin or Referer only from the Send panel's fields, refused unless well-formed |
 | Renderer program assembly (`renderer-host.js`) | a constant list off the extension origin | none | no bundle influences it; a bundle-influenced name would make it analyzer HTTP |
 | The page's own traffic through `intercept.js`'s `fetch`, `XMLHttpRequest`, `WebSocket` and `EventSource` wrappers | the page | the page's | none needed: the wrapper calls the original and confers nothing |
 | Operator writes into a channel the page opened (`WS_SEND_MSG`, `PM_SEND_MSG`, `MC_SEND_MSG`) | the page opened the socket, port or window | the page's | the router's document→document rule; `documentId` routing; a postMessage target must be one real origin (`_isRealTargetOrigin` in `lib/popup-console.js`, DCHECKed in `lib/popup-handlers.js`) |
@@ -537,7 +544,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | A seeded page's server redirects the cookie-bearing document load to another origin | mitigated: the credentialed SOP reads the landed origin (`blocked-cors-credentialed:`), and `bridge.js` refuses to seat a cross-origin response (`cross-origin-redirect:`) |
 | The analyzer's own credentialed GET ends the person's session or destroys a resource | mitigated as a floor: GET only, and `_destructiveToken` refuses a listed path token before the wire and after a redirect for any credentialed request that is not `observed`; an unmatched path is not thereby safe |
 | A compromised renderer forges an operator's reply | not a threat: an operator send is the offscreen document's own fetch and never passes through the renderer |
-| A compromised extension page sends as an observed frame | residual: the operator tier trusts every extension document; the pages' Trusted Types policy and CSP bound it |
+| A compromised extension page sends as an observed frame | residual: the operator tier trusts every extension document, which can also state any `Origin` and `Referer`; the pages' Trusted Types policy and CSP bound it |
 | A compromised renderer drives the socket, port or window send relays | not a threat: it cannot reach them, and the channel is the page's own |
 | An automatic caller in the trusted zone makes an operator send or widens an origin | mitigated: the operator tier `CHECK`s an extension-document sender and `PAGE_CONTEXT_USER_INITIATED`, and `AST_EGRESS_POLICY` `CHECK`s the initiator; the automatic sweep is routed to `safeFetch` |
 | A page widens its own origin for exploration | mitigated: `EGRESS_POLICY` is on the command surface the router gates on the extension origin |

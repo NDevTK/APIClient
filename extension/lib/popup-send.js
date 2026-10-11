@@ -526,15 +526,20 @@ function renderSendUrl() {
   }
 
   var init = sendPanelRequestInit();
+  var typed = sendPanelStatedHeaders();
   var stated = function (v, unstated) { return v === null ? unstated : v; };
   row.appendChild(domElement("div", { class: "send-url-note" }, [
-    "Sent from this extension as the frame the request was observed in — its Origin, its Referer and its " +
-    "cookies — with mode " + stated(init.mode, "not stated") + ", referrer " +
+    "Sent from this extension as the frame the request was observed in — " +
+    (typed.origin === null ? "its Origin" : "the Origin you stated, " + typed.origin + ", in place of its own") +
+    ", " +
+    (typed.referer === null ? "its Referer" : "the Referer you stated, " + typed.referer + ", in place of its own") +
+    " and its cookies — with mode " + stated(init.mode, "not stated") + ", referrer " +
     stated(init.referrer === "about:client" ? "the page's URL" : init.referrer === "" ? "none" : init.referrer,
            "not stated") + ", referrer policy " +
     stated(init.referrerPolicy === "" ? "the document's" : init.referrerPolicy, "not stated") +
     ". What is not stated is fetch's default (an unstated policy is strict-origin-when-cross-origin). " +
-    "Cookie, Origin and Referer cannot be typed as headers: the browser owns them."]));
+    "Cookie, Origin and Referer cannot be typed as headers: the browser owns them, and Origin and Referer " +
+    "are stated only in their own fields below."]));
   row.appendChild(domElement("div", { class: "send-url-note" }, [
     "Not decided here: an API key whose learned location is the URL is attached downstream as a `key` " +
     "query parameter, from a key store this panel cannot read — whether that happens to this request is " +
@@ -556,6 +561,16 @@ function sendPanelRequestInit() {
     referrer: observed === null ? null : observed.referrer,
     referrerPolicy: observed === null ? null : observed.referrerPolicy,
   };
+}
+
+/* The Origin and Referer the person typed in place of the frame's own (#send-stated-origin and
+   #send-stated-referer), each null when its field is empty. The offscreen's operator tier refuses a value
+   that is not what the header carries. */
+function sendPanelStatedHeaders() {
+  var o = document.getElementById("send-stated-origin"), r = document.getElementById("send-stated-referer");
+  DCHECK(!!o && !!r, "the Send panel carries no stated Origin or Referer field — extension/popup.html declares both");
+  return { origin: o.value.trim() === "" ? null : o.value.trim(),
+           referer: r.value.trim() === "" ? null : r.value.trim() };
 }
 
 function loadSendRequestInit(req) {
