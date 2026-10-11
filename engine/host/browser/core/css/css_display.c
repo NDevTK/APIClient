@@ -64,15 +64,15 @@ static int css_display_tokens(const char *text, CssKeyword *out)
     }
 }
 
-bool css_display_parse(const char *text, CssDisplay *out)
+/* §2's `Value:` line over `n` keywords already identified, so the one-keyword comparison below runs the grammar
+   with no text to read. */
+static bool css_display_parse_keywords(const CssKeyword *t, int n, CssDisplay *out)
 {
-    CssKeyword t[CSS_DISPLAY_MAX_TOKENS], outer = CSS_KEYWORD_INVALID, inner = CSS_KEYWORD_INVALID;
+    CssKeyword outer = CSS_KEYWORD_INVALID, inner = CSS_KEYWORD_INVALID;
     bool list_item = false;
-    int n, i;
+    int i;
     unsigned k;
 
-    DCHECK(text != NULL && out != NULL, "a display value was parsed from no text or into nowhere");
-    n = css_display_tokens(text, t);
     if (n <= 0) return false;
     if (n == 1) {
         if (css_keyword_set_has(CSS_KEYWORDS_DISPLAY_INTERNAL, t[0])) {
@@ -111,6 +111,14 @@ bool css_display_parse(const char *text, CssDisplay *out)
     if (outer == CSS_KEYWORD_INVALID) outer = inner == CSS_KEYWORD_RUBY ? CSS_KEYWORD_INLINE : CSS_KEYWORD_BLOCK;
     *out = css_display_pair(outer, inner, list_item);
     return true;
+}
+
+bool css_display_parse(const char *text, CssDisplay *out)
+{
+    CssKeyword t[CSS_DISPLAY_MAX_TOKENS];
+
+    DCHECK(text != NULL && out != NULL, "a display value was parsed from no text or into nowhere");
+    return css_display_parse_keywords(t, css_display_tokens(text, t), out);
 }
 
 CssDisplay css_display_blockify(CssDisplay d)
@@ -183,7 +191,7 @@ bool css_display_is_box(CssDisplay d, CssKeyword k)
 bool css_display_spells(CssDisplay d, CssKeyword k)
 {
     CssDisplay v = css_display_keyword(CSS_DISPLAY_BOX, CSS_KEYWORD_INVALID);
-    bool ok = css_keyword_set_has(CSS_KEYWORDS_DISPLAY, k) && css_display_parse(css_keyword_name(k), &v);
+    bool ok = css_keyword_set_has(CSS_KEYWORDS_DISPLAY, k) && css_display_parse_keywords(&k, 1, &v);
 
     DCHECKF(ok, "keyword %u was asked of a display value, and it is not a one-keyword `display` value",
             (unsigned)k);
