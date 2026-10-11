@@ -5658,24 +5658,18 @@ static StepUnit engine_orphan_unit(int r) {
 }
 
 /* A modelled potential close request: HTML §6.10.1 Close requests' preamble, performed by an agent with no user.
- * §6.10.1's examples (Esc, an Android back gesture, an assistive technology's dismiss, a game controller's back
- * button) are all user acts, so a run that waits for one never reaches the page's `cancel` and `close` handlers,
- * a dialog's dismissal or a popover's light-dismiss; modelling the arrival is the same kind of act as driving an
- * uncalled function. The arrival is one frame on this flow (the task the preamble queues), preemptible, parkable
- * and forkable at step 7's history-action activation; nothing loops over close requests.
- *
- * This flow, not a sibling: there is one arrival to model and this flow has nothing left to run, unlike the
- * orphan take's many bodies. It stops with no counter or cap: §6.10.2 process close watchers takes the last group,
- * so a document with three groups is modelled three times, and a task that reaches step 9's "Otherwise, there was
- * nothing watching for a close request" has established that nothing is left; that completion value
- * (core/html/close_request.h) is latched on the flow. A flow that closed something is asked again next step, and a
- * page that adds a watcher in its own `close` handler keeps being modelled.
- *
- * Everything past it is forced: it rests on an arrival nobody performed, so the mark is taken in the same operation
- * as the frame, before one opcode runs, and from then pending_prov_compose stamps every park PROV_FORCED and
- * endpoint.c keeps sightings out of the derived pool. The mark is monotone. Returns 1 if it installed the task as
- * this flow's frame; 0 means nothing is left to model or there is no fully active document to target, which lets
- * the caller finish. */
+ * §6.10.1's examples (Esc, a back gesture, an assistive technology's dismiss) are user acts, so without this a run
+ * never reaches `cancel`/`close` handlers, a dialog's dismissal or a popover's light-dismiss; modelling the arrival
+ * is the same kind of act as driving an uncalled function. The arrival is one frame on this flow (the task the
+ * preamble queues), preemptible, parkable and forkable at step 7's history-action activation.
+ * This flow, not a sibling: there is one arrival and this flow has nothing left to run. No counter or cap:
+ * §6.10.2 takes the last group, so three groups are modelled three times, and step 9's "nothing watching for a
+ * close request" (core/html/close_request.h) is latched on the flow. A flow that closed something is asked again
+ * next step, so a page that adds a watcher in its own `close` handler keeps being modelled.
+ * Everything past it is forced: the mark is taken with the frame, before one opcode runs, so pending_prov_compose
+ * stamps every park PROV_FORCED and endpoint.c keeps sightings out of the derived pool; the mark is monotone.
+ * Returns 1 if it installed the task as this flow's frame; 0 when nothing is left to model or no fully active
+ * document is there to target, which lets the caller finish. */
 static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     lxb_dom_node_t *document;
 
