@@ -4214,6 +4214,33 @@ static void flow_ix_check(void) {
     DCHECKF(a.best == ref,
             "the order's index answered the runnable maximum differently from a walk (index slot %d weight %.17g, "
             "walk slot %d weight %.17g)", a.best ? a.best->reg_i : -1, a.bw, ref ? ref->reg_i : -1, rw);
+    /* And the two other shapes of the ask, against the walk's own folds: the reference member seeded (the
+       dispatch ask keeps an incumbent on a tie) and excluded (the preempt hook's rival). */
+    if (ref) {
+        const Flow *ex = NULL, *se = NULL; double ew = 0.0, sew = 0.0;
+        double sw0 = flow_weight(ref);
+        for (int i = 0; i < g_flows_n; i++) {
+            const Flow *m = g_flows[i];
+            double w;
+            if (m == ref || flow_host_owed(m)) continue;
+            w = flow_weight(m);
+            if (!ex || w > ew) { ex = m; ew = w; }
+        }
+        se = (!ex || sw0 >= ew) ? ref : ex; sew = se == ref ? sw0 : ew;
+        a = flow_ix_query(NULL, ref);
+        DCHECKF(a.best == ex, "the order's index answered the runnable maximum excluding a member differently from "
+                "a walk (index slot %d, walk slot %d)", a.best ? a.best->reg_i : -1, ex ? ex->reg_i : -1);
+        a = flow_ix_query(ref, NULL);
+        DCHECKF(a.best == se && a.bw == sew, "the order's index answered the runnable maximum seeded with a member "
+                "differently from a walk (index slot %d, walk slot %d)", a.best ? a.best->reg_i : -1, se->reg_i);
+        /* A seed tied with the maximum keeps the thread: the case a class answers through a member other than
+           the seed and then folds the seed back over it. */
+        if (ex && ew == sw0) {
+            a = flow_ix_query(ex, NULL);
+            DCHECKF(a.best == ex, "the order's index handed a tie away from its seed (index slot %d, seed slot %d)",
+                    a.best ? a.best->reg_i : -1, ex->reg_i);
+        }
+    }
 }
 #endif
 
