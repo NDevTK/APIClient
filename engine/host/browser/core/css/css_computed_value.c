@@ -276,6 +276,14 @@ static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name)
     if (!css_var_references(cascaded)) return cascaded;
     sub = css_cv_substitute_for(el, cascaded);
     free(cascaded);
+    /* css-values-5 "Invalid Substitution"'s "Parse result according to prop’s grammar" step, for a longhand
+       whose grammar core/css/css_shorthand.h owns: the parse let the `var()` through unjudged. A row typed by
+       its own computed-value rule (a length, a keyword) answers the same step in its parse. */
+    if (sub != NULL && css_shorthand_validates_longhand(name)) {
+        out = css_shorthand_longhand_value(name, sub);
+        free(sub);
+        sub = out;
+    }
     return sub != NULL ? sub : css_cv_strdup("unset");
 }
 

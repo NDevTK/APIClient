@@ -15,6 +15,7 @@
 #include "core/css/css_length.h"
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_shorthand.h"
+#include "core/css/css_var.h"
 
 static char *css_sh_strdup(const char *s)
 {
@@ -1557,6 +1558,12 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
 
     (void)side;
     DCHECK(value != NULL, "a longhand declaration was validated with no value");
+    /* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Resolving in Properties": "If a property
+       value contains one or more arbitrary substitution functions, and all of those functions are themselves
+       syntactically valid according to their argument grammars, the entire value’s grammar must be assumed to
+       be valid at parse time." The grammar is asked after substitution, in core/css/css_computed_value.c. This
+       is the scan the shorthand arm of css_style_declaration.c's collection asks. */
+    if (css_var_references(value)) return css_sh_strdup(value);
     if (css_background_shorthand_validates_longhand(longhand))
         return css_background_shorthand_longhand_value(longhand, value);
     DCHECK(css_shorthand_validates_longhand(longhand),
