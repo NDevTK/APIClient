@@ -1399,15 +1399,24 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
     return filled;
 }
 
+#define WPT_CHILD_MAX 32
+/* A child document's channel carries lines nobody asked for only in its boot round, the stretch between its
+   spawn and the `S` it writes when its frontier first rests; after that it speaks only to answer an ask
+   (wpt_child_ask). These two are that round's half of the pump, defined beside the child table. */
+static int wpt_children_booting_fds(struct pollfd *pfd, int *which);
+static int wpt_child_take_unasked(int which);
+
 /* THE HOST'S HALF OF ONE SLICE BOUNDARY: move every connection as far as it goes, deliver the requests that
-   finished, and answer how many registers that filled.
+   finished, take what a booting child document wrote (its notices, routed, and its `S`), and answer how many
+   registers and routed notices that filled.
    `block` is asked ONLY where the frontier has nothing runnable and this host has nothing else to pay — see
    the loop in main. It is an INFINITE poll and never a deadline: §NO BOUNDS. */
 static int wpt_net_pump(JSContext *ctx, int block)
 {
-    struct pollfd pfd[WPT_CONN_MAX];
+    struct pollfd pfd[WPT_CONN_MAX + WPT_CHILD_MAX];
     uint64_t map[WPT_CONN_MAX];
-    int nf = 0, owned = 0, i, delivered = 0;
+    int which[WPT_CHILD_MAX];
+    int nf = 0, nc, owned = 0, i, delivered = 0;
 
     for (i = 0; i < g_conn_n; i++) {
         WptRequest *r = g_conn[i].owner ? wpt_request_find(g_conn[i].owner) : NULL;
@@ -1420,12 +1429,16 @@ static int wpt_net_pump(JSContext *ctx, int block)
         map[nf++] = g_conn[i].id;
         if (r) owned++;
     }
-    DCHECK(!block || owned > 0, "this host was asked to WAIT with no request outstanding on any connection — a "
-                                "poll with nothing to wait for is a hang, and the caller that asked for it "
-                                "believes an answer is coming that nobody is going to send");
-    if (nf) {
-        int rc = poll(pfd, (nfds_t)nf, block ? -1 : 0);
+    nc = wpt_children_booting_fds(pfd + nf, which);
+    DCHECK(!block || owned > 0 || nc > 0,
+           "this host was asked to WAIT with no request outstanding on any connection and no child document "
+           "still in its boot round — a poll with nothing to wait for is a hang, and the caller that asked for "
+           "it believes an answer is coming that nobody is going to send");
+    if (nf + nc) {
+        int rc = poll(pfd, (nfds_t)(nf + nc), block ? -1 : 0);
         CHECK(rc >= 0 || errno == EINTR, "wpt: poll over the corpus connections failed");
+        for (i = 0; i < nc; i++)
+            if (pfd[nf + i].revents) delivered += wpt_child_take_unasked(which[i]);
         /* BY ID, NOT BY INDEX: advancing one connection can release it (a hang-up, a §9.3.1 retry) and the
            pool compacts, so the slot this row named may now hold a different connection entirely. */
         for (i = 0; i < nf; i++) {
@@ -1608,9 +1621,8 @@ static int wpt_issue_pending(void)
  * process, nor a wasm instance, nor a session, nor a park. The answer carries its TYPE because `otherW.length`
  * is a number and a page compares it with `===` — an answer that arrived as the string "0" would satisfy a
  * loose check and prove only that bytes moved. */
-#define WPT_CHILD_MAX 32
-
-typedef struct { char *name; char *origin; int to, from; pid_t pid; } ChildDoc;
+/* `at_rest` is whether the child has written the `S` that ends its boot round. */
+typedef struct { char *name; char *origin; int to, from; pid_t pid; int at_rest; } ChildDoc;
 static ChildDoc g_children[WPT_CHILD_MAX];
 static int g_children_n;
 static const char *g_self_exe;   /* argv[0], which is what a child navigable is re-executed from */
@@ -1741,6 +1753,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
     g_children[g_children_n].to = down[1];
     g_children[g_children_n].from = up[0];
     g_children[g_children_n].pid = pid;
+    g_children[g_children_n].at_rest = 0;
     g_children_n++;
 }
 
@@ -1798,8 +1811,57 @@ static const char *wpt_child_ask(ChildDoc *c, const char *op)
             free(line);
             continue;
         }
+        /* The end of the child's boot round, if this ask was written before it rested. */
+        if (!strcmp(buf, "S")) { c->at_rest = 1; continue; }
         return buf;
     }
+}
+
+static int wpt_children_booting_fds(struct pollfd *pfd, int *which)
+{
+    int i, n = 0;
+
+    for (i = 0; i < g_children_n; i++) {
+        if (g_children[i].at_rest) continue;
+        pfd[n].fd = g_children[i].from;
+        pfd[n].events = POLLIN;
+        pfd[n].revents = 0;
+        which[n++] = i;
+    }
+    return n;
+}
+
+/* One line a booting child wrote unasked: a notice, routed as wpt_child_ask routes one and counted as work,
+   or its `S`. A child that closes its channel before resting ended its boot round by dying, which no answer
+   in this protocol covers. */
+static int wpt_child_take_unasked(int which)
+{
+    static char *buf;
+    static size_t buf_cap;
+    ChildDoc *c = &g_children[which];
+    char *line;
+
+    CHECKF(wpt_child_read_line(c, &buf, &buf_cap),
+           "wpt: child document %s closed its channel before its boot round rested", c->name);
+    if (!strcmp(buf, "S")) { c->at_rest = 1; return 0; }
+    CHECKF(!strncmp(buf, "N\t", 2),
+           "wpt: child document %s wrote a line nobody asked for that is not a notice: [%.120s]", c->name, buf);
+    line = strdup(buf + 2);
+    CHECK(line != NULL, "wpt: OOM relaying a child's notice");
+    DCHECK(g_wpt_ctx != NULL, "a child relayed a notice before this host had a document to route it into");
+    wpt_route_notice(g_wpt_ctx, line, c->origin);
+    free(line);
+    return 1;
+}
+
+/* Whether any child document is still in its boot round, and so may still write a notice unasked. */
+static int wpt_children_booting(void)
+{
+    int i;
+
+    for (i = 0; i < g_children_n; i++)
+        if (!g_children[i].at_rest) return 1;
+    return 0;
 }
 
 static void wpt_children_free(void)
@@ -3501,6 +3563,10 @@ static int wpt_child_main(int argc, char **argv)
        than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
        post has to be on this channel before the parent asks anything. */
     wpt_child_run(ctx, NULL);
+    /* The end of this child's boot round: everything it wrote so far it wrote unasked, and from here it writes
+       only to answer (the parent's pump stops watching this channel on reading it). */
+    fputs("S\n", stdout);
+    fflush(stdout);
 
     while (fgets(line, sizeof line, stdin)) {
         char *nl = strchr(line, '\n');
@@ -3863,13 +3929,20 @@ int main(int argc, char **argv)
                owed something and this host says it owes nothing, so the flows parked here are waiting for a
                reply nobody is going to send. In release there is nothing to fix it with, so the run ends with
                the flows parked and the teardown names what was dropped. */
-            DCHECK(g_inflight_n > 0,
+            /* A REFERENCED DOCUMENT AT REST IS THE THIRD ANSWER. Its last timeline waits to be asked something by
+               a peer (engine.h's engine_set_referenced — this document created a navigable another instance
+               hosts), so with nothing in flight it waits on the children still in their boot round, the only
+               channels that can write to it unasked; once every child has rested nothing can arrive, which is
+               trusted.mjs's all-stalled end, and the park below takes it. */
+            int booting = wpt_children_booting();
+
+            DCHECK(g_inflight_n > 0 || booting || engine_referenced(),
                    "the frontier stalled on work this host says it owes, this host filled NOTHING, and it has "
                    "NOTHING IN FLIGHT — the stall hook and the network edge are two answers to one question "
                    "and they disagree, so the flows parked here are waiting for a reply nobody will send");
             /* AND THIS END PAGES FOR THE SAME REASON, so the two ways this host stops are one operation: a
                frontier parked on a reply nobody will send is a frontier with everything to lose. */
-            if (!g_inflight_n) { engine_request_park(); g_parking = 1; continue; }
+            if (!g_inflight_n && !booting) { engine_request_park(); g_parking = 1; continue; }
             wpt_net_pump(ctx, /*block*/1);
         }
     }
