@@ -1,5 +1,5 @@
-/* The provisioning notices' field tables: what `navigable.create`, `navigable.swap` and `navigable.navigate`
- * carry, in order, as one declaration every composer and reader derives its indices from.
+/* The navigable notices' field tables: what `navigable.create`, `navigable.swap`, `navigable.navigate` and
+ * `navigable.request` carry, in order, as one declaration every composer and reader derives its indices from.
  *
  * A notice is the operation name and then one TAB before each field (solver/engine.h's engine_notice_build).
  * The enumerators below are a field's position among the fields, which is the composer's array index; a reader
@@ -51,12 +51,23 @@
 
 enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_REMAINDER };
 
+/* `navigable.request`: the HTML §7.4.5 request facts of a child navigable `creator` created at `address`
+   (core/frame/navigable.c's nav_announce_child_request), for the zone's own load of the same frame. */
+#define NAVIGABLE_REQUEST_FIELDS(X)                                                                        \
+    X(CREATOR, creator, TOKEN)          /* the creating document's world name */                          \
+    X(DESTINATION, destination, TOKEN)  /* Fetch §2.2.5's destination of the container */                 \
+    X(REFERRER_POLICY, referrerPolicy, TOKEN) /* after Fetch §4.1 Main fetch, possibly empty */           \
+    X(ADDRESS, address, TOKEN)          /* the address the child is navigated to */
+
 #define NAVIGABLE_NOTICE_ENUM_CREATE(id, js, enc) NAVIGABLE_CREATE_##id,
 #define NAVIGABLE_NOTICE_ENUM_PROVISION(id, js, enc) NAVIGABLE_PROVISION_##id,
+#define NAVIGABLE_NOTICE_ENUM_REQUEST(id, js, enc) NAVIGABLE_REQUEST_##id,
 enum { NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_ENUM_CREATE) NAVIGABLE_CREATE_N };
 enum { NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_ENUM_PROVISION) NAVIGABLE_PROVISION_N };
+enum { NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_ENUM_REQUEST) NAVIGABLE_REQUEST_N };
 #undef NAVIGABLE_NOTICE_ENUM_CREATE
 #undef NAVIGABLE_NOTICE_ENUM_PROVISION
+#undef NAVIGABLE_NOTICE_ENUM_REQUEST
 
 /* A record has at most one REMAINDER and it is the last field: the count of remainders, and the sum of their
    positions, are compile-time sums over the table. */
@@ -66,6 +77,9 @@ enum { NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_ENUM_PROVISION) NAVIGABLE_PRO
 #define NAVIGABLE_NOTICE_COUNT_PROVISION(id, js, enc) + NAVIGABLE_NOTICE_IS_REMAINDER(enc)
 #define NAVIGABLE_NOTICE_AT_PROVISION(id, js, enc) \
     + (NAVIGABLE_NOTICE_IS_REMAINDER(enc) ? NAVIGABLE_PROVISION_##id : 0)
+#define NAVIGABLE_NOTICE_COUNT_REQUEST(id, js, enc) + NAVIGABLE_NOTICE_IS_REMAINDER(enc)
+#define NAVIGABLE_NOTICE_AT_REQUEST(id, js, enc) \
+    + (NAVIGABLE_NOTICE_IS_REMAINDER(enc) ? NAVIGABLE_REQUEST_##id : 0)
 _Static_assert((0 NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_COUNT_CREATE)) == 0 ||
                ((0 NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_COUNT_CREATE)) == 1 &&
                 (0 NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_AT_CREATE)) == NAVIGABLE_CREATE_N - 1),
@@ -74,10 +88,16 @@ _Static_assert((0 NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_COUNT_PROVISION)) 
                ((0 NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_COUNT_PROVISION)) == 1 &&
                 (0 NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_AT_PROVISION)) == NAVIGABLE_PROVISION_N - 1),
                "the provision notice has a REMAINDER that is not its one last field");
+_Static_assert((0 NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_COUNT_REQUEST)) == 0 ||
+               ((0 NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_COUNT_REQUEST)) == 1 &&
+                (0 NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_AT_REQUEST)) == NAVIGABLE_REQUEST_N - 1),
+               "the request notice has a REMAINDER that is not its one last field");
 #undef NAVIGABLE_NOTICE_COUNT_CREATE
 #undef NAVIGABLE_NOTICE_AT_CREATE
 #undef NAVIGABLE_NOTICE_COUNT_PROVISION
 #undef NAVIGABLE_NOTICE_AT_PROVISION
+#undef NAVIGABLE_NOTICE_COUNT_REQUEST
+#undef NAVIGABLE_NOTICE_AT_REQUEST
 #undef NAVIGABLE_NOTICE_IS_REMAINDER
 
 #endif

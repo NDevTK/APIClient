@@ -1437,17 +1437,21 @@ static char *nav_request_referrer_policy(JSContext *ctx, const NavLoadState *s)
     return out;
 }
 
-/* `navigable.request<TAB><creator><TAB><destination><TAB><referrer policy><TAB><url>`: the §7.4.5 request facts
-   of a child navigable document `creator` created at `url`, its destination and its request referrer policy after
-   Fetch §4.1 Main fetch (possibly empty), announced to the trusted zone for its own load of the same frame. The
-   address is last because a URL holds no tab and a policy may be empty. */
+/* `navigable.request` (navigable_notice.h's request table): the §7.4.5 request facts of a child navigable this
+   document created at `addr`, its destination and its request referrer policy after Fetch §4.1 Main fetch
+   (possibly empty), announced to the trusted zone for its own load of the same frame. */
 static void nav_announce_child_request(JSContext *ctx, const char *addr, JSValueConst container,
                                        const char *request_policy, const char *item)
 {
     char *dest = nav_container_destination(container);
     char *policy = nav_main_fetch_referrer_policy(request_policy, item);
-    const char *const fields[] = { world_doc_name(document_doc(ctx)), dest, policy, addr };
-    char *op = engine_notice_build("navigable.request", fields, sizeof fields / sizeof fields[0]);
+    const char *const fields[NAVIGABLE_REQUEST_N] = {
+        [NAVIGABLE_REQUEST_CREATOR] = world_doc_name(document_doc(ctx)),
+        [NAVIGABLE_REQUEST_DESTINATION] = dest,
+        [NAVIGABLE_REQUEST_REFERRER_POLICY] = policy,
+        [NAVIGABLE_REQUEST_ADDRESS] = addr,
+    };
+    char *op = engine_notice_build("navigable.request", fields, NAVIGABLE_REQUEST_N);
 
     engine_host_notify(ctx, op);
     free(op);

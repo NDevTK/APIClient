@@ -50,7 +50,8 @@ function parseList(h, name) {
 
 function headerTable() {
   const h = readFileSync(HEADER, "utf8");
-  return { create: parseList(h, "NAVIGABLE_CREATE_FIELDS"), provision: parseList(h, "NAVIGABLE_PROVISION_FIELDS") };
+  return { create: parseList(h, "NAVIGABLE_CREATE_FIELDS"), provision: parseList(h, "NAVIGABLE_PROVISION_FIELDS"),
+           request: parseList(h, "NAVIGABLE_REQUEST_FIELDS") };
 }
 
 function jsText(t) {
@@ -62,11 +63,12 @@ function jsText(t) {
     "EDIT.\n" +
     "// Each field's index in a provisioning notice split on TAB (index 0 is the operation name), `parts`,\n" +
     "// the split length of a complete record, and `encoding`, each field's encoding. `create` is\n" +
-    "// navigable.create; `provision` is navigable.swap and navigable.navigate. A `var`, so a vm context's\n" +
-    "// global object carries it.\n" +
+    "// navigable.create; `provision` is navigable.swap and navigable.navigate; `request` is\n" +
+    "// navigable.request. A `var`, so a vm context's global object carries it.\n" +
     "var NAVIGABLE_NOTICE = Object.freeze({\n" +
     `  create: ${obj(t.create)},\n` +
     `  provision: ${obj(t.provision)},\n` +
+    `  request: ${obj(t.request)},\n` +
     "});\n";
 }
 
@@ -90,8 +92,8 @@ if (import.meta.main) {
     process.exit(0);
   }
   writeFileSync(JS_OUT, TEXT);
-  console.log(`[noticegen] create ${TABLE.create.parts} parts, provision ${TABLE.provision.parts} parts -> ` +
-              "extension/lib/navigable-notice.js");
+  console.log(`[noticegen] create ${TABLE.create.parts} parts, provision ${TABLE.provision.parts} parts, ` +
+              `request ${TABLE.request.parts} parts -> extension/lib/navigable-notice.js`);
 } else if (readFileSync(JS_OUT, "utf8") !== TEXT) {
   throw new Error("[noticegen] extension/lib/navigable-notice.js is not what navigable_notice.h renders, so the " +
                   "extension would index notices by a table the engine no longer writes — run " +

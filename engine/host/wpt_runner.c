@@ -1662,6 +1662,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 /* Field `id` of a split create or provision record (navigable_notice.h): the operation name is f[0]. */
 #define WPT_CREATE(id) f[1 + NAVIGABLE_CREATE_##id]
 #define WPT_PROVISION(id) f[1 + NAVIGABLE_PROVISION_##id]
+#define WPT_REQUEST(id) f[1 + NAVIGABLE_REQUEST_##id]
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
@@ -1790,11 +1791,12 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        refusal is explicit because a silently dropped notice is invisible at the emitting end (the DFAIL below).
        The grammar is still asserted: a malformed record is a writer that has changed, whatever this host does
        with it. */
-    /* `navigable.request <creator> <destination> <referrer policy> <url>`: a child navigable's request facts
+    /* `navigable.request`, navigable_notice.h's request table: a child navigable's request facts
        (core/frame/navigable.c), which the trusted zone speaks a sub-frame seed with. A WPT run loads no seed, so
        the record is read for its grammar alone. */
-    if (nf == 5 && !strcmp(f[0], "navigable.request")) {
-        DCHECK(*f[1] != '\0' && *f[2] != '\0' && *f[4] != '\0',
+    if (nf == 1 + NAVIGABLE_REQUEST_N && !strcmp(f[0], "navigable.request")) {
+        DCHECK(*WPT_REQUEST(CREATOR) != '\0' && *WPT_REQUEST(DESTINATION) != '\0' &&
+               *WPT_REQUEST(ADDRESS) != '\0',
                "a navigable.request notice named no creator, destination or address — core/frame/navigable.c "
                "writes all three non-empty");
         free(whole);

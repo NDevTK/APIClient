@@ -3692,12 +3692,14 @@ async function hostNotice(eng, line) {
   /* Field indices from lib/navigable-notice.js, which engine/noticegen.mjs writes from the engine's
      navigable_notice.h, so no index here is written by hand. */
   const C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
-  /* `navigable.request <creator> <destination> <referrer policy> <url>` — a child navigable's HTML §7.4.5 request
-     facts, which a sub-frame seed of that address speaks with (seedChildRequest). */
+  /* `navigable.request`, navigable_notice.h's request table — a child navigable's HTML §7.4.5 request facts,
+     which a sub-frame seed of that address speaks with (seedChildRequest). */
   if (f[0] === "navigable.request") {
-    DCHECK(f.length === 5 && f[1] !== "" && URL.canParse(f[4]),
-           "a navigable.request notice is not `<creator> <destination> <referrer policy> <url>`: " + line);
-    childRequestRecord(f[1], new URL(f[4]).href, { destination: f[2], referrerPolicy: f[3] });
+    const R = NAVIGABLE_NOTICE.request;
+    DCHECK(f.length === R.parts && f[R.creator] !== "" && URL.canParse(f[R.address]),
+           "a navigable.request notice does not match lib/navigable-notice.js's request table: " + line);
+    childRequestRecord(f[R.creator], new URL(f[R.address]).href,
+                       { destination: f[R.destination], referrerPolicy: f[R.referrerPolicy] });
     return;
   }
   if (f[0] === "navigable.create") {

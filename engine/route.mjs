@@ -823,11 +823,12 @@ async function drainNotices(e) {
            `route declaration carries an address and a provenance and is ranked by value against every other ` +
            `work item, which is extension/bridge.js's Level-1 order and nothing this process has`);
     }
-    /* `navigable.request <creator> <destination> <referrer policy> <url>` — a child navigable's request facts,
-       which only extension/bridge.js's seed load reads; this driver checks the grammar. */
+    /* `navigable.request`, navigable_notice.h's request table — a child navigable's request facts, which only
+       extension/bridge.js's seed load reads; this driver checks the grammar. */
     else if (f[0] === 'navigable.request') {
-      if (f.length !== 5 || !f[1] || !f[2] || !f[4])
-        fail(`a navigable.request notice is not <creator> <destination> <referrer policy> <url>: ${n}`);
+      const R = NAVIGABLE_NOTICE.request;
+      if (f.length !== R.parts || !f[R.creator] || !f[R.destination] || !f[R.address])
+        fail(`a navigable.request notice does not match navigable_notice.h's request table: ${n}`);
     }
     else throw new Error('a notice this host does not act on: ' + f[0]);
   }
