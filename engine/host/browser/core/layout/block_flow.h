@@ -499,6 +499,10 @@ typedef struct {
    come to disagree about where a margin collapsed. */
 size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out);
 
+/* The same enumeration without a drive of its own: false ("not yet") when the walk deferred a contribution,
+   with nothing stored; true with the boxes at `*out` (the caller's to free) and their number at `*count`. */
+bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count);
+
 /* CSS 2.1 §10.6.3's (and, for a box that establishes a block formatting context, §10.6.7's) CONTENT-BASED
    HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that BEHAVES AS AUTO (css-sizing-3
    §3.2.1, `used_value_height_behaves_as_auto`), which is a computed `auto` and also a percentage whose

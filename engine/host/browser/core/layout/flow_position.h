@@ -108,4 +108,8 @@ typedef struct {
  * `el` must be a box on a line (`inline` or `inline-block`, in normal flow, `horizontal-tb`). */
 size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out);
 
+/* The same rectangles without a drive of their own: false ("not yet") when the establishing context or its
+   origin deferred a question, with nothing stored; true with the array at `*out` and its count at `*count`. */
+bool flow_inline_fragment_rects_ask(lxb_dom_element_t *el, FlowRect **out, size_t *count);
+
 #endif

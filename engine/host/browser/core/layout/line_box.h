@@ -277,6 +277,12 @@ typedef struct {
 size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                  LineBoxFragment **out);
 
+/* The same fragments without a drive of their own: false ("not yet") when the establishing context's §9.4.1
+   walk deferred a contribution, with nothing stored; true with the array at `*out` and its count at `*count`.
+   `line_box_inline_fragments` is this ask inside a drive (core/layout/layout_job.h). */
+bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                   LineBoxFragment **out, size_t *count);
+
 /* Where a non-replaced inline box's own margin edges reach on one physical axis: `*lo` and `*hi` receive the
  * extreme over all of its fragments, in the frame `line_box_content_span` and `LineBoxFragment` use (offsets
  * from `*establishing`'s content box origin), with `*establishing` receiving that block container.
@@ -306,7 +312,8 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
    The extreme is over every fragment, not the two ends, because "negative values for margin properties are
    allowed": `margin-left: -20px` puts the first fragment's margin edge inside its border edge, and a middle
    fragment's split edge, which carries no margin, can then be outermost. */
-void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
-                                 bool vertical, CssPx *lo, CssPx *hi);
+/* Answers false ("not yet"), with nothing written, where `line_box_inline_fragments_ask` does. */
+bool line_box_inline_margin_span_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                     bool vertical, CssPx *lo, CssPx *hi);
 
 #endif

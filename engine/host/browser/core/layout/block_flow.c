@@ -2751,23 +2751,26 @@ CssPx block_flow_static_child_top(lxb_dom_element_t *el)
     return top;
 }
 
-size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
+bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count)
 {
     BfAnonSink sink;
     CssPx unused = css_px(0.0);
     bool found = false;
     char *d;
     bool container;
+    BfBox b;
 
     DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with no element");
     DCHECK(out != NULL,
            "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with nowhere to put them. A count alone "
            "names no run and no position, so a caller holding one would know that a box exists and have no way "
            "to reach the formatting context inside it — which is the only thing this entry is asked for");
+    DCHECK(count != NULL, "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with nowhere to count them");
     sink.v = NULL;
     sink.n = 0;
     sink.cap = 0;
     *out = NULL;
+    *count = 0;
     /* §9.2.1.1's sentence has TWO conjuncts — "if a BLOCK CONTAINER BOX … HAS A BLOCK-LEVEL BOX INSIDE IT" —
        and both are asked here rather than left to the walk, because a zero is that sentence ANSWERING. See
        block_flow.h for what each shape of zero means; every one of them is a positive statement about which
@@ -2775,13 +2778,16 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
     d = bf_computed(el, "display");
     container = block_flow_display_is_block_container(d);
     free(d);
-    if (!container) return 0;
-    if (bf_content_kind(el) != BF_CONTENT_MIXED) return 0;
+    if (!container) return true;
+    if (bf_content_kind(el) != BF_CONTENT_MIXED) return true;
     /* §9.4.1's STACK IS RUN, because that is where §9.2.1.1's boxes are generated and where their positions
        come from. It is run whatever this container's `height` says — `bf_height_needs_content` decides whether
        a box's own content decides ITS SIZE, which is a different question from where the boxes inside it are,
        and a container with a declared height is exactly the one whose text can overflow it. */
-    (void)bf_layout_driven(el, NULL, &unused, &found, &sink, NULL, BF_BASELINE_NONE);
+    if (!bf_layout(el, NULL, &unused, &found, &sink, NULL, BF_BASELINE_NONE, &b)) {
+        free(sink.v);
+        return false;
+    }
     DCHECK(!found, "the anonymous-box walk reported placing a box it was not looking for");
     DCHECK(sink.n > 0,
            "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "
@@ -2790,5 +2796,17 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
            "per-child predicate, and the walk wraps every maximal inline-level run it meets — so an empty "
            "answer is one classification having been asked twice and answered differently");
     *out = sink.v;
-    return sink.n;
+    *count = sink.n;
+    return true;
+}
+
+size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
+{
+    LayoutJobDrive d;
+    size_t n = 0;
+
+    layout_job_drive_begin(&d);
+    while (!block_flow_anonymous_boxes_ask(el, out, &n)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    return n;
 }

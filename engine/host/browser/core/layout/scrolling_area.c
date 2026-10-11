@@ -235,11 +235,14 @@ static bool sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending_
    It is the rectangle CSS 2.2 §9.4.2 gives a block container's LINE BOXES ("the width of a line box is
    determined by a containing block", and §10.1's second case makes that the CONTENT edge), so it is the origin
    core/layout/line_box.h's span is measured from and the one place the two components have to agree. */
-static CssPx sa_content_origin(lxb_dom_element_t *b, bool vertical)
+static bool sa_content_origin(lxb_dom_element_t *b, bool vertical, CssPx *out)
 {
-    FlowPoint o = flow_padding_box_origin(b);
+    FlowPoint o;
 
-    return css_px_add(vertical ? o.y : o.x, used_value_px(b, vertical ? "padding-top" : "padding-left"));
+    if (!flow_border_box_origin_ask(b, &o)) return false;
+    *out = css_px_add(css_px_add(vertical ? o.y : o.x, used_value_leading_border_px(b, vertical)),
+                      used_value_px(b, vertical ? "padding-top" : "padding-left"));
+    return true;
 }
 
 /* ONE NON-REPLACED INLINE DESCENDANT'S CONTRIBUTION, which is `sa_descendant_edge`'s question over a box that
@@ -257,20 +260,22 @@ static CssPx sa_content_origin(lxb_dom_element_t *b, bool vertical)
    and that costs this file nothing: line_box.h reports the CONTAINER either way and adds the anonymous box's
    own origin to the coordinates it measures inside it, so the one frame composed here is right for both shapes
    and there is no second origin to hand back. */
-static CssPx sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi)
+static bool sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi, CssPx *out)
 {
     lxb_dom_element_t *establishing = NULL;
     char nbuf[160];
-    CssPx lo, hi;
+    CssPx lo, hi, origin;
 
-    line_box_inline_margin_span(d, &establishing, vertical, &lo, &hi);
+    if (!line_box_inline_margin_span_ask(d, &establishing, vertical, &lo, &hi)) return false;
     DCHECKF(establishing != NULL,
            "inline box %s, %s axis, span [%g, %g]: "
            "CSS 2.2 §9.4.2's formatting context was reported as NO BOX for an inline box whose fragments were "
            "measured in it. core/layout/line_box.c walks past every inline ancestor to a block container and "
            "crashes there when it runs out, so a NULL here is that walk having returned without either",
            box_subject(d, nbuf, sizeof nbuf), vertical ? "block" : "inline", lo.px, hi.px);
-    return css_px_add(sa_content_origin(establishing, vertical), ending_at_hi ? hi : lo);
+    if (!sa_content_origin(establishing, vertical, &origin)) return false;
+    *out = css_px_add(origin, ending_at_hi ? hi : lo);
+    return true;
 }
 
 /* ONE BLOCK CONTAINER'S INLINE FORMATTING CONTEXT folded into the running extreme — the boxes CSS 2.2 §9.2.2.1
@@ -311,18 +316,21 @@ static CssPx sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, CssPx orig
     return css_px_min(best, css_px_add(origin, lo));
 }
 
-static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx best)
+static bool sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx *best)
 {
-    if (!block_flow_establishes_inline_context(b)) return best;
+    if (!block_flow_establishes_inline_context(b)) return true;
     {
         BlockFlowRun whole;
+        CssPx origin;
 
         /* §9.4.2's context with an ELEMENT to name it is the WHOLE of this container's content — the run with
            no break on either side of it, which is the shape core/layout/block_flow.h's enumeration yields for
            a container that holds no block-level box. */
         whole.after = NULL;
         whole.end = NULL;
-        return sa_fold_span(b, whole, sa_content_origin(b, vertical), vertical, ending_at_hi, best);
+        if (!sa_content_origin(b, vertical, &origin)) return false;
+        *best = sa_fold_span(b, whole, origin, vertical, ending_at_hi, *best);
+        return true;
     }
 }
 
@@ -342,18 +350,19 @@ static CssPx sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool
    ITS INLINE-AXIS EDGES ARE NOT OPERANDS and block_flow.h states why: `width: auto` with zero margins puts
    them exactly on the container's own CONTENT edges, which CSS 2 §8.1 nests inside the padding edge this
    file's caller has already seeded the extreme with. */
-static CssPx sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx best)
+static bool sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx *out)
 {
-    BlockFlowAnonBox *v;
-    size_t n = block_flow_anonymous_boxes(b, &v), i;
-    CssPx content;
+    BlockFlowAnonBox *v = NULL;
+    size_t n = 0, i;
+    CssPx content, best = *out;
 
+    if (!block_flow_anonymous_boxes_ask(b, &v, &n)) return false;
     /* THE CONTAINER'S OWN CONTENT ORIGIN IS ASKED FOR ONLY WHERE THERE IS A BOX TO MEASURE FROM IT, and that
        is a crash surface and not a saving: core/layout/flow_position.h ABORTS for every positioning scheme it
        does not implement, so reading an origin for a container that generates none of §9.2.1.1's boxes would
        raise a float's or an out-of-flow box's crash at an element this fold has nothing to say about. */
-    if (n == 0) { free(v); return best; }
-    content = sa_content_origin(b, vertical);
+    if (n == 0) { free(v); return true; }
+    if (!sa_content_origin(b, vertical, &content)) { free(v); return false; }
     for (i = 0; i < n; i++) {
         CssPx origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
 
@@ -363,7 +372,8 @@ static CssPx sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bo
         else              best = css_px_min(best, origin);
     }
     free(v);
-    return best;
+    *out = best;
+    return true;
 }
 
 /* THE EXTREME OVER EVERY DESCENDANT'S BOX, in tree order. WHICH NODES HAVE A BOX IS TWO QUESTIONS AND NOT ONE,
@@ -407,15 +417,22 @@ static CssPx sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bo
 static void sa_walk_open(ScrollingAreaWalk *w, lxb_dom_element_t *root, lxb_dom_element_t *exclude_under,
                          CssPx seed)
 {
+    LayoutJobDrive d;
+
     w->root = root;
     w->exclude_under = exclude_under;
-    w->best = sa_anon_block_boxes_extreme(root, w->vertical, w->ending_at_hi,
-                                          sa_inline_context_extreme(root, w->vertical, w->ending_at_hi, seed));
+    w->best = seed;
+    /* Folding into an extreme is idempotent, so an attempt that answered "not yet" part way is retried whole. */
+    layout_job_drive_begin(&d);
+    while (!sa_inline_context_extreme(root, w->vertical, w->ending_at_hi, &w->best) ||
+           !sa_anon_block_boxes_extreme(root, w->vertical, w->ending_at_hi, &w->best))
+        (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     w->n = lxb_dom_interface_node(root)->first_child;
 }
 
 /* Fold the next descendant node in tree order into the extreme, and advance the cursor past it. Answers false
-   ("not yet") when the node's origin deferred a question: the cursor and the extreme are untouched. */
+   ("not yet") when a question the node's edges asked was deferred: the cursor stays on the node. */
 static bool sa_walk_fold(ScrollingAreaWalk *w)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(w->root), *n = w->n;
@@ -441,13 +458,17 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                    inline box and everything else, asked here because §9.4.2 gives the first a SET of
                    border areas and no `width` or `height` to size one with. */
                 CssPx e;
+                bool ready = sa_is_non_replaced_inline(d) ? sa_inline_box_edge(d, w->vertical, w->ending_at_hi, &e)
+                                                          : sa_descendant_edge(d, w->vertical, w->ending_at_hi, &e);
 
-                if (sa_is_non_replaced_inline(d)) e = sa_inline_box_edge(d, w->vertical, w->ending_at_hi);
-                else if (!sa_descendant_edge(d, w->vertical, w->ending_at_hi, &e)) return false;
+                if (!ready) return false;
                 w->best = w->ending_at_hi ? css_px_max(w->best, e) : css_px_min(w->best, e);
             }
-            w->best = sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, w->best);
-            w->best = sa_anon_block_boxes_extreme(d, w->vertical, w->ending_at_hi, w->best);
+            /* A "not yet" here leaves the edge folded and the cursor on `d`: folding is idempotent, so the
+               retry folds it again to the same extreme. */
+            if (!sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, &w->best) ||
+                !sa_anon_block_boxes_extreme(d, w->vertical, w->ending_at_hi, &w->best))
+                return false;
         }
     } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
         lxb_dom_element_t *parent;
@@ -572,7 +593,7 @@ void scrolling_area_walk_element(ScrollingAreaWalk *w, lxb_dom_element_t *el, bo
               "\"Inline, non-replaced elements\" (\"the 'width' property does not apply\") and §10.6.1 "
               "\"Inline, non-replaced elements\" (\"the 'height' property does not apply\") are what leave it "
               "no single rectangle. So §2 does not define this element's scrolling area and no user agent "
-              "reads it off one box. WHAT TO BUILD IS THE SEED, not the walk: `line_box_inline_margin_span` "
+              "reads it off one box. WHAT TO BUILD IS THE SEED, not the walk: `line_box_inline_margin_span_ask` "
               "(core/layout/line_box.h) already answers the extreme over this box's fragments on one axis, and "
               "the same entry over its PADDING edges is what §2's row wants in place of the one padding box "
               "below — everything after the seed is unchanged, because the descendant walk is over `el`'s "

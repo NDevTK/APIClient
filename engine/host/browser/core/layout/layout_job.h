@@ -32,17 +32,18 @@
  * `scrollIntoView`, with `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
- * border-box origin through CSS 2.1 §10.1's second case (core/layout/flow_position.h's ask) propagates "not
- * yet" to the walk step, the questions it deferred stay suspended on the job across the rest, and the next
- * activation computes them before it retries the node. A resting drive also defers once it has opened
- * rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies in one activation, so a node whose derivation is wide rests
- * mid-node rather than only a deep one. */
-/* NAMED RESIDUAL, drives that are not rest points. Not covered: every other drive (core/layout/block_flow.c's
- * entries for auto heights, baselines, anonymous boxes and static positions, and flow_position.c's other
- * arms, which reach them) still computes what it deferred inside the same activation. Next: their callers
- * propagate "not yet" in turn, starting with the line-box origin (`flow_inline_fragment_rects`' establishing
- * box and anonymous-box enumeration). How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU
- * assert naming a unit whose heavy node is inline-level, out of flow, or a table part. */
+ * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,
+ * its anonymous-box enumeration and its origin; core/layout/flow_position.h's and line_box.h's asks)
+ * propagates "not yet" to the walk step, the questions it deferred stay suspended on the job across the rest,
+ * and the next activation computes them before it retries the node. A resting drive also defers once it has
+ * opened rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies in one activation, so a node whose derivation is wide
+ * rests mid-node rather than only a deep one. */
+/* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's entries for auto
+ * heights, baselines and static positions, and flow_position.c's out-of-flow and table arms, which reach
+ * them, still compute what they deferred inside the same activation. Next: the out-of-flow origin's static
+ * position (`flow_static_position`) propagates in turn. How its absence shows: the
+ * REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming a unit whose heavy node is out of flow or a table
+ * part. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the

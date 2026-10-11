@@ -1747,10 +1747,10 @@ static bool lb_run_holds_child(lxb_dom_element_t *container, BlockFlowRun run, l
     return true;
 }
 
-static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbContext *ctx)
+static bool lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbContext *ctx)
 {
     BlockFlowAnonBox *v = NULL;
-    size_t n = block_flow_anonymous_boxes(container, &v), i, found = 0;
+    size_t n = 0, i, found = 0;
     /* §9.2.1.1's own predicate, read only to assert with: the collection below does not branch on it, so it
        is a second derivation of one fact the closing asserts compare. */
     bool breaks = block_flow_child_breaks_inline_box(container, box_tree_child_of_node(child));
@@ -1758,6 +1758,7 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
 
     ctx->box = NULL;
     ctx->n = 0;
+    if (!block_flow_anonymous_boxes_ask(container, &v, &n)) return false;
     DCHECKF(n > 0,
            "<%s> (display `%s`), child <%s>: "
            "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" generated NO box inside a block container that answered "
@@ -1831,14 +1832,16 @@ static void lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
            "parenthesis above says the section generates anyway",
            lb_el_name(container, cbuf, sizeof cbuf), lb_el_display(container),
            lb_node_name(child, nbuf, sizeof nbuf));
+    return true;
 }
 
 /* The inline formatting context `el` is on: the nearest ancestor that generates a block container box,
    reached by walking past the inline boxes between, then which of §9.4.2's two shapes holds this box. §9.4.2's
    condition is asked over the container's whole child list, the one shape with an element to name it
    (core/layout/block_flow.h); a mixed container's runs are §9.2.1.1's anonymous block boxes, and the one
-   holding this box supplies the run and origin `lb_anon_run` looks up. */
-static LbContext lb_establishing_context(lxb_dom_element_t *el)
+   holding this box supplies the run and origin `lb_anon_run` looks up. False ("not yet") when that lookup's
+   §9.4.1 walk deferred a contribution; `*out` is then unwritten. */
+static bool lb_establishing_context(lxb_dom_element_t *el, LbContext *out)
 {
     lxb_dom_node_t *a, *child = lxb_dom_interface_node(el);
     char ebuf[64], abuf[64];
@@ -1893,10 +1896,12 @@ static LbContext lb_establishing_context(lxb_dom_element_t *el)
                 ctx.box[0].origin_x = css_px(0.0);
                 ctx.box[0].origin_y = css_px(0.0);
                 ctx.n = 1;
-                return ctx;
+                *out = ctx;
+                return true;
             }
-            lb_anon_run(anc, child, &ctx);
-            return ctx;
+            if (!lb_anon_run(anc, child, &ctx)) return false;
+            *out = ctx;
+            return true;
         }
         if (inline_box) child = a;
     }
@@ -1912,7 +1917,8 @@ static LbContext lb_establishing_context(lxb_dom_element_t *el)
           "any position is asked for, so the two have come apart",
           lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el),
           lb_node_name(child, abuf, sizeof abuf));
-    return ctx;
+    *out = ctx;
+    return true;
 }
 
 /* This inline box's items in one of §9.2.1.1's boxes: the half-open range `[*lo, *hi)` of the fill just
@@ -2009,8 +2015,8 @@ static bool lb_atomic_item(const TextRunMeasure *m, lxb_dom_element_t *el, size_
     return found == 1;
 }
 
-size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
-                                 LineBoxFragment **out)
+bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                   LineBoxFragment **out, size_t *count)
 {
     LbFill local, *f;
     const LbLineFacts *facts;
@@ -2027,7 +2033,7 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
     size_t n, i, b, nf = 0;
     bool atomic;
 
-    DCHECK(el != NULL && establishing != NULL && out != NULL,
+    DCHECK(el != NULL && establishing != NULL && out != NULL && count != NULL,
            "CSSOM VIEW §6's box fragments were asked for with no element or nowhere to report them");
     DCHECK(lb_computed_is(el, "display", "inline") || lb_computed_is(el, "display", "inline-block"),
            "CSSOM VIEW §6's box fragments were asked for a box whose computed `display` is neither `inline` "
@@ -2082,7 +2088,7 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
               "reach even that: `lb_phrasing_break` crashes for the soft wrap opportunity itself, one walk "
               "earlier, so it is that crash and not this one that gates it");
     lb_require_horizontal_tb(el);
-    ctx = lb_establishing_context(el);
+    if (!lb_establishing_context(el, &ctx)) return false;
     style = ctx.style;
     lb_require_horizontal_tb(style);
     *establishing = style;
@@ -2272,11 +2278,24 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
            "second fragment is §9.4.2's fill having put one item on two lines, or this element having been "
            "collected into two of the container's anonymous block boxes");
     *out = frags;
-    return nf;
+    *count = nf;
+    return true;
 }
 
-void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
-                                 bool vertical, CssPx *lo, CssPx *hi)
+size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                 LineBoxFragment **out)
+{
+    LayoutJobDrive d;
+    size_t n = 0;
+
+    layout_job_drive_begin(&d);
+    while (!line_box_inline_fragments_ask(el, establishing, out, &n)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    return n;
+}
+
+bool line_box_inline_margin_span_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
+                                     bool vertical, CssPx *lo, CssPx *hi)
 {
     LineBoxFragment *frags = NULL;
     size_t n, i;
@@ -2317,7 +2336,7 @@ void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **esta
            "calculating the height of the line box\". It needs ONE ORIGIN PLUS ONE EXTENT instead, which is "
            "what core/layout/scrolling_area.c routes every box its `sa_is_non_replaced_inline` refuses to — so "
            "reaching here is that classification and this entry's precondition having come apart");
-    n = line_box_inline_fragments(el, establishing, &frags);
+    if (!line_box_inline_fragments_ask(el, establishing, &frags, &n)) return false;
     DCHECK(n >= 1 && frags != NULL,
            "CSS 2.2 §9.4.2's fragments were reported as NONE for an inline box that generates one. That entry's "
            "own closing assert makes a zero count impossible — the box's two edge items are content the fill "
@@ -2350,4 +2369,5 @@ void line_box_inline_margin_span(lxb_dom_element_t *el, lxb_dom_element_t **esta
            "non-inverted on the inline axis and derives on the block axis from one baseline plus a "
            "non-negative ascent and descent — so an inverted pair is the two edges having been taken over "
            "different fragment sets");
+    return true;
 }

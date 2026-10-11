@@ -406,7 +406,7 @@ static bool fp_is_on_a_line_box(lxb_dom_element_t *el)
    The frame is the establishing box's content box: its origin (this function, one level up) plus CSS 2 §8.1's
    leading border and padding, as §10.1's second case composes it below. CSSOM View §6's `getClientRects` asks
    core/layout/line_box.h for the whole list via core/dom/element_view.c. */
-size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
+bool flow_inline_fragment_rects_ask(lxb_dom_element_t *el, FlowRect **out, size_t *count)
 {
     lxb_dom_element_t *style = NULL;
     LineBoxFragment *frags = NULL;
@@ -418,7 +418,7 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
 
     DCHECK(el != NULL && out != NULL,
            "CSS 2 §9.4.2's fragment rectangles were asked for with no element or nowhere to report them");
-    n = line_box_inline_fragments(el, &style, &frags);
+    if (!line_box_inline_fragments_ask(el, &style, &frags, &n)) return false;
     DCHECKF(n >= 1 && frags != NULL && style != NULL,
            "%s, establishing box %s, %zu fragment(s) reported%s: "
            "CSS 2 §9.4.2's fragments were reported as none for an inline-level box that generates one. That "
@@ -430,7 +430,10 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
     /* §10.1's second case, as the block-level arm composes it: the establishing box's origin (where a float, an
        out-of-flow ancestor or a vertical mode crashes by its own section) plus §8.1's leading border and
        padding, the gap between its border edge and the content edge line_box.h measures from. */
-    o = flow_border_box_origin(style);
+    if (!flow_border_box_origin_ask(style, &o)) {
+        free(frags);
+        return false;
+    }
     left = css_px_add(o.x, used_value_leading_edge_px(style, false));
     top = css_px_add(o.y, used_value_leading_edge_px(style, true));
     rects = malloc(n * sizeof *rects);
@@ -444,21 +447,33 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
     }
     free(frags);
     *out = rects;
+    *count = n;
+    return true;
+}
+
+size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
+{
+    LayoutJobDrive d;
+    size_t n = 0;
+
+    layout_job_drive_begin(&d);
+    while (!flow_inline_fragment_rects_ask(el, out, &n)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     return n;
 }
 
 /* The origin of a box §9.4.2 places: its first fragment's corner, which is also an atomic inline-level box's
    only one ("single opaque box"), so callers need not know which they hold. */
-static FlowPoint fp_line_box_origin(lxb_dom_element_t *el)
+static bool fp_line_box_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     FlowRect *rects = NULL;
-    FlowPoint p;
+    size_t n = 0;
 
-    (void)flow_inline_fragment_rects(el, &rects);
-    p.x = rects[0].x;
-    p.y = rects[0].y;
+    if (!flow_inline_fragment_rects_ask(el, &rects, &n)) return false;
+    out->x = rects[0].x;
+    out->y = rects[0].y;
     free(rects);
-    return p;
+    return true;
 }
 
 static void fp_require_placeable(lxb_dom_element_t *el)
@@ -833,7 +848,7 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
     fp_require_horizontal_tb(el);
     /* §9.4's two normal-flow contexts are alternatives chosen by level, so a box on a line leaves through
        §9.4.2 here, like floats and out-of-flow boxes above. */
-    if (fp_is_on_a_line_box(el)) { *out = fp_line_box_origin(el); return true; }
+    if (fp_is_on_a_line_box(el)) return fp_line_box_origin(el, out);
     /* CSS 2.1 §17.5 Visual layout of table contents places row, cell and row group boxes, which must not fall
        through to §9.4.1's rules; all go through `fp_table_grid_origin`. The three row group displays are
        spelled as strings, like the tests above, rather than routed through `table_box_kind_is_row_group`'s

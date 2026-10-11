@@ -1363,7 +1363,7 @@ static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic
                   "core/layout/line_box.c's `lb_fill` is built and has callers, and that file's own named "
                   "crash is about a `wbr`'s SOFT WRAP OPPORTUNITY rather than the fill — it says in its own "
                   "words that the fill 'already weighs every soft wrap opportunity in a run against each "
-                  "line's available width'. The EXTENT is built too: `line_box_inline_margin_span` reports "
+                  "line's available width'. The EXTENT is built too: `line_box_inline_margin_span_ask` reports "
                   "where a non-replaced inline box's edges reach as an extreme over ALL its fragments, and "
                   "it ASSERTS the non-replaced-inline precondition this arm has already established. WHAT "
                   "IS ACTUALLY LEFT IS A DEFINITION, not machinery: 'rendered width' is used by §4.8.3 and "
