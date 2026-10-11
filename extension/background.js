@@ -77,40 +77,14 @@ function toBrain(m) {
 chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", tabId: tabId }); });
 
 // ─── Privileged chrome.* RPC for the offscreen brain ──────────────────────────
-// The brain runs in a document and can't call chrome.tabs.*; it sends a {__rpc}
-// message and the SW performs the call. (chrome.scripting.executeScript injects a
-// function that can't cross a message boundary, so the exploit-probe — the only
-// scripting user — must run in the SW; that orchestration is relocated here as a
-// follow-up and is not yet present.)
-// chrome.scripting.executeScript injects a FUNCTION, which can't cross a message
-// boundary — so the exploit-probe's injected functions live HERE (the SW has
-// chrome.scripting) and the brain selects one by name, passing only serializable
-// args. These are the probe's fixed primitives; the orchestration (session state,
-// payload shaping, PROBE_HIT correlation) stays in the brain.
-// @security-finding  NOTHING CALLS `scripting.exec` — grep the whole extension for it and the only hit is the
-// RPC arm below. These injectors are therefore an UNUSED privilege, and the privilege is the largest one this
-// extension has: arbitrary MAIN-world execution in any tab (`world: "MAIN"`, `target.allFrames`), i.e. full
-// same-origin control of every site the user has open, plus the `scripting` permission that exists only for
-// them. The live PoC verification took a different route — the popup embedded the sandboxed poc-sandbox.html and
-// the payload is delivered by the PoC itself (window.open / postMessage), with intercept.js's apiclientsink
-// relaying the hit — so `seedStorage`, `postMessage`, `dispatchEvents` and `readExecFlag` have no caller and
-// `tabs.create` / `tabs.remove` / `tabs.get` below have none either.
-// It is gated to the offscreen document (the only trusted zone). THE PARAGRAPH THAT STOOD HERE SAID THIS TABLE
-// HAD NO CALLER AND NAMED THE DECISION THAT WOULD SETTLE IT, AND THAT DECISION HAS NOW BEEN MADE, so the
-// sentence is kept in its own words rather than deleted — a reader who greps for a caller and finds few will
-// re-derive it. It read: "so it is not reachable today; what it is, is the blast radius of any future hole in
-// that gate, held open for a caller that does not exist. Either the probe orchestration this file's comment
-// promises lands and uses it, or this arm, the injectors, the three unused tabs.* arms and the `scripting`
-// permission are DELETED together. It is named here rather than deleted in a security review because removing
-// it decides that the injected-probe design is not coming back — that is the probe design's call, not this
-// review's."
-// THE PROBE DESIGN'S CALL IS IN: `pocAttackerButton` below is the caller, and it is the one §LIVE-VERIFY needs.
-// The live PoC used to run in `poc-sandbox.html`, a `manifest.sandbox.pages` document whose origin is OPAQUE —
-// so every cross-document delivery it performed arrived at the victim with `event.origin === "null"`, an
-// identity no real handler's origin check accepts, and a no-hit through that channel was indistinguishable from
-// the engine-fidelity divergence §LIVE-VERIFY reads a no-hit as. The attacker document is now a REAL
-// REGISTRABLE ORIGIN the trusted zone opens as an ordinary tab, with the payload EVALUATED there rather than
-// served from there, so nothing is hosted and `event.origin` reads that document's own address.
+// The brain runs in a document and can't call chrome.tabs.*; it sends a {__rpc} message and the SW performs
+// the call. chrome.scripting.executeScript injects a FUNCTION, which can't cross a message boundary, so the
+// live-verify injector lives here and the brain selects it by name, passing only serializable args. The
+// table holds exactly the injectors something calls: every entry is MAIN-world execution in a tab the
+// offscreen names, so an entry with no caller is privilege held open for nothing.
+// The attacker document is a real registrable origin the trusted zone opens as an ordinary tab, with the
+// payload evaluated there rather than served from there, so nothing is hosted and `event.origin` reads that
+// document's own address.
 // WHICH WORLD EACH HALF RUNS IN IS MEASURED AND NOT CHOSEN. In real Chrome at `https://example.com`, with an
 // invented-capability control beside each reading: the ISOLATED world reports `self.origin` as the document's
 // and has `chrome.runtime.sendMessage`, and `new Function` THROWS there — `EvalError`, naming this EXTENSION's
@@ -188,63 +162,6 @@ const _PROBE_INJECTORS = {
     });
     return { armed: true, attackerOrigin: String(self.origin) };
   },
-  // Read the per-marker execution flag intercept.js's apiclientsink() populated —
-  // proof the browser actually ran the payload (vs. taint merely reaching a sink).
-  // A throw here means the page tampered with `self` (frozen, proxied, etc.) so
-  // the probe result is genuinely unknown; surface so a bundle that defeats the
-  // flag read is visible rather than silently flipping to "not reproduced".
-  readExecFlag: (flag) => { try { return self[flag] || null; } catch (e) { console.warn("[probe:readExecFlag] flag=%s threw: %s", flag, e && e.message || e); return null; } },
-  // Same-window postMessage to the bundle's own listener, retried to cover async
-  // handler-registration races.
-  postMessage: (shapedPayload) => {
-    const deliveries = [200, 1500, 3500];
-    for (const delay of deliveries) {
-      setTimeout(() => {
-        try { window.postMessage(shapedPayload, "*"); }
-        catch (e) {
-          // postMessage of structured-cloneable data should never throw under
-          // a normal page; a throw means the payload couldn't be cloned (e.g.
-          // contains a function / DOM node) or the window is detached. Both
-          // are real failures the probe needs to know about.
-          console.warn("[probe:postMessage] threw at delay=%dms: %s", delay, e && e.message || e);
-        }
-      }, delay);
-    }
-  },
-  // Pre-seed localStorage + cookies before the bundle reads them at module init.
-  seedStorage: (storageItems, cookieItems) => {
-    try {
-      for (const it of (storageItems || [])) {
-        if (it && it.key != null) localStorage.setItem(String(it.key), String(it.value == null ? "" : it.value));
-      }
-      for (const it of (cookieItems || [])) {
-        if (it && it.value != null) document.cookie = String(it.value);
-      }
-    } catch (e) {
-      // localStorage / document.cookie can throw (quota, third-party cookie
-      // policy, sandboxed iframe). Surface so the probe knows the seed didn't
-      // land — otherwise the exploit reproducibility looks like a code-path
-      // bug when it's actually a storage-policy block.
-      console.warn("[probe:seedStorage] threw: %s", e && e.message || e);
-    }
-  },
-  // Dispatch a sequence of postMessage events with per-message delay (structured plan).
-  dispatchEvents: (eventList, perMessageDelayMs) => {
-    const baseDelay = 500;
-    eventList.forEach((ev, i) => {
-      const t = baseDelay + i * perMessageDelayMs;
-      setTimeout(() => {
-        try { if (ev && ev.kind === "postMessage") window.postMessage(ev.payload, "*"); }
-        catch (e) {
-          // Same diagnostic rationale as the single-postMessage injector above —
-          // a structured-clone failure or detached window must be visible so
-          // the structured-plan probe doesn't report NOT_REPRODUCED for a
-          // delivery failure rather than a real bundle behavior.
-          console.warn("[probe:dispatchEvents] postMessage threw at i=%d t=%dms: %s", i, t, e && e.message || e);
-        }
-      }, t);
-    });
-  },
 };
 
 async function _swRpc(msg) {
@@ -252,7 +169,6 @@ async function _swRpc(msg) {
   switch (api) {
     case "tabs.sendMessage": return chrome.tabs.sendMessage(...args);
     case "tabs.create": return chrome.tabs.create(...args);
-    case "tabs.remove": return chrome.tabs.remove(...args);
     case "tabs.query": return chrome.tabs.query(...args);
     case "tabs.get": return chrome.tabs.get(...args);
     case "webNavigation.getAllFrames": return chrome.webNavigation.getAllFrames(...args);
@@ -281,8 +197,9 @@ async function _swRpc(msg) {
       const o = args[0] || {};
       const fn = _PROBE_INJECTORS[o.op];
       if (!fn) throw new Error("unknown scripting op: " + o.op);
+      CHECK(o.allFrames === undefined, "scripting.exec was asked for allFrames — it injects the top frame only, "
+                                       + "and the one caller arms the attacker document, which is that frame");
       const target = { tabId: o.tabId };
-      if (o.allFrames) target.allFrames = true;
       const results = await chrome.scripting.executeScript({ target, world: "MAIN", func: fn, args: o.args || [] });
       return (results || []).map((r) => ({ frameId: r && r.frameId, result: r ? r.result : undefined }));
     }
