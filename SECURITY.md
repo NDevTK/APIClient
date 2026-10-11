@@ -113,6 +113,11 @@ module loads) and `fetchedXhr` (the page's `XMLHttpRequest`) in `bridge.js`, and
 automatic discovery sweep) in `lib/discovery-probe.js`. The engine itself opens no socket: its requests park,
 and the bridge relays each to `safeFetch`.
 
+A document load of a `data:` URL is not a request. Its bytes are in the URL and it reaches no other party, so
+`navigationLoad` and trusted.mjs's `navigate` answer it with `safeFetchSchemeData` (Fetch §4.3 "Scheme fetch"'s
+"data" arm, through the realm's own fetch) and ask no egress question. Its document's origin is opaque, so
+`principalOf` gives it its own `null:` principal and cluster and it carries no session.
+
 Which extension context can open a connection at all is enforced by CSP in all but two:
 - `popup.html` and `dev.html` add `connect-src 'none'` to the manifest's extension-page policy, so the browser
   refuses a `fetch`, XHR, WebSocket, EventSource or beacon from either. The popup reaches the network only by
@@ -195,7 +200,8 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
 - The principal is per call, never a global, because the zone interleaves many renderers. `opts.pageUrl` comes
   from the mint and is DCHECKed non-empty and parseable; with the DCHECKs compiled out an unparseable principal
   classifies public, which still refuses every private target. A principal that names no host (`about:blank`,
-  `data:`, `blob:`) is not a private-network principal.
+  `data:`, `blob:`) is not a private-network principal: it classifies public (see "A local-scheme document's
+  address space" below).
 - A cross-origin script acts with the origin of the page it is loaded into, never its own host, which is what
   the per-call principal encodes.
 
@@ -600,6 +606,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Redirect hops between the first and last URL | `safeFetch` sees only the requested and the landed URL, so a redirect chain that leaves the origin and returns is tainted `basic` where Fetch would taint it, and an intermediate redirect response's own CORS check is not run | each hop recorded per request. `fetch`'s `redirect: "manual"` cannot supply it: it answers Fetch §2.2.6 "Responses"' opaque-redirect filtered response (status 0, empty header list, null body), so the `Location` is not readable. `webRequest.onBeforeRedirect` reports none of this extension's offscreen fetches (measured in Chrome 148), so it cannot either | a `cors` reply delivered `basic` after a chain that crossed origins |
 | The request carries no page `Origin` header | `Origin` is a forbidden request header, so the zone's request carries this extension's origin or none, and a server that reflects the request's `Origin` answers an `Access-Control-Allow-Origin` that is not the page's. The page then gets a network error where a browser's request would pass: a narrowing | a transport that can state the page's origin | a cross-origin API that works in a browser failing `blocked-cors:allow-origin-mismatch` here |
 | No ORB for a no-cors element's bytes | CORB applies to script-like destinations only, so a cross-origin `no-cors` image, style or font body of any type is delivered to the engine; page script cannot read it, but a compromised engine could | Chromium's ORB rules for the other no-cors destinations | a JSON or HTML body delivered for an `image` destination |
+| A local-scheme document's address space | `_ipAddressSpace` classifies a principal that names no host (`about:blank`, `data:`, `blob:`) as public. Local Network Access §3.5 "Integration with HTML" adds an IP address space to the policy container and copies it in "clone a policy container", so a `data:` child of a loopback or local page is that space in a browser, and its requests to it are not less public. Here they are refused (`blocked-local-network:loopback-from-public`): a narrowing | the zone keeping the creator's address space beside the inherited container and classifying the child's requests against it, rather than against the child's own URL | a `data:` child's requests to its creator's private network refused while the creator's identical ones fire |
 | Redirect to a less public host | `safeFetch` re-judges the landed host and refuses to ingest, but the hop that reached it was already sent | a walk judging each `Location` before it is followed, which needs the 3xx's `Location` that `redirect: "manual"` hides (see the row above) | a public host's 3xx onto an intranet address appearing in that host's logs |
 | Credential lineage | the chokepoint sees the credential state of the request in front of it and nothing about where the address came from | a `credentialed` bit on the response the engine ingests, carried into the concolic value's source identity and composed at the park beside the provenance word | every request at an origin reading `lineage=unknown`, including addresses the bundle built from a logged-in reply |
 | Authority in a path segment | `url-authority` matches capability-URL parameter names and the JWS prefix only; an opaque token in a path reads `unknown` | read the signal off the engine, whose park knows which source each segment came from | `url-authority=unknown` doing all the work at a widened origin whose addresses carry capability tokens |
