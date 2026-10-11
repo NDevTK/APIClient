@@ -203,12 +203,12 @@ typedef unsigned CssEnvSet;
 #define CSS_ENV_BIT(f)   (((CssEnvSet)1u) << (f))
 #define CSS_ENV_ALL      ((CssEnvSet)((1u << CSS_ENV_FACT_COUNT) - 1u))
 
-/* One monomial of a length's form: `k · Π fact_f^e[f]`, with at least one non-zero exponent, or `k · A` for an
-   ATOM: an opaque function of the facts the form cannot state, named by `atom` (non-zero; every exponent is
-   then zero) and valued `aval` in this realm. An atom stands for one opaque result wherever that one result is
-   reused, so a sum that adds it and takes it away again cancels it. Its name is a counter's, which no other
-   process and no later session shares, so a form still holding an atom is opaque to anything that outlives
-   the layout that minted it (core/frame/viewport.c's boundary). */
+/* One monomial of a length's form: `k · Π fact_f^e[f]`, times an ATOM `A` where `atom` is non-zero: an opaque
+   function of the facts the form cannot state, named by `atom` and valued `aval` in this realm. A monomial
+   holds at most one atom and names an atom or a fact. An atom stands for one opaque result wherever that one
+   result is reused, so a sum that adds it and takes it away again cancels it. Its name is a counter's, which
+   no other process and no later session shares, so a form still holding an atom is opaque to anything that
+   outlives the layout that minted it (core/frame/viewport.c's boundary). */
 #define CSS_PX_FORM_MAX 8
 typedef struct {
     unsigned      atom;
@@ -221,10 +221,11 @@ typedef struct {
    value in this realm. It is a normal form of the function and not a record of the operations: the monomials
    are sorted and merged, so two derivations of one function compose the same form. Sums, differences and
    products keep it (a font's ascent is the font size times a face metric); an extreme the facts' ranges do
-   not decide becomes an atom; a snap, a math function, a quotient by a fact, a product with an atom, or a form
-   wider than CSS_PX_FORM_MAX leaves an opaque function of the same set (`known` false). Read only where `env` is non-empty, since a determined length is its own constant; every exponent
-   names a fact in `env`, whose `val` is written. It is what lets core/frame/viewport.h say two lengths differ
-   by a constant in every world. */
+   not decide, a snap, a math function, a quotient by a derived length and a product of two atoms each become
+   one atom; a form wider than CSS_PX_FORM_MAX or a non-finite example leaves an opaque function of the same
+   set (`known` false). Read only where `env` is non-empty, since a determined length is its own constant;
+   every exponent names a fact in `env`, whose `val` is written. It is what lets core/frame/viewport.h say two
+   lengths differ by a constant in every world. */
 typedef struct {
     bool          known;
     int           n;

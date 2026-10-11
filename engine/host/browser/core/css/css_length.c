@@ -235,7 +235,7 @@ double css_px_form_eval(CssPx a)
         double t = a.form.m[i].k;
 
         if (a.form.m[i].atom) t *= a.form.m[i].aval;
-        else for (f = 0; f < CSS_ENV_FACT_COUNT; f++) t *= pow(a.form.val[f], a.form.m[i].e[f]);
+        for (f = 0; f < CSS_ENV_FACT_COUNT; f++) t *= pow(a.form.val[f], a.form.m[i].e[f]);
         v += t;
     }
     return v;
@@ -347,10 +347,9 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     else if (hi <= 0.0) win = want_hi ? &b : &a;
     /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
        atom so that every place this one result is carried to can still subtract it.
-       Named residual. Not covered: the other opaque results (a product with an atom, a form too wide) still
-       leave no form. Next diff: each mints an atom through css_px_form_atom. How its absence shows: two
-       lengths downstream of one such result that differ by a constant and still cross the `long` boundary as
-       two forks. */
+       Named residual. Not covered: a form too wide still leaves no form. Next diff: it mints an atom through
+       css_px_form_atom. How its absence shows: two lengths downstream of one such result that differ by a
+       constant and still cross the `long` boundary as two forks. */
     if (win == NULL) {
         DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
         css_px_form_atom(&out);
@@ -394,9 +393,14 @@ CssPx css_px_mul(CssPx a, CssPx b)
             for (j = 0; j < b.form.n; j++) {
                 CssPxMonomial m;
 
-                /* A product with an atom is a function of it the form has no term for. */
-                if (a.form.m[i].atom || b.form.m[j].atom) return out;
+                /* A monomial holds one atom, so a product of two is one atom of its own. */
+                if (a.form.m[i].atom && b.form.m[j].atom) {
+                    css_px_form_atom(&out);
+                    return out;
+                }
                 memset(&m, 0, sizeof m);
+                m.atom = a.form.m[i].atom ? a.form.m[i].atom : b.form.m[j].atom;
+                m.aval = a.form.m[i].atom ? a.form.m[i].aval : b.form.m[j].aval;
                 for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
                     DCHECK(a.form.m[i].e[f] + b.form.m[j].e[f] <= 255, "a monomial's exponent overflowed");
                     m.e[f] = (unsigned char)(a.form.m[i].e[f] + b.form.m[j].e[f]);
