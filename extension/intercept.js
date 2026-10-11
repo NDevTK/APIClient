@@ -289,8 +289,46 @@
 
   const _fetch = window.fetch;
 
+  /* The four request facts a replay must reproduce, as Fetch §5.4 "Request class" sets them: an `init`
+     member that exists wins over `input`'s, and a member neither supplies is null, which a replay passes
+     as absent so fetch applies its own default. A Request's values are read through getters captured
+     here, before any page script runs, so a page-replaced getter cannot restate them. */
+  const _apply = Reflect.apply;
+  const _INIT_MEMBERS = ["credentials", "mode", "referrer", "referrerPolicy"];
+  const _requestGet = {};
+  for (var _i = 0; _i < _INIT_MEMBERS.length; _i++)
+    _requestGet[_INIT_MEMBERS[_i]] = Object.getOwnPropertyDescriptor(Request.prototype, _INIT_MEMBERS[_i]).get;
+  const _xhrWithCredentials = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "withCredentials").get;
+
+  /* Fetch §5.4's init["referrer"] step: "" is no-referrer; a URL parsed against the document's base that
+     is `about:client` or not same origin with the document is "client"; otherwise the parsed URL. The
+     answer is spelled as the Request `referrer` getter spells it. A string that does not parse makes
+     fetch throw, so no record is emitted for it. */
+  function _referrerOfInit(v) {
+    if (v === "") return "";
+    var parsed = new URL(v, document.baseURI);
+    // An opaque origin serializes as "null" and is same origin with nothing but itself.
+    if (parsed.href === "about:client" || parsed.origin === "null" || parsed.origin !== location.origin)
+      return "about:client";
+    return parsed.href;
+  }
+
+  function _fetchRequestInit(input, init) {
+    var isRequest = input instanceof Request;
+    var out = {};
+    for (var i = 0; i < _INIT_MEMBERS.length; i++) {
+      var k = _INIT_MEMBERS[i];
+      var v = init ? init[k] : undefined;
+      if (v !== undefined) out[k] = k === "referrer" ? _referrerOfInit(String(v)) : String(v);
+      else out[k] = isRequest ? _apply(_requestGet[k], input, []) : null;
+    }
+    return out;
+  }
+
   window.fetch = async function (input, init) {
     var callStack = _captureCallStack();
+    // Read at the call: the page may mutate its own `init` while the request is in flight.
+    var requestInit = _pageOwned(function () { return _fetchRequestInit(input, init); });
     // Snapshot request data before calling fetch (body may be consumed)
     var reqHeaders = _captureHeaders(input, init);
     var bodySource = (init && init.body !== undefined) ? init.body : null;
@@ -345,7 +383,7 @@
     });
     /* THE PAGE'S OWN CODE REFUSED TO BE READ — a positive answer, and the only one available: this request
        cannot be observed, so NOTHING is emitted for it. A partially-read record would be a plausible datum. */
-    if (seen === _PAGE_THREW) return response;
+    if (seen === _PAGE_THREW || requestInit === _PAGE_THREW) return response;
 
     const url = seen.url;
     const method = seen.method;
@@ -487,6 +525,7 @@
         requestHeaders: reqHeaders,
         requestBody: reqBody,
         requestBodyBase64: reqBase64,
+        requestInit: requestInit,
         callStack: callStack,
       });
     })();
@@ -617,6 +656,10 @@
           requestHeaders: _reqHeaders,
           requestBody: _reqBody,
           requestBodyBase64: _reqBase64,
+          // XMLHttpRequest §3.5.6 "The send() method": mode "cors", credentials "include" when
+          // withCredentials is true and "same-origin" otherwise; XHR has no referrer or policy to state.
+          requestInit: { credentials: _apply(_xhrWithCredentials, this, []) ? "include" : "same-origin",
+                         mode: "cors", referrer: null, referrerPolicy: null },
           callStack: callStack,
         });
       } catch (_) {}
@@ -723,10 +766,15 @@
   const _EventSource = window.EventSource;
 
   if (_EventSource) {
+    const _esWithCredentials = Object.getOwnPropertyDescriptor(_EventSource.prototype, "withCredentials").get;
     class WrappedEventSource extends _EventSource {
       constructor(url, opts) {
         super(url, opts);
         const esUrl = typeof url === "string" ? url : String(url);
+        /* HTML §9.2.2 "The EventSource interface": a potential-CORS request, so mode "cors", whose
+           credentials are "include" when withCredentials is true and "same-origin" otherwise. */
+        const requestInit = { credentials: _apply(_esWithCredentials, this, []) ? "include" : "same-origin",
+                              mode: "cors", referrer: null, referrerPolicy: null };
 
         this.addEventListener("message", function (e) {
           try {
@@ -739,6 +787,7 @@
               responseHeaders: {},
               body: e.data,
               base64Encoded: false,
+              requestInit: requestInit,
             });
           } catch (_) {}
         });

@@ -20,6 +20,22 @@
  * field is one of its own creators' statements, so a hole there is our logic and it crashes. */
 const _RESP_TRANSPORTS = ["fetch", "xhr", "websocket", "eventsource", "postmessage", "messagechannel"];
 
+/* The observed request's credentials mode, mode, referrer and referrer policy, as intercept.js records
+   them: each member a string, or null where the page supplied none. A page-dispatched event can carry any
+   shape, so this is a refusal, never an assert. */
+const REQUEST_INIT_MEMBERS = ["credentials", "mode", "referrer", "referrerPolicy"];
+function _requestInitServed(ri) {
+  if (!ri || typeof ri !== "object") return false;
+  for (const k of REQUEST_INIT_MEMBERS) if (ri[k] !== null && typeof ri[k] !== "string") return false;
+  return true;
+}
+// The four members only: a record keeps no field the renderer added beside them.
+function _requestInitCopy(ri) {
+  const out = {};
+  for (const k of REQUEST_INIT_MEMBERS) out[k] = ri[k];
+  return out;
+}
+
 /* THE WHOLE MESSAGE IS CHECKED ONCE, ON ARRIVAL, AND EVERY READ BELOW IS THEN PLAIN.
  *
  * This function is where an untrusted zone's bytes become a trusted zone's record, and it was reading
@@ -57,10 +73,13 @@ function _relayMessageUnserved(msg) {
     if (msg.requestBody !== null && typeof msg.requestBody !== "string") return "requestBody";
     if (typeof msg.requestBodyBase64 !== "boolean") return "requestBodyBase64";
     if (typeof msg.callStack !== "string") return "callStack";
+    if (!_requestInitServed(msg.requestInit)) return "requestInit";
     // Only the fetch wrapper can produce a filtered-response kind; XHR's own spec fails a cross-origin
     // response CORS did not allow rather than handing back an opaque one, so for XHR absence is the answer.
     if (msg.transport === "fetch" && (typeof msg.responseType !== "string" || msg.responseType === ""))
       return "responseType";
+  } else if (msg.transport === "eventsource") {
+    if (!_requestInitServed(msg.requestInit)) return "requestInit";
   } else if (msg.transport === "websocket") {
     if (typeof msg.wsId !== "string" || msg.wsId === "") return "wsId";
   } else if (msg.transport === "postmessage" || msg.transport === "messagechannel") {
@@ -306,6 +325,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       statusText: "",
       completedAt: Date.now(),
       requestHeaders: {},
+      requestInit: _requestInitCopy(msg.requestInit),
       contentType: "",
       rawBodyB64: null,
       responseBody: msg.body,
@@ -405,6 +425,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     statusText: msg.statusText,
     completedAt: Date.now(),
     requestHeaders: headerMap,
+    requestInit: _requestInitCopy(msg.requestInit),
     contentType: contentType || "",
     rawBodyB64: rawBodyB64,
     responseBody: msg.body,

@@ -48,7 +48,9 @@
      different producer on a different path — and reading them off intercept.js's detail was a read with no
      writer, with `|| null` as the reason it never crashed. */
   const PER_TRANSPORT = ["responseType", "wsId", "statusText",
-                         "requestHeaders", "requestBody", "requestBodyBase64", "callStack"];
+                         "requestHeaders", "requestBody", "requestBodyBase64", "callStack", "requestInit"];
+  // requestInit: the request's credentials, mode, referrer and referrer policy, from the fetch, XHR and
+  // EventSource wrappers; a socket frame has no request to describe.
   document.addEventListener("__uasr_resp", (e) => {
     if (!e.detail) return;
     const d = e.detail;

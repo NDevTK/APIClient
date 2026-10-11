@@ -177,6 +177,14 @@ function _checkLogEntry(entry, kind) {
        oracle signal `testing/harness.js`'s netdiff reads to name the function forced execution failed to
        drive, so an ABSENT one there reads as a live request with no bundle behind it: exactly the state that
        diagnostic exists to distinguish, reported by the field being missing instead of by the run. */
+    // The observed request's credentials, mode, referrer and referrer policy, or null where none was
+    // observed; the Send panel replays a request with them.
+    DCHECK(entry.requestInit === null ||
+           (!!entry.requestInit && typeof entry.requestInit === "object" &&
+            REQUEST_INIT_MEMBERS.every((k) => entry.requestInit[k] === null ||
+                                              typeof entry.requestInit[k] === "string")),
+           "a captured HTTP record reached the global log with a requestInit that is neither null nor the " +
+           "four members lib/response-decode.js copies, for kind " + kind);
     DCHECK(typeof entry.callStack === "string",
            "a captured HTTP record reached the global log with no call-site field — netdiff names the bundle " +
            "function that fired a [live]-only endpoint out of it, and an absent one is that endpoint " +
@@ -1303,6 +1311,8 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
     /* THE FORM'S OWN ENCTYPE, which content.js already resolved to the HTML default where the form named
        none — so this is what the browser would send, not a guess standing in for it. */
     requestHeaders: method !== "GET" ? { "content-type": msg.enctype } : {},
+    // A form submission is a navigation, not a fetch: no fetch init was observed, so a replay states none.
+    requestInit: null,
     contentType: msg.enctype,
     rawBodyB64: reqBody ? btoa(reqBody) : null,
     /* THE RESPONSE HALF IS EMPTY BECAUSE THE SUBMISSION WAS OBSERVED AND ITS ANSWER WAS NOT. This record is
