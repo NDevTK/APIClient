@@ -5160,17 +5160,15 @@ typedef struct {
     int     n;     /* how many the take handed over — one, asserted */
 } OrphanTake;
 
-/* THE VISITOR, AND IT ONLY RECORDS. JS_OrphanTakeOne calls it from inside the walk of the runtime's object
-   list, so creating a GC object here would insert into the list being iterated; the dup below is a refcount
-   bump, which allocates nothing. JS_OrphanTakeOne asserts exactly that. */
+/* The visitor only records. JS_OrphanTakeOne calls it from inside the walk of the runtime's object list, so
+   creating a GC object here would insert into the list being iterated; the dup is a refcount bump and allocates
+   nothing (JS_OrphanTakeOne asserts it). */
 static void engine_orphan_record(JSContext *ctx, JSValueConst fn, int arg_count, void *opaque) {
     OrphanTake *t = (OrphanTake *)opaque;
 
-    /* THE SEAM, ASSERTED AT THE ONE PLACE IT CAN BE LOST. A second hand-over in one call is a take that went
-       back to enumerating the set, and the caller below turns each into a flow — so it would mint an unbounded
-       chain of flows inside one scheduler step again, with nothing between them for the preempt hook to be
-       consulted at. It is not a tautology about the callee: it is this consumer's requirement on it, stated
-       where a change to the walk would break it rather than in the seam verdict six thousand lines away. */
+    /* One function per take: each becomes a flow, so a second hand-over in one call would make the seeding step
+       a loop with no suspend point, which the scheduler's seam assertion aborts on. This is the consumer's
+       requirement on the walk, stated where a change to the walk would break it. */
     DCHECK(t->n == 0,
            "the orphan take handed over a SECOND function in one call — each one becomes a flow, so the step "
            "that seeds them is a loop again with no suspend point on it, which is the stretch the scheduler's "
@@ -5180,46 +5178,21 @@ static void engine_orphan_record(JSContext *ctx, JSValueConst fn, int arg_count,
     t->n = 1;
 }
 
-/* HOW MANY ORPHANS THIS DOCUMENT HAS DRIVEN. Reported in the result document so a run can say how much of the
-   page's code was reached by nothing but forced invocation.
-   IT IS NO LONGER EACH DRIVE'S NAME, and that is the correction this comment carries. It used to be: an
-   argument's source identity was `{orphan<ordinal>.arg0}`, chosen because an ordinal was the only thing
-   available that was unique (a function's `name` is empty for half of a minified bundle and duplicated across
-   the rest). An ordinal is unique WITHIN a session and means nothing across one — and the moment a drive's
-   recipe crossed the tier that became the difference between reproducing the drive and reproducing its PATH.
-   decide.c's replay compares the QUESTION each recorded arm answers, and a question is composed from the source
-   identities in it, so a resumed drive of the same body under a different ordinal asks a different question at
-   its very first branch: every arm the drive recorded inside the function is discarded as a divergence and the
-   body is re-explored from there. The LOCATOR is unique per body and stable across sessions, so it is what
-   names the unknowns now, and the recorded arms line up. Two drives of one body share the name, which is
-   correct rather than the aliasing the ordinal was avoiding: they are the same call of the same function with
-   the same unknowns, and a fork already shares its parent's argument objects. */
+/* How many orphans this document has driven, reported in the result document. A drive's unknowns are named by
+   the body's locator, not an ordinal: decide.c's replay compares the question each recorded arm answers, and a
+   question is composed from the source identities in it, so a name that changed across sessions would discard
+   every recorded arm at the drive's first branch. The locator is unique per body and stable across sessions; two
+   drives of one body share it, correctly, being the same call with the same unknowns. */
 static long g_orphans_driven;
-/* AND HOW MANY TIMES A FLOW GOT AS FAR AS ASKING — see the raise site for why the pair is read together and
-   never one of them. It is the ORPHAN surface's half of what solver/solve.h's arrival census is for the @S
-   surface: a zero that cannot say whether the engine looked and found nothing or never looked. */
+/* How many times a flow got as far as asking; read with the count above (see the raise site). It is the orphan
+   surface's counterpart of solver/solve.h's @S arrival census. */
 static long g_orphan_asks;
 
-/* THE ORPHAN SURFACE'S OWN CENSUS — see engine.h, and see the raise sites for what each number is counted at.
-   IT LIVES BESIDE THE COUNTERS AND NOT BESIDE engine_routed_census, which is the other census this file
-   exports: an accessor placed with its siblings instead of with its data reads statics declared two
-   thousand lines below it, which does not compile — and the version of this that tried is why the note is
-   here rather than being rediscovered.
-   `driven` EXISTED AND REACHED NOTHING A CENSUS CAN READ. It was written into the heap/progress line only, and
-   §Testing is explicit that the renderer does not tee its stdout — "a console scrape is the wrong surface by
-   construction" — so the ONE number that says whether this engine ever drove code the page shipped and never
-   ran was, for every session there has been, computed and thrown away. §What-the-tool-produces makes that
-   surface the headline ("Surface INTERESTING UNUSED endpoints ... A sniffer shows what FIRED; this shows what
-   the bundle CAN do but didn't"), so the product's own proposition had no measurement on the shipped path.
-   BOTH OR NEITHER, for the @S arrival census's reason exactly: `driven == 0` alone is three different findings
-   — the bundle ships no uncalled code, no flow ever reached the end of its own work, or the walk ran and the
-   heap had none — and only the pair tells the middle one (a scheduling result to act on) from the outer two
-   (facts about the page).
-   AND THE FIRST AND THE THIRD ARE NOT THE SAME FINDING EITHER, WHICH THIS COMMENT READS AS THOUGH THEY WERE
-   BY CALLING BOTH "facts about the page". A heap with no untaken body is a fact about the HEAP, and this
-   engine has a measured reason for one to differ from the bundle: see the residual at the take in
-   engine_orphan_seed, and read @COLD's `outOfProgramsAtTheLadder` before reading a zero `asked` as the
-   middle finding. */
+/* The orphan surface's census (engine.h). It sits beside the counters it reads, which are declared here. Both or
+   neither: `driven == 0` alone is three findings (the bundle ships no uncalled code; no flow reached the end of
+   its own work; the walk ran and the heap had none), and the pair separates the middle one, a scheduling result,
+   from the others. The first and third differ too: an empty heap is a fact about the heap, which can differ from
+   the bundle (see the residual at the take in engine_orphan_seed, and @COLD's `outOfProgramsAtTheLadder`). */
 void engine_orphan_census(long *driven, long *asked) {
     DCHECK(driven != NULL && asked != NULL,
            "the orphan census was asked for one of its two numbers — a drive count with no ask count beside it "
@@ -5228,30 +5201,22 @@ void engine_orphan_census(long *driven, long *asked) {
     *driven = g_orphans_driven; *asked = g_orphan_asks;
 }
 
-/* …AND HOW MANY OF THOSE DRIVES THE WALK'S PREFERRED PASS CHOSE — a body whose source resolved a network door's
-   own entry name against the global object. The count lives on the RUNTIME because the walk is quickjs's, and it
-   is forwarded through this file because this file is what holds the session's context: a composer with no
-   runtime in hand would otherwise have to be given one for a single row, and the row's denominator is the drive
-   count directly above, which is also here.
-   WHY IT IS A ROW AND NOT AN INFERENCE: a run in which NO body carries that bit behaves byte-identically to a run
-   with no order in it, so `orphansDriven` alone cannot tell AN ORDER THAT FIRED from AN ORDER WHOSE PREFERRED
-   POPULATION WAS EMPTY, and those two take opposite work — the first says read the addresses the drives produced,
-   the second says find out why a bundle whose compiler resolved `fetch` dozens of times has no FUNCTION body
-   spelling it, which is a question about PROGRAM bodies this walk skips by construction. */
+/* How many of those drives the walk's preferred pass chose: a body whose source resolves a network door's entry
+   name against the global object. The count lives on the runtime (the walk is quickjs's) and is forwarded here,
+   where the session's context and the drive count it is read against are. A run in which no body carries that bit
+   behaves exactly like a run with no order, so without this row "the order fired" and "its preferred population
+   was empty" read alike, and they take opposite work (read the drives' addresses, or find out why a bundle that
+   resolves `fetch` has no function body spelling it). */
 long engine_orphan_preferred(void) {
     DCHECK(g_sess_ctx != NULL, "the orphan order's witness was asked for outside a session — the count is on the "
                                "runtime this file holds, so with no context there is no walk to report about");
     return (long)JS_OrphanPreferredTakes(JS_GetRuntime(g_sess_ctx));
 }
 
-/* …AND OVER HOW MANY DISTINCT SCRIPTS THOSE DRIVES WERE SPREAD — the order's OTHER witness, and the one that
-   answers the defect the order was built for. The preference bit above says WHICH KIND of body the walk chose;
-   this says whether the walk kept choosing from ONE CHUNK. They are two independent facts about one walk and
-   neither implies the other: a run can be all-preferred and all from one script, and a run can be fairly spread
-   with no preferred body in it.
-   READ AS A RATIO AGAINST THE DRIVE COUNT, which is why all three rows are composed on one line of the census.
-   One script per hundred drives is the monopoly measured on app.gitpod.io — 179 drives, every recorded fork site
-   inside the HLS player one chunk ships — and a count near the page's chunk count is that order working. */
+/* Over how many distinct scripts those drives were spread: the order's other witness. The preference bit says
+   which kind of body was chosen; this says whether the walk kept choosing from one chunk. Read as a ratio
+   against the drive count (all three rows are composed on one census line): one script per hundred drives is
+   one chunk monopolising the drives; a count near the page's chunk count is the order working. */
 long engine_orphan_scripts(void) {
     DCHECK(g_sess_ctx != NULL, "the orphan order's fairness witness was asked for outside a session — the table "
                                "is on the runtime this file holds, so with no context there is no walk to "
@@ -5259,95 +5224,56 @@ long engine_orphan_scripts(void) {
     return (long)JS_OrphanScriptsDrawn(JS_GetRuntime(g_sess_ctx));
 }
 
-/* AND THE GENERATION AT WHICH THIS DOCUMENT LAST WALKED THE HEAP. Creating a function object is the only event
-   that can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the
-   previous one already took — and the walk is O(live objects) while a frontier has one finishing flow after
-   another asking. Not a memo about any orphan: it is the answer to "has anything happened", and being wrong in
-   the only direction it can be wrong (a 2^32 wrap) costs one redundant walk. */
+/* The generation at which this document last walked the heap. Creating a function object is the only event that
+   can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the previous
+   one took, and a walk is O(live objects). It is not a memo about any orphan, and its only error (a 2^32 wrap)
+   costs one redundant walk. */
 static uint32_t g_orphan_gen_seen;
 static int      g_orphan_gen_valid;
-/* WHAT EACH ASK DID, BECAUSE `asked` MINUS WHAT THE STEP-UNIT HISTOGRAM NAMES IS TWO STATES AND NOT ONE.
-   engine_orphan_seed has exactly FOUR exits past `g_orphan_asks++`, and solver/step_unit.h names only the two
-   that produce work: `seed-one-orphan-flow` and `hand-a-parked-drive-its-function` are written past a take,
-   so a reader subtracting them from the ask count is left with a residue that is the MEMO having answered for
-   an unchanged generation OR the walk having run and found the heap empty. Those take opposite work — the
-   first is a question about `js_closure2`'s generation bump and about how often this frontier asks between
-   two closures, the second is a fact about the HEAP and is what the named residual at the take is about (a
-   body whose only closure was already released has no live function object to be handed over) — and
-   engine/build.mjs's own verdict for a driveless span offers exactly those two as an alternation it cannot
-   choose between, in as many words. This is that alternation given rows.
-   THE PARTITION IS THE POINT AND THE ROWS ARE HOW IT IS CHECKED. `asks` is raised at the ENTRY past the
-   forking gate and each of these three at exactly one exit, so the equality asserted at
-   engine_step_unit_runs states that every ask reached one of the exits that names itself — which is
-   `sum(g_step_unit_runs) == g_steps`'s argument at a smaller scale, and is broken by precisely the thing that
-   would otherwise widen the unexplained residue in silence: an early return added between the ask and the
-   exits. A row incremented on the line beside the ask would be equal by construction and would assert
-   nothing.
-   PER-SESSION, LIKE THE PAIR THEY PARTITION AND UNLIKE `g_step_unit_runs`, which is released by nothing.
-   That is not a detail: it is the whole reason the take's own row is here rather than read off the histogram,
-   since an equality between a per-session total and a per-instance summand holds only on a host that opens
-   one session per instance and would go silently wrong on one that does not.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing in the engine reads these, no arm of the walk branches on
-   one, and "how many asks found nothing" is exactly the shape a no-progress detector would be built from.
-   NAMED RESIDUAL — WHAT IS NOT COVERED: the split is readable only from a DCHECK's message when the partition
-   breaks, because no census publishes it, so the alternation engine/build.mjs states stays undecidable for
-   every reader of a result document. WHAT THE NEXT DIFF BUILDS: the three rows beside `_orphansDriven`/
-   `_orphansAsked` in solver/result.c's census, which is a cross-boundary landing (extension/bridge.js's
-   forward list and extension/popup.js's reader are the other half and deploy on WRITE while this half is live
-   only after a build), so it is one diff and not this one. HOW ITS ABSENCE SHOWS: a reader holding a document
-   whose ask count exceeds the sum of its `seed-one-orphan-flow` and `hand-a-parked-drive-its-function` rows
-   can state the residue and cannot state which of the two mechanisms produced it. */
+/* What each ask did. engine_orphan_seed has four exits past `g_orphan_asks++`, and solver/step_unit.h names only the
+   two that produce work (`seed-one-orphan-flow`, `hand-a-parked-drive-its-function`), so the residue would be
+   either the memo answering for an unchanged generation or the walk finding the heap empty, which take opposite
+   work (js_closure2's generation bump and the asking rate, or the heap; see the residual at the take). Each row is
+   raised at exactly one exit, and engine_step_unit_runs asserts they sum to the asks, which an early return added
+   between the ask and the exits would break. Per session, like the pair they partition (unlike
+   `g_step_unit_runs`), so the identity holds on a host that opens several sessions per instance. A report only.
+   Named residual. Not covered: the split is readable only from a DCHECK message when the partition breaks, since
+   no census publishes it. Next diff builds: the three rows beside `_orphansDriven`/`_orphansAsked` in
+   solver/result.c's census, landed with extension/bridge.js's forward list and extension/popup.js's reader as one
+   cross-boundary diff. Absence shows as: a document whose ask count exceeds its two named step-unit rows, with
+   no way to say which mechanism produced the residue. */
 static long g_orphan_asks_memo, g_orphan_asks_empty, g_orphan_asks_took;
-/* …AND WHICH EXIT EACH ASK TOOK — see solver/engine.h for the two opposite repairs this partition decides
-   between and why it is one struct. Returned WHOLE rather than through three out-params for engine_rival_miss's
-   reason: a partition read through three calls is three moments. */
+/* Which exit each ask took (solver/engine.h says which two repairs this decides between). Returned whole,
+   for engine_rival_miss's reason: a partition read through three calls is three moments. */
 EngineOrphanExits engine_orphan_exits(void) {
     EngineOrphanExits e;
 
     e.memo = g_orphan_asks_memo; e.empty = g_orphan_asks_empty; e.took = g_orphan_asks_took;
     return e;
 }
-/* THE ROUND TRIP'S TWO NUMBERS. How many waits a take has SATISFIED, and how many waiting flows FINISHED
-   without ever being handed a body. The third, how many were rebuilt, is the cold tier's own
-   (cold_resumed().orphans) and is not restated here.
-   THE UNMET COUNT IS THE OBSERVABLE, and it is counted at the finish rather than derived from the other two
-   because the other two do not subtract: a waiting drive forks arms while it replays, so more flows can be
-   satisfied than there were records, and a difference of counts would report that healthy multiplicity as a
-   loss. A drive that finished still waiting is the loss, exactly, with nothing else in it — the bundle no
-   longer holds the body its recipe named, or the locator does not name what it was written for. On a document
-   whose bytes did not change between two sessions it is ZERO, and nothing else in the run would say so: a
-   resumed frontier whose most expensive members drive nothing looks identical to one that worked. */
+/* The round trip's two numbers: waits a hand-over satisfied, and waiting flows that finished without a body. The
+   third, how many were rebuilt, is the cold tier's (cold_resumed().orphans). The unmet count is counted at the
+   finish, not derived: a waiting drive forks arms while it replays, so more flows can be satisfied than there
+   were records, and a difference would report that as a loss. A drive that finished still waiting is the loss
+   exactly (the bundle no longer holds the body, or the locator does not name it), and on unchanged bytes between
+   two sessions it is zero. */
 static long g_orphan_claims_met, g_orphan_claims_unmet;
-/* …AND WHETHER ANY CLAIM IS STILL OPEN. It is a LATCH set by a walk that found none, not a counter maintained
-   at every site that could clear one: a claimant can also leave the frontier by being finished or paged, and a
-   counter would then have to be decremented at flow_remove, at flow_release and at the park — three obligations
-   for a fact one walk answers exactly. It stops for good the first time it finds the frontier holds none.
-   THIS SAID THE WALK "RUNS ONCE PER ORPHAN TAKEN", AND IT IS REWRITTEN RATHER THAN DELETED because the reason it
-   was true is the reason the latch has to be cheap: while a take was the only door, the walk ran a few dozen
-   times in a session and the latch was an optimisation. engine_orphan_born is a SECOND reader of the same walk
-   at a FAR hotter event — every function object the runtime builds — so the latch is now what makes that door
-   affordable rather than merely tidy, and it is answered at the seeding (engine_orphan_claim_open) instead of
-   being discovered on the first closure of the compile. The walk is still O(members) and still only in a session
-   that resumed drives at all; what changed is how often it would run without the latch. */
+/* Whether any claim is still open: a latch set by a walk that found none, rather than a counter that flow_remove,
+   flow_release and the park would all have to decrement. Only cold_resume opens claims, before any flow is
+   picked, so once none is open none ever is. engine_orphan_born reads it at every function object the runtime
+   builds, so the latch is what makes that hook cheap; it is set at seeding (engine_orphan_claim_open). */
 static int g_orphan_claims_closed;
 
-/* HAND THIS BODY TO EVERY RESUMED DRIVE THAT WAS WAITING FOR IT, and answer how many there were.
-   EVERY ONE OF THEM AND NOT THE FIRST. What a take consumes is the `entered` BIT; the function object itself
-   is not consumed by being called, and the session that recorded these flows had exactly this shape — ONE
-   function and N flows whose frames were clones of one call of it. Handing it to the first claimant and
-   leaving the rest waiting would starve every arm of a drive but one, which is the same silent drop as
-   dropping the record.
-   IT IS A WALK OF THE FRONTIER AND NOT A TABLE KEYED BY HASH, for the reason cold.c gives about its own
-   deleted pointer-keyed index one level over: the value would be a `Flow *`, a flow leaves the frontier by
-   several different doors, and an entry that outlives its flow answers a later take with a dangling pointer.
-   The registry is the one structure that cannot be stale about which flows exist, so it is what is asked. */
+/* Hands this body to every resumed drive waiting for it and answers how many there were. Every one, not the first:
+   a take consumes the `entered` bit, not the function, and the recording session had one function with N flows
+   whose frames were clones of one call, so handing it to one would starve the other arms. A walk of the frontier
+   rather than a table keyed by hash, for the reason cold.c gives about its deleted index: a `Flow *` value would
+   dangle once its flow left by one of several doors, and the registry cannot be stale about which flows exist. */
 static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash);
 
-/* IS ANY INHERITED CLAIM STILL WAITING FOR A BODY — the same predicate the routing walk counts as `open`, asked
-   ONCE at seeding so that a session which inherited no drive never pays for the routing walk at all. It is the
-   latch's answer computed where the answer is already known rather than discovered on the first closure a page
-   builds, which is what engine_orphan_born needs it for: that hook is reached by EVERY function object in the
-   runtime, and the latch is the whole of what makes it free. */
+/* Is any inherited claim still waiting for a body? The routing walk's `open` predicate, asked once at seeding so a
+   session that inherited no drive never pays for the walk, which engine_orphan_born would otherwise run at every
+   function object. */
 static int engine_orphan_claim_open(void) {
     Flow *fl;
     int i;
@@ -5357,40 +5283,24 @@ static int engine_orphan_claim_open(void) {
     return 0;
 }
 
-/* THE SAME WALK, ASKED AT THE ONE MOMENT THE BODY EXISTS RATHER THAN AT A TAKE — quickjs's JS_SetOrphanBornHook.
-   A take enumerates the HEAP, so it can hand over only a body some live reference is holding; a body whose only
-   closure is a NESTED DECLARATION inside a call frame is released with that frame, so it is takeable for the
-   length of one frame and invisible before and after. Whether any flow's ask falls inside that window is a fact
-   about the SCHEDULE, which §Testing names as the shape a green must never depend on — and the round trip is
-   where it stops being a nicety, because the nested body is itself a parked claim and its own parent is another.
-   MEASURED, ON THE FIXTURE'S OWN RESIDUE, AND IT IS WHY THIS EXISTS. The cold document ships an uncalled
-   function with an uncalled function inside it, so the residue carries THREE locators: two arms of the outer
-   drive and one for the inner body. A session that SEEDS the outer drive takes the inner body, because the
-   outer arm FORKS and the fork CLONES the live frame, so the nested closure stands in the frontier until the
-   sibling is picked. A session that RESUMES the outer drive from the residue does not fork at all — the replay
-   consumes a RECORDED arm — so the outer call is built and its frame ends inside ONE step, and the inner body is
-   offered to nobody: one take in the whole session, `seed-one-orphan-flow` 0, and the third claim carried
-   forward unmet. Running the residue through a third session is a FIXED POINT — same nineteen records, 2 met, 1
-   unmet, for ever. The claim, the locator, and the routing to EVERY claimant were all correct; what was missing
-   was a moment at which the claim could be satisfied.
-   IT ROUTES AND NEVER SEEDS, which is the one thing this door may not borrow from the take. A body nobody
-   claimed is left takeable and the take seeds it exactly as before. Seeding here would mint a frontier member
-   from inside a compile, with no flow switched in and no path under it — the take asserts both of those at the
-   line that mints, and they are properties of the DISCOVERING FLOW, which a closure's creation does not have. */
+/* The same walk asked when a body is created (quickjs's JS_SetOrphanBornHook) rather than at a take. A take
+   enumerates the heap, so it can hand over only a body a live reference holds; a nested declaration's closure is
+   released with its frame and is takeable for one frame only. Whether an ask falls in that window is a fact
+   about the schedule. A resumed outer drive consumes a recorded arm instead of forking, so its frame ends within
+   one step and a nested body's claim would never be met (on the cold fixture's residue: 2 met, 1 unmet, a fixed
+   point across sessions). This hook routes and never seeds: a body nobody claimed stays takeable, and seeding here
+   would mint a member from inside a compile with no flow switched in, which the take asserts against. */
 static int engine_orphan_born(JSContext *ctx, JSValueConst fn, int argc, void *opaque) {
     uint64_t hash;
 
     (void)opaque;
-    /* THE LATCH FIRST, BEFORE THE HASH. Only cold_resume opens a claim and it runs before any flow is picked, so
-       a frontier that holds none holds none for the rest of the session — and this hook is on the path of every
-       function object a page builds, so a session with no residue must pay one load and one branch here and not
-       a fold over a function's source text. */
+    /* The latch first, before the hash: this hook runs for every function object a page builds, so a session
+       with no residue pays one load and one branch, not a fold over source text. */
     if (g_orphan_claims_closed) return 0;
     hash = JS_OrphanHash(ctx, fn);
-    /* THE LOCATOR IS THIS CODEBASE'S OWN COMPOSITION over bytes a stranger wrote, so its WELL-FORMEDNESS is an
-       invariant this engine owes and may assert — solver/cold.c refuses this same value on the way IN ("no body
-       hashes to the value this file uses to mean 'not a drive'"), and the two ends have to agree or a residue
-       would carry a name no claim could ever match and the drive would wait for ever. */
+    /* The locator is this codebase's composition over page bytes, so its well-formedness is ours to assert:
+       solver/cold.c refuses the same reserved value on the way in, and the ends must agree or a claim could never
+       match. */
     DCHECK(hash != 0,
            "a body this runtime has just built names itself with the value the cold tier writes to mean 'not a "
            "drive' — solver/cold.c refuses that locator when it reads a residue, so a claim could never match "
@@ -5410,49 +5320,29 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
                "a flow is waiting for an orphan's body without being marked as a drive — the three fields are "
                "one identity, written together by the cold tier's rebuild, so this flow was assembled by "
                "something that set part of it");
-        /* IT BUILDS THE CALL ITSELF, LATER, IN ITS OWN TIMELINE. Only the function crosses here, because the
-           receiver and the arguments are concolic OBJECTS: minted under this flow's stamp they would be this
-           flow's private state for the rest of the session, so no delta would ever capture the claimant's
-           writes to them and no rewind would restore them. */
+        /* Only the function crosses here; the claimant builds its call later in its own timeline, because the
+           receiver and arguments are concolic objects that, minted under this flow's stamp, would be this flow's
+           private state, outside every delta. */
         fl->fn = JS_DupValue(ctx, fn);
         fl->orphan_argc = argc;
         n++;
     }
-    /* THE LATCH, SET BY THE WALK ITSELF. Only cold_resume opens a claim and it runs once, before any flow is
-       picked, so a frontier that holds none holds none for the rest of the session. `open` is counted before
-       this pass satisfies anything, so a pass that satisfies the last of them latches on the NEXT take. */
+    /* The latch, set by the walk itself. `open` is counted before this pass satisfies anything, so a pass that
+       satisfies the last claim latches on the next one. */
     if (!open) g_orphan_claims_closed = 1;
     g_orphan_claims_met += n;
     return n;
 }
 
-/* THE CALL A DRIVEN ORPHAN IS. Mints one concolic per declared parameter and one for the receiver, and returns
- * the flow base that calls `fn` with them.
- * THIS SAID THE ARGUMENTS ARE UNKNOWN EXTERNAL INPUT "BY DEFINITION, SINCE NOTHING IN THE PAGE EVER SUPPLIED
- * ANY", AND THE SECOND HALF IS FALSE IN THE ONE CASE WHERE A PAGE DOES SUPPLY ONE — kept in its own words
- * because the reading it licenses is the one a reader re-derives, and the diff it licenses DELETES AN ARM. A
- * DEFAULT INITIALIZER is a value the page itself built for a parameter, and the drive already reaches it: the
- * parser emits `OP_get_arg k; OP_dup; OP_undefined; OP_strict_eq; OP_if_false` per defaulted parameter, so the
- * unknown minted here meets the page's own `=== undefined` gate and FORKS — one arm dropping the unknown and
- * running the page's default expression, one keeping it. The mint is therefore CORRECT and its stated reason
- * was not, which matters because the natural repair for "a drive never takes a real value" is to hand this
- * site one: that decides the gate, and §a-wrong-narrowing is exact about the cost — it deletes the arm in
- * which the page's own default ran, with nothing contradicted. The invariant below is that line made
- * checkable rather than argued.
- * WHAT A PARAMETER WITH NO DEFAULT IS WORTH IS UNCHANGED AND IS WHY THE UNKNOWN STAYS: its value is its
- * CALLER's, an orphan is a body no caller reached, so no value for it exists anywhere in the program and
- * §Attacker-sources' symbolic argument is the only honest answer.
- * RETIREMENT: this record goes when the defaulted-parameter arm is asserted where the fork is taken rather
- * than described here, because the arm is then un-deletable by construction instead of by a reader meeting
- * this paragraph.
- * IT RUNS IN THE TIMELINE OF THE FLOW THAT WILL DRIVE IT, which is why it is a function rather than two copies:
- * the receiver and every argument are objects, so they are stamped with the running flow's generation and are
- * that flow's private state for the rest of the session. Minting them under one flow and handing them to
- * another would put a second flow's writes into the first flow's private set, where no delta captures them and
- * no rewind restores them.
- * THE UNKNOWNS ARE NAMED BY THE BODY'S LOCATOR, not by an ordinal — see g_orphans_driven for why that changed
- * and what it costs to get wrong: the name is part of every question this call's branches ask, and a question
- * asked under a name the recording session did not use is a divergence at the drive's first branch. */
+/* The call a driven orphan is: mints one concolic per declared parameter and one for the receiver, and returns the
+ * flow base that calls `fn` with them. A parameter with no default has no value anywhere in the program (its caller
+ * is what never ran), so a symbolic argument is the only honest one. A defaulted parameter is reached anyway: the
+ * parser emits `OP_get_arg k; OP_dup; OP_undefined; OP_strict_eq; OP_if_false`, so the unknown meets the page's own
+ * `=== undefined` gate and forks, one arm running the page's default. Handing this site a concrete value would
+ * decide that gate and delete the default's arm; ORPHAN_BINDS_OPEN checks it.
+ * It runs in the timeline of the flow that will drive it: the receiver and arguments are objects stamped with the
+ * running flow's generation, private to it for the session, so minting them under another flow would put this
+ * flow's writes outside every delta. The unknowns are named by the body's locator (see g_orphans_driven). */
 static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash) {
     JSValue *args = NULL, self, *base;
     char id[64];
@@ -5465,31 +5355,15 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
         args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
         CHECK(args, "engine: OOM minting a driven orphan's arguments");
     }
-    /* WHAT EVERY VALUE THIS SITE BINDS MUST STILL BE: SOMETHING THAT DECIDES NO BRANCH THIS RUN DID NOT PROVE.
-       That is the whole of what the banner's correction above is about, and it is spelled ONCE and expanded at
-       both mints rather than written twice, so the receiver and an argument cannot drift into two answers to
-       one question. §concolic.h grades HELD as "an example a document or a server SUPPLIED", and NOTHING
-       supplied this one — an orphan's parameter has no value anywhere in the program, its caller being the
-       thing that never ran — so a HELD value here is one this engine invented and then let mark a PRIMARY arm.
-       IT IS NOT VACUOUS AND THE ARMING INPUT IS EXACT, read off `example_state_of` rather than assumed: that
-       function returns NONE for `JS_IsUndefined(c->example)`, which is what this site passes today, and falls
-       through to HELD for any non-undefined example with no pin and no contradiction. So handing
-       `concolic_new` a real example at either mint fires this, which is precisely what the repair "let a drive
-       take a real value" invites.
-       WHY IT ASKS ONLY THIS AND NOT ALSO `concolic_is` — THE WIDER TEST WAS WRITTEN AND IS REFUSED, recorded
-       because it is the one a reader re-derives. `concolic_new` legitimately returns CONCRETE bytes at this
-       mint by two arms: a pinned source (§CONCRETIZE-ON-PIN, a fact the run proved) and an @S CANDIDATE
-       re-fire substituting the attacker's payload at this very source. A `concolic_is(v) ||
-       concolic_src_pinned(id)` disjunct admits the first and REFUSES the second, because `cand_matches` is
-       static to concolic.c and keyed on `g_cand_src`, and no public predicate asks whether a candidate is
-       substituting THIS source (`concolic_candidate_delivered` is a different fact — whether a delivery
-       happened at all). That assert would therefore abort a candidate verification run, which
-       §Offensive-programming names by hand as NOT a `@WHY`: "an unsolved `@S` sink (a parked search)" is the
-       exploration surface. Both refused arms answer NONE here, not HELD, so this test is sound in every one of
-       them. What it does NOT reach, stated so the guard is not read as wider than it is: a diff that REPLACES
-       the mint with a concrete value is invisible to it.
-       RETIREMENT: this record goes when concolic.h publishes the per-source candidate predicate, because the
-       wider disjunct is then spellable from here and the refusal above has nothing left to explain. */
+    /* What every value bound here must be: something that decides no branch the run did not prove. concolic.h
+       grades HELD as "an example a document or a server SUPPLIED", and nothing supplied an orphan's parameter, so
+       a HELD value here is invented and would mark a primary arm. `example_state_of` returns NONE for an undefined
+       example, which is what this site passes, and HELD for any other unpinned, uncontradicted example, so passing
+       a real example fires it. It deliberately does not also refuse every concrete value: `concolic_new` returns
+       concrete bytes for a pinned source and for an @S candidate substituting this source, and no public
+       predicate asks the latter (`cand_matches` is static to concolic.c), so a wider assert would abort candidate
+       verification. Both of those answer NONE here. A diff replacing the mint with a concrete value is invisible
+       to it. Spelled once and expanded at both mints. */
 #define ORPHAN_BINDS_OPEN(v, nm) \
     DCHECKF(concolic_example_state(v) != CONCOLIC_EX_HELD, \
             "a driven orphan bound %s to a value carrying a HELD example — an orphan's parameter has no value " \
@@ -5500,211 +5374,46 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
 
     for (k = 0; k < argc; k++) {
         snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
-        /* THIS ENGINE'S OWN INSTRUMENT, which is the whole reason that word exists. A driven orphan's
-           argument stood in NO byte anywhere — the thing that never ran is its caller, so nothing supplied
-           it and no parse of anything could state it. §What-the-tool-produces' bar is literally TRUE of an
-           address composed from it ("it exists only at run time") and the claim that bar is MAKING is false
-           of it: nothing was LEARNED, because the hole is ours. The same sentence the assert below makes
-           about the EXAMPLE, made about the PROVENANCE. */
+        /* This engine's own instrument: the argument stood in no byte anywhere, so an address composed from it is
+           runtime-only but nothing was learned from it; the provenance says so, as the assert says it of the
+           example. */
         args[k] = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
         ORPHAN_BINDS_OPEN(args[k], id);
     }
     snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
-    /* AND THE RECEIVER IS THE SAME FACT — see the loop above. */
+    /* The receiver is the same fact. */
     self = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
     ORPHAN_BINDS_OPEN(self, id);
 #undef ORPHAN_BINDS_OPEN
 
-    /* NAMED RESIDUAL — WHAT IS NOT COVERED: a drive cannot read a MODULE-LEVEL binding at all, so the values
-       an address is composed from are out of its reach whatever is done to its arguments. A module's bindings
-       are closure cells (quickjs.h's JSTimeTravelHooks.module_eval, in its own words) and ride the delta
-       through `cell_write`; `cow_capture_varref` has no flow-private skip, there being no per-cell generation
-       to ask; and a module's EVALUATION STATE is per-flow, which that hook's own banner says is "the state
-       that decides whether a flow evaluates AT ALL". So a cell written by the flow that LINKED the module
-       is restored to its baseline — UNINITIALIZED, a module binding being in TDZ before the prologue runs —
-       for every flow that is not that flow's descendant, and `OP_get_var_ref_check` throws rather than
-       evaluating anything. IT IS THE LINKING FLOW AND NOT THE EVALUATING ONE, which is a correction and not a
-       spelling: the clause below carries why, and the difference is that re-evaluating reaches the cell never
-       while re-linking cannot happen at all, the status being at baseline for every world. So "each world
-       evaluates the module once" is not a cure that was merely out of reach — it is a cure for the wrong
-       phase.
-       AND THE `AT BASELINE FOR EVERY WORLD` HALF OF THAT IS RETIRED BY THE CONSTRUCTION THIS RECORD STATES AS
-       MET THREE PARAGRAPHS DOWN, AND IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO STOPS HERE BUILDS TO AN
-       ASYMMETRY THAT IS GONE — MEASURED, AND THE COST WAS A DISPATCHED BRIEF. `js_module_set_status` is the
-       only assignment to a module's status in the engine and its body is `js_module_eval_capture(ctx, m);
-       m->status = status;`, so the status is PER-FLOW exactly as the cells are. A coordinator read this clause
-       as the live mechanism, inferred that the cure was to make the link phase's cell writes BASELINE "matching
-       its status", and dispatched it; the repair had landed in the OPPOSITE direction, the status having been
-       moved to match the cells, so the proposed diff was already done and its premise was the half this clause
-       had not retired. THE TELL IS THAT A RESIDUAL'S HEAD IS READ AND ITS RETIREMENT NOTES ARE NOT.
-       WHAT IS LEFT IS A MISSING TRIGGER AND NOT AN ASYMMETRY, which takes different work. Both halves being
-       per-flow means a world whose cells read UNINITIALIZED also reads the status UNLINKED, so §16.2.1.6.1.2
-       Link ( ) is genuinely OWED in that world and a flow that IMPORTS performs it and writes its own cells. A
-       DRIVE has no import — its world is the discovering flow's, `engine_sibling_assemble` below being handed
-       `f` — so nothing in its timeline reaches the link and `OP_get_var_ref_check` throws at the first read.
-       The population is flows with NO IMPORT OF THEIR OWN, not flows outside a linking ancestry.
-       AND THE PAIR THAT IS STILL ASYMMETRIC IS CORRECT AS IT STANDS, which is the next error available:
-       `JSModuleEvalState` holds `status`, both dfs indices, `stack_prev`, `cycle_root`, the capability and the
-       async accounting, and NOT `loaded`, `func_created`, `func_obj` or the export `var_ref`s — so the
-       STRUCTURAL half of the link is baseline and built once. That is what makes a re-link in a second world
-       cheap and what keeps the cells ONE set of shared JSVarRefs whose VALUES the delta isolates; capturing it
-       would give each world its own cells and merge nothing, and re-running `js_create_module_function` per
-       world would re-dup every export's `var_ref`. Read JS_ModuleEvalStateSave's field list before proposing
-       either.
-       RETIREMENT — RE-KEYED BY ONE PHASE, AND THE OLD WORDING IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO
-       RE-DERIVES IT FROM `Link` WILL WRITE `Link` AGAIN. It read: this record goes when a drive issues
-       §16.2.1.6.1.2 Link ( ) for the module its body belongs to IN ITS OWN WORLD before building the call,
-       which needs the module back-pointer §16.2.1.7.3.1 InitializeEnvironment ( )'s "Set the ScriptOrModule of
-       moduleContext to module" names and that JSFunctionBytecode does not carry — MEASURED ABSENT with the
-       command, so this condition is not born met: over the struct's own line range `grep -c JSModuleDef` answers
-       0 against `grep -c 'JSContext \*realm'` answering 1 as the armed control. Every clause of that is correct
-       and the back-pointer half is untouched; what it got wrong is WHICH PHASE makes the body answerable.
-       LINK IS ONE PHASE SHORT OF THE POPULATION THIS RECORD IS ABOUT, AND THE SPEC'S OWN ASYMMETRY IS WHY — so a
-       drive built to satisfy the retired condition would ENTER the body and still read `undefined` for half of
-       what the module declares, which is the direction that reads as a reach gap rather than as a phase gap.
-       §16.2.1.7.3.1 walks the lexically-scoped declarations and performs `CreateImmutableBinding` where
-       `IsConstantDeclaration` is true and `CreateMutableBinding` otherwise, and then performs `InitializeBinding`
-       for EXACTLY the function, generator, async-function and async-generator declarations: a `const` gets a
-       binding and NO VALUE. What values it is `Evaluation of module.[[ECMAScriptCode]]` in §16.2.1.7.3.2
-       "ExecuteModule ( [ capability ] )", which §16.2.1.6.1.3 "Evaluate ( )" runs and which Link does not
-       reach — so after Link alone a module-level FUNCTION export is CALLABLE and a module-level `const` is in
-       TDZ. That is a difference no reach count can express, and `mod-drive-fn == 1` beside `mod-drive-const == 0`
-       over `/chunk/mdmod.js` in test_forced.c is the one reading that states it. Derived from this tree's own
-       committed corpus rather than from recall: `engine/specindex/text/ecmascript.json`, stamped `Draft ECMA-262
-       / September 2, 2026`, whose §16.2.1.7.3.1 text carries `createimmutablebinding` and `createmutablebinding`
-       for the lexical walk and `initializebinding` only inside the function-declaration arm.
-       RETIREMENT: this record goes when a drive issues §16.2.1.6.1.3 Evaluate ( ) — not Link alone — for the
-       module its body belongs to IN ITS OWN WORLD before building the call. Link stays the first half and is
-       still NECESSARY, and the back-pointer it needs is still absent by the measurement above; what the retired
-       condition was missing is that Link is not SUFFICIENT.
-       WHICH drives land inside a LINKING ancestry is therefore decided by which flow happened to run out of
-       work, a fact about the SCHEDULE, which is the same argument engine_orphan_born was built on for a
-       different fact.
-       AND THAT SCHEDULE FACT IS NOT THAT THE PARENT IS ARBITRARY — IT IS THAT THE PARENT IS SELECTED AGAINST,
-       which is the stronger statement and the one a reader who sets out to measure the arbitrariness will not
-       find. This rung's own arrival condition is stated at its call site in flow_step: it is reached when the
-       clock hooks decline, which includes A FRAME STRICTLY AHEAD WITH A REPLY STILL IN THE AIR. A flow in that
-       state is one whose own program sequence is STOPPED at a row whose source has not arrived, so its world
-       is missing exactly the chunks it is waiting for — and a module graph is delivered as those chunks. The
-       population at this rung is therefore enriched for flows whose module graph is incomplete, which is the
-       worst available parent for a drive of a body that graph defines. Nothing here is random.
-       AND THE ENUMERATION THAT PLACES THIS SITE AMONG ITS PEERS, handed over as a DERIVATION because the count
-       moves on any commit that adds a fork: `grep -n 'engine_sibling_assemble(ctx,' engine/host/solver/engine.c`
-       names every site at which a live session mints a frontier member, and `grep -n 'flow_add(\|flow_add_unseeded('`
-       over the solver directory names every other door onto the frontier. Read both and the shape is one
-       sentence: there is ONE forking primitive, every live-session member goes through it, and at every call
-       site but THIS ONE the parent is the flow whose OWN work the fork is — a reply delivered to the flow that
-       asked for it, a branch arm of the flow that branched, an answer or a decline of the flow's own ask. Only
-       here is the parent structurally unrelated to the work, because what is forked is a body the FRONTIER
-       owns and the parent is whoever ran out of their own. The other doors are roots by design and state so:
-       the session's first flow, a joined document's first flow, a cold-tier rebuild and a candidate session
-       each pass WORLD_NONE and each replays its own world rather than inheriting one.
-       AND A QUEUED JOB IS NOT ONE OF THESE DOORS, which is the half that has to be said because the spec's
-       §Every-runtime-job-is-a-scheduler-flow reads as though it were. A timer task, a delivered reaction and a
-       resumed program
-       become `f->frame` ON THE RUNNING FLOW — every frame installation in this file writes `f->frame` for the
-       `f` it was handed — so a job inherits the running flow's world by construction and has no seeding site at
-       which a parent could be chosen wrongly. A reader hunting this defect across job sources is hunting a
-       population that does not exist; what a job CAN do is run a callback whose closure belongs to a world the
-       running flow is not in, which is the same uncaptured-prologue fact arriving through a shared work queue
-       rather than through a choice of parent.
-       RETIREMENT: this record goes when the forking primitive ASSERTS whose work the fork is — a statement each
-       caller passes, which the four that can make it make and which this one cannot — because the odd site is
-       then named by a check that fires instead of by an enumeration a reader has to re-run. MEASURED NOT-MET at
-       the revision this was written: no such predicate occurs in this file or in flow.h, against the primitive's
-       own name occurring 28 times as the armed control.
-       THE NEXT-DIFF CLAUSE THAT STOOD HERE IS WRONG AND IS RECORDED RATHER THAN DELETED, because it is what
-       a reader re-derives from the paragraph above it and because its METHOD is the part that would otherwise
-       be copied. IT IS GIVEN UNQUOTED, BECAUSE A QUOTED RUN THAT IS THIS TREE'S OWN PROSE IS COMPARED AGAINST
-       WHATEVER STANDARD THE NEAREST PRECEDING CITATION NAMES — measured: adding the retirement condition above
-       made this block's §16.2.1.7.3.1 that anchor and the citation audit reported this retired clause as a
-       divergence from ECMAScript, which is a false accusation produced by punctuation rather than by anything
-       about the text. It said — a world that reads an uninitialized module binding EVALUATES that module, keyed
-       on the per-flow state JS_ModuleEvalStateSave already carries, so a flow with no import of its own reaches
-       the exports it never wrote. Every premise above it is true and the remedy does not follow, because
-       EVALUATION IS NOT WHAT WRITES THE CELL. A module's declaration instantiation is compiled into the body's
-       own `OP_push_this; OP_if_false <body>` prologue and is selected by a TRUTHY `this` — the link walk's own
-       comment in quickjs.c says so verbatim, and it is the one caller that passes `JS_TRUE`. Both evaluation
-       entries pass `JS_UNDEFINED`, which is falsy, so they take the `OP_if_false` arm into the module's own
-       code and RUN NO PROLOGUE AT ALL. A world that re-evaluated the module would therefore write none of its
-       function-declaration cells, which is most of the population: of the module-level identifiers the corpus
-       implicates, the majority are function declarations and the minority are lexicals with initializers, and
-       the clause is right only for the second kind. Re-derive it rather than taking this on trust — the three
-       readings are the prologue-selection comment, the `JS_TRUE` at the link walk, and the two eval entries'
-       arguments, all reachable with `grep -nF 'OP_push_this; OP_if_false' engine/qjs/quickjs.c` and a read of
-       each hit's neighbourhood.
-       THE METHOD THAT PRODUCED IT IS THE FINDING: the author traced the SYMPTOM (`OP_get_var_ref_check` throws
-       on an uninitialized cell) and the CAPTURE (`cow_capture_varref` has no flow-private skip) and never asked
-       WHICH INSTRUCTION WRITES THAT CELL AND WHEN. That one question decides the whole shape, and a clause
-       written without it names a remedy for a phase that does not run. So a residual about a value's isolation
-       states the WRITE it is about, not the READ that fails on it: the read is where the defect is observed and
-       the write is where it is caused, and they are routinely in different phases of different algorithms.
-       AND THE ASYMMETRY THE CORRECTED READING NAMES IS ONE PHASE ISOLATED TWO OPPOSITE WAYS, which is why no
-       re-seeding and no re-evaluation reaches it. The prologue's cell writes go through the page's own write
-       hooks and are therefore PER-FLOW, captured into whichever delta was being captured into. The module's
-       STATUS is a field of a C record and is written by the link phase with NO capture anywhere in its chain —
-       re-derived here, with the control armed, as 92 capture calls in quickjs.c against ZERO in the range that
-       holds the three link-phase status writes. So every world reads the module LINKED while only the linking
-       world ran the prologue, and a flow that is not that world's descendant finds the status saying there is
-       nothing to do and the cells saying nothing was done. THAT IS quickjs's HALF AND NOT THIS FILE'S, which is
-       why it is named here rather than attempted.
-       RETIREMENT — MET BY A CONSTRUCTION, AND THE SYMPTOM REPRODUCES ANYWAY, WHICH IS THE PART WORTH MORE
-       THAN THE RETIREMENT. The condition read: this goes when a module's link-phase cell writes and its status
-       write are isolated the SAME way — both captured or both at baseline — and it is met. `js_module_set_status`
-       is the only ASSIGNMENT to a module's status in the engine and its body is `js_module_eval_capture(ctx, m);
-       m->status = status;`, so the announcement is part of the write and no site can forget it. MEASURED WITH
-       THE COMMAND rather than relayed, because the figure this record first carried was a count of a SPELLING
-       that admits comparisons: `grep -cE '\bm1?->status *= *[^=]' engine/qjs/quickjs.c` answers TWO — the
-       helper's own line, and `JS_ModuleEvalStateRestore`'s `m->status = b->status`, which that site's comment
-       deliberately exempts because a restore is the delta being UNAPPLIED and announcing it would offer the
-       value being restored as this flow's first baseline. The same pattern written as `status *=` answers 35,
-       every extra hit a `==`, which is why the count is stated with the regex beside it.
-       AND THE ERROR THIS RECORD'S OWN ABSENCE CLAUSE PREDICTS IS STILL OBSERVED WITH THAT CAPTURE IN PLACE, SO
-       THE ASYMMETRY WAS NOT THE WHOLE CAUSE. Measured on `app.gitpod.io` at the revision that landed the
-       seed-order fix: a drive's page errors carried `__vite__mapDeps is not initialized` on a frame rendering
-       as `Concolic.`, which is this record's HOW-ITS-ABSENCE-SHOWS clause exactly, and the bundle's own
-       declaration is `const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=[…])))=>i.map(i=>d[i])` — a
-       top-level LEXICAL WITH AN INITIALIZER, read from its own DEFAULT PARAMETER, inside an `async` function's
-       resumed continuation. That is the MINORITY kind this record already separates from the function
-       declarations, and §10.2.11 FunctionDeclarationInstantiation evaluates a formal parameter's initializer as
-       part of the CALL, by which time §14.3.1 Let and Const Declarations has initialised the outer binding — so
-       a browser reads the binding and this engine read a cell its own timeline had written as though it had not.
-       WHAT IS NOW KNOWN AND WAS NOT: the status capture does not reach it, so the remaining cause is downstream
-       of both phases being isolated alike. WHAT THE NEXT DIFF BUILDS: nothing here, because the population is a
-       FIXTURE statement rather than a page — `test_forced.c` carries `mdSelf` and `mdFork`, one plain and one
-       over a forked gate, each reading a top-level `const` from its own default parameter inside a continuation
-       and emitting a CONSTANT token, so the next build says whether the defect reproduces with no network, no
-       bundle and no schedule luck in it. HOW ITS ABSENCE WOULD SHOW: those statements' tokens absent from the
-       learned addresses while their enclosing continuation ran, or present reading `mdWRONG`/`mdfWRONG`.
-       AND THE METHOD NOTE ABOVE IS WHAT CAUGHT THIS: a residual about a value's isolation states the WRITE it
-       is about, and for a lexical with an initializer that write is the module BODY's, not the prologue's — so
-       the two kinds this record separates need two different cures, and only the first one's was built.
-       HOW ITS ABSENCE SHOWS: an uncaught `<name> is not initialized` whose named binding resolves to a
-       module-top-level declaration, reported on a frame whose receiver renders as `Concolic.` — and that
-       second half is a NECESSARY and not a sufficient condition for the reading flow being a drive, which is
-       the correction this clause carries rather than the claim it first made. It said "the receiver being
-       this site's mint, so the frame says the reading flow is a drive", and `js_callsite_data_line` renders
-       `"%s."` from `js_callsite_type_name` — the RECEIVER'S TYPE NAME, as its own comment states ("a method
-       call is `Foo.bar` ... the second is the receiver's type") — so the prefix is the CLASS of whatever the
-       receiver was and nothing in the frame carries a source identity. EVERY concolic receiver renders it: a
-       member read off server-injected state, a call result, `{location.hash}`'s own members. The wrong half
-       is kept because it is the half a reader re-derives from this site minting the receiver, and because it
-       is the half that would make a reachability witness out of a frame that cannot carry one. What the
-       observation does establish is that the receiver was an unknown THIS engine minted rather than a value
-       the page held, which is true of every drive and of no ordinary page call; telling a drive's frame from
-       another unknown's needs the argument identity, which the frame does not print. A reader holding such an
-       error can state that some exploring flow died at its first touch of a value the page had built, and
-       cannot state which kind of flow from the frame, nor state the population from any count the run
-       publishes.
-       RETIREMENT: this record goes when a frame in this tree carries the SOURCE IDENTITY of a concolic
-       receiver beside its class, because the drive-versus-other-unknown question is then read off the frame
-       instead of being undecidable in it. */
+    /* Named residual. Not covered: a drive cannot read a module-level binding its own timeline never initialized.
+       Module bindings are closure cells written through the delta (`cell_write`; `cow_capture_varref` has no
+       flow-private skip), and a module's status is per flow too (`js_module_set_status` is the one status
+       assignment and calls js_module_eval_capture first), so a world whose cells read uninitialized also reads
+       the module unlinked. A flow that imports links it in its own world; a drive has no import (its world is
+       the discovering flow's), so `OP_get_var_ref_check` throws at its first read. The structural half of a link
+       (`loaded`, `func_created`, `func_obj`, the export `var_ref`s) is baseline and built once by design; read
+       JS_ModuleEvalStateSave's field list before proposing to capture it.
+       Two writes are involved. Function declarations' cells are written by the declaration prologue, the body's
+       `OP_push_this; OP_if_false` arm selected by a truthy `this`, which only the link walk passes (the eval
+       entries pass JS_UNDEFINED); §16.2.1.7.3.1 InitializeEnvironment initializes only function declarations.
+       A `const` gets its value from §16.2.1.7.3.2 ExecuteModule, which §16.2.1.6.1.3 Evaluate runs. test_forced.c
+       shows the split as `mod-drive-fn == 1` beside `mod-drive-const == 0` over /chunk/mdmod.js, and `mdSelf` /
+       `mdFork` read a top-level `const` from its own default parameter inside a continuation.
+       Next diff builds: a drive performs Link and then Evaluate for its body's module in its own world before
+       building the call. That needs the module back-pointer §16.2.1.7.3.1 names ("Set the ScriptOrModule of
+       moduleContext to module"), which JSFunctionBytecode does not carry.
+       Absence shows as: an uncaught `<name> is not initialized` naming a module top-level declaration on a frame
+       whose receiver renders `Concolic.` (necessary, not sufficient: the prefix is the receiver's type name,
+       which every concolic receiver shares), or `mdSelf`/`mdFork`'s tokens missing or reading `mdWRONG`/`mdfWRONG`.
+       A drive's parent is whichever flow ran out of work, the one engine_sibling_assemble caller whose parent is
+       unrelated to the work, and this rung is also reached by a flow with a frame strictly ahead and a reply in
+       the air, so parents are enriched for flows whose module graph is incomplete. A queued job is not such a
+       door: it runs on the running flow and inherits its world. */
 
-    /* take_result FALSE — A DRIVE IS FOR WHAT THE BODY REACHES, NOT FOR WHAT IT RETURNS, and here the two
-       answers are not merely uninteresting-versus-interesting. `cv` is read by arms of flow_step that
-       dispatch on its TYPE, so an orphan returning a string would arrive at the one asking whether a
-       javascript: URL evaluated to one; the drive's own completion is already carried by the exception
-       arms, which is everything this caller needs of it. */
+    /* take_result false: a drive is for what the body reaches, not what it returns. `cv` is read by flow_step arms
+       that dispatch on its type (a string would reach the javascript: URL arm); the drive's completion is carried
+       by the exception arms. */
     base = JS_FlowNewCall(ctx, fn, self, argc, (JSValueConst *)args, false);
     CHECK(base != NULL, "engine: a driven orphan's call frame could not be allocated — the bit that made "
                         "this function an orphan is already consumed, so there is no second chance at it");
@@ -5715,57 +5424,32 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
     return base;
 }
 
-/* THE THREE THINGS AN ORPHAN STEP CAN DO, all of them PROGRESS and all of them distinct work: it seeds a fresh
-   drive of a body nothing has called, it hands a body back to the drives a park recorded for it, or it builds
-   the call of a drive that has been handed one. 0 is "there was nothing to take", which is what lets the
-   caller finish. */
+/* The three things an orphan step can do, all progress and all distinct: seed a fresh drive of a body nothing
+   called, hand a body back to the drives a park recorded for it, or build the call of a drive that has one.
+   0 is "nothing to take", which lets the caller finish. */
 #define ORPHAN_STEP_SEEDED   1
 #define ORPHAN_STEP_ROUTED   2
 #define ORPHAN_STEP_RESUMED  3
 
-/* AND THE TWO ARE SEPARATE FUNCTIONS BECAUSE THEY ANSWER SEPARATE QUESTIONS, WHICH IS THE WHOLE OF THE FIX ONE
- * LAYER UP. `engine_orphan_resume` is THIS FLOW'S OWN WORK — a drive it IS, whose body a take handed back, and
- * whose call it must build before it can run anything. `engine_orphan_seed` is the FRONTIER'S work: it consumes
- * a bit that lives on shared bytecode (quickjs's JSFunctionBytecode.entered, one per body for the whole
- * runtime), it hands the body to a member that is not necessarily this one, and the flow that performs it gains
- * nothing of its own by doing so.
- *
- * THEY WERE ONE FUNCTION AND THAT MADE A RUNTIME-GLOBAL SET GATE A PER-FLOW VERDICT. flow_step asked the pair as
- * one rung directly above the exit that declares a timeline OVER, so a flow could not finish while ANY
- * un-entered body existed anywhere on the heap — a fact about the agent, decided by every other member, and
- * refilled by them too, since running page code is what creates the closures that make bodies orphans. That is
- * §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS exactly: the stricter question (has the heap been exhausted) decided,
- * and the cost landed silently on the looser one (has THIS flow run out of work), with nothing anywhere to say a
- * member had been ready to retire. The observable was a frontier that only ever grew.
- * Split, the ladder asks the flow's own question and then the frontier's, at ONE boundary — the last moment
- * before the clock is allowed to move. Which is NOT where the split first put them: the seed went to the exit
- * that declares a timeline OVER, and that exit sits BELOW the two clock-driven sources — so whether it was
- * reached at all was decided by whether core/rendering's opportunity fires, which is a property of the
- * DOCUMENT and not of the scheduler. See the rung in flow_step for that argument and for the two measurements
- * that bound it in both directions; the split itself was right and only its landing was somewhere whose
- * arrivals nobody chose. */
+/* Two functions because they answer two questions. `engine_orphan_resume` is this flow's own work: a drive it is,
+ * whose body was handed back, and whose call it must build before it can run anything. `engine_orphan_seed` is the
+ * frontier's work: it consumes a bit on shared bytecode (JSFunctionBytecode.entered, one per body per runtime), it
+ * hands the body to a member that need not be this one, and the performing flow gains nothing of its own.
+ * Asked as one, a runtime-global set would gate a per-flow verdict: no flow could finish while any un-entered body
+ * existed anywhere on the heap, and running page code keeps creating them, so the frontier would only grow.
+ * flow_step asks the flow's own question and then the frontier's at one boundary, the last moment before the clock
+ * may move, above the clock-driven sources so whether it is reached does not depend on the document's rendering
+ * opportunities (see the rung in flow_step). */
 static int engine_orphan_resume(JSContext *ctx, Flow *f) {
     JSValue *base;
 
-    /* A SESSION THAT EXPLORES NOTHING DRIVES NOTHING, AND THAT IS THE SAME SENTENCE engine_prepare_fork'S ASSERT
-     * MAKES — said one mechanism over, where nothing was saying it. The MINTING half of that argument is the
-     * seed's and is stated there, at the line that actually adds a member; what is left here is the half that
-     * is about THIS function, and it is the stronger of the two.
-     *
-     * A DRIVE THAT IS ALREADY A MEMBER IS THE SAME STATEMENT, NOT AN EXCEPTION. A resumed drive is a residue
-     * record standing on a recorded path, which only a session seeded from recipes can hold; a non-forking
-     * session that held one would be a residue seeded into a session that cannot serve it — it can neither
-     * drive it nor fork the arms its path is made of — so it is asserted rather than served. §@S's candidate
-     * re-fire is ONE concrete path, and a conformance run measuring the browser half against a spec oracle is
-     * measuring a browser, which never invokes a function nobody called.
-     *
-     * AND THE CALL THIS BUILDS IS WHERE THE ONE UNANSWERABLE ORDER COMES FROM, which is the second reason a
-     * session that explores nothing does not reach it. engine_orphan_call mints each argument and the receiver
-     * with NO EXAMPLE — correctly: nothing in the page ever supplied one, and §Solver forbids inventing one.
-     * Those are the only example-free unknowns a host without the source overlay can hold, so they are what
-     * reaches §8.7's `setTimeout` as a timeout nothing computed, becomes an expiry nothing computed, and
-     * leaves core/timing/event_loop.c's order with two feasible arms and no fact to choose between them. Not
-     * driving them in such a session removes the question rather than answering it wrong. */
+    /* A session that explores nothing drives nothing, as engine_prepare_fork asserts. The seed states the
+     * minting half where it adds a member; here, a resumed drive is a residue record standing on a recorded path,
+     * which only a session seeded from recipes holds, and a non-forking session can neither drive it nor fork its
+     * arms, so holding one is asserted. §@S's candidate re-fire is one concrete path, and a conformance run measures
+     * a browser, which never calls a function nobody called. The call also mints example-free unknowns, the only
+     * kind a host without the source overlay holds, which would reach §8.7's `setTimeout` as an uncomputed timeout
+     * and leave core/timing/event_loop.c's order with two feasible arms and no fact to choose between. */
     if (!g_sess_forking) {
         DCHECK(!f->orphan_want,
                "a flow waiting to adopt an orphan's body is a member of a session that explores nothing — its "
@@ -5774,14 +5458,11 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
         return 0;
     }
 
-    /* A RESUMED DRIVE THAT HAS ITS FUNCTION BACK BUILDS ITS OWN CALL, and it builds it HERE rather than at the
-     * moment it was handed one. This is the point at which a flow has nothing left to run, which is where the
-     * drive belonged in the session that recorded it — so the recorded arms the replay has been consuming run
-     * out exactly here, and the arms the CALL then takes are the next ones in the same chain. Adopting earlier
-     * would put the call in front of programs the flow had still to replay and consume their arms with it.
-     * IT IS THIS FLOW AND NOT A SIBLING. The recipe named ONE flow, the reward on it is the drive's, and the
-     * decision chain under it is the drive's path; seeding a sibling here would leave this flow standing on an
-     * orphan's chain with nothing to run and hand the work to a member with no record behind it. */
+    /* A resumed drive that has its function back builds its own call here, where the flow has nothing left to
+     * run, which is where the drive belonged in the recording session: the recorded arms the replay consumed run
+     * out exactly here and the call's arms are the next in the same chain. Adopting earlier would put the call in
+     * front of programs still to replay. It is this flow, not a sibling: the recipe named one flow, whose reward
+     * and decision chain are the drive's. */
     if (f->orphan_want && !JS_IsUndefined(f->fn)) {
         DCHECK(f->orphan && f->orphan_hash != 0,
                "a flow is waiting to adopt an orphan without being one — `orphan_want` is written only by the "
@@ -5794,29 +5475,19 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
         g_orphans_driven++;
         base = engine_orphan_call(ctx, f->fn, f->orphan_argc, f->orphan_hash);
         f->frame = base;
-        /* THE WAIT IS OVER AND IT IS NOT COUNTED AGAIN HERE. `orphanClaimsMet` counts HAND-OVERS BY THE ROUTING
-           WALK, which is the event the round trip is about; an arm that inherited the function from a waiting
-           parent reaches this line too, and counting frames built would add those to a number compared against
-           the records.
-           IT SAID "BY A TAKE", AND THE CLAUSE IS REWRITTEN RATHER THAN DELETED because a reader who re-derives it
-           from the seed will re-derive the take: the walk has TWO callers now — the take, and a body's own
-           creation (engine_orphan_born) — and `met` counts the walk rather than either door, so a session in
-           which no take ever routed still reports every claim it satisfied. What the number means is unchanged
-           and where it is raised is unchanged; what is no longer true is that a take is the only way to raise it. */
+        /* Not counted again here: `orphanClaimsMet` counts hand-overs by the routing walk (from a take or from a
+           body's creation, engine_orphan_born), and an arm that inherited the function from a waiting parent also
+           reaches this line, so counting built frames would inflate a number compared against the records. */
         f->orphan_want = 0;
         return ORPHAN_STEP_RESUMED;
     }
     return 0;
 }
 
-/* THE FRONTIER'S ORPHAN SURFACE, SERVED BY WHICHEVER MEMBER HAS RUN OUT OF ITS OWN WORK — see the note above
- * engine_orphan_resume for why this is a separate function and what asking the two as one cost.
- * ITS GATE IS THE MINTING HALF OF THE ARGUMENT THE RESUME STATES: §scheduler is explicit that a drive of a
- * function the page never called is "just another BFS flow", and the line below MINTS one —
- * engine_sibling_assemble, over decide_fork_same_path, adds a member to the frontier. A session declared
- * non-forking is one that must not gain members from inside itself, and the fork seam is asserted for exactly
- * this; this path went around it, through a different door onto the same frontier. The claimant assertion stays
- * with the claimant, in the resume. */
+/* The frontier's orphan surface, served by whichever member has run out of its own work (see the note above
+ * engine_orphan_resume). Its gate is the minting half: the line below adds a member to the frontier
+ * (engine_sibling_assemble over decide_fork_same_path), and a non-forking session must gain none from inside itself,
+ * which the fork seam asserts for every other door. */
 static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     OrphanTake t = { JS_UNDEFINED, 0, 0 };
     uint32_t gen = JS_OrphanGen(JS_GetRuntime(ctx));
@@ -5826,131 +5497,46 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
 
     if (!g_sess_forking) return 0;
 
-    /* A FLOW RAN OUT OF WORK AND ASKED WHETHER THE PAGE SHIPPED CODE IT NEVER RAN — counted HERE, which is
-       the one point that event happens, and counted BEFORE the memo below rather than after it. §scheduler
-       makes the drive of an uncalled function an ordinary BFS flow, and `driven` alone cannot say whether the
-       frontier ever GOT to the question: `driven == 0` is "this bundle ships no uncalled code", "no flow ever
-       reached the end of its own work", and "the walk happened and the heap had none" at once, and the three
-       take opposite actions. The first is a fact about the page, the second is a scheduling result worth
-       acting on, and the pair separates them.
-       WITHIN A FORKING SESSION, WHICH IS THE READING THIS COUNTER IS IN AND HAD NOT SAID. The gate above
-       returns BEFORE this line, so a session declared non-forking reads `asked == 0` by construction however
-       many flows ran out of work — a FOURTH state, and one that is byte-identical to the second, which is the
-       one the pair exists to separate. It is not ambiguous to a reader who asks, because the fact that
-       distinguishes it is public and is not this pair: `engine_session_forks()`. The counter is left counting
-       WALKS PERFORMED rather than moved above the gate to count flows that ran out of work — that would not
-       resolve the fourth reading, it would give the number a different meaning and leave the old one unread —
-       so what closes it is that the regime is stated, here and by whatever publishes the pair.
-       IT IS LIVE, NOT HYPOTHETICAL: the conformance host begins its sessions non-forking, and the shipped host
-       begins them forking. Any consumer of this pair that can run under both — a census row, a diagnostic that
-       names a cause — must read the session's own bit before it may say the frontier never reached the
-       question, or it states the SCHEDULE as the cause of a zero the policy guaranteed.
-       BEFORE THE MEMO ON PURPOSE. The memo answers the question from a previous walk's result; a flow that
-       reaches it HAS asked, and counting past it would make this number a fact about the memo instead of
-       about the frontier — the same one-number-two-mechanisms defect solver/solve.h's arrival census exists
-       to end, in the surface §What-the-tool-produces calls the headline. */
+    /* A flow ran out of work and asked whether the page shipped code it never ran: counted here, before the memo,
+       because a flow that reaches the memo has asked, and counting past it would make this a fact about the memo.
+       Within a forking session only: the gate above returns first, so a non-forking session reads `asked == 0`
+       however many flows ran out of work, a fourth state identical to "no flow reached the end of its work". A
+       consumer that can run under both regimes (the conformance host starts non-forking, the shipped host forking)
+       must read `engine_session_forks()` before naming the schedule as the cause of a zero. */
     g_orphan_asks++;
     if (g_orphan_gen_valid && gen == g_orphan_gen_seen) { g_orphan_asks_memo++; return 0; }
-    /* AN EMPTY WALK IS NOT THE SAME CLAIM AS "THIS BUNDLE SHIPS NO UNCALLED CODE", AND THE TAKE IS NARROWER
-       THAN THE SURFACE §What-the-tool-produces NAMES — a NAMED RESIDUAL, because what is here is correct and
-       what it covers is smaller than what the product promises.
-       WHAT IS NOT COVERED, as a PROPERTY and not as a list of source shapes: this walk can hand over only a
-       body that has a LIVE FUNCTION OBJECT OF ITS OWN, because JS_OrphanTakeOne enumerates rt->gc_obj_list
-       filtered to JS_GC_OBJ_TYPE_JS_OBJECT and reads the body off `p->u.func.function_bytecode`. A body whose
-       only closure has already been released has no such object — quickjs is refcounted and
-       js_bytecode_function_finalizer drops the body's reference with the closure — so it is invisible here
-       however loudly the bundle ships it. That is the ordinary shape of a minified bundle's inner helpers.
-       THE NEXT-DIFF CLAUSE THAT STOOD HERE IS RETIRED, AND IT IS RECORDED RATHER THAN DELETED because its
-       METHOD is the part the next reader would otherwise copy. It said: "JS_GC_OBJ_TYPE_FUNCTION_BYTECODE is
-       a sibling type on the SAME list, and a nested body is held alive by its enclosing body's cpool, so the
-       BODIES are already reachable from the walk that is here. What is missing is the ENVIRONMENT — js_closure
-       takes the enclosing frame's `var_refs`, and those died with the closure." Every premise in it is true
-       and the two conclusions drawn from them are not. Read, at the sites named, without a build:
-       (1) THE REACHABILITY ARGUMENT TRACES ITS EDGE ONE WAY AND NEVER ASKS WHAT HOLDS THE ROOT. `cpool` is a
-       PARENT-TO-CHILD owning edge and nothing else — cpool_add takes js_dup at parse, free_function_bytecode
-       releases `b->cpool[i]`, the mark arm walks it — and JSFunctionBytecode carries NO parent pointer. So a
-       released closure's body is alive IF AND ONLY IF its enclosing chain's root is held, and for a document's
-       script that root is the program function object async_func_init dup'd into `sf->cur_func`, which
-       flow_step's program-completion arm releases through JS_FlowFree — whose completed and suspended arms
-       BOTH free `sf->cur_func` — before it writes `f->frame = NULL`, the state this function is reached in.
-       A parked sibling's JS_FlowClone dups the same `cur_func` and extends that life, so the population is a
-       function of THE SCHEDULE (how many flows still hold a frame for that program) and can be empty.
-       "Already reachable" asserts unconditionally what is at
-       best conditional, and the condition is one no reader of this site can see.
-       (2) THE ENUMERATION IT NAMES CANNOT SUPPLY THE HALF OF THE ENVIRONMENT THAT IS OBSERVED, and this half
-       needs no measurement at all. A bare JSFunctionBytecode reached off the object list carries no route back
-       to any live enclosing closure — see the missing parent pointer above — and js_closure2 reads EVERY
-       JS_CLOSURE_REF / JS_CLOSURE_GLOBAL_REF cell out of exactly that closure's `p->u.func.var_refs`. So that
-       walk could only mint the whole environment, which is §Solver's "a SHAPE for an APP-OWNED value is a
-       DRIVING FAILURE" one scope out: it would replace module-scope config the page COMPUTED with an unknown
-       and degrade every endpoint the body builds out of it.
-       WHAT THE NEXT DIFF BUILDS is therefore a DESCENT FROM THE OBJECTS THIS WALK ALREADY VISITS rather than
-       a second enumeration, because that walk is the one place both halves are in hand at once: the live
-       enclosing closure `p`, and in `p->u.func.function_bytecode->cpool` every body it can instantiate. What
-       is handed over is that PAIR. The environment then splits exactly along js_closure2's own switch:
-         · JS_CLOSURE_REF / JS_CLOSURE_GLOBAL_REF are OBSERVED — `cur_var_refs[cv->var_idx]` is the enclosing
-           closure's own `var_refs`, alive because that object is what the walk found — and are TAKEN.
-         · JS_CLOSURE_LOCAL / JS_CLOSURE_ARG go through get_var_ref, which dereferences the enclosing STACK
-           FRAME (`sf->cur_func`, `sf->var_buf`, `sf->arg_buf`). That frame is gone and no session gets it
-           back, so THOSE are the unknowns — one per JSClosureVar, named from `cv->var_name` beside the
-           parent's JS_OrphanHash so the per-flow tracker keys them apart for the reason engine_orphan_call
-           gives about arguments. The shape needs no new kind: get_var_ref's own uncaptured arm already builds
-           a DETACHED JSVarRef holding its own value, which is what a minted cell is.
-       The pair is found at the take; the mint belongs beside engine_orphan_call's argument minting, which is
-       the same question one scope out. IT CANNOT BE BUILT FROM THIS DIRECTORY, and that is read rather than
-       assumed: quickjs.h's JS_EXTERN list hands out a var-ref cell a caller ALREADY HOLDS
-       (JS_VarRefGetValue / JS_VarRefSetValue) and, on the spellings searched, nothing that yields a body's
-       nested bodies or a closure's cell BY INDEX — so the descent is a quickjs-side entry first.
-       AND THAT ENTRY IS NOT ON THE `qjs_*` WASM ABI, which is the wrong rule to reach for here and was
-       reached for once while this paragraph was being written. JS_OrphanTakeOne is plain C linkage — one
-       JS_EXTERN in quickjs.h, one definition in quickjs.c, one caller in this file — so its sibling costs
-       three files in one link and NOT §A-CROSS-BOUNDARY-DIFF's seven hops (build.mjs names it only inside a
-       diagnostic string). AND THE SUBMODULE HALF OF THAT IS RETIRED BY A SUBTREE MERGE AND IS KEPT IN ITS OWN
-       WORDS BECAUSE A READER WHO RE-DERIVES A FORK'S COST FROM ITS BEING A FORK WILL RE-ADD IT. It read:
-       "What it does still cost is a SUBMODULE commit plus the superproject's gitlink, which land together or
-       not at all." `engine/qjs` is ORDINARY TRACKED CONTENT of this one repository now — MEASURED with the
-       command: `git ls-files -s` names exactly ONE gitlink, `engine/qjs/test262`, and `git cat-file -t
-       <rev>:engine/qjs` answers `tree` — so the three files land in ONE commit and the cross-boundary pair the
-       clause warned about is unreachable rather than merely unlikely. The three-files-in-one-link half is
-       unchanged and is the operative number.
-       HOW ITS ABSENCE SHOWS, measured rather than argued (artifact 9c757178, solvergate `direct`, 3 runs a
-       side, identical on every run): two documents differing ONLY in whether the uncalled function's closure
-       outlives its defining frame. Held on a live object -> `asked` 396, `driven` 2, and the two endpoints
-       only those bodies name appear in the finding set carrying `{orphan<locator>.argN}`. Left as a bare
-       declaration inside the IIFE -> `asked` 387, `driven` 0, and both endpoints absent. Same seed, same
-       ladder, same schedule; the difference is entirely whether the heap still held a closure.
-       WHAT THAT PAIR IS AND IS NOT EVIDENCE FOR, which the retired clause did not separate and which is why
-       it read as settled. It establishes WHAT IS NOT COVERED and nothing past it. Its second document is the
-       case (1) shows may hold no live body at all, so a diff that builds the descent above and is SCORED
-       against that document can read as a total failure while being correct. Score it instead on the
-       population the descent reaches unconditionally: an ENTERED body held by a live object — `App.init` on a
-       global, called once, with a helper it does not call — whose nested body is alive by that object, never
-       entered, and reachable from no object of its own. Expect the helper's endpoint to appear carrying
-       `{orphan<locator>.argN}` beside an env-named unknown, and expect the IIFE document to be unchanged.
-       AND THE ONE COUNT THAT SEPARATES THE TWO READINGS OF ONE `driven` 0, which nothing in this tree can
-       take today for the reason just given: how many live, never-entered, non-program JSFunctionBytecode
-       exist at ask time. The retired clause predicts at least one in the IIFE document; the reading above
-       predicts it is scheduler-dependent there and at least one in the `App.init` document. Printing that
-       count is the first thing the descent should be able to do, and it settles this paragraph.
-       So a `driven` of 0 beside a large `asked` is this residual until the heap is checked, and NOT the third
-       of the three readings engine_orphan_census names being the same thing as the first. */
-    /* THE MEMO IS RECORDED ONLY BY AN EMPTY WALK, and that is what the take taking ONE changes about it. It
-       used to be written before the walk, which was right for a call that drained the set: after it, the answer
-       to "is there anything at this generation" really was no. A one-at-a-time take leaves the rest of the set
-       standing at the SAME generation — nothing about seeding a flow creates a function object — so writing it
-       here would say "nothing to take" about a heap full of untaken orphans and every one of them would be lost
-       for the session. It states exactly what it is: the generation at which a walk found NOTHING. */
+    /* Named residual. An empty walk is not "this bundle ships no uncalled code": the take can hand over only a
+       body with a live function object of its own (JS_OrphanTakeOne walks rt->gc_obj_list's JS_GC_OBJ_TYPE_JS_OBJECT
+       entries and reads `p->u.func.function_bytecode`). Not covered: a body whose only closure was released, the
+       ordinary shape of a minified bundle's inner helpers. Its bytecode survives only while its enclosing chain's
+       root is held (`cpool` is a parent-to-child edge and JSFunctionBytecode has no parent pointer), and for a
+       document script the root is the program function object flow_step's completion arm releases through
+       JS_FlowFree, kept alive longer only by a parked sibling's JS_FlowClone, so even that is schedule-dependent.
+       Next diff builds: a descent from the objects this walk already visits, handing over the pair (a live
+       enclosing closure `p`, a never-entered body in its bytecode's `cpool`). js_closure2's switch splits the
+       environment: JS_CLOSURE_REF / JS_CLOSURE_GLOBAL_REF cells are observed and taken from `p->u.func.var_refs`;
+       JS_CLOSURE_LOCAL / JS_CLOSURE_ARG cells belonged to the dead frame and become unknowns named from
+       `cv->var_name` beside the parent's JS_OrphanHash, as detached JSVarRefs (get_var_ref's uncaptured shape).
+       Minting the whole environment instead would replace module-scope config the page computed with unknowns.
+       It needs a quickjs entry (nothing in quickjs.h yields a body's nested bodies or a closure's cell by index):
+       plain C linkage, quickjs.h, quickjs.c and this file in one commit. Score it on an entered body held by a
+       live object (`App.init` on a global with an uncalled nested helper), whose helper's endpoint should appear
+       carrying `{orphan<locator>.argN}`; a bare declaration inside an IIFE may hold no live body at all. Its
+       first output should be the count of live, never-entered, non-program bodies at ask time.
+       Absence shows as: two documents differing only in whether the uncalled function's closure outlives its
+       frame give `driven` 2 and 0 at nearly equal `asked`, the second missing the endpoints only those bodies
+       name. A `driven` of 0 beside a large `asked` is this residual until the heap is checked. */
+    /* The memo is recorded only by an empty walk: a one-at-a-time take leaves the rest of the set standing at
+       the same generation (seeding a flow creates no function object), so recording it after a successful take
+       would declare a heap of untaken orphans empty for the session. */
     if (!JS_OrphanTakeOne(ctx, engine_orphan_record, &t)) {
         g_orphan_gen_seen = gen; g_orphan_gen_valid = 1;
         g_orphan_asks_empty++;
         DCHECK(JS_IsUndefined(t.fn), "an orphan take that reported nothing still left a function on the record");
         return 0;
     }
-    /* AND THE OTHER SIDE OF THAT BRANCH, RAISED HERE RATHER THAN AT EITHER EXIT BELOW IT. A take that handed a
-       body over either routes it to a claimant or seeds a drive, and both of those are already named by
-       solver/step_unit.h; what this row is counting is the TAKE, which is the event the two exits share and
-       the one the partition needs, so raising it at the exits would make it a second spelling of the
-       histogram instead of a summand of the ask. */
+    /* The take's own row, raised here rather than at either exit below: the two exits (route, seed) are already
+       named by solver/step_unit.h, and the partition needs the take they share as a summand of the ask. */
     g_orphan_asks_took++;
     DCHECK(t.n == 1 && !JS_IsUndefined(t.fn),
            "an orphan take reported success without handing over a function — the bit that made it an orphan "
@@ -5968,54 +5554,35 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
            "function' is a FACT — that argument is retired: it is a fact only when the run is over, a run that "
            "renders is never over, and waiting for it served the surface never.)");
 
-    /* WHAT THIS BODY IS CALLED ACROSS SESSIONS, computed once per body because a body is taken once. It is
-       needed unconditionally — every drive this session creates has to be parkable, and the locator IS its
-       recipe — and the routing below is the second reader of the same number rather than a reason to compute
-       it. Its cost is one pass over one function's source text, so the whole session pays one pass over the
-       bundle. */
+    /* What this body is called across sessions, computed once per body (a body is taken once): every drive must
+       be parkable and the locator is its recipe; the routing below reads the same number. One pass over the
+       function's source text, so the session pays one pass over the bundle. */
     hash = JS_OrphanHash(ctx, t.fn);
 
-    /* AND WHETHER A DRIVE THIS SESSION INHERITED WAS WAITING FOR EXACTLY THIS BODY. The recorded flow carries
-     * the path, the rank and the arms; what it could not carry is the function, because a heap reference dies
-     * with the session that held it. So the take routes: the function goes to the flow whose recipe named it,
-     * and that flow builds the call in its own timeline at its own next turn (the branch at the top).
-     * WITHOUT THIS THE RECIPE IS NEARLY INERT, and that is the whole reason it exists rather than each claimant
-     * taking its own. Every flow that runs out of work reaches this line, so a resumed frontier of thousands of
-     * members races for the same heap: the first arrival takes the body a claimant was recorded for and drives
-     * it from a fresh path, and the claimant — whose recorded arms are the gates that made that function
-     * reachable in the first place — finds nothing left to take and finishes having driven nothing. The
-     * function would still be driven and the WORK would not look lost, which is exactly what makes it the kind
-     * of loss nothing reports.
-     * IT IS SKIPPED ENTIRELY WHEN NO CLAIM CAN BE OPEN, so a session with no residue pays one comparison.
-     * AND IT IS ONE OF TWO DOORS ONTO THE SAME WALK NOW, not a selector and not a fallback: engine_orphan_born
-     * asks the identical question at a body's CREATION, which is the only moment a body whose closure dies with
-     * the frame that built it can be offered to anybody. Two call sites of one function at two events, exactly as
-     * the COW capture is reached from several accessors — there is no condition here choosing between them.
-     * NAMED RESIDUAL — WHAT IS NOT COVERED: whether this door can still fire at all. A claim is opened only by
-     * cold_resume, which runs INSIDE engine_sched_begin above every compile, and the born hook is installed in
-     * that same function — so every body of the page is offered at its creation and marked `entered` if it was
-     * claimed, which is precisely the filter that keeps it from reaching a take. The population left for this
-     * line is a body that was ALREADY a live, un-entered, non-program closure when the claim opened, and nothing
-     * here establishes that such a body exists. WHAT THE NEXT DIFF BUILDS: this branch deleted, with the ordering
-     * it depends on ASSERTED at the seeding instead of being true by where two calls happen to sit. HOW ITS
-     * ABSENCE SHOWS: `hand-a-parked-drive-its-function` in the step-unit histogram of a resumed run — nonzero
-     * says this door fired and the population is real, and zero on every run of every host says it is the dead
-     * code §Aggressively-delete asks for. It is NOT deleted in this diff because a wrong answer here is a claim
-     * that waits for ever, and that number has not been read yet. */
+    /* Whether a drive this session inherited was waiting for exactly this body. The recorded flow carries the
+     * path, rank and arms but not the function (a heap reference dies with its session), so the take routes the
+     * function to the flow whose recipe named it, which builds the call in its own timeline (the branch at the top
+     * of engine_orphan_resume). Without routing, the first flow to run out of work would take the body and drive
+     * it from a fresh path, and the claimant, whose recorded arms are the gates that made it reachable, would
+     * finish having driven nothing, a loss nothing reports. Skipped when no claim can be open. engine_orphan_born
+     * asks the same walk at a body's creation; the two are doors onto one function, not alternatives.
+     * Named residual. Not covered: whether this door still fires. Claims open only in cold_resume, inside
+     * engine_sched_begin above every compile, where the born hook is installed too, so every claimed body is
+     * offered and marked `entered` at creation and never reaches a take; what is left is a body already live and
+     * un-entered when the claim opened, which may not exist. Next diff builds: this branch deleted, with that
+     * ordering asserted at the seeding. Absence shows as: `hand-a-parked-drive-its-function` in a resumed run's
+     * step-unit histogram, nonzero if this door fires, zero on every run of every host if it is dead. */
     if (!g_orphan_claims_closed && engine_orphan_route(ctx, t.fn, t.argc, hash)) {
-        /* NO FRESH DRIVE IS SEEDED BESIDE THEM. The body is being driven — by flows standing on the recorded
-           paths that made it reachable, which is strictly more than a fresh drive from the baseline would
-           reach — and a sibling assembled here as well would be a second timeline calling the same function
-           for the same reason, ranked with the discovering flow's account and standing on nothing. */
+        /* No fresh drive beside them: the claimants drive the body from the recorded paths that reached it, and
+           a second timeline calling the same function would stand on nothing. */
         JS_FreeValue(ctx, t.fn);
-        return ORPHAN_STEP_ROUTED;   /* progress exactly as seeding one is */
+        return ORPHAN_STEP_ROUTED;   /* progress, as seeding one is */
     }
 
     g_orphans_driven++;
     base = engine_orphan_call(ctx, t.fn, t.argc, hash);
-    /* THE OTHER SIDE OF THE GATE AT THE TOP OF THIS FUNCTION, asserted where the member is actually minted
-       rather than only where the mechanism is entered — the two are separated by a take, a hash and a route,
-       any of which could grow its own way in. */
+    /* The other side of the gate at this function's top, asserted where the member is minted, since a take, a
+       hash and a route separate the two. */
     DCHECK(g_sess_forking,
            "a driven orphan was about to be added to the frontier of a session that explores nothing — the "
            "gate at the top of this walk returns before the take, so reaching this line means a second entry "
@@ -6025,33 +5592,19 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
                                                         "predicate was asked)"),
                                   concolic_pins_suspend());
     sib->orphan = 1;
-    /* AND THE FUNCTION IT RE-DRIVES, which is what flow.h says `fn` IS and what nothing had put there:
-       every flow_add in this engine passed JS_UNDEFINED, so the field's comment described a flow kind that
-       did not exist. It is what makes a walk of the frontier able to say which functions are being driven at
-       all. The assembly dup'd the PARENT's (undefined), so that reference is given back here. */
+    /* The function it drives, flow.h's `fn`, so a walk of the frontier can say which functions are being driven.
+       The assembly dup'd the parent's (undefined), which is given back here. */
     JS_FreeValue(ctx, sib->fn);
     sib->fn = JS_DupValue(ctx, t.fn);
-    /* …AND THE NAME THAT OUTLIVES IT, which is what the park writes and what a later session finds this same
-       body by. Stamped HERE, at the one place a drive is created, so no drive can exist without one; an arm of
-       it inherits the field with the mark (engine_sibling_assemble). */
+    /* The name that outlives it, written by the park and used by a later session to find the body. Stamped at
+       the one place a drive is created; its arms inherit it with the mark (engine_sibling_assemble). */
     sib->orphan_hash = hash;
-    /* WHERE IT ENTERS THE QUEUE, ASSERTED AT THE ONE ENTRY THAT MANUFACTURES ITS OWN WORK. An orphan drive is
-       work this timeline CREATES, so it is exactly the shape flow.c's arrival rule exists for: a flow that
-       could enter at virtual time zero would carry the full optimism bonus and stand ahead of the entire
-       backlog, and a bundle with thousands of uncalled functions would promote thousands of them there. It does
-       not take flow_arrive_at_virtual_time's path — it is assembled as a SIBLING, so flow_fork_inherit hands it
-       the discovering flow's account — and the two agree here by construction rather than by coincidence: the
-       DCHECK above says this flow is the one in service, and SFQ's v(t) IS the service of the flow in service.
-       Asserted because the two are reached through different functions and only this site knows they must
-       meet. */
-    /* EVERY COORDINATE, because the virtual time a flow enters at has as many as the weight has terms: the
-       completed-unit count (the optimism term's), its own service WITH THE WINDOW MARK THAT SAYS WHICH SILENCE
-       THAT SERVICE IS A READING OF, and its FAMILY's (the aging term's two
-       halves). `born` used to be the second half of this assert and it was the same quantity as the first; it
-       is gone with the per-arm charge. An orphan drive that founded a family of its own would carry the
-       discovering flow's reward with none of its aging, and one entering at zero units would carry the full
-       optimism bonus — either is the promotion this line exists to forbid, and a bundle ships thousands of
-       uncalled functions to do it with. */
+    /* Where it enters the queue, asserted at the one entry that manufactures its own work: a drive entering at
+       virtual time zero would carry the full optimism bonus ahead of the backlog, and a bundle has thousands of
+       uncalled functions. It is assembled as a sibling, so flow_fork_inherit hands it the discovering flow's
+       account, which equals SFQ's v(t) because this flow is the one in service. Every coordinate is checked: the
+       completed-unit count (the optimism term), its service with the window mark, and its family (the aging
+       term's halves). */
     DCHECK(sib->cpu == f->cpu && sib->cpu_gen == f->cpu_gen &&
            sib->visits == f->visits && sib->family == f->family,
            "a driven orphan entered the frontier at a virtual time that is not the running flow's — it was "
@@ -6062,8 +5615,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     return ORPHAN_STEP_SEEDED;
 }
 
-/* WHAT THAT STEP JUST DID, for the seam assertion — which can say a step ran too long but not what it was
-   doing, so a label naming one of three unrelated things is not the localisation it exists to be. */
+/* What that step did, for the seam assertion, which can say a step ran too long but not what it was doing. */
 static StepUnit engine_orphan_unit(int r) {
     switch (r) {
     case ORPHAN_STEP_SEEDED:  return STEP_UNIT_ORPHAN_SEED;
@@ -6075,60 +5627,32 @@ static StepUnit engine_orphan_unit(int r) {
     return STEP_UNIT_NONE;
 }
 
-/* A MODELLED POTENTIAL CLOSE REQUEST — HTML §6.10.1 "Close requests"' preamble, performed by an agent that has
- * no user to perform it.
+/* A modelled potential close request: HTML §6.10.1 Close requests' preamble, performed by an agent with no user.
+ * §6.10.1's examples (Esc, an Android back gesture, an assistive technology's dismiss, a game controller's back
+ * button) are all user acts, so a run that waits for one never reaches the page's `cancel` and `close` handlers,
+ * a dialog's dismissal or a popover's light-dismiss; modelling the arrival is the same kind of act as driving an
+ * uncalled function. The arrival is one frame on this flow (the task the preamble queues), preemptible, parkable
+ * and forkable at step 7's history-action activation; nothing loops over close requests.
  *
- * WHY IT EXISTS AT ALL. §6.10.1's own four examples of a potential close request are the Esc key, an Android
- * back button or gesture, an assistive technology's dismiss gesture and a game controller's back button. Every
- * one of them is a USER ACT, so a run that waits for one explores none of the code behind it — and what is
- * behind it is the page's own `cancel` and `close` handlers, a dialog's dismissal, a popover's light-dismiss:
- * exactly the "what the bundle CAN do but didn't" §What-the-tool-produces is about. Modelling the arrival is
- * the same kind of act as force-invoking a function nothing called, and it is done for the same reason.
+ * This flow, not a sibling: there is one arrival to model and this flow has nothing left to run, unlike the
+ * orphan take's many bodies. It stops with no counter or cap: §6.10.2 process close watchers takes the last group,
+ * so a document with three groups is modelled three times, and a task that reaches step 9's "Otherwise, there was
+ * nothing watching for a close request" has established that nothing is left; that completion value
+ * (core/html/close_request.h) is latched on the flow. A flow that closed something is asked again next step, and a
+ * page that adds a watcher in its own `close` handler keeps being modelled.
  *
- * IT IS NOT A DRIVER AND NOT A SECOND SCHEDULER. The arrival becomes ONE frame on THIS flow — the task
- * §6.10.1's preamble queues — so it is preemptible per opcode, parkable at any depth, forkable at step 7's
- * history-action activation, ranked and starved and paged by the one WFQ. Nothing loops over close requests.
- *
- * WHY THIS FLOW AND NOT A SIBLING, which is the one place this differs from the orphan seed above. An orphan
- * take hands over one of MANY bodies and the discovering flow must go on to take the next, so each drive is a
- * sibling. A close request is not a set: there is one arrival to model, in this timeline, and this flow has
- * nothing left to run — that is what reaching this arm MEANS. Seeding a sibling here would leave this flow
- * standing with nothing to do and hand its work to a member with no path behind it, which is the sentence the
- * resumed-drive branch above already makes for its own case.
- *
- * WHEN IT STOPS, WITH NO COUNTER, NO CAP AND NO SEEN-SET. §6.10.2's process close watchers takes the LAST
- * group of the manager, so a document with three groups is modelled three times — three tasks, one flow, each
- * running the handlers of one group. What ends it is the standard's own sentence: step 9's "Alternative
- * processing: Otherwise, there was nothing watching for a close request." A task that fell through to it has
- * ESTABLISHED that this timeline's manager has nothing for a close request to do, and that fact is the task's
- * completion value (core/html/close_request.h) — read at the frame's completion and latched on the flow. It is
- * not a bound: membership of the frontier is untouched, a flow that closed something is asked again on its
- * very next step, and a page that establishes a watcher inside its own `close` handler is modelled for as long
- * as it keeps doing so. What is refused is a re-ask that the algorithm itself has already answered.
- *
- * AND EVERYTHING PAST IT IS FORCED. §A-REQUEST-CARRIES-THE-PROVENANCE grades a request by what it RESTS ON,
- * and everything below this line rests on an arrival nobody performed: a `fetch()` a `close` handler makes is
- * evidence about what a server answers to a request no client sent. So the mark is taken HERE, in the same
- * operation as the frame and before the flow can run one opcode of it — the wrong grade is impossible rather
- * than discouraged, exactly as it is at the decline fork. From this instant pending_prov_compose stamps every
- * park PROV_FORCED and endpoint.c's identity keeps every sighting out of the derived pool; the @S reproduction
- * envelope's "requires a user gesture" is the same fact spoken on the other surface.
- * IT IS MONOTONE, so a flow that models a second close request is already marked and the second call says
- * nothing the first did not.
- *
- * Returns 1 if it installed the task as this flow's frame; 0 means there is nothing left to model, which is
- * what lets the caller finish. */
+ * Everything past it is forced: it rests on an arrival nobody performed, so the mark is taken in the same operation
+ * as the frame, before one opcode runs, and from then pending_prov_compose stamps every park PROV_FORCED and
+ * endpoint.c keeps sightings out of the derived pool. The mark is monotone. Returns 1 if it installed the task as
+ * this flow's frame; 0 means nothing is left to model, which lets the caller finish. */
 static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     lxb_dom_node_t *document;
 
-    /* THE SAME GATE THE ORPHAN SEED HAS, FOR THE SAME REASON — and here it is about the FORK rather than about
-       a new member: step 7 asks §6.4.1 "Data model"'s history-action activation, which is answered by a fork,
-       so a session declared non-forking cannot run these steps to their end. An @S candidate re-fire is ONE
-       concrete path and a conformance run is measuring a browser, and neither of those sends a gesture. */
+    /* The orphan seed's gate, here about the fork: step 7 asks §6.4.1 Data model's history-action activation,
+       answered by a fork, so a non-forking session cannot run these steps to their end (an @S re-fire and a
+       conformance run send no gesture). */
     if (!g_sess_forking) return 0;
-    /* §6.10.1's STEP 9, AS THIS TIMELINE ALREADY ANSWERED IT. See the header note above: a task that reached
-       alternative processing established that nothing here is watching, and this is where that answer is
-       spent. */
+    /* §6.10.1 step 9, as this timeline already answered it (see the header). */
     if (f->close_req_none) return 0;
     DCHECK(flow_running() == f,
            "a modelled close request was built while another flow was switched in — the task reads the close "
@@ -6142,10 +5666,9 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
            "a flow is already inside a modelled close request's task and has no frame — the pair is written "
            "together here and cleared together at the task's completion, so one without the other is a "
            "completion path that took one of the two");
-    /* WHICH DOCUMENT THE ARRIVAL IS TARGETED AT. §6.10.1 targets a potential close request AT a Document, and a
-       real one reaches the top-level traversable's active document — which is this realm's, the same document
-       every other arm of this ladder is about (the lifecycle stage, the rendering opportunity, the due timer).
-       The Document NODE and not the realm, because the steps derive their own realm from the node. */
+    /* Which document the arrival targets: a real one reaches the top-level traversable's active document, this
+       realm's, the document every other arm of this ladder is about. The node, not the realm, because the steps
+       derive their own realm from it. */
     document = node_of(document_object(ctx));
     DCHECK(document != NULL && document->type == LXB_DOM_NODE_TYPE_DOCUMENT,
            "the realm a flow ran its programs in does not answer with a Document node — every arm of this "
@@ -6162,67 +5685,33 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
 }
 
 
-/* THE @S SEARCH'S ASK, COUNTED AT THE ONE SITE A ROW IS BORN. `progStartsCand` (see g_prog_starts) is a
-   numerator and this is its denominator: how many candidate programs the solver ASKED to have run. Without it
-   a zero there is two runs at once — no breakout ever reached an executable position, so there was nothing to
-   start, and breakouts reached one and no member was ever handed the thread at its row — and those take
-   OPPOSITE work, one being a question for the derivation in solve_html.c and the other for the WFQ. §@S makes
-   FIRING the whole standard of proof for a finding, so the distance between these two rows is the security
-   half's own gap, and it was unmeasurable for as long as only one end of it existed.
-   IT IS THE ASK AND NOT THE OUTCOME (CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION). A row's creation is
-   upstream of every step that may LEGITIMATELY decline to run it: the pick, the compile — a breakout that does
-   not fit its sink's context is a candidate that correctly never parses, which is the search working and is
-   what engine_queue_candidate's own entry says of it — and the destroyed-document walk in solver/flow.c, which
-   removes unstarted rows. Counted at any of those, each correct refusal would be reported as a candidate the
-   search failed to place.
-   KEYED ON THE ROW'S KIND AND NEVER ON WHICH ENTRY CALLED, so a second door to queuing one is counted by BEING
-   that kind rather than by its author remembering to — the same reason the kind is a column of the row.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads it and no arm branches on it. */
+/* The @S search's ask, counted at the one site a candidate row is born: the denominator of `progStartsCand`
+   (g_prog_starts). Without it a zero there is either no breakout reaching an executable position (a question for
+   solve_html.c's derivation) or rows never handed the thread (a question for the WFQ). Counted at the ask, upstream
+   of every step that may correctly decline to run it: the pick, the compile (a breakout that does not fit its
+   sink's context correctly never parses, as engine_queue_candidate says), and solver/flow.c's destroyed-document
+   walk. Keyed on the row's kind, not the calling entry, so a second door to queuing one is counted by being that
+   kind. A report only. */
 static long g_prog_queued_cand;
 
-/* HTML §4.12.1.1 "Processing model" STEP 33 — AN EXTERNAL SCRIPT'S FETCH BEGINS WHEN THE ELEMENT IS PREPARED,
-   NOT WHEN ITS POSITION IS REACHED. Step 33 is "If el has a src content attribute:", and its `classic` arm is
-   "Fetch a classic script given url, settings object, options, classic script CORS setting, encoding, and
-   onComplete." — inside `prepare the script element`. Step 35, "If el's type is `classic` and el has a src
-   attribute, or el's type is `module`:", comes AFTER it and decides only WHERE the result executes: the `set of
-   scripts that will execute as soon as possible`, the in-order list, the `list of scripts that will execute
-   when the document has finished parsing`, or the parser's pending parsing-blocking script.
-   FETCH-WHEN-PREPARED AND EXECUTE-IN-ORDER ARE TWO STEPS OF ONE ALGORITHM AND THIS ENGINE PERFORMED THEM AS
-   ONE. The park stood at the cursor in flow_step, so a document's second `<script src>` was not requested
-   until its first had been fetched AND RUN — one request in flight where a browser has the whole markup's
-   worth. Measured on real bundles: a page shipping 26 scripts paid 26 serial round trips, and `defer` and
-   `async` produced byte-identical wire behaviour to a parser-blocking script, because the attribute only ever
-   reached step 35 and step 33 was never separate from it.
-   THE ROW'S CREATION IS THIS ENGINE'S PREPARE, AND THAT IS A FACT ABOUT THIS ENGINE'S PARSE RATHER THAN A
-   CHOICE. A document reaches the engine fully parsed — lexbor runs to completion before any program does — so
-   every markup `<script>` has been reached by the parser before the sequence exists, and every one of them is
-   therefore prepared before the first of them executes. engine_queue_into is the ONE site that turns an
-   element into a row, so it is the one site at which step 33 can be owed exactly once per element.
-   HTML §4.12.1.1's ORDER IS UNTOUCHED, WHICH IS THE POINT: the row keeps the position it was queued at, flow_step
-   still stops at it until its OWN bytes arrive, and document_exec_scripts still lays the rows down in
-   §13.2.7's milestone order. Only the moment the request is ISSUED moves.
-   THE REALM IS THE ROW'S DOCUMENT'S, WHICH IS STEP 32 — "Let settings object be el's node document's relevant
-   settings object." — and step 33 hands THAT to the fetch. It used to be flow_step's ambient ctx, which is the
-   session's, so a child navigable's script was checked against another document's policy container.
-   NO DEDUP, BECAUSE THERE IS NOTHING LEFT TO DEDUP AGAINST. The row's name is minted one statement before this
-   call and never reused (solver/flow.h's `dyn_id`), so no entry of this register can already name it. The loop
-   that stood here existed only because the park was re-asked on every scheduler pass while the flow waited at
-   the cursor, and that pass is gone.
-   NAMED RESIDUAL — WHAT IS NOT COVERED: the ELEMENT reads this park makes are answered by whichever
-   timeline's DOM delta is applied at the moment the row is created, and for a row seeded onto a NEW flow that
-   is not always that flow's own. The session's first flow and every cold-resumed one ARE created at baseline
-   (engine_open_session says so at both calls), and every row engine_queue_docscript_url adds belongs to the
-   flow that is running — but an @S candidate flow is created at the scheduler's PICK with the outgoing flow
-   still switched in, and engine_join_document's boot flow is created by the flow that built the navigable. The
-   POLICY half is unaffected either way: a Document's policy container is written once at its creation and is
-   not COW-captured, so fetch_main_blocked answers the same under any delta. What can differ is script_csp_meta
-   — §2.5.6's nonce slot and the `integrity` attribute, both read through the DOM — and Fetch §4.3's `blob:`
-   store lookup. WHAT THE NEXT DIFF BUILDS: creation-at-baseline for those two flow-creating sites, the way the
-   session's own seeding and cold_resume already have it. HOW ITS ABSENCE SHOWS: a page that writes
-   `s.integrity` or `s.nonce` onto a markup `<script src>` and then reaches a detected sink — the @S candidate
-   seeded off that flow builds its copy of the request from the WRITING timeline's attribute, so the script is
-   admitted or refused on a value the candidate's own baseline run never had, and the verdict is about a
-   document no timeline ever held. */
+/* HTML §4.12.1.1 Processing model step 33: an external script's fetch begins when the element is prepared, not when
+   its position is reached. Step 33 ("If el has a src content attribute:") fetches inside prepare the script element;
+   step 35 decides only where the result executes (the as-soon-as-possible set, the in-order list, the list for
+   after parsing, or the pending parsing-blocking script). A document reaches the engine fully parsed, so every
+   markup `<script>` is prepared before the first executes, and engine_queue_into, the one site turning an element
+   into a row, owes step 33 exactly once per element. §4.12.1.1's order is untouched: the row keeps its position,
+   flow_step stops at it until its own bytes arrive, and document_exec_scripts lays rows down in §13.2.7's order.
+   The realm is the row's document's (step 32: "Let settings object be el's node document's relevant settings
+   object"). There is nothing to deduplicate against: the row's name is minted just before this call and never
+   reused (solver/flow.h's `dyn_id`).
+   Named residual. Not covered: the element reads this park makes (script_csp_meta's nonce slot and `integrity`, and
+   Fetch §4.3's `blob:` lookup) are answered under whichever DOM delta is applied when the row is created, which for
+   an @S candidate flow (created at the pick with the outgoing flow still switched in) and engine_join_document's
+   boot flow (created by the flow that built the navigable) is not the new flow's own. The policy half is
+   unaffected: a policy container is written once at creation and not COW-captured. Next diff builds: creation at
+   baseline for those two sites, as the session's seeding and cold_resume have. Absence shows as: a page that writes
+   `s.integrity` or `s.nonce` onto a markup `<script src>` and reaches a detected sink, where the candidate's
+   request is admitted or refused on an attribute value its own baseline run never had. */
 static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
     /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
        a method, so it is Fetch §2.2.5 Requests' `GET`. STATED, because the seam is keyed on the pair and a
