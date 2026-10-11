@@ -14474,29 +14474,30 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* …and the same two steps as §4.10.22.4's ENTRY LIST, which is the half a member read cannot state. The
        negative clause is the assertion in each: step 1 picks `a` AND NOT `b`, step 2 keeps `b` AND NOT `a`. It
        is spelled as an equality plus a refusal rather than as param_value_only, because two provenance grades
-       of ONE statement legitimately carry the same value twice and `only` would read that as a fork. */
+       of ONE statement legitimately carry the same value twice and `only` would read that as a fork. The
+       address is the resolved one, which is what a form submission requests. */
     const char *lfasel1_why = NULL; int lfasel1_tt = 1;
-    fold_row(&lfasel1_tt, &lfasel1_why, !!strstr(js, "\"/api/lfasel1\""),
+    fold_row(&lfasel1_tt, &lfasel1_why, !!strstr(js, "\"https://x.test/api/lfasel1\""),
              "NOT REACHED: there is no /api/lfasel1 record at all, so the select's ENTRY LIST was never "
              "derived — `submit()` did not run, or the form was not connected. That is the SCHEDULE");
-    fold_row(&lfasel1_tt, &lfasel1_why, param_value_is(js, "/api/lfasel1", "sc", "a"),
+    fold_row(&lfasel1_tt, &lfasel1_why, param_value_is(js, "https://x.test/api/lfasel1", "sc", "a"),
              "§4.10.7 step 1 + §4.10.22.4 step 5.6: `<select name=x><option>a<option>b</select>` must submit "
              "`x=a` with no `selected` attribute anywhere, and this record's `sc` does not carry `a` — either "
              "step 1 selected nothing (the entry list is then EMPTY, which is the same 0 as selecting the "
              "wrong option and is why the clause below is separate) or the option's value did not fall back "
              "to its collected text");
-    fold_row(&lfasel1_tt, &lfasel1_why, !param_value_is(js, "/api/lfasel1", "sc", "b"),
+    fold_row(&lfasel1_tt, &lfasel1_why, !param_value_is(js, "https://x.test/api/lfasel1", "sc", "b"),
              "§4.10.7 step 1 selected MORE than the first option, or the wrong one: `sc` carries `b`, so the "
              "entry list has an option step 1 never names — it selects the FIRST non-disabled one and returns");
     const char *lfasel2_why = NULL; int lfasel2_tt = 1;
-    fold_row(&lfasel2_tt, &lfasel2_why, !!strstr(js, "\"/api/lfasel2\""),
+    fold_row(&lfasel2_tt, &lfasel2_why, !!strstr(js, "\"https://x.test/api/lfasel2\""),
              "NOT REACHED: there is no /api/lfasel2 record at all, so step 2's entry list was never derived. "
              "That is the SCHEDULE");
-    fold_row(&lfasel2_tt, &lfasel2_why, param_value_is(js, "/api/lfasel2", "sd", "b"),
+    fold_row(&lfasel2_tt, &lfasel2_why, param_value_is(js, "https://x.test/api/lfasel2", "sd", "b"),
              "§4.10.7 step 2 + §4.10.22.4 step 5.6: with BOTH options made selected by the factory's fourth "
              "argument, a single-select submits the LAST one alone, and this record's `sd` does not carry "
              "`b` — step 2 cleared the wrong end of the list, or it cleared everything");
-    fold_row(&lfasel2_tt, &lfasel2_why, !param_value_is(js, "/api/lfasel2", "sd", "a"),
+    fold_row(&lfasel2_tt, &lfasel2_why, !param_value_is(js, "https://x.test/api/lfasel2", "sd", "a"),
              "§4.10.7 step 2 did not run: `sd` carries `a` as well as `b`, so TWO options were selected on a "
              "select with no `multiple` attribute — \"set the selectedness of all but the last option element "
              "with its selectedness set to true … to false\" is exactly what did not happen");
