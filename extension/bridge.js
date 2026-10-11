@@ -1849,8 +1849,9 @@ async function seedReferrerPolicy(documentId) {
    policy (HTML §4.8.5's "navigate an iframe or frame" navigates using the element's node document). A
    top-level navigation's initiator is not recorded, so the document speaks as itself with no referrer.
    Named residual. Not covered: a top-level document's initiator; a child the parent's instance had not created
-   when the seed loads (a frame its scripts insert later, or one whose browser load redirected); and a parent
-   whose seed no instance installed (itself a sub-frame). The next diff waits on the parent instance's create
+   when the seed loads (a frame its scripts insert later, or one whose browser load redirected); a parent whose
+   instance has left the pool by then (finalized); and a parent whose seed no instance installed (itself a
+   sub-frame). The next diff waits on the parent instance's create
    notice for the seed's address. Their absence shows as a seed load's Referer, Sec-Fetch-Site and
    Sec-Fetch-Dest differing from the browser's navigation of that document. */
 function seedSpeaker(msg) {
