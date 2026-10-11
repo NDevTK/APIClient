@@ -106,10 +106,9 @@ const char *endpoint_door_token(int door) {
     ENDPOINT_DOORS(ENDPOINT_DOOR_ARM)
 #undef ENDPOINT_DOOR_ARM
     }
-    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — "
-                "the mechanism that composed an address is stated by its producer and refused at the door "
-                "when it is not, so this is a record that reached the surface in a release build with no "
-                "producer having said, and the word about to be published names a mechanism nothing ran",
+    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — every "
+                "producer states its door and the mint refuses an unstated one, so this record reached the surface "
+                "without a producer naming the mechanism that composed it",
                 door);
 }
 
@@ -123,10 +122,9 @@ int endpoint_door_reach(int door) {
     ENDPOINT_DOORS(ENDPOINT_DOOR_REACH_ARM)
 #undef ENDPOINT_DOOR_REACH_ARM
     }
-    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — "
-                "the reach census is asking what a markup parse would have reached through a mechanism "
-                "nothing named, and the class it is about to raise is at an index outside the partition it "
-                "is a member of",
+    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the reach "
+                "census can only classify a door the list names, so the class it would raise is outside the "
+                "partition",
                 door);
 }
 
@@ -137,10 +135,9 @@ const char *endpoint_reach_token(int reach) {
     ENDPOINT_REACHES(ENDPOINT_REACH_ARM)
 #undef ENDPOINT_REACH_ARM
     }
-    CHECK_FAILF("endpoint: the @H reach census states the class %d, which is none of endpoint.h's "
-                "ENDPOINT_REACHES — every class comes off `endpoint_door_reach`, which is generated from the "
-                "door list's own third column, so this is a value no list produced and the key about to be "
-                "published names a razor reading nothing decided",
+    CHECK_FAILF("endpoint: the @H reach census states the class %d, which is none of endpoint.h's ENDPOINT_REACHES — "
+                "every class comes off `endpoint_door_reach`, generated from the door list's third column, so no "
+                "list produced this value",
                 reach);
 }
 
@@ -155,11 +152,8 @@ const char *endpoint_address_class_token(int cls) {
 #undef ENDPOINT_ADDRESS_CLASS_ARM
     }
     CHECK_FAILF("endpoint: an @H record states the address class %d, which is none of endpoint.h's "
-                "ENDPOINT_ADDRESS_CLASSES — every value comes off `address_class_of`, which returns a member "
-                "of that list on every one of its arms, so this is a field nothing in this file wrote and the "
-                "word "
-                "about to be published is a claim about the product's runtime-only bar that no measurement "
-                "made",
+                "ENDPOINT_ADDRESS_CLASSES — `address_class_of` returns a member of that list on every arm, so "
+                "something other than the mint wrote this field",
                 cls);
 }
 
@@ -174,10 +168,9 @@ int endpoint_door_bytes(int door) {
     ENDPOINT_DOORS(ENDPOINT_DOOR_BYTES_ARM)
 #undef ENDPOINT_DOOR_BYTES_ARM
     }
-    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — "
-                "the razor composer is asking whether that mechanism's bytes were in the served document at "
-                "all, about a mechanism nothing named, and the class it is about to hand that composer is at "
-                "an index outside the list it is a member of",
+    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the razor "
+                "composer asks whether a door's bytes were in the served document, and it cannot ask that of a door "
+                "the list does not name",
                 door);
 }
 
@@ -190,10 +183,8 @@ const char *endpoint_razor_class_token(int cls) {
 #undef ENDPOINT_RAZOR_CLASS_ARM
     }
     CHECK_FAILF("endpoint: an @H record states the razor class %d, which is none of endpoint.h's "
-                "ENDPOINT_RAZOR_CLASSES — every value comes off `endpoint_razor_class_of`, which returns one "
-                "of exactly two members of that list, so this is a value nothing in this file composed and the "
-                "word about to be published is this engine's answer to the product's runtime-only bar with no "
-                "measurement under it",
+                "ENDPOINT_RAZOR_CLASSES — `endpoint_razor_class_of` returns one of exactly two members, so nothing "
+                "in this file composed this value",
                 cls);
 }
 
@@ -208,9 +199,8 @@ const char *endpoint_witness_class_token(int cls) {
 #undef ENDPOINT_WITNESS_CLASS_ARM
     }
     CHECK_FAILF("endpoint: an @H record states the witness class %d, which is none of endpoint.h's "
-                "ENDPOINT_WITNESS_CLASSES — every value comes off `witness_class_now`, which returns one of "
-                "exactly three members, so this is a field nothing in this file wrote and the word about to "
-                "be published is the only bound anybody has on what the product's own bar did not measure",
+                "ENDPOINT_WITNESS_CLASSES — `witness_class_now` returns one of exactly three members, so something "
+                "other than the mint wrote this field",
                 cls);
 }
 
@@ -623,25 +613,22 @@ static int param_pred_same(const ConcolicPred *a, const ConcolicPred *b) {
    indistinguishable from an unconstrained one. */
 static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, size_t vlen, EpLoc loc,
                    const char *hole) {
-    DCHECK(nlen > 0, "an endpoint param was minted with no NAME — a nameless param cannot be substituted back "
-                     "into a request, so every producer here must refuse the unnamed case at its own site "
-                     "rather than emit a record keyed by the empty string");
+    DCHECK(nlen > 0, "an endpoint param was minted with no name — a nameless param cannot be substituted back into a "
+                     "request, so every producer must refuse the unnamed case at its own site");
     /* Where it landed is asserted at the mint: a param whose location is not one of the three is a producer that
        built a param without saying what it is, and a consumer defaulting it (`p.location || "query"`) would hide
        that. Every site that adds a param passes through here. */
     DCHECK(loc == EP_QUERY || loc == EP_PATH || loc == EP_BODY,
-           "an endpoint param was minted with no LOCATION — a param the reviewer cannot place is a param "
-           "that cannot be replayed, and a consumer defaulting it reads every one of them as a query param");
+           "an endpoint param was minted with no location — a param that cannot be placed cannot be replayed, and "
+           "every producer states query, path or body");
     /* A path param always has a hole: `path_scan` mints a param only for a segment holding a brace and passes the
        brace-stripped segment as the key, so this holds by construction, and asserting it makes a `location:"path"`
        row a denominator a consumer can trust and holds the next producer of a path param to it. The query and body
        producers have no such invariant (`concolic_hole_key` answers NULL for a brace-free value), which is what
        `has_hole` is for. */
     DCHECK(loc != EP_PATH || hole != NULL,
-           "a PATH param was minted with no hole key — path_scan mints one only for a braced segment and "
-           "passes that segment's brace-stripped name as the key, so a path param with no hole is a second "
-           "producer that learned to mint a path param and not to name the hole it stands for, and every "
-           "domain read below would be silently skipped for it");
+           "a path param was minted with no hole key — path_scan mints one only for a braced segment and passes its "
+           "brace-stripped name as the key, so this is a producer that mints path params without naming the hole");
     if (b->n >= b->cap) { b->cap = b->cap ? b->cap * 2 : 8; b->e = realloc(b->e, (size_t)b->cap * sizeof(KV)); CHECK(b->e, "endpoint: OOM params"); }
     b->e[b->n].name = malloc(nlen + 1); CHECK(b->e[b->n].name, "endpoint: OOM param name");
     memcpy(b->e[b->n].name, name, nlen); b->e[b->n].name[nlen] = 0;
@@ -805,17 +792,16 @@ static const char *kv_run_end(const char *b, int npair,
     int k;
 
     DCHECK(npair >= 1,
-           "a query pair run was asked for no pairs at all — every span `query_align` records is at least "
-           "one, a literal covering exactly one pair and a hole covering the value that stood there");
+           "a query pair run was asked for no pairs at all — every span `query_align` records covers at least one "
+           "pair");
     for (k = 0; k < npair; k++) {
         const char *xn = NULL, *xv = NULL, *next;
         size_t xnn = 0, xvn = 0;
 
         next = kv_pair_next(p, &xn, &xnn, &xv, &xvn);
         DCHECK(next != NULL,
-               "a query pair run ran off the end of the example it was measured against — `query_align` "
-               "proved this span against this same string, so a run wanting more pairs than the string holds "
-               "is that proof and this walk reading two different addresses");
+               "a query pair run ran off the end of its example — `query_align` proved this span against the same "
+               "string, so this walk and that proof are reading two different addresses");
         if (!next) break;
         if (k == 0) { *nm = xn; *nn = xnn; *vl = xv; *vn = xvn; }
         p = next;
@@ -897,10 +883,9 @@ static int *query_align(const char *shape, const char *ex, int *nshape) {
                 span[i] = k - j;
             }
             DCHECK(n != m || span[i] == 1,
-                   "a query whose shape and example hold the SAME number of pairs aligned with a hole "
-                   "standing over more than one of them — a literal covers exactly one and a hole at least "
-                   "one, so equal counts admit the 1:1 reading and no other, and this is an answer that was "
-                   "never in question moving under a widening made only for the unequal case");
+                   "a query whose shape and example hold the same number of pairs aligned with a hole over more than "
+                   "one pair — a literal covers one pair and a hole at least one, so equal counts admit only the 1:1 "
+                   "alignment");
             j += span[i];
         }
         /* The parts sum to the total, the identity a reader of this array can check without re-deriving the
@@ -942,9 +927,9 @@ static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
            of one list, the only way a value could be attributed to the wrong param. */
         if (span) {
             DCHECK(i < npair,
-                   "the shape walk ran past the pair count its own alignment was built from — `kv_split` and "
-                   "this loop split ONE string and the span array is sized by the first, so a further pair "
-                   "here is this walk reading past the end of that array");
+                   "the shape walk ran past the pair count its alignment was built from — `kv_split` and this loop "
+                   "split one string and the span array is sized by the first, so this reads past the end of that "
+                   "array");
             ne = kv_run_end(e, span[i], &en, &enn, &ev, &evn);
             DCHECK(enn == nn && !memcmp(en, nm, nn),
                    "an aligned example query's pair names a different param than the shape's at the same "
@@ -971,9 +956,8 @@ static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
         free(shapeval);
     }
     DCHECK(!span || i == npair,
-           "the shape walk visited a different number of pairs than the alignment was built over — the span "
-           "array is indexed by this loop and sized by `kv_split`, so a short walk leaves a hole reading a "
-           "span that belongs to another pair the next time this address is scanned");
+           "the shape walk visited a different number of pairs than the alignment was built over — the span array is "
+           "sized by `kv_split` and indexed by this loop, so the two must visit the same pairs");
     free(span);
 }
 
@@ -1002,8 +986,8 @@ static char *url_example(JSContext *ctx, JSValueConst url) {
        hand the exception to. Both are this engine's logic being wrong, so it is asserted, and the conversion can
        fail only on OOM. */
     DCHECK(!JS_IsObject(ex) && !JS_IsSymbol(ex),
-           "a URL's concolic EXAMPLE is not a primitive — the example rides the value the interpreter "
-           "actually computed, so a wrapper or a symbol here is that propagation having lost the address");
+           "a URL's concolic example is not a primitive — the example is the value the interpreter computed, so a "
+           "wrapper or a symbol here means the propagation lost the address");
     s = JS_ToCString(ctx, ex);
     CHECK(s, "endpoint: OOM rendering the concrete URL a flow computed");
     r = strdup(s);
@@ -1050,16 +1034,15 @@ static const char *seg_run_end(const char *b, int nseg) {
     const char *e;
 
     DCHECK(nseg >= 1,
-           "a segment run was asked for no segments at all — every span `path_align` records is at least one, "
-           "a literal covering exactly one segment and a hole covering the value that stood there");
+           "a segment run was asked for no segments at all — every span `path_align` records covers at least one "
+           "segment");
     for (e = b; *e; e++) {
         if (*e != '/') continue;
         if (--nseg == 0) return e;
     }
     DCHECK(nseg == 1,
-           "a segment run ran off the end of the example it was measured against — `path_align` proved this "
-           "span against this same string, so a run wanting more segments than the string holds is that "
-           "proof and this walk reading two different addresses");
+           "a segment run ran off the end of its example — `path_align` proved this span against the same string, so "
+           "this walk and that proof are reading two different addresses");
     return NULL;
 }
 
@@ -1131,10 +1114,9 @@ static int *path_align(const char *shape, const char *ex, int *nshape) {
             /* And the equal-count case is the 1:1 walk, asserted, since that is why this matcher answers
                byte-identically to an equal-count one for every address such a matcher aligns. */
             DCHECK(n != m || span[i] == 1,
-                   "an address whose shape and example hold the SAME number of segments aligned with a hole "
-                   "standing over more than one of them — a literal covers exactly one and a hole at least "
-                   "one, so equal counts admit the 1:1 reading and no other, and this is an answer that was "
-                   "never in question moving under a widening made only for the unequal case");
+                   "an address whose shape and example hold the same number of segments aligned with a hole over "
+                   "more than one segment — a literal covers one segment and a hole at least one, so equal counts "
+                   "admit only the 1:1 alignment");
             j += span[i];
         }
         /* The parts sum to the total, the identity a reader of this array can check without re-deriving the table:
@@ -1181,9 +1163,9 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
 
         if (span) {
             DCHECK(i < nseg,
-                   "the shape walk ran past the segment count its own alignment was built from — `seg_split` "
-                   "and this loop split ONE string and the span array is sized by the first, so a further "
-                   "segment here is this walk reading past the end of that array");
+                   "the shape walk ran past the segment count its alignment was built from — `seg_split` and this "
+                   "loop split one string and the span array is sized by the first, so this reads past the end of "
+                   "that array");
             be = seg_run_end(b, span[i]);
             bn = be ? (size_t)(be - b) : strlen(b);
             /* The example runs out exactly when the shape does, asserted where the two walks are in one hand, as
@@ -1210,9 +1192,9 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
                segment cannot hold a `/` because this walk split on one, so it holds by construction, and the next
                producer of a name has to keep it true. */
             DCHECK(!strpbrk(name, "{}/"),
-                   "a path param's NAME still holds a brace or a slash — the popup substitutes a hole by "
-                   "matching /\\{([^}/]+)\\}/ against this path, so a name outside that grammar names a hole "
-                   "no substitution can find");
+                   "a path param's name still holds a brace or a slash — the popup substitutes a hole by matching "
+                   "/\\{([^}/]+)\\}/ against the path, so a name outside that grammar names a hole no substitution "
+                   "can find");
             json_buf_raw(&p, "{"); json_buf_raw(&p, name); json_buf_raw(&p, "}");
             /* So a path param looks its domain up by the string the popup substitutes it by and decide.c filed it
                under. The value is the concrete example aligned out of the URL, with no braces to read a hole out of;
@@ -1227,9 +1209,8 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
         if (span) b = be + 1;
     }
     DCHECK(!span || i == nseg,
-           "the shape walk visited a different number of segments than the alignment was built over — the "
-           "span array is indexed by this loop and sized by `seg_split`, so a short walk leaves a hole "
-           "reading a span that belongs to another segment the next time this address is scanned");
+           "the shape walk visited a different number of segments than the alignment was built over — the span array "
+           "is sized by `seg_split` and indexed by this loop, so the two must visit the same segments");
     free(span);
     return json_buf_take(&p);
 }
@@ -1281,13 +1262,12 @@ static int body_spans_params(KvBuf *out, const EndpointBody *body) {
         const char *val;
 
         DCHECK(s->shape != NULL,
-               "an unknown byte range of a request body reached the @H surface with no provenance — the shape "
-               "is what says WHERE these bytes came from, and a range with neither an example nor a source is "
-               "a row a reviewer can read nothing off");
+               "an unknown byte range of a request body reached the @H surface with no shape — the shape records "
+               "where the bytes came from, so a range with neither an example nor a source carries nothing a "
+               "reviewer can read");
         DCHECK(i == 0 || body->span[i - 1].off + body->span[i - 1].len <= s->off,
-               "a request body's unknown byte ranges arrived out of order or overlapping — the capture walks "
-               "the page's view in index order, so two ranges claiming one byte means two records of one body "
-               "were merged");
+               "a request body's unknown byte ranges arrived out of order or overlapping — the capture walks the "
+               "page's view in index order, so two ranges claiming one byte are two records of one body merged");
         nl = snprintf(name, sizeof name, "body[%zu:%zu]", s->off, s->off + s->len);
         DCHECK(nl > 0 && nl < (int)sizeof name,
                "a body span's name did not fit its buffer — the name is two decimal offsets into a body, so a "
@@ -1436,10 +1416,9 @@ static char *body_bytes_b64(const EndpointBody *body) {
        sent these bytes, which a reviewer replays. Asserted here and decided at one place, body_store: a shape
        reaching this function is that choice having gone wrong. */
     DCHECK(body->kind == EPB_SENT,
-           "the base64 of a request body was asked for a body that is NOT bytes the request sends — this "
-           "function makes the record's replay claim, so running it over an unknown body's display spelling "
-           "publishes the characters of a hole as a payload a reviewer would send. body_store picks the "
-           "field; a shape belongs in `body_shape` and never here");
+           "the base64 of a request body was asked for a body that is not bytes the request sends — this function "
+           "makes the record's replay claim, so it may run only over an EPB_SENT body; body_store routes a shape to "
+           "`body_shape`");
     return body_b64_encode(body->bytes, body->len);
 }
 
@@ -1450,10 +1429,8 @@ static char *body_bytes_b64(const EndpointBody *body) {
 static char *body_example_b64(const EndpointBody *body) {
     if (!body || !body->bytes || body->len == 0) return NULL;
     DCHECK(body->kind == EPB_EXAMPLE,
-           "the example bytes of a request body were asked for a body that is not one — this key states "
-           "what a payload LOOKS LIKE so a consumer holding the span params can splice into it, and it is "
-           "reached only for a body carrying spans. A body with none is either bytes the request sends or the "
-           "display spelling of an unknown, and body_store picks between those two");
+           "the example bytes of a request body were asked for a body that is not an example — this key is reached "
+           "only for a body carrying spans, and body_store routes every other body to the sent bytes or the shape");
     return body_b64_encode(body->bytes, body->len);
 }
 
@@ -1479,9 +1456,9 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
            `body_b64` promises these are the bytes the request sends, and a spanned body's are an unknown's example
            or a byte nobody wrote; `body_shape` is a C string over bytes that may hold a NUL and may not be UTF-8. */
         DCHECK(body_named,
-               "a request body carrying unknown byte ranges was stored with none of its ranges named — every "
-               "span mints a param, so this is the span walk having been skipped and these example bytes "
-               "would reach a reviewer with no address to splice at, which is the half that makes them safe");
+               "a request body carrying unknown byte ranges was stored with none of its ranges named — every span "
+               "mints a param, so the span walk was skipped and the example bytes would reach a reviewer with no "
+               "address to splice at");
         e->body_example_b64 = body_example_b64(body);
     } else if (body_named) {
         return;
@@ -1515,9 +1492,8 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
 static void param_set_excl(Param *p, char *const *ex, int n) {
     int i;
     DCHECK(p->nexcl == 0 && p->excl == NULL,
-           "an endpoint param's exclusion set was seeded twice — the first sighting takes the set and every "
-           "later one INTERSECTS it, so a second seed would replace a constraint that had already been "
-           "narrowed by another path and state, of this endpoint, something no run of the program obeyed");
+           "an endpoint param's exclusion set was seeded twice — the first sighting takes the set and every later "
+           "one intersects it, so a second seed would discard a narrowing another path made");
     if (n <= 0) return;
     p->excl = malloc((size_t)n * sizeof(char *));
     CHECK(p->excl, "endpoint: OOM recording what a flow proved a param is not");
@@ -1546,9 +1522,8 @@ static void param_intersect_excl(Param *p, char *const *ex, int n) {
    whether it was merged or seeded, and one owner per string survives a new caller. */
 static void param_set_bound(ParamBound *d, const ParamBound *s) {
     DCHECK(!d->has_lo && !d->has_hi && !d->lo_txt && !d->hi_txt,
-           "an endpoint param's interval was seeded twice — the first sighting takes it and every later one "
-           "WIDENS it, so a second seed would replace a bound another path had already disproved and state, "
-           "of this endpoint, a constraint no run of the program obeyed");
+           "an endpoint param's interval was seeded twice — the first sighting takes it and every later one widens "
+           "it, so a second seed would discard a bound another path had already widened");
     *d = *s;
     d->lo_txt = d->hi_txt = NULL;
     if (s->has_lo) { d->lo_txt = strdup(s->lo_txt); CHECK(d->lo_txt, "endpoint: OOM recording a param's lower bound"); }
@@ -1579,9 +1554,8 @@ static void param_widen_bound(ParamBound *d, const ParamBound *s) {
 /* The call predicates' first observation: this endpoint's record takes the set the recording flow proved. */
 static void param_set_pred(Param *p, const ConcolicPred *src, int n) {
     DCHECK(p->npred == 0 && p->pred == NULL,
-           "an endpoint param's call-predicate set was seeded twice — the first sighting takes the set and "
-           "every later one INTERSECTS it, so a second seed would replace a constraint that had already been "
-           "narrowed by another path and state, of this endpoint, something no run of the program obeyed");
+           "an endpoint param's call-predicate set was seeded twice — the first sighting takes the set and every "
+           "later one intersects it, so a second seed would discard a narrowing another path made");
     if (n <= 0) return;
     p->pred = param_pred_copy(src, n);
     p->npred = n;
@@ -1605,9 +1579,8 @@ static void param_intersect_pred(Param *p, const ConcolicPred *src, int n) {
 /* The loose equalities' first observation: this endpoint's record takes the set the recording flow proved. */
 static void param_set_leq(Param *p, const ConcolicLooseEq *src, int n) {
     DCHECK(p->nleq == 0 && p->leq == NULL,
-           "an endpoint param's loose-equality set was seeded twice — the first sighting takes the set and "
-           "every later one INTERSECTS it, so a second seed would replace a constraint that had already been "
-           "narrowed by another path and state, of this endpoint, something no run of the program obeyed");
+           "an endpoint param's loose-equality set was seeded twice — the first sighting takes the set and every "
+           "later one intersects it, so a second seed would discard a narrowing another path made");
     if (n <= 0) return;
     p->leq = param_leq_copy(src, n);
     p->nleq = n;
@@ -1654,39 +1627,34 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        endpoint passes through here. A value outside the vocabulary is the dangerous one: `0` is `observed`, so an
        uninitialised grade reads as the strongest claim this surface makes. */
     DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
-            "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h "
-            "defines — the grade is part of this record's identity and is emitted on it, so an unrecognised "
-            "one both merges with nothing and publishes a word no consumer can read. method=%s", prov, method);
+            "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h defines — "
+            "the grade is part of the record's identity and is emitted on it. method=%s", prov, method);
     /* And which mechanism composed the address, asserted at the same mint for the same reason. A membership test
        despite its spelling: `ENDPOINT_DOORS` gives its members no explicit values, so the enum is dense from
        `EPD_UNSTATED` to `EPD_COUNT`. `EPD_UNSTATED` is 0 so that a producer that forgets is refused here rather than
        read as whichever mechanism the numbering put first; endpoint_door_token's CHECK catches the same record in
        release. */
     DCHECKF(door > EPD_UNSTATED && door < EPD_COUNT,
-            "an endpoint was recorded with the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the "
-            "mechanism that composed an address is the one fact about a sighting no consumer can re-derive, "
-            "and it is what CLAUDE.md's `epEmitted - epPreProgram` razor subtracts two totals to approximate, "
-            "so a record without one is a row that partitions with nothing. State the door for the mechanism "
-            "this call site IS. method=%s", door, method);
+            "an endpoint was recorded with the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the door is "
+            "the one fact about a sighting no consumer can re-derive; state the door of the mechanism this call site "
+            "is. method=%s", door, method);
     /* And whose bytes the body is: what the request sends, the engine's display spelling of an unknown, or an
        example of the payload, which only the producer knows (it asked core/fetch/body.h to obtain them). The zero
        is UNSTATED, so a producer that forgets is refused rather than read as the replayable arm. The message names
        mime and method because three callers pass a body and all would report this line. */
     DCHECKF(!body || body->kind == EPB_SENT || body->kind == EPB_SHAPE || body->kind == EPB_EXAMPLE,
-            "a request body reached the @H surface without its producer saying whether the bytes are what the "
-            "request SENDS, this engine's display spelling of an unknown, or an EXAMPLE of the payload. Those "
-            "are not three renderings of one fact: the first is replayable evidence, the second is a hole, "
-            "and the third is what the payload looks like at ranges `params` names. Emitting any of them as "
-            "another hands a reviewer a request the page never made or hides one it did. State the kind from "
-            "the arm core/fetch/body.h already told you. method=%s mime=%s", method, body->mime ? body->mime : "(none)");
+            "a request body reached the @H surface without its producer stating whether the bytes are sent, the "
+            "display spelling of an unknown, or an example of the payload — the three are graded apart; state the "
+            "kind from the arm core/fetch/body.h reports. method=%s "
+            "mime=%s", method, body->mime ? body->mime : "(none)");
     /* And the one pairing between the two facts above, which the example key rests on: §10.4.5.18
        TypedArraySetElement ( obj, index, value ) records a span even where no byte was written, so a body carrying
        spans has bytes the request cannot be said to send. Asserted at the mint, so body_store can dispatch on
        `nspan` and body_example_b64 assert its precondition. One-way: a body with no span may still be an example. */
     DCHECKF(!body || body->nspan == 0 || body->kind == EPB_EXAMPLE,
-            "a request body carrying unknown byte ranges reached the @H surface graded as something other "
-            "than an EXAMPLE of the payload — some of its bytes are an unknown's example and some are bytes "
-            "nobody wrote, so no record of this request may claim it sends exactly them. method=%s kind=%d",
+            "a request body carrying unknown byte ranges was graded as something other than an example — some of its "
+            "bytes are an unknown's example, so no record of it may claim the request sends exactly them. method=%s "
+            "kind=%d",
             method, (int)body->kind);
     /* And that its span record is one fact: `EndpointBody` is filled field by field at each producer, and a count
        with no array reads as unknown ranges nobody can name while an array with no count reads as none, neither
@@ -1709,13 +1677,9 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        fourth-number residual: the any-program-started bit carried on the document the record's realm belongs to,
        raised where that document's first program starts, which also answers the child-navigable case. */
     DCHECK(!g_boundary_spent,
-           "an @H ask arrived on a surface whose counters were reset while a program had already started on "
-           "this instance — the program-state boundary is `g_prog_starts`, which the engine's session "
-           "teardown names on its NOT-RESET list, and every counter here is reset per session, so this "
-           "document's whole markup door will grade POST-program: `preProgram` reads 0, `emitted - "
-           "preProgram` reads the entire surface, and the product's razor reports the `<head>` counted back "
-           "as everything forced execution contributed. Nothing downstream can see it: both censuses' "
-           "identities hold, and `pre_program` is decided at each mint and never re-armed");
+           "an @H ask arrived on a surface whose counters were reset after a program had started on this instance — "
+           "the program-state boundary `g_prog_starts` is not reset per session while these counters are, so "
+           "`pre_program` would grade this whole document's markup as post-program");
     g_asks++;
     if (ask_pre_program) g_asks_pre_program++;
     if (g_suppress) { g_ask_suppressed++; return; }   /* candidate/verify run: not a real @H endpoint */
@@ -1727,11 +1691,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        line. Asserted here because the mapping takes a door and only a caller holds one; a door arm put in front of
        that line fires this. */
     DCHECK(endpoint_razor_class_of(door, EPA_UNKNOWN) == EPZ_RUNTIME_ONLY,
-           "`address_class_of`'s flow-less member is no longer the one `endpoint_razor_class_of` maps to "
-           "`runtime-only` — that function's residual rests on the no-flow fallback CLAIMING on the product's "
-           "bar, which is why a stale pin chain would assert a determination no flow made; if this member "
-           "now maps elsewhere, the direction that argument states is inverted and the gate it justifies is "
-           "protecting the opposite thing");
+           "`address_class_of`'s flow-less member does not map to `runtime-only` under `endpoint_razor_class_of` — "
+           "the gate that stops a stale pin chain from claiming a determination rests on that mapping");
     /* And the member that does not claim: `address_class_of` narrows the bar by returning `EPA_UNKNOWN_UNPROVEN`,
        and that narrowing is real only while this mapping leaves such a row `unproven`; a door arm, or a member
        reordered above `EPA_UNKNOWN`, would hand the bar back every instrument hole with every census still summing.
@@ -1740,11 +1701,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        union working. */
     DCHECK(endpoint_door_bytes(door) == EPB_OFF_DOCUMENT ||
            endpoint_razor_class_of(door, EPA_UNKNOWN_UNPROVEN) == EPZ_UNPROVEN,
-           "`address_class_of`'s whose-narrowed member now CLAIMS on the product's own bar through a door "
-           "whose bytes were in the served document — that member exists so the bar refuses an address the "
-           "run did not determine and whose every root this engine minted, the served document spells, or no "
-           "mint could speak for, and a mapping that clears it restores exactly the over-claim the read "
-           "closed: on a real site every row that cleared this bar was this engine's own instrument hole");
+           "`address_class_of`'s whose-narrowed member clears the product's bar through a door whose bytes were in "
+           "the served document — that member exists so the bar refuses an address the run did not determine");
     /* And what the path that composed it had chosen, read on the same line and for the same reason: a fact about
        the running flow, which nothing below may re-ask. */
     int wcls = witness_class_now();
@@ -1861,10 +1819,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        a JSON body parse) runs page code. None does; the assert keeps a later diff from splitting the ask census's
        partition from the record's flag. */
     DCHECK(e->pre_program == ask_pre_program,
-           "a program started between an endpoint ask reaching the @H surface and that ask minting its "
-           "record — the two are counted as one instant, so the ask census's program-state partition and this "
-           "record's own flag now grade the same sighting on either side of the boundary, and a reader "
-           "computing what forced execution contributed would be subtracting two different populations");
+           "a program started between an endpoint ask reaching the @H surface and that ask minting its record — the "
+           "ask census and the record's `pre_program` flag must grade one sighting on the same side of the boundary");
     g_ask_minted++;
     if (kvb.n) { e->params = calloc((size_t)kvb.n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
     for (int j = 0; j < kvb.n; j++) {
@@ -1908,9 +1864,8 @@ void endpoint_mark_asset(const char *method, const char *url) {
     char *upath, *path;
 
     DCHECK(method && *method && url && *url,
-           "an asset verdict arrived naming no request — the reply register is keyed on the (method, url) pair "
-           "the request was owed under, so a verdict missing either half names no record and would silently "
-           "retract nothing while reading as a retraction");
+           "an asset verdict arrived naming no request — the reply register is keyed on the (method, url) pair the "
+           "request was owed under, so a verdict missing either half names no record");
     upath = url_path_of(url);
     path = path_scan(&kvb, upath, NULL);
     for (int i = 0; i < g_eps_n; i++)
@@ -1928,8 +1883,8 @@ void endpoint_mark_asset(const char *method, const char *url) {
 void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pre_program) {
     long a = 0, em = 0, pre = 0;
     DCHECK(minted && assets && emitted && pre_program,
-           "the @H surface census was asked for with somewhere to put fewer than four of its numbers — the "
-           "partition is the whole point and a caller taking one of them is reading a bare count again");
+           "the @H surface census was asked for with somewhere to put fewer than four of its numbers — the census is "
+           "a partition and is returned whole");
     for (int i = 0; i < g_eps_n; i++) {
         if (g_eps[i].is_asset) a++;
         else {
@@ -1947,10 +1902,8 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
        ones, which a reader computing the complement must be able to assume; a value above `emitted` is a raise
        outside the skip. */
     DCHECK(pre <= em,
-           "the @H surface counted more records minted BEFORE the first program than it emits at all — the "
-           "pre-program count is raised only inside the emitted arm of this one walk, so a value above it is "
-           "a second raise added outside that arm; a reader computing `emitted - preProgram` as the number of "
-           "addresses running code could have composed would read a negative count as a large one");
+           "the @H surface counted more records minted before the first program than it emits — the pre-program "
+           "count is raised only inside the emitted arm of this walk, so a larger value is a raise outside that arm");
     /* And the two relations that span the two instruments, asserted here, the only place the record array and the
        ask counts are in one hand (endpoint_ask_census asserts its own partitions and cut). `pre <=
        g_asks_pre_program`: every pre-program record was minted by an ask whose own bit was true (the mint asserts
@@ -1960,11 +1913,9 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
        by a path that did not pass endpoint_record's door: endpoint.h's funnel note, stated by something that cannot
        go stale. */
     DCHECK(pre <= g_asks_pre_program,
-           "the @H surface emits more records minted before the first program than the door counted asks made "
-           "before one — every such record was minted by such an ask and the assets skipped by this walk can "
-           "only make the first number smaller, so a value above it means the ask census's program-state "
-           "boundary and this walk's are two different boundaries, and `emitted - preProgram` and `asks - "
-           "preProgram` are then complements of two different populations read as complements of one");
+           "the @H surface emits more pre-program records than the door counted pre-program asks — every such record "
+           "was minted by such an ask, so the ask census and this walk are using two different program-state "
+           "boundaries");
     DCHECK(g_ask_minted == (long)g_eps_n,
            "the @H surface holds a different number of records than the number of asks that minted one — the "
            "mint is counted on the one path that grows this array, so a disagreement is a record built "
@@ -1981,30 +1932,22 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
 void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
                          long *merged_pre_program) {
     DCHECK(asks && pre_program && suppressed && merged && minted && merged_pre_program,
-           "the @H ask census was asked for with somewhere to put fewer than six of its numbers — the two "
-           "partitions and the cut are the whole point and a caller taking one of them is reading a bare count again, "
-           "which for this instrument means reading a total that cannot say whether running code ever composed "
-           "a request at all");
+           "the @H ask census was asked for with somewhere to put fewer than six of its numbers — the two partitions "
+           "and the cut are returned whole");
     DCHECK(g_asks == g_ask_suppressed + g_ask_merged + g_ask_minted,
-           "the @H surface's asks do not sum over the three things that can happen to one — they are three "
-           "arms of ONE door, counted on the three paths out of it, so a total that moves without an arm "
-           "moving is a fourth exit added above them, and the MERGED arm is the one a reader silently loses, "
-           "which is exactly the population this census exists to make visible");
+           "the @H surface's asks do not sum over suppressed, merged and minted — they are the three exits of one "
+           "door, so a total that moves without an arm is a fourth exit added above them");
     DCHECK(g_asks_pre_program <= g_asks,
-           "the @H surface counted more asks made BEFORE the first program than asks made at all — the "
-           "pre-program count is raised only inside the one entry that raises the total, so a value above it "
-           "is a second raise, and a reader computing `asks - preProgram` as the number of network call sites "
-           "running code reached would read a negative count as a large one");
+           "the @H surface counted more pre-program asks than asks — the pre-program count is raised only inside the "
+           "entry that raises the total, so a larger value is a second raise");
     /* And the two containments of the cut, asserted here, where every term of either is in hand; the cut selects on
        two independent facts, and each containment fires on a different way of getting it wrong. The first is
        against the arm it sits inside: it is raised only on the line after `g_ask_merged`, so a larger value is a
        raise outside that arm. */
     DCHECKF(g_ask_merged_pre_program <= g_ask_merged,
-            "the @H surface counted more asks merging into a record minted before the first program (%ld) "
-            "than asks that merged at all (%ld) — the cut is raised only inside the merge arm that raises the "
-            "total, so a larger cut is a raise added outside it, and a reader taking the rest of the merges "
-            "as the arm where running code re-composed its OWN addresses would read a negative count as a "
-            "large one", g_ask_merged_pre_program, g_ask_merged);
+            "the @H surface counted more asks merging into a pre-program record (%ld) than asks that merged at all "
+            "(%ld) — the cut is raised only inside the merge arm, so a larger cut is a raise outside "
+            "it", g_ask_merged_pre_program, g_ask_merged);
     /* And the second is against the other fact the cut selects on: every member was asked with a program running,
        so it is contained in `asks - preProgram`, endpoint.h's separation between the two readings of a zero razor.
        The sides are raised at different events (the door's entry, the merge), so they part exactly when the door's
@@ -2046,11 +1989,9 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
        there are two structs: core/fetch and core/xhr each declare their own. */
     if (e->steps) {
         DCHECKF(e->steps == steps && e->stage_first == first_stage && e->stage_n == n && e->entry == entry,
-                "a SECOND machine declared itself to the %s edge census, or the same machine declared a "
-                "different table or a different global entry identifier — these rows are keyed by ONE "
-                "machine's stages, so a second one's arms summed into them would publish a histogram of two "
-                "populations under one edge's name, and a second entry name would file one edge's compile "
-                "report under two spellings of which only the last would ever match", who);
+                "a second machine declared itself to the %s edge census, or the same machine declared a different "
+                "table or entry identifier — the rows are keyed by one machine's stages, so a second declaration "
+                "would merge two populations", who);
         return;
     }
     e->died = (long *)calloc((size_t)n, sizeof *e->died);
@@ -2086,17 +2027,16 @@ static void edge_freed(EndpointEdge *e, const char *who, int stage, int reached)
     int i = stage - e->stage_first;
 
     DCHECKF(e->steps != NULL,
-            "a %s state was torn down before its machine declared its stages — the census cannot name the arm "
-            "this teardown belongs to, and a partition with an unnameable arm is a total with a hole in it",
+            "a %s state was torn down before its machine declared its stages — the census cannot name the arm this "
+            "teardown belongs to",
             who);
     /* A CHECK, for absent.c's vocabulary bound's reason: the line below indexes the array with this value in every
        build, and a state standing at a stage its own machine does not name is a fact about the driver, not a row to
        file. */
     CHECKF(i >= 0 && i < e->stage_n,
-           "a %s state was torn down standing at stage %d, which its machine's own table does not name "
-           "(it declares %d stages based at %d) — the stage a machine holds is asserted against its "
-           "declaration by the step driver, so a value outside it here is this census reading a stage the "
-           "driver never wrote or a machine numbering its stages from something other than what it declared",
+           "a %s state was torn down at stage %d, which its machine's table does not name (it declares %d stages "
+           "based at %d) — the step driver asserts every stage against the declaration, so this census is reading a "
+           "stage the driver never wrote",
            who, stage, e->stage_n, e->stage_first);
     e->freed++;
     if (reached) e->freed_reached++;
@@ -2197,9 +2137,8 @@ static void edge_num(JsonBuf *b, long v) {
     int n = snprintf(t, sizeof t, "%ld", v);
 
     DCHECK(n > 0 && (size_t)n < sizeof t,
-           "a census number did not fit its own conversion buffer — the width of a long's decimal form is a "
-           "property of the type, so this is a host whose long is wider than this buffer was written for and "
-           "the number about to be published has lost its leading digits");
+           "a census number did not fit its conversion buffer — the buffer is sized for a long's decimal form, so "
+           "this host's long is wider than the buffer was written for");
     json_buf_raw(b, t);
 }
 
@@ -2229,9 +2168,8 @@ char *endpoint_door_hist_json(void) {
            keeps the frame intact on the way. */
         DCHECKF(g_eps[i].door > EPD_UNSTATED && g_eps[i].door < EPD_COUNT,
                 "an @H record reached the door census carrying the door %d, which is none of endpoint.h's "
-                "ENDPOINT_DOORS — the mint refuses an unstated one, so this is a record that reached this "
-                "surface in a build where that assert was compiled out, and the count about to be raised is "
-                "at an index outside the table this census is a partition of", g_eps[i].door);
+                "ENDPOINT_DOORS — the mint refuses an unstated door, so this record bypassed the mint's "
+                "check", g_eps[i].door);
         n[g_eps[i].door]++;
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
@@ -2247,11 +2185,9 @@ char *endpoint_door_hist_json(void) {
     }
     json_buf_raw(&b, "}");
     DCHECKF(sum == emitted,
-            "the @H surface's per-door counts sum to %ld against the %ld rows it emits — the doors are a "
-            "PARTITION of the emitted surface and the two are one array walked twice with the same asset "
-            "skip, so a difference is one of those walks having stopped describing the population the other "
-            "counts, and a reader taking a door's share of the surface would be taking a fraction of a "
-            "number that is not its size", sum, emitted);
+            "the @H surface's per-door counts sum to %ld against the %ld rows it emits — the doors partition the "
+            "emitted surface over the same asset skip, so the two walks are counting different "
+            "populations", sum, emitted);
     return json_buf_take(&b);
 }
 
@@ -2294,10 +2230,8 @@ char *endpoint_reach_hist_json(void) {
     json_buf_raw(&b, "}");
     DCHECKF(sum == emitted,
             "the @H surface's per-reach counts sum to %ld against the %ld rows it emits — the three classes "
-            "are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip the census "
-            "beside it does, so a difference is one of those walks having stopped describing the population "
-            "the other counts, and the markup reach a reader reads off this row would be a share of a "
-            "number that is not the surface's size", sum, emitted);
+            "partition the emitted surface over the same `is_asset` skip, so the two walks are counting different "
+            "populations", sum, emitted);
     return json_buf_take(&b);
 }
 
@@ -2322,35 +2256,27 @@ char *endpoint_address_hist_json(void) {
     int c, i;
 
     DCHECK(EPA_CONCRETE == 0,
-           "endpoint.h's ENDPOINT_ADDRESS_CLASSES no longer begins with the member that PROVES NOTHING — the "
-           "record's merge is a MAX over this list's order and `memset` leaves a fresh record at 0, so a "
-           "reordering makes that zero mean a claim the mint never made");
+           "endpoint.h's ENDPOINT_ADDRESS_CLASSES does not begin with the member that proves nothing — the record's "
+           "merge is a maximum over this order and `memset` leaves a fresh record at 0, so 0 must make no claim");
     DCHECK(EPA_UNKNOWN == EPA_COUNT - 1,
-           "endpoint.h's ENDPOINT_ADDRESS_CLASSES no longer ENDS with the member CLAUDE.md "
-           "§What-the-tool-produces' hard bar is keyed on — `endpoint_razor_class_of` reads `EPA_UNKNOWN` and "
-           "the record's merge is a MAX over this order, so a member above it lets a later sighting carry a "
-           "record out of the one class that clears the bar, and this surface would stop claiming an address "
-           "a path had already proved stands in no served byte");
+           "endpoint.h's ENDPOINT_ADDRESS_CLASSES does not end with EPA_UNKNOWN — `endpoint_razor_class_of` keys the "
+           "product's bar on it and the merge is a maximum over this order, so a member above it would let a later "
+           "sighting carry a record out of the class that clears the bar");
     /* The third fact, which the two ends cannot see: the list's two predicates are asked of one stored member, and
        with more than one undetermined member Q1 is spelled as a threshold (`cls <= EPA_SOURCE_DETERMINED`), which
        is correct only while the determined members are a prefix. A determined member added above an undetermined
        one would satisfy both end asserts, keep every count summing, and make Q1 answer determined for a row no
        path determined. */
     DCHECK(EPA_SOURCE_DETERMINED < EPA_UNKNOWN_UNPROVEN,
-           "endpoint.h's ENDPOINT_ADDRESS_CLASSES no longer has its DETERMINED members as a PREFIX of the "
-           "order — that list's banner spells Q1 as `cls <= EPA_SOURCE_DETERMINED`, which is a threshold and "
-           "is the only spelling available once more than one member answers NOT DETERMINED, so a determined "
-           "member standing above an undetermined one makes every consumer of that reading answer that the "
-           "run had determined an address no path determined");
+           "endpoint.h's ENDPOINT_ADDRESS_CLASSES does not hold its determined members as a prefix — consumers read "
+           "determination as the threshold `cls <= EPA_SOURCE_DETERMINED`");
     memset(n, 0, sizeof n);
     for (i = 0; i < g_eps_n; i++) {
         if (g_eps[i].is_asset) continue;
         DCHECKF(g_eps[i].addr_class >= 0 && g_eps[i].addr_class < EPA_COUNT,
-                "an @H record reached the address-class census carrying the class %d, which is none of "
-                "endpoint.h's ENDPOINT_ADDRESS_CLASSES — the mint writes this field unconditionally from "
-                "`address_class_of`, which returns a member of that list on every one of its arms, so this is "
-                "a record minted by something that is not that line, and the count about to be raised is at "
-                "an index outside the table this census is a partition of", g_eps[i].addr_class);
+                "an @H record reached the address-class census carrying the class %d, which is none of endpoint.h's "
+                "ENDPOINT_ADDRESS_CLASSES — the mint writes this field from `address_class_of`, which returns a "
+                "member on every arm, so something else wrote it", g_eps[i].addr_class);
         n[g_eps[i].addr_class]++;
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
@@ -2368,11 +2294,9 @@ char *endpoint_address_hist_json(void) {
     }
     json_buf_raw(&b, "}");
     DCHECKF(sum == emitted,
-            "the @H surface's per-address-class counts sum to %ld against the %ld rows it emits — the "
-            "classes are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip "
-            "the census beside it does, so a difference is one of those walks having stopped describing the "
-            "population the other counts, and the hard bar a reader reads off this row would be a share of a "
-            "number that is not the surface's size", sum, emitted);
+            "the @H surface's per-address-class counts sum to %ld against the %ld rows it emits — the classes "
+            "partition the emitted surface over the same `is_asset` skip, so the two walks are counting different "
+            "populations", sum, emitted);
     /* The bar is not the sum of this table and the reach table: the two overlap (an undetermined `reply-chunk` row
        is counted by both), so their sum exceeds the surface; a union is per-row membership, which
        `endpoint_razor_hist_json` composes. */
@@ -2400,11 +2324,9 @@ char *endpoint_razor_hist_json(void) {
     for (i = 0; i < g_eps_n; i++) {
         if (g_eps[i].is_asset) continue;
         DCHECKF(g_eps[i].addr_class >= 0 && g_eps[i].addr_class < EPA_COUNT,
-                "an @H record reached the razor census carrying the address class %d, which is none of "
-                "endpoint.h's ENDPOINT_ADDRESS_CLASSES — `endpoint_razor_class_of` reads that field as its "
-                "FIRST arm and anything outside the list falls through it into `unproven`, so a corrupt value "
-                "here is not a wrong count but an UNDER-CLAIM published as a floor, which is the one "
-                "direction this row may not be wrong in", g_eps[i].addr_class);
+                "an @H record reached the razor census carrying the address class %d, which is none of endpoint.h's "
+                "ENDPOINT_ADDRESS_CLASSES — `endpoint_razor_class_of` would read it as `unproven` and under-claim "
+                "the published floor", g_eps[i].addr_class);
         n[endpoint_razor_class_of(g_eps[i].door, g_eps[i].addr_class)]++;
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
@@ -2422,11 +2344,9 @@ char *endpoint_razor_hist_json(void) {
     }
     json_buf_raw(&b, "}");
     DCHECKF(sum == emitted,
-            "the @H surface's per-razor-class counts sum to %ld against the %ld rows it emits — the two "
-            "classes are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip "
-            "the three censuses beside it do, so a difference is one of those walks having stopped describing "
-            "the population the others count, and the BAR a reader reads off this row would be a share of a "
-            "number that is not the surface's size", sum, emitted);
+            "the @H surface's per-razor-class counts sum to %ld against the %ld rows it emits — the two classes "
+            "partition the emitted surface over the same `is_asset` skip, so the walks are counting different "
+            "populations", sum, emitted);
     return json_buf_take(&b);
 }
 
@@ -2442,19 +2362,15 @@ char *endpoint_witness_hist_json(void) {
     int c, i;
 
     DCHECK(EPW_UNASKED == 0,
-           "endpoint.h's ENDPOINT_WITNESS_CLASSES no longer begins with the member that proves NOTHING — the "
-           "record's merge is a MAX over this list's order and `memset` leaves a fresh record at 0, so a "
-           "reordering makes that zero mean a CLAIM the mint never made, and every row minted outside a flow "
-           "would publish it");
+           "endpoint.h's ENDPOINT_WITNESS_CLASSES does not begin with the member that proves nothing — the record's "
+           "merge is a maximum over this order and `memset` leaves a fresh record at 0, so 0 must make no claim");
     memset(n, 0, sizeof n);
     for (i = 0; i < g_eps_n; i++) {
         if (g_eps[i].is_asset) continue;
         DCHECKF(g_eps[i].witness_class >= 0 && g_eps[i].witness_class < EPW_COUNT,
                 "an @H record reached the witness census carrying the class %d, which is none of endpoint.h's "
-                "ENDPOINT_WITNESS_CLASSES — the mint writes this field unconditionally from "
-                "`witness_class_now`, which returns one of exactly three members, so this is a record minted "
-                "by something that is not that line and the count about to be raised is at an index outside "
-                "the table this census is a partition of", g_eps[i].witness_class);
+                "ENDPOINT_WITNESS_CLASSES — the mint writes this field from `witness_class_now`, which returns one "
+                "of three members, so something else wrote it", g_eps[i].witness_class);
         n[g_eps[i].witness_class]++;
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
@@ -2473,11 +2389,9 @@ char *endpoint_witness_hist_json(void) {
     }
     json_buf_raw(&b, "}");
     DCHECKF(sum == emitted,
-            "the @H surface's per-witness-class counts sum to %ld against the %ld rows it emits — the three "
-            "classes are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip "
-            "the four censuses beside it do, so a difference is one of those walks having stopped describing "
-            "the population the others count, and the BOUND a reader reads off this row would be a share of a "
-            "number that is not the surface's size", sum, emitted);
+            "the @H surface's per-witness-class counts sum to %ld against the %ld rows it emits — the three classes "
+            "partition the emitted surface over the same `is_asset` skip, so the walks are counting different "
+            "populations", sum, emitted);
     return json_buf_take(&b);
 }
 
@@ -2497,10 +2411,8 @@ static long edge_stage_sum(const EndpointEdge *e) {
    teardown, which raises one arm like any other. */
 static void edge_partition(const EndpointEdge *e, const char *who, long sum) {
     DCHECKF(sum + e->freed_reached == e->freed,
-            "the %s edge's torn-down states do not sum over what happened to them (%ld by the stage rows plus "
-            "%ld whose construction had completed, %ld freed) — the rows are the two arms of ONE teardown, so "
-            "a total that moves without an arm moving is a third arm added above them, and what a reader "
-            "loses is the stage a construction died at, which is the whole content of this census",
+            "the %s edge's torn-down states do not sum over their two arms (%ld by stage plus %ld whose construction "
+            "completed, against %ld freed) — a total that moves without an arm is a third arm added above them",
             who, sum, e->freed_reached, e->freed);
 }
 
@@ -2552,11 +2464,9 @@ char *endpoint_fetch_edge_rows(void) {
        the reply decoder's) — the fetch edge's share of the ask population. The two are raised in two files at
        two events, so they part company when an offer is raised without the record call under it. */
     DCHECKF(g_fetch_edge.reached <= g_asks,
-            "the fetch edge offered this surface more addresses (%ld) than the surface counted asks at its "
-            "door (%ld) — the offer is raised on the line before endpoint_record and that door raises the ask "
-            "total before its own gate, so a larger offer count is an offer raised with no record call under "
-            "it, and a reader taking the rest of the asks as the OTHER doors' share would read a negative "
-            "count as a large one",
+            "the fetch edge offered this surface more addresses (%ld) than the surface counted asks (%ld) — the "
+            "offer is raised just before endpoint_record, which raises the ask total before its gate, so this is an "
+            "offer with no record call under it",
             g_fetch_edge.reached, g_asks);
     /* The one relation `began` has to the call row, and it is a presence relation. Every world that began
        descends from a world that entered core/idl_args.c's stage 0, but a fork in the conversions gives each
@@ -2597,10 +2507,8 @@ char *endpoint_xhr_edge_rows(void) {
        send machine never declared is core/xhr recording an endpoint in a session whose own xhr_init did not run,
        which would publish this edge's share of `epAsks` with no census under it, as an absence. */
     DCHECKF(g_xhr_offered == 0 || g_xhr_edge.steps != NULL,
-            "the XHR edge offered this surface %ld addresses with no send machine ever declared to it — the "
-            "declaration is xhr_init's and every member of §3 runs after it, so this is a session whose "
-            "endpoint records came from a component this census was never told about, and the rows are about "
-            "to be ABSENT from a document that nevertheless counted this edge's asks",
+            "the XHR edge offered this surface %ld addresses with no send machine declared to it — xhr_init declares "
+            "the machine before any send runs, so these records came from a component this census was not told about",
             g_xhr_offered);
     if (!g_xhr_edge.steps) {
         /* No rows at all, for the fetch edge's absent arm's reason: a host that installs no XMLHttpRequest runs no
@@ -2630,11 +2538,9 @@ char *endpoint_xhr_edge_rows(void) {
        before its gate, so this edge's offers are contained in the surface's asks, the slack being every other
        door. */
     DCHECKF(g_xhr_offered <= g_asks,
-            "the XHR edge offered this surface more addresses (%ld) than the surface counted asks at its door "
-            "(%ld) — the offer is raised on the line before endpoint_record and that door raises the ask "
-            "total before its own gate, so a larger offer count is an offer raised with no record call under "
-            "it, and a reader taking the rest of the asks as the OTHER doors' share would read a negative "
-            "count as a large one",
+            "the XHR edge offered this surface more addresses (%ld) than the surface counted asks (%ld) — the offer "
+            "is raised just before endpoint_record, which raises the ask total before its gate, so this is an offer "
+            "with no record call under it",
             g_xhr_offered, g_asks);
     edge_stage_hist(&hist, &g_xhr_edge);
     died = json_buf_take(&hist);
@@ -2676,10 +2582,9 @@ char *endpoint_json_array(void) {
            reader for", never as a hole to default past. */
         if (e->body_b64 || e->body_shape || e->body_example_b64) {
             DCHECK((!!e->body_b64 + !!e->body_shape + !!e->body_example_b64) == 1,
-                   "one request body was recorded under more than one of this surface's three claims — bytes "
-                   "the request sends, the display spelling of an unknown, and an EXAMPLE of a payload whose "
-                   "unknown ranges `params` names. body_store sets exactly one, so a record holding two is "
-                   "two sightings merged across a grade the identity is supposed to keep apart");
+                   "one request body was recorded under more than one of the three body claims (sent bytes, an "
+                   "unknown's display spelling, an example) — body_store sets exactly one, so this is two sightings "
+                   "merged across the grade");
             if (e->body_mime) { json_buf_raw(&b, ","); json_buf_key(&b, "bodyMime"); json_buf_str(&b, e->body_mime); }
             /* Three keys, so the consumer never guesses: `bodyBase64` is the replay claim, `bodyShape` a statement
                about which source composes the body, and `bodyExampleBase64` what the payload looks like at the byte
@@ -2863,9 +2768,8 @@ char *endpoint_json_array(void) {
                     }
                     json_buf_raw(&b, "]");
                     DCHECK(pr->holds == 0 || pr->holds == 1,
-                           "a call predicate reached the emission for an arm that is neither taken nor "
-                           "not-taken — the arm IS the fact this record carries, so a third value would be "
-                           "written as one of the two and the consumer could not tell which");
+                           "a call predicate reached the emission for an arm that is neither taken nor not-taken — "
+                           "the arm is the fact this record carries");
                     json_buf_raw(&b, ","); json_buf_key(&b, "holds");
                     json_buf_raw(&b, pr->holds ? "true" : "false");
                     json_buf_raw(&b, "}");
