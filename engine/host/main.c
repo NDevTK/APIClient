@@ -481,15 +481,6 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            "a document's bytes carry no guard byte at their stated length — the ABI placement writes one past "
            "the sequence, so a length that does not name that byte is this entry and the trusted zone holding "
            "two different documents under one call");
-    {
-        UrlRecord rec;
-        CHECK(url != NULL && *url && url_parse(&rec, url, strlen(url), NULL),
-              "the host started this engine without a document ADDRESS — a document is loaded FROM somewhere, "
-              "and every relative URL the page builds resolves against it");
-        origin = url_serialize_origin(&rec);
-        CHECK(origin != NULL, "the document address has no serializable origin");
-        url_record_free(&rec);
-    }
     CHECK(top_level_url != NULL && *top_level_url,
           "the host started this engine with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide "
           "whether this document's realm is a secure context, and Web IDL §3.3.13's members exist or do not by "
@@ -518,21 +509,20 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                "flags. Read as the empty set it would create a cross-origin `<iframe sandbox>` child that runs "
                "the scripts, submits the forms and relaxes the `document.domain` its embedder's markup forbids");
     }
-    /* §7.3.2.1's determine the origin returns a new opaque origin when the sandboxed origin browsing context flag
-       is set, so a navigable whose creation set carries that flag has an opaque principal,
-       while this instance's is the tuple origin the zone derived from the fetched address. It is asserted, not
-       corrected here: SECURITY.md makes the principal the trusted zone's to state, and an engine demoting itself
-       would disagree with the SOP answers `safeFetch` enforces for it.
-       Named residual. Not covered: a sandboxed cross-origin frame runs under its server's real origin, same origin
-       with its siblings from that host. Next diff builds: the zone mints a per-document opaque token when the
-       create notice announces this flag (extension/bridge.js's `_senderOrigin` shape, engine/trusted.mjs). How its
-       absence shows: this DCHECK fires on such a frame. */
-    DCHECK(!(creation_flags & SANDBOX_ORIGIN) || !strcmp(origin, "null"),
-           "a document was rooted with §7.1.5's SANDBOXED ORIGIN flag set and a TUPLE origin for a principal — "
-           "§7.3.2.1's determine the origin returns a NEW OPAQUE ORIGIN for that flag, so this instance is "
-           "running a sandboxed Document as same origin with every other document of its server. The trusted "
-           "zone derives this principal from the URL it fetched and must mint a per-document opaque token when "
-           "the create notice announces this flag (extension/bridge.js, engine/trusted.mjs)");
+    /* HTML §7.3.2.1 "Creating browsing contexts"' determine the origin: "If sandboxFlags has its sandboxed origin
+       browsing context flag set, then return a new opaque origin"; otherwise this entry's document is at a URL
+       and takes "url's origin". The flag set is the trusted zone's record of the navigable (its
+       lib/document-record.js), which also gives the instance an opaque principal of its own, so the engine and
+       the zone's SOP answers come from one statement. */
+    {
+        UrlRecord rec;
+        CHECK(url != NULL && *url && url_parse(&rec, url, strlen(url), NULL),
+              "the host started this engine without a document ADDRESS — a document is loaded FROM somewhere, "
+              "and every relative URL the page builds resolves against it");
+        origin = (creation_flags & SANDBOX_ORIGIN) ? strdup("null") : url_serialize_origin(&rec);
+        CHECK(origin != NULL, "the document address has no serializable origin, or OOM");
+        url_record_free(&rec);
+    }
     memset(&response_headers, 0, sizeof response_headers);
     header_list_parse_field_lines(&response_headers, headers);
     navigation_params_from_response(&np, &response_headers, creation_flags,

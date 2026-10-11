@@ -560,6 +560,16 @@ async function main() {
      zone is where an address is ranked and legitimately fetched again, and it holds no set at all. */
   const seededRoutes = new Set();
   let seedSerial = 0;
+  /* A document's principal: HTML §7.3.2.1's determine the origin returns a new opaque origin when its record
+     carries the sandboxed origin browsing context flag, and the URL's origin otherwise. The opaque one is this
+     zone's "null:<n>" token (extension/lib/safe-fetch.js reads it as same-origin with nothing), unique per
+     document, so clusterOf never joins it to an instance and it holds no session; the engine computes "null"
+     from the same flag set (main.c's qjs_init). */
+  let opaqueSerial = 0;
+  const principalOf = (doc, url) =>
+    ZONE.docRecordOpaque(doc) ? `null:opaque${++opaqueSerial}` : new URL(url).origin;
+  /* An origin as HTML serializes it to a page: an opaque one is "null" (§7.1.1), never this zone's token. */
+  const stampOrigin = (o) => (o.includes('://') ? o : 'null');
 
   /* A FAILED PIECE OF WORK IS RAISED WHERE IT CAN BE READ AND NOT SWALLOWED WHERE IT HAPPENS. The work is
      started when the bill is announced and awaited a round or more later, so a rejection would otherwise sit
@@ -922,7 +932,7 @@ async function main() {
                                             actor: 'page', doc: e.doc, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined,
-                                            identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
+                                            identity: ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
                                                                                q.credentials, q.mode,
                                                                                q.referrerPolicy, q.referrer) });
     if (raw.refusal && raw.refusal.kind === 'decline') {
@@ -1043,7 +1053,7 @@ async function main() {
                                             provenance, pinned, driven, credentials, useCorsPreflight: false,
                                             actor: 'page',
                                             doc: e.doc, credentialed: false,
-                                            identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
+                                            identity: ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
                                                                                credentials, mode,
                                                                                referrerPolicy, referrer) });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
@@ -1276,7 +1286,7 @@ async function main() {
          record keyed on the asking document, which the bill would have to carry. Absence shows as: a holder's
          own request refused on `doc-reach`, `actor` or `witness` at an origin whose table permits the holder's
          own record, after a child with a weaker record joined it. */
-      const childOrigin = new URL(loaded.url).origin;
+      const childOrigin = principalOf(doc, loaded.url);
       const holder = clusterOf(group, childOrigin);
       if (holder) {
         if (holder === e || holder.referenced !== 1)
@@ -1333,7 +1343,7 @@ async function main() {
          open would park its last flow for a question no instance can ask. */
       /* Under the creating instance's record joined with the notice's words (childDoc). */
       const doc = childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]);
-      await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
+      await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         group: newGroup(), referenced: 0 });
@@ -1357,7 +1367,7 @@ async function main() {
                                     f[P.provenance], f[P.driven], f[P.pinned], e.doc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       const doc = childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]);
-      await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
+      await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         group: e.group, referenced: 1 });
@@ -1412,7 +1422,7 @@ async function main() {
          a route the bundle merely DECLARED — this zone named the document because no page ever held one. */
       /* Under the declaring instance's record joined with the declaration's words. */
       const doc = childDoc(e.doc, f[2], f[3], f[4]);
-      await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: new URL(loaded.url).origin,
+      await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         group: newGroup(), referenced: 0 });
@@ -1425,7 +1435,7 @@ async function main() {
       const go = () => {
         const t = holderOf(f[1]);
         if (!t) return false;
-        t.ready.push(['route', e.origin, b64(record)].join('\t'));
+        t.ready.push(['route', stampOrigin(e.origin), b64(record)].join('\t'));
         flush();
         return true;
       };

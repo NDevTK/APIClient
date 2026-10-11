@@ -457,7 +457,11 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   `fetch()`, XHR and `import()` targets are untrusted URLs the chokepoint judges.
 - One instance per origin-keyed agent cluster, `(browsing-context group, origin)`, never per tab or per page.
   `clusterKeyOf` in `bridge.js` builds the key from browser-stated halves: the group is `sender.tab.id` and the
-  origin is `_senderOrigin`'s, so two sandboxed iframes of one page are two clusters. A same-origin child is a
+  origin is `_senderOrigin`'s, so two sandboxed iframes of one page are two clusters. A document the zone
+  provisions takes its principal from its record (`principalOf`, HTML §7.3.2.1's determine the origin): a
+  record carrying the sandboxed origin flag gets a fresh `null:` token, so it is its own cluster, never joins
+  an instance of its URL's origin, loads and fetches with no session, and speaks to pages as `"null"`; the
+  engine computes `"null"` from the same flag set (`qjs_init`). A same-origin child is a
   second realm in its creator's heap (`child_in_this_agent` in `navigable.c`); a second cross-origin document of
   one cluster, or a navigation replacing a group's top, joins the running instance (`engineJoin`, over the
   engine's `qjs_join`) instead of getting a second heap.

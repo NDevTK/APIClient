@@ -1047,6 +1047,14 @@ function childDocRecord(eng, provenance, driven, pinned) {
                                "engineRoot writes one before the instance can issue anything");
   return docRecordJoin(eng.doc, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
 }
+/* A document's principal: HTML §7.3.2.1's determine the origin returns a new opaque origin when its record
+   carries the sandboxed origin browsing context flag, and `origin` (the URL's, or the browser-stated one)
+   otherwise. The opaque one is `_senderOrigin`'s "null:<uuid>" shape, unique per document, so clusterKeyOf
+   never joins it to an instance and navigationCarriesSession gives it no session; the engine computes "null"
+   from the same flag set (main.c's qjs_init). */
+function principalOf(doc, origin) {
+  return docRecordOpaque(doc) ? "null:" + crypto.randomUUID() : origin;
+}
 /* An entry's flag set. One written before the field has the empty set: until the zone recorded flags, every
    persisted document was a top-level root or seed created with `none`. */
 function frontierSandbox(e) {
@@ -2124,7 +2132,7 @@ const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
    credential carries, or null when it has none, which loads without the session. */
 async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromDoc, refusalArm,
-                              actor, driven, pinned, request, speakerOf) {
+                              actor, driven, pinned, request, speakerOf, readerOpaque) {
   DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
          (request.referrerPolicy === null || request.referrerPolicy === "" ||
           REFERRER_POLICIES.indexOf(request.referrerPolicy) >= 0),
@@ -2190,7 +2198,11 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      hosts at the line that opens the socket. At an unconfigured origin a derived navigation is refused like a
      forced one (the default fires program loads only), and the person widens the origin to permit it. A
      refusal comes back as the chokepoint's `blocked-signal:` reply record. */
-  const speaker = navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
+  /* A load whose reader is an opaque document carries no session: the session decision is about who reads the
+     bytes, and an opaque origin is same-origin with nothing, as for a cross-origin child (SECURITY.md). */
+  DCHECK(typeof readerOpaque === "boolean",
+         "a §7.4 navigation was asked for without stating whether its reader is an opaque document");
+  const speaker = !readerOpaque && navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
   const credentialed = speaker !== null;
   /* The request as the speaker's client composed it, where the speaker knows it (a sub-frame seed). */
   DCHECK(speaker === null || speaker.request === null ||
@@ -2874,7 +2886,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
                      doc: eng.doc, credentialed: false,
-                     identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs, credentials, mode,
+                     identity: pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
@@ -2964,7 +2976,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
      be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
      gains such an arm widens this list deliberately. */
-  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request) => {
+  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request, readerOpaque) => {
     DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
            "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
            ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
@@ -2973,7 +2985,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, eng.doc,
-                                   refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg));
+                                   refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg),
+                                   readerOpaque);
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
     DCHECK(refusalArm === "rendezvous" || r.declined === null,
@@ -3100,7 +3113,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                                             doc: eng.doc, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers,
-                                            identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs,
+                                            identity: pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs,
                                                                           q.credentials, q.mode,
                                                                           q.referrerPolicy, q.referrer) });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
@@ -3248,8 +3261,8 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   /* The creation sandboxing flags, on the same rule. A join is reachable with a sandbox: `<iframe
      sandbox="allow-same-origin allow-scripts" src="https://cdn/…">` keeps the child's tuple origin (so it
      clusters with that host's documents) while most HTML §7.1.5 Sandboxing flags stay set. The sandboxed
-     origin flag cannot arrive here (it forces an opaque origin that clusters with nothing); main.c asserts
-     that. */
+     origin flag cannot arrive here: principalOf gives such a document an opaque origin that clusters with
+     nothing, and main.c's join entry asserts it. */
   DCHECK(typeof creationSandboxFlags === "string" && creationSandboxFlags !== "",
          "a document was joined with no HTML §7.1.5 CREATION SANDBOXING FLAG SET — the composed set and " +
          "`none` are the two facts a host states, so an absent one is a caller that skipped the question and " +
@@ -3852,17 +3865,15 @@ async function hostNotice(eng, line) {
     /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
     const loaded = await eng.fetchedDocument(f[C.address], f[C.provenance], f[C.driven], f[C.pinned],
-                                             /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED);
+                                             /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
+                                             docRecordOpaque(_childDoc));
     childRequestAlias(f[C.creator], f[C.address], loaded.url);
-    /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
-       this zone followed), not the notice's origin field: SECURITY.md makes routing and the origin stamped on a
-       delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
-       is rooted at (HTML §7.5.1 Shared document creation infrastructure's `creationURL`).
-       Named residual: a child whose creator applied `sandbox` without `allow-same-origin` has an opaque origin
-       (HTML §7.3.2.1 Creating browsing contexts: the sandboxed origin browsing context flag yields "a new
-       opaque origin"), and this still stamps its address's tuple origin. Next diff reads that flag out of
-       `creationSandboxFlags` and mints a per-document opaque token here, as `_senderOrigin` does. Absence
-       shows as main.c's root entry aborting on the pairing of that flag with a tuple principal. */
+    /* The child's principal is principalOf its record: a new opaque origin under the sandboxed origin flag
+       (HTML §7.3.2.1 Creating browsing contexts), otherwise the origin of the response's URL (`loaded.url`,
+       after redirects, which only this zone followed), never the notice's origin field: SECURITY.md makes
+       routing and the origin stamped on a delivered message the trusted zone's alone. The same URL is the
+       address the instance is rooted at (HTML §7.5.1 Shared document creation infrastructure's
+       `creationURL`). */
     /* The child's browsing-context group is its creator's: a nested navigable is in its parent's group, and an
        auxiliary one too unless `noopener` severed it. So two cross-origin children of one page at one origin
        are one cluster, as HTML has them. */
@@ -3878,7 +3889,7 @@ async function hostNotice(eng, line) {
     const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
     /* The record's reach, arrival and flag set are on every analyze record. */
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
-                  origin: originOf(loaded.url),
+                  origin: principalOf(_childDoc, originOf(loaded.url)),
                   groupId: _inCreatorGroup ? eng.groupId : "noopener:" + (_nextNoopenerGroup++),
                   provenance: _childDoc.reach, arrival: docRecordArrival(_childDoc),
                   sandbox: docRecordSandbox(_childDoc),
@@ -4054,8 +4065,11 @@ async function hostNotice(eng, line) {
        an address this zone declined at `document.fetch`. */
     /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
        an empty Uint8Array. */
+    /* The record is the creating instance's joined with the notice's words, as for a created child. */
+    const _swapDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const swapped = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
-                                              /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED);
+                                              /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
+                                              docRecordOpaque(_swapDoc));
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -4067,10 +4081,8 @@ async function hostNotice(eng, line) {
     DCHECK(typeof swapped.url === "string" && swapped.url !== "",
            "the swapped-to document load answered no RESPONSE URL — §7.1.3.2 provisions a new instance from " +
            "the address the Document is at, which after a redirect is not the address the swap requested");
-    /* The record is the creating instance's joined with the notice's words, as for a created child. */
-    const _swapDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const swapMsg = { type: "AST_ANALYZE", pageHtml: swapped.bytes === null ? new Uint8Array(0) : swapped.bytes,
-                      sourceUrl: swapped.url, origin: originOf(swapped.url),
+                      sourceUrl: swapped.url, origin: principalOf(_swapDoc, originOf(swapped.url)),
                       groupId: "swap:" + (_nextSwapGroup++),
                       provenance: _swapDoc.reach, arrival: docRecordArrival(_swapDoc),
                       sandbox: docRecordSandbox(_swapDoc),
@@ -4113,16 +4125,17 @@ async function hostNotice(eng, line) {
     DCHECK(!hostHolderOf(f[P.document]),
            "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
+    /* The record is the creating instance's joined with the notice's words, as for a created child. */
+    const _navDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const navd = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
-                                           /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED);
+                                           /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
+                                           docRecordOpaque(_navDoc));
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
            "the instance is provisioned from all three");
-    /* The record is the creating instance's joined with the notice's words, as for a created child. */
-    const _navDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const navMsg = { type: "AST_ANALYZE", pageHtml: navd.bytes === null ? new Uint8Array(0) : navd.bytes,
-                     sourceUrl: navd.url, origin: originOf(navd.url), groupId: eng.groupId,
+                     sourceUrl: navd.url, origin: principalOf(_navDoc, originOf(navd.url)), groupId: eng.groupId,
                      provenance: _navDoc.reach, arrival: docRecordArrival(_navDoc),
                      sandbox: docRecordSandbox(_navDoc),
                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
@@ -4212,8 +4225,10 @@ async function hostNotice(eng, line) {
        vocabulary on the way out. */
     if (!_seeds.has(f[1]))
       /* The declaring document's reach grade travels with the item for the same reason. */
+      /* `doc` is the seed's own record, the declaring instance's joined with the declaration's words. */
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
-                         provenance: f[2], driven: f[3], pinned: f[4], fromDoc: eng.doc });
+                         provenance: f[2], driven: f[3], pinned: f[4], fromDoc: eng.doc,
+                         doc: childDocRecord(eng, f[2], f[3], f[4]) });
     /* Nothing is kicked: this router runs inside serviceFetch within the one scheduling loop, so `_hostDriving`
        is true and a `_hostKick()` would return on its first line. `admit` ranks this entry next round. */
     return;
@@ -4449,7 +4464,7 @@ async function engineServiceHostRequests(eng) {
       () => eng.fetchedDocument(fetchArgs.slice(initTab + 1), fetchArgs.slice(0, fetchTab),
                                 fetchArgs.slice(fetchTab + 1, drivenTab),
                                 fetchArgs.slice(drivenTab + 1, pinnedTab), /*refusalArm*/"rendezvous",
-                                fetchRequest),
+                                fetchRequest, docRecordOpaque(eng.doc)),
       /* A same-origin child's load files its landed address under its create's facts, as a cross-origin one's
          does in the `navigable.create` arm. */
       (r) => {
@@ -5112,9 +5127,8 @@ async function admitSeatLand(seat) {
        that happened. `topLevelUrl` is its own address after redirects (HTML §8.1.3.1, §7.5.1's `creationURL`). */
     /* The provenance carried into the residue this run parks: the load was decided from `seed.provenance`, so
        the stored grade must agree (at a widened origin a forced declaration passes `_seedRefusal`). */
-    const _seedDoc = docRecordJoin(seed.fromDoc, docRecord(seed.provenance, seed.driven, seed.pinned,
-                                                           NAVIGABLE_NOTICE.sandbox.none));
-    const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
+    const _seedDoc = seed.doc;
+    const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: principalOf(_seedDoc, seed.principalOrigin),
                   groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
                   topLevelUrl: loaded.url,
                   credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
@@ -5488,8 +5502,10 @@ const _hostOps = {
                                               mark says whether a drive of uncalled code ran them. */
                                            /*actor*/"page", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
-                                           async () => ({ identity: engineIdentity(seed.principalOrigin, seed.principalUrl),
-                                                          referrer: "none", policy: null, request: null })));
+                                           async () => ({ identity: engineIdentity(stampOrigin(seed.principalOrigin),
+                                                                                   seed.principalUrl),
+                                                          referrer: "none", policy: null, request: null }),
+                                           docRecordOpaque(seed.doc)));
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -6048,7 +6064,8 @@ self.astDispatch = async function astDispatch(msg) {
                                                   NAVIGABLE_NOTICE.sandbox.none),
                                         /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
-                                        DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg));
+                                        DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg),
+                                        /* a document the person's browser loaded states no zone flags */ false);
     const unavailable = seedUnavailable(loaded, originOf(msg.sourceUrl));
     /* The outcome is reported the instant the load settles, so a person opening the popup over an empty panel
        can tell "failed" from "nothing yet" while the analysis runs. */
