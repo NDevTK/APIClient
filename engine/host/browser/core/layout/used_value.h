@@ -286,6 +286,12 @@ CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical);
    places a box from its leading pair; core/css/css_computed_value.c's CSSOM §9 inset arm reads both. */
 CssPx used_value_abs_offset_trailing_px(lxb_dom_element_t *el, bool vertical);
 
+/* Whether that solve reads a static position on the axis asked: CSS 2.1 §10.3.7's and §10.6.4's all-three-
+   `auto` entry and their rule 2, both entered with the two offsets `auto`. `*trailing` is set to the side it
+   reads, `right` for an `rtl` static-position containing block on the inline axis. The solve asserts each read
+   against this, so core/layout/flow_position.c can ask the position before the solve runs. */
+bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, bool *trailing);
+
 /* CSS 2.2 §9.4.3 "Relative positioning"' used translation on one axis: the signed distance a relatively
    positioned box is shifted by after normal flow places it, the used `left` horizontally and `top` vertically
    ("'Left' moves the boxes to the right", "'Top' moves the boxes down"). §9.4.3 states a pair, "the used

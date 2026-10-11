@@ -2685,7 +2685,7 @@ lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t
     return NULL;
 }
 
-CssPx block_flow_static_child_top(lxb_dom_element_t *el)
+bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
 {
     lxb_dom_element_t *cb;
     lxb_dom_node_t *n, *after;
@@ -2756,8 +2756,9 @@ CssPx block_flow_static_child_top(lxb_dom_element_t *el)
     {
         CssPx unused = css_px(0.0);
         bool want_found = false;
+        BfBox w;
 
-        (void)bf_layout_driven(cb, NULL, &unused, &want_found, NULL, &st, BF_BASELINE_NONE);
+        if (!bf_layout(cb, NULL, &unused, &want_found, NULL, &st, BF_BASELINE_NONE, &w)) return false;
     }
     if (!found)
         DFAILF("%s, whose static-position containing block is %s: CSS 2 §9.4.1's walk over that container "
@@ -2767,6 +2768,18 @@ CssPx block_flow_static_child_top(lxb_dom_element_t *el)
                "have come apart, which they can only do if one of them classified a child differently from "
                "the other",
                box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
+    *out = top;
+    return true;
+}
+
+CssPx block_flow_static_child_top(lxb_dom_element_t *el)
+{
+    LayoutJobDrive d;
+    CssPx top;
+
+    layout_job_drive_begin(&d);
+    while (!block_flow_static_child_top_ask(el, &top)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     return top;
 }
 

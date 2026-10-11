@@ -3531,6 +3531,35 @@ static bool uv_abs_static_cb_is_rtl(lxb_dom_element_t *el)
     return rtl;
 }
 
+bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, bool *trailing)
+{
+    CssLength lb, la;
+    char nbuf[160];
+
+    DCHECKF(el != NULL && uv_box_kind(el) == UV_BOX_ABS,
+            "%s: CSS 2.1 §10.3.7's and §10.6.4's static position is read only by an absolutely positioned "
+            "box's solve", box_subject(el, nbuf, sizeof nbuf));
+    lb = css_computed_length(el, vertical ? "top" : "left");
+    la = css_computed_length(el, vertical ? "bottom" : "right");
+    *trailing = !vertical && uv_abs_static_cb_is_rtl(el);
+    return uv_len_is_auto(lb) && uv_len_is_auto(la);
+}
+
+/* The static position as `uv_abs_solve` reads it, asserting that `used_value_abs_static_position_read`
+   reports this read, which core/layout/flow_position.c's out-of-flow origin asks before the solve runs. */
+static CssPx uv_abs_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
+{
+    bool t = false;
+    char nbuf[160];
+
+    DCHECKF(used_value_abs_static_position_read(el, vertical, &t) && t == trailing,
+            "%s: the solve read the %s static position on the %s axis and "
+            "`used_value_abs_static_position_read` does not report that read",
+            box_subject(el, nbuf, sizeof nbuf), trailing ? "trailing" : "leading",
+            vertical ? "block" : "inline");
+    return flow_static_position(el, vertical, trailing);
+}
+
 static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertical)
 {
     UvSurround s = uv_surround(el, vertical);
@@ -3592,7 +3621,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
                §10.6.4's "set
                `top` to the static position and apply rule number three below", which has no `rtl` arm to
                choose between because a block axis has no bidirectional order to reverse. */
-            r.before = flow_static_position(el, vertical, false);
+            r.before = uv_abs_static_position(el, vertical, false);
             content = vertical
                           ? block_flow_auto_height(el)
                           : uv_abs_shrink_to_fit(
@@ -3602,7 +3631,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
                                  r.m_after);
         } else {
             /* "…otherwise, set `right` to the static position and apply rule number one below." */
-            r.after = flow_static_position(el, false, true);
+            r.after = uv_abs_static_position(el, false, true);
             content = uv_abs_shrink_to_fit(
                 el, css_px_sub(css_px_sub(css_px_sub(free_space, r.after), r.m_before), r.m_after));
             r.before = css_px_sub(css_px_sub(css_px_sub(css_px_sub(free_space, r.m_before), content),
@@ -3693,10 +3722,10 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
                THIS IS THE SECOND ENTRY THAT NEEDS A STATIC POSITION and it is the one a real page reaches:
                a box with a declared size and no declared offsets is exactly this rule on both axes. */
             if (vertical || !uv_abs_static_cb_is_rtl(el)) {
-                r.before = flow_static_position(el, vertical, false);
+                r.before = uv_abs_static_position(el, vertical, false);
                 r.after = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), content);
             } else {
-                r.after = flow_static_position(el, false, true);
+                r.after = uv_abs_static_position(el, false, true);
                 r.before = css_px_sub(css_px_sub(css_px_sub(free_space, r.after), fixed), content);
             }
         } else if (a_size && a_after) {

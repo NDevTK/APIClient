@@ -621,10 +621,23 @@ static void fp_require_placeable(lxb_dom_element_t *el)
  * solve over the hypothetical box with its in-flow `width`. Absence shows as an absolutely positioned box with
  * `margin-left: auto` and no declared `left` sitting at the leading content edge, where a browser centres it. */
 
+/* `flow_padding_box_origin` without a drive: false ("not yet") as `flow_border_box_origin_ask` answers it. */
+static bool fp_padding_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
+{
+    FlowPoint p;
+
+    if (!flow_border_box_origin_ask(el, &p)) return false;
+    p.x = css_px_add(p.x, used_value_leading_border_px(el, false));
+    p.y = css_px_add(p.y, used_value_leading_border_px(el, true));
+    *out = p;
+    return true;
+}
+
 /* §10.1's third and fourth cases as a coordinate: the leading edge, on the axis asked, of the rectangle an
    absolutely positioned box's offsets are stated against, in the ICB's space. The extent is the caller's
-   (`used_value_containing_block_width`, or §10.6.4's block-axis twin). */
-static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_static_position)
+   (`used_value_containing_block_width`, or §10.6.4's block-axis twin). False ("not yet") when the fourth
+   case's ancestor origin was deferred; `*out` is then unwritten. */
+static bool fp_abs_cb_leading_ask(lxb_dom_element_t *el, bool vertical, bool for_static_position, CssPx *out)
 {
     lxb_dom_element_t *anc = NULL;
     lxb_dom_node_t *n;
@@ -634,7 +647,8 @@ static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_st
     switch (used_value_abs_containing_block(el, &anc)) {
     case USED_VALUE_ABS_CB_INITIAL:
         /* §10.1: the initial containing block is "anchored at the canvas origin", this component's origin. */
-        return css_px(0.0);
+        *out = css_px(0.0);
+        return true;
     case USED_VALUE_ABS_CB_VIEWPORT:
         /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes": a fixed box's containing block is "the
            layout viewport … as a result, fixed boxes do not move when the document is scrolled", and CSSOM
@@ -645,7 +659,10 @@ static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_st
            scrolled to their origin": the ICB has "the dimensions of the viewport", so that is
            `for_static_position` returning the origin. Its second half holds already:
            `flow_padding_box_origin` subtracts no ancestor scroll offset. */
-        if (for_static_position) return css_px(0.0);
+        if (for_static_position) {
+            *out = css_px(0.0);
+            return true;
+        }
         n = lxb_dom_interface_node(el);
         DCHECKF(n->owner_document != NULL,
                "%s: §10.1's third case was asked for an element whose node has no owner document — every node "
@@ -657,7 +674,8 @@ static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_st
                "core/dom/element_view.h's has-a-box predicate is where an element outside a rendered tree "
                "leaves, and the two answers have come apart",
                box_subject(el, nbuf, sizeof nbuf));
-        return css_px(viewport_window_scroll(dctx, vertical));
+        *out = css_px(viewport_window_scroll(dctx, vertical));
+        return true;
     case USED_VALUE_ABS_CB_PADDING_EDGE: {
         /* §10.1's fourth case: "the containing block is formed by the padding edge of the ancestor", which
            `flow_padding_box_origin` is (so an unplaceable ancestor crashes there by its own section). */
@@ -668,39 +686,45 @@ static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_st
                "case with no ancestor. The tag and the element are written together out of one walk, so a "
                "NULL here is that walk having produced a case it has no box for",
                box_subject(el, nbuf, sizeof nbuf));
-        o = flow_padding_box_origin(anc);
-        return vertical ? o.y : o.x;
+        if (!fp_padding_box_origin_ask(anc, &o)) return false;
+        *out = vertical ? o.y : o.x;
+        return true;
     }
     }
     DFAILF("%s: §10.1 gives an absolutely positioned box one of three rectangles and this is a fourth",
            box_subject(el, nbuf, sizeof nbuf));
-    return css_px(0.0);
+    *out = css_px(0.0);
+    return true;
 }
 
-CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
+bool flow_static_position_ask(lxb_dom_element_t *el, bool vertical, bool trailing, CssPx *out)
 {
     lxb_dom_element_t *spcb;
     FlowPoint o;
-    CssPx edge, cb_edge;
+    CssPx edge, cb_edge, top;
 
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's static position was asked for with no element");
     /* The root's hypothetical static box is in the initial containing block, §10.1's first case, which is
        also its containing block as an absolutely positioned box: the static position is that rectangle's own
        edge on every arm. */
-    if (fp_is_root(lxb_dom_interface_node(el))) return css_px(0.0);
+    if (fp_is_root(lxb_dom_interface_node(el))) {
+        *out = css_px(0.0);
+        return true;
+    }
     DCHECK(!vertical || !trailing,
            "CSS 2.1 §10.6.4 names `top` in BOTH of the entries that use a static position — its "
            "all-three-`auto` case (\"set `top` to the static position and apply rule number three below\") and "
            "its rule 2 — and states no static position for `bottom` anywhere. A trailing static position on "
            "the block axis is §10.3.7's `rtl` arm having been carried across an axis it is not written for");
     spcb = block_flow_static_position_containing_block(el);
-    o = flow_border_box_origin(spcb);
+    if (!flow_border_box_origin_ask(spcb, &o)) return false;
+    if (!fp_abs_cb_leading_ask(el, vertical, true, &cb_edge)) return false;
     if (vertical) {
+        if (!block_flow_static_child_top_ask(el, &top)) return false;
         /* §9.4.1's vertical rule from the walk that implements it, measured from the static-position containing
            block's top content edge, so its §8.1 leading border and padding are added here, as §10.1's second
            case does for an in-flow box. */
-        edge = css_px_add(css_px_add(o.y, used_value_leading_edge_px(spcb, true)),
-                          block_flow_static_child_top(el));
+        edge = css_px_add(css_px_add(o.y, used_value_leading_edge_px(spcb, true)), top);
     } else if (!trailing) {
         /* §9.4.1's horizontal rule: "each box's left outer edge touches the left edge of the containing block".
            The outer edge is §8.1's margin edge, what §10.3.7 asks for, so it is the block's left content edge. */
@@ -711,29 +735,50 @@ CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
         edge = css_px_add(css_px_add(o.x, used_value_leading_edge_px(spcb, false)),
                           used_value_content_px(spcb, false));
     }
-    cb_edge = fp_abs_cb_leading(el, vertical, true);
-    if (!trailing) return css_px_sub(edge, cb_edge);
+    if (!trailing) {
+        *out = css_px_sub(edge, cb_edge);
+        return true;
+    }
     /* §10.3.7's `right` is measured from the containing block's right edge, positive leftwards, so the
        subtraction is reversed and the rectangle's extent (the ancestor's padding box under §10.1's fourth
        case, `used_value_containing_block_width`) is added to reach that edge. */
-    return css_px_sub(css_px_add(cb_edge, used_value_containing_block_width(el)), edge);
+    *out = css_px_sub(css_px_add(cb_edge, used_value_containing_block_width(el)), edge);
+    return true;
+}
+
+CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
+{
+    LayoutJobDrive d;
+    CssPx v;
+
+    layout_job_drive_begin(&d);
+    while (!flow_static_position_ask(el, vertical, trailing, &v)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    return v;
 }
 
 /* CSS 2 §9.3.2 "Box offsets: `top`, `right`, `bottom`, `left`"' placement of an absolutely positioned box:
    §10.3.7's equation puts its leading border edge at the containing block's leading edge plus the used offset
    plus the used margin. No ancestor border or padding is added, because §10.1's fourth case is already the
-   padding edge (`fp_abs_cb_leading`); that is the difference from §10.1's second case below. */
-static FlowPoint fp_abs_origin(lxb_dom_element_t *el)
+   padding edge (`fp_abs_cb_leading_ask`); that is the difference from §10.1's second case below.
+   The static positions §10.3.7's and §10.6.4's solve will read are asked first, so a deferred stack walk
+   answers false ("not yet") before anything is computed and the solve then finds them answered. */
+static bool fp_abs_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
 {
-    FlowPoint p;
+    CssPx x0, y0, unused;
+    bool vertical, trailing;
 
-    p.x = css_px_add(css_px_add(fp_abs_cb_leading(el, false, false),
-                                used_value_abs_offset_px(el, false)),
-                     used_value_px(el, "margin-left"));
-    p.y = css_px_add(css_px_add(fp_abs_cb_leading(el, true, false),
-                                used_value_abs_offset_px(el, true)),
-                     used_value_px(el, "margin-top"));
-    return p;
+    for (vertical = false;; vertical = true) {
+        if (used_value_abs_static_position_read(el, vertical, &trailing) &&
+            !flow_static_position_ask(el, vertical, trailing, &unused))
+            return false;
+        if (vertical) break;
+    }
+    if (!fp_abs_cb_leading_ask(el, false, false, &x0) || !fp_abs_cb_leading_ask(el, true, false, &y0))
+        return false;
+    out->x = css_px_add(css_px_add(x0, used_value_abs_offset_px(el, false)), used_value_px(el, "margin-left"));
+    out->y = css_px_add(css_px_add(y0, used_value_abs_offset_px(el, true)), used_value_px(el, "margin-top"));
+    return true;
 }
 
 /* CSS 2.2 §9.4.3 "Relative positioning"'s translation on one axis, or zero where the section does not apply.
@@ -807,7 +852,7 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
        §10.1's third or fourth case, solved by §10.3.7 and §10.6.4, whose `auto` cases use the static
        position, so this consumes §9.4.1's flow layout. */
     if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
-        return (*out = fp_abs_origin(el), true);
+        return fp_abs_origin_ask(el, out);
     /* CSS 2 §9.5.1's placement for the root, the one float whose containing block (the initial containing
        block) holds no other box: "a floating box's outer top may not be higher than the top of its containing
        block" and "must be placed as high as possible", and "a left-floating box must be put as far to the left
@@ -948,7 +993,7 @@ bool flow_border_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
     /* CSS 2.2 §9.4.3 "Relative positioning", applied once here because it shifts any placement: "Once a box has
        been laid out according to the normal flow or floated, it may be shifted relative to this position."
        The record carries the shifted point, so descendants inherit the translation through §10.1's second
-       case, and a `position: absolute` child of a relative parent moves too (`fp_abs_cb_leading` reads that
+       case, and a `position: absolute` child of a relative parent moves too (`fp_abs_cb_leading_ask` reads that
        parent's `flow_padding_box_origin`).
        "Offsetting a box (B1) in this way has no effect on the box (B2) that follows" holds because
        `block_flow_child_top_ask` derives from used heights and §8.3.1 and calls nothing in this file; a stack walk
@@ -978,9 +1023,11 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
    each axis, derived from `flow_border_box_origin` so an unplaceable box crashes there first. */
 FlowPoint flow_padding_box_origin(lxb_dom_element_t *el)
 {
-    FlowPoint p = flow_border_box_origin(el);
+    LayoutJobDrive d;
+    FlowPoint p;
 
-    p.x = css_px_add(p.x, used_value_leading_border_px(el, false));
-    p.y = css_px_add(p.y, used_value_leading_border_px(el, true));
+    layout_job_drive_begin(&d);
+    while (!fp_padding_box_origin_ask(el, &p)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     return p;
 }

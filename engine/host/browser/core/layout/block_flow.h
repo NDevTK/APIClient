@@ -593,4 +593,9 @@ lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t
    box-generating inline content in front of the element, whose anonymous box §9.2.1.1 splits in two. */
 CssPx block_flow_static_child_top(lxb_dom_element_t *el);
 
+/* The same distance asked without a drive of its own: false ("not yet") when the walk deferred a question,
+   with `*out` unwritten and the question suspended on the current job. `block_flow_static_child_top` is this
+   ask inside a drive. */
+bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out);
+
 #endif

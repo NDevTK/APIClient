@@ -39,11 +39,11 @@
  * opened rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies in one activation, so a node whose derivation is wide
  * rests mid-node rather than only a deep one. */
 /* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's entries for auto
- * heights, baselines and static positions, and flow_position.c's out-of-flow and table arms, which reach
- * them, still compute what they deferred inside the same activation. Next: the out-of-flow origin's static
- * position (`flow_static_position`) propagates in turn. How its absence shows: the
- * REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming a unit whose heavy node is out of flow or a table
- * part. */
+ * heights and baselines still compute what they deferred inside the same activation; flow_position.c's table
+ * arms and the out-of-flow solve's `auto` sizes (core/layout/used_value.c's `uv_abs_solve`) reach them. Next:
+ * `block_flow_auto_height` propagates in turn, asked by the out-of-flow origin before the solve as its static
+ * positions are. How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming a unit
+ * whose heavy node is a table part or an out-of-flow box with an `auto` size. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the

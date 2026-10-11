@@ -86,6 +86,10 @@ FlowPoint flow_padding_box_origin(lxb_dom_element_t *el);
    containing block"). */
 CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing);
 
+/* The same position asked without a drive of its own: false ("not yet") when a question it asked was
+   deferred, with `*out` unwritten. `flow_static_position` is this ask inside a drive. */
+bool flow_static_position_ask(lxb_dom_element_t *el, bool vertical, bool trailing, CssPx *out);
+
 /* One border area in the same space: a position and its two extents. */
 typedef struct {
     CssPx x, y, width, height;
