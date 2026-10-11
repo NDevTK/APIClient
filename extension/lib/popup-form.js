@@ -2,21 +2,27 @@
    DOM). Builds the Send-panel input UI from a request schema: buildFormFields + the recursive field/
    message/repeated builders (_buildFieldStep/_buildMessageGroup/...) + createSingleInput. Called by
    the send panel via the global scope; formFieldsToMap (value collection) stays. */
+
+// A section label for something the run learned: `<title> (learned)`.
+function _formLearnedLabel(title) {
+  return domElement("div", { class: "form-section-label" },
+                    [title + " ", domElement("span", { class: "card-meta" }, ["(learned)"])]);
+}
+
 function buildFormFields(schema, initialData = null) {
   const container = document.getElementById("send-form-fields");
-  container.innerHTML = "";
+  container.replaceChildren();
 
   if (schema.method && (schema.method.description || schema.method.scopes?.length)) {
     const info = domElement("div", { class: "card" });
     info.style.marginBottom = "8px";
-    let html = "";
     if (schema.method.description) {
-      html += `<div class="card-meta">${esc(schema.method.description)}</div>`;
+      info.appendChild(domElement("div", { class: "card-meta" }, [String(schema.method.description)]));
     }
     if (schema.method.scopes?.length) {
-      html += `<div class="card-meta scopes-row">Scopes: ${schema.method.scopes.map((s) => `<code>${esc(s)}</code>`).join(" ")}</div>`;
+      info.appendChild(domElement("div", { class: "card-meta scopes-row" }, ["Scopes: ",
+        schema.method.scopes.map((s, i) => [i === 0 ? "" : " ", domElement("code", {}, [String(s)])])]));
     }
-    info.innerHTML = html;
     container.appendChild(info);
   }
 
@@ -28,8 +34,7 @@ function buildFormFields(schema, initialData = null) {
   const _rh = (schema.method && schema.method.requiredHeaders)
     || (schema.endpoint && schema.endpoint.requiredHeaders);
   if (_rh && Object.keys(_rh).length > 0) {
-    const hsec = domElement("div", { class: "form-section" });
-    let hh = '<div class="form-section-label">Required Headers <span class="card-meta">(learned)</span></div>';
+    const hsec = domElement("div", { class: "form-section" }, [_formLearnedLabel("Required Headers")]);
     for (const [hn, hv] of Object.entries(_rh)) {
       /* THE HEADER VOCABULARY IS ASSERTED, NOT PATTERN-MATCHED. `hv.kind === "literal"` on an untranslated
          value is FALSE rather than an error, so the header renders as "dynamic — paste runtime value" and the
@@ -47,17 +52,21 @@ function buildFormFields(schema, initialData = null) {
         /* Literal: read-only display. sendRequest auto-attaches the
            value from currentSchema.method.requiredHeaders so the user
            doesn't need to retype it. */
-        hh += `<div class="card-meta" style="display:flex;gap:8px;align-items:center;"><code>${esc(hn)}</code>: <code>${esc(String(hv.value))}</code></div>`;
+        hsec.appendChild(domElement("div", { class: "card-meta" },
+                                    [domElement("code", {}, [hn]), ": ", domElement("code", {}, [hv.value])]));
       } else {
         /* Opaque: editable input so the reviewer can paste in the
            runtime value (CSRF token, signature, bearer) the analyzer
            couldn't compute. The input carries data-required-header so
            sendRequest's auto-attach loop reads it as a learned header
            override; user-typed form headers still win above. */
-        hh += `<div class="card-meta" style="display:flex;gap:8px;align-items:center;"><code>${esc(hn)}</code>: <input type="text" class="opaque-header-input" data-required-header="${esc(hn)}" placeholder="dynamic — paste runtime value" style="flex:1;min-width:0"></div>`;
+        hsec.appendChild(domElement("div", { class: "card-meta" }, [
+          domElement("code", {}, [hn]), ": ",
+          domElement("input", { type: "text", class: "opaque-header-input", "data-required-header": hn,
+                                placeholder: "dynamic — paste runtime value" }),
+        ]));
       }
     }
-    hsec.innerHTML = hh;
     container.appendChild(hsec);
   }
 
@@ -96,8 +105,9 @@ function buildFormFields(schema, initialData = null) {
          "emit, so two arriving means one of those doors was bypassed and this panel would have to " +
          "choose which of several contradictory claims to show a reviewer");
   if (_bs || _bsh || _bex) {
-    const bsec = domElement("div", { class: "form-section" });
-    let bh = '<div class="form-section-label">Request Body <span class="card-meta">(learned)</span></div>';
+    const bsec = domElement("div", { class: "form-section" }, [_formLearnedLabel("Request Body")]);
+    const meta = (children) => bsec.appendChild(domElement("div", { class: "card-meta" }, children));
+    const bytes = (text) => meta([domElement("code", {}, [text])]);
     if (_bex) {
       /* A BYTE-COMPOSED PAYLOAD, AND THE CLAIM IS NEITHER OF THE OTHER TWO. These bytes are what the payload
          LOOKS LIKE: outside the ranges they are bytes the page's own serializer computed, and inside one
@@ -120,16 +130,18 @@ function buildFormFields(schema, initialData = null) {
       DCHECK(typeof _bex.base64 === "string",
              "a learned request-body example reached the Send panel with no bytes — the base64 is the whole " +
              "of what this field states, and the byte RANGES that address it are useless without it");
-      bh += '<div class="card-meta">This request builds its body byte by byte, so these are an EXAMPLE of the payload and NOT bytes to replay. Where a byte range below is unknown, this holds the example that unknown carried, or a byte nobody wrote where the run computed none.</div>';
-      bh += `<div class="card-meta"><code style="word-break:break-all">${esc(_bex.base64)}</code></div>`;
+      meta(["This request builds its body byte by byte, so these are an EXAMPLE of the payload and NOT bytes " +
+            "to replay. Where a byte range below is unknown, this holds the example that unknown carried, or a " +
+            "byte nobody wrote where the run computed none."]);
+      bytes(_bex.base64);
       /* THE TYPE IS SHOWN ONLY WHERE THE PAGE HAD ONE, AND ITS ABSENCE IS STATED RATHER THAN PASSED OVER.
          §5.2 BodyInit unions gives a BufferSource no Content-Type, so no type here is the ORDINARY case for
          exactly this population and means the request really sends none. That is a fact a reviewer replaying
          by hand needs, and an empty line reads identically to a field this build does not report. */
       if (typeof _bex.mime === "string")
-        bh += `<div class="card-meta">Sent as <code>${esc(_bex.mime)}</code>.</div>`;
+        meta(["Sent as ", domElement("code", {}, [_bex.mime]), "."]);
       else
-        bh += '<div class="card-meta">The page set no <code>Content-Type</code> for it, so the request sends none.</div>';
+        meta(["The page set no ", domElement("code", {}, ["Content-Type"]), " for it, so the request sends none."]);
     } else if (_bs) {
       /* BYTES, AND THE CLAIM IS THE REPLAY CLAIM. The type is shown beside them because it is how they are
          READ — the pair solver/endpoint.h's EndpointBody is one struct for — and the base64 is shown as
@@ -138,8 +150,8 @@ function buildFormFields(schema, initialData = null) {
       DCHECK(typeof _bs.mime === "string" && typeof _bs.base64 === "string",
              "a learned request body reached the Send panel without both of its halves — bytes with no type " +
              "are bytes nothing can name the fields of, and solver/endpoint.c records the pair or neither");
-      bh += `<div class="card-meta">These are the bytes this request was observed sending, as <code>${esc(_bs.mime)}</code>.</div>`;
-      bh += `<div class="card-meta"><code style="word-break:break-all">${esc(_bs.base64)}</code></div>`;
+      meta(["These are the bytes this request was observed sending, as ", domElement("code", {}, [_bs.mime]), "."]);
+      bytes(_bs.base64);
     } else {
       /* A SHAPE, AND THE CLAIM IS ABOUT A SOURCE. It is labelled as what it is in the same breath as it is
          shown, because these characters are the engine's spelling of a hole and a reviewer who read them as
@@ -148,18 +160,18 @@ function buildFormFields(schema, initialData = null) {
       DCHECK(typeof _bsh.shape === "string",
              "a learned request-body shape reached the Send panel with no shape text — the spelling is the " +
              "whole of what this field states");
-      bh += '<div class="card-meta">This request builds its body from a value the run could not compute, so there are no bytes to replay. It is composed from:</div>';
-      bh += `<div class="card-meta"><code style="word-break:break-all">${esc(_bsh.shape)}</code></div>`;
+      meta(["This request builds its body from a value the run could not compute, so there are no bytes to " +
+            "replay. It is composed from:"]);
+      bytes(_bsh.shape);
       if (typeof _bsh.mime === "string")
-        bh += `<div class="card-meta">Sent as <code>${esc(_bsh.mime)}</code>.</div>`;
+        meta(["Sent as ", domElement("code", {}, [_bsh.mime]), "."]);
     }
-    bsec.innerHTML = bh;
     container.appendChild(bsec);
   }
 
   if (schema.parameters && Object.keys(schema.parameters).length > 0) {
-    const section = domElement("div", { class: "form-section" });
-    section.innerHTML = '<div class="form-section-label">URL Parameters</div>';
+    const section = domElement("div", { class: "form-section" },
+                               [domElement("div", { class: "form-section-label" }, ["URL Parameters"])]);
     /* EVERY `param.*` BELOW IS READ AS ITSELF, because lib/send.js's `resolveEndpointSchema` now declares the
        WHOLE parameter record from BOTH of its producers — the discovery-doc branch and the AST-learned
        path-segment branch — instead of one shape from one and five fields from the other. The `|| null` /
@@ -294,11 +306,11 @@ function buildFormFields(schema, initialData = null) {
   }
 
   if (schema.requestBody?.fields?.length > 0) {
-    const section = domElement("div", { class: "form-section" });
     const label = schema.requestBody.schemaName
-      ? `Request Body (${esc(schema.requestBody.schemaName)})`
+      ? `Request Body (${schema.requestBody.schemaName})`
       : "Request Body";
-    section.innerHTML = `<div class="form-section-label">${label}</div>`;
+    const section = domElement("div", { class: "form-section" },
+                               [domElement("div", { class: "form-section-label" }, [label])]);
     const renderedTop = new Set();
     for (const field of schema.requestBody.fields) {
       renderedTop.add(field.name);
@@ -359,7 +371,7 @@ function buildFormFields(schema, initialData = null) {
   }
 
   if (!schema.parameters && !schema.requestBody?.fields?.length) {
-    container.innerHTML = '<div class="hint">No schema available.</div>';
+    domReplaceChildren(container, [domElement("div", { class: "hint" }, ["No schema available."])]);
   }
 
   // Show raw body textarea alongside form when schema has no body fields
@@ -578,7 +590,9 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      read. */
   const displayName = fieldDef.displayName !== null ? fieldDef.displayName
     : (fieldDef.name !== "" ? fieldDef.name : name);
-  let labelHtml = `<span class="field-name">${esc(displayName)}</span>`;
+  const label = [domElement("span", { class: "field-name" }, [displayName])];
+  const badge = (cls, text, title) =>
+    label.push(" ", domElement("span", title === undefined ? { class: cls } : { class: cls, title }, [text]));
 
   /* THERE MUST BE SOMETHING TO RENAME, AND A MARKER IS NOT IT. `isNameMarker` MEANS this record's `name` was
      minted by this panel and addresses nothing (lib/field-def.js) — lib/discovery.js's `_circularRefSentinel`
@@ -595,36 +609,36 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      CLAUDE.md §RUN-DON'T-MATCH performed on a wire key, and it could not tell this row from a probe-learned
      message field that describes no children — the two are identical at every other name on the record.
      THE RENAME TARGET ITSELF IS STILL READ AS ITSELF: `parentSchema: null` means this field has none, and it
-     used to be `esc(fieldDef.parentSchema || "params")`, which wrote every unowned field's rename into the
+     used to be `fieldDef.parentSchema || "params"`, which wrote every unowned field's rename into the
      URL-PARAMETER schema — a body field synthesized from a captured JSON value carries no schema at all, and
      clicking its ✎ persisted the rename against `params`, where nothing would ever read it back. */
   if (!fieldDef.isNameMarker &&
       fieldDef.parentSchema !== null &&
       (fieldDef.number !== null || name.startsWith("field") || category === "param" ||
        fieldDef.parentSchema !== "params")) {
-    labelHtml += ` <span class="btn-rename" title="Rename field" data-schema="${esc(fieldDef.parentSchema)}" data-key="${esc(name)}">✎</span>`;
+    label.push(" ", domElement("span", { class: "btn-rename", title: "Rename field",
+                                         "data-schema": fieldDef.parentSchema, "data-key": name }, ["✎"]));
   }
 
-  // esc(): `number` is not guaranteed numeric — openapi-import.js takes it verbatim from an imported spec's
-  // `x-field-numbers`, which is a file the researcher was handed. Every value on this path came from
-  // somewhere hostile; none of them is escaped by being "probably a number".
+  // `number` is not guaranteed numeric — openapi-import.js takes it verbatim from an imported spec's
+  // `x-field-numbers`, a file the researcher was handed — so it renders as text.
   if (fieldDef.number !== null)
-    labelHtml += ` <span class="field-number">#${esc(String(fieldDef.number))}</span>`;
-  labelHtml += ` <span class="field-type">${esc(fieldDef.type)}</span>`;
+    badge("field-number", "#" + String(fieldDef.number));
+  badge("field-type", fieldDef.type);
   if (fieldDef.required)
-    labelHtml += ` <span class="field-required">required</span>`;
+    badge("field-required", "required");
   if (fieldDef.label === "repeated")
-    labelHtml += ` <span class="field-repeated">repeated</span>`;
+    badge("field-repeated", "repeated");
 
   // Stats-derived badges
   if (fieldDef._requiredConfidence != null && !fieldDef.required) {
-    labelHtml += ` <span class="field-stat badge-optional">seen ${Math.round(fieldDef._requiredConfidence * 100)}%</span>`;
+    badge("field-stat badge-optional", "seen " + Math.round(fieldDef._requiredConfidence * 100) + "%");
   }
   if (fieldDef._detectedEnum && fieldDef.enum) {
-    labelHtml += ` <span class="field-stat badge-enum-detected">enum detected</span>`;
+    badge("field-stat badge-enum-detected", "enum detected");
   }
   if (fieldDef._defaultValue != null) {
-    labelHtml += ` <span class="field-stat badge-default">default: ${esc(String(fieldDef._defaultValue))}</span>`;
+    badge("field-stat badge-default", "default: " + String(fieldDef._defaultValue));
   }
   // A DOMAIN IS RENDERED AS A DOMAIN. `5–100` on its own reads like a pair of observed values; it is the
   // range the field's observations spanned, which is a constraint on what the value can be, never a value the
@@ -632,7 +646,8 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   // known only to satisfy a range stays a domain-annotated shape, and inventing a member of it fabricates an
   // observed key. The input below is NOT prefilled from it (pickExampleValue deleted its "range-min" tier).
   if (fieldDef._range) {
-    labelHtml += ` <span class="field-stat badge-range" title="the domain this field's observations spanned — a constraint, not a value the code computed">range ${esc(String(fieldDef._range.min))}–${esc(String(fieldDef._range.max))}</span>`;
+    badge("field-stat badge-range", "range " + String(fieldDef._range.min) + "–" + String(fieldDef._range.max),
+          "the domain this field's observations spanned — a constraint, not a value the code computed");
   }
   /* AND THE DOMAIN THE CODE ITSELF STATED. `_range` is what the observed values spanned; this is what the
      bundle's own equality gates PROVED the value is not, on the arms the forced execution took. It renders
@@ -645,7 +660,9 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      spelling of "did the exclusion badge render" — one of which is free to drift from the other. */
   const _ex = Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0;
   if (_ex) {
-    labelHtml += ` <span class="field-stat badge-excluded" title="values the forced execution proved this parameter is NOT, on every observed path to this request — a constraint the code stated, never a value it computed">${fieldDef._excludedValues.map((v) => "\u2260 " + esc(String(v))).join(", ")}</span>`;
+    badge("field-stat badge-excluded", fieldDef._excludedValues.map((v) => "\u2260 " + String(v)).join(", "),
+          "values the forced execution proved this parameter is NOT, on every observed path to this request — " +
+          "a constraint the code stated, never a value it computed");
   }
   /* …AND THE ORDERING GATE'S HALF OF THE SAME RULE. `_range` above is a statistic over observed traffic; this
      is a CONSTRAINT the bundle's own `x > 5` stated, and the two must not be read in one voice — so it gets
@@ -656,7 +673,9 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      it where inventing `6` is forbidden. */
   const _bp = boundsPhrase(fieldDef._bounds);
   if (_bp) {
-    labelHtml += ` <span class="field-stat badge-bounds" title="the interval the forced execution proved this parameter obeys, on every observed path to this request — a constraint the code stated, never a value it computed">${esc(_bp)}</span>`;
+    badge("field-stat badge-bounds", _bp,
+          "the interval the forced execution proved this parameter obeys, on every observed path to this " +
+          "request — a constraint the code stated, never a value it computed");
   }
   /* …AND THE CALL GATE'S HALF, WHICH IS THE THIRD OF THE THREE AND THE ONE §@H NAMES BY EXAMPLE. An equality
      gives `_excludedValues`, an ordering `_bounds`, and a method call neither — so a parameter whose only
@@ -666,7 +685,10 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      @H may state it where inventing `/api/users` is forbidden. */
   const _pp = predicatesPhrase(fieldDef._predicates);
   if (_pp) {
-    labelHtml += ` <span class="field-stat badge-predicates" title="the predicates the bundle's own code ran on this parameter, and the answer each got, on every observed path to this request — a leading ! is a test the run PROVED false. A constraint the code stated, never a value it computed">${esc(_pp)}</span>`;
+    badge("field-stat badge-predicates", _pp,
+          "the predicates the bundle's own code ran on this parameter, and the answer each got, on every " +
+          "observed path to this request — a leading ! is a test the run PROVED false. A constraint the code " +
+          "stated, never a value it computed");
   }
   /* …AND THE LOOSE EQUALITY'S HALF, WHICH IS THE FOURTH AND THE ONE THAT USED TO ARRIVE AS NOTHING. A `===`
      that held DETERMINED the value and the parameter shows it as a prefill; a `==` that held determined none,
@@ -676,7 +698,10 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      state it where inventing `0` out of it is forbidden. */
   const _lq = looselyEqualsPhrase(fieldDef._looselyEquals);
   if (_lq) {
-    labelHtml += ` <span class="field-stat badge-predicates" title="the loose equalities (==) the bundle's own code held of this parameter on every observed path to this request. ECMAScript §7.2.13 IsLooselyEqual coerces, so this narrows the value without determining it — read it as JavaScript. A constraint the code stated, never a value it computed">${esc(_lq)}</span>`;
+    badge("field-stat badge-predicates", _lq,
+          "the loose equalities (==) the bundle's own code held of this parameter on every observed path to " +
+          "this request. ECMAScript §7.2.13 IsLooselyEqual coerces, so this narrows the value without " +
+          "determining it — read it as JavaScript. A constraint the code stated, never a value it computed");
   }
   /* …AND WHICH OF TWO SENTENCES THE FOUR BADGES ABOVE ARE SILENT WITH, WHICH IS THE ONLY THING ON THIS ROW
      THAT IS NOT A CLAIM ABOUT THE VALUE. `≠ admin`, `> 5`, `startsWith("/api")` and `== 0` each say what the
@@ -698,9 +723,17 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      the same voice as `≠ admin`. It is this panel saying what the absence of those badges MEANS, never
      something the code proved about a value. */
   if (fieldDef._astValueClass !== null && !_ex && !_bp && !_pp && !_lq) {
-    labelHtml += fieldDef._astValueClass === "unknown"
-      ? ` <span class="field-stat badge-valueclass" title="a value the code did NOT compute stands here, and no equality, ordering, call or loose-equality gate this run observed narrowed it on every path to the request — so the absence of a constraint badge is a domain nothing has proved, not a literal with nothing to prove. This is a parameter the reviewer must supply and the tool has not yet narrowed">unknown, unnarrowed</span>`
-      : ` <span class="field-stat badge-valueclass" title="every observed path to this request minted this parameter from a value the code COMPUTED, so there was never a runtime unknown here for a gate to narrow — the absence of a constraint badge is that, and not a gate this run failed to observe">literal</span>`;
+    if (fieldDef._astValueClass === "unknown")
+      badge("field-stat badge-valueclass", "unknown, unnarrowed",
+            "a value the code did NOT compute stands here, and no equality, ordering, call or loose-equality " +
+            "gate this run observed narrowed it on every path to the request — so the absence of a constraint " +
+            "badge is a domain nothing has proved, not a literal with nothing to prove. This is a parameter " +
+            "the reviewer must supply and the tool has not yet narrowed");
+    else
+      badge("field-stat badge-valueclass", "literal",
+            "every observed path to this request minted this parameter from a value the code COMPUTED, so " +
+            "there was never a runtime unknown here for a gate to narrow — the absence of a constraint badge " +
+            "is that, and not a gate this run failed to observe");
   }
   // A PREFILLED BOX ALWAYS CARRIES ITS PROVENANCE. The badge is driven by the SAME resolvePrefill() the input
   // reads, so the box can never show a value the label does not attribute — which is what happened for a
@@ -709,10 +742,10 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   // observed on the wire.
   var _pf = resolvePrefill(fieldDef, initialValue);
   if (_pf.source) {
-    labelHtml += ` <span class="field-stat badge-prefill" title="Prefilled from ${esc(_pf.source)}">prefill: ${esc(_pf.source)}</span>`;
+    badge("field-stat badge-prefill", "prefill: " + _pf.source, "Prefilled from " + _pf.source);
   }
   if (fieldDef.format && fieldDef.format !== fieldDef.type) {
-    labelHtml += ` <span class="field-stat badge-format">${esc(fieldDef.format)}</span>`;
+    badge("field-stat badge-format", String(fieldDef.format));
   }
   /* …AND THE BADGE THAT SAYS THIS ROW HOLDS NO INPUT, IN THE PANEL'S OWN CONSTRAINT VOCABULARY. The two
      absences get two words, because lib/field-def.js keeps them apart and a rendering that folded them would
@@ -721,12 +754,17 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      message a document described and that has none. Read them in the same voice as `≠ admin` and `> 5`:
      something the run STATED about this position, never something it computed for it. */
   if (_untraversed) {
-    labelHtml += _kids === null
-      ? ` <span class="field-stat badge-untraversed" title="a message whose OWN fields nothing described — this panel is not offering to compose one, and nothing is sent from this row">fields not described</span>`
-      : ` <span class="field-stat badge-untraversed" title="a message a document described as having no fields of its own — there is nothing to fill in, and nothing is sent from this row">no fields</span>`;
+    if (_kids === null)
+      badge("field-stat badge-untraversed", "fields not described",
+            "a message whose OWN fields nothing described — this panel is not offering to compose one, and " +
+            "nothing is sent from this row");
+    else
+      badge("field-stat badge-untraversed", "no fields",
+            "a message a document described as having no fields of its own — there is nothing to fill in, and " +
+            "nothing is sent from this row");
   }
 
-  labelEl.innerHTML = labelHtml;
+  domAppendChildren(labelEl, label);
   wrapper.appendChild(labelEl);
 
   if (fieldDef.description) {
@@ -742,8 +780,9 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      one and nothing is doubled. */
   if (fieldDef._astValidValues !== null && fieldDef._astValidValues.length > 0 && fieldDef.enum === null) {
     const valHint = domElement("div", { class: "field-ast-values" });
-    valHint.innerHTML = '<span class="ast-values-label">Values found in JS:</span> '
-      + fieldDef._astValidValues.map(v => '<span class="ast-value-chip">' + esc(String(v)) + '</span>').join(' ');
+    domAppendChildren(valHint, [domElement("span", { class: "ast-values-label" }, ["Values found in JS:"]), " ",
+      fieldDef._astValidValues.map((v, i) => [i === 0 ? "" : " ",
+                                              domElement("span", { class: "ast-value-chip" }, [String(v)])])]);
     valHint.addEventListener("click", function(e) {
       if (!e.target.classList.contains("ast-value-chip")) return;
       var input = wrapper.querySelector(".form-input");
@@ -769,10 +808,12 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      behind a declaration would delete the observation rather than avoid doubling it. */
   if (fieldDef._astForcedValues !== null && fieldDef._astForcedValues.length > 0) {
     const forcedHint = domElement("div", { class: "field-ast-values field-ast-forced" });
-    forcedHint.innerHTML = '<span class="ast-values-label ast-forced-label">Reached only by FORCING a gate '
-      + '(a request no client makes):</span> '
-      + fieldDef._astForcedValues.map(v => '<span class="ast-value-chip ast-value-chip-forced">'
-                                          + esc(String(v)) + '</span>').join(' ');
+    domAppendChildren(forcedHint, [
+      domElement("span", { class: "ast-values-label ast-forced-label" },
+                 ["Reached only by FORCING a gate (a request no client makes):"]), " ",
+      fieldDef._astForcedValues.map((v, i) => [i === 0 ? "" : " ", domElement("span",
+        { class: "ast-value-chip ast-value-chip-forced" }, [String(v)])]),
+    ]);
     forcedHint.addEventListener("click", function(e) {
       if (!e.target.classList.contains("ast-value-chip-forced")) return;
       var input = wrapper.querySelector(".form-input");
