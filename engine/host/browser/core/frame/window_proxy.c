@@ -9,7 +9,7 @@
  *   - the binding is per flow: one forked arm navigates the frame and its `contentWindow` targets the new Window,
  *     its sibling still targets the old one, and both hold the same proxy, so proxy -> Window rides the COW delta
  *     (cow_capture_host_record);
- *   - so is the same-origin check: §7.2.3's [[Get]] is filtered by whether the accessor and the target's active
+ *   - so is the same-origin check: HTML §7.2.3's [[Get]] is filtered by whether the accessor and the target's active
  *     document are same origin, and the target's origin is whatever the flow navigated it to;
  *   - a parked flow resumes with its delta, so the proxy it holds resolves through that delta, not through whatever
  *     the engine last did. */
@@ -68,12 +68,12 @@ typedef struct {
        when something reads through it. */
     JSContext *realm;
     char      *url;    /* the navigable's address, for a realm not yet materialized (owned) */
-    /* The active document's origin, §7.1.1's record, for §7.2.1's same-origin check. Borrowed: an origin is
-       immutable and lives for the agent (core/url/origin.h), so it can sit inside the bytes proxy_of captures; a
-       navigation replaces this pointer rather than mutating its target, so a parked flow's copy still names its
-       world's origin. A record, not a serialization, because §7.1.1's step 1 compares identity: every opaque origin
-       serializes to "null", so a string cannot tell one opaque origin read twice from two distinct ones (a `data:`
-       document's own about:blank child would read as cross-origin to it). */
+    /* The active document's origin, §7.1.1's record, for the §7.1.1 same origin check §7.2.1 makes. Borrowed: an
+       origin is immutable and lives for the agent (core/url/origin.h), so it can sit inside the bytes proxy_of
+       captures; a navigation replaces this pointer rather than mutating its target, so a parked flow's copy still
+       names its world's origin. A record, not a serialization, because §7.1.1's step 1 compares identity: every
+       opaque origin serializes to "null", so a string cannot tell one opaque origin read twice from two distinct ones
+       (a `data:` document's own about:blank child would read as cross-origin to it). */
     const Origin *origin;
     /* The navigable's own state (see the member table below for why it is here and not in the peer). All of it is
        per flow: a flow that closed or renamed the window is the only one whose timeline contains that, and
@@ -321,7 +321,7 @@ static void wp_set_at(JSContext *ctx, ProxyData *p, JSValue *slot, JSValue v,
 }
 #define wp_set(ctx_, p_, slot_, v_) wp_set_at((ctx_), (p_), (slot_), (v_), __FILE__, __LINE__)
 
-/* §7.2.1's same-origin check: §7.1.1's algorithm over two records, step 1's nonce comparison and step 2's tuple
+/* The check §7.2.1 makes, §7.1.1's same origin over two records: step 1's nonce comparison and step 2's tuple
  * comparison, both inside origin_same. Step 1 ("If A and B are the same opaque origin, then return true") is an
  * identity comparison that a serialization cannot run, since every opaque origin serializes to "null"; it matters
  * because §7.3.2.1's determine-the-origin hands one opaque origin to several Documents, so a `data:` document's
@@ -635,7 +635,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
        into a tree this navigable no longer presents.
        The rows are the running flow's because the question is per timeline: a sibling arm that has not navigated
        still holds rows of its navigable's active document (solver/flow.h states the argument). */
-    /* Named residual: the outgoing document's rows are asserted absent, not dropped. Not covered: HTML §7.4.4
+    /* Named residual: the outgoing document's rows are asserted absent, not dropped. Not covered: HTML §7.5.11
        "Aborting a document load" aborts a navigated-away Document's fetch controllers, so a browser drops these
        rows, and solver/flow.h has the primitive (`flow_programs_remove_for_document`, §7.5.10 step 5's removal,
        per flow); but not every caller is established as a real navigation, since the initial about:blank handover
@@ -953,8 +953,8 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
     CHECK(tlus != NULL, "the realm's top-level creation URL would not convert to a C string");
     /* §8.1.3.1's top-level origin for the one navigable no §7.3.2.1 ran for: the instance's root, whose
        environment the host built. The origin is §7.3.2.1 "Creating browsing contexts"' determine the origin over
-       that URL with this agent's origin as the source origin, the algorithm that answers "whose origin is a
-       Document at this address"; its two inheritance cases are the addresses §4.7 cannot answer for,
+       that URL with this agent's origin as the source origin, the algorithm that answers whose origin a
+       Document at this address has; its two inheritance cases are the addresses §4.7 cannot answer for,
        `about:blank` (where §7.3.2.1 creates every top-level browsing context) and `about:srcdoc`. A host that
        started this instance at a real address gets §4.7's tuple, same origin as this agent's by construction. */
     url_record_init(&rec);
@@ -1122,7 +1122,7 @@ JSContext *window_proxy_realm_of_document(uint32_t doc)
    The realm read's NULL has four readings, and this names which one holds. §7.5.10 "Destroying documents"'
    set-the-Document's-browsing-context-to-null step runs with window_proxy_set_destroyed nulling the navigable's
    realm, so a timeline that ran `window.close()` holds a navigable of that name with no active document. That is
-   neither "no timeline opened it" nor "this timeline navigated away from it" (a navigation replaces an active
+   neither a name no timeline opened nor one this timeline navigated away from (a navigation replaces an active
    document and leaves a realm, which is why window_proxy_navigate refuses a destroyed navigable), and a reader
    that took it for one would materialize a Document for a null browsing context, which proxy_realm refuses.
    The remote arm is not a fourth spelling of absent: a remote navigable is in this table (window_proxy_new_remote
@@ -1853,7 +1853,7 @@ static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
 };
 
 /* §7.2.1: a read the origins do not permit is a SecurityError thrown at the read, not undefined: a page
-   distinguishes the two, and undefined would say "this window has no such member" about one it cannot see. */
+   distinguishes the two, and undefined would say this window has no such member when the reader cannot see it. */
 static bool proxy_read_permitted(const ProxyData *p, int magic)
 {
     if (PROXY_CROSS_ORIGIN[magic])
@@ -2125,7 +2125,7 @@ JSValue window_proxy_cross_origin_getter(JSContext *ctx, const char *name)
  * receiver would pass a test that only checks the throw and be wrong four times on the Window (the four
  * operations §7.2.1.3.1 lists with neither flag), twice on `location` (its getter and setter both go through) and
  * once on a Location (`href`'s setter goes through, its getter does not). Step 2 below is those flags.
- * `platform_object` is the raw `this` value, not §3.7.7's resolved `jsValue`, and the two are equivalent: the
+ * `platform_object` is the raw `this` value, not Web IDL §3.7.7's resolved `jsValue`, and the two are equivalent: the
  * resolution only affects a missing receiver ("or realm's global object otherwise"), and that global is a Window
  * of this heap, which the Window arm answers same-origin unconditionally. Resolving would also cost, since
  * window_proxy_this_object answers owned and this runs on every declared member of the platform. */
@@ -2243,8 +2243,8 @@ static bool proxy_atom_index(JSContext *ctx, JSAtom prop, uint32_t *pidx)
  * It runs before the same-origin question: step 2 precedes step 3's `IsPlatformObjectSameOrigin(W)`, and every
  * path through step 2 returns, so an array index never reaches step 3 (asking step 3 first would answer
  * `undefined` for `frames[0][0]` about a grandchild navigable that exists).
- * Out of range is two answers (step 2.4): `undefined` for a same-origin W says "that window has no such frame",
- * and the SecurityError for a cross-origin one says "you may not look"; a page's `try`/`catch` tells them
+ * Out of range is two answers (step 2.4): `undefined` for a same-origin W says that window has no such frame,
+ * and the SecurityError for a cross-origin one says the reader may not look; a page's `try`/`catch` tells them
  * apart. */
 /* The list is the target document's, never the reading realm's, the list `length` answers by. Two facts decide
  * it without materializing anything:
@@ -2319,7 +2319,7 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
     return -1;
 }
 
-/* ---- §7.2.3's same-origin branch: the operation is performed on W ----------------------------------------
+/* ---- §7.2.3 when §7.1.1's same origin holds: the operation is performed on W ------------------------------
  *
  * Each of §7.2.3's internal methods says the same for a same-origin W, and it is not "answer the same value": it
  * is `W.[[X]](…)`. So `frame.contentWindow.addEventListener` is the other document's Window's own member, and
@@ -2356,7 +2356,7 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * is not declared [Global], so they are own properties of no global and are always reached up the chain
  * (core/events/event_target.c). */
 
-/* §7.2.3's own surface for one name: an own property of this object, not a prototype hit. §7.2.3 "The
+/* §7.2.3's own surface for one name: an own property of this object, not a prototype hit. HTML §7.2.3 "The
  * WindowProxy exotic object": "There is no WindowProxy interface object." Every name a WindowProxy answers is
  * answered by §7.2.3.5's [[GetOwnProperty]] and listed by §7.2.3.10's [[OwnPropertyKeys]], so a member reachable
  * only up a prototype chain would be one `Object.getOwnPropertyDescriptor(w, n)` answers `undefined` for while
@@ -2448,7 +2448,7 @@ static JSValueConst proxy_forwarded_object(JSContext *ctx, JSValueConst obj, JSA
 
 /* HTML §7.2.3.1 [[GetPrototypeOf]] ( ): "Let W be the value of the [[Window]] internal slot of this. If
    IsPlatformObjectSameOrigin(W) is true, then return ! OrdinaryGetPrototypeOf(W). Return null."
-   W is proxy_target_window's: §7.2.1.3.3 IsPlatformObjectSameOrigin(O) is "the current settings object's origin
+   W is proxy_target_window's: HTML §7.2.1.3.3 IsPlatformObjectSameOrigin(O) is "the current settings object's origin
    is same origin-domain with O's relevant settings object's origin", and every internal method here asks it
    through the one proxy_same_origin, so an answer that is wrong is wrong for all of them at once and fixed once.
    A navigable with no active document (destroyed, or discarded by a close) has no W to perform
@@ -2540,8 +2540,8 @@ static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     if (proxy_atom_index(ctx, prop, &idx)) return 0;                    /* step 2.1 */
     w = proxy_forward_window(ctx, obj, p, prop);
     if (JS_IsUninitialized(w)) {
-        /* A destroyed navigable and a name §7.2.3's own surface does not answer: there is no active document to
-           perform step 2.2 on and nothing here to remove, so `true` is truthful. */
+        /* A destroyed navigable and a name HTML §7.2.3's own surface does not answer: there is no active document to
+           perform §7.2.3.9 step 2.2 on and nothing here to remove, so `true` is truthful. */
         if (!proxy_surface_desc(ctx, NULL, prop)) return 1;
         /* §7.2.3's own surface is an own property (see proxy_surface_desc), so `true` here would leave
            [[GetOwnProperty]] reporting a configurable own property [[Delete]] claimed to remove, and the surface
@@ -2971,7 +2971,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
          * three asserts are `iframeWindow.top === null`, `iframeWindow.parent === null` and
          * `iframeWindow.frameElement === null` after the container element is removed, and the corpus has it
          * twice (window-top-null.html, window-parent-null.html).
-         * "This's navigable is null" is neither "this is closed" nor "this's browsing context is null": §7.2.2.4
+         * A null navigable is neither a closed window nor a null browsing context: §7.2.2.4
          * spells three of its four getters' step 1 three ways, and this record keeps the three facts apart (see
          * window_proxy.h). The navigable's spelling is window_proxy_navigable_null, a walk that goes true
          * synchronously at §7.3.1.6's sever; `closing` is not it (a closing traversable still has its
@@ -3015,9 +3015,9 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            are told apart here. */
         if (wp_closed(p)) return JS_NULL;
         if (window_proxy_is_remote(nav)) {
-            /* §7.2.1.3.3 IsPlatformObjectSameOrigin and "this agent holds the active document" are one condition,
-               which makes this the standard's test: SECURITY.md keys an instance on `(browsing context group,
-               origin)`, so a Document this agent hosts is same origin with every realm that could ask. The one
+            /* HTML §7.2.1.3.3 IsPlatformObjectSameOrigin and this agent holding the active document are one
+               condition, which makes this the standard's test: SECURITY.md keys an instance on `(browsing context
+               group, origin)`, so a Document this agent hosts is same origin with every realm that could ask. The one
                shape that breaks the pairing is a same-origin document in another browsing context group, a
                separate instance by that key, for which §7.2.4's arms take the ordinary branch over a Document
                this heap lacks; the filtered object would refuse reads the origins permit, so it is asserted. */
@@ -3579,11 +3579,11 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         *presult = magic == WP_CLOSED ? JS_TRUE : JS_NewInt32(ctx, 0);
         return JS_STEP_DONE;
     }
-    /* A nested navigable's `closed` is this agent's either way, so it is answered here. §7.3.1 declares is closing
-       with "This is only ever set to true for top-level traversable navigables" (window_proxy_set_closing asserts
-       it), so the only half of §7.2.2.1's or a nested navigable can satisfy is a null browsing context, written
-       by §7.3.1.6's destroy a child navigable, run by the agent holding the container element: this one. A peer
-       asked about its own document would answer out of its root proxy, the record of a navigable it believes is
+    /* A nested navigable's `closed` is this agent's either way, so it is answered here. HTML §7.3.1 declares is
+       closing with "This is only ever set to true for top-level traversable navigables" (window_proxy_set_closing
+       asserts it), so the only half of §7.2.2.1's or a nested navigable can satisfy is a null browsing context,
+       written by §7.3.1.6's destroy a child navigable, run by the agent holding the container element: this one. A
+       peer asked about its own document would answer out of its root proxy, the record of a navigable it believes is
        top-level. */
     if (magic == WP_CLOSED && !JS_IsUndefined(p->parent)) { *presult = JS_FALSE; return JS_STEP_DONE; }
 
@@ -3680,7 +3680,7 @@ void window_proxy_install_proto(JSContext *ctx)
 
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "the WindowProxy prototype could not be allocated");
-    /* §7.2.3 "The WindowProxy exotic object": "There is no WindowProxy interface object." The surface below is
+    /* HTML §7.2.3 "The WindowProxy exotic object": "There is no WindowProxy interface object." The surface below is
        the [[Window]]'s (§7.2.3.7's same-origin [[Get]] is an OrdinaryGet answering out of it), so Web IDL §3.7.3
        "Interface prototype object"'s class string on this object is Window's identifier. It is also what a page
        reads: `Object.prototype.toString.call(w)` is "[object Window]" for a window it may see, and for one it
