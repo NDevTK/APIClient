@@ -3567,10 +3567,9 @@ const char *engine_pending_fetches(void) {
                         (size_t)(t10 - (t9 + 1)) == rl && !memcmp(t9 + 1, r, rl) &&
                         (size_t)(lend - (t11 + 1)) == ul && !memcmp(t11 + 1, u, ul)) {
                         /* One reply fills every entry on the key, so each folded field states what survives
-                           every member, independent of walk order. The initiator and the provenance fold to
-                           the most observed (monotone): if any member's path stood on no contradicted arm, a
-                           real client makes exactly this request, and labelling its reply forced would be false
-                           and would cost active discovery; a forced flow's use of it is its own `path_forced`.
+                           every member, independent of walk order. The initiator folds to parser-inserted if any
+                           member is; the provenance folds with the witness and drive marks, as one member's
+                           vector (below); a flow's own use of the reply is its own `path_forced`.
                            The destination folds to the strictest ingestion: if any member compiles the reply,
                            the bytes must pass the code rule, so script-like (§2.2.5) wins; otherwise the line
                            keeps what it has, since no consumer distinguishes, say, `image` from `font` (one
@@ -3591,19 +3590,20 @@ const char *engine_pending_fetches(void) {
                         /* The (provenance, witness, drive) vector folds as one, taking one member's whole, so
                            the line never states a vector no member held: folding each by its own extremum gave
                            (derived, unpinned, undriven) from a (forced, pinned, undriven) member and a
-                           (derived, unpinned, driven) one, each refused alone. The order is lexicographic,
-                           provenance, then witness, then drive, so the provenance still folds toward most
-                           observed. Taking the cleanest member is sound for the marks: each is an
-                           over-approximation recorded at the flow, so a member that composed the same bytes with
-                           its marks clear refutes them for this address. */
+                           (derived, unpinned, driven) one, each refused alone. The order is whose act first:
+                           drive, then witness, then provenance, the egress default's own discriminator (the
+                           page's own unpinned act fires; a drive or a pinned witness needs a widening), so a line
+                           fires by default exactly when one member alone would; ties fold toward most observed.
+                           The marks are over-approximations recorded at the flow, so a member that composed the
+                           same bytes with its marks clear refutes them for this address. */
                         /* Every reader below takes the computed offset, never a `tN + 1` of its own, so the
                            offsets and tab pointers are not two spellings of one position that could drift. */
                         int cur_prov = prov_of_token(join + p_at, p_len);
                         int cur_pinned = pinned_is_yes(join + n_at, n_len);
                         int cur_driven = driven_is_yes(join + v_at, v_len);
-                        int take_new = prov_v < cur_prov ||
-                                       (prov_v == cur_prov && (pinned_v < cur_pinned ||
-                                                               (pinned_v == cur_pinned && driven_v < cur_driven)));
+                        int take_new = driven_v < cur_driven ||
+                                       (driven_v == cur_driven && (pinned_v < cur_pinned ||
+                                                                   (pinned_v == cur_pinned && prov_v < cur_prov)));
                         int mo_prov = take_new ? prov_v : cur_prov;
                         int mo_pinned = take_new ? pinned_v : cur_pinned;
                         int mo_parser = ini_is_parser(join + i_at, i_len) || ini_is_parser(ini, il);
