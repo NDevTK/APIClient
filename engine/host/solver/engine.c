@@ -2335,7 +2335,8 @@ const PolicyContainer *engine_document_policy(uint32_t doc)
  * deliveries of the worlds on them. Its decision state is decide_fork_same_path's, since no predicate was asked.
  * As decide.h says of the answer fork, a decision vector cannot record which sender arm each arm took, so the
  * mapping crosses a park in the commitment record (flow.h) and is not carried across a re-run of the document.
- * `f` makes the delivery in this same step; at most one arm per delivery. */
+ * `f` makes the delivery in this same step; at most one arm per delivery. A cross-agent operation is received by
+ * the same rule (flow_perform): its arm is the timeline never asked. */
 static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
                                      void *dec_blob, void *pin_blob, FlowPathMarks marks);
 /* What the step names itself (defined with the scheduler below). A refusal is a step that consumed a record and
@@ -2345,7 +2346,7 @@ static StepUnit g_step_unit;
 /* Returns which mechanism minted the other side, because this is the one line that knows: the caller writes it
    on the commitment row and deliver_admits reads the row rather than re-deriving it from the vector. "Did this
    fork run" and "does this vector name a branch" agree for this producer but are different questions. */
-static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec, EngineArrival m)
+static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec, EngineArrival m, const char *why)
 {
     char *fork_point = world_vec_fork_point(vec);
     FlowCommitArm covering;
@@ -2371,10 +2372,8 @@ static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec, 
     DCHECK(!JS_HasActivation(JS_GetRuntime(ctx)),
            "a delivery-time fork was taken with page code on the stack — the arm re-enters its scheduler step, which "
            "is sound only between tasks");
-    sib = engine_sibling_assemble(ctx, f, NULL,
-                                  decide_fork_same_path("(a cross-document message arrived from one arm of a "
-                                                        "sender's branch — no predicate was asked)"),
-                                  concolic_pins_suspend(), flow_path_marks(f));
+    sib = engine_sibling_assemble(ctx, f, NULL, decide_fork_same_path(why), concolic_pins_suspend(),
+                                  flow_path_marks(f));
     /* The one thing that makes the arm a different timeline, written after assembly so the arm's inherited
        record is the parent's as of before this delivery. Its other side is `f`, so the arm value is this same
        mechanism: a foreclosed row defers to the parent, and the parent is here. */
@@ -2650,7 +2649,9 @@ static void flow_deliver(JSContext *ctx, Flow *f)
         JS_FreeCString(ctx, record);
         JS_FreeValue(ctx, rv);
         JS_FreeValue(ctx, entry);
-        arm = deliver_fork_arm(ctx, f, vec, marks);
+        arm = deliver_fork_arm(ctx, f, vec, marks,
+                               "(a cross-document message arrived from one arm of a sender's branch — no "
+                               "predicate was asked)");
         deliver_commit_taken(ctx, f, vec, arm);
         deliver_take_marks(f, marks);
     }
@@ -6692,21 +6693,29 @@ static void flow_perform(JSContext *ctx, Flow *f)
                "object-valued member through the program route below");
         perform_answer_notify(ctx, ctx, f, token, ENGINE_COMPLETION_NORMAL, answer);
         JS_FreeValue(ctx, answer);
+    } else if (deliver_admits(ctx, f, remote_op_worlds(op)) != STEP_UNIT_ROUTED_DELIVERY) {
+        /* The program route receives the asking world as a delivery does, so a timeline committed against it
+           neither runs the program nor answers; the timeline on the other side of that commitment holds its own
+           copy of the entry (perform_q_fork) and answers. */
+        g_step_unit = STEP_UNIT_CROSS_AGENT_OP_NOT_MINE;
     } else {
         /* The entry is spent and the token survives it: the record has become a program, and the token is copied
            onto the program's row, because the answer is the program's completion. Copied, not moved: a forked arm
            may still name the queue entry, so the row owns its own string. */
-        char *own = strdup(token);
+        char *own;
         JSContext *rctx = doc_realm(doc);
-        /* The program this operation becomes runs the peer page's code (a close runs its unload handlers) on the
-           asking flow's path, so this timeline takes the asker's marks.
-           Named residual. Not covered: the timeline that was never asked is not kept beside this one, so the
-           answering timeline is graded wholesale. Next diff builds: a perform-time fork as flow_deliver's
-           (deliver_fork_arm), with the unasked arm sending no answer under the asker's rendezvous. Absence shows
-           as: a peer's own later requests graded forced after a forced asker's operation, on every timeline. */
-        {
-            deliver_take_marks(f, record_marks_field(remote_op_marks_field(op)));
-        }
+        EngineArrival marks = record_marks_field(remote_op_marks_field(op));
+        FlowCommitArm arm;
+
+        /* The program runs the peer page's code (a close runs its unload handlers) on the asking flow's path, so
+           the asked timeline takes the asker's marks; the arm forked first is the timeline never asked, which
+           holds no program row and so answers nothing under the asker's rendezvous. */
+        arm = deliver_fork_arm(ctx, f, remote_op_worlds(op), marks,
+                               "(a cross-agent operation arrived from a marked or branched asker — no predicate "
+                               "was asked)");
+        deliver_commit_taken(ctx, f, remote_op_worlds(op), arm);
+        deliver_take_marks(f, marks);
+        own = strdup(token);
         /* The program is read before the row is made, because reading it sets the operation's operands on the
            answering realm's global (remote_op.c). Its length is its `strlen`: remote_op_program answers one of this
            engine's fixed programs, not page text. */

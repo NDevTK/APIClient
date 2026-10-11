@@ -149,6 +149,9 @@
     X(ROUTED_TARGET_DESTROYED,                                                    \
                           "routed-delivery-the-target-document-was-destroyed")    \
     X(CROSS_AGENT_OP,     "cross-agent-operation")                                \
+    /* an operation from a world this timeline is committed against: consumed */  \
+    /* unperformed, as a routed delivery is refused (flow_perform)            */  \
+    X(CROSS_AGENT_OP_NOT_MINE, "cross-agent-operation-not-this-timeline")         \
     X(MICROTASK,          "microtask-checkpoint")                                 \
     X(DELIVER_REPLY,      "deliver-one-reply")                                    \
     /* NO `scheme-fetch-answered` ROW, AND ITS ABSENCE IS A STATEMENT. It named */ \
