@@ -525,7 +525,7 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     /* The mode: HTML §8.1.4.2's fetch a single module script creates the request with mode "cors" outright,
        so this is the module arm and never the element's. */
     req.mode = script_request_mode(SCRIPT_TYPE_MODULE, flow_dyn_el(f));
-    /* The referrer is §2.2.5's "client"; the referrer policy is the referring script's options', copied by
+    /* The referrer is Fetch §2.2.5's "client"; the referrer policy is the referring script's options', copied by
        §8.1.4.2's descendant script fetch options, and a program no `<script>` produced has the empty string. */
     req.referrer = "client";
     req.referrer_policy = flow_dyn_el(f) ? referrer_policy_attribute_keyword(flow_dyn_el(f)) : "";
@@ -638,7 +638,7 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     /* The mode, which `stype` decides besides the decode: §2.5.1's mode off the element for a classic script,
        `cors` for a module (see script_request_mode). */
     req.mode = script_request_mode(stype, el);
-    /* §2.2.5's "client", and HTML §4.12.1.1's script fetch options' referrer policy: "the current state of
+    /* Fetch §2.2.5's "client", and HTML §4.12.1.1's script fetch options' referrer policy: "the current state of
        el's referrerpolicy content attribute". */
     req.referrer = "client";
     req.referrer_policy = el ? referrer_policy_attribute_keyword(el) : "";

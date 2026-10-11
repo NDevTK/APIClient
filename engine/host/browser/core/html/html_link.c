@@ -896,7 +896,7 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
            "more modern features, where the request's mode is always `cors`". Two `rel` keywords, two
            algorithms, and the same markup answers differently — which is exactly why this is passed. */
         req.mode = mode;
-        /* §2.2.5's "client", and the element's referrerpolicy attribute state, which is the referrer policy of
+        /* Fetch §2.2.5's "client", and the element's referrerpolicy attribute state, which is the referrer policy of
            HTML §4.2.4.3's link processing options and of §4.6.8.12 step 11 alike. */
         req.referrer = "client";
         req.referrer_policy = referrer_policy_attribute_keyword(el);

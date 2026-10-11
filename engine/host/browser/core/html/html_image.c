@@ -1081,7 +1081,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         /* …AND §2.5.1's MODE, its third output, from the same state — see cors_settings_attribute.h for why
            the two are separate entries rather than one call answering both. */
         req.mode = cors_potential_request_mode(cors_settings_attribute_state(el));
-        /* §2.2.5's "client", and §4.8.4.3.5's "Set request's referrer policy to the current state of the
+        /* Fetch §2.2.5's "client", and HTML §4.8.4.3.5's "Set request's referrer policy to the current state of
            element's referrerpolicy attribute". */
         req.referrer = "client";
         req.referrer_policy = referrer_policy_attribute_keyword(el);
