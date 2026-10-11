@@ -10429,6 +10429,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              strstr(js, "{\"sink\":\"innerHTML\",\"source\":\"" MESSAGE_DATA_SRC) != NULL,
              "the second delivery reached the markup sink and no @S record names a message's data there: its "
              "`e.data` read back the first delivery's pinned bytes, so one message's pin decided another's input");
+    const char *xdm_own_why = NULL; int xdm_own = 1;
+    fold_row(&xdm_own, &xdm_own_why, !param_value_is(js, "/api/xdmgate", "d", "xdmstep"),
+             "the second delivery's `e.data` read as `xdmstep`, the value the FIRST delivery's equality pinned: "
+             "two messages shared one source identity, so one message's pin decided another's input");
     const char *bc_msg_ran_why = NULL; int bc_msg_ran = 1;
     fold_row(&bc_msg_ran, &bc_msg_ran_why, param_value_is(js, "/api/bcmsg", "v", "bcENTER"),
              "NOT REACHED: there is no /api/bcmsg record, so §9.5 postMessage step 9's delivery task never ran "
@@ -15119,6 +15123,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "xdm-set", xdm_set, "/api/xdmgate", SESS_EXPLORE, xdm_set_why },
         { "xdm-second", xdm_second, "/api/xdmgate", SESS_EXPLORE, xdm_second_why, .gate = "xdm-set" },
         { "xdm-sink", xdm_sink, "_xdmSinkEl.innerHTML", SESS_EXPLORE, xdm_sink_why, .gate = "xdm-second" },
+        { "xdm-own", xdm_own, "_xdmSinkEl", SESS_EXPLORE, xdm_own_why, .reach = "xdm-second" },
         { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
         { "bc-msg-fork", bc_msg_fork, "/api/bcfork", SESS_EXPLORE, bc_msg_fork_why, .gate = "bc-msg-ran" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see

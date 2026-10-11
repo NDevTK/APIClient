@@ -2,9 +2,9 @@
    set the state that opens it. One of test_forced.c's exploring documents (its TF_DOCS table). A cross-origin
    peer posts twice once the page asks `/api/xdmready` (test_forced.c's fixture_route_gadget_post).
    The first delivery's `e.data === 'xdmstep'` arm sets `_xdmOk`; the second delivery's `e.data` then reaches
-   markup. The two deliveries are two attacker inputs, so a pin made on the first says nothing about the second,
-   and the second's bytes must still arrive at the sink as attacker input. Each arm emits a constant to
-   `/api/xdmgate` first, the reachability witness its row is read beside. It ends with TF_CANVAS_INK, which
+   markup and, first, a `d` parameter. The two deliveries are two attacker inputs, so a pin made on the first
+   says nothing about the second: `d` must never read as the first delivery's pinned `xdmstep`. Each arm emits a
+   constant `v` to `/api/xdmgate`, the reachability witness its row is read beside. It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_XDMULTI_H
 #define ENGINE_HOST_FIXTURE_XDMULTI_H
@@ -20,7 +20,7 @@ static const char HTML_XDMULTI[] =
     "var _xdmOk = false;"
     "window.addEventListener('message', function(e){"
     " if (!_xdmOk) { if (e.data === 'xdmstep') { _xdmOk = true; fetch('/api/xdmgate?v=xdmSet'); } return; }"
-    " fetch('/api/xdmgate?v=xdmSecond'); _xdmSinkEl.innerHTML = e.data; });"
+    " fetch('/api/xdmgate?v=xdmSecond&d=' + e.data); _xdmSinkEl.innerHTML = e.data; });"
     "fetch('/api/xdmready');"
     "</script>"
     TF_CANVAS_INK
