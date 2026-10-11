@@ -11,17 +11,13 @@ static const char HTML_SCRIPTS[] =
     "<!doctype html><html>"
     "<body>"
     "<script>"
-    /* HTML §4.12.1.1 "Processing model", the last step of "prepare the script element": "Otherwise, immediately
-       execute the script element el, even if other scripts are already executing." This is the FIRST of the
-       document's <script>s, so the program it injects belongs at a slot INSIDE the document's own sequence —
-       between script 1 and script 2 — the one position the scheduler could not name while the
-       document's scripts lived in a table separate from the flow's own rows: the slot arithmetic went NEGATIVE
-       and a `CHECK` (fatal in release, and it fired on a real site) stopped the run there.
-       THE PROBE IS THE ORDER AND NOT THE ABSENCE OF A CRASH. `__so` is appended to by each program in turn and
-       the next <script> reports it, so the two possible answers are different strings: `ABXC`
-       is the injected row at its own position, and `ABC` is the same row taken to the TAIL of the sequence —
-       which is where an engine that cannot address a slot inside the document's scripts would have to put it,
-       and where it would then run after the program that reports. */
+    /* HTML §4.12.1.1 "Processing model": an inline script that is not parser-inserted runs inside the
+       appendChild that connects it. DOM §4.2.3 "Mutation algorithms"' insert runs the post-connection steps
+       before it returns, HTML's script post-connection steps "Prepare the script element given insertedNode",
+       and prepare's last step is "Otherwise, immediately execute the script element el, even if other scripts
+       are already executing." `__so` is appended to by each program in turn and the next <script> reports it:
+       `AXBC` is that order; `ABXC` is the injected program deferred to after its injector, and `ABC` is it
+       taken to the tail, after the program that reports. */
     "var __so = 'A';"
     "var soEl = document.createElement('script');"
     "soEl.textContent = \"__so += 'X';\";"

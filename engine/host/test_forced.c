@@ -12285,22 +12285,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&addstr_tt, &addstr_why, emitted_record_prefix_has(js, "/api/addstr/", "\"r1920\""),
              "§13.15.3 step 1.c's STRING arm did not leave `r1920` on the /api/addstr/ record — a String on "
              "either side takes step 1.c whatever the other side's example is, so this must not move");
-    /* §4.12.1.1's "immediately execute the script element" AT A POSITION INSIDE THE DOCUMENT'S OWN SEQUENCE.
-       The match is EXACT and the near-miss is the whole point: `ABXC` is the injected program at the slot after
-       the <script> that injected it, and `ABC` is that same program pushed to the TAIL — the only place a
-       scheduler whose cursor walked the document's scripts before the flow's own rows could put it, and the
-       place from which it runs after the program that reports. `ABC` must NOT satisfy this row, which is why
-       the token is quoted whole rather than searched for as a substring of the sequence. */
+    /* HTML §4.12.1.1's "immediately execute the script element", inside the appendChild that connects it (see
+       the statement). The match is exact: `ABXC` (deferred to after the injector) and `ABC` (taken to the
+       tail) are the two wrong orders, and neither may satisfy the row. */
     const char *scriptorder_why = NULL; int scriptorder_tt = 1;
     fold_row(&scriptorder_tt, &scriptorder_why, !!strstr(js, "\"/api/scriptorder\""),
              "NOT REACHED: there is no /api/scriptorder record at all, so the reporting <script> never ran. "
              "That is the SCHEDULE");
-    fold_row(&scriptorder_tt, &scriptorder_why, param_value_only(js, "/api/scriptorder", "seq", "ABXC"),
-             "§4.12.1.1 the injected program did not run at the slot AFTER the <script> that injected it: "
-             "/api/scriptorder's `seq` is not exactly `ABXC`. `ABC` is the near-miss and the whole point — "
-             "that is the same program pushed to the TAIL, where a scheduler whose cursor walked the "
-             "document's scripts before the flow's own rows would put it. Asked as `_only` because the "
-             "sequence is a value the document DETERMINED");
+    fold_row(&scriptorder_tt, &scriptorder_why, param_value_only(js, "/api/scriptorder", "seq", "AXBC"),
+             "§4.12.1.1 the injected inline script did not run inside the appendChild that connected it: "
+             "/api/scriptorder's `seq` is not exactly `AXBC`. `ABXC` is it deferred to after the <script> "
+             "that injected it, `ABC` is it taken to the tail. Asked as `_only` because the sequence is a "
+             "value the document determined");
 
     /* HTML §3.1.7's `currentScript`, in THREE rows because these are three independent claims and one boolean
        over them would say only that one of three unrelated things is wrong.
