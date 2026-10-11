@@ -417,7 +417,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
            "CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" puts a block-level box on the CONTAINER's stack, as a "
            "sibling of the anonymous boxes, whether it is a direct child or is reached through an inline box "
            "it breaks — so no run this walk is ever handed may contain one, and whichever of "
-           "`bf_content_kind` and `block_flow_next_block_box` stopped agreeing with the other is the fix");
+           "`bf_content_is_inline` and `block_flow_next_block_box` stopped agreeing with the other is the fix");
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' atomic inline-level box that is not replaced, one
        item of this run ("as a single opaque box"; css-text-3 §5.5 "Line Breaking Details": "a soft wrap
        opportunity before and after each replaced element or other atomic inline").

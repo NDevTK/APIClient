@@ -529,7 +529,7 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
               "the element tree by its contents\" as a child sequence — so what is owed here is ROUTING this "
               "walk to it and NOT a second copy of the rule. "
               "THIS FILE'S OWN WALKS ARE ROUTED, WHICH IS WHY REACHING THIS LINE NOW MEANS A CALLER OUTSIDE "
-              "THEM: `bf_content_next`, `bf_content_kind`, `bf_inline_box_breaks`, the run's start and step "
+              "THEM: `bf_content_next`, `bf_content_is_inline`, `bf_inline_box_breaks`, the run's start and step "
               "and `block_flow_run_generates_box` all take that sequence, so nothing this file enumerates can "
               "hand this classification a `contents` element any more. A caller that still composes a child "
               "list with `->first_child` and `->next`, or a box parent with `->parent`, is what gets here — "
@@ -570,7 +570,7 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
     if (block) return BLOCK_FLOW_CHILD_BLOCK;
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": this child is inline-level, so it is not on
        §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
-       container establishes is decided over the WHOLE child list rather than here (bf_content_kind). */
+       container establishes is decided over the WHOLE child list rather than here (bf_content_is_inline). */
     if (inline_level) return BLOCK_FLOW_CHILD_INLINE;
     /* CSS 2.1 §17.4 Tables in the visual formatting model ANSWERS THIS CLASSIFICATION, and it used to abort
        here. The box §9.4.1's stack places for a `display: table` element is not the table box at all: "the
@@ -885,31 +885,16 @@ static bool bf_box(lxb_dom_element_t *el, BfBaseline pass, BfBox *out);
 
 /* ---- WHICH FORMATTING CONTEXT THIS BLOCK CONTAINER ESTABLISHES ------------------------------------------
    CSS 2.2 §9.4.2 states the condition and §9.2.1 states the alternative in the same breath: a block container
-   "either contains only block-level boxes or establishes an inline formatting context", and §9.4.2's own first
-   sentence is that an inline formatting context "is established by a block container box THAT CONTAINS NO
-   BLOCK-LEVEL BOXES". So the question is answered over the WHOLE child list, ONCE, before either algorithm
-   runs — never per child, which is what a walk that classified as it stacked would be doing.
-   A MIXED CONTAINER IS NOT A THIRD ANSWER TO §9.2.1's QUESTION, and that is the whole content of §9.2.1.1
-   "Anonymous block boxes": "if a block container box (such as that generated for the DIV above) has a
-   block-level box inside it (such as the P above), then we FORCE IT TO HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT".
-   So the presence of one block-level child settles the CONTAINER's formatting context — §9.4.1's stack, below —
-   and what the inline-level children get is not a formatting context for the container but a box of their own
-   inside it.
-   IT IS STILL A FOURTH ANSWER TO THIS CLASSIFICATION'S QUESTION, because the forcing has to be RUN and only a
-   mixed child list runs it. A walk that folded MIXED into BLOCK answered §9.2.1 correctly and then could not
-   say whether §9.2.1.1 had generated anything — which is exactly what a caller enumerating those boxes needs
-   to know before it walks a child list at all. */
-typedef enum {
-    BF_CONTENT_NONE = 0,   /* no in-flow children: §10.6.3's fourth bullet, and §9.4.2 creates no line box */
-    BF_CONTENT_BLOCK,      /* ONLY block-level boxes: §9.4.1's stack below, and §9.2.1.1 generates nothing */
-    BF_CONTENT_INLINE,     /* NO block-level box: §9.4.2's context, established by this ELEMENT's own box */
-    BF_CONTENT_MIXED       /* both: §9.4.1's stack below, over the box list §9.2.1.1's forcing produces */
-} BfContent;
-
-static BfContent bf_content_kind(lxb_dom_element_t *el)
+   "either contains only block-level boxes or establishes an inline formatting context", and an inline
+   formatting context "is established by a block container box THAT CONTAINS NO BLOCK-LEVEL BOXES". One
+   block-level box settles the container's context — §9.2.1.1 "Anonymous block boxes": "then we FORCE IT TO
+   HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT" — so the scan stops at the first one: a long list of block-level
+   children is answered at its first member, and only a container that holds none reads its whole list.
+   Answers whether the container's children hold an inline-level box and no block-level box. */
+static bool bf_content_is_inline(lxb_dom_element_t *el)
 {
     BoxTreeChild c;
-    bool block = false, inl = false;
+    bool inl = false;
 
     /* css-display-3 §2.5's SPLICED SEQUENCE, because this walk and `block_flow_next_block_box` are REQUIRED to
        agree — core/layout/intrinsic_size.c asserts that agreement by name — and a `contents` child would put
@@ -931,31 +916,24 @@ static BfContent bf_content_kind(lxb_dom_element_t *el)
            does to the answer is a fact about the WIDTH of line boxes and about §9.5.2's clearance, which is
            each walk's own question at its own line. */
         case BLOCK_FLOW_CHILD_FLOAT:  break;
-        case BLOCK_FLOW_CHILD_BLOCK:  block = true; break;
+        case BLOCK_FLOW_CHILD_BLOCK:  return false;
         case BLOCK_FLOW_CHILD_INLINE:
             inl = true;
             /* §9.2.1.1's SECOND PARAGRAPH IS PART OF THIS QUESTION AND NOT OF A LATER ONE. A broken inline box
                puts its in-flow block-level descendant on THIS container's box list, as a SIBLING of the
                anonymous boxes around the two halves — so the container "contains a block-level box" in exactly
                the sense §9.4.2's establishing condition means, and answering INLINE here would hand §9.4.2's
-               line boxes a box no line box can hold. BOTH bits are set because the split leaves an
-               inline-level box on each side of the break, "even if either side is empty", and those halves are
-               what §9.2.1.1's anonymous block boxes then wrap: the container is MIXED, never plain BLOCK.
-               THE EMPTY HALF IS STILL A BOX AND NOT A LINE BOX, which is the same distinction `inl` already
-               draws for every other child: this classification is over BOX GENERATION, and whether a half
-               produces a LINE box is §9.4.2's zero-height rule asked later, by the walk that fills it. */
-            if (block_flow_child_breaks_inline_box(el, c)) block = true;
+               line boxes a box no line box can hold. */
+            if (block_flow_child_breaks_inline_box(el, c)) return false;
             break;
         }
     }
-    if (block) return inl ? BF_CONTENT_MIXED : BF_CONTENT_BLOCK;
-    if (inl) return BF_CONTENT_INLINE;
-    return BF_CONTENT_NONE;
+    return inl;
 }
 
 /* §9.4.2's OWN CONDITION, WHOLE — see the header for why it is exported rather than re-derived. Both conjuncts
    are the section's own sentence: the box must be a BLOCK CONTAINER, and it must CONTAIN NO BLOCK-LEVEL BOXES.
-   The `display` half is asked FIRST and is not redundant with the classification below: `bf_content_kind` reads
+   The `display` half is asked FIRST and is not redundant with the classification below: `bf_content_is_inline` reads
    a CHILD LIST and a `display: inline` element with only text children has one that looks exactly like a block
    container's, so a caller that skipped it would be told that an inline box establishes the formatting context
    its own ancestor establishes — and would then place that context's line boxes against the inline box's
@@ -969,7 +947,7 @@ bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
     d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
     if (!container) return false;
-    return bf_content_kind(el) == BF_CONTENT_INLINE;
+    return bf_content_is_inline(el);
 }
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" -------------------------------------------------------------
@@ -1233,7 +1211,7 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
    did not exist" — and CSS 2.2 §10.6.3 "Block-level non-replaced elements in normal flow when 'overflow'
    computes to 'visible'" says the same of the height this walk returns, "Only children in the normal flow are
    taken into account (i.e., floating boxes and absolutely positioned boxes are ignored, and relatively
-   positioned boxes are considered without their offset)". `bf_content_kind` above quotes the first of those and
+   positioned boxes are considered without their offset)". `bf_content_is_inline` above quotes the first of those and
    ANSWERS for a container with a float; this refusal read the same sentence and refused anyway, so one file
    disagreed with itself about one operand. TOO NARROW: it asked about a CHILD LIST where both surviving
    quantities are scoped to a FORMATTING CONTEXT, which core/layout/line_box.c's own §9.5 residual had already
@@ -1646,7 +1624,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     resumed = bf_walk_resume(body, el, &w, &out);
     if (wrapper) wn = bf_wrapper_boxes(el, &wl);
     /* A resumed walk took its branch on its first run. */
-    if (!resumed) w.ifc = !wrapper && bf_content_kind(el) == BF_CONTENT_INLINE;
+    if (!resumed) w.ifc = !wrapper && bf_content_is_inline(el);
     if (w.ifc) {
         /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
            margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
@@ -2836,10 +2814,11 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
     *out = NULL;
     *count = 0;
     /* §9.2.1.1's sentence has TWO conjuncts — "if a BLOCK CONTAINER BOX … HAS A BLOCK-LEVEL BOX INSIDE IT" —
-       and both are asked here rather than left to the walk, because a zero is that sentence ANSWERING. See
-       block_flow.h for what each shape of zero means. */
+       and the zero each gives is that sentence ANSWERING (see block_flow.h): an element that is no block
+       container, and one establishing §9.4.2's context, are answered here; a container holding block-level
+       boxes is answered by its stack, which wraps each run of inline-level content it meets. */
     if (!block_flow_display_is_block_container(css_computed_display(el))) return true;
-    if (bf_content_kind(el) != BF_CONTENT_MIXED) return true;
+    if (bf_content_is_inline(el)) return true;
     /* The census counts an ask at the attempt that answers it, as the origin's does. The stack runs whatever
        this container's `height` says: a container with a declared height is exactly the one whose text can
        overflow it. */
@@ -2850,12 +2829,6 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
                "a container's stack answered without closing its anonymous boxes in the placement record; the "
                "stack question's body closes them when its BF_BASELINE_NONE pass answers");
     }
-    DCHECK(hn > 0,
-           "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "
-           "holds BOTH a block-level box and inline-level content. Those are the section's own two conjuncts, "
-           "the classification above and the stack decide them over the same child list with the same "
-           "per-child predicate, and the stack wraps every maximal inline-level run it meets — so an empty "
-           "answer is one classification having been asked twice and answered differently");
     *out = bf_anon_copy(held, hn);
     *count = hn;
     return true;

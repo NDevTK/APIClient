@@ -623,7 +623,7 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
               "block-level boxes inside it\" puts a block-level box OUTSIDE the anonymous box as its SIBLING "
               "whether it is a child of the container or was reached through an inline box the section breaks "
               "around it — so no run this walk is ever handed may contain one, at any depth, and the run's "
-              "exclusive end is where it stops. Whichever of `bf_content_kind` and `block_flow_next_block_box` "
+              "exclusive end is where it stops. Whichever of `bf_content_is_inline` and `block_flow_next_block_box` "
               "stopped agreeing with the other is the fix");
     /* §10.8's step 2 for this box, asked at the walk because it is about the box (whether its `A'` and `D'`
        are measured from its neighbours' baseline) and the walk reaches each box once, while the per-line pass
