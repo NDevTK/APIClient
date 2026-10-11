@@ -5674,7 +5674,8 @@ static StepUnit engine_orphan_unit(int r) {
  * Everything past it is forced: it rests on an arrival nobody performed, so the mark is taken in the same operation
  * as the frame, before one opcode runs, and from then pending_prov_compose stamps every park PROV_FORCED and
  * endpoint.c keeps sightings out of the derived pool. The mark is monotone. Returns 1 if it installed the task as
- * this flow's frame; 0 means nothing is left to model, which lets the caller finish. */
+ * this flow's frame; 0 means nothing is left to model or there is no fully active document to target, which lets
+ * the caller finish. */
 static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     lxb_dom_node_t *document;
 
@@ -5702,6 +5703,11 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
            "the realm a flow ran its programs in does not answer with a Document node — every arm of this "
            "ladder is about that realm's document, so a flow that reached the end of its work without one is "
            "standing somewhere this arm cannot name a target in");
+    /* A potential close request is a user act on a document the user can reach, and §6.10.1 step 6's note
+       gives the only way that document stops being fully active inside the steps: a step 3 listener. A
+       document whose traversable was closed (its own close(), a peer's definitely close) is no target, and
+       modelling the arrival there would return at step 6 on every ask with nothing latched. */
+    if (!document_fully_active(ctx)) return 0;
     f->frame = close_request_flow(ctx, document);
     f->close_req = 1;
     flow_mark_forced_arm();
