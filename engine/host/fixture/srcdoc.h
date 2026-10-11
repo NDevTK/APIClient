@@ -15,12 +15,13 @@ static const char HTML_SRCDOC[] =
        checked at the record's birth); without a srcdoc document no run can reach them.
        IT IS MARKUP AND NOT SCRIPT, for the realm budget: a frame a `<script>` created would be created by every
        flow that reached it, while markup is created once by the parse, before anything forks.
-       EVERY WITNESS IS A LITERAL, so no address can become unknown and fail to go out; the one thing composed
-       at run time is the RESOLUTION of `/api/` against `sdbase?v=rel`, which is §2.4.3's answer.
+       EVERY ADDRESS IS AN ABSOLUTE LITERAL, so none can become unknown and fail to go out, and the endpoint
+       surface reports each as written.
        THE ROWS, ordered so an earlier one localises a later one's absence:
-         /api/sdrun    absolute: the armed control — the srcdoc Document was built and its script ran.
-         /api/sdbase   relative: §4.2.3 "The base element" freezes `/api/` against §2.4.3's fallback base URL,
-                       whose step 1 for this class is "Return document's about base URL."
+         /api/sdrun    the armed control — the srcdoc Document was built and its script ran.
+         /api/sdbase   §4.2.3 "The base element" freezes `/api/` against §2.4.3's fallback base URL, whose
+                       step 1 for this class is "Return document's about base URL"; read through
+                       `new Request('sdbase').url`, Fetch's own parse against the API base URL.
          /api/sdparse  DOMParser inside the frame: addressed `about:srcdoc` with a NULL about base URL and not
                        of §4.8.5's class (that is said only of a srcdoc NAVIGATION's Document).
          /api/sdclone  `document.cloneNode(true)`, the same creation by its other caller, written first so a
@@ -28,7 +29,8 @@ static const char HTML_SRCDOC[] =
     "<iframe id=sdf srcdoc=\"<base href='/api/'>"
     "<script>"
     "fetch('https://x.test/api/sdrun?v=ran');"
-    "fetch('sdbase?v=rel');"
+    "fetch('https://x.test/api/sdbase?v=' + (new Request('sdbase').url === 'https://x.test/api/sdbase'"
+    " ? 'rel' : 'wrong'));"
     "var sdc = document.cloneNode(true);"
     "fetch('https://x.test/api/sdclone?v=' + (sdc !== document ? 'cloned' : 'wrong'));"
     "var sdp = new DOMParser().parseFromString('<p id=sdpp>x</p>', 'text/html');"

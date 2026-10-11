@@ -11650,45 +11650,46 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        until the markup above existed. The rows are ordered so that an earlier one surviving localises a later
        one's absence; see that markup for what each separates. */
     const char *sdrun_why = NULL; int sdrun_tt = 1;
-    fold_row(&sdrun_tt, &sdrun_why, !!strstr(js, "\"/api/sdrun\""),
+    fold_row(&sdrun_tt, &sdrun_why, !!strstr(js, "\"https://x.test/api/sdrun\""),
              "NOT REACHED: there is no /api/sdrun record at all, and that address is ABSOLUTE — it depends on "
              "no base resolution, so its absence is not §2.4.3 answering wrongly. Either the `<iframe srcdoc>` "
              "built no Document or that Document's own script never ran, and every srcdoc row below this one "
              "is unscored rather than failing");
-    fold_row(&sdrun_tt, &sdrun_why, param_value_is(js, "/api/sdrun", "v", "ran"),
+    fold_row(&sdrun_tt, &sdrun_why, param_value_is(js, "https://x.test/api/sdrun", "v", "ran"),
              "the srcdoc Document's script ran and /api/sdrun's `v` is not `ran`, which is a literal in the "
              "document — so the request was composed from something other than the constant beside it");
-    /* §2.4.3's FALLBACK BASE URL, asked of the one class whose step 1 is an assert. THE ADDRESS IS COMPOSED BY
-       THE ENGINE out of two literals — `/api/` from the frame's own `<base href>` and `sdbase?v=rel` from its
-       only relative reference — so this row is the resolution itself and not a string the page carried. */
+    /* §2.4.3's FALLBACK BASE URL, asked of the one class whose step 1 is an assert. The resolution is Fetch
+       §5.4 step 5's parse of `sdbase` against the API base URL, read in the frame through `Request.url` — the
+       endpoint surface reports a fetch's address as the page wrote it, so it cannot carry this. */
     const char *sdbase_why = NULL; int sdbase_tt = 1;
-    fold_row(&sdbase_tt, &sdbase_why, !!strstr(js, "\"/api/sdbase\""),
+    fold_row(&sdbase_tt, &sdbase_why, !!strstr(js, "\"https://x.test/api/sdbase\""),
              "there is no /api/sdbase record: the ONLY relative reference in the srcdoc Document resolved to "
              "nothing, so §4.2.3's freeze of `/api/` against §2.4.3's fallback base URL did not produce a "
              "usable base. `about:srcdoc` has an opaque path and can be no base, so this is what a NULL about "
              "base URL looks like from the page — read /api/sdrun first: if that row stands, the Document was "
              "built and ran, and the about base URL is the thing that was missing when its tree was walked");
-    fold_row(&sdbase_tt, &sdbase_why, param_value_is(js, "/api/sdbase", "v", "rel"),
-             "/api/sdbase was requested and its `v` is not `rel` — the base resolved, so the relative "
-             "reference reached an address, and the token beside it is a literal of the frame's own markup");
+    fold_row(&sdbase_tt, &sdbase_why, param_value_is(js, "https://x.test/api/sdbase", "v", "rel"),
+             "/api/sdbase's `v` is not `rel`: `new Request('sdbase').url` inside the srcdoc frame is not "
+             "https://x.test/api/sdbase, so the frame's base URL is not `/api/` frozen against its about base "
+             "URL (the parent's https://x.test/p)");
     /* §4.8.5's CLASS IS NOT ITS ADDRESS — a Document built INSIDE the frame by an algorithm that is not a
        navigation takes its source's URL and gets no about base URL, so it is addressed `about:srcdoc` with a
        legitimately null one. A step 1 keyed on the address asserted on it, which is a page-reachable abort. */
     const char *sdclone_why = NULL; int sdclone_tt = 1;
-    fold_row(&sdclone_tt, &sdclone_why, !!strstr(js, "\"/api/sdclone\""),
+    fold_row(&sdclone_tt, &sdclone_why, !!strstr(js, "\"https://x.test/api/sdclone\""),
              "there is no /api/sdclone record: `document.cloneNode(true)` inside the srcdoc frame did not "
              "reach its fetch. If /api/sdrun stands, the frame ran and this statement is where it stopped — "
              "which is the shape a §2.4.3 step 1 keyed on the ADDRESS rather than on §4.8.5's class produces, "
              "since the copy is addressed `about:srcdoc` and no clone is a navigation");
-    fold_row(&sdclone_tt, &sdclone_why, param_value_is(js, "/api/sdclone", "v", "cloned"),
+    fold_row(&sdclone_tt, &sdclone_why, param_value_is(js, "https://x.test/api/sdclone", "v", "cloned"),
              "the clone ran and /api/sdclone's `v` is not `cloned` — the copy is the same object as the "
              "Document it was made from, which no reading of DOM §4.4's clone produces");
     const char *sdparse_why = NULL; int sdparse_tt = 1;
-    fold_row(&sdparse_tt, &sdparse_why, !!strstr(js, "\"/api/sdparse\""),
+    fold_row(&sdparse_tt, &sdparse_why, !!strstr(js, "\"https://x.test/api/sdparse\""),
              "there is no /api/sdparse record: `new DOMParser().parseFromString(...)` inside the srcdoc frame "
              "did not reach its fetch. Read /api/sdclone first — it is the SAME creation reached by the other "
              "of its two callers, so the pair says whether this is the creation or the member");
-    fold_row(&sdparse_tt, &sdparse_why, param_value_is(js, "/api/sdparse", "v", "built"),
+    fold_row(&sdparse_tt, &sdparse_why, param_value_is(js, "https://x.test/api/sdparse", "v", "built"),
              "the parse ran and /api/sdparse's `v` is not `built` — the parsed Document does not contain the "
              "element its own markup names");
     /* AND THE OTHER DIRECTION: `<iframe src=\"about:srcdoc\">` takes §4.8.5's `Otherwise` arm, so it is NOT of
@@ -15162,7 +15163,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            `<base href>` and this literal — the key names a statement the document makes, exactly as
            `realm-reclaim` above does. */
         { "srcdoc-script-ran", sdrun_tt, "/api/sdrun", SESS_EXPLORE, sdrun_why },
-        { "srcdoc-fallback-base", sdbase_tt, "sdbase?v=rel", SESS_EXPLORE, sdbase_why },
+        { "srcdoc-fallback-base", sdbase_tt, "/api/sdbase", SESS_EXPLORE, sdbase_why },
         { "srcdoc-clone-not-class", sdclone_tt, "/api/sdclone", SESS_EXPLORE, sdclone_why },
         { "srcdoc-domparser-not-class", sdparse_tt, "/api/sdparse", SESS_EXPLORE, sdparse_why },
         { "srcdoc-otherwise-sync", sdsync_tt, "/api/sdsync", SESS_EXPLORE, sdsync_why },
