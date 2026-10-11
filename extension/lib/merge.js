@@ -735,7 +735,8 @@ function _sumStats(byDoc) {
    would silently drop what it had not heard of. */
 function _mergeMethodInto(em, nm, docKey) {
   for (const k in nm) {
-    if (k === "parameters" || k === "_stats" || k === "_astInferred" || k === "_astRazorClasses") continue;
+    if (k === "parameters" || k === "_stats" || k === "_astInferred" || k === "_astRazorClasses" ||
+        k === "_astWitnesses") continue;
     if (em[k] === undefined || em[k] === null) em[k] = nm[k];
   }
   if (nm._astInferred) em._astInferred = true;
@@ -744,6 +745,13 @@ function _mergeMethodInto(em, nm, docKey) {
     const where = "lib/merge.js moat-merging a method's razor classes";
     for (const c of checkRazorClassSet(nm._astRazorClasses, where)) {
       em._astRazorClasses = razorClassSetWith(em._astRazorClasses, c, where);
+    }
+  }
+  // …and so is the witness pool: each member is one sighting's statement and none is joined to another.
+  if (nm._astWitnesses !== undefined) {
+    const where = "lib/merge.js moat-merging a method's witnesses";
+    for (const p of checkWitnessPool(nm._astWitnesses, where)) {
+      em._astWitnesses = witnessPoolWith(em._astWitnesses, p.provenance, p.assumed, where);
     }
   }
   if (nm.parameters) {

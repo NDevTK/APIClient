@@ -50,6 +50,63 @@ const hasHole = (s) => astAddressHasHole(s || "");
    A crash invalidates the run's claims of completeness, not its observations: findings composed before the
    abort are already merged into the cumulative record and are still relayed. The cost counters, the park
    residue and the right to overwrite the cross-session frontier entry are gated on `_run` at their sites. */
+/* `witness` on each @H row, per solver/endpoint.h: one element per distinct sighting witness, `null` where no
+   flow stood, else that sighting's entries — `{source, value, kind}` per pin, `{decision, taken}` per forced
+   branch, `{decision, completion}` per forced native completion. A row from an engine build that predates the
+   key carries none, and then no row does (one instance emits one document shape). Beside `witnessClass`:
+   `unasked` is exactly the row whose every element is `null` (the class is a MAX over the same sightings), and
+   a `may-rest-on` row has a sighting whose path pinned a value, so some element holds a pin. */
+const WITNESS_PIN_KINDS = Object.freeze(["string", "number", "boolean", "null", "undefined", "bigint"]);
+function assertWitnessEntry(x, where) {
+  DCHECK(x && typeof x === "object" && !Array.isArray(x), "a witness entry is not an object (" + where + ")");
+  const keys = Object.keys(x).sort().join(",");
+  if (keys === "kind,source,value") {
+    DCHECK(typeof x.source === "string" && x.source !== "" && typeof x.value === "string" &&
+           WITNESS_PIN_KINDS.indexOf(x.kind) >= 0,
+           "a witness pin is not {source, value, kind} with a non-empty source, a string value and one of " +
+           WITNESS_PIN_KINDS.join("/") + " (" + where + "): " + JSON.stringify(x));
+  } else if (keys === "decision,taken") {
+    DCHECK(typeof x.decision === "string" && x.decision !== "" && typeof x.taken === "boolean",
+           "a witness branch decision is not {decision, taken} with a non-empty condition and a boolean arm (" +
+           where + "): " + JSON.stringify(x));
+  } else {
+    DCHECK(keys === "completion,decision" && typeof x.decision === "string" && x.decision !== "" &&
+           Number.isInteger(x.completion) && x.completion >= 0,
+           "a witness entry is none of solver/endpoint.h's three shapes (a pin, a branch decision, an outcome " +
+           "decision) (" + where + "): " + JSON.stringify(x));
+  }
+}
+function assertEndpointWitnesses(rows) {
+  let stated = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (!("witness" in rows[i])) continue;
+    stated++;
+    const w = rows[i].witness, where = "fetchCallSites[" + i + "]";
+    DCHECK(Array.isArray(w) && w.length > 0,
+           "an @H row's `witness` is not a non-empty array (" + where + ") — solver/endpoint.c files one " +
+           "element for every sighting it records");
+    let asked = 0, pinned = 0;
+    for (const el of w) {
+      if (el === null) continue;
+      DCHECK(Array.isArray(el), "an @H row's witness element is neither null nor an array (" + where + ")");
+      asked++;
+      for (const x of el) {
+        assertWitnessEntry(x, where);
+        if ("source" in x) pinned++;
+      }
+    }
+    DCHECK((rows[i].witnessClass === "unasked") === (asked === 0),
+           "an @H row states `witnessClass: " + JSON.stringify(rows[i].witnessClass) + "` beside " + asked +
+           " asked sighting witness(es) (" + where + ") — both are read off the same sightings at one instant, " +
+           "so `unasked` is exactly the row no flow stood at");
+    DCHECK(rows[i].witnessClass !== "may-rest-on" || pinned > 0,
+           "an @H row states `may-rest-on` and no sighting witness holds a pin (" + where + ") — the path bit " +
+           "and the pin are written on one line of solver/decide.c");
+  }
+  DCHECK(stated === 0 || stated === rows.length,
+         "`witness` is stated on " + stated + " of " + rows.length + " @H rows — solver/endpoint.c writes it on " +
+         "every row in one loop, so a mixed document is that emit having become conditional");
+}
 /* The contract solver/result.c composes, asserted at the seam because every field is read below and a missing
    one would become an empty finding set reported as a clean page. */
 function assertResultDocument(r) {
@@ -58,6 +115,7 @@ function assertResultDocument(r) {
   DCHECK(Array.isArray(r.fetchCallSites),
          "the engine's result document carries no fetchCallSites array — endpoint.c serializes its deduped " +
          "endpoints into that field, so its absence is the whole learned API surface arriving as nothing");
+  assertEndpointWitnesses(r.fetchCallSites);
   DCHECK(Array.isArray(r.securitySinks),
          "the engine's result document carries no securitySinks array — solve.c serializes its fire-verified " +
          "PoCs into that field, and a missing one reports an exploitable page as clean");

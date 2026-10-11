@@ -571,6 +571,14 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     m._astRazorClasses = razorClassSetWith(m._astRazorClasses, callSite.razorClass,
                                            "lib/learn.js registering method " + JSON.stringify(methodName));
   }
+  /* …and what each sighting's flow assumed, as its own pool beside the values (lib/endpoint-record.js's
+     `witnessPoolWith`). A row from an engine build that predates the key states nothing. */
+  if ("witness" in callSite) {
+    const where = "lib/learn.js registering method " + JSON.stringify(methodName);
+    for (const assumed of callSite.witness) {
+      m._astWitnesses = witnessPoolWith(m._astWitnesses, callSite.provenance, assumed, where);
+    }
+  }
 
   /* `_astCallSites` IS GONE, AND SO IS THE SOURCE LOCATION IT WAS MADE OF. It recorded one entry per call
      site as {script, line, column, enclosingFunction}, keyed and deduped on `line:column`, and its comment

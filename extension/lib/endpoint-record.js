@@ -296,6 +296,34 @@ function methodRazorClasses(m, where) {
   return checkRazorClassSet(m._astRazorClasses, where);
 }
 
+/* WHAT A METHOD'S SIGHTINGS ASSUMED — the engine's per-row `witness` (solver/endpoint.h), pooled on the method
+   record as `_astWitnesses`: distinct `{provenance, assumed}` pairs, where `assumed` is one sighting witness
+   (`null` where no flow stood, else its entries, sorted by the engine) and `provenance` the grade of the row it
+   arrived on. It is its own pool: no value pool reads it, and two witnesses are never joined, since their
+   union would state a combination no flow assumed. A method no engine row with the key reached has none.
+   Returns rather than mutates. */
+function witnessPoolWith(prior, provenance, assumed, where) {
+  DCHECK(isCallSiteProvenance(provenance),
+         "a sighting witness arrived under the provenance " + JSON.stringify(provenance) + " (" + where + ")");
+  DCHECK(assumed === null || Array.isArray(assumed),
+         "a sighting witness is neither null nor an array of entries (" + where + ") — extension/bridge.js " +
+         "asserts the engine's shape at the seam");
+  const have = prior === undefined ? [] : checkWitnessPool(prior, where);
+  const key = JSON.stringify([provenance, assumed]);
+  if (have.some((p) => JSON.stringify([p.provenance, p.assumed]) === key)) return have;
+  return have.concat([{ provenance: provenance, assumed: assumed }]);
+}
+
+// Asserts a stored pool's shape: a non-empty list of {provenance, assumed} pairs, as witnessPoolWith writes.
+function checkWitnessPool(pool, where) {
+  DCHECK(Array.isArray(pool) && pool.length > 0 &&
+         pool.every((p) => !!p && typeof p === "object" && isCallSiteProvenance(p.provenance) &&
+                           (p.assumed === null || Array.isArray(p.assumed))),
+         "a method's witness pool " + JSON.stringify(pool) + " is not a non-empty list of {provenance, " +
+         "assumed} pairs (" + where + ") — witnessPoolWith is its one writer");
+  return pool;
+}
+
 /* THE FOLD, WHERE TWO SIGHTINGS OF ONE ADDRESS MEET — the MOST OBSERVED of them, which is the rule the
    engine's own pending-line join uses and for the same argument: the two sightings are one ADDRESS, so if
    either was reached without standing on a contradicted arm then a real client's code computes it and the
