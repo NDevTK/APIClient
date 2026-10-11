@@ -285,29 +285,19 @@ static Endpoint *g_eps = NULL;
 static int g_eps_n = 0, g_eps_cap = 0;
 static int g_suppress = 0;   /* a candidate/verify re-run's requests are @S artifacts, not real @H */
 
-/* The ask, which the outcome figures beside the surface cannot carry. endpoint_surface_census walks the record
- * array, so every figure it produces counts outcomes, and a census of what landed cannot tell a component that
- * never asked from one whose ask a gate correctly refused; the repair is to record at the call. endpoint_record
- * is the one door every HTTP-shaped edge passes through (endpoint.h's funnel note), so a count at its entry is the
- * number of times this engine composed a request and offered its address to this surface. It is not the number of
- * times a network call site was reached: five Fetch §5.4 stages stand in front of this door (endpoint.h, with the
- * residual for that count).
- *
- * `emitted - preProgram` is a ceiling on what forced execution contributed (endpoint.h), and its zero has two
- * readings that take opposite work: no arm composed a request, or arms composed requests whose addresses were
- * already on the surface. A repeat sighting merges and moves nothing (the record's `pre_program` was decided at
- * its mint), so the second is invisible to every outcome row. `asks - preProgram` is nonzero in the second case
- * and zero in the first, a ceiling on that reading (it is also nonzero for a post-program ask that minted, and
- * for one that merged into a record post-program code minted); `merged_pre_program` below states it exactly.
- *
- * Six rows, two partitions and a cut over one event. By outcome, `suppressed + merged + minted == asks`, asserted
- * where all four are in hand; by program state, `preProgram <= asks`, a containment, since a stored complement
- * would be a second raise free to drift. The sixth is a cut inside the merged arm, summed with nothing, its
- * containments asserted at the accessor. Every one is a lifetime count, never a gauge: it may be differenced or
- * accumulated and never decreases, so a sample below its predecessor is this file and not the run. Their scope is
- * the surface's, not the process's: reset in endpoint_init and endpoint_free beside `g_eps_n`, because one process
- * runs many sessions and a standing count would report a previous document's asks under this one's name. A
- * report, never a bound: nothing branches on one. */
+/* The ask, which the outcome figures cannot carry: endpoint_surface_census walks the record array, so it counts
+ * outcomes and cannot tell a component that never asked from one whose ask a gate refused. endpoint_record is the
+ * one door every HTTP-shaped edge passes (endpoint.h's funnel note), so a count at its entry is how often this
+ * engine offered an address to the surface; five Fetch §5.4 stages stand in front of it (endpoint.h's residual).
+ * `emitted - preProgram` is a ceiling on what forced execution contributed, and its zero reads either "no arm
+ * composed a request" or "arms composed requests already on the surface" (a repeat merges and moves nothing, since
+ * `pre_program` is decided at the mint). `asks - preProgram` is nonzero only in the second, a ceiling on it;
+ * `merged_pre_program` states it exactly.
+ * Six rows over one event. By outcome `suppressed + merged + minted == asks`, asserted where all four are in hand;
+ * by program state `preProgram <= asks`, a containment (a stored complement would be a second raise); the sixth is
+ * a cut inside the merged arm, its containments asserted at the accessor. Lifetime counts that never decrease, so
+ * a sample below its predecessor is this file and not the run. Scoped to the surface: reset in endpoint_init and
+ * endpoint_free beside `g_eps_n`, since one process runs many sessions. A report; nothing branches on one. */
 static long g_asks;             /* every call that reached the door, counted before the gate */
 static long g_asks_pre_program; /* …of those, the ones asked before this instance had started any program */
 static long g_ask_suppressed;   /* declined AT the gate: a candidate/verify re-fire is an @S artifact */
