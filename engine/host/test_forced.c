@@ -496,9 +496,10 @@ static int  fixture_cold_moment_met(void);
 static int  fixture_park_requested(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
-/* The messaging document's cross-origin peer post: fixture_provide raises the latch when the page asks
-   `/api/xdready`, after its handlers are listening, and the exploring session's hook routes it once. */
-static int  g_xd_ready, g_xd_routed;
+/* The cross-origin peer posts of the messaging and two-message documents: fixture_provide raises a latch when
+   the page asks `/api/xdready` or `/api/xdmready`, after its handlers are listening, and the exploring
+   session's hook routes each document's posts once. */
+static int  g_xd_ready, g_xd_routed, g_xdm_ready, g_xdm_routed;
 static void fixture_route_gadget_post(JSContext *ctx);
 
 /* ─── THE ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON: A PAIR, AND A THIRD AT ANOTHER DOOR ───
@@ -824,6 +825,7 @@ static int fixture_provide(JSContext *ctx) {
            this branch is never reached a second time. A fixture-side `once` flag would be a second answer
            to that question and free to disagree with it. */
         if (!strcmp(abs, "https://x.test/api/xdready")) g_xd_ready = 1;
+        if (!strcmp(abs, "https://x.test/api/xdmready")) g_xdm_ready = 1;
         if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
             filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
                                      "blocked-signal: this origin has not been widened for a program load "
@@ -1010,6 +1012,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/platform.h"
 #include "fixture/windowclose.h"
 #include "fixture/windowopenerclose.h"
+#include "fixture/xdmulti.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1429,6 +1432,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "platform", HTML_PLATFORM },
     { "windowclose", HTML_WINDOWCLOSE },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
+    { "xdmulti", HTML_XDMULTI },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -10411,6 +10415,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&xd_nosink, &xd_nosink_why, !strstr(js, "\"equals\":\"https://b.example\""),
              "a sender demand names `https://b.example`, whose handler reaches no sink: a pin is recorded as a "
              "demand only where an attacker value arrives at a sink");
+    /* Two deliveries, one handler: the first's pinned arm opens the state the second's sink is behind, and the
+       second delivery's bytes must arrive at that sink as attacker input of their own. */
+    const char *xdm_set_why = NULL; int xdm_set = 1;
+    fold_row(&xdm_set, &xdm_set_why, param_value_is(js, "/api/xdmgate", "v", "xdmSet"),
+             "NOT REACHED: the first delivery's `e.data === 'xdmstep'` arm never ran, so the routed posts were "
+             "not delivered or arrived concrete");
+    const char *xdm_second_why = NULL; int xdm_second = 1;
+    fold_row(&xdm_second, &xdm_second_why, param_value_is(js, "/api/xdmgate", "v", "xdmSecond"),
+             "NOT REACHED: no timeline that set `_xdmOk` received the second delivery");
+    const char *xdm_sink_why = NULL; int xdm_sink = 1;
+    fold_row(&xdm_sink, &xdm_sink_why,
+             strstr(js, "{\"sink\":\"innerHTML\",\"source\":\"" MESSAGE_DATA_SRC) != NULL,
+             "the second delivery reached the markup sink and no @S record names a message's data there: its "
+             "`e.data` read back the first delivery's pinned bytes, so one message's pin decided another's input");
     const char *bc_msg_ran_why = NULL; int bc_msg_ran = 1;
     fold_row(&bc_msg_ran, &bc_msg_ran_why, param_value_is(js, "/api/bcmsg", "v", "bcENTER"),
              "NOT REACHED: there is no /api/bcmsg record, so §9.5 postMessage step 9's delivery task never ran "
@@ -15098,6 +15116,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "xd-pin-b", xd_pin_b, "/api/xdgate", SESS_EXPLORE, xd_pin_b_why },
         { "xd-sender", xd_sender, "_xdSinkEl.innerHTML", SESS_EXPLORE, xd_sender_why, .gate = "xd-pin-a" },
         { "xd-nosink", xd_nosink, "_xdSinkEl", SESS_EXPLORE, xd_nosink_why, .reach = "xd-pin-b" },
+        { "xdm-set", xdm_set, "/api/xdmgate", SESS_EXPLORE, xdm_set_why },
+        { "xdm-second", xdm_second, "/api/xdmgate", SESS_EXPLORE, xdm_second_why, .gate = "xdm-set" },
+        { "xdm-sink", xdm_sink, "_xdmSinkEl.innerHTML", SESS_EXPLORE, xdm_sink_why, .gate = "xdm-second" },
         { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
         { "bc-msg-fork", bc_msg_fork, "/api/bcfork", SESS_EXPLORE, bc_msg_fork_why, .gate = "bc-msg-ran" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
@@ -16601,9 +16622,16 @@ static void fixture_route_peer_post(JSContext *ctx) {
 /* The peer is cross-origin and is not the origin either handler gates on, so the stamped origin is the
    example and both arms of each `event.origin ===` fork; the pinned arms are what the rows read. */
 static void fixture_route_gadget_post(JSContext *ctx) {
-    if (!g_xd_ready || g_xd_routed) return;
-    g_xd_routed = 1;
-    fixture_post_from_peer(ctx, "xpeer", "<b>xdpost</b>", "https://peer.example");
+    if (g_xd_ready && !g_xd_routed) {
+        g_xd_routed = 1;
+        fixture_post_from_peer(ctx, "xpeer", "<b>xdpost</b>", "https://peer.example");
+    }
+    /* Two records in one consultation, so every timeline appends them in post order (engine_route). */
+    if (g_xdm_ready && !g_xdm_routed) {
+        g_xdm_routed = 1;
+        fixture_post_from_peer(ctx, "xmpeer", "xdmone", "https://peer.example");
+        fixture_post_from_peer(ctx, "xmpeer", "<b>xdmtwo</b>", "https://peer.example");
+    }
 }
 
 /* THE QUESTION, ASKED ONCE, THROUGH THE PRODUCTION DOOR. `windowproxy.get … length` is HTML §7.2.1.3.1
