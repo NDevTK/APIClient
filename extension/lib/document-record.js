@@ -1,13 +1,13 @@
 // lib/document-record.js — the trusted zone's record of each document it provisioned: how its navigation
-// reached it and the sandboxing flags its navigable was created with.
+// reached it, the sandboxing flags its navigable was created with, and its policy container's IP address space.
 //
-// A document's record holds the navigation's reach grade (the three provenance words, CLAUDE.md's "a request
-// carries the provenance of its values"), its drive mark (whether a drive of uncalled code made it), its
-// witness mark (whether its address rested on a value a fork pinned), and HTML §7.1.5's creation sandboxing
-// flag set. The zone writes one per document at provisioning, from the provisioning notice joined with the
-// issuing document's record, and never again. lib/safe-fetch.js reads the marks as a floor under the engine's
-// per-request words, and the zone hands the flag set to the engine, so an engine whose words are wrong can
-// narrow what fires and what a document may do, and never widen either.
+// A document's record holds the navigation's reach grade (the three provenance words), its drive mark (whether a drive
+// of uncalled code made it), its witness mark (whether its address rested on a value a fork pinned), HTML §7.1.5's
+// creation sandboxing flag set, and Local Network Access §3.5's IP address space. The zone writes one per document at
+// provisioning, from the provisioning notice joined with the issuing document's record, and never again.
+// lib/safe-fetch.js reads the marks as a floor under the engine's per-request words and classifies the private-network
+// check against the space; the zone hands the flag set to the engine, so an engine whose words are wrong can narrow
+// what fires and what a document may do, and never widen either.
 //
 // Records are frozen and minted only by docRecord; `_DOC_RECORDS` is how a reader tells a record from an
 // object with the same keys. The marks' wire form is engine.h's arrival word, `<reach>,<drive>,<witness>`; the
@@ -21,6 +21,10 @@ var _DOC_PINNED = ["pinned", "unpinned"];
    the composition is the weaker grade. The order is an explicit map, not array positions, so a word added to
    the vocabulary cannot silently re-rank the others. */
 var _DOC_REACH_RANK = { observed: 0, derived: 1, forced: 2 };
+/* Local Network Access §2.1 "IP Address Space"'s three words, ranked from least to most public (its "less
+   public than"); lib/safe-fetch.js compares a request's target against a record's space by the same map. The
+   meet of several askers' spaces is the least public, since a request any asking document may make is made. */
+var IP_ADDRESS_SPACE_RANK = Object.freeze({ loopback: 0, local: 1, public: 2 });
 var _DOC_RECORDS = new WeakSet();
 /* The three §7.1.5 flags this file's algorithms name, CHECKed against the vocabulary on load so a renamed flag
    fails here rather than reading as unset. */
@@ -50,7 +54,7 @@ function _sandboxOf(serialized) {
   return V.flags.filter(function (n) { return names.indexOf(n) >= 0; });
 }
 
-function docRecord(reach, driven, pinned, sandbox) {
+function docRecord(reach, driven, pinned, sandbox, addressSpace) {
   CHECK(_DOC_REACH.indexOf(reach) >= 0 && typeof _DOC_REACH_RANK[reach] === "number" &&
         _DOC_DRIVEN.indexOf(driven) >= 0 && _DOC_PINNED.indexOf(pinned) >= 0,
         "a document record was minted from " + JSON.stringify([reach, driven, pinned]) + " — a ranked reach " +
@@ -61,8 +65,11 @@ function docRecord(reach, driven, pinned, sandbox) {
   CHECK(reach !== "observed" || (driven === "undriven" && pinned === "unpinned"),
         "a document record states `observed` with a drive or witness mark — an observed document is one a " +
         "person named, which no drive navigated to and no pin addressed");
+  CHECK(typeof IP_ADDRESS_SPACE_RANK[addressSpace] === "number",
+        "a document record was minted with the IP address space " + JSON.stringify(addressSpace) + " — Local " +
+        "Network Access §3.5 gives every policy container one of `public`, `local` and `loopback`, initially public");
   var r = Object.freeze({ reach: reach, driven: driven, pinned: pinned,
-                          sandbox: Object.freeze(_sandboxOf(sandbox)) });
+                          sandbox: Object.freeze(_sandboxOf(sandbox)), addressSpace: addressSpace });
   _DOC_RECORDS.add(r);
   return r;
 }
@@ -88,6 +95,21 @@ function docRecordOpaque(r) {
   return r.sandbox.indexOf(_SBX_ORIGIN) >= 0;
 }
 
+/* The policy container's IP address space (Local Network Access §3.5), which a request this document makes is
+   classified against. */
+function docRecordAddressSpace(r) {
+  CHECK(_DOC_RECORDS.has(r), "an address space was asked of something docRecord did not mint");
+  return r.addressSpace;
+}
+
+/* The record of the document a navigation of `r`'s navigable created with a policy container whose IP address
+   space is `addressSpace` (Local Network Access §3.5: a response's own, or a clone of its creator's), with
+   every mark and flag of `r`. A join's space is its creator's, the navigable's initial document's. */
+function docRecordWithAddressSpace(r, addressSpace) {
+  CHECK(_DOC_RECORDS.has(r), "an address space was given to something docRecord did not mint");
+  return _docRecordDerived(r.reach, r.driven, r.pinned, r.sandbox, addressSpace, [r]);
+}
+
 /* Whether `r` carries every mark and flag `of` carries and a reach no stronger. */
 function _docRecordCovers(r, of) {
   return _DOC_REACH_RANK[r.reach] >= _DOC_REACH_RANK[of.reach] &&
@@ -97,8 +119,8 @@ function _docRecordCovers(r, of) {
 
 /* Build a record from parts and assert permanence against the records it came from: nothing a document does
    relaxes a flag or mark its navigation carries, so the result covers each of `from`. */
-function _docRecordDerived(reach, driven, pinned, flags, from) {
-  var j = docRecord(reach, driven, pinned, _sandboxSerialized(flags));
+function _docRecordDerived(reach, driven, pinned, flags, addressSpace, from) {
+  var j = docRecord(reach, driven, pinned, _sandboxSerialized(flags), addressSpace);
   from.forEach(function (f) {
     CHECK(_docRecordCovers(j, f),
           "a derived document record cleared a flag or mark, or strengthened the reach, of " + JSON.stringify(f) +
@@ -117,7 +139,9 @@ function _marksJoin(a, b) {
    It is HTML §7.1.5's "determine the creation sandboxing flags" for a nested navigable, "the union of the
    flags that are present in" "the flags set on embedder's iframe sandboxing flag set" and "the flags set on
    embedder's node document's active sandboxing flag set": `a` is the creating document's record and `b` the
-   notice's own. It is also how a top-level provision keeps its navigable's flags and its issuer's marks. */
+   notice's own. It is also how a top-level provision keeps its navigable's flags and its issuer's marks.
+   The address space is `a`'s, the clone of the creator's container; a document created from a network
+   response is provisioned with its response's own (docRecordWithAddressSpace, docRecordOfArrival). */
 function docRecordJoin(a, b) {
   CHECK(_DOC_RECORDS.has(a) && _DOC_RECORDS.has(b),
         "two document records were joined and one was not minted by docRecord");
@@ -125,7 +149,7 @@ function docRecordJoin(a, b) {
   return _docRecordDerived(m.reach, m.driven, m.pinned,
                            NAVIGABLE_NOTICE.sandbox.flags.filter(function (n) {
                              return a.sandbox.indexOf(n) >= 0 || b.sandbox.indexOf(n) >= 0;
-                           }), [a, b]);
+                           }), a.addressSpace, [a, b]);
 }
 
 /* An auxiliary navigable (a popup) the creating document `creator` opened, whose notice states `own`. HTML
@@ -148,7 +172,7 @@ function docRecordAuxiliary(creator, own) {
   var j = _docRecordDerived(m.reach, m.driven, m.pinned,
                             NAVIGABLE_NOTICE.sandbox.flags.filter(function (n) {
                               return own.sandbox.indexOf(n) >= 0 || (inherits && creator.sandbox.indexOf(n) >= 0);
-                            }), [own]);
+                            }), creator.addressSpace, [own]);
   CHECK(_DOC_REACH_RANK[j.reach] >= _DOC_REACH_RANK[creator.reach] &&
         (creator.driven !== "driven" || j.driven === "driven") &&
         (creator.pinned !== "pinned" || j.pinned === "pinned"),
@@ -169,9 +193,11 @@ function docRecordMeet(records) {
     return { reach: _DOC_REACH_RANK[a.reach] <= _DOC_REACH_RANK[b.reach] ? a.reach : b.reach,
              driven: a.driven === "driven" && b.driven === "driven" ? "driven" : "undriven",
              pinned: a.pinned === "pinned" && b.pinned === "pinned" ? "pinned" : "unpinned",
-             sandbox: a.sandbox.filter(function (n) { return b.sandbox.indexOf(n) >= 0; }) };
+             sandbox: a.sandbox.filter(function (n) { return b.sandbox.indexOf(n) >= 0; }),
+             addressSpace: IP_ADDRESS_SPACE_RANK[a.addressSpace] <= IP_ADDRESS_SPACE_RANK[b.addressSpace]
+               ? a.addressSpace : b.addressSpace };
   });
-  var j = docRecord(m.reach, m.driven, m.pinned, _sandboxSerialized(m.sandbox));
+  var j = docRecord(m.reach, m.driven, m.pinned, _sandboxSerialized(m.sandbox), m.addressSpace);
   records.forEach(function (r) {
     CHECK(_docRecordCovers(r, j), "a meet is not covered by one of its records: " + JSON.stringify(r));
   });
@@ -236,12 +262,12 @@ function docRecordAskerRefusal(role, reason, name) {
            why + ")" };
 }
 
-/* engine.h's arrival word and the notice's flag set, parsed; the arrival word serialized. */
-function docRecordOfArrival(arrival, sandbox) {
+/* engine.h's arrival word, the notice's flag set and the address space, parsed; the arrival word serialized. */
+function docRecordOfArrival(arrival, sandbox, addressSpace) {
   var w = typeof arrival === "string" ? arrival.split(",") : [];
   CHECK(w.length === 3, "a document record was asked of the arrival " + JSON.stringify(arrival) +
                         ", which is not engine.h's three comma-joined words");
-  return docRecord(w[0], w[1], w[2], sandbox);
+  return docRecord(w[0], w[1], w[2], sandbox, addressSpace);
 }
 function docRecordArrival(r) {
   CHECK(_DOC_RECORDS.has(r), "an arrival was asked of something docRecord did not mint");
@@ -257,6 +283,8 @@ if (typeof self !== "undefined") {
   self.docRecordArrival = docRecordArrival;
   self.docRecordSandbox = docRecordSandbox;
   self.docRecordOpaque = docRecordOpaque;
+  self.docRecordAddressSpace = docRecordAddressSpace;
+  self.docRecordWithAddressSpace = docRecordWithAddressSpace;
   self.docRecordMeet = docRecordMeet;
   self.docRecordOfAsker = docRecordOfAsker;
   self.docRecordNameParent = docRecordNameParent;

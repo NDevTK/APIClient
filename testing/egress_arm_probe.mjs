@@ -183,12 +183,13 @@ const CONTROLS = [
 
 const URL_UNDER_TEST = 'https://example.test/x';
 
-/* A site states its document record as lib/document-record.js's four words, minted here through the zone's
-   own docRecord, since the chokepoint accepts only a record that function made. */
+/* A site states its document record as lib/document-record.js's first four words, minted here through the
+   zone's own docRecord, since the chokepoint accepts only a record that function made. The address space is
+   `public`: the firing decision reads none, so every row states the one a new container has. */
 function ask(Z, facts) {
   if (!Array.isArray(facts.doc) || facts.doc.length !== 4)
     throw new Error(`a probe row states the document record ${JSON.stringify(facts.doc)} — four words`);
-  const f = Object.assign({ url: URL_UNDER_TEST }, facts, { doc: Z.docRecord(...facts.doc) });
+  const f = Object.assign({ url: URL_UNDER_TEST }, facts, { doc: Z.docRecord(...facts.doc, 'public') });
   const v = Z.safeFetchSignalVector(f);
   const r = Z.safeFetchFiringRefusal(f);
   return { verdict: r === null ? 'FIRES' : 'REFUSED', vector: v,

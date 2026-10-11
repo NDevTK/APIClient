@@ -157,9 +157,9 @@ function _seedIsProbeable(seedUrl, seedMethod) {
  * a service would publish a document to one grade and not the other.
  *
  * WHAT IT STATES TO THE CHOKEPOINT, AND WHY EACH ANSWER IS THE ONE IT IS.
- *   pageUrl / pageOrigin — the analysed DOCUMENT's own browser-stated facts, off the DocData that
- *     `handleContentMessage` stamps from `_browserFacts` (`doc.url` is `MessageSender.url`, `doc.origin` is
- *     `MessageSender.origin`). NOT the tab's top-level address, which is the SSRF-principal substitution
+ *   the record's address space / pageOrigin — the analysed DOCUMENT's own browser-stated facts, off the DocData
+ *     `handleContentMessage` stamps from `_browserFacts` (the space of `doc.url`, `MessageSender.url`, and
+ *     `doc.origin`, `MessageSender.origin`). NOT the tab's top-level address, the SSRF-principal substitution
  *     SECURITY.md records removing, and not a URL-derived origin, which fabricates a tuple origin for a
  *     sandboxed document the browser refused to give one.
  *   provenance `derived` — the app's own code named this HOST (the page reached it) and `buildDiscoveryUrls`
@@ -181,7 +181,6 @@ function _chokepointGetFn(tab, who) {
          "safeFetch would classify this document's SSRF target against no principal at all");
   return async function (url, headers) {
     const r = await safeFetch(url, {
-      pageUrl: tab.url,
       pageOrigin: tab.origin,
       provenance: "derived",
       /* AND HOW THE DOCUMENT THIS SWEEP IS RUN FROM WAS REACHED, WHICH IS `observed` AND IS A FACT ABOUT THE
@@ -189,7 +188,8 @@ function _chokepointGetFn(tab, who) {
          ran in it, which is the whole reason this function has a principal at all — so the context these
          addresses are derived in is the person's own act. The word beside it is about the ADDRESSES, which
          this sweep composed; the two are independent and the chokepoint reads both. */
-      doc: docRecord("observed", "undriven", "unpinned", NAVIGABLE_NOTICE.sandbox.none),
+      doc: docRecord("observed", "undriven", "unpinned", NAVIGABLE_NOTICE.sandbox.none,
+                     safeFetchDocumentAddressSpace(tab.url, null)),
       /* `unstated`: the host comes from a reply's URL and the key from the keys this run learned, and neither
          list carries the engine's witness mark, so `unpinned` would be a claim nothing here can make. */
       pinned: "unstated",

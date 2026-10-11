@@ -500,7 +500,7 @@ async function main() {
      the seed, which this harness named on its own command line, which is what `observed` says. Stating one
      word for both would have this gate testing a request shape the run never makes. */
   const probe = await ZONE.safeFetch(`${peerOrigin}/pna-probe`,
-                                     { pageUrl: seedUrl, destination: 'document', mode: 'navigate',
+                                     { destination: 'document', mode: 'navigate',
                                        provenance: 'derived', pinned: 'unpinned',
                                        /* THIS GATE COMPOSED THE ADDRESS, so the act is THIS TOOL'S and not
                                           any analysed page's — see safe-fetch.js's `_actorOf`. The peer
@@ -508,7 +508,8 @@ async function main() {
                                           is built from a value this run computed, so no page's code is
                                           anywhere in the composition. */
                                        actor: 'tool', driven: 'unstated',
-                                       doc: ZONE.docRecord('observed', 'undriven', 'unpinned', 'none'),
+                                       doc: ZONE.docRecord('observed', 'undriven', 'unpinned', 'none',
+                                                           ZONE.safeFetchDocumentAddressSpace(seedUrl, null)),
                                        credentialed: false });
   if (!probe || typeof probe.status !== 'number')
     record('pna', 'missing', 'safeFetch returned no reply record at all');

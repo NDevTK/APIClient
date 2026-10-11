@@ -62,9 +62,10 @@ const PRINCIPAL = 'https://app.example.com/page';
    git grep -n 'refusalArm' extension/bridge.js                       (the ROUTE seed: derived/page)
    git grep -n 'PROVENANCE_OBSERVED, PROVENANCE_OBSERVED' extension/bridge.js  (the AMBIENT seed: observed/tool) */
 function navOpts(over) {
-  return Object.assign({ pageUrl: PRINCIPAL, pageOrigin: new URL(PRINCIPAL).origin,
+  return Object.assign({ pageOrigin: new URL(PRINCIPAL).origin,
                          destination: 'document', mode: 'navigate', provenance: 'derived',
-                         doc: z.docRecord('observed', 'undriven', 'unpinned', 'none'),
+                         doc: z.docRecord('observed', 'undriven', 'unpinned', 'none',
+                                          z.safeFetchDocumentAddressSpace(PRINCIPAL, null)),
                          actor: 'page', pinned: 'unstated', credentials: 'include',
                          credentialed: true }, over || {});
 }

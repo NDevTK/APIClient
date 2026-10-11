@@ -1151,7 +1151,8 @@ function issuedRecords(eng, issuer, minted) {
    record `from` (issuedRecords) joined with the navigation's own words and no flags of its own, so it keeps the
    navigable's flags, inherits every mark above it and can never be stronger than the documents that issued it. */
 function childDocRecord(from, provenance, driven, pinned) {
-  return docRecordJoin(from, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
+  return docRecordJoin(from, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none,
+                                       docRecordAddressSpace(from)));
 }
 /* A document's principal: HTML §7.3.2.1 "Creating browsing contexts"' determine the origin returns a new opaque
    origin when its record carries the sandboxed origin browsing context flag, and `origin` (the URL's, or the
@@ -1167,6 +1168,11 @@ function principalOf(doc, origin) {
 function frontierSandbox(e) {
   return e.sandbox !== undefined ? e.sandbox : NAVIGABLE_NOTICE.sandbox.none;
 }
+/* An entry's IP address space (Local Network Access §3.5). One written before the field is a root or seed, as
+   above, whose container was a new one: its response's space. */
+function frontierAddressSpace(e) {
+  return e.addressSpace !== undefined ? e.addressSpace : self.safeFetchDocumentAddressSpace(e.sourceUrl, null);
+}
 /* An entry's arrival. One written before the field states its grade and the strict marks: an `observed` entry is
    the ambient seed, which no drive or pin reached, and any other grade takes `driven` and `pinned`, the words
    that refuse rather than fire. */
@@ -1174,8 +1180,9 @@ function frontierArrival(e) {
   if (e.arrival !== undefined) return e.arrival;
   const reach = frontierProvenance(e);
   const none = NAVIGABLE_NOTICE.sandbox.none;
-  return docRecordArrival(reach === PROVENANCE_OBSERVED ? docRecord(reach, DRIVEN_NO, "unpinned", none)
-                                                         : docRecord(reach, DRIVEN_YES, "pinned", none));
+  const space = frontierAddressSpace(e);
+  return docRecordArrival(reach === PROVENANCE_OBSERVED ? docRecord(reach, DRIVEN_NO, "unpinned", none, space)
+                                                         : docRecord(reach, DRIVEN_YES, "pinned", none, space));
 }
 function frontierDoc(e, when) {
   frontierPlace(e, when);
@@ -1304,7 +1311,7 @@ async function frontierResidency() {
     const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                    responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
                    credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
-                   sandbox: frontierSandbox(e), shed: true };
+                   sandbox: frontierSandbox(e), addressSpace: frontierAddressSpace(e), shed: true };
     frontierRecord(shed, "was shed to the configured share");
     await frontierWrite(e.key, shed);
     if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
@@ -1565,10 +1572,11 @@ async function frontierRederive(e) {
     /* `actor: "tool"`: no page asked for this load; the frontier did. It changes no outcome here, since the
        witness mark is `unstated`. */
     /* `mode: "navigate"`: the navigate algorithm's own request (Fetch §2.2.5 Requests). */
-    try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
+    try { r = await self.safeFetch(e.sourceUrl, { pageOrigin: e.origin,
                                                   destination: "document", mode: "navigate",
                                                   provenance: frontierProvenance(e),
-                                                  doc: docRecordOfArrival(frontierArrival(e), frontierSandbox(e)),
+                                                  doc: docRecordOfArrival(frontierArrival(e), frontierSandbox(e),
+                                                                          frontierAddressSpace(e)),
                                                   actor: "tool", driven: "unstated",
                                                   pinned: "unstated",
                                                   credentials: "include",
@@ -1590,7 +1598,8 @@ async function frontierRederive(e) {
   const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                           responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit,
                           visits: e.visits, credentialed: e.credentialed, provenance: frontierProvenance(e),
-                          arrival: frontierArrival(e), sandbox: frontierSandbox(e), shed: true, stranded: true };
+                          arrival: frontierArrival(e), sandbox: frontierSandbox(e),
+                          addressSpace: frontierAddressSpace(e), shed: true, stranded: true };
   frontierRecord(strandedEntry, "was stranded");
   await frontierWrite(e.key, strandedEntry);
   if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(strandedEntry));
@@ -2238,7 +2247,7 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
    credential carries, or null when it has none, which loads without the session. */
-async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromDoc, refusalArm,
+async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, refusalArm,
                               actor, driven, pinned, request, speakerOf, readerOpaque) {
   DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
          (request.referrerPolicy === null || request.referrerPolicy === "" ||
@@ -2283,16 +2292,11 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
          "a §7.4 navigation was asked for with no network chokepoint installed — lib/safe-fetch.js is loaded " +
          "before this file in ast-worker.html, so its absence is that load order broken and every document " +
          "of this session would report as a load that did not load");
-  /* The private-network principal is the caller's, never re-derived from `u`: safeFetch classifies the SSRF
-     host relative to `opts.pageUrl`, so an address naming itself as principal would self-authorize. */
-  DCHECK(typeof principalUrl === "string" && principalUrl !== "",
-         "a §7.4 navigation was asked for with no private-network principal — safeFetch classifies the SSRF " +
-         "host relative to it, and a load that supplied its own address as its own principal would let any " +
-         "requested URL authorize itself into the user's intranet");
-  /* The credentialed-read principal is a second fact: `pageUrl` is an address for the SSRF check, `pageOrigin`
-     is a browser-stated origin deciding whose authenticated bytes may be read. A sandboxed frame reports an
-     ordinary address and an opaque origin, so deriving one from the other would give it its embedder's
-     session. */
+  /* The private-network principal is `fromDoc`'s address space (safeFetch reads it off the record), never
+     re-derived from `u`, so a requested address cannot authorize itself into the user's intranet. The
+     credentialed-read principal is a second fact: `principalOrigin` is a browser-stated origin deciding whose
+     authenticated bytes may be read. A sandboxed frame reports an ordinary address and an opaque origin, so
+     deriving one from the other would give it its embedder's session. */
   DCHECK(typeof principalOrigin === "string",
          "a §7.4 navigation was asked for with no credentialed-read principal — it is the browser's " +
          "MessageSender.origin for the document this load belongs to, and it is what decides whether the " +
@@ -2351,7 +2355,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        observed one. */
     /* `mode: "navigate"`: HTML §7.4.5's fetch is the navigate algorithm's, whose reader is the instance the
        document becomes, not the page that named it. */
-    const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
+    const r = await self.safeFetch(abs, { pageOrigin: principalOrigin,
                                           destination: request.destination, mode: "navigate",
                                           provenance: provenance,
                                           doc: fromDoc, actor: actor, driven: driven,
@@ -2822,7 +2826,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   CHECK(eng.records.size === 0,
         "an instance's root document record was written twice — it is written once, when the root is " +
         "provisioned, and every request the document asks is judged against it");
-  const rootDoc = docRecordOfArrival(msg.arrival, msg.sandbox);
+  const rootDoc = docRecordOfArrival(msg.arrival, msg.sandbox, msg.addressSpace);
   CHECK(creationSandboxFlags === docRecordSandbox(rootDoc),
         "a document is being rooted with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
         "whose set is `" + docRecordSandbox(rootDoc) + "` — the engine is handed the record's set, one statement");
@@ -3004,7 +3008,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          and a request on this seam is a GET, which §5.4 refuses a body. */
       /* `driven` is the engine's drive mark off the same line (solver/engine.h's PENDING_DRIVEN_*), relayed:
          the chokepoint's `actor` row reads it. */
-      const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
+      const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
                      doc, credentialed: false,
                      identity: pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs, credentials, mode,
@@ -3108,7 +3112,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     /* `doc` is the issuing document's record: the creator's for a create, the asker's for a load, the
        issuer's for a swap or a navigation (askerRecord). */
     DCHECK(docRecordIs(doc), "a §7.4 document load was asked for with no issuing document's record");
-    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, doc,
+    const r = await navigationLoad(u, msg.sourceUrl, msg.origin, provenance, doc,
                                    refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg),
                                    readerOpaque);
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
@@ -3231,7 +3235,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       DCHECK(q.driven === DRIVEN_YES || q.driven === DRIVEN_NO,
              "the engine's xhr.send record states the drive mark `" + q.driven + "`, which is neither token " +
              "solver/engine.h declares — `xhr_request_op` writes one through `engine_driven_token`");
-      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination: "",
+      const r = await self.safeFetch(abs, { pageOrigin: eng.origin, destination: "",
                                             mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                             driven: q.driven,
                                             doc, actor: "page",
@@ -3447,7 +3451,7 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   /* The joined document's record, written once. */
   CHECK(!eng.records.has(docName) && eng.records.size > 0,
         "a joined document's record was written twice, or into an instance whose root has none");
-  eng.records.set(docName, docRecordOfArrival(msg.arrival, msg.sandbox));
+  eng.records.set(docName, docRecordOfArrival(msg.arrival, msg.sandbox, msg.addressSpace));
   CHECK(creationSandboxFlags === docRecordSandbox(eng.records.get(docName)),
         "a document is being joined with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
         "whose set is `" + docRecordSandbox(eng.records.get(docName)) + "` — the engine is handed the record's set");
@@ -3985,7 +3989,8 @@ async function hostNotice(eng, line) {
       return;
     }
     const _creatorDoc = _created.doc;
-    const _childOwn = docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
+    const _childOwn = docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags],
+                                docRecordAddressSpace(_creatorDoc));
     const _childDoc = f[C.parent] === "u" ? docRecordAuxiliary(_creatorDoc, _childOwn)
                                           : docRecordJoin(_creatorDoc, _childOwn);
     if (_childDoc === null) {
@@ -4029,12 +4034,15 @@ async function hostNotice(eng, line) {
            "carries is the one the creating engine ASKED for, and the principal this zone stamps on a peer " +
            "instance has to be the origin of the URL its bytes CAME from");
     const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
-    /* The record's reach, arrival and flag set are on every analyze record. */
+    /* The record's reach, arrival and flag set are on every analyze record, with the address space of the
+       document the load created: its response's, or the creator's for a local-scheme one (`_childDoc` is the
+       navigable's initial document, whose container is the creator's clone). */
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
                   origin: principalOf(_childDoc, originOf(loaded.url)),
                   groupId: _inCreatorGroup ? eng.groupId : "noopener:" + (_nextNoopenerGroup++),
                   provenance: _childDoc.reach, arrival: docRecordArrival(_childDoc),
                   sandbox: docRecordSandbox(_childDoc),
+                  addressSpace: self.safeFetchDocumentAddressSpace(loaded.url, _creatorDoc),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* The response's own header list, whole; the creator's container is relayed separately below. */
     DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
@@ -4234,6 +4242,7 @@ async function hostNotice(eng, line) {
                       groupId: "swap:" + (_nextSwapGroup++),
                       provenance: _swapDoc.reach, arrival: docRecordArrival(_swapDoc),
                       sandbox: docRecordSandbox(_swapDoc),
+                      addressSpace: self.safeFetchDocumentAddressSpace(swapped.url, _swapFrom.issuerDoc),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
     /* No inherited policy: a swapped-to Document has no creator to clone a container from (HTML §7.3.2.1 with
@@ -4291,6 +4300,7 @@ async function hostNotice(eng, line) {
                      sourceUrl: navd.url, origin: principalOf(_navDoc, originOf(navd.url)), groupId: eng.groupId,
                      provenance: _navDoc.reach, arrival: docRecordArrival(_navDoc),
                      sandbox: docRecordSandbox(_navDoc),
+                     addressSpace: self.safeFetchDocumentAddressSpace(navd.url, _navFrom.issuerDoc),
                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(navd.headers)) navMsg.responseHeaders[_n] = navd.headers[_n];
     const _nkey = clusterKeyOf(navMsg);
@@ -4376,11 +4386,11 @@ async function hostNotice(eng, line) {
                    "holds it");
       return;
     }
-    /* The work item takes its inputs with it: both principals belong to the declaring document, not the declared
-       address (`safeFetch` classifies the SSRF host relative to `principalUrl`, so an address supplying itself
-       would self-authorize), and the pool may no longer hold that engine at admission. The provenance is stored
-       from the record (always `derived` here, since a refused one returned above); navigationLoad asserts the
-       vocabulary on the way out. */
+    /* The work item takes its inputs with it: the principals belong to the declaring document, not the declared
+       address (its address bases the load and its record's address space classifies the SSRF host, so an
+       address cannot authorize itself), and the pool may no longer hold that engine at admission. The
+       provenance is stored from the record (always `derived` here, since a refused one returned above);
+       navigationLoad asserts the vocabulary on the way out. */
     if (!_seeds.has(f[1]))
       /* The declaring document's reach grade travels with the item for the same reason. */
       /* `doc` is the seed's own record, the declaring document's joined with the declaration's words. */
@@ -5327,6 +5337,8 @@ async function admitSeatLand(seat) {
                      navigable. */
                   provenance: _seedDoc.reach, arrival: docRecordArrival(_seedDoc),
                   sandbox: docRecordSandbox(_seedDoc),
+                  /* No creator, so a new container (Local Network Access §3.5): its response's space. */
+                  addressSpace: self.safeFetchDocumentAddressSpace(loaded.url, null),
                   persist: true };
     DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
            "a declared route minted a browsing-context group this pool already runs an instance for — the " +
@@ -5366,7 +5378,8 @@ async function admitSeatLand(seat) {
                           origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
                           recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
                           credentialed: stored.credentialed, provenance: frontierProvenance(stored),
-                          arrival: frontierArrival(stored), sandbox: frontierSandbox(stored) },
+                          arrival: frontierArrival(stored), sandbox: frontierSandbox(stored),
+                          addressSpace: frontierAddressSpace(stored) },
                         "was re-derived for the cold tier");
     } else {
       doc = frontierDoc(stored, "came back from the cold tier");
@@ -5382,7 +5395,7 @@ async function admitSeatLand(seat) {
                   topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed,
                   /* The word this residue was parked under, re-stated so the entry it parks again keeps it. */
                   provenance: frontierProvenance(stored), arrival: frontierArrival(stored),
-                  sandbox: frontierSandbox(stored), persist: true };
+                  sandbox: frontierSandbox(stored), addressSpace: frontierAddressSpace(stored), persist: true };
     /* A rehydration whose engine aborts is bannered by engineBootFailed at the reservation, with the pool slot
        it releases; no catch here. A rehydrated recipe never has a caller (`cold`). */
     /* The stored document is passed as parked; engineRoot asserts its shape, so a missing document is never
@@ -5679,8 +5692,8 @@ const _hostOps = {
            check and the boot happen in admitSeatLand at the top of a round, so an invariant abort still reaches
            hostSchedule's failure arm. */
         admitLoadSeat({ kind: "seed", seed: seed },
-                      () => navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
-                                           seed.principalOrigin, seed.provenance, seed.fromDoc,
+                      () => navigationLoad(seed.url, seed.principalUrl, seed.principalOrigin, seed.provenance,
+                                           seed.fromDoc,
                                            /* `report`: a route seed holds no rendezvous and has an arm
                                               (admitSeatLand drops the seat and prints the chokepoint's
                                               reason). A decline is reachable: the notice's `_seedRefusal`
@@ -5794,6 +5807,7 @@ const _hostOps = {
         /* The provenance of the load that produced this document, read by frontierRederive when it fetches the
            bytes back; bound to a local above so the field's receiver is a name an auditor can anchor. */
         provenance: _parkProvenance, arrival: eng.msg.arrival, sandbox: eng.msg.sandbox,
+        addressSpace: eng.msg.addressSpace,
         credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
         /* `emit` is the surface this run demonstrated, both halves of what it emits (@H endpoints and @S sinks).
            frontierWeight divides it by `visits`, so whenever the demonstrated surface is monotone the quotient is
@@ -6163,7 +6177,9 @@ self.astDispatch = async function astDispatch(msg) {
          claims nothing about how anything at this origin was actually reached or composed. */
       const _probe = { url: msg.subject + "/", destination: "", provenance: PROVENANCE_FORCED,
                        pinned: "unstated",
-                       doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none),
+                       /* `public`: no document makes it, so its container would be a new one. */
+                       doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none,
+                                      "public"),
                        actor: "tool", driven: "unstated",
                        credentialed: false, headers: null };
       return { success: true, result: {
@@ -6238,7 +6254,7 @@ self.astDispatch = async function astDispatch(msg) {
        the request this zone is about to make, which is this tool, from an address an observer reported
        (safe-fetch.js's `_actorOf`: a request this tool composed at a person's direction is still `tool`).
        engine/trusted.mjs's command-line seed states the same word. */
-    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
+    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.origin,
                                         /* `none`: this seed can report an unavailability through
                                            `onNavigationOutcome` but not a decline, since offscreen-brain.js's
                                            `_PAGE_SOURCE_KINDS` (status/empty/network) all say a load was
@@ -6252,7 +6268,8 @@ self.astDispatch = async function astDispatch(msg) {
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED,
                                         docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned",
-                                                  NAVIGABLE_NOTICE.sandbox.none),
+                                                  NAVIGABLE_NOTICE.sandbox.none,
+                                                  self.safeFetchDocumentAddressSpace(msg.sourceUrl, null)),
                                         /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
                                         DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg),
@@ -6280,8 +6297,16 @@ self.astDispatch = async function astDispatch(msg) {
     /* The word the load was performed under, written onto the record (this run persists, so its residue is
        re-fetched later from what this states); the same constant as the load, so the two cannot disagree. */
     msg.provenance = PROVENANCE_OBSERVED;
+    /* The policy container of a document the person's browser loaded is the browser's; this zone knows it
+       through the response's address (Local Network Access §3.5).
+       Named residual: a browser-reported local-scheme frame (match_origin_as_fallback runs content.js in a
+       data: or blob: frame) is given a new container, initially public, since this zone holds no record of
+       its creator. Next diff stamps the parent frame's browser-stated address onto the document's facts and
+       derives the space from it. Absence shows as `blocked-local-network:<space>-from-public` on a request
+       from a local-scheme frame of a loopback or local page. */
+    msg.addressSpace = self.safeFetchDocumentAddressSpace(loaded.url, null);
     msg.arrival = docRecordArrival(docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned",
-                                             NAVIGABLE_NOTICE.sandbox.none));
+                                             NAVIGABLE_NOTICE.sandbox.none, msg.addressSpace));
     /* A document the person's browser loaded: the zone states no flags for it, since its sandbox is the
        browser's own to enforce and the engine computes what its response's CSP adds. */
     msg.sandbox = NAVIGABLE_NOTICE.sandbox.none;

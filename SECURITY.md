@@ -93,9 +93,10 @@ The other ends apply the same rules:
   token (so two opaque documents never compare same-origin), and a sender with no `documentId` as a fresh
   unstorable token. `_docOrigins` keeps the mapping after the document's buffer is gone.
 - There are two principals and they are never one field. `url` is the document's own `sender.url`: the
-  private-network principal and the engine's `window.location`; it travels as `sourceUrl` and reaches
-  `safeFetch` as `opts.pageUrl`. `origin` is `MessageSender.origin`: the credentialed-read principal; it
-  reaches `safeFetch` as `opts.pageOrigin`. Neither is parsed out of an address, so a sub-frame analyses as
+  engine's `window.location`, travelling as `sourceUrl`; its response's IP address space is the
+  private-network principal, carried on the zone's record of the document and read by `safeFetch` off
+  `opts.doc`. `origin` is `MessageSender.origin`: the credentialed-read principal; it reaches `safeFetch` as
+  `opts.pageOrigin`. Neither is parsed out of an address, so a sub-frame analyses as
   itself, and a page that sandboxes its own iframe cannot have that frame read as its embedder.
 - A message from an untrusted zone carries material (response bytes, the address the page is posting to) and
   never identity. The one address-shaped field on the wire is `CONTENT_SEED.seedUrl` (`_sendPageSeed` in
@@ -143,7 +144,7 @@ Which extension context can open a connection at all is enforced by CSP in all b
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
 | no userinfo in the URL | `safeFetch` | `blocked-url-credentials` |
 | a reply whose final URL does not parse (URL Standard §6.1 "URL class" throws) is not read | `safeFetch` | `blocked-final-url-unparseable`, graded `network` |
-| origin-relative SSRF on the requested and the landed host: a target whose Local Network Access §2.1 "IP Address Space" is less public than the page's | `_ipAddressSpace`, `_lessPublicThan` against `opts.pageUrl` | `blocked-local-network:<target>-from-<page>`, `blocked-local-network-redirect:<target>-from-<page>` |
+| origin-relative SSRF on the requested and the landed host: a target whose Local Network Access §2.1 "IP Address Space" is less public than the page's | `_ipAddressSpace`, `_lessPublicThan` against the asking document's record's space (`docRecordAddressSpace`) | `blocked-local-network:<target>-from-<page>`, `blocked-local-network-redirect:<target>-from-<page>` |
 | per-origin egress policy, before the wire and on the landed URL | `_firingRefusal` | `blocked-signal:<signal>=<value>`, `blocked-signal-redirect:` |
 | destructive-path deny list where the session pays and the request is not `observed`, before the wire and after a redirect | `_destructiveToken` | `blocked-destructive:<token>`, `blocked-destructive-redirect:` |
 | own SOP/CORS on a credentialed reply, over the landed origin | `_resourceSameOrigin`, then exact-origin `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true` | `blocked-cors-credentialed:<landed origin>` |
@@ -197,11 +198,14 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
   computed from a credentialed reply. Those are separate egress signals.
 - A credentialed request may not state a header list (`_credentialedOf`, a `CHECK`), because a header such as
   `X-Http-Method-Override` is a route to a verb other than GET.
-- The principal is per call, never a global, because the zone interleaves many renderers. `opts.pageUrl` comes
-  from the mint and is DCHECKed non-empty and parseable; with the DCHECKs compiled out an unparseable principal
-  classifies public, which still refuses every private target. A principal that names no host (`about:blank`,
-  `data:`, `blob:`) is not a private-network principal: it classifies public (see "A local-scheme document's
-  address space" below).
+- The principal is per call, never a global, because the zone interleaves many renderers. It is the asking
+  document's record's IP address space, Local Network Access §3.5 "Integration with HTML"'s policy container
+  field, set once when the zone provisions the document (`safeFetchDocumentAddressSpace`): a document created
+  from an http(s) response has its response's (`_ipAddressSpace` on the response URL's host); a local-scheme
+  document (`about:blank`, `data:`, `blob:`) has a clone of its initiator's (HTML §7.1.7 "Policy containers";
+  for a nested navigable, its creator); any other document, and a local-scheme one no zone record initiated,
+  has a new container's, initially public.
+  `docRecord` CHECKs the word, and the meet of several askers' records takes the least public.
 - A cross-origin script acts with the origin of the page it is loaded into, never its own host, which is what
   the per-call principal encodes.
 
@@ -606,7 +610,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Redirect hops between the first and last URL | `safeFetch` sees only the requested and the landed URL, so a redirect chain that leaves the origin and returns is tainted `basic` where Fetch would taint it, and an intermediate redirect response's own CORS check is not run | each hop recorded per request. `fetch`'s `redirect: "manual"` cannot supply it: it answers Fetch §2.2.6 "Responses"' opaque-redirect filtered response (status 0, empty header list, null body), so the `Location` is not readable. `webRequest.onBeforeRedirect` reports none of this extension's offscreen fetches (measured in Chrome 148), so it cannot either | a `cors` reply delivered `basic` after a chain that crossed origins |
 | The request carries no page `Origin` header | `Origin` is a forbidden request header, so the zone's request carries this extension's origin or none, and a server that reflects the request's `Origin` answers an `Access-Control-Allow-Origin` that is not the page's. The page then gets a network error where a browser's request would pass: a narrowing | a transport that can state the page's origin | a cross-origin API that works in a browser failing `blocked-cors:allow-origin-mismatch` here |
 | No ORB for a no-cors element's bytes | CORB applies to script-like destinations only, so a cross-origin `no-cors` image, style or font body of any type is delivered to the engine; page script cannot read it, but a compromised engine could | Chromium's ORB rules for the other no-cors destinations | a JSON or HTML body delivered for an `image` destination |
-| A local-scheme document's address space | `_ipAddressSpace` classifies a principal that names no host (`about:blank`, `data:`, `blob:`) as public. Local Network Access §3.5 "Integration with HTML" adds an IP address space to the policy container and copies it in "clone a policy container", so a `data:` child of a loopback or local page is that space in a browser, and its requests to it are not less public. Here they are refused (`blocked-local-network:loopback-from-public`): a narrowing | the zone keeping the creator's address space beside the inherited container and classifying the child's requests against it, rather than against the child's own URL | a `data:` child's requests to its creator's private network refused while the creator's identical ones fire |
+| A browser-reported local-scheme frame's address space | A local-scheme document the zone provisions takes its creator's address space from the creator's record. A local-scheme frame the person's browser loaded (`content.js` runs in a `data:` or `blob:` frame under `match_origin_as_fallback`) reaches the zone as an ambient seed with no record of its creator, so it gets a new container's space, public, where Local Network Access §3.5 gives it its creator's. Its requests to that creator's private network are refused: a narrowing | the parent frame's browser-stated address stamped onto the document's facts, its space derived from that | `blocked-local-network:<space>-from-public` on a request from a local-scheme frame of a loopback or local page |
 | Redirect to a less public host | `safeFetch` re-judges the landed host and refuses to ingest, but the hop that reached it was already sent | a walk judging each `Location` before it is followed, which needs the 3xx's `Location` that `redirect: "manual"` hides (see the row above) | a public host's 3xx onto an intranet address appearing in that host's logs |
 | Credential lineage | the chokepoint sees the credential state of the request in front of it and nothing about where the address came from | a `credentialed` bit on the response the engine ingests, carried into the concolic value's source identity and composed at the park beside the provenance word | every request at an origin reading `lineage=unknown`, including addresses the bundle built from a logged-in reply |
 | Authority in a path segment | `url-authority` matches capability-URL parameter names and the JWS prefix only; an opaque token in a path reads `unknown` | read the signal off the engine, whose park knows which source each segment came from | `url-authority=unknown` doing all the work at a widened origin whose addresses carry capability tokens |

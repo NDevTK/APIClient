@@ -228,7 +228,8 @@ const ZONE = (() => {
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal',
-                   'safeFetchSchemeData'])
+                   'docRecordAddressSpace', 'docRecordWithAddressSpace', 'safeFetchSchemeData',
+                   'safeFetchDocumentAddressSpace'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -236,8 +237,10 @@ const ZONE = (() => {
                       'grade while `--explore` authorized nothing');
   return sandbox;
 })();
-/* The record of a document a person named: the seed and the root it becomes. */
-const OBSERVED_DOC = ZONE.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none);
+/* The record of a document a person named at `url`: the seed and the root it becomes. Nothing created it, so
+   its policy container is a new one with its response's IP address space (Local Network Access §3.5). */
+const observedDoc = (url) => ZONE.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none,
+                                            ZONE.safeFetchDocumentAddressSpace(url, null));
 
 /* EVERY FIELD OF EVERY REPLY, ASSERTED AND NEVER DEFAULTED — the same list `bridge.js` asserts at the same
    seam, because it is the same producer answering the same question and a second reader that checked less
@@ -495,10 +498,10 @@ async function main() {
   }
 
   /* THE SEED, WHICH IS THE ONE REQUEST THIS ZONE ORIGINATES. It is OBSERVED by construction: a person named
-     the address and nothing in any bundle derived it. `pageUrl` is that same address because a top-level
-     document's SSRF principal is itself — which is what lets `http://localhost/…` reach the person's own
-     loopback (normal web rules) while a public page may not, and it is `safe-fetch.js`'s rule rather than a
-     decision taken here.
+     the address and nothing in any bundle derived it. Its record's address space is that same address's,
+     because a top-level document a person names is its own private-network principal — which is what lets
+     `http://localhost/…` reach the person's own loopback (normal web rules) while a public page may not, and
+     it is `safe-fetch.js`'s rule rather than a decision taken here.
      UNCREDENTIALED, STATED — see this file's header: there is no cookie jar in this process, so the mode
      would name a person who is not present.
      AND `observed` IS STATED RATHER THAN LEFT OFF, which is the same sentence the first line of this comment
@@ -516,10 +519,10 @@ async function main() {
      observed/observed arm already admits this load, and the `actor` arm requires `page`. See
      safe-fetch.js's `_actorOf`, which records that a value chosen for correctness rather than for effect is
      exactly the kind nothing tests. */
-  const seed = await ZONE.safeFetch(target, { pageUrl: target, destination: 'document', mode: 'navigate',
+  const seed = await ZONE.safeFetch(target, { destination: 'document', mode: 'navigate',
                                               provenance: 'observed', pinned: 'unpinned',
                                               actor: 'tool', driven: 'unstated',
-                                              doc: OBSERVED_DOC, credentialed: false });
+                                              doc: observedDoc(target), credentialed: false });
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
     throw new Error(`the chokepoint refused the seed: ${seed.statusText} — the document a session is rooted ` +
@@ -679,7 +682,8 @@ async function main() {
      record `from` (issuedRecords) joined with the navigation's own words and no flags of its own, so it keeps
      the navigable's flags and can never be stronger than the documents that issued it. */
   const childDoc = (from, provenance, driven, pinned) =>
-    ZONE.docRecordJoin(from, ZONE.docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
+    ZONE.docRecordJoin(from, ZONE.docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none,
+                                            ZONE.docRecordAddressSpace(from)));
   /* The record a request or notice from instance `e` is judged against, given the documents the engine names
      in `role` (lib/document-record.js's docRecordAskerRefusal): the meet of their records (docRecordOfAsker,
      docRecordMeet) as `{doc, refusal: null}`, or `{doc: null, refusal}` naming the first that is not a
@@ -711,10 +715,15 @@ async function main() {
   };
   /* A refusal's words for this zone's decline records: the closed token's sentence, and the instance. */
   const askerRefusal = (e, refusal) => `${refusal.text}, as named by the engine of [${e.tag}]`;
-  async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, group }) {
+  /* The record of the document created at `url` from the navigable record `doc`: its policy container's IP
+     address space is its response's, or `creator`'s (null for none) for a local-scheme one (Local Network
+     Access §3.5), which bridge.js states on the analyze record. */
+  const createdDoc = (doc, url, creator) =>
+    ZONE.docRecordWithAddressSpace(doc, ZONE.safeFetchDocumentAddressSpace(url, creator));
+  async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, creator, group }) {
     /* The document's record, against which every request it asks is judged (askerRecord). Composed by the
        caller and recorded here, so an instance is never provisioned without one. */
-    recordDocument(docId, doc);
+    recordDocument(docId, createdDoc(doc, url, creator));
     if (referenced !== 0 && referenced !== 1)
       throw new Error(`an instance was provisioned for ${url} without stating whether a peer holds a ` +
                       'reference into its document — the flag decides whether its timelines may finish, so ' +
@@ -929,7 +938,7 @@ async function main() {
        document that initiated it. The join names the document this load will PRODUCE, which is a different
        document and is stated where that one is provisioned. Stating the join here would answer a permission
        question about a document that does not exist yet. */
-    const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
+    const rec = replyRecord(await ZONE.safeFetch(abs, { destination: 'document',
                                                         mode: 'navigate',
                                                         provenance, pinned, doc: fromDoc,
                                                         actor: 'page', driven,
@@ -969,7 +978,7 @@ async function main() {
     const methodRefusal = ZONE.safeFetchMethodRefusal(q.method);
     if (methodRefusal) { e.ready.push(declineAnswer(id, `${q.method} ${q.url} — ${methodRefusal.reason}`)); return; }
     const abs = new URL(q.url, e.docUrl).href;
-    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination: '',
+    const raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination: '',
                                             mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
                                             actor: 'page', doc, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
@@ -1100,7 +1109,7 @@ async function main() {
        chokepoint decides from the pair what the page may read of the reply (Fetch §4.1 "Main fetch"). */
     /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
        which a GET cannot carry. */
-    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination, mode,
+    const raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination, mode,
                                             provenance, pinned, driven, credentials, useCorsPreflight: false,
                                             actor: 'page',
                                             doc, credentialed: false,
@@ -1318,7 +1327,8 @@ async function main() {
         return;
       }
       const creatorDoc = created.doc;
-      const own = ZONE.docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
+      const own = ZONE.docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags],
+                                 ZONE.docRecordAddressSpace(creatorDoc));
       const doc = f[C.parent] === 'u' ? ZONE.docRecordAuxiliary(creatorDoc, own)
                                       : ZONE.docRecordJoin(creatorDoc, own);
       if (doc === null) {
@@ -1355,7 +1365,7 @@ async function main() {
                           'creator\'s heap' : 'holds no peer reference — every instance of a group was ' +
                           'provisioned for a peer\'s navigable or created one'}`);
         holder.docs.push(f[C.child]);
-        recordDocument(f[C.child], doc);
+        recordDocument(f[C.child], createdDoc(doc, loaded.url, creatorDoc));
         holder.ready.push(['join', loaded.url, f[C.child], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
                            ...createFacts(f, doc), ZONE.docRecordArrival(doc)].join('\t'));
         retryHeld();
@@ -1371,7 +1381,7 @@ async function main() {
                         /* Under the creating document's record joined with the notice's words: taking the
                            notice's alone would let a child of a document this zone chose to open read as one
                            the person navigated to, or shed a mark the creator carries. */
-                        doc, referenced: 1 });
+                        doc, creator: creatorDoc, referenced: 1 });
       return;
     }
     /* `navigable.swap <new document> <url> <origin> <provenance> <driven> <pinned> <issuer>` — HTML §7.1.3.2 "Browsing context group switches due to
@@ -1412,7 +1422,7 @@ async function main() {
       await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
-                        group: newGroup(), referenced: 0 });
+                        creator: swapFrom.issuerDoc, group: newGroup(), referenced: 0 });
       return;
     }
     /* `navigable.navigate <new document> <url> <origin> <provenance> <driven> <pinned> <issuer>` — a TOP-LEVEL traversable navigated to a
@@ -1441,7 +1451,7 @@ async function main() {
       await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
-                        group: e.group, referenced: 1 });
+                        creator: navFrom.issuerDoc, group: e.group, referenced: 1 });
       return;
     }
     /* `document.seed <address> <provenance> <driven> <pinned> <issuer>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
@@ -1503,7 +1513,7 @@ async function main() {
       await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
-                        group: newGroup(), referenced: 0 });
+                        creator: null, group: newGroup(), referenced: 0 });
       return;
     }
     /* `windowproxy.post <target doc> <world> <marks> <target origin> <base64>` — §9.4.4 across instances, relayed
@@ -1963,10 +1973,11 @@ async function main() {
      BASE OF EVERY JOIN THIS RUN COMPOSES: a person named this address on the command line. Every document
      the run reaches is composed against it, so a root stated any other way would silently re-grade the whole
      tree beneath it. */
+  const rootDoc = observedDoc(docUrl);
   const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
-                                 facts: topLevelFacts(docUrl, ZONE.docRecordSandbox(OBSERVED_DOC)),
-                                 doc: OBSERVED_DOC, group: newGroup(),
+                                 facts: topLevelFacts(docUrl, ZONE.docRecordSandbox(rootDoc)),
+                                 doc: rootDoc, creator: null, group: newGroup(),
                                  referenced: 0 });
 
   /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its

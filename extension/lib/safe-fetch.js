@@ -476,7 +476,7 @@ function _drivenOf(opts) {
    rule also refuses `as`, since the CORB class is the request's destination. A closed set restates what the
    body reads, and the drift direction is safe: an option added to the body and not here aborts on its
    author's first call. */
-var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "mode", "provenance", "pinned", "driven",
+var _SAFEFETCH_OPTIONS = ["pageOrigin", "destination", "mode", "provenance", "pinned", "driven",
                           "doc", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
                           "identity", "signal", "onChunk"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
@@ -1482,9 +1482,9 @@ function _ipAddressSpace(host) {
 }
 /* Local Network Access §2.1's "less public than": loopback is less public than local and public, and local is
    less public than public. A request is refused when its target is less public than the page principal, which
-   is §2.2 "Local Network Request"'s definition of the request a browser would gate. */
-var _SPACE_RANK = { loopback: 0, local: 1, public: 2 };
-function _lessPublicThan(lhs, rhs) { return _SPACE_RANK[lhs] < _SPACE_RANK[rhs]; }
+   is §2.2 "Local Network Request"'s definition of the request a browser would gate. The rank is
+   lib/document-record.js's, whose records carry the page principal's space. */
+function _lessPublicThan(lhs, rhs) { return IP_ADDRESS_SPACE_RANK[lhs] < IP_ADDRESS_SPACE_RANK[rhs]; }
 /* The destructive-path deny list: the one place this project matches on a name, and it matches only to
    refuse. A wrong deny costs one unfired request that forced execution still derives and reports, while a
    wrong assert would fabricate a finding that propagates, so over-broad is its cheap direction.
@@ -1660,10 +1660,10 @@ async function _readBody(resp, sink, gated) {
    fetch"' response tainting from its mode (`cors` passes §4.10 "CORS check" and is CORS-filtered,
    cross-origin `no-cors` is opaque, cross-origin `same-origin` is a network error), stated as the record's
    `type`. Every post-fetch gate judges the landed URL.
-   Principals, per call: `opts.pageUrl` (`MessageSender.url`) classifies the SSRF target; `opts.pageOrigin`
-   (`MessageSender.origin` or the host-assigned cluster origin, never parsed from a URL or taken from the
-   engine) is the SOP principal and every page request's origin. An opaque principal is same-origin with
-   nothing. Credentialed callers are `bridge.js`'s `navigationLoad` and `frontierRederive`, only where
+   Principals, per call: the asking document's record (`opts.doc`) carries the IP address space the SSRF
+   target is classified against; `opts.pageOrigin` (`MessageSender.origin` or the host-assigned cluster
+   origin, never parsed from a URL or taken from the engine) is the SOP principal and every page request's
+   origin. An opaque principal is same-origin with nothing. Credentialed callers are `bridge.js`'s `navigationLoad` and `frontierRederive`, only where
    `navigationCarriesSession` holds; the page's own requests (`fetched`, `fetchedXhr`) are uncredentialed.
    Every caller states `destination`, `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed`
    and `credentials`, asserted at the entry. */
@@ -1750,35 +1750,14 @@ async function safeFetch(url, opts) {
      leave that caller believing it streamed past the one gate that needs the whole body. */
   if (opts.onChunk !== undefined && _bodyGated(opts))
     return _refused("decline", "blocked-stream-body-gated:" + _destinationOf(opts), [parsed.href], {});
-  /* Origin-relative SSRF. The principal is the analysed document's own browser-stated address, passed per
-     call as `opts.pageUrl` (its `MessageSender.url`, never `sender.tab.url`, so a sub-frame of a tab whose top
-     is localhost does not inherit a private classification). It is per call, not a global, because the
-     trusted zone interleaves many renderers. A cross-origin script acts with the origin of the page it is
-     loaded into, never its own host. A target is refused when its IP address space is less public than the
-     principal's (`_ipAddressSpace`, Local Network Access §2.1): a public page reaches neither the person's
-     network nor their machine, and a page on the local network does not reach the machine's loopback.
-     `opts.pageUrl` is never on the wire: the trusted zone composes it (in the extension, from
-     `_browserFacts`' `url`, minted from `MessageSender` and DCHECKed non-empty there). So an absent or
-     unparseable principal is this zone's bug and is DCHECKed; with the DCHECKs compiled out it classifies
-     public, which still refuses every private target.
-     A principal that parses and names no host (`about:blank`, `data:`, `blob:`, reachable through the content
-     script's `match_about_blank` and `match_origin_as_fallback`) is input; it names no server, so it is not a
-     private-network principal. */
-  DCHECK(typeof opts.pageUrl === "string" && opts.pageUrl !== "",
-         "the network chokepoint was asked to classify an SSRF target with no page principal (`" +
-         opts.pageUrl + "`) — the principal is the analysed document's OWN browser-stated address, " +
-         "minted by _browserFacts and DCHECKed non-empty there, so its absence at this call is a " +
-         "caller that stopped passing one and never a document that has no address");
-  var _pageUrl = null;
-  try { _pageUrl = new URL(String(opts.pageUrl)); }
-  catch (e) { RETHROW_FATAL(e); _pageUrl = null; }
-  DCHECK(_pageUrl !== null,
-         "the page principal handed to the SSRF classifier is not a parseable URL (`" + opts.pageUrl +
-         "`) — the browser states this address and this zone only carries it, so a string a URL parser " +
-         "refuses is our copy of it corrupted rather than anything the analysed page did");
-  /* `_pageUrl ?` is the release arm under the DCHECKs above: an unparseable principal classifies public,
-     which is this gate's fail-closed answer. */
-  var _pageSpace = _pageUrl ? _ipAddressSpace(_pageUrl.hostname) : "public";
+  /* Origin-relative SSRF, Local Network Access §2.2 "Local Network Request": a request whose target's IP
+     address space is less public than "request's policy container's IP address space". That space is the
+     asking document's record's (docRecordAddressSpace), which the zone set when it provisioned the document:
+     its response's for a document created from a network response, its creator's for one whose container is
+     a clone (Local Network Access §3.5 "Integration with HTML"). It is per call, because the trusted zone
+     interleaves many renderers, and never parsed from an address the request states: a cross-origin script
+     acts in the document it is loaded into, and a `data:` child of a loopback page reaches loopback. */
+  var _pageSpace = docRecordAddressSpace(_docOf(opts));
   /* Network: host permissions bypass the browser's own answer, and this reinstates it for the addresses this
      zone can classify. Local Network Access §2.2 "Local Network Request" is the request a browser gates. */
   var _targetSpace = _ipAddressSpace(parsed.hostname);
@@ -2069,6 +2048,23 @@ async function safeFetch(url, opts) {
            refusal: null, type: _type };
 }
 
+/* The IP address space of the policy container a document at `url` is created with, HTML §7.1.7 "Policy
+   containers"' determine navigation params policy container with the field Local Network Access §3.5
+   "Integration with HTML" adds: a local URL (about:, blob:, data:) with an initiator takes a clone of the
+   initiator's container, so `creator`'s record's space; an http(s) response's container takes the space of
+   the response's IP address, which this zone answers from the host (`_ipAddressSpace`; see SECURITY.md's
+   private network by name); anything else is a new container, initially public. `creator` is the initiating
+   document's record, or null for a document no record of this zone initiated. */
+function safeFetchDocumentAddressSpace(url, creator) {
+  CHECK(creator === null || docRecordIs(creator),
+        "a document's address space was asked with a creator that is neither null nor a record docRecord minted");
+  var parsed = new URL(String(url));
+  var local = parsed.protocol === "about:" || parsed.protocol === "blob:" || parsed.protocol === "data:";
+  if (local && creator !== null) return docRecordAddressSpace(creator);
+  if (parsed.protocol === "http:" || parsed.protocol === "https:") return _ipAddressSpace(parsed.hostname);
+  return "public";
+}
+
 /* Fetch §4.3 "Scheme fetch"'s "data" arm, for a document load: "Let dataURLStruct be the result of running the
    data: URL processor on request's current URL" (Fetch §6 "data: URLs"), a network error on failure, and
    otherwise a response whose status message is `OK`, whose header list is the struct's serialized MIME type as
@@ -2244,6 +2240,7 @@ if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
   self.safeFetchOperator = safeFetchOperator;
   self.safeFetchSchemeData = safeFetchSchemeData;
+  self.safeFetchDocumentAddressSpace = safeFetchDocumentAddressSpace;
   self.safeFetchStatedRefusal = safeFetchStatedRefusal;
   self.safeFetchStatedShape = safeFetchStatedShape;
   self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;

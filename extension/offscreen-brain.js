@@ -1052,21 +1052,13 @@ async function _dispatchDocument(docKey) {
   tab.endpoints.forEach(function (val, key) { if (isEndpointKey(key)) keysToDelete.push(key); });
   for (var di = 0; di < keysToDelete.length; di++) tab.endpoints.delete(keysToDelete[di]);
 
-  /* THE ANALYSIS PRINCIPAL. This becomes safeFetch's `opts.pageUrl` — the origin-relative private-network
-     principal — and the engine's `window.location`. It is the DOCUMENT'S OWN browser-provided address, never
-     the tab's (a sub-frame analyses as itself, never as its embedder) and never a content-script-supplied
-     value: SECURITY.md records a `msg.url -> scripts[0].url` fallback that was an actual hole here.
-     `buf.url || buf.pageUrl || ""` STOOD HERE AND `buf.pageUrl` HAD NO WRITER. Nothing in the extension has
-     ever set it, so the limb was a defaulted read of a field no producer produces — CLAUDE.md's "a name that
-     is READ somewhere and WRITTEN nowhere is a broken contract, and a default is what stops it being a crash".
-     Worse than dead: the only value in this zone that has ever been spelled `pageUrl` is the one content.js
-     ever put in its own message to this zone is a `pageUrl`, so the one plausible way to make that limb fire
-     would have re-introduced by name the exact content-script-stated principal SECURITY.md says was removed.
-     THE SEED IS NOT AN EXCEPTION TO THAT AND MUST NOT BECOME ONE: `buf.seedUrl` is what the custom browser
-     NAVIGATES TO, and this is what the navigation is AUTHORIZED as — safeFetch classifies the private-network
-     target against `sourceUrl`, so a seed that reached this line would be an address authorizing itself. The
-     two are same-origin by the CONTENT_SEED arm's own check, which is exactly why nothing is lost by keeping
-     them apart. */
+  /* The analysis principal: the document's own browser-provided address, never the tab's (a sub-frame
+     analyses as itself, never as its embedder) and never a content-script-supplied value. It is the engine's
+     `window.location`, and its response's IP address space is the document record's (bridge.js), the
+     private-network principal safeFetch reads. The seed is not an exception: `buf.seedUrl` is what the custom
+     browser navigates to and this is what the navigation is authorized as, so a seed here would be an address
+     authorizing itself. The two are same-origin by the CONTENT_SEED arm's own check, so nothing is lost by
+     keeping them apart. */
   var tabUrl = facts.url;
   var response;
   try {
