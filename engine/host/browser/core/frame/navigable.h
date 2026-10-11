@@ -281,7 +281,10 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
  * one. An unmaterialized navigable holds the initial about:blank Document §7.4 created it with; that Document
  * has no scripts, so it has no lifecycle to run and nothing below it to walk — "not materialized" and "no
  * children" are the same answer (window_proxy.h), and materializing every navigable a forced-execution
- * frontier ever created in order to ask is the heap exhaustion navigable.c's deferral exists to avoid. */
+ * frontier ever created in order to ask is the heap exhaustion navigable.c's deferral exists to avoid.
+ * The roots are the asking document's top-level traversable, the group's other top-level traversables, and
+ * every navigable this instance was rooted in under a peer's parent (navigable_root), whose subtrees no walk
+ * from a top-level traversable reaches. */
 JSValue navigable_tree_order(JSContext *ctx);
 
 /* `document_resource` is HTML §7.4.2.2 "Beginning navigation"'s own third input, declared in the algorithm's

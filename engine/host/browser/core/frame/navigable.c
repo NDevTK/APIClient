@@ -3475,6 +3475,10 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url)
  * IT DOES NOT MATERIALIZE ANYTHING. An unmaterialized navigable holds the about:blank Document §7.4 created it
  * with, which has no iframes, so there is nothing below it to walk — see window_proxy.h. */
 static JSValue g_group = JS_UNDEFINED;   /* the browsing context group's top-level traversables (baseline) */
+/* The navigables this instance was rooted in whose §7.3.1.3 parent is a peer's (baseline): the roots of this
+   agent's subtrees that no walk from a top-level traversable reaches, since the walk does not descend through
+   a navigable whose document another instance holds. */
+static JSValue g_peer_parented = JS_UNDEFINED;
 
 /* THE ONE WALK OVER THE NAVIGABLE TREE, in HTML §7.3.1.5 "Related navigable collections" order, as an Array of
    WindowProxy (owned). Every navigable reachable from `root`, `root` first.
@@ -3621,6 +3625,32 @@ JSValue navigable_tree_order(JSContext *ctx)
 
         if (!JS_IsSameValue(ctx, other, top)) nav_append_tree(ctx, out, &nout, other);
         JS_FreeValue(ctx, other);
+    }
+    /* HTML §8.1.7.3 Processing model: "Let docs be all fully active Document objects whose relevant agent's
+       event loop is eventLoop". A document this instance holds under a navigable a peer holds (a cross-origin
+       iframe's document, or a same-origin document nested through one) is such a Document, and no tree above
+       reaches it, so its own subtree is appended. The ordering conditions that follow that sentence ("Any
+       Document B whose container document is A must be listed after A in the list") hold: its container
+       document is in the peer, and its own descendants follow it in pre-order. */
+    DCHECK(JS_IsArray(g_peer_parented), "the peer-parented roots were read before navigable_init built the list");
+    len = JS_GetPropertyStr(ctx, g_peer_parented, "length");
+    n = 0;
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue root = JS_GetPropertyUint32(ctx, g_peer_parented, i);
+        uint32_t j;
+        bool listed = false;
+
+        /* The asking document may itself be one of these roots, whose tree is already the first one above. */
+        for (j = 0; j < nout && !listed; j++) {
+            JSValue seen = JS_GetPropertyUint32(ctx, out, j);
+
+            listed = JS_IsSameValue(ctx, seen, root);
+            JS_FreeValue(ctx, seen);
+        }
+        if (!listed) nav_append_tree(ctx, out, &nout, root);
+        JS_FreeValue(ctx, root);
     }
     JS_FreeValue(ctx, top);
     return out;
@@ -4543,6 +4573,19 @@ JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPol
        sandbox propagates to auxiliary browsing contexts flag; the host states that set from its record of the
        navigable (the trusted zone's lib/document-record.js), as it states a nested navigable's. */
     proxy = window_proxy_new_self(ctx, doc, name, opener_policy, parent, creation_sandbox_flags);
+    /* A navigable rooted here under a peer's parent is a root of this agent's event loop walk
+       (navigable_tree_order). */
+    if (window_proxy_is(parent) && window_proxy_is_remote(parent)) {
+        uint32_t n = 0;
+        JSValue len;
+
+        CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
+        DCHECK(JS_IsArray(g_peer_parented), "a navigable was rooted before navigable_init built its list");
+        len = JS_GetPropertyStr(ctx, g_peer_parented, "length");
+        JS_ToUint32(ctx, &n, len);
+        JS_FreeValue(ctx, len);
+        JS_SetPropertyUint32(ctx, g_peer_parented, n, JS_DupValue(ctx, proxy));
+    }
     JS_FreeValue(ctx, parent);
     return proxy;
 }
@@ -5102,6 +5145,10 @@ void navigable_init(JSContext *ctx)
         g_group = JS_NewArray(ctx);
         CHECK(!JS_IsException(g_group), "the browsing context group's list could not be allocated");
     }
+    if (JS_IsUndefined(g_peer_parented)) {
+        g_peer_parented = JS_NewArray(ctx);
+        CHECK(!JS_IsException(g_peer_parented), "the peer-parented roots' list could not be allocated");
+    }
 }
 
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin)
@@ -5134,6 +5181,8 @@ void navigable_free(JSContext *ctx)
        what lets the realms behind those proxies become collectable. */
     JS_FreeValue(ctx, g_group);
     g_group = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_peer_parented);
+    g_peer_parented = JS_UNDEFINED;
     /* THE LIST GOES, THE REALMS DO NOT. Every entry is BORROWED (navigable_realm hands ownership to the
        navigable), so there is nothing here to release and nothing here to free them with: a realm still
        reachable at this point outlives this agent's own state and is torn down by whoever holds it, releasing
