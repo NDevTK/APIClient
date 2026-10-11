@@ -281,6 +281,24 @@ static int method_is_token(const char *s)
 
 bool request_method_is_token(const char *m) { return method_is_token(m) != 0; }
 
+int request_parse_input_url(JSContext *ctx, const char *in, size_t n, UrlRecord *rec)
+{
+    /* 5.1, against the API base URL through Fetch's one parse: `new Request("/api/users")` is how a bundle
+       names its own endpoints. */
+    if (!fetch_parse_url(ctx, rec, in, n)) {
+        url_record_free(rec);
+        JS_ThrowTypeError(ctx, "the Request input is not a valid URL");
+        return -1;
+    }
+    /* 5.3: a page may not put a password on the wire by writing it into a fetch. */
+    if ((rec->username && *rec->username) || (rec->password && *rec->password)) {
+        url_record_free(rec);
+        JS_ThrowTypeError(ctx, "the Request input URL includes credentials");
+        return -1;
+    }
+    return 0;
+}
+
 /* §5.4 STEP 25 AS ONE OPERATION, because two call sites perform it: this constructor, and `fetch(input, init)`,
    which runs §5.4 inline over an init it never turns into a Request. fetch() had none of it — no token test, no
    forbidden-method refusal and no normalization — so `{method:"connect"}` went out and `{method:"post"}` was
@@ -1125,27 +1143,13 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             UrlRecord rec;
             size_t n = 0;
             const char *in = JS_ToCStringLen(ctx, &n, input);
-            bool ok;
+            int bad;
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             if (!in) return -1;
-            /* AGAINST THE API BASE URL, through Fetch's one parse. `new Request("/api/users")` is how a
-               bundle names its own endpoints, and with a NULL base every one of them was a TypeError. */
-            ok = fetch_parse_url(ctx, &rec, in, n);
+            bad = request_parse_input_url(ctx, in, n, &rec);
             JS_FreeCString(ctx, in);
-            if (!ok) {
-                url_record_free(&rec);
-                JS_ThrowTypeError(ctx, "the Request input is not a valid URL");
-                return -1;
-            }
-            /* §5.4 step 5.3: a URL with credentials is a TypeError — a page may not put a password on the
-               wire by writing it into a fetch. Step 5 is the STRING-input arm and holds one list: 5.1 parses
-               against the base URL, 5.2 throws on failure, and this is 5.3. */
-            if ((rec.username && *rec.username) || (rec.password && *rec.password)) {
-                url_record_free(&rec);
-                JS_ThrowTypeError(ctx, "the Request input URL includes credentials");
-                return -1;
-            }
+            if (bad < 0) return -1;
             {
                 /* url_serialize returns a plain malloc'd string, and everything this struct holds is freed
                    with the ENGINE's allocator — mixing the two is a heap corruption that only shows up at

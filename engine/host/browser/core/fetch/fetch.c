@@ -1154,22 +1154,27 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
     }
     if (u) {
         /* §4.3 SCHEME FETCH: "Switch on request's current URL's scheme". The scheme is what the URL PARSER
-           says it is and not what the string starts with, so the URL is parsed ONCE here and every arm below
-           reads that record — which is also what lets §6 have the parsed URL it asserts on. A relative
-           reference with no base is the one input the parse refuses, and it names no scheme, so it is none of
-           the local arms and belongs to the trusted host below. */
+           says it is and not what the string starts with, so the URL is parsed here and every arm below reads
+           that record — which is also what lets §6 have the parsed URL it asserts on. A concrete URL is
+           already §5.4 step 5's serialization (FETCH_RECORD), which the parser accepts against any base. A
+           concolic's shape may parse or not, and is none of the local arms either way. */
         UrlRecord rec;
         const char *scheme;
 
         url_record_init(&rec);
         scheme = fetch_parse_url(ctx, &rec, u, strlen(u)) ? rec.scheme : NULL;
         /* WHETHER THIS FLOW HAS A URL AT ALL, asked ONCE because two different steps below turn on the same
-           one fact. A parse that FAILED produced no record, and a CONCOLIC's parse produced a record out of a
-           DISPLAY FORM: its shape `/api/u?uid={state}.id` does parse, and it is not the address the request
-           will go to — §5.4 step 2's URL is unknown for exactly as long as the value is. Every algorithm that
-           reads a URL record as the request's URL is therefore off for both, which is why the serialization
-           below and §2.9 above it read this and not the parse's own success. */
-        bool url_is_real = scheme && !concolic_is(url);
+           one fact. A CONCOLIC's parse produced a record out of a DISPLAY FORM: its shape
+           `/api/u?uid={state}.id` does parse, and it is not the address the request will go to — §5.4 step 2's
+           URL is unknown for exactly as long as the value is. Every algorithm that reads a URL record as the
+           request's URL is therefore off for it, which is why the serialization below and §2.9 above it read
+           this and not the parse's own success. */
+        bool url_is_real = !concolic_is(url);
+
+        DCHECK(scheme != NULL || !url_is_real,
+               "a concrete fetch() URL reached Fetch §4.3's scheme switch and the URL parser refused it. It is "
+               "§5.4 step 5's own serialization (FETCH_RECORD), and a serialized URL parses against any base, "
+               "so this is the parser and its serializer disagreeing");
 
         /* §4.1 MAIN FETCH STEP 7, and it runs HERE — before §4.3's scheme fetch, which is step 12 — because
            that is the order the two steps are in. "If should request be blocked due to a bad port, should
@@ -1490,6 +1495,32 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            recorded on the endpoint surface as a GET. */
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
+        /* §5.4 STEP 5, the string arm, through the constructor's own implementation: a string the URL parser
+           refuses, or one carrying credentials, is a TypeError and the promise rejects. The parsed URL then IS
+           the request's URL, so `s->url` becomes its serialization here, before the stages below run page code
+           that could move the document base URL. A Request input contributes its parsed URL (step 6). A
+           concolic has no bytes to parse yet; fetch_park reads its shape. */
+        if (!request_is(s->input) && !concolic_is(s->url)) {
+            UrlRecord parsed;
+            size_t n = 0;
+            const char *in = JS_ToCStringLen(ctx, &n, s->url);
+            char *ser;
+            JSValue v;
+            int bad;
+
+            if (!in) return -1;
+            bad = request_parse_input_url(ctx, in, n, &parsed);
+            JS_FreeCString(ctx, in);
+            if (bad < 0) return -1;
+            ser = url_serialize(&parsed, /*exclude_fragment*/ false);
+            url_record_free(&parsed);
+            CHECK(ser != NULL, "OOM serializing Fetch §5.4 step 5's parsed URL");
+            v = JS_NewString(ctx, ser);
+            free(ser);
+            if (JS_IsException(v)) return -1;
+            JS_FreeValue(ctx, s->url);
+            s->url = v;
+        }
         if (request_init_apply(ctx, init, /*from*/ NULL, &s->rec) < 0)
             return -1;
         headers_fill_init(&s->fill);

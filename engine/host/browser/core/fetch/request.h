@@ -5,6 +5,7 @@
 
 #include "quickjs.h"
 #include "core/idl_args.h"
+#include "core/url/url.h"
 
 void request_init(JSContext *ctx);
 /* Fetch §5.4 "Request class"' prototype AND its interface object, for ONE realm — Web IDL §3.8 "Platform
@@ -168,6 +169,12 @@ const RequestRecord *request_record_of(JSValueConst v);
  * serialized form derived at the one C consumer that needs bytes. ITS ABSENCE SHOWS as
  * `new Request(location.hash)` aborting the agent where `fetch(location.hash)` records an endpoint. */
 int  request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *from, RequestRecord *rec);
+
+/* Fetch §5.4 "Request class" constructor step 5, the string-input arm: 5.1 parses `in` against the API base
+   URL, 5.2 throws a TypeError if that fails, 5.3 throws one if the URL includes credentials. 0 with `rec`
+   holding the parsed URL, which the caller frees; -1 with the TypeError live and `rec` freed. The constructor
+   and `fetch()` (whose §5.6 step 2 invokes the constructor) both call it. */
+int request_parse_input_url(JSContext *ctx, const char *in, size_t n, UrlRecord *rec);
 
 /* `dictionary RequestInit` ITSELF — the declaration table, so §5.6's `fetch(input, init)` declares the SAME
    one §5.4's constructor does. A second hand-written member list is exactly how thirteen of them went missing
