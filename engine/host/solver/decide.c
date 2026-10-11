@@ -12,184 +12,79 @@
 
 static void *decide_fork_blob(int cursor, int arm, uint32_t asked);   /* the sibling's hot state (below) */
 static void *decide_fork_handoff(int arm);   /* …and the same, where no question could be spelled (below) */
-/* NOTHING THE RUN OBSERVED SAYS WHICH ARM IS THE REAL ONE — decide_real_arm's answer for an example-free
-   value, and the value dec_fork_here and decide_note_forced_arm both read as "make no claim". It is declared
-   with the forward declarations rather than beside its producer because THREE functions spell it and a
-   literal -1 in any of them would be a fourth meaning of the same number (decide_arm already answers -1 for
-   "not concolic" and decide_value_arm for "not decided"). */
+/* Nothing the run observed says which arm is the real one: decide_real_arm's answer for an example-free value,
+   which dec_fork_here and decide_note_forced_arm read as "make no claim". Named once because three functions
+   spell it, and decide_arm already answers -1 for "not concolic" and decide_value_arm for "not decided". */
 #define REAL_ARM_UNOBSERVED (-1)
 
-/* THE DECISION VECTOR IS A CHAIN, NOT A COPY — the fourth and last instance of cow.c's refcounted immutable
- * segment, and the one that was still copying.
+/* The decision vector is a chain of cow.c's refcounted immutable segments, like CowSeg, DomSeg and ConsSeg. A
+ * fork's sibling holds the parent's decisions up to the branch plus one byte, the other arm, and that prefix is
+ * frozen (the cursor only moves forward, and a replayed slot is read, never written), so siblings share it
+ * rather than each copying it: a copy is quadratic in the walk length, and paging it out would write the shared
+ * prefix once per flow. What is per flow is the head, the decisions taken since the last freeze; everything
+ * below is shared with ancestors, refcounted, and freed when the last flow standing on it goes.
  *
- * A FORK SHARES THE PREFIX. The sibling's decision vector is, by construction, the parent's decisions up to the
- * branch plus one byte: the other arm. That prefix is FROZEN at that instant — neither flow can ever rewrite a
- * decision it has already taken, because the cursor only moves forward and a replayed slot is read, never
- * written — so it is exactly the shape cow.c's CowSeg, dom_cow.c's DomSeg and concolic.c's ConsSeg already
- * have, and it was the only one of the four still handing each sibling its own `malloc(cursor)` + `memcpy`.
- *
- * MEASURED, on the minimal fixture, whose unknown-length walk forks once per position so the chain is as long
- * as the walk (@COLD in the progress stream, which is the census this file's cost had no row in before):
- *
- *     flows       1006      4014      9006     16046
- *     decKiB       506      7916     39720    125915     <- copied: the whole prefix, per flow
- *     decKiB         7        31        70       125     <- chained: one blob header per flow
- *     decSegKiB     41       164       369       658     <- …plus the shared chain, counted ONCE
- *     cLiveKiB    4057     18559     62226    165039     <- the whole engine's live C allocation, copied
- *     cLiveKiB    3633     10974     23249     40447     <- …chained
- *
- * 125915 KiB against 125+658 — and the ratio is not the point, the SHAPE is: the first row is quadratic and
- * the other two are linear, so the gap is unbounded. Every one of those numbers is a matched FLOW COUNT and
- * not a matched wall clock, which is the only honest comparison here: the copy was O(n) work per fork as well
- * as O(n) bytes, so the same wall clock now reaches 29550 flows where it reached 16046.
- *
- * That is n^2/2 bytes to the byte — 16046 flows held 128,745,080 decision slots, and 16046^2/2 is 128,736,529 —
- * and it was 123 MB of the 137 MB of per-flow snapshot the frontier was holding, against 15 MB for every
- * suspended heap-frame chain in the run put together. A quadratic term in the thing a cold tier exists to page
- * is not a paging problem, it is the wrong data structure: paging it out would have written the same shared
- * prefix once per flow and multiplied the sharing back out, which is precisely what §State-isolation forbids
- * ("The delta captures ONLY shared baseline state").
- *
- * WHAT IS PER-FLOW IS THE HEAD: the decisions this flow has taken since its last freeze, which for a flow that
- * forks at every branch is exactly one. Everything below it is shared with its ancestors, refcounted, and freed
- * when the last flow standing on it goes.
- *
- * `g_c` is the cursor in WHOLE-VECTOR coordinates, so `below` on each segment is the index its first slot has —
- * stored rather than re-derived, for the reason TrampFrame's `local_slots` is: a length that is computed twice
- * can disagree with itself. */
-/* `park_id` IS THE SEGMENT'S NAME IN THE PARK DOCUMENT, and it lives HERE rather than in a pointer table the
-   pager keeps, because a pointer is not an identity across a FREE. The cold tier writes each frozen segment
-   once and names it by a dense ordinal; a park that runs several times in one session — which is what a PARTIAL
-   self-park is — releases the flows it wrote between two of those runs, so a segment nothing stands on any more
-   is freed and the allocator may hand the SAME ADDRESS back for a segment on a completely different path. A
-   table keyed by address would then answer the second segment with the first one's ordinal, and every flow
-   standing on it would resume onto a path it never took, silently. A name that dies with the thing it names
-   cannot do that: -1 until the pager assigns one, and every construction site below sets it. */
-/* `k` IS WHICH QUESTION EACH ARM ANSWERS, and without it a decision vector is a sequence of answers with no
-   record of what was asked — which is only safe while the replay asks the identical questions in the identical
-   order, and that is precisely what a resume cannot promise. A cold-resumed flow starts at cursor 0 and re-runs
-   the document against TODAY's code and TODAY's replies (decide_blob_new says so, and §Time-travel-resume
-   requires it: "a resumed flow re-derives example VALUES from CURRENT sources"). The moment one question
-   appears, disappears or moves, the cursor is off by one and decide_arm's replay branch hands every subsequent
-   branch the arm belonging to some other predicate — a real arm, in range, satisfying every assert on the path,
-   all of which are RANGE asserts. That is the silent failure, and it is silent in both directions: a clean
-   resume and a scrambled one emit byte-identical output, so no gate this project has could tell them apart.
-   The column is the identity that makes the two distinguishable. It is a CONTENT HASH of the constraint key,
-   for the same reason JSStepHdr::fork_ask_key is one ("The bytes are the only thing that is the same question
-   in every tier") — the key string is heap-allocated per ask and freed immediately, a rebuilt segment has no
-   address at all, and the park document carries text. A hash can only ever fail to CATCH a mismatch, never
-   invent one, which is the property an assert standing over every replayed branch has to have.
-   ONE ALLOCATION HOLDS BOTH COLUMNS: `k` first (so malloc's own alignment is the uint32 array's) and `e`
-   immediately after it, because a second reclaim_malloc per segment is a second allocation per FORK, and this
-   file's whole history is about what per-fork cost does at 16046 flows. `e` is not separately owned and is
-   never separately freed — dec_seg_unref frees `s->k` and that is the whole block. */
+ * `g_c` is the cursor in whole-vector coordinates, so each segment stores `below`, the index of its first slot,
+ * rather than re-deriving it. */
+/* `park_id` is the segment's name in the park document, kept on the segment rather than in a pager table keyed
+   by address: a partial self-park can free a segment between two runs, and the allocator may hand the same
+   address to a segment on another path, which an address-keyed table would answer with the first one's
+   ordinal. It is -1 until the pager assigns one, and every construction site sets it. */
+/* `k` is the question each arm answers. A cold-resumed flow starts at cursor 0 and re-runs the document against
+   current code and replies, so a question can appear, disappear or move; a replay that matched by position alone
+   would hand each later branch another predicate's arm, in range and passing every range assert, and emit the
+   same output as a clean resume. `k` makes the two distinguishable. It is a content hash of the constraint key,
+   as JSStepHdr::fork_ask_key is, because the key string is freed after each ask, a rebuilt segment has no
+   address, and the park document carries text; a hash can fail to catch a mismatch but never invent one.
+   One allocation holds both columns, `k` first (so malloc's alignment is the uint32 array's) and `e` after it,
+   so a fork costs one allocation; `e` is never freed separately, and dec_seg_unref frees `s->k`. */
 typedef struct DecSeg {
-    uint32_t *k;        /* the asked question per slot; OWNS the block, with `e` inside it */
+    uint32_t *k;        /* the asked question per slot; owns the block, with `e` inside it */
     signed char *e;     /* the arms — points into `k`'s allocation at offset n*sizeof(uint32_t) */
     int n, below; struct DecSeg *base; int refcount; long park_id;
 } DecSeg;
 
-/* WHAT ONE SLOT COSTS in the frozen chain and in the head — stated once, because the census subtracts exactly
-   what the allocation added and a size written twice can disagree with itself. */
+/* What one slot costs in the frozen chain and in the head, stated once so the census subtracts exactly what the
+   allocation added. */
 #define DEC_SLOT_BYTES (sizeof(uint32_t) + 1u)
 
 static DecSeg *g_dec_base = NULL;   /* the frozen prefix the running flow stands on (NULL = it has none) */
 static int g_dec_below = 0;         /* slots in that chain — the head's index origin */
-/* THE HEAD IS TWO PARALLEL BUFFERS AND NOT ONE BLOCK, which is the opposite of the frozen segment's layout
-   above and is the right answer for the opposite reason: the head is ONE reusable buffer for the whole session
-   (decide_free owns it), so its allocation count is a constant and its two reallocs cost nothing per fork —
-   while splitting a growing block would have to re-place `e` inside it on every growth. */
+/* The head is two parallel buffers, unlike a frozen segment: it is one reusable buffer for the session
+   (decide_free owns it), so its two reallocs cost nothing per fork, while one growing block would re-place `e`
+   on every growth. */
 static signed char *g_dec = NULL; static int g_dec_n = 0, g_dec_cap = 0;   /* the head: this flow's own */
 static uint32_t *g_dec_k = NULL;   /* …and which question each of its slots answers */
 static int g_c = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
-/* THE ARM THE RUNNING FLOW WAS BORN OWING — a HANDOFF from the fork that minted it, and NOT a decision this
-   file has recorded anywhere. See DecideBlob's `pending` for what makes those two different kinds of thing;
-   here it is enough that it is installed by decide_resume, taken by the FIRST decision this flow reaches, and
-   -1 for every flow that was not minted at a branch with no spellable question. */
+/* The arm the running flow was born owing: a handoff from the fork that minted it, not a recorded decision (see
+   DecideBlob's `pending`). decide_resume installs it, the first decision this flow reaches takes it, and it is -1
+   for every flow not minted at a branch with no spellable question. */
 static signed char g_pending = -1;
 
-/* THE FORK CENSUS'S ROWS — THREE POPULATIONS IN THREE TABLES, and the split is the admission design rather than
-   tidiness. They are declared here rather than beside fork_key_count because decide_free releases them and
-   stands above it, and a census whose teardown could not see them would hold one strdup per distinct predicate
-   past the session that made them. See fork_key_count for the shared entry and decide.h for what a row means.
- *
- * ONE POPULATION IS THE PAGE'S AND THE OTHER IS THIS TREE'S, so only one of them can ever overflow. A
- * MECHANISM row is prose written by hand at a call site in this tree (every one of them reaches
- * decide_fork_same_path, which takes the row name from its CALLER), so the set is enumerable where it is
- * authored and cannot be enlarged by any document: those rows are
- * counted EXACTLY, in a table that simply grows. There is no admission question for a population a page cannot
- * grow, and asking one would spend slots of the scarce table on the rows that were never at risk — while
- * leaving the heaviest of them free to evict the predicates the census exists to name, since a mechanism that
- * fires on every orphan drive outweighs every individual branch beneath it. A CONSTRAINT key is the page's and
- * is unbounded, so it gets the fixed table and the policy below.
- *
- * THE FIXED TABLE IS SPACE-SAVING (Metwally, Agrawal & El Abbadi, "Efficient Computation of Frequent and Top-k
- * Elements in Data Streams", ICDT 2005) and the two properties that recommend it are both about what the
- * census can still SAY, not about its constant factors.
- *   - ITS COUNTERS SUM TO THE ARRIVALS, EXACTLY. An eviction hands the departing row's mass to the row that
- *     displaces it, so nothing evaporates and the identity every other sentence in this file rests on — the
- *     rows summing to the total, and through it the frontier's `created = 1 + forks + …` provenance — survives
- *     an admission policy that first-come never needed one for.
- *   - EACH ROW KNOWS HOW MUCH OF ITSELF IT CANNOT PROVE. `err` is the mass inherited from whatever this row
- *     displaced, so `n - err` is a FLOOR: hits at this key and at no other, whoever was evicted. That is what
- *     the census publishes, so a named row can only ever UNDERSTATE a site — which is §Emission's rule about
- *     never inventing, applied to the instrument instead of to a finding.
- * MISRA-GRIES IS THE OTHER CANDIDATE AND IS REJECTED ON THE SECOND PROPERTY. Its decrement-all shaves mass off
- * every RESIDENT row to pay for one non-resident arrival, so the mass missing from the table afterwards is a
- * mixture of "hits at sites the table could not hold" and "hits at sites it did hold" with nothing to separate
- * them — two states behind one number, which is the exact defect this table exists to end, reintroduced by the
- * fix for it. Its per-row error is also ONE global bound shared by every row, so no row is ever exact and no
- * two rows can be told apart by it; Space-Saving's `err` is per row and is zero for every row admitted before
- * the table filled, which is how the census can call a count exact and mean it.
- *
- * AND THE THIRD IS A PAGE'S TOO AND IS NOT A PREDICATE — IT IS WHERE A FORK HAPPENED THAT ASKED NOTHING THIS
- * ENGINE CAN NAME. BOTH key spellers answer NULL for a value whose identity concolic.c cannot spell —
- * decide_key at a bytecode branch and outcome_key at a native operation's completion — and this said only the
- * first for as long as the outcome seam ASSERTED its key instead of deciding on it, which made a sentence
- * about one population read as a sentence about the mechanism. Every route to that NULL bottoms out in one
- * place: `operand_kind` classifies an Object or a Symbol as unspellable (literal_ident's own note says why —
- * an object's identity is its ADDRESS, which does not survive the park a resumed flow replays through, and
- * coercing it would run the page's `toString` from C), and concolic_ident_compose then makes every value
- * derived from one unspellable too. So the branch AND the outcome walk alike keep both arms,
- * record no constraint, and had exactly ONE row for all of it: a single hand-written mechanism name
- * standing in for whatever share of a document's forks reach a value this engine declines to name.
- * THAT IS §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE PERFORMED BY AN INSTRUMENT INSTEAD OF BY AN ASSERT.
- * The row states an action — "this is where the frontier is growing" — with no object, in the one table whose
- * entire job is to say WHERE; and its own banner already condemns the shape one population over ("a peer's
- * answer, a message from one arm of a sender's branch, a drive of a function the page never called are three
- * different things and one row for all three describes none of them"). The same sentence is true of every
- * unnameable branch in a bundle, and there is nothing here a reader can go and look at.
- * ITS KEY IS THE VALUE'S OWN DISPLAY SHAPE, AND IT IS A REPORTING ADDRESS RATHER THAN AN IDENTITY — which is
- * the whole of why it may exist at all. A shape is ALWAYS present (concolic_alloc strdups `{}` for a value
- * handed none, so there is no absence for a consumer to default past); it is composed from PROGRAM FACTS and
- * holds no address, so it names the same thing on the flow that minted it, on the flow that resumes it from
- * the cold tier and in the next session — the property §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED
- * refuses to a pc and to an object's address alike; and derived_operand_shape renders `?` at exactly the
- * operand whose identity went absent, so a row merges precisely what this engine cannot tell apart and
- * nothing else. What a shape must NEVER become is the CONSTRAINT key: filing it there would let one flow's
- * `a[x]` decide another flow's `b[x]`, and concolic.c states the asymmetry in one line beside the field
- * itself: "Absence costs forks; a wrong identity costs the arm." The replay slot stays absent, and that pair is the honest one: this table
- * says where a fork happened, not what it asked.
- * SO IT IS PAGE-GROWN AND TAKES A FIXED TABLE OF ITS OWN, never the predicates'. Sharing theirs would let
- * whichever population is heavier evict the rows the other exists to name, which is the argument the split
- * above already makes one population over — and it would make the two bounds one number, which is the state
- * where a census can no longer say which of its answers it has stopped answering. Its keys open on `~`, a byte
- * THIS FILE writes in front of the shape, because a shape is the page's bytes and can spell any first byte at
- * all: the namespace is the writer's to STATE and never the object's to sniff, which is the rule
- * fork_key_count already keeps for the other two. */
+/* The fork census's rows, three populations in three tables (see fork_key_count and decide.h). A mechanism row
+ * is prose written at a call site in this tree (each reaches decide_fork_same_path with its caller's name), so a
+ * document cannot enlarge the set; it is counted exactly in a table that grows. A constraint key is the page's
+ * and unbounded, so it gets a fixed table with Space-Saving admission (Metwally, Agrawal & El Abbadi, "Efficient
+ * Computation of Frequent and Top-k Elements in Data Streams", ICDT 2005): an eviction hands the departing row's
+ * mass to its replacement, so counters sum to arrivals, and `n - err` is a per-row floor, so a named row can only
+ * understate. Misra-Gries is rejected: its decrement-all mixes mass from held and unheld sites into one number.
+ * The third population is unnamed sites, where decide_key or outcome_key answers NULL (`operand_kind` refuses an
+ * Object or Symbol, whose identity is its address, and concolic_ident_compose propagates that), so the branch
+ * keeps both arms and records no constraint. Its key is the value's display shape: always present, composed from
+ * program facts, stable across resume, with `?` where identity went absent. It is a reporting address and must
+ * never become the constraint key, which would let one flow's `a[x]` decide another's `b[x]`. It gets its own
+ * fixed table, and its keys open on `~`, a byte this file writes, because the namespace is the writer's to
+ * state, never the object's to sniff. */
 #define DECIDE_FORK_KEYS 64
-/* SMALLER THAN THE PREDICATES' TABLE ON PURPOSE, and the reason is what a row of each is FOR. A predicate row
-   names a question, and a document asks a great many distinct ones; an unnamed site names a SHAPE, and the
-   shapes that reach this table are the handful of expression forms an engine cannot name (a dynamic key read
-   on an ordinary object, a derivation over one, a comparison between two) rather than one per branch. A table
-   sized for the wrong distribution spends slots that are never claimed, and every unclaimed slot is a row of
-   the OTHER census that could have existed instead. */
+/* Smaller than the predicates' table: a predicate row names a question, and a document asks many; an unnamed
+   site names a shape, and only a handful of expression forms reach it (a dynamic key read on an ordinary object,
+   a derivation over one, a comparison between two). */
 #define DECIDE_SITE_KEYS 32
-/* ONE ROW SHAPE FOR EVERY ADMITTED TABLE, because Space-Saving is ONE algorithm and two spellings of it would
-   be two rules free to disagree about what `err` means. `err` is the mass this row inherited from whatever it
-   displaced, so `n - err` is the floor it may publish; a row admitted before its table filled carries 0. */
+/* One row shape for every admitted table, because Space-Saving is one algorithm. `err` is the mass inherited from
+   the row displaced, so `n - err` is the floor a row may publish; a row admitted before its table filled carries
+   0. */
 typedef struct { char *key; long n, err; } ForkRow;
 static ForkRow g_fork_keys[DECIDE_FORK_KEYS];
 static ForkRow g_fork_sites[DECIDE_SITE_KEYS];
@@ -197,105 +92,43 @@ static struct { char *key; long n; } *g_fork_mech;   /* grows: bounded by this t
 static int  g_fork_mech_n, g_fork_mech_cap;
 static long g_fork_total;
 
-/* THE REPLAY LEDGER — WHAT A REPLAY DID WITH THE PATH IT WAS HANDED, which is the one half of
-   §Time-travel-resume this engine asserted at the branch and could not state at the outcome. The ASSERTION
-   half is real and it is above: dec_replay consumes a recorded arm ONLY when the branch's constraint key
-   equals the key recorded beside that arm, so the POSITIONAL replay — whose own deleted comment records that
-   it emitted "byte-identical findings" to a clean resume — is structurally impossible now.
-   THE OUTCOME HALF HAD NO INSTRUMENT AT ALL. dec_leave_path has exactly one call site and nothing counted it,
-   so a session that rebuilt N flows and left its recorded path at the FIRST branch of every one of them —
-   replaying zero arms, re-exploring from the baseline — published numbers IDENTICAL to a session that
-   replayed every arm: solver/result.c's `resumed`, `resumedSegs`, `resumedFlows` and `resumedCands` all say
-   what the DOCUMENT HELD, never what the REPLAY DID WITH IT. The ORPHAN half of the same round trip has had
-   this instrument all along — `orphanClaims`/`Met`/`Unmet`, which that file calls THE VERDICT, "ZERO on a
-   document whose bytes did not change" — while the PATH half, every 'f' and 'c' record and the whole of what
-   a recipe IS, had none. THE `_wfq` CENSUS'S DEPTH ROWS CANNOT STAND IN FOR IT, and the reason is their KIND
-   rather than their subject: `decMax`/`candDecMax` are GAUGES — the deepest vector among the members standing
-   at the instant the census is taken — while this is a question about what HAPPENED. A flow that abandons its
-   recorded path forks at that very branch and appends its own slots from there, so its vector regrows and the
-   gauge reads the same on both outcomes. solver/flow.h says the nearest thing the depth rows can say, and its
-   scope is the limit: "a candidate stuck at rung 0 with a growing `cand_dec_max` is one whose replay is
-   diverging before its own source read" — an INFERENCE from two rows, about CANDIDATES, at a rung.
-
-   THEY ARE A REPORT AND NEVER A VERDICT, and that is forced rather than chosen. §Time-travel-resume has a
-   replay run against TODAY's code and TODAY's replies — "a resumed flow re-derives example VALUES from
-   CURRENT sources" — so a divergence is PERMITTED, and an assert on one would fire on the engine working.
-   What was missing was never permission to diverge; it was the ability to SAY that one happened, which is
-   also why this is three numbers rather than a pass/fail row.
-
-   ALL THREE ARE LIFETIME COUNTS OVER THE SESSION — released in decide_free exactly as `g_fork_total` is, and
-   deliberately the SAME LIFETIME as the `resumed` row they are read beside, because that row is what tells
-   this ledger's two populations apart and a process-lifetime ledger under a per-session discriminator is two
-   moments compared as one. Monotone within a session (the only writes are the `++` below and that release),
-   so two samples of ONE session may legitimately be differenced. That is what makes them LIFETIME COUNTS and
-   not the per-member GAUGE this same census also carries: `stepUnits` says who is STANDING in an arm at the
-   instant of the census and cannot be differenced, these say what has HAPPENED and can.
-
-   THE UNIT IS NOT THE SAME FOR ALL THREE, AND THE MIDDLE ONE IS THE TRAP. `g_replay_hits` and
-   `g_replay_left_arms` are counted in ARMS — decision-vector slots. `g_replay_left` is counted in EVENTS, one
-   per divergence however many arms that divergence abandoned. Reading it as arms is the `svcMax` defect
-   exactly (a quantity quoted in the unit its NAME suggests instead of the one its ACCESSOR computes), so the
-   accessor states the pair and decide.h states it again where a reader will be standing. */
-/* …AND `g_replay_hits` NONZERO WITH NO COLD RESUME IS THE ORDINARY STATE AND IS NOT A PREFIX BEING RE-RUN,
-   WHICH IS A SECOND SENSE ERROR ON THE SAME ROW AND COSTS MORE THAN THE UNIT ONE ABOVE. The unit trap is
-   reading arms as steps; this one is reading a REPLAY as RE-EXECUTION, and the word is the whole of why — an
-   arm consumed here is one recorded QUESTION re-asked and matched, and a flow consuming it has not re-run a
-   single opcode it did not have to. A forked sibling resumes over its parent's FRAME SNAPSHOT and an O(1)
-   shared base segment (engine_sibling_assemble, whose DCHECK refuses the frameless case precisely because
-   that one WOULD "compile that program's row again and replay every side effect the parent has already
-   performed"), so what it consumes here is the arm it was forked to take, not a prefix.
-   THE DISCRIMINATOR IS `resumed` AND IT IS ALREADY PUBLISHED BESIDE THIS ROW, so the pair is read together or
-   neither is read: `replayHits` large with `resumed` at ZERO is siblings taking their own recorded arms in
-   session, which is the design; `replayHits` large with `resumed` above zero is the cold tier rebuilding, and
-   only THAT population re-executes anything. MEASURED on one real page, two runs, artifact 9c2c239d:
-   `replayHits` 3345 and 3439 with `resumed` 0, `park` 0, `replayLeft` 0 and `replayLeftArms` 0 in both — no
-   rebuild happened, no divergence abandoned an arm, and every hit was a fork arm.
-   IT IS RECORDED HERE BECAUSE THE MISREADING WAS ACTED ON: a lane offered the replay as the one admissible
-   lever left against a frontier that cannot drain — on the premise that every arm re-executes its parent's
-   prefix — and there is no such re-execution to spare. solver/flow.c carries the unit half of this and
-   engine.c's flow_switch_in carries the comment that produced it. */
-/* FORKS TAKEN OVER A SUBJECT THIS FLOW HAD ALREADY DETERMINED — an OBSERVATION with no behaviour attached,
-   landed before the refusal it is the precondition for, because §Testing requires a prediction to state its
-   own reachability witness and a guard with no population is the stub §NO-STUBS forbids.
-   WHAT IT IS ABOUT. §Solver-half's CONCRETIZE-ON-PIN says a source this flow's own equality proved is read
-   back as the REAL value, so a later branch on it "is decided by RUNNING the real predicate on a real string
-   and does not fork at all". That holds for the two MINT arms, which hand back a bare primitive — such a
-   condition never reaches this function. It does NOT hold for a source the page MATERIALISED before its gate:
-   `concolic_example` leaves the record intact, so `var role = q("role"); if (role === "admin") …` still holds
-   a concolic afterwards, and a SECOND predicate over it — `role.length > 3` — arrives here with a subject
-   whose value this flow has proved and FORKS. The domain is a singleton, so one of those two arms is a world
-   the run itself contradicted.
-   IT COUNTS THE ASK AND NOT THE OUTCOME, deliberately: the raise is gated on `forked`, which is the fork
-   actually taken, so it is a count of EVENTS that happened and not of opportunities — but it asks
-   `concolic_src_pinned` about the SUBJECT'S SOURCE, which is a fact about this flow's constraint and is
-   therefore available whether or not the pin is ever read back. A version keyed on the value's own pin bytes
-   would answer about the comparison result rather than its subject (see concolic.h for why the two accessors
-   are not interchangeable).
-   A LIFETIME COUNT, released in decide_free exactly as `g_fork_total` is, and reported BESIDE that total in one
-   call for decide_replay_stats' reason: `over_pinned <= total` is an assertion about ONE MOMENT, and two
-   getters would let a caller read the numerator after a fork and the denominator before it. */
+/* The replay ledger: what a replay did with the path it was handed. dec_replay consumes a recorded arm only when
+   the branch's constraint key equals the key recorded beside it, which is the assertion half; this is the outcome
+   half. solver/result.c's `resumed*` rows say what the document held, not what the replay did with it, and the
+   `_wfq` census's `decMax`/`candDecMax` are gauges that read the same whether a flow followed or abandoned its
+   recorded path, since an abandoning flow forks and regrows its vector.
+   They are a report, never a verdict: a resumed flow re-derives values from current sources, so a divergence is
+   permitted, and an assert on one would fire on the engine working.
+   All three are lifetime counts over the session, released in decide_free as `g_fork_total` is, with the same
+   lifetime as the `resumed` row read beside them; two samples of one session may be differenced. Units differ:
+   `g_replay_hits` and `g_replay_left_arms` count arms (decision-vector slots), `g_replay_left` counts
+   divergences, however many arms each abandoned. */
+/* `g_replay_hits` nonzero with no cold resume is the ordinary state: an arm consumed here is a recorded question
+   re-asked and matched, not re-execution. A forked sibling resumes over its parent's frame snapshot and an O(1)
+   shared base segment (engine_sibling_assemble refuses the frameless case), so what it consumes is the arm it was
+   forked to take. Read it beside `resumed`: hits with `resumed` at zero are siblings taking their own arms; with
+   `resumed` above zero, the cold tier is rebuilding, and only that population re-executes anything. */
+/* Forks taken over a subject this flow had already determined, an observation counted ahead of the refusal it is
+   the precondition for. Concretize-on-pin reads a source this flow's equality proved back as the real value, which
+   holds for the two mint arms (a bare primitive never reaches here); a source the page materialised before its
+   gate keeps its concolic record (`concolic_example` leaves it intact), so in `var role = q("role"); if (role ===
+   "admin") …` a second predicate such as `role.length > 3` arrives with a proved subject and forks, one arm a
+   world the run contradicted. It counts forks taken (gated on `forked`), asking `concolic_src_pinned` about the
+   subject's source, not the comparison result's pin bytes (concolic.h says why the two differ). A lifetime count,
+   released in decide_free, reported beside `g_fork_total` in one call so `over_pinned <= total` holds of one
+   moment. */
 static long g_fork_over_pinned;   /* EVENTS: forks whose subject this flow had already pinned             */
 static long g_replay_hits;        /* ARMS consumed on a matching question (dec_replay)                  */
 static long g_replay_left;        /* EVENTS: divergences (dec_leave_path)                               */
 static long g_replay_left_arms;   /* ARMS abandoned by those divergences, summed                        */
 
-/* THE THIRD OF decide_arm'S THREE ARMS, WHICH HAD NO ROW AT ALL WHILE THE OTHER TWO HAD FOUR BETWEEN THEM.
-   Every decision this file reaches over a SPELLABLE question is answered exactly one of three ways: REFINED out
-   of this flow's own constraint (no slot, no member, no cost), REPLAYED from a recorded slot (g_replay_hits), or
-   NEW (a fork, counted per predicate by fork_key_count, or dec_answer_here's site answer). Two of those three
-   were published and the first was counted nowhere — and the first is the whole of what a NAME buys, so
-   "how much did naming this operand buy" had no reading in this engine, on any document, ever.
-   THE PAIR IS AN ASK AND AN OUTCOME AND NOT TWO OUTCOMES, which is why `asked` exists at all. `refined` at 0
-   has two readings that take opposite work — no branch was ever re-asked inside one flow's own constraint,
-   or NO SPELLABLE QUESTION WAS EVER REACHED — and the second is the state fork_site_name's whole residual
-   describes, so it is the NEAR MISS rather than the exotic case. `asked` is the reachability witness that
-   separates them, on the idiom flow.h's `index_asked` states for the six FlowIndexChecks rows.
-   COUNTED AT decide_arm AND NOWHERE ELSE, WHICH IS A STATEMENT ABOUT concolic_branch_decided'S OTHER CALLERS
-   AND IS A DERIVATION RATHER THAN A FIGURE — `git grep -nE 'concolic_branch_decided[[:space:]]*\(' -- '*.c'
-   '*.h'` names them, and the count is not written here because it moves. At the revision this landed there were
-   THREE, of which exactly one is a DECISION: decide_value_arm and outcome_settle READ the constraint, and a
-   read is not a decision and must not consume a slot, so a counter inside that function would count a
-   population most of which decided nothing. */
+/* The third of decide_arm's three answers. A decision over a spellable question is refined from this flow's own
+   constraint (no slot, no member, no cost), replayed from a recorded slot (g_replay_hits), or new (a fork,
+   counted per predicate by fork_key_count, or dec_answer_here's site answer). `refined` counts the first, which
+   is what a name buys. `asked` is its reachability witness, on the idiom flow.h's `index_asked` uses: `refined`
+   at 0 means either no branch was re-asked inside one flow's constraint or no spellable question was reached (the
+   state fork_site_name's residual describes). Both count at decide_arm only: concolic_branch_decided's other
+   callers (decide_value_arm, outcome_settle) read the constraint without deciding, and must not consume a slot. */
 static long g_branch_asked;       /* DECISIONS reached over a question this engine can spell (decide_arm)  */
 static long g_branch_refined;     /* …of those, answered from this flow's own constraint (no slot, no fork) */
 
@@ -311,68 +144,34 @@ static void dec_ensure(int n) {
     g_dec_cap = nc;
 }
 
-/* THE ASKED QUESTION'S IDENTITY, as 32-bit FNV-1a over the constraint key's bytes.
+/* The asked question's identity: 32-bit FNV-1a over the constraint key's bytes, as quickjs.c's step_fork_key
+ * hashes an operation string for the same hazard one tier down ("A hash can only ever fail to CATCH a mismatch,
+ * never invent one"). That one lives on JSStepHdr, which dies with the frame chain; this column crosses a park.
  *
- * IT IS THE ENGINE'S OWN PRECEDENT AND NOT A CHOICE MADE HERE: quickjs.c's step_fork_key hashes an operation
- * string exactly this way, for exactly this hazard one tier down — "an outcome fork's answer was delivered to a
- * DIFFERENT question than the one that asked for it" — and states the property that makes it the right shape
- * for an assert ("A hash can only ever fail to CATCH a mismatch, never invent one"). That mechanism cannot be
- * reused here because it lives on JSStepHdr, which dies with the frame chain and therefore cannot cross a park;
- * this column is the same fact recorded on the one part of a snapshot that does cross.
+ * 32 bits: the likeliest divergence is one inserted or deleted question, and the damage is done at the first
+ * misaligned slot, where an 8-bit key would false-agree 1 in 256 to save 3 bytes per slot.
  *
- * 32 BITS, AND THE WIDTH IS ARGUED RATHER THAN INHERITED. The likeliest divergence is a SINGLE inserted or
- * deleted question, after which every remaining slot is misaligned by one — so the check gets many chances,
- * but the DAMAGE is done at the first misaligned slot and a miss there is the exact silence this column
- * exists to end. An 8-bit key false-agrees at that slot 1 in 256, which for the product's central claim is a
- * lottery rather than a check; it saves 3 bytes per slot, and this file's own measurements put the whole frozen
- * chain at 658 KiB across 16046 flows, so the saving is tens of kilobytes against a 1-in-256 chance of passing
- * the one event the column is for. A hash the engine already spells at a width it already argued is also the
- * only way there is ONE answer to "how is a question named" rather than two that drift.
- *
- * ZERO IS THE REFUSAL FOR A QUESTION THIS ENGINE CANNOT SPELL, AND IT IS NOT A SLOT VALUE. decide_key returns
- * NULL for a value with no identity (uncertainty, which keeps both arms), so every such branch hashes to 0 —
- * and 0 NEVER ENTERS THE VECTOR. dec_append and dec_seg_arm both assert `asked != 0`, and dec_fork_here
- * records no slot at all where no key was spelled, so `asked == 0` at a recording site means exactly "there is
- * nothing here to record" and the assert can say so. That is what the nudge on the last line is FOR: a
- * spelled key can never collide with the refusal, so the two states are one comparison apart in every build.
- *
- * IT USED TO BE A RESERVED SLOT VALUE, AND THAT IS THE DEFECT THIS SHAPE EXISTS TO END. A zeroed slot AGREES
- * with every other zeroed slot, so over that population the replay was still POSITIONAL — decide_arm's own
- * note records that it took slot g_c whatever the branch was, and that it is not any more. A resumed flow that
- * diverged inside the population consumed a recorded arm belonging to a DIFFERENT branch, dec_leave_path was
- * never reached, `replayLeft` reported no divergence, and `replayHits` scored the divergence as AGREEMENT —
- * so dec_replay's claim ("an arm consumed is exactly an arm whose recorded question the branch re-asked") held
- * of the spelled slots and was VACUOUS of the rest, while every instrument read green. THE RESERVATION IS WHAT
- * HID IT: reserving a value and explaining the reservation is what a careful author does, and it is also what
- * stops the next reader asking how many things are standing on the reservation. The answer was the whole
- * SITE-row population decide_fork_json publishes — see fork_site_name for what that costs and how it is
- * measured. THE DEFECT SHAPE, which outlives the numbers: a sentinel a codebase deliberately reserved, with a
- * comment justifying it, and no line anywhere counting the population sitting on it.
- *
- * WHAT REPLACED IT IS NOT A WIDER HASH AND NOT A SECOND KEY SPACE. Neither can help, and for one reason: a
- * width separates keys, and these branches have no key to separate. Inventing a distinguishing name here — a
- * display shape, a vector position, a pc — would claim exactly the knowledge the identity layer lacks, which
- * is the wrong-identity half of the trade concolic.c prices beside the field itself ("Absence costs forks; a
- * wrong identity costs the arm"), and it would make wrong consumption RARER rather than impossible. What
- * replaced it is that such a branch RECORDS NOTHING and hands its sibling a one-shot arm instead
- * (decide_fork_handoff) — which is what decide.h's site-row contract already said it did, in the words
- * "claims no replay slot", while this function was quietly recording one. The narrowing is unchanged and is
- * the one fork_site_name's residual names: give an object a name, after which decide_key stops answering NULL
- * for it and the branch moves into the predicate rows with a replay slot of its own. */
+ * 0 is the refusal for a question this engine cannot spell (decide_key returned NULL), never a slot value:
+ * dec_append and dec_seg_arm assert `asked != 0`, and dec_fork_here records no slot where no key was spelled. A
+ * zero slot would agree with every other, making the replay positional over that population, so a resumed flow
+ * diverging there would consume another branch's arm with `replayLeft` silent. Such a branch records nothing and
+ * hands its sibling a one-shot arm (decide_fork_handoff), as decide.h's site-row contract states. A wider hash or
+ * an invented name (a display shape, a position, a pc) cannot help a branch with no key, and would claim knowledge
+ * the identity layer lacks. The nudge on the last line keeps a spelled key off the refusal. */
 static uint32_t dec_key_hash(const char *key) {
     uint32_t h = 2166136261u;
 
     if (key == NULL)
-        return 0;   /* "no identity this engine can spell" — see above; a REFUSAL, never a slot value */
+        return 0;   /* "no identity this engine can spell": a refusal, never a slot value */
     while (*key) {
         h ^= (unsigned char)*key++;
         h *= 16777619u;
     }
-    return h ? h : 1u;   /* 0 is the refusal, so a spelled key that lands on it is nudged off — see above */
+    return h ? h : 1u;   /* 0 is the refusal, so a spelled key that lands on it is nudged off */
 }
 
-/* THE FROZEN CHAIN'S OWN CENSUS — the fourth of the four, counted at the two points a segment's lifetime begins
-   and ends so the pair cannot drift from the thing it counts. */
+/* The frozen chain's own census, counted at the two points a segment's lifetime begins and ends so the pair
+   cannot drift from the thing it counts. */
 static long g_dec_seg_live, g_dec_seg_entries_live, g_dec_seg_bytes_live;
 
 /* Drop a chain reference: refcount--, free the segment at zero, continue into its base. A loop, not recursion —
@@ -381,17 +180,10 @@ static long g_dec_seg_live, g_dec_seg_entries_live, g_dec_seg_bytes_live;
 static void dec_seg_unref(DecSeg *s) {
     while (s && --s->refcount <= 0) {
         DecSeg *base = s->base;
-        /* THE CENSUS'S OTHER HALF. Its own comment says the pair is "counted at the two points a segment's
-           lifetime begins and ends so the pair cannot drift from the thing it counts" — and only the BEGIN
-           point was written, so the count could only ever rise. `decide_free`'s teardown DCHECK then fired on
-           every run that froze a single segment, reporting a leak of memory these two `free`s had already
-           released. A counter that cannot go down is not a census of what is live; it is a total, and asserting
-           on it says nothing about the heap. */
+        /* The census's end point, matching the increments at construction, so the count is of live segments. */
         g_dec_seg_live--; g_dec_seg_entries_live -= s->n;
         g_dec_seg_bytes_live -= (long)sizeof *s + (long)((size_t)s->n * DEC_SLOT_BYTES);
-        /* ONE FREE FOR THE ONE BLOCK. `e` points INSIDE `k`'s allocation (see the struct), so freeing it here
-           would free a pointer the allocator never handed out — the two columns are one owned thing and this
-           is the one site that says so. */
+        /* One free for the one block: `e` points inside `k`'s allocation (see the struct). */
         free(s->k); free(s);
         s = base;
     }
@@ -403,8 +195,8 @@ void decide_chain_stats(long *segs, long *entries, long *bytes) {
     if (bytes) *bytes = g_dec_seg_bytes_live;
 }
 
-/* The running flow's decision state is over: release its chain and empty its head. `g_dec` itself is the ONE
-   reusable head buffer and is not freed here — decide_free owns it. */
+/* The running flow's decision state is over: release its chain and empty its head. `g_dec` is the one reusable
+   head buffer and is not freed here; decide_free owns it. */
 static void dec_clear(void) {
     dec_seg_unref(g_dec_base);
     g_dec_base = NULL; g_dec_below = 0; g_dec_n = 0;
@@ -412,47 +204,19 @@ static void dec_clear(void) {
 
 static int dec_total(void) { return g_dec_below + g_dec_n; }
 
-/* The arm recorded at whole-vector index `k`. The head first, because that is where a SIBLING's read lands: it
-   resumes with its cursor AT the branch it was forked over, so the one slot it replays is the topmost.
-   THE COLD TIER'S RESUMED FLOW READS THE OTHER END, and that is worth saying because the walk below is O(chain)
-   per read for it: it starts at cursor 0, so its first read is the BOTTOM segment and the loop descends the
-   whole chain to reach it, then the next read descends all but one, and so on — O(depth^2) to replay a path of
-   depth D, with D forks-deep chains made of one-arm segments. That is a few tens of milliseconds at the depths
-   this engine has measured (8000) and it is not a bound (nothing is dropped or truncated), but it is the cost
-   that grows fastest in a resume and it has one obvious root fix: a resume walks its arms in ASCENDING order,
-   so the chain can be indexed ONCE at decide_resume into the flow that is running — one array for the one
-   switched-in flow, never one per parked flow, which is the distinction that made the flat vector the wrong
-   shape to park in the first place. */
-/* …AND IT ANSWERS BOTH COLUMNS IN ONE WALK, through `asked`. The arm and the question that produced it are one
-   fact about one slot, and reading them with two descents of the chain would be two walks that can disagree
-   about which slot they landed on the first time an index calculation moves. */
-/* BOTH ASSERTS BELOW ARE `CHECK`s, AND THE THING THAT DECIDED THAT IS THE LINE UNDER EACH OF THEM RATHER THAN
-   THE SEVERITY OF THE STATE. `k` is an ARRAY INDEX and the subscript on the next line is compiled into EVERY
-   build, so a dev-only guard is compiled out in precisely the build where the dereference happens — check.h's
-   own header states what that costs on the target this engine ships on: a WebAssembly load has one trap
-   condition, running past the CURRENT MEMORY SIZE, so an index outside this vector does not fault, it RETURNS
-   A VALUE. A negative `k` reads `g_dec[k - g_dec_below]` before the allocation and `*asked` comes back a
-   uint32 nobody wrote; both are in range as far as anything downstream can tell.
-   AND WHAT IS DOWNSTREAM IS THE REPLAY ITSELF, which is why proceeding is worse than aborting even in
-   production. dec_replay compares the `asked` this writes against the question the branch just computed: a
-   garbage value that MISSES makes the flow declare a divergence and dec_leave_path TRUNCATES its recorded
-   vector at the cursor, discarding real recorded arms; a garbage value that MATCHES makes the flow take an arm
-   nothing ever recorded and advance the cursor over it. Either one is §scheduler's razor — a resume that is
-   not byte-identical, that drops or reorders or forgets — arriving as a silently different flow rather than as
-   a crash, and a frontier whose members no longer describe the paths they were parked on cannot be repaired by
-   a later run.
-   THE SECOND IS `CHECK_FAIL` FOR A REASON THE FIRST DOES NOT HAVE: falling out of this function leaves `*asked`
-   UNWRITTEN. dec_replay's `recorded` is an automatic, so the release continuation is not a plausible datum, it
-   is a read of an uninitialised object — which the compiler is entitled to reason from, and this project has
-   already measured what that entitlement produces (a self-jump emitted from an out-of-bounds scan the optimiser
-   assumed could not happen). Writing a default into `*asked` here would be the defaulted-field defect in its
-   purest form: it would make "no slot answered" indistinguishable from "the slot answered question 0".
-   IT IS ALSO UNREACHABLE ONCE THE FIRST CHECK HOLDS, and that is stated rather than removed. The chain's
-   bottom-most segment is built with `below == 0` (dec_seg_arm with a NULL base, and the first dec_freeze off a
-   cleared head), and dec_leave_path's replacement prefix keeps `ns->below = s->below`, so the descent matches
-   at the bottom for every `k >= 0`. Reaching it therefore means the chain's `below` offsets and the head's
-   origin disagree — an invariant of the CHAIN, which is why the assert stays here rather than collapsing into
-   the bounds test above it. */
+/* The arm recorded at whole-vector index `k`, with the question that produced it through `asked`, in one walk so
+   the two columns cannot land on different slots. The head is read first, because a sibling resumes with its
+   cursor at the branch it was forked over and replays the topmost slot. A cold-resumed flow starts at cursor 0
+   and descends the whole chain for each read, O(depth^2) for a path of depth D: nothing is dropped, and the root
+   fix is to index the chain once at decide_resume for the one running flow, never per parked flow.
+   Both asserts are CHECKs because the subscript is compiled into every build, and on wasm an out-of-range load
+   returns a value rather than trapping; dec_replay would then compare a garbage `asked` against the branch's
+   question, and either truncate real recorded arms as a divergence or take an arm nothing recorded. The second is
+   CHECK_FAIL because falling out leaves `*asked` unwritten, an uninitialised automatic in dec_replay, and a
+   default would make "no slot answered" read as "the slot answered question 0". It is unreachable once the first
+   holds: the bottom segment has `below == 0` (dec_seg_arm with a NULL base, or the first dec_freeze off a cleared
+   head) and dec_leave_path's replacement keeps `ns->below = s->below`, so reaching it means the chain's offsets
+   and the head's origin disagree. */
 static int dec_at(int k, uint32_t *asked) {
     const DecSeg *s;
     CHECK(k >= 0 && k < dec_total(),
@@ -469,26 +233,17 @@ static int dec_at(int k, uint32_t *asked) {
                "against an uninitialised automatic and take whichever arm that comparison fell out on");
 }
 
-/* Append one decision to the head, WITH the question it answers. The two are written by the same statement
-   because a slot whose arm is recorded and whose question is not is exactly the state this column exists to
-   make impossible. */
-/* AND EVERY SLOT IS A BOOLEAN ARM, WHICH IS THE INVARIANT THE WHOLE VECTOR RESTS ON AND HAD NOTHING SAYING SO.
-   A decision is TAKEN or NOT TAKEN; there is no N-way slot and there is no need for one, because an operation
-   with N feasible completions is asked as N-1 two-armed questions (solver_outcome). The check belongs here
-   because this is where an arm enters the vector, and because dec_replay normalises what it reads with `? 1 :
-   0` — so a slot written as 2 would come back as 1, a real arm in range, and the flow would stand on a
-   completion nothing chose with every assert on the path satisfied. */
+/* Append one decision to the head with the question it answers, written together so no slot has an arm without
+   a question. Every slot is a boolean arm: an operation with N feasible completions is asked as N-1 two-armed
+   questions (solver_outcome), and dec_replay normalises what it reads with `? 1 : 0`, so a wider value would come
+   back as a real arm nothing chose. */
 static void dec_append(int arm, uint32_t asked) {
     DCHECK(arm == 0 || arm == 1,
            "a decision vector slot was written with something that is not an arm — every slot is one branch "
            "taken or not taken, and a wider value is silently narrowed by the replay's own read");
-    /* AND EVERY SLOT CARRIES A QUESTION A LATER RUN CAN RE-ASK, which is the OTHER invariant the whole vector
-       rests on and is the one that was violated. 0 is dec_key_hash's REFUSAL and not a key: a slot carrying it
-       agrees with every other such slot, so the replay over that population is positional — a resumed flow
-       that diverges inside it consumes another branch's arm, dec_leave_path never runs, and `replayHits`
-       scores the divergence as agreement. A branch with no spellable question therefore records NOTHING
-       (dec_fork_here) and hands its sibling a one-shot arm instead (decide_fork_handoff), and this assert is
-       what makes that a CHECKED FACT rather than a claim the contract in decide.h was making about it. */
+    /* Every slot carries a question a later run can re-ask: 0 is dec_key_hash's refusal, which would agree with
+       every other such slot. A branch with no spellable question records nothing (dec_fork_here) and hands its
+       sibling a one-shot arm (decide_fork_handoff); this assert makes that a checked fact. */
     DCHECK(asked != 0,
            "a decision vector slot was recorded for a question this engine cannot spell — 0 is dec_key_hash's "
            "refusal, so this slot would agree with every other unspellable branch's and the replay over them "
@@ -500,11 +255,9 @@ static void dec_append(int arm, uint32_t asked) {
     g_dec[g_dec_n++] = (signed char)arm;
 }
 
-/* AN EMPTY SEGMENT OF `n` SLOTS, counted into the census, with its two columns placed inside ONE block — the
-   single speller of the layout the struct describes, because there are three construction sites (a freeze, a
-   sibling's arm, and the cold tier's rebuild) and a layout written three times is a layout that disagrees with
-   its own free the first time one of them changes. The caller fills `k` and `e`, and sets `below`, `base` and
-   `refcount` — the three things that differ between the three sites and nothing else does. */
+/* An empty segment of `n` slots, counted into the census, with both columns in one block: the one speller of the
+   layout for its three construction sites (a freeze, a sibling's arm, the cold tier's rebuild). The caller fills
+   `k` and `e` and sets `below`, `base` and `refcount`. */
 static DecSeg *dec_seg_alloc(int n) {
     DecSeg *s;
 
@@ -515,8 +268,8 @@ static DecSeg *dec_seg_alloc(int n) {
     CHECK(s, "decide: OOM allocating a decision segment");
     s->k = reclaim_malloc((size_t)n * DEC_SLOT_BYTES);
     CHECK(s->k, "decide: OOM allocating a decision segment's slots");
-    /* `e` LIVES INSIDE `k`'s BLOCK, after the whole uint32 column — so `k` carries malloc's alignment and `e`
-       needs none. dec_seg_unref frees `s->k` and nothing else; there is no second owner here. */
+    /* `e` lives inside `k`'s block, after the uint32 column, so `k` carries malloc's alignment; dec_seg_unref
+       frees `s->k` only. */
     s->e = (signed char *)(s->k + n);
     s->n = n;
     s->park_id = -1;   /* unnamed: no park document has written this segment (see the struct) */
@@ -525,36 +278,17 @@ static DecSeg *dec_seg_alloc(int n) {
     return s;
 }
 
-/* THIS FLOW HAS LEFT THE PATH ITS VECTOR DESCRIBES — so the vector ENDS at the cursor, and everything above it
- * belongs to a run this flow is no longer on.
+/* This flow has left the path its vector describes, so the vector ends at the cursor. A replay against current
+ * code and replies may diverge (and an @S candidate re-injected on a path recorded with a concolic source asks
+ * fewer questions once its source is concrete); this stops it consuming arms that answer questions it did not ask.
+ * Nothing is dropped or pruned: the caller forks at this branch next, so both arms run from here.
  *
- * IT IS THE MECHANISM decide_arm's key assert used to ask the next reader to build, and the assert's own words
- * are why it is a truncation rather than a widening: "the arm it would let through is another flow's". A replay
- * against TODAY's code and TODAY's replies is ALLOWED to diverge — §Time-travel-resume requires the
- * re-derivation that causes it, and §@S's re-injection point hands a candidate a path recorded by a flow whose
- * source was concolic where the candidate's is concrete, so the candidate legitimately asks FEWER questions.
- * What was missing was not permission to diverge, it was the ability to NOTICE and stop consuming.
- *
- * NOTHING IS DROPPED AND NOTHING IS PRUNED, which is what keeps this out of §NO BOUNDS. The caller forks at
- * this very branch on the line after, so both arms run from here exactly as they would at any new decision;
- * what is abandoned is a RECORD of answers to questions this run did not ask, which no flow can use.
- *
- * IT IS A NEW SEGMENT AND NOT A LOWERED ORIGIN, and that is forced by two sites rather than chosen. `g_dec_below`
- * alone does not describe a flow's vector: decide_resume RE-DERIVES it as `base->below + base->n`, so a
- * truncation held only in the global is undone by the first park; and dec_seg_arm places a sibling's slot at
- * that same `base->below + base->n`, so a fork taken straight after would put the sibling's arm above the tail
- * this flow had just left behind. Freezing the surviving prefix as its own segment makes both of those read
- * the cursor, because the chain is contiguous again — and it is what a fork already does at every other
- * branch, so this is the existing shape rather than a second one.
- * IT COSTS ONE SEGMENT, NEVER THE PREFIX. Only the segment the cursor falls INSIDE is copied — the chain below
- * it is shared by pointer exactly as every fork shares it — so this is O(that segment), which for a
- * fork-per-branch chain is one slot. Copying `[0, g_c)` would be the per-flow `malloc + memcpy` this file's
- * header measures as the quadratic it deleted.
- * THE TAIL IS RELEASED, NEVER TORN OUT. The segments above the cursor stay alive for every sibling standing on
- * them; what is dropped is THIS flow's reference, which is the same bookkeeping a flow finishing performs.
- * THE HEAD IS EMPTY HERE BY CONSTRUCTION: a slot is appended only by the forking branch, which leaves the
- * cursor at the end, so a flow that is still replaying has taken none of its own. Asserted rather than zeroed,
- * because zeroing it would silently discard decisions this flow really did make. */
+ * It freezes the surviving prefix as a new segment rather than lowering `g_dec_below`, because decide_resume
+ * re-derives the origin as `base->below + base->n`, and dec_seg_arm places a sibling's slot there too. Only the
+ * segment the cursor falls inside is copied; the chain below is shared by pointer. The tail above is released by
+ * dropping this flow's reference, and stays alive for siblings standing on it. The head is empty by
+ * construction (a slot is appended only by the forking branch, which leaves the cursor at the end); asserted,
+ * because zeroing it would discard decisions this flow made. */
 static void dec_leave_path(void) {
     DecSeg *old = g_dec_base, *s, *ns;
     int n;
@@ -566,12 +300,9 @@ static void dec_leave_path(void) {
            "a flow diverged from its recorded path at a cursor inside its OWN head — the head holds only "
            "decisions this run took and appended, each of which it asked for itself, so a slot there cannot "
            "answer a different question than the branch consuming it");
-    /* COUNTED BEFORE ANYTHING MOVES, and above the `g_c == 0` arm rather than inside the common tail, because
-       that arm RETURNS: a flow whose very first branch disagreed is the loudest divergence there is — it
-       stands on nothing and abandons its whole vector — and counting in the tail would be the one case this
-       ledger silently missed. `dec_total() - g_c` is >= 1 by the assert above it, which is what makes
-       `replayLeftArms >= replayLeft` an identity a reader can check off the printed numbers rather than a
-       property of the documents seen so far. */
+    /* Counted before anything moves and above the `g_c == 0` arm, which returns: a flow whose first branch
+       disagreed abandons its whole vector. `dec_total() - g_c >= 1` by the assert above, so
+       `replayLeftArms >= replayLeft` holds of the printed numbers. */
     g_replay_left++;
     g_replay_left_arms += dec_total() - g_c;
     if (g_c == 0) {                      /* the very first branch disagreed: this flow stands on nothing */
@@ -591,19 +322,17 @@ static void dec_leave_path(void) {
     ns->below = s->below;
     ns->base = s->base;
     ns->refcount = 1;                    /* the running flow's, and nobody else's: this prefix is new */
-    /* TAKEN BEFORE THE RELEASE, because the release may free `s` and cascade into the very segment this one is
-       about to be based on. */
+    /* Taken before the release, which may free `s` and cascade into the segment this one is based on. */
     if (ns->base) ns->base->refcount++;
     g_dec_base = ns;
     g_dec_below = g_c;
     dec_seg_unref(old);
 }
 
-/* FREEZE the head into a shared immutable segment and hand the caller ONE reference on it, on top of the
-   running flow's own. An empty head freezes to nothing: the caller takes another reference on the chain the
-   flow already stands on, which is what keeps a park/resume pair with no decisions between them from pushing an
-   empty segment per switch — the same guard concolic_pins_suspend keeps, and for the same reason (the chain's
-   depth would then count SWITCHES rather than forks). */
+/* Freeze the head into a shared immutable segment and hand the caller one reference on it, on top of the running
+   flow's own. An empty head freezes to nothing: the caller takes another reference on the chain the flow stands
+   on, so a park/resume pair with no decisions between pushes no empty segment (as concolic_pins_suspend guards),
+   and the chain's depth counts forks, not switches. */
 static DecSeg *dec_freeze(void) {
     DecSeg *s;
 
@@ -619,12 +348,9 @@ static DecSeg *dec_freeze(void) {
     return s;
 }
 
-/* ONE MORE DECISION over `base`, as its own segment — the sibling's arm at the branch. It takes the caller's
-   reference on `base` (the fork's freeze produced exactly one to give).
-   `asked` IS THE PARENT'S OWN QUESTION, not a second one: a fork is two arms of ONE branch, so the sibling's
-   slot answers the identical predicate and carries the identical key. That is what makes the sibling's replay
-   of its one recorded slot checkable at all — it re-executes the branch it was forked over and the key it
-   computes there must be the key recorded here. */
+/* One more decision over `base`, as its own segment: the sibling's arm at the branch. It takes the caller's
+   reference on `base` (the fork's freeze produced exactly one). `asked` is the parent's own question, since a fork
+   is two arms of one branch; the sibling re-executes that branch and must compute the key recorded here. */
 static DecSeg *dec_seg_arm(DecSeg *base, int arm, uint32_t asked) {
     DecSeg *s = dec_seg_alloc(1);
     DCHECK(arm == 0 || arm == 1,
@@ -642,12 +368,9 @@ static DecSeg *dec_seg_arm(DecSeg *base, int arm, uint32_t asked) {
     return s;
 }
 
-/* A FRESH FLOW STANDS ON NOTHING — an empty vector, cursor 0, and every branch it reaches is a new decision.
-   It used to copy a BIRTH VECTOR off the flow, and no caller ever supplied one: the field was the from-baseline
-   replay mechanism, built and never reached, which is exactly the shape the cold tier needed and could not use
-   (a flat array per flow is the quadratic the chain above deleted). A flow that carries a recorded path is not
-   fresh — it RESUMES, over the chain the cold tier rebuilt, at cursor 0. So there is one representation of a
-   decision vector in this engine and it is the shared chain. */
+/* A fresh flow stands on nothing: an empty vector, cursor 0, and every branch it reaches is a new decision. A flow
+   that carries a recorded path resumes over the chain the cold tier rebuilt, at cursor 0, so the shared chain is
+   the one representation of a decision vector. */
 void decide_enter(JSContext *ctx, Flow *f) {
     (void)ctx;
     dec_clear();   /* whatever the previous flow was standing on is not this one's */
@@ -655,41 +378,37 @@ void decide_enter(JSContext *ctx, Flow *f) {
     g_c = 0;
     g_cur_fn = f->fn;   /* borrowed */
     g_running = 1;
-    /* A FRESH FLOW OWES NOTHING AND IS OWED NOTHING: a handoff is minted only by a fork, and a fork hands it to
-       a sibling through that sibling's BLOB, which is decide_resume's entry rather than this one. */
+    /* A fresh flow owes and is owed nothing: a handoff is minted only by a fork and reaches a sibling through its
+       blob, which is decide_resume's entry. */
     g_pending = -1;
     concolic_clear_pins();   /* pins are per-flow: this run re-derives them as it replays its EQ gates */
 }
 
 void decide_leave(JSContext *ctx) {
     (void)ctx;
-    /* THE FLOW IS DONE, so its reference on the chain goes with it. Every other release point is a flow
-       STARTING (decide_enter / decide_resume, which clear before installing their own); a flow that finishes
-       reaches neither, and the chain it stood on would be held by a global until some later flow happened to
-       start. Released where the lifetime actually ends. */
+    /* The flow is done, so its reference on the chain goes with it; a finishing flow reaches neither
+       decide_enter nor decide_resume, which clear before installing. */
     dec_clear();
     g_running = 0;
-    g_pending = -1;   /* a handoff belongs to ONE run of ONE flow; it never survives into the next switch-in */
+    g_pending = -1;   /* a handoff belongs to one run of one flow and never survives into the next switch-in */
     g_cur_fn = JS_UNDEFINED;
 }
 
-/* THE SESSION'S TEARDOWN. The head buffer and any chain the last flow left standing are this file's, and
-   nothing else frees them — the frontier's teardown frees the flows' BLOBS, which is a different reference. */
+/* The session's teardown. The head buffer and any chain the last flow left standing are this file's; the
+   frontier's teardown frees the flows' blobs, which are a different reference. */
 void decide_free(void) {
     int i;
 
     dec_clear();
     free(g_dec); g_dec = NULL;
     free(g_dec_k); g_dec_k = NULL;
-    g_dec_cap = 0;   /* ONE capacity for both head buffers — dec_ensure grows them together or not at all */
+    g_dec_cap = 0;   /* one capacity for both head buffers: dec_ensure grows them together */
     for (i = 0; i < DECIDE_FORK_KEYS; i++) {
         free(g_fork_keys[i].key);
         g_fork_keys[i].key = NULL; g_fork_keys[i].n = g_fork_keys[i].err = 0;
     }
-    /* AND THE UNNAMED SITES, WHOSE ROWS ARE THE PAGE'S BYTES — released here for the reason the declaration
-       gives for declaring them beside the others: a census whose teardown could not see a table would hold one
-       strdup per distinct shape past the session that produced them, and a shape is unbounded in both its
-       length and its count. */
+    /* The unnamed sites' rows hold the page's bytes, unbounded in length and count, so they are released with
+       the session too. */
     for (i = 0; i < DECIDE_SITE_KEYS; i++) {
         free(g_fork_sites[i].key);
         g_fork_sites[i].key = NULL; g_fork_sites[i].n = g_fork_sites[i].err = 0;
@@ -697,24 +416,14 @@ void decide_free(void) {
     for (i = 0; i < g_fork_mech_n; i++) free(g_fork_mech[i].key);
     free(g_fork_mech); g_fork_mech = NULL; g_fork_mech_n = g_fork_mech_cap = 0;
     g_fork_total = 0;
-    /* THE LEDGER GOES WITH THE SESSION, for the reason its banner gives: it is read beside `resumed`, which
-       describes THIS session's rebuild, and a ledger that outlived the session would be a lifetime count
-       under a per-session discriminator — two moments published on one line. */
+    /* The ledger goes with the session: it is read beside `resumed`, which describes this session's rebuild. */
     g_replay_hits = g_replay_left = g_replay_left_arms = 0;
     g_fork_over_pinned = 0;
-    /* AND THE REFINEMENT PAIR, RELEASED WITH THEM FOR THEIR REASON: it is read BESIDE `replayHits` (the two
-       are two arms of one partition) and beside `resumed`, which describes THIS session's rebuild, so a pair
-       that outlived the session would be a lifetime count under a per-session discriminator. */
+    /* The refinement pair goes with it, for the same reason: it is read beside `replayHits` and `resumed`. */
     g_branch_asked = g_branch_refined = 0;
-    /* THE CHAIN HAS TWO KINDS OF HOLDER AND THIS USED TO NAME ONE. A frozen segment is referenced by the flows
-       forked below it — released by flow_registry_free's loop above — AND by every open @S SEARCH, which takes
-       one at the moment its sink is detected (solve.c's add_pending freezes the path a candidate is re-injected
-       at) and gives it back at solve_free. Naming only the flows made this assert read as "the frontier leaked"
-       for a state that was really "the searches have not been released yet", and it was the second reading that
-       kept happening: solver_agent_free called solve_free AFTER this, so any session whose sink was detected
-       while standing on a non-empty decision path aborted here with a message pointing at the wrong owner. The
-       order is fixed there; what belongs here is the list of who must have finished, because an assert that
-       names one holder cannot be read by whoever forgets to be the other. */
+    /* A frozen segment has two kinds of holder: the flows forked below it (released by flow_registry_free's
+       loop) and every open @S search, which freezes the path a candidate is re-injected at (solve.c's
+       add_pending) and gives it back at solve_free. solver_agent_free calls solve_free before this. */
     DCHECK(g_dec_seg_live == 0,
            "the decision chain outlived the session — a frozen segment is referenced by the flows forked below "
            "it and by the @S searches that froze a re-injection path at it, and both are released before this "
@@ -724,55 +433,30 @@ void decide_free(void) {
 
 int decide_cursor(void) { return g_c; }
 
-/* WHICH PREDICATE IS GROWING THE FRONTIER — see decide.h.
- *
- * A COUNT AND NOT A LAST-SEEN, because a sample of the most recent fork answers a question nobody asked: a
- * frontier growing at one branch forks there thousands of times and at a dozen other branches once each, and
- * the last one before the sample instant is as likely to be one of the dozen. The table is small and keyed by
- * the constraint key, so two forks at one source and operation are one row however many call sites spell it,
- * and a CHAIN — a source whose operation string carries a position — shows as many rows with one hit each,
- * which is itself the answer. What a fixed table does with the key that does not fit IS the admission policy,
- * and it is stated where the rows are declared: an undercount that says so is a measurement, an undercount
- * that does not is a lie. */
-/* THE ROW HOLDS THE WHOLE KEY, because a census that truncates its own key merges the rows it exists to tell
-   apart — the same defect the key construction itself carried, one layer up, and it would report a frontier
-   growing at "one predicate" that is really two. The rows themselves are declared above decide_free.
-
-   AND THE TABLE HOLDS TWO NAMESPACES, WHICH THREE SENTENCES IN THIS TREE ASSERTED AND NO LINE OF CODE DID.
-   decide_fork_json says the overflow row sits "under a name no constraint key can collide with because no key
-   is prose"; decide_fork_same_path says a synthetic row must never be "a fabricated key, which would merge
-   with a real one the moment one spelled the same way"; concolic.c says the two encodings "are disjoint in
-   every spelling this engine" has. All three are claims about a KEY'S FIRST BYTE and all three were unchecked,
-   which is the shape CLAUDE.md calls too FEW asserts: a constraint key is concolic_ident_compose's output and
-   every field of it is written `<len>:<bytes>`, so it opens on a DECIMAL DIGIT; a synthetic row is prose this
-   file and engine.c write by hand and opens on `(`. A collision does not crash and does not truncate — it
-   ADDS two populations into one row, and the row still sums into the total, so the census stays internally
-   consistent while naming a predicate that took a fraction of the forks filed under it. That is the
-   plausible-datum defect performed on the one instrument whose whole job is to say WHERE the frontier is
-   growing, and nothing downstream could ever tell.
-   THE NAMESPACE IS THE CALLER'S TO STATE, not this function's to sniff. A predicate whose key happened to open
-   on `(` would otherwise be waved through as a synthetic row by the very test meant to catch it — the
-   recognizer shape, at the one place it would silently invert the answer — and a caller passing NULL for "I
-   have no key" must not be able to masquerade as one that has nothing to say. So each site names which
-   population it is filing into, and BOTH halves are asserted here, at the one point every row converges on. */
-/* AND A THIRD MEMBER FOR THE THIRD POPULATION, stated by its filing site exactly as the other two are: a fork
-   whose value this engine could not name is not a predicate (nothing was asked and nothing recorded) and it is
-   not prose this tree authored (its name is the page's shape), so a caller that had only the other two to
-   choose from had to lie about one of them — which is how one hand-written mechanism row came to stand for a
-   population a document grows. */
+/* Which predicate is growing the frontier (see decide.h). A count, not a last-seen: a frontier growing at one
+ * branch forks there thousands of times and elsewhere once each, and the last fork before a sample is as likely
+ * to be one of the rare ones. The table is keyed by the constraint key, so forks at one source and operation are
+ * one row however many call sites spell it, and a chain (a source whose operation string carries a position)
+ * shows as many one-hit rows, which is itself the answer. The admission policy is stated where the rows are
+ * declared: an undercount that says so is a measurement. */
+/* The row holds the whole key, because a census that truncates its key merges the rows it exists to tell apart.
+   The table holds three namespaces, distinguished by first byte and asserted where every row converges: a
+   constraint key is concolic_ident_compose's output, every field written `<len>:<bytes>`, so it opens on a decimal
+   digit; a synthetic row is prose this file and engine.c write, opening on `(`; an unnamed site opens on
+   FORK_SITE_PREFIX. A collision would add two populations into one row that still sums into the total. The
+   namespace is the caller's to state, not this function's to sniff: a predicate key opening on `(` would
+   otherwise pass as synthetic, so each site names the population it files into. A fork whose value this engine
+   could not name is neither a predicate (nothing was asked or recorded) nor prose this tree authored. */
 typedef enum { FORK_ROW_PREDICATE, FORK_ROW_SYNTHETIC, FORK_ROW_SITE } ForkRowKind;
 
-/* THE BYTE THIS FILE WRITES IN FRONT OF AN UNNAMED SITE'S SHAPE — the third namespace, declared once because
-   the filing site asserts it, the emission asserts it again where the consumer reads it, and engine/build.mjs
-   partitions the object by it. It is a PREFIX rather than a property of the key because a shape is the page's
-   bytes: `(` and every decimal digit are spellings a page can produce, so nothing about the shape itself could
-   ever tell the three populations apart. */
+/* The byte this file writes in front of an unnamed site's shape: the third namespace, declared once because the
+   filing site and the emission assert it and engine/build.mjs partitions the object by it. It is a prefix because
+   a shape is the page's bytes, which can spell `(` or a digit. */
 #define FORK_SITE_PREFIX '~'
 
-/* THE CENSUS'S OWN ARITHMETIC, WALKED RATHER THAN CARRIED. A running sum kept beside the rows would be a second
-   copy of one fact, agreeing with them only for as long as somebody remembers to update both — so the check
-   that the rows account for every fork is computed FROM the rows, at every row that changes, which is where a
-   broken sum is still one operation away from its cause. Both are pure and vanish with the asserts. */
+/* The census's own arithmetic, walked rather than carried: the check that the rows account for every fork is
+   computed from the rows at every row that changes, not from a running sum kept beside them. Both are pure and
+   vanish with the asserts. */
 static long ss_sum(const ForkRow *rows, int cap)
 {
     long s = 0;
@@ -789,11 +473,10 @@ static long fork_census_sum(void)
     for (i = 0; i < g_fork_mech_n; i++) s += g_fork_mech[i].n;
     return s;
 }
-/* EVERY ROW'S OWN SHAPE. A claimed row was claimed BY AN ARRIVAL and only ever grows, so it holds at least one
-   hit — which is why a ZERO count is not a state this table can be in, and why an absent row is the only way it
-   has of saying "not seen". And `err <= n - 1` is Space-Saving's guarantee restated as a bound the publisher
-   depends on: the floor a row publishes is `n - err`, so an error that reached its count would publish a floor
-   of zero and put a site in the census that this table cannot prove took a single fork. */
+/* Every row's own shape. A claimed row was claimed by an arrival and only grows, so it holds at least one hit,
+   and an absent row is how the table says "not seen". `err <= n - 1` is Space-Saving's guarantee as the bound the
+   publisher depends on: the published floor is `n - err`, and an error reaching the count would publish a site
+   this table cannot prove took a fork. */
 static int ss_rows_sane(const ForkRow *rows, int cap)
 {
     int i;
@@ -814,9 +497,8 @@ static int fork_rows_sane(void)
         if (!g_fork_mech[i].key || g_fork_mech[i].n < 1) return 0;
     return 1;
 }
-/* The lightest claimed row's count — Space-Saving's eviction candidate, and the bound on the hits of every key
-   the table is NOT holding. -1 while a row is still unclaimed, which is the state in which nothing is evicted
-   and no key has been excluded at all. */
+/* The lightest claimed row's count: Space-Saving's eviction candidate and the bound on the hits of every key the
+   table is not holding. -1 while a row is still unclaimed, when nothing is evicted. */
 static long ss_min(const ForkRow *rows, int cap)
 {
     long m = -1;
@@ -829,9 +511,8 @@ static long ss_min(const ForkRow *rows, int cap)
     return m;
 }
 
-/* SPACE-SAVING ADMISSION — see the rows' declaration for why this algorithm and not the other. Three cases and
-   there is no fourth: the row already holding this key, a row never claimed, and a full table, where the
-   LIGHTEST row gives up its NAME and keeps its MASS. */
+/* Space-Saving admission (see the rows' declaration). Three cases: the row already holding this key, a row never
+   claimed, and a full table, where the lightest row gives up its name and keeps its mass. */
 static void ss_admit(ForkRow *rows, int cap, const char *key)
 {
     int i, light = 0;
@@ -849,11 +530,9 @@ static void ss_admit(ForkRow *rows, int cap, const char *key)
         if (!strcmp(rows[i].key, key)) { rows[i].n++; return; }
         if (rows[i].n < rows[light].n) light = i;
     }
-    /* THE MASS IS INHERITED AND THE NAME IS NOT, which is the one thing an eviction must not get wrong. The
-       displaced key's hits STAY in the table, or the rows stop summing to the forks and the frontier's
-       provenance identity stops closing; and they are recorded as the new row's ERROR, or they are published
-       as forks at the key that displaced it — an evicted site's count resurrected under another site's name,
-       which is the single failure this whole column exists to make impossible. */
+    /* The mass is inherited and the name is not. The displaced key's hits stay in the table, so the rows still sum
+       to the forks, and they are recorded as the new row's error, so they are never published as forks at the key
+       that displaced it. */
     inherited = rows[light].n;
     DCHECK(inherited == ss_min(rows, cap),
            "a fork census eviction displaced a row that is not the lightest — Space-Saving bounds a row's error "
@@ -867,10 +546,8 @@ static void ss_admit(ForkRow *rows, int cap, const char *key)
     rows[light].err = inherited;
 }
 
-/* AND THE MECHANISM ROWS, EXACT, IN A TABLE THAT GROWS — see the declaration. There is no admission policy here
-   because there is nothing to admit against: the strings are this tree's, so the population is what the call
-   sites spell and a document cannot add one. A fixed size with an overflow arm would be a bound on a set that
-   is not a page's to enlarge, and the row it dropped would be the one a reader is most likely to be reading. */
+/* The mechanism rows, exact, in a table that grows (see the declaration). The strings are this tree's, so a
+   document cannot add one, and a fixed size with an overflow arm would bound a set no page can enlarge. */
 static void fork_mech_count(const char *key)
 {
     int i;
@@ -895,34 +572,25 @@ static void fork_key_count(const char *key, ForkRowKind kind)
            "a fork census row was filed under no name at all — every row of this table is either a constraint "
            "key or a named mechanism that forks without one, and an empty name merges with nothing because it "
            "IS nothing: the row would sum into the total while describing no site a reader can go to");
-    /* A CONSTRAINT KEY OPENS ON ITS OWN LENGTH PREFIX. concolic_ident_compose writes `<len>:<bytes>` per
-       field, so `branch` composes to a key beginning "6:" and `outcome` to one beginning "7:" — there is no
-       spelling of a value's identity that opens on anything but a digit, which is precisely WHY the prose rows
-       are safe to share this namespace. If this fires, the identity grammar changed and the overflow row's own
-       collision argument went with it. */
+    /* A constraint key opens on its own length prefix: concolic_ident_compose writes `<len>:<bytes>` per field, so
+       `branch` composes to a key beginning "6:" and `outcome` to "7:". If this fires, the identity grammar changed
+       and the prose rows can collide with it. */
     DCHECK(kind != FORK_ROW_PREDICATE || (*key >= '0' && *key <= '9'),
            "a fork census row was filed as a PREDICATE under a name that is not a constraint key — every key "
            "concolic_ident_compose produces opens on a decimal length prefix, and a name that does not is "
            "either prose filed through the wrong site or an identity grammar that no longer keeps the two "
            "namespaces disjoint. Either way the synthetic rows can now collide with a predicate and the "
            "largest row of this table stops naming a site");
-    /* …AND A SYNTHETIC ROW OPENS ON `(`, which is the other half of the same claim and is what stops a
-       mechanism-row from being read as a branch the program took. */
+    /* A synthetic row opens on `(`, so a mechanism row is never read as a branch the program took. */
     DCHECK(kind != FORK_ROW_SYNTHETIC || *key == '(',
            "a mechanism that forks without a predicate filed its row under a name that does not read as one — "
            "the prose rows are told apart from constraint keys by their leading `(` and by nothing else, so a "
            "name without it is a fabricated predicate: it merges with a real key the moment one spells the "
            "same way, and until then it reports a branch the program never took");
-    /* …AND AN UNNAMED SITE IS ASSERTED BY NEITHER OF THOSE, WHICH IS A STATEMENT AND NOT AN OMISSION. Its
-       name is the PAGE's display shape, which can open on a decimal digit or a `(` as easily as anything
-       else, so there is no first byte to check here and a check that passed would be about nothing. Its
-       namespace is MADE at the emission, where FORK_SITE_PREFIX is written in front of the shape — see
-       fork_site_name for why the byte is not carried on the key, and decide_fork_json for the assert that
-       stands where a consumer actually reads it. What keeps this population out of the other two here is
-       structural and needs no byte at all: the caller states the kind and the kind picks the TABLE. */
-    /* THE POPULATION THE CALLER NAMED IS THE TABLE IT GOES INTO, which makes the three namespaces STRUCTURAL
-       and leaves the asserts above as what they always were: a check that a site is filing into the population
-       it thinks it is. Three tables cannot collide however a key is spelled. */
+    /* An unnamed site is checked by neither: its name is the page's display shape, which can open on any byte. Its
+       namespace is made at the emission, where FORK_SITE_PREFIX is written (see fork_site_name and
+       decide_fork_json). Here the caller's kind picks the table, so the three populations cannot collide however a
+       key is spelled; the asserts check that a site files into the population it thinks it is. */
     g_fork_total++;
     if (kind == FORK_ROW_PREDICATE) ss_admit(g_fork_keys,  DECIDE_FORK_KEYS, key);
     else if (kind == FORK_ROW_SITE) ss_admit(g_fork_sites, DECIDE_SITE_KEYS, key);
@@ -939,233 +607,21 @@ static void fork_key_count(const char *key, ForkRowKind kind)
            "identity `created = 1 + forks + …` no longer closes over anything a reader can subtract");
 }
 
-/* THE NAME OF A FORK THIS ENGINE COULD NOT SPELL A QUESTION FOR — the value's own display shape, BORROWED
- * from the record and never owned here (the census strdups what it admits, and the byte that puts this row in
- * its own namespace is written by decide_fork_json).
+/* The name of a fork this engine could not spell a question for: the value's display shape, borrowed from the
+ * record (the census strdups what it admits; decide_fork_json writes the `~` byte). It answers where, never
+ * what: it is never handed to concolic_constrain_branch or the question column, since `a[x]` and `b[x]` over two
+ * ordinary objects compose one shape ("Absence costs forks; a wrong identity costs the arm."). The shape is
+ * total (concolic_alloc strdups `{}` for a value handed none), so the DCHECK asserts it. It borrows rather than
+ * building a prefixed key, which would cost an allocation on every fork of this class.
  *
- * IT ANSWERS "WHERE" AND IT MUST NOT BE READ AS "WHAT". A site key is not an identity and is never handed to
- * concolic_constrain_branch or to the decision vector's question column: `a[x]` and `b[x]` over two ordinary
- * objects compose ONE shape, so filing it as a constraint would decide one flow's read from another's — which
- * concolic.c prices in one line beside the field itself ("Absence costs forks; a wrong identity costs the
- * arm."). The fork stays
- * two-armed, the replay slot stays absent, and this table records only that a fork happened here.
- *
- * THE SHAPE IS TOTAL, WHICH IS WHY THERE IS NOTHING TO DEFAULT. concolic_alloc strdups `{}` for a value handed
- * no shape at all, so every live concolic has one and a consumer never meets an absence to fill — the DCHECK
- * below asserts that rather than a `? :` past it, because a NULL here would mean the record was reached
- * through something that is not a concolic and the row would then name whatever the fallback spelled.
- *
- * AND IT BORROWS THE SHAPE RATHER THAN BUILDING A KEY, WHICH IS A COST DECISION AND NOT A STYLE ONE. This
- * runs ON EVERY FORK of this class — a quarter of a real bundle's forks — and this file's own DecSeg layout
- * note already refuses a second allocation at that frequency ("a second reclaim_malloc per segment is a second
- * allocation per FORK, and this file's whole history is about what per-fork cost does at 16046 flows"). A
- * prefixed key would be one malloc, one copy and one free per fork to prepend ONE CONSTANT BYTE, so the byte
- * is written where the object is composed instead and the table stores the page's shape verbatim. The
- * namespace is therefore created AT THE EMISSION, which is also where a consumer reads it and where
- * decide_fork_json already re-asserts the other two — a shape is the PAGE's bytes and can open on a decimal
- * digit (`5..toFixed()`), on `(`, on `_`, on anything, so nothing about the string could ever have carried
- * the distinction on its own.
- *
- * RESIDUAL — WHAT THIS DOES NOT COVER: the OPERAND still has no name. This gives the FORK an address; it does
- * not give the Object or Symbol it was taken over an identity, so such a branch still records no constraint,
- * claims no replay slot, and re-forks every time the flow reaches it. THE MIDDLE CLAUSE IS NOW CHECKED RATHER
- * THAN ASSERTED, and it is worth saying which way round that went: this sentence was TRUE ABOUT THE DESIGN and
- * FALSE ABOUT THE CODE for as long as it stood, because dec_fork_here recorded a slot under dec_key_hash's
- * refusal — so every reader who came to ask whether the replay was safe over this population was told by this
- * line that there was nothing here to be unsafe about. dec_append asserts it now (see dec_key_hash), which is
- * the difference between a contract and a claim. That is CORRECT as it stands rather than
- * unfinished — an object's only name here is its ADDRESS, so spelling one would be the wrong-identity half of
- * concolic.c's trade and would cost the arm. BOTH HALVES OF THAT ARE CHECKABLE AND WERE CHECKED. It is
- * REUSED: an object is `js_malloc(ctx, sizeof(JSObject))` in JS_NewObjectFromShape and goes back through
- * js_free_rt in free_object, with no pool and no bump arena between them, so two objects never alive at once
- * routinely share bytes. And NO PARK SURVIVES IT, which is the load-bearing half: a park document holds
- * decision vectors, world commits, deliveries and an orphan LOCATOR, and cold.c's 'o' record states what that
- * buys — "the flow replays the document exactly as an 'f' does — which is what re-creates the closure".
- * Nothing carries a heap pointer across, so the frame chain and every object in it are REGENERATED by
- * replaying the flow's arms. Whatever names an object must be reproduced by that replay, which is a strictly
- * stronger requirement than being unique inside one heap.
- *
- * THE FALSIFIER BELOW HAS FIRED, ON A REAL PAGE, WHICH IS WHY THE CLAUSE UNDER IT IS REWRITTEN INSTEAD OF
- * LEFT STANDING. Pooled over the bombed runs of one document whose first program is 1.35 MB of third-party
- * script carrying core-js: `~` rows were 26.9–37.2% of ALL forks (33597 of 102947), the largest single row
- * one shape at 22128 forks pooled, against `replayHits` of 449–1075 — a question re-asked with nothing
- * accumulating, which is exactly the reading below. POOLED, NOT ONE RUN, and this host's quantum is
- * wall-denominated: re-derive before quoting. The MECHANISM is what does not move with the numbers — core-js
- * reads an ABSENT global, derives a well-known-symbol name from it, and uses that unknown as a PROPERTY KEY
- * on dozens of prototypes, so the population is N distinct objects read with ONE unknown key and N identities
- * collapse to none.
- *
- * AND THE COST IS MEASURED ON FROZEN BYTES WITH THE CONTROL INSIDE EACH SAMPLE, which is a better number than
- * the pooled one above and is the one to re-derive against. Artifact of 9c757178, schedule `direct`, every
- * document DRAINED (rc 0 with a result emitted, so the fork counts are a function of the DOCUMENT rather than
- * of the schedule — this gate's own oracle), one run per point, and the points are exact integers rather than
- * readings of a clock:
- *   REPETITION. One object, one unknown key, the SAME branch written R times: the site row is 1, 2, 3 at
- *   R = 1, 2, 3 and the frontier is 8, 10, 12 flows — one fork and two flows PER REPEAT, for ever. In those
- *   same three documents the SPELLABLE predicate rows are FLAT at 1, 1, 2, 1 across all three, because a
- *   repeat of a named question is refined by concolic_branch_decided and costs nothing. That is "re-forks
- *   every time the flow reaches it" measured against its own control, in one file, at one instant.
- *   BREADTH. N distinct objects read with ONE unknown key: the site row is exactly 2^N - 1 — 3, 15, 63 at
- *   N = 2, 4, 6 — and the frontier is 2^(N+2) flows: 16, 64, 256. Every unnamed read doubles the world count
- *   and every world re-asks it.
- * Linear per repetition and exponential per distinct unnamed read is why a bundle doing this six times over
- * dozens of prototypes spends its whole budget and emits nothing. THE WORKLOAD IS A FIXTURE'S AND ITS SHAPE
- * IS THEREFORE ITS AUTHOR'S, so the transfer to a real document is a HYPOTHESIS this fixture cannot settle;
- * what supports it is the pooled measurement above, which is a different instrument agreeing.
- *
- * AND WHICH BASE THIS BANNER'S RECORDED POINTS USED IS NOT STATED, WHICH COST NOTHING WHILE NOTHING NAMED AN
- * OBJECT AND IS THE FIRST THING A READER NOW NEEDS. concolic.c's own measurement of the repetition shape
- * records that an INTRINSIC base and a PAGE-CREATED base gave byte-identical numbers, so by that file's own
- * evidence those points are ambiguous between two documents — and the two stopped answering alike when JS_IntrinsicName
- * landed for the first and JS_RunningSiteHash plus the mint for the second. A point quoted against today's
- * tree therefore names its base or it names neither document.
- *
- * AND THIS BANNER'S POINTS ARE NOT RE-DERIVABLE, WHICH IS A FACT ABOUT THIS REPOSITORY RATHER THAN ABOUT THE
- * MEASUREMENT. The documents they were taken on are in no tracked revision, and the artifact they name is not
- * reachable either: this repository is SHALLOW, so `git cat-file -t 9c757178` answers that it is not a valid
- * object name and the archaeology CLAUDE.md prescribes for a stale claim cannot run from a clone at all. What
- * stood here was an exact-integer measurement with neither its subject nor its artifact in reach.
- * WHAT CLOSES THAT GOING FORWARD IS THREE COMMITTED DOCUMENTS, on the precedent quickjs.c's reference-collapse
- * block sets by naming four committed ones: engine/tests/solver/unknown_key_repeat.html is the repetition
- * shape at R = 4, unknown_key_breadth.html the breadth shape at N = 3 over three distinct creation SITES, and
- * unknown_key_breadth_one_site.html that document's controlled twin over three objects of ONE site, so a
- * disagreement between the pair is attributable to the ORDINAL half of a page-created name and to nothing
- * else. Each states its base at its own head, and each asserts the SET of endpoint paths rather than a flow
- * count: the arm vector is in the path, so a refined repeat is a PURE pair and a collapsed breadth is a SHORT
- * set — readings of one run, rather than counts held against a number somebody remembers.
- *
- * AND THE REPETITION POINTS DISAGREE WITH concolic.c'S OWN MEASUREMENT OF THE SAME SHAPE, WHICH IS A FINDING
- * ABOUT THIS RECORD AND NOT ABOUT THE ENGINE. That file states, of one base and one unknown key branched R
- * times before the namer, a frontier of 2^R and forks of 2^R - 1 at R = 1, 2, 3. This record states forks of
- * R and a frontier of 6 + 2R. No one document answers both, and the arithmetic says which of them follows from
- * the mechanism this file's own residual states at fork_site_name: an unnamed read records no constraint and
- * re-forks at every reach, so in a STRAIGHT-LINE repeat both arms of repeat 1 reach repeat 2 and fork there,
- * 2^(r-1) flows reach repeat r, and the total is 2^R - 1. Linear is unreachable for that shape.
- * WHAT A LINEAR LAW WOULD REQUIRE IS ONE FLOW PER REPEAT, AND SUCH A DOCUMENT IS ONE NO NAME CAN COLLAPSE. A
- * constraint set is PER FLOW — concolic.c's PinBlob carries the segment chain and decide_enter calls
- * concolic_clear_pins to give a fresh flow an empty one — so refinement cannot cross flows however completely
- * an operand is named. R uncalled functions driven as orphans is ONE shape that fits 6 + 2R, and naming it is
- * a hypothesis rather than a reading. So the prediction that this row falls to a constant in R is true of a
- * straight-line repeat and false of a per-flow one, and the integers alone do not say which was measured.
- * AND THE SENTENCE ABOVE IS FALSE OF THE ONE FLOW POPULATION A REAL PAGE IS MADE OF, WHICH IS A CORRECTION TO
- * ITS INFERENCE AND NOT TO ITS EVIDENCE — KEPT IN ITS OWN WORDS BECAUSE BOTH FACTS IT CITES ARE TRUE AND A
- * READER WHO RE-DERIVES THE RULE FROM THEM WILL RE-ADD IT. `PinBlob` does carry the chain and `decide_enter`
- * does clear it, and neither says anything whatever about a FORK. dec_fork_here calls concolic_pins_suspend
- * and hands that blob to engine_prepare_fork; concolic_pins_suspend's own comment says it serves a fork as
- * well as a park ("the sibling starts from what the parent had at the branch AND the parent goes on holding
- * it"); EVERY ONE of engine.c's engine_sibling_assemble call sites passes it and both paths through
- * engine_prepare_fork forward it — and the number that stood here was FIVE where the construct answers SIX,
- * which is why the derivation replaces it rather than the corrected digit: `grep -cE
- * 'engine_sibling_assemble[[:space:]]*\\(ctx' engine/host/solver/engine.c` is the population, it moves on any
- * commit that adds a fork, and engine.c states the same command at its own counting site. The PROPERTY is what
- * this argument rests on and it was re-derived at all six (five pass `concolic_pins_suspend()` directly and two
- * forward a caller's blob), so the count was wrong and the claim it supports was not; engine_sibling_assemble sets `started` AND `pin_blob` on the sibling; and
- * flow_switch_in's `started` arm calls concolic_pins_resume. So REFINEMENT CROSSES EVERY FORK: a question the
- * parent pinned before the branch is refined in both arms and in every descendant of either, so what a name
- * buys is not confined to one flow's own prefix.
- * AND THE WORKED EXAMPLE IS THE SAME ERROR ONE LEVEL DOWN, WHICH IS WHY THIS IS RECORDED AS A METHOD FAILURE
- * RATHER THAN A SLIP. An orphan drive is not a fresh flow: engine.c mints it with engine_sibling_assemble and
- * concolic_pins_suspend under the row "(a function the page never called was driven — no predicate was
- * asked)", so R orphan drives inherit the driving flow's constraint and 6 + 2R is not explained by an empty
- * one either. The shape that fits it is still unnamed and naming it is still a hypothesis; what is settled is
- * that an empty constraint is not the mechanism.
- * WHAT GENUINELY STARTS EMPTY IS THREE POPULATIONS AND A FORK IS NONE OF THEM: a flow no installer marked
- * `started`, which is flow_switch_in's other arm and decide_enter's whole caller set; and the two sites that
- * install concolic_pins_blob_empty DELIBERATELY and say why — cold.c's 'f'/'c' arms and solve.c's @S
- * re-injection, both of which REPLAY the document from the baseline and re-derive every pin as they go. In a
- * session reporting `resumed: 0` the second and third contribute nothing at all, so essentially every member
- * of the frontier the pooled points above were taken on is a forked sibling holding its parent's chain.
- * SO THE COST OF AN UNNAMED OPERAND WAS NEVER BOUNDED BY A PER-FLOW CONSTRAINT, AND THE REASON IT RE-FORKS IS
- * THE ONE fork_site_name'S RESIDUAL ALREADY GIVES AND NO OTHER: there is no identity, so
- * concolic_branch_decided answers -1 WITHIN one flow exactly as it does across two. That is what the
- * repetition control in this banner measures — the SPELLABLE predicate rows are FLAT in the same three
- * documents the site row grows in — and it is a statement about NAMING and not about flow boundaries.
- * RETIREMENT: this record goes when a fork's inheritance of its parent's constraint is ASSERTED where the blob
- * is handed over, so a reader asks the code what crosses a fork rather than asking a paragraph.
- * SO THE `Linear per repetition and exponential per distinct unnamed read` CONCLUSION IS SPLIT RATHER THAN
- * DELETED: exponential per distinct unnamed read is consistent with its own points and with the mechanism,
- * and LINEAR PER REPETITION IS CONSISTENT WITH NEITHER. Nothing in
- * this tree can say which document either record was taken on; the committed documents answer it for a
- * straight-line repeat, which is the only shape a reader can now check.
- * RETIREMENT: this record goes when the repetition law in this file is stated as a reading of a document this
- * tree carries, so a number and its subject cannot be separated again.
- *
- * WHAT MUST EXIST AFTERWARD: a name for an object composed from what the BUNDLE OR THE ENGINE determines and
- * the session does not — minted where the object is CREATED and never read off its address — after which
- * concolic.c can spell an identity for a value derived from one, decide_key stops answering NULL for it, and
- * that fork moves out of this population into the predicate rows with a replay slot of its own.
- *
- * THAT MECHANISM NOW EXISTS AND ITS REACH IS FOUR NAME SOURCES, so what is left of this residual is a SITE for
- * the classes still outside it and not a design. quickjs's JS_CreationName composes (site, ordinal) and
- * concolic.c's creation_name spells it: the ordinal is minted AT CREATION from the running flow's own counter
- * (JSConcolicHooks.mint_ordinal), which is the prefix quantity this paragraph asks for, and the SITE is per
- * class — JS_OrphanHash's body locator for a CLOSURE, the pattern's own code units and flag word for a REGEXP,
- * and JS_RunningSiteHash's position of the page's own running code for an ORDINARY OBJECT. Beside those three,
- * an INTRINSIC is named by its realm slot (JS_IntrinsicName) and a REGISTERED symbol by its key
- * (JS_SymbolRegistryKey), neither of which needs an ordinal.
- * THIS READ "ITS REACH IS ONE CLASS … so a page-created CLOSURE is named and every other page-created value
- * still is not", AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE A COUNT OF WHAT IS NAMED IS WHAT A READER
- * GREPS BEFORE BUILDING A NAMER. It was already short by the REGEXP half when it was read, and short by the
- * intrinsic and the registered symbol from the paragraph below it, so a reader arriving here was told that the
- * population this residual measures had no namer reaching it when four of them did. That is the direction this
- * project rates worst: the only reader of a named absence is somebody about to go and fill it. What remains
- * genuinely unnamed is `Symbol("x")`, `[]` and the exotic-state classes, enumerated with their three clauses at
- * concolic.c's literal_ident, and none of it is this file's to build.
- *
- * AND THAT CLAUSE SAID "THE BUNDLE" ALONE, WHICH IS THE HALF THAT DOES NOT REACH THE MEASURED POPULATION.
- * `Array.prototype` is not created by the bundle; it is the realm's own class-proto slot, built at realm
- * creation beside every other intrinsic, so a namer composed only from a position in the page's script
- * answers NOTHING for the objects that population is actually taken over. An object has as many name sources
- * as it has kinds of CREATOR, and the two that matter differ in kind rather than in detail: an INTRINSIC is a
- * singleton of its realm and is named by the SLOT it occupies — a registry this machine owns and fixed at its
- * own definition, which is the one condition under which a position may name anything at all — and it needs
- * nothing else, because there is only ever one of it. A PAGE-CREATED object is named by its creation site and
- * that is NOT enough on its own, which is the next paragraph.
- * BOTH HALVES OF THAT ARE NOW BUILT AND THE PARAGRAPH IS KEPT FOR ITS ARGUMENT, WHICH IS THE PART A READER
- * RE-DERIVES: JS_IntrinsicName walks `class_proto`/`class_ctor` — the ONE array every realm goes through,
- * rather than a hand-picked list of named slots, which is what leaves a component quietly unnameable in one
- * realm — and the ordinary-object half is JS_RunningSiteHash plus the mint. What the paragraph must NOT be read
- * as is a statement that either is outstanding; the population that is, is enumerated at concolic.c's
- * literal_ident and nowhere else.
- *
- * A CREATION SITE ALONE IDENTIFIES A SET, AND THIS IS THE ONE FAILURE THE FUNCTION PRECEDENT DOES NOT HAVE —
- * so it is the one a reader who copies that precedent will rediscover. JS_OrphanHash names an uncalled
- * function by (script, line, column, body text) and needs no more, because a body is 1:1 with its position:
- * its own note says the two coordinates are "what separates the dozens of identical one-line bodies a
- * minifier emits". An object is 1:N with its position and N is unbounded — one `{}` inside a loop is one site
- * and a thousand objects. So a page-created object's name is (creation site) PLUS THE CREATING FLOW'S OWN
- * COUNT OF PRIOR CREATIONS AT THAT SITE, which is a fact about the EXECUTED PREFIX and not an index into a
- * set anybody mutates: a replay reproduces it by reproducing the prefix, and a fork carries it exactly as it
- * carries every other prefix quantity. Two flows creating the same object at the same site with the same
- * count then get the SAME name, and that is correct rather than aliasing, for JS_OrphanTakeOne's reason —
- * "Two drives of one body sharing the name is correct, not aliasing". The precedent's other two refusals
- * transfer unchanged: a live object is the address refuted above, and a heap-walk index is a fact about
- * allocation and collection order that no replay reproduces.
- *
- * HOW ITS ABSENCE WOULD SHOW: a `~` row climbing across a session while the flow that owns it consumes no
- * recorded arms — g_replay_hits flat against a growing site row — which is a question re-asked with nothing
- * accumulating rather than a search that is narrowing. THAT IS NOW THE OBSERVED STATE RATHER THAN A
- * PREDICTION, so what the sentence is still good for is its CONVERSE: after the namer lands, this row falls
- * AND `replayHits` rises on the same document, and either half alone is a fix that did not work.
- *
- * AND THAT CONVERSE IS RIGHT ABOUT THE DIRECTION AND INSENSITIVE TO R, WHICH IS WHY IT CANNOT BE THE WHOLE
- * FALSIFIER AND WHY `branchRefined` EXISTS. A named repeat is REFINED — decide_arm's first arm, which consumes
- * no slot — and never REPLAYED, so `replayHits` gains exactly the ONE slot the collapsed fork's sibling
- * replays, whatever R is, while the R-1 re-asks the name actually paid for land in an arm nothing counted.
- * Derived from the three arms rather than measured: over a straight-line repeat of one branch, an UNNAMED
- * operand gives site row 2^R - 1 and `branchAsked` 0; a NAMED one gives predicate row 1, `replayHits` 1,
- * `branchAsked` 2R and `branchRefined` 2(R-1). So the pair to read after a namer lands is the site row against
- * `branchRefined`, and `replayHits` says how many FORKS collapsed rather than how many re-asks did.
- * AND THE SAME PAIR READS THE OTHER DIRECTION TOO, WHICH IS WHAT MAKES IT A FALSIFIER FOR THE SLOT FIX
- * RATHER THAN ONLY FOR THE NAMER. While these forks recorded slots, `replayHits` was inflated by every one of
- * them that a diverged replay consumed by position — an agreement nobody had checked — so removing the slots
- * must move THREE numbers together on a document with a large site row and any resume in it: the parked chain
- * shrinks (decide_blob_stats `entries`) by about the site row's share of forks, `replayHits` FALLS by the
- * false agreements it was counting, and `replayLeft`/`replayLeftArms` RISE, because a divergence that used to
- * be absorbed by a zeroed slot now meets a spelled question and reaches dec_leave_path. A run where `entries`
- * does not fall is a run where this fix did not fire at all; one where `entries` falls and the ledger does not
- * move is a document whose replays never diverged, which the same census can say (`resumed`), and is not
- * evidence either way. */
+ * Named residual: the operand has no name. Not covered: `Symbol("x")`, `[]` and the exotic-state classes
+ * enumerated at concolic.c's literal_ident; a branch over one records no constraint, claims no replay slot
+ * (dec_append asserts it) and re-forks at each reach, because an address is reused and survives no park.
+ * Next diff builds: creation names for those classes, beside JS_CreationName's (site, creating flow's ordinal),
+ * JS_IntrinsicName and JS_SymbolRegistryKey, after which decide_key stops answering NULL and the fork moves to the
+ * predicate rows (engine/tests/solver/unknown_key_*.html state the shapes). How its absence shows: on one
+ * document a `~` row grows while `branchRefined` stays flat; a working namer lowers the site row and raises
+ * `branchRefined`, while `replayHits` gains one slot per collapsed fork. */
 static const char *fork_site_name(JSValueConst subject) {
     const char *sh = concolic_shape_c(subject);
 
@@ -1177,85 +633,30 @@ static const char *fork_site_name(JSValueConst subject) {
     return sh;
 }
 
-/* THE CENSUS SERIALIZES ITSELF, which is the rule solver/result.c states for every surface it composes:
-   endpoint.c walks its deduped endpoints, solve.c its fire-verified sinks, and the table this file owns is
-   rendered by this file. The alternative is what it replaced — an indexed accessor whose ONE caller was a
-   printf in a third file, hand-escaping keys it did not own — and the keys are precisely why that was the
-   wrong shape: a constraint key carries the SEPARATOR BYTES it is built with, which are control characters, so
-   the escaping is a fact about this table's own contents and belongs where the table is.
-
-   IT MOVED FOR THE REASON EVERY OTHER CENSUS DID (result.h): its only emission was `run_scheduler`'s
-   `@PROGRESS` line, and `run_scheduler` is reached only through `engine_run`, so "which predicate is growing
-   the frontier" — the first question a run whose frontier explodes asks — had never once been answerable off a
-   production run. It rides the result document as `_forkAt`.
-
-   WHAT A ROW PUBLISHES IS ITS FLOOR, AND THE ERRORS ARE PUBLISHED TOGETHER AS ONE ROW OF THEIR OWN — which is
-   the whole of how an approximate census stays quotable. A predicate row emits `n - err`: hits at that key and
-   at no other, whatever was evicted. The inherited mass is emitted once, summed, under a prose name no
-   constraint key can collide with because no key is prose. So the three phases below are a PARTITION of
-   Space-Saving's counters — exact mechanism rows, predicate floors, and the errors — and they therefore still
-   sum to the forks, which is the identity a reader subtracts the frontier's provenance out of.
-   AND EACH OF THE THREE SENTENCES A READER CAN BUILD FROM THAT IS TRUE RATHER THAN NEARLY TRUE. The overflow
-   row is ABSENT exactly when no eviction ever happened, so its absence is the positive statement that no site
-   was excluded. It LEADS when more mass is unattributable than the best-proven site can claim, which is the
-   table saying it has not answered. And below that it is the bound on how far any one named row understates —
-   a row's true count is at least its published floor and at most that floor plus this row — so "the named rows
-   are a floor" stops being a caution and becomes the guarantee.
-   WHAT IT CANNOT SAY IS WHICH KEYS ARE IN IT, so it carries the ONE NUMBER THAT BOUNDS THE ONES IT IS NOT. An
-   evicted site and a site this document never reached are both simply ABSENT here, and no arrangement of the
-   ROWS separates them. Space-Saving does separate them, with a guarantee about a number the rows do not carry:
-   a key the table is not holding has taken AT MOST the lightest resident row's count. So that number is emitted
-   as a member of this object, and the two states stop being one silence — below it a key may have been evicted,
-   above it a key cannot have been, and a reader can say which of "one hot predicate fell out of the table" and
-   "a long tail" it is looking at, which decide.h names as two readings with opposite fixes.
-   IT IS A MEMBER AND NOT A ROW, AND THE DIFFERENCE IS THE WHOLE OF ITS ESCAPING: it is a BOUND on hits, not a
-   count OF hits, so summing it into the total would put mass in the denominator that no fork ever produced. It
-   is told apart from a row by its leading `_`, which neither namespace can spell — a constraint key opens on
-   concolic_ident_compose's decimal length prefix and a mechanism row on `(`, both asserted at fork_key_count
-   and again at the row loop below, where the consumer actually reads them.
-   IT IS PRESENT WITH EVERY OBJECT THAT HAS ROWS, AND ITS VALUE RATHER THAN ITS PRESENCE CARRIES THE STATE.
-   Zero is the exact answer where nothing was ever excluded, so the state a sentinel would have marked is a
-   real reading of a real number and there is nothing to decode. What that buys is at the consumer: a member
-   that appeared only sometimes could not be told from one a PRODUCER PREDATING IT never wrote, and a stale
-   census would then be partitioned happily — its old overflow bucket is prose opening on `(`, exactly like a
-   mechanism row, so it would be filed among the sites this tree names and reported as the largest of them.
-   Present with every non-empty object, absence beside rows means one thing only. The two statements are then
-   checked against each other instead: a positive bound and a non-zero overflow row are one fact stated twice
-   (a spill is an eviction's residue; an eviction is the only way a key leaves this table), so a consumer that
-   sees one without the other is looking at a census that contradicts itself.
-   WHAT IS STILL NOT EMITTED is each row's OWN inherited error, which would give a TIGHT per-row bound instead
-   of the summed one this object publishes as the overflow row. It needs a shape change (`key -> [floor, err]`)
-   that extension/bridge.js's "every value in this census is a finite number" DCHECK and popup.js's generic
-   `key x N` renderer both refuse, so it lands with those two readers or not at all. Its absence shows as a
-   reader that can bound a row's understatement only by the WHOLE spill: with one heavy row and 63 exact ones,
-   the exact rows are quoted as though they might each be understating by the entire inherited mass. Caller
-   frees. */
+/* The census serializes itself, as solver/result.c's rule says for every surface (endpoint.c its endpoints,
+   solve.c its sinks): a constraint key carries control-character separators, so the escaping belongs with the
+   table. It rides the result document as `_forkAt`. A predicate row publishes its floor `n - err`; the inherited
+   mass is published once, summed, as an overflow row under prose no key can spell, so mechanism rows, floors and
+   overflow partition the counters and still sum to the forks. The overflow row is absent exactly when nothing
+   was evicted, and bounds how far any named row understates. Each table also publishes, as a `_`-prefixed member
+   rather than a row (it is a bound on hits, not hits, and must not enter the sum), Space-Saving's bound on a key
+   it is not holding: the lightest resident count, which separates an evicted site from one never reached. It is
+   present on every object with rows, with value 0 when nothing was excluded, so its absence means a producer
+   that predates it.
+   Residual: each row's own error is not emitted. Next diff builds `key -> [floor, err]`, which
+   extension/bridge.js's finite-number DCHECK and popup.js's `key x N` renderer refuse, so it lands with them. Its
+   absence shows as exact rows quoted as though each might understate by the whole spill. Caller frees. */
 char *decide_fork_json(void)
 {
     static const char OVERFLOW_KEY[] = "(forks the named rows cannot prove are their own)";
-    /* SPACE-SAVING'S BOUND ON EVERY KEY THIS TABLE IS NOT HOLDING — see above for why it is a member rather
-       than a row, and why it appears only beside the overflow row. IT IS NAMED AS THE SENTENCE IT IS because
-       the surface that renders this object renders it generically, as `key x N` (extension/popup.js), so a
-       terse field name would arrive at a person in the exact shape of a fork site with a count beside it —
-       which is the non-site-rendered-as-a-site defect this whole column exists to end, reintroduced one
-       consumer downstream. Read as prose with its value appended, this name states its own meaning.
-       IT IS WRITTEN WITH NO ESCAPING PASS, which is sound because it is this file's own literal and not a
-       page's bytes: the only way a quote or a control character could enter it is a backslash escape in the C
-       source, and engine/build.mjs reads this literal to tell the member from a row and REFUSES an escaped one
-       rather than half-decoding it — so the spelling that would break this write is the spelling that stops
-       the build. A key the loop below escapes is the PAGE's and has no such guarantee. */
+    /* Space-Saving's bound on every key this table is not holding. It is named as a sentence because
+       extension/popup.js renders the object generically as `key x N`, and a terse name would read as a fork site.
+       It is this file's literal, written unescaped; engine/build.mjs reads it to tell the member from a row and
+       refuses an escaped spelling. */
     static const char LIGHTEST_KEY[] = "_the most any site this table is not holding can have taken";
-    /* THE THIRD POPULATION'S OWN PAIR, AND THEY ARE ITS OWN BECAUSE A BOUND IS ABOUT ONE TABLE. Space-Saving's
-       guarantee — a key the table is NOT holding took at most the lightest resident count — is a statement
-       about the table that did the evicting, so publishing one number over two tables would answer the
-       question "could an excluded PREDICATE outrank the named ones" with a fact about the shapes and the other
-       way round. Two tables, two spills, two bounds, and each pair is checked against the other exactly as the
-       first one is.
-       THE OVERFLOW ROW OPENS ON `(` AND NOT ON THE SITE PREFIX, which is deliberate and is the same reading
-       the first one already has: it is not a site, it is the mass of the sites this table CANNOT name, so it
-       belongs to the prose namespace and is matched BY NAME before any byte test — the rule decide.h states
-       for its twin. Naming it with the prefix would put a non-site among the sites, which is the
-       non-site-rendered-as-a-site defect this whole column exists to end. */
+    /* The unnamed sites' own pair, since a bound is about the one table that did the evicting. The overflow row
+       opens on `(`, not the site prefix: it is the mass of sites the table cannot name, matched by name before
+       any byte test, as decide.h states for its twin. */
     static const char SITE_OVERFLOW_KEY[] =
         "(forks at unnamed sites the named shapes cannot prove are their own)";
     static const char SITE_LIGHTEST_KEY[] =
@@ -1263,21 +664,19 @@ char *decide_fork_json(void)
     size_t n = 3;   /* "{}" and the NUL */
     char *out;
     size_t len = 0;
-    /* MEMBERS, NOT ROWS — the count exists to place the separating commas, and this object now has a member
-       that is not a row, so a name that said `rows` would be one of the two facts wearing the other's name in
-       the one function whose whole subject is telling them apart. */
+    /* Members, not rows: the count places the separating commas, and this object has members that are not
+       rows. */
     int i, phase, members = 0;
     long spill = 0, sum = 0, lightest;
     long site_spill = 0, site_lightest;
 
-    /* THE SIZE IS COUNTED FROM THE ROWS THEMSELVES rather than estimated, because a key is the PAGE's bytes
-       and has no bound this file may assume. Every byte of a key can escape to six (`\u00XX`), a row costs the
-       two quotes, the colon, the comma and a long's widest 20 digits, and the object costs its braces. */
+    /* The size is counted from the rows, since a key is the page's bytes: each byte can escape to six
+       (`\u00XX`), a row costs two quotes, the colon, the comma and a long's widest 20 digits, and the object its
+       braces. */
     for (i = 0; i < DECIDE_FORK_KEYS; i++)
         if (g_fork_keys[i].key) { n += strlen(g_fork_keys[i].key) * 6 + 24; spill += g_fork_keys[i].err; }
-    /* …AND A SITE ROW COSTS ONE BYTE MORE THAN ITS KEY, because the `~` that puts it in its own namespace is
-       written HERE and is not part of the stored key (fork_site_name says why). It sits inside the 24 bytes
-       every row already carries for its punctuation and its widest count, so it is priced and not slack. */
+    /* A site row costs one byte more than its key, for the `~` written here (fork_site_name says why); it fits in
+       the 24 bytes every row carries. */
     for (i = 0; i < DECIDE_SITE_KEYS; i++)
         if (g_fork_sites[i].key) { n += strlen(g_fork_sites[i].key) * 6 + 24; site_spill += g_fork_sites[i].err; }
     for (i = 0; i < g_fork_mech_n; i++) n += strlen(g_fork_mech[i].key) * 6 + 24;
@@ -1287,19 +686,10 @@ char *decide_fork_json(void)
     out = malloc(n);
     if (!out) return NULL;
     out[len++] = '{';
-    /* THE BOUND FIRST, WHERE A READER MEETS IT BEFORE THE ROWS IT QUALIFIES, AND WITH EVERY OBJECT THAT HAS
-       ROWS AT ALL. Emitting it only where it BITES was the other candidate and it is the worse one for a
-       reason that is about the consumer rather than about this table: a member that comes and goes cannot be
-       told from a member a PRODUCER PREDATING IT never wrote, so a reader handed a stale line would partition
-       it happily and mis-file an old overflow bucket — prose, opening on `(` exactly as a mechanism row does —
-       among the sites this tree names. Present with every non-empty object, its absence beside rows is
-       structurally "this census predates this reader" and there is nothing else it can be.
-       AND THE VALUE IS THE TIGHT ONE IN BOTH STATES, so there is no sentinel to read as a number. Nothing is
-       excluded until an eviction, an eviction leaves an error no later eviction can clear (a displaced row
-       hands over `inherited >= 1` and admission never zeroes an err on a full table), so `spill == 0` IS
-       "every key ever seen is resident" and the most an absent site can have taken is exactly ZERO. Above
-       zero it is Space-Saving's bound, which holds only over a full table — and a full table is what a
-       non-zero spill proves. `{}` is untouched and still says this document never forked. */
+    /* The bound first, before the rows it qualifies, on every object that has rows, so its absence beside rows
+       means only a producer that predates it. `spill == 0` means every key seen is resident (an eviction leaves
+       `inherited >= 1` that no admission clears), so the bound is exactly 0; above zero it is Space-Saving's,
+       which holds over the full table a non-zero spill proves. `{}` still says this document never forked. */
     lightest      = spill      ? ss_min(g_fork_keys,  DECIDE_FORK_KEYS) : 0;
     site_lightest = site_spill ? ss_min(g_fork_sites, DECIDE_SITE_KEYS) : 0;
     if (g_fork_total) {
@@ -1325,11 +715,8 @@ char *decide_fork_json(void)
         DCHECK(len < n, "the fork census overran the size counted for its own bound — that member's key is "
                         "this file's own literal and was priced from it, so it does not fit only if the "
                         "pricing above stopped being over the same string");
-        /* AND THE UNNAMED SITES' BOUND, ON EVERY OBJECT THAT HAS ROWS, FOR ITS TWIN'S REASON EXACTLY — a
-           member that came and went could not be told from one a producer predating it never wrote, and a
-           stale line would then be partitioned happily with an unprefixed site read as a predicate floor. The
-           two DCHECKs above are made again over this pair rather than assumed from it: they are Space-Saving's
-           guarantee restated over ONE table, and this is a different table with a different history. */
+        /* The unnamed sites' bound, on every object with rows, for its twin's reason; the two DCHECKs are made
+           again over this table, which has its own history. */
         DCHECK(site_lightest >= 0,
                "the fork census has unattributable mass among its UNNAMED SITES and yet reports an unclaimed "
                "site row — an eviction only ever happens on a FULL table, so this pair says a shape was "
@@ -1356,7 +743,7 @@ char *decide_fork_json(void)
                      phase == 3 ? DECIDE_SITE_KEYS : 1); i++) {
         const char *k;
         long hits;
-        /* THE ONE PHASE WHOSE NAMESPACE IS MADE HERE RATHER THAN CARRIED ON THE KEY — see fork_site_name. */
+        /* The one phase whose namespace is made here rather than carried on the key (see fork_site_name). */
         int prefixed = (phase == 3);
 
         if (phase == 0) {                               /* the mechanisms: exact, and no error to publish */
@@ -1375,11 +762,8 @@ char *decide_fork_json(void)
             k = SITE_OVERFLOW_KEY; hits = site_spill;
         }
         sum += hits;
-        /* THE NAMESPACE, ASSERTED WHERE THE CONSUMER READS IT AND NOT ONLY WHERE THE ROW WAS FILED.
-           fork_key_count asserts each site files into the population it thinks it is; this asserts that what
-           comes OUT still carries the first byte the object is partitioned by. A reader that wants "which
-           PREDICATE" rather than "which fork site" splits these rows on exactly this test, so a third spelling
-           does not arrive as an unknown — it arrives as one of the other two, or as mass in neither. */
+        /* The namespace, asserted where the consumer reads it: a reader splitting predicates from fork sites
+           tests exactly this first byte, so a fourth spelling would be read as one of the three. */
         DCHECK(prefixed || *k == '(' || (*k >= '0' && *k <= '9'),
                "the fork census is emitting a row whose name opens on none of its three namespaces — a "
                "constraint key opens on concolic_ident_compose's decimal length prefix, a mechanism row and "
@@ -1393,9 +777,8 @@ char *decide_fork_json(void)
                "shape a document forked at among the rows a document cannot grow");
         if (members++) out[len++] = ',';
         out[len++] = '"';
-        /* THE NAMESPACE, WRITTEN. It is one byte in front of the page's own bytes rather than a byte stored on
-           every row, and it is written INSIDE the quotes and ABOVE the escaping loop because it is this file's
-           literal and not the page's: escaping it would be escaping a character this file chose. */
+        /* The namespace byte, written inside the quotes and before the escaping loop, because it is this file's
+           literal, not the page's. */
         if (prefixed) out[len++] = FORK_SITE_PREFIX;
         for (; *k; k++) {
             if (*k == '"' || *k == '\\') { out[len++] = '\\'; out[len++] = *k; }
@@ -1430,76 +813,49 @@ char *decide_fork_json(void)
 
 long decide_fork_total(void) { return g_fork_total; }
 
-/* See decide.h. THE TOTAL IS RE-REPORTED HERE RATHER THAN LEFT TO `decide_fork_total` FOR THE SIBLINGS' REASON:
-   `over_pinned <= total` is an assertion about ONE MOMENT, and a caller joining two getters by hand could read
-   the numerator after a fork and the denominator before it and publish a fraction above 1 that no instant of
-   this session held. It is not a second answer to the total's question — it is the same answer, handed over in
-   the one call that makes the containment checkable. */
+/* See decide.h. The total is reported with the pinned count in one call, so `over_pinned <= total` holds of one
+   moment rather than of two getters read around a fork. */
 void decide_fork_pinned_stats(long *total, long *over_pinned) {
     if (total) *total = g_fork_total;
     if (over_pinned) *over_pinned = g_fork_over_pinned;
 }
 
-/* See decide.h. THE THREE ARE HANDED BACK IN ONE CALL BECAUSE THE IDENTITY OVER THEM IS AN ASSERTION ABOUT ONE
-   MOMENT, and this session has already paid for the other shape: two rows read at two ends of a run were
-   differenced into a contradiction that held of no quantity, and three mechanisms were written down for it
-   before the file's own owner read the constant that explained it. Three separate getters would let a caller
-   sample `left` before a divergence and `leftArms` after it and publish `leftArms == 0 && left == 1` — an
-   identity violation manufactured by the reading rather than by the engine. One call, one moment. */
+/* See decide.h. The three are handed back in one call because the identity over them holds of one moment: three
+   getters would let a caller sample `left` before a divergence and `leftArms` after it and publish a violation
+   the engine never held. */
 void decide_replay_stats(long *hits, long *left, long *left_arms) {
     if (hits) *hits = g_replay_hits;
     if (left) *left = g_replay_left;
     if (left_arms) *left_arms = g_replay_left_arms;
 }
 
-/* See decide.h. BOTH IN ONE CALL for decide_replay_stats' reason exactly: `refined <= asked` is an assertion
-   about ONE MOMENT, and two getters would let a caller read the denominator before a refinement and the
-   numerator after it and publish a fraction above 1 that no instant of this session ever held. */
+/* See decide.h. Both in one call, for decide_replay_stats' reason: `refined <= asked` holds of one moment. */
 void decide_refine_stats(long *asked, long *refined) {
     if (asked) *asked = g_branch_asked;
     if (refined) *refined = g_branch_refined;
 }
 
-/* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps the
-   whole vector it has accumulated (every arm it appended while it ran) + its cursor, so on resume it consumes
-   the SAME decisions from where it left off. decide_suspend snapshots; decide_resume restores + re-binds
-   cur_fn. It is also the shape the cold tier rebuilds a parked flow into — a chain and a cursor is the whole of
-   one flow's decision state whether the chain was frozen by this session or read back out of a recipe. */
-/* A BLOB IS A POINTER AT A SEGMENT and a cursor — the whole of one flow's parked decision state, and it is
-   O(1) whatever the depth of the vector it names. It was a `malloc(dec_n)` + `memcpy` of the entire vector, on
-   every park AND on every fork, which is where the quadratic came from. */
-/* `pending` IS A HANDOFF AND NOT A RECORDED DECISION, AND THE TWO ARE DIFFERENT KINDS RATHER THAN TWO
-   SPELLINGS OF ONE. A recorded slot is REPLAYABLE: it carries the question it answers, so any flow re-reaching
-   that question can check itself against it and dec_replay's whole claim rests on that. A branch this engine
-   cannot spell has no such question — so a slot for it is not a replay entry, it is a hole with an index, and
-   a population of them makes the replay positional over exactly that population (dec_key_hash carries what
-   that cost). The arm the sibling must take is still a real fact; it is a fact about THIS FORK and THIS
-   SIBLING rather than about a path anybody can re-walk. So it rides the blob the fork mints, is taken by the
-   first decision the sibling reaches, and dies there. -1 is "nothing owed", which is every blob but a fork's
-   over an unspellable branch.
-   ITS PRECONDITION IS engine_prepare_fork'S OWN AND IS NOT A NEW ONE — the sibling re-reaches the ask as the
-   FIRST question it asks, which is what that function's two asserts about live frames and page activations
-   exist to guarantee, and which the recorded-slot form relied on just as completely: that slot sat AT the
-   sibling's cursor, so a sibling whose step asked something else first consumed it for the wrong branch with
-   nothing to say so. decide_arm asserts the precondition instead of trusting it, and DISCARDS the handoff
-   rather than misapplying it.
-   IT DOES NOT CROSS THE COLD TIER, AND THAT IS A NAMED RESIDUAL RATHER THAN AN OVERSIGHT. NOT COVERED: a
-   sibling paged out before it has run loses the handoff, because the cold tier writes a chain and a cursor
-   (decide_blob_seg/decide_blob_cursor) and this is neither. WHAT THE NEXT DIFF BUILDS: a column on the park
-   document's flow record carrying it, written where the pager emits the cursor and read back in
-   decide_blob_new — plumbing in cold.c, which is why it is named here rather than guessed at. HOW ITS ABSENCE
-   WOULD SHOW: such a flow resumes at cursor 0 owing nothing, re-runs, re-reaches its branch and FORKS there —
-   so both arms still run and nothing is dropped, and the cost is one duplicate flow per cold-resumed un-run
-   sibling of an unspellable fork. It never shows as a missing world, which is why it is a residual and not a
-   defect. */
+/* Swap the running decision state when the scheduler interleaves flows. A paused flow keeps its whole vector and
+   its cursor, so on resume it consumes the same decisions from where it left off; decide_suspend snapshots,
+   decide_resume restores and re-binds cur_fn. The cold tier rebuilds a parked flow into the same shape. A blob is
+   a pointer at a segment and a cursor, O(1) whatever the vector's depth.
+   `pending` is a handoff, not a recorded decision. A recorded slot carries the question it answers, so a flow
+   re-reaching it can check itself; a branch this engine cannot spell has no question, and a slot for it would make
+   the replay positional (see dec_key_hash). So the arm rides the blob the fork mints, is taken by the first
+   decision the sibling reaches, and dies there; -1 means nothing owed. Its precondition is engine_prepare_fork's
+   (the sibling's first ask is the forked branch); decide_arm asserts it and discards a handoff it cannot apply.
+   Named residual: the handoff does not cross the cold tier. Not covered: a sibling paged out before it ran loses
+   it, since the pager writes a chain and a cursor (decide_blob_seg/decide_blob_cursor). Next diff builds: a
+   column on the park document's flow record, written where the pager emits the cursor and read in
+   decide_blob_new (cold.c). How its absence would show: such a flow resumes at cursor 0, re-reaches its branch and
+   forks, so both arms run and the cost is one duplicate flow per cold-resumed un-run sibling. */
 typedef struct { DecSeg *seg; int c; signed char pending; } DecideBlob;
 void *decide_suspend(void) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
     b->seg = dec_freeze();   /* the blob owns the reference the freeze hands back */
     b->c = g_c;
-    /* CARRIED, NEVER LAUNDERED. A sibling can be preempted between the frame clone and the branch it was
-       forked over — the attention check is per-opcode and its ask is the first one — so a park that dropped
-       the handoff would silently delete the arm this fork exists to explore. */
+    /* Carried, never laundered: a sibling can be preempted between the frame clone and the branch it was forked
+       over, and a park that dropped the handoff would delete the arm this fork exists to explore. */
     b->pending = g_pending;
     return b;
 }
@@ -1527,10 +883,8 @@ void decide_resume(void *blob, JSValueConst fn) {
 }
 void decide_blob_free(void *blob) { DecideBlob *b = blob; if (b) { dec_seg_unref(b->seg); free(b); } }
 
-/* THE COLD TIER'S READ AND WRITE OF THIS CHAIN — see decide.h for why the chain is the only part of a snapshot
-   that has an identity outside this session's heap, and why the SEGMENTS rather than the flattened vector are
-   what crosses. The pointers are opaque to the caller: it names a segment by a park-local ordinal it assigns
-   itself, never by anything of this file's. */
+/* The cold tier's read and write of this chain (decide.h says why the segments, not a flattened vector, cross).
+   The pointers are opaque to the caller, which names a segment by a park-local ordinal it assigns. */
 const void *decide_blob_seg(const void *blob) {
     const DecideBlob *b = blob;
     DCHECK(b != NULL, "the cold tier asked for the decision chain of a flow that has none parked — a flow that "
@@ -1577,16 +931,13 @@ void *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, 
     memcpy(s->k, keys, (size_t)n * sizeof *keys);
     s->below = b ? b->below + b->n : 0;
     s->base = b;
-    /* ONE reference for the base link, exactly as a freeze transfers one, and ONE for the rebuilder — which is
-       the only difference between building a chain forwards and freezing one backwards: the rebuilder holds
-       every segment it made until the whole park is decoded, because a segment's users are decoded after it. */
+    /* One reference for the base link, as a freeze transfers one, and one for the rebuilder, which holds every
+       segment it made until the whole park is decoded, because a segment's users are decoded after it. */
     if (b) b->refcount++;
     s->refcount = 1;
-    /* A REBUILT SEGMENT IS UNNAMED, and that is not merely bookkeeping: the ordinal a resume reads belongs to
-       the document it is READING, and the id here is the name in the document this session will WRITE. A
-       resumed flow that is parked again is written out under a fresh ordinal beside every other flow of this
-       session, which is the only thing that keeps one park document's ordinals dense in one namespace.
-       dec_seg_alloc set it; stated here because this is the site a reader checks it at. */
+    /* A rebuilt segment is unnamed (dec_seg_alloc set -1): the ordinal a resume reads belongs to the document it
+       read, while `park_id` names the segment in the document this session will write, so ordinals stay dense in
+       one namespace. */
     return s;
 }
 
@@ -1616,45 +967,27 @@ void *decide_blob_new(void *seg) {
     CHECK(b, "decide: OOM rebuilding a parked flow's decision state");
     b->seg = seg;
     if (seg) ((DecSeg *)seg)->refcount++;
-    /* NOTHING OWED — a handoff is a live fork's transfer to the sibling standing at its branch, and this flow
-       is not standing anywhere: it re-runs the document from the top. See DecideBlob's `pending` for what a
-       resumed sibling loses here and why losing it costs a duplicate flow rather than an arm. */
+    /* Nothing owed: a handoff is a live fork's transfer to the sibling at its branch, and this flow re-runs the
+       document from the top (see DecideBlob's `pending`). */
     b->pending = -1;
-    /* CURSOR 0 — the whole of what makes this a REPLAY. The flow re-runs the document from its first script and
-       consumes one recorded arm at each branch it re-reaches; when the cursor catches up with the end of the
-       chain it forks like any other flow, which is where its exploration continues. */
+    /* Cursor 0 makes this a replay: the flow re-runs the document and consumes one recorded arm at each branch it
+       re-reaches, and forks like any other flow once the cursor reaches the chain's end. */
     b->c = 0;
     return b;
 }
 
-/* See decide.h. `entries` is how many decisions the flow stands on, which is a property of the CHAIN and is
-   therefore SHARED with every ancestor; `bytes` is what the flow itself owns, which is now the blob and nothing
-   else. Reporting both is the point — the pair is what says the sharing is real.
-   AND THE BLOB CARRIES A SECOND NUMBER THIS ONE IS NOT: the CURSOR. The chain's length is where the recorded
-   path ENDS and the cursor is where the flow standing on it has GOT TO, and for a flow installed by
-   decide_blob_new the two are as far apart as they can be — a whole recorded path under a cursor of 0, before
-   the flow has executed one opcode. So a caller that wants a DISTANCE TRAVELLED must not take this number: it
-   is the denominator, it is fixed from the instant the blob is built, and a replaying flow reads it identical
-   at every sample from its creation to its last. That is the §svcMax defect in the shape a size/position pair
-   makes it available in — a quantity read in the unit its variable's NAME suggests instead of the one this
-   accessor computes — and it is stated here because this is the line that computes it.
-   THE PARKED CURSOR IS ASSERTED HERE AND NOT ONLY AT THE RESUME THAT CONSUMES IT. decide_resume checks
-   `g_c <= dec_total()` when it installs a blob, which is one switch-in later than the earliest moment a
-   corrupted one can be seen: the frontier's census walks every PARKED blob per sample, so this is where a
-   cursor that has come apart from its own chain is caught while the member that holds it can still be named.
-   The two reads are the same invariant at the two ends of a park, which is what makes either one able to fire
-   without the other having been wrong. */
+/* See decide.h. `entries` is how many decisions the flow stands on, a property of the chain shared with every
+   ancestor; `bytes` is what the flow itself owns, the blob. Together they show the sharing. `entries` is where the
+   recorded path ends, not how far the flow has got (decide_blob_cursor answers that): for a flow installed by
+   decide_blob_new it is a whole path under a cursor of 0, fixed from the instant the blob is built. The parked
+   cursor is asserted here as well as at decide_resume, because the frontier's census walks every parked blob, so
+   a cursor that has come apart from its chain is caught while the member holding it can be named. */
 void decide_blob_stats(const void *blob, long *entries, long *bytes) {
     const DecideBlob *b = blob;
     long n;
 
-    /* AN ABSENT BLOB AND A FLOW STANDING ON NOTHING ARE DIFFERENT FACTS AND THE `?:` HERE AVERAGED THEM. A
-       fresh flow legitimately stands on zero decisions, so 0 is a real answer and the most ordinary one — which
-       is exactly what made the default invisible: a caller that reached here with no decision state at all got
-       back a number indistinguishable from the commonest true one, and the census that summed it described a
-       frontier whose members it had never read. `CHECK` and not `DCHECK` because the dereference below is in
-       every build: with the guard gone this pointer is load-bearing in release, which check.h's own rule makes
-       the promotion rather than a choice made here. */
+    /* An absent blob and a flow standing on nothing are different facts: 0 is the commonest true answer, so a
+       default here would be invisible. CHECK, because the dereference below is in every build. */
     CHECK(b != NULL,
           "decide: the decision state of a flow that has none parked was asked for — a running flow's state is "
           "live (decide_live_stats answers that one) and a parked flow's is its blob, so a NULL here is a "
@@ -1668,14 +1001,9 @@ void decide_blob_stats(const void *blob, long *entries, long *bytes) {
     if (entries) *entries = n;
     if (bytes) *bytes = (long)sizeof *b;
 }
-/* …AND THE NUMBER decide_blob_stats IS NOT — see decide.h. It exists because the paragraph above told every
-   caller which of the blob's two numbers it must not take for a distance, and then offered no way to take the
-   other one: solver/flow.h's `cand_dec_max` claimed to be "how far the best of them has GOT" while being fed
-   from the LENGTH, for the whole life of that row, because the length was the only thing reachable.
-   THE RANGE IS ASSERTED HERE AND NOT ONLY AT ITS NEIGHBOUR, and that is not a duplicated check: the two
-   accessors are reached by different callers at different moments (the census walks every parked blob; a
-   resume installs one), and an invariant checked at one reader is an invariant the other reader is trusting
-   rather than asserting. The condition is the same one because the fact is the same one. */
+/* The cursor: how far along its chain a parked flow has got (see decide.h), which decide_blob_stats' `entries` is
+   not. The range is asserted here too, because the census and a resume reach the two accessors at different
+   moments, and each asserts rather than trusts. */
 int decide_blob_cursor(const void *blob) {
     const DecideBlob *b = blob;
     long n;
@@ -1697,38 +1025,30 @@ void decide_live_stats(long *entries, long *bytes) {
     if (bytes) *bytes = (long)((size_t)g_dec_cap * DEC_SLOT_BYTES);   /* both head buffers; one capacity governs them */
 }
 
-/* The sibling's hot decision state at a fork: replay the parent's path so far, then take `arm` at this branch
-   (cursor). c = cursor so on resume the sibling re-executes the OP_if and replays exactly this arm — never
-   re-forks, never re-runs the prefix. `asked` is the branch's own question, which both arms answer. */
+/* The sibling's hot decision state at a fork: the parent's path so far, then `arm` at this branch. c = cursor, so
+   on resume the sibling re-executes the OP_if and replays exactly this arm, never re-forking or re-running the
+   prefix. `asked` is the branch's own question, which both arms answer. */
 static void *decide_fork_blob(int cursor, int arm, uint32_t asked) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM fork blob");
-    /* A FORK IS ALWAYS AT THE END, and that is what makes the freeze the sibling's whole prefix rather than a
-       prefix of it. decide_arm reaches the forking branch only when the cursor has caught up with the vector
-       (the replay arm consumes a recorded slot, the constraint arm consumes none and records none), so the head
-       being frozen here ends exactly at `cursor`. Asserted rather than assumed: a fork at an interior cursor
-       would hand the sibling decisions this flow took AFTER the branch it is being forked at. */
+    /* A fork is always at the end: decide_arm reaches the forking branch only when the cursor has caught up with
+       the vector (a replay consumes a recorded slot; a constraint answer records none), so the frozen head ends
+       at `cursor`. A fork at an interior cursor would hand the sibling decisions taken after the branch. */
     DCHECK(cursor == dec_total(),
            "a fork was prepared at a cursor that is not the end of the decision vector — the sibling would "
            "inherit decisions taken after the branch it is being forked at");
     b->seg = dec_seg_arm(dec_freeze(), arm, asked);   /* the sibling's arm over the shared prefix; O(1) */
     b->c = cursor;
-    b->pending = -1;   /* the arm is RECORDED here, under the question both arms answer — see decide_fork_handoff */
+    b->pending = -1;   /* the arm is recorded here, under the question both arms answer; see decide_fork_handoff */
     return b;
 }
 
-/* THE SIBLING'S HOT STATE AT A FORK OVER A BRANCH THIS ENGINE CANNOT SPELL — the same shared prefix and the
- * same end-of-vector cursor as the recording fork above, and the arm as a ONE-SHOT rather than as a slot.
- *
- * IT IS A SEPARATE FUNCTION AND NOT A FLAG, for decide_freeze_path's reason: neither caller may be readable as
- * the other's special case, because they differ in the one thing that matters about a fork's blob — whether
- * what it hands the sibling is a REPLAY ENTRY (a question and its answer, checkable by anyone who re-asks it)
- * or a TRANSFER (one answer, to one sibling, for one branch, checkable by nobody). DecideBlob's `pending`
- * carries why the second cannot be spelled as the first without making the whole vector's replay positional
- * over this population.
- * THE CURSOR IS THE END OF THE VECTOR exactly as the recording fork's is, and for the same reason: decide_arm
- * reaches a NEW decision only with the cursor caught up. So the sibling has nothing above it to replay, and
- * the handoff is the only thing it is owed — which is also what makes "the first decision this flow takes" a
- * sound binding for it (decide_arm consumes it there). */
+/* The sibling's hot state at a fork over a branch this engine cannot spell: the same shared prefix and
+ * end-of-vector cursor as the recording fork above, with the arm as a one-shot rather than a slot. A separate
+ * function rather than a flag, because the two differ in what they hand the sibling: a replay entry (a question
+ * and its answer, checkable by anyone who re-asks it) or a transfer (one answer, to one sibling, for one branch).
+ * DecideBlob's `pending` says why the second cannot be spelled as the first. decide_arm reaches a new decision
+ * only with the cursor caught up, so the sibling has nothing above it to replay and takes the handoff at its first
+ * decision. */
 static void *decide_fork_handoff(int arm) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM fork handoff blob");
 
@@ -1740,43 +1060,24 @@ static void *decide_fork_handoff(int arm) {
            "a fork was prepared at a cursor that is not the end of the decision vector — the sibling would "
            "inherit decisions taken after the branch it is being forked at, and would take its handoff after "
            "replaying them rather than at the branch it was minted over");
-    b->seg = dec_freeze();   /* the shared immutable prefix; O(1), exactly as the recording fork's freeze is */
+    b->seg = dec_freeze();   /* the shared immutable prefix, O(1), as the recording fork's freeze is */
     b->c = g_c;
     b->pending = (signed char)arm;
     return b;
 }
 
-/* THE OTHER FORK'S BLOB — see decide.h. No arm, because no question was asked: the sibling's path IS its
-   parent's and it diverges over a value that arrived, not over a predicate. The freeze is the same one the
-   branch fork performs and for the same reason (one shared immutable prefix, O(1)); the cursor is the parent's
-   own, which may be mid-replay.
+/* The other fork's blob (see decide.h). No arm, because no question was asked: the sibling's path is its parent's,
+ * and it diverges over a value that arrived, not over a predicate. The freeze is the branch fork's (one shared
+ * immutable prefix, O(1)); the cursor is the parent's own, which may be mid-replay.
  *
- * AND THAT LAST CLAUSE IS WHY THIS SITE IS NOT EXEMPT FROM decide_arm's KEY ASSERT, WHICH IT WILL TRIP.
- * The arms below the cursor are what the parent already replayed and agree by construction; the arms ABOVE it
- * are the ones a mid-replay parent has still to consume, and they were recorded by a run in which the peer
- * answered ONE way. This mints N-1 siblings holding N-1 DIFFERENT answers to that read, and every one of them
- * goes on to consume those same arms. At most one of the N can be the timeline that recorded them, so the
- * others replay another timeline's decisions the moment their different answer changes which question the
- * program asks next.
- *
- * THAT IS A DEFECT AND NOT A FALSE POSITIVE, and this file already says so one screen up, in decide.h's own
- * words: "WHAT IT CANNOT CARRY IS THE ANSWER, and that is the honest limit of a decision vector". The key
- * column does not create that limit; it is the first thing in the engine that can SEE it. Narrowing the assert
- * to let this site through would put the limit back under the floorboards and would be the silent fallback
- * §C-stack names — every narrowing condition is a case quietly handed to the broken path. So the assert stands
- * unnarrowed, this site trips it, and the trip is the work queue.
- *
- * WHAT IT IS NOT IS THE OUTCOME FORK'S PROBLEM, AND THIS PARAGRAPH USED TO SAY IT WAS — "the same N-way slot
- * solver_outcome's n == 2 DCHECK is already waiting for". That was wrong twice over and the correction is
- * recorded here because this is where the claim was made. solver_outcome has no N-way slot and never needed
- * one: it asks N-1 two-armed questions, each keyed by the COMPLETION it is about, so its answers are ordinary
- * boolean arms a vector already records. And the two are not the same fact even in shape — an outcome's
- * completions are a set the MACHINE declares and NUMBERS at its own definition, so a completion index means
- * the same thing in every session, while a peer's answers are a set only the PEER knows, regenerated from
- * whatever timelines it has today, so there is no index for a slot to hold. What this site needs is its own
- * column: an ANSWER recorded beside the arm, naming the peer TIMELINE the answer came from (a world, which
- * already crosses the seam and already parks), so a replay can ask that peer for the same one instead of
- * taking the first it is offered. Nothing in the engine records that yet. */
+ * That is why this site trips decide_arm's key assert, and the assert stays unnarrowed: the arms above a
+ * mid-replay parent's cursor were recorded in a run where the peer answered one way, and this mints N-1 siblings
+ * holding different answers that go on to consume those same arms. decide.h states the limit ("WHAT IT CANNOT
+ * CARRY IS THE ANSWER"); the key column is what sees it. The outcome fork has no such problem: solver_outcome asks
+ * N-1 two-armed questions keyed by completions the machine numbers at its definition, while a peer's answers are
+ * a set only the peer knows. What this site needs is an answer column beside the arm, naming the peer timeline (a
+ * world, which already crosses the seam and parks) so a replay can ask that peer for the same answer; nothing
+ * records it yet. */
 void *decide_fork_same_path(const char *why) {
     DecideBlob *b;
 
@@ -1790,36 +1091,21 @@ void *decide_fork_same_path(const char *why) {
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state");
     b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
     b->c = g_c;
-    /* NOTHING OWED. This sibling's path IS its parent's, unchanged — it diverges over a value that arrived and
-       not over a branch — so there is no arm for anyone to hand it. A handoff is minted at a fork over an
-       unspellable BRANCH and nowhere else (decide_fork_handoff). */
+    /* Nothing owed: this sibling diverges over a value that arrived, not a branch, so there is no arm to hand it;
+       a handoff is minted only at a fork over an unspellable branch (decide_fork_handoff). */
     b->pending = -1;
-    /* AND IT IS COUNTED, because this mints a MEMBER OF THE FRONTIER and @PROGRESS's `forks` is the frontier's
-       growth. It was counted nowhere: fork_key_count runs only in decide_arm's new-decision branch, so every
-       sibling a peer's answer created was invisible to both the total and the histogram — and the histogram's
-       own sentence is "WHICH PREDICATE IS GROWING THE FRONTIER", which for this class it could not answer at
-       all. The cost of the omission is not the undercount, it is what the undercount does to a reader: a
-       frontier's provenance is exactly `created = 1 + forks + candidates + joined documents + cold resumes`,
-       and with this class missing the residual of that subtraction is the sum of THREE unrelated things. A sum
-       labelled with one of its terms is a number that means whichever term the reader had in mind — measured,
-       a residual of 0 was read as "no child document was ever given a timeline", which is not what it says and
-       is not even true of the run that produced it.
-       IT GETS ITS OWN ROW AND NOT A FABRICATED KEY. There is no predicate here — the paragraph above says so
-       in as many words — so composing one would put a branch in the census that the program never took, and
-       the row would merge with a real predicate the moment one spelled the same way. The row states what
-       actually happened, which is also what keeps the rows summing to the total.
-       AND WHICH ROW IS THE CALLER'S TO SAY, which is the correction that came with the third caller. This was
-       one fixed string naming a peer's ANSWER, and it was already counting an orphan drive — a fork over a
-       function the page never called, which has no peer and no answer in it — so the row was false about most
-       of what it held while reading as a measurement of one thing. Every mechanism that forks without a
-       predicate gets its own row now, and the rows still sum to the total. */
+    /* Counted, because this mints a frontier member and @PROGRESS's `forks` is the frontier's growth: the
+       provenance `created = 1 + forks + candidates + joined documents + cold resumes` closes only if every
+       mechanism that mints one is counted. It gets its own row, named by the caller, not a fabricated predicate key,
+       which would report a branch the program never took; each mechanism that forks without a predicate (a peer's
+       answer, an orphan drive) is a different row, and the rows still sum to the total. */
     fork_key_count(why, FORK_ROW_SYNTHETIC);
     return b;
 }
 
-/* See decide.h. The freeze and the reference are the fork's; the CENSUS ENTRY is not, because no member of the
-   frontier is being made. Written as its own function rather than a flag on the one above so that neither
-   caller can be read as the other's special case: one mints a flow, one records a path. */
+/* See decide.h. The freeze and reference are the fork's; the census entry is not, because no frontier member is
+   made. A function of its own rather than a flag on the one above, so neither caller reads as the other's special
+   case: one mints a flow, one records a path. */
 void *decide_freeze_path(void) {
     DecideBlob *b;
 
@@ -1829,41 +1115,23 @@ void *decide_freeze_path(void) {
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM freezing a flow's decision path");
     b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
     b->c = g_c;
-    b->pending = -1;   /* a PATH, not a member: nothing is being minted here for a handoff to be owed to */
+    b->pending = -1;   /* a path, not a member: nothing is minted here for a handoff to be owed to */
     return b;
 }
 
-/* THE PREDICATE'S IDENTITY, which is what the flow's constraint is keyed by.
+/* The predicate's identity, which the flow's constraint is keyed by: the identity of the value the branch tests.
+ * A comparison result is a derived value like any other, and concolic.c composes the operator and both operands
+ * into its identity, so `if (x)`, `x < 700`, `x < 300`, `700 < x` and `x > 700` are five identities and five
+ * independent facts. There is no producer field for a consumer to default, and a merged key would decide one
+ * predicate from another and prune an arm the constraint does not contradict, which no gate could see. The
+ * composition is sized from its members and cannot truncate, and its length-prefixed fields mean no member can
+ * spell another's boundary.
  *
- * IT IS THE IDENTITY OF THE VALUE THE BRANCH TESTS, and that one sentence is the whole rule — there is no
- * second case for comparisons. A comparison RESULT is a derived value like any other, and concolic.c composes
- * the operator and BOTH operands into its identity, so `if (x)`, `x < 700`, `x < 300`, `700 < x` and `x > 700`
- * are five identities and five independent facts without this file knowing what any of them mean.
- *
- * IT USED TO KEY A COMPARISON ON THE OPERAND'S SOURCE PLUS AN OPERATOR AND A TOKEN, DEFAULTING BOTH — and the
- * relational hook supplied neither, so `x\x01""\x01""` was every ordering over one source: in one flow
- * `parseInt(gCS(a).width) < 700` and `parseInt(gCS(b).width) < 300` produced the SAME key and the second was
- * decided by the first, pruning an arm the flow's constraint does not contradict. §Solver-half allows exactly
- * one direction ("a contradicted branch is pruned (sound-only — uncertainty keeps the arm)") and that is the
- * other one; a pruned arm emits nothing, so no gate could see it. The `tok ? tok : ""` was not the symptom, it
- * was the CONCEALMENT: it turned "the producer does not produce this" into a plausible key. The consumer now
- * has no field to default, because the whole predicate is the value's own identity.
- *
- * AND IT USED TO BE BUILT INTO A `char key[256]` WITH AN UNCHECKED snprintf, which is the same defect by a
- * second route — concolic_exotic_get's field paths alone were 192 bytes, and a truncated key merges two
- * predicates exactly as a dropped operator does. The composition is sized from its members and cannot
- * truncate, and its length-prefixed fields mean no member can spell another's boundary.
- *
- * Returns a heap key the caller frees, or NULL when the value has no identity this engine can spell —
- * uncertainty, which keeps both arms.
- *
- * AND IT IS THE BRANCH IDENTITY, NOT THE VALUE'S OWN, WHICH IS ONE STRING FOR EVERY VALUE BUT A NEGATION. A
- * program spells one gate two ways — `if (p)` and `if (!p)` — and they are not two predicates: §7.1.2
- * ToBoolean stands between the value and the branch in both, so the second asks the first's question with the
- * arms swapped. Keying them apart would make a flow that has already fixed `p` fork AGAIN at `!p` and then
- * stand on two arms that contradict each other — sound, since it only over-explores, and the loss of the one
- * refinement that makes the frontier tractable. So the polarity is applied to the ARM by the caller and never
- * to this key; concolic_branch_ident_c states the whole of it. */
+ * Returns a heap key the caller frees, or NULL when the value has no identity this engine can spell (uncertainty,
+ * which keeps both arms). It is the branch identity, which differs from the value's own only for a negation:
+ * §7.1.2 ToBoolean stands between value and branch in both `if (p)` and `if (!p)`, so they ask one question with
+ * the arms swapped, and keying them apart would fork again at `!p` on a flow that has fixed `p`. The caller applies
+ * the polarity to the arm, never to this key; concolic_branch_ident_c states it. */
 static char *decide_key(JSValueConst cond) {
     const char *f[1];
 
@@ -1871,9 +1139,8 @@ static char *decide_key(JSValueConst cond) {
     return concolic_ident_compose("branch", f, 1);
 }
 
-/* See decide.h. It reads the constraint WITHOUT touching the decision vector or its cursor: a read is not a
-   decision, so it must not consume a slot — the same rule decide_arm's feasible-refinement arm keeps, and for
-   the same reason (a consumed slot would make the NEXT branch read someone else's answer). */
+/* See decide.h. It reads the constraint without touching the decision vector or its cursor: a read is not a
+   decision, so it must not consume a slot (a consumed slot would make the next branch read another's answer). */
 int decide_value_arm(JSValueConst cond)
 {
     char *key = decide_key(cond);
@@ -1882,18 +1149,14 @@ int decide_value_arm(JSValueConst cond)
     if (!key) return -1;
     arm = concolic_branch_decided(key);
     free(key);
-    /* THE KEY IS THE PREDICATE'S AND THE ANSWER IS THIS VALUE'S, and for a negation those differ by exactly
-       the polarity — the same XOR decide_branch applies to the arm it returns. Asking for the key's answer
-       and handing it back unflipped would tell a caller holding `!p` what it would have learned holding `p`,
-       which is the arm it did not ask about. -1 is not decided and has no complement. */
+    /* The key is the predicate's and the answer is this value's; for a negation they differ by the polarity,
+       the same XOR decide_branch applies to the arm it returns. -1 is not decided and has no complement. */
     return arm < 0 ? arm : (arm ^ concolic_branch_neg(cond));
 }
 
-/* THE RECORDED ARM AT THE CURSOR, or -1 WHEN THE SLOT THERE ANSWERS A DIFFERENT QUESTION — the whole of what
-   tells a replay whether it is still on its recorded path, in ONE descent of the chain. The cursor moves only
-   on a match, so a caller that gets -1 is standing exactly where the divergence is and dec_leave_path can end
-   the vector at it. Asking the question and taking the arm in two calls would be two walks of a chain this
-   file's own note already measures as the resume's fastest-growing cost. */
+/* The recorded arm at the cursor, or -1 when the slot there answers a different question, in one descent of the
+   chain. The cursor moves only on a match, so a caller that gets -1 stands at the divergence and dec_leave_path
+   can end the vector there. */
 static int dec_replay(uint32_t asked) {
     uint32_t recorded;
     int arm;
@@ -1903,33 +1166,17 @@ static int dec_replay(uint32_t asked) {
     arm = dec_at(g_c, &recorded) ? 1 : 0;
     if (recorded != asked) return -1;
     g_c++;
-    /* COUNTED HERE AND NOWHERE ELSE, on the far side of the key comparison, because an arm consumed is exactly
-       an arm whose recorded question the branch re-asked — which is the whole of what this ledger claims. A
-       count taken above the comparison would count ATTEMPTS, and an attempt is what a divergence also is.
-       AND THAT CLAIM NOW HOLDS OF EVERY SLOT RATHER THAN OF MOST OF THEM. The comparison one line up is an
-       IDENTITY comparison only where the recorded key is one: a slot carrying dec_key_hash's refusal agreed
-       with every other such slot, so over that population this line counted positional agreement — a diverged
-       replay taking another branch's arm — as a hit, and dec_leave_path never ran. dec_append refuses that
-       slot now, so there is one population here and the sentence above is true of all of it. */
+    /* Counted here, past the key comparison, because an arm consumed is exactly an arm whose recorded question the
+       branch re-asked; above the comparison it would count attempts, which a divergence also is. dec_append
+       refuses a slot with no question, so the comparison is an identity comparison for every slot. */
     g_replay_hits++;
-    /* …AND THE RUNWAY RUNG, OBSERVED HERE BECAUSE THIS IS THE ONLY LINE IN THE ENGINE THAT CONSUMES A RECORDED
-       ARM. §@S(i) requires every rung to have an observation site "STRICTLY BEFORE the thing it is a distance
-       to", and every rung the fitness had reported AT a sink or AT the source read — so a candidate crossing
-       eight hundred gates of its replay ranked exactly like one that had executed nothing, while two of the
-       four weight terms strictly FELL as it made that progress. This is the site that is before all of them.
-       THE NUMERATOR IS `g_c` AND IT IS HONEST ONLY AT THIS LINE, which is why the call is here and not at the
-       scheduler. The cursor advances on APPENDS too (dec_new_decision, dec_nonforking), so a candidate that
-       has diverged and forked nine hundred times would read a full path it never walked; taken on the far side
-       of the key comparison it is exactly the recorded path CONSUMED, which is the same reasoning the counter
-       one line up already rests on.
-       AND THE DENOMINATOR IS READ LIVE RATHER THAN STORED. A divergence ENDS the vector at the cursor
-       (dec_leave_path), which would make the fraction 1.0 for a path the flow abandoned — except that this
-       function asserts `g_c < dec_total()` at entry, so no reading is ever TAKEN after a truncation and the
-       last one taken was against the untruncated path. The observer is monotone, so the abandoned reading
-       cannot be walked back by a later, smaller one either.
-       THE POPULATION IS STATED HERE AND ASSERTED THERE. A runway is the approach to a CANDIDATE's own source
-       read, so the question is asked only of a flow that carries a payload; flow_observe_replay DCHECKs that
-       rather than tolerating a caller who does not, which is the shape flow_observe_survival already has. */
+    /* The runway rung, observed here because this is the only line that consumes a recorded arm: §@S requires an
+       observation site strictly before what a rung measures, and a candidate's replay comes before its sink and
+       its source read. The numerator `g_c` is honest only here: the cursor also advances on appends
+       (dec_new_decision, dec_nonforking), and past the key comparison it counts exactly the recorded path consumed.
+       The denominator is read live; the entry assert `g_c < dec_total()` means no reading is taken after a
+       truncation, and the observer is monotone. Only a candidate (a flow with a payload) is asked, which
+       flow_observe_replay asserts, as flow_observe_survival does. */
     {
         Flow *f = flow_running();
         if (f && f->cand_payload) flow_observe_replay(f, g_c, dec_total());
@@ -1937,69 +1184,26 @@ static int dec_replay(uint32_t asked) {
     return arm;
 }
 
-/* THE FORK — reached by a branch this flow has never decided, and by one whose recorded answer belongs to
-   another question (dec_leave_path having just ended the vector at the cursor, which makes the two the same
-   state). FRAME-SNAPSHOT: prepare the OTHER arm's sibling hot state (its decision vector + the current
-   constraint), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The sibling resumes
-   AT the branch and replays its arm — it does NOT re-run from the start. No re-run vector, no fallback.
-   WHICH ARM THIS FLOW KEEPS IS THE OBSERVATION'S TO DECIDE, AND IT USED TO BE THE CONDITION'S SPELLING. This
-   line read `dec_append(1, …)` and blob'd 0: the parent took TRUE at every fork, whatever the run had actually
-   computed. §Learning-from-replies states the rule in one sentence — "at a branch the example marks the real
-   arm PRIMARY; the forced sibling drops the contradicted example, so only gate-DEPENDENT values degrade to a
-   shape while gate-independent values stay concrete" — and with TRUE hardcoded the first clause was false, so
-   the second clause was being asked of the wrong sibling. `if (cfg.admin)` over a loaded `false` kept the
-   ADMIN arm as the primary and pushed the arm a real session takes into a sibling, which is a REPORTING
-   question: the primary is the flow whose values are the ones a session would have computed, and every @H
-   value on it is stated as observed.
-   IT IS A FAIRNESS QUESTION TOO, AND THIS SENTENCE USED TO SAY IT WAS NOT. "Both arms run, both are ranked
-   identically" is true AT the branch and stops being true one quantum later: only the kept arm goes on
-   running, and what it becomes is a POPULATION while its sibling stays one member. §ONE WFQ policy's
-   correction is the reason — aging "is TRUE OF A MONOPOLIZING RUNNER AND FALSE OF A MONOPOLIZING BRANCHER",
-   because a fork COPIES the charge, so N members of the kept arm share the debt of the one that ran and the
-   parked sibling sits frozen at the identical charge. Rank-neutrality is a statement about MEMBERS, and this
-   line hands one of two WORLDS the thread.
-   `real_arm` IS THAT OBSERVATION AND NOT A PREFERENCE — the arm §7.1.2 ToBoolean gives for the concrete
-   example the value already carries, computed ONCE by the caller and used both here and by the FORCED mark, so
-   the two cannot answer differently about one branch. -1 is "nothing observed says", which is the honest state
-   for genuinely external input and absent app state (example-free by design), and there this flow keeps TRUE
-   exactly as it did — a choice between two arms neither of which contradicts anything.
-   AND "ARBITRARY" IS WHAT THAT CHOICE IS IN PRINCIPLE AND NOT WHAT IT IS IN EFFECT, BECAUSE THE MEANING OF
-   ARM 1 IS SUPPLIED BY WHOEVER SPELLED THE PREDICATE. Where the ENGINE spells it, a step machine numbers its
-   ordinary completion 0 (core/timing/timer.c states the convention at §8.7's step 4), `outcome_nth` asks
-   position 0 first while `real` is UNSTATED, and the walk returns that completion the moment an arm answers
-   1 — so at the outcome seam this constant answers "yes, the ordinary completion" and the machine TERMINATES.
-   Where the PAGE spells it, `arm` means "the page's own gate answered true", and for the commonest shape in
-   JavaScript — a loop's continuation test over an unknown length — true is KEEP GOING. One constant,
-   opposite meanings, and the arm that ENDS the walk is the runner's at one seam and the sibling's at the
-   other.
-   MEASURED, ON FROZEN BYTES, n=3, AND THE CONTROL IS INSIDE EACH SAMPLE (a fixture whose only variable is
-   whether one global is defined; artifact built from 2fd95568, an ancestor of this commit — re-derive before
-   quoting). One run held TEN ladders, all over sibling derivations of ONE unknown. The SIX engine-spelled
-   ones were none of them longer than two rows and the deepest question any of them asked was `>2`:
-   `[[OwnPropertyKeys]]>1` 3349 with no `>2`; `LengthOfArrayLike>0` 3337 and 2877 with no `>1`; and three
-   that reached a second row at 33 hits and stopped. The FOUR page-spelled `n < len` ladders ran 2, 4, 14 and
-   29 rows — the longest from n=0 to n=28, still 44 hits at its tail. Same page, same instant, same operand
-   family; the only difference is who owned the polarity of the question.
-   THE REPAIR IS NOT A DIFFERENT CONSTANT, AND THAT IS WHY THIS RECORDS THE EFFECT RATHER THAN CHANGING THE
-   LINE. Arm 0 is not the neutral answer either: it would keep the SKIP arm of `if (__FLAGS.admin)` as the
-   runner, which is the burial §Attacker-sources exists to prevent, and it would state a PREFERENCE at the one
-   line whose whole paragraph is that `real_arm` is an observation and never one. No constant is right for
-   both shapes, because the page owns the polarity of one of them.
-   THE SIBLING'S SNAPSHOT DOES NOT PRE-RECORD ITS ARM, and that deletion is what makes the order in decide_arm
-   one rule instead of two. It used to write FALSE into the constraint, take the snapshot, then overwrite with
-   TRUE — so the sibling was born already knowing the answer to the branch it was about to re-execute, its
-   constraint was AHEAD of its cursor, and the vector had to be consulted before the constraint or the
-   sibling's one recorded slot would be read by the NEXT branch. It buys nothing: the sibling resumes AT this
-   branch, re-asks it, takes FALSE out of its recorded slot and records FALSE itself on the line below — the
-   same constraint, one branch later, derived rather than planted. What the sibling DOES inherit is everything
-   this flow knew BEFORE the branch, which is what the snapshot is. */
-/* `*forked` COMES BACK FROM THE SEAM AND MEANS "THE CALLER MUST STILL SNAPSHOT", which is not the same
-   statement as "a fork happened" and used to be conflated with it. A fork always happens here; whether anything
-   is left for the caller to do depends on WHO can build the sibling's resume point (engine_prepare_fork), and
-   a caller whose sibling was assembled on the spot must not be told to clone a frame it does not have.
-   The parent's own arm is constrained by decide_arm's tail rather than here, so that the constraint is applied
-   in ONE place for all three ways a decision is reached — and so that the seam, which may assemble the sibling
-   before this returns, sees the parent's constraint exactly as the sibling's frozen copy left it. */
+/* The fork, reached by a branch this flow has never decided, or by one whose recorded answer belongs to another
+   question (dec_leave_path having just ended the vector at the cursor). Frame snapshot: prepare the other arm's
+   sibling hot state (its decision vector and the current constraint) and signal the interpreter (0x100 bit) to
+   clone this frame at the branch; the sibling resumes there and replays its arm, never re-running from the start.
+   The observation decides which arm this flow keeps. `real_arm` is §7.1.2 ToBoolean of the example the value
+   carries, computed once by the caller and shared with the forced mark, so the primary flow is the one whose
+   values a real session would compute (`if (cfg.admin)` over a loaded `false` keeps the false arm), as
+   §Learning-from-replies states. The kept arm goes on running and becomes a population while its sibling stays one
+   member, so this is a fairness choice too. With nothing observed (-1: external input, absent app state) it keeps
+   arm 1, whose meaning the predicate's speller supplies: at the outcome seam the engine numbers its ordinary
+   completion 0 and asks it first, so arm 1 ends the machine's walk, while a page's loop test over an unknown length
+   reads arm 1 as keep going. Arm 0 would keep the skip arm of `if (__FLAGS.admin)` as the runner, so no constant
+   is right for both spellings.
+   The sibling's snapshot does not pre-record its arm: it resumes at this branch, re-asks it, takes its recorded
+   slot and records the constraint itself. It inherits everything this flow knew before the branch. */
+/* `*forked` comes back from the seam meaning "the caller must still snapshot", which differs from "a fork
+   happened": a fork always happens here, and whether the caller has work left depends on who can build the
+   sibling's resume point (engine_prepare_fork). The parent's own arm is constrained by decide_arm's tail, so
+   the constraint is applied in one place for all three ways a decision is reached, and the seam, which may
+   assemble the sibling before this returns, sees the parent's constraint as the sibling's frozen copy left it. */
 static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, uint32_t asked,
                         int restartable, int real_arm, int *forked, const char *site) {
     int take = real_arm < 0 ? 1 : real_arm;
@@ -2009,37 +1213,24 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
     DCHECK(real_arm == REAL_ARM_UNOBSERVED || real_arm == 0 || real_arm == 1,
            "a fork was told the real arm is a value that is neither arm nor the unobserved marker — it comes "
            "from one ToBoolean of one example, so a third value is a caller computing it somewhere else");
-    /* THE NAMESPACES PART HERE, and the ternary that used to stand in one argument is why they must: a
-       `key ? key : "(prose)"` hands one parameter two populations, so the site that KNOWS which one it has is
-       the site that was saying nothing about it.
-       AND THE SECOND ARM USED TO BE ONE HAND-WRITTEN MECHANISM ROW FOR EVERY FORK IN THIS CLASS, which is the
-       defect this pair replaces. `(no source identity)` was true and it named no site: it counted every branch
-       over a value concolic.c declines to spell — a dynamic key read on an ordinary object, a derivation over
-       one, a comparison between two — into a single number in the table whose entire job is to say WHERE the
-       frontier grows. Reading it told you an action with no object, which is §AN-ASSERT-THAT-NAMES-A-REMEDY-
-       BUT-NOT-A-SITE arriving in an instrument, and the row was routinely the largest thing in the object.
-       IT IS A SITE AND STILL NOT A PREDICATE, which is why it is a THIRD population and not a widening of the
-       first. Nothing was asked: decide_key answered NULL, both arms are kept, no constraint is recorded and no
-       replay slot is claimed. The row says where a fork HAPPENED; the census's predicate rows say what a fork
-       ASKED, and merging the two would put a branch in that population the program never took. */
-    /* THE SITE ROWS AND THE FORKS THAT RECORD NOTHING ARE ONE SET, ASSERTED HERE BECAUSE THIS IS THE ONE PLACE
-       BOTH ARE IN HAND. dec_key_hash maps NULL to 0 and nudges every other key OFF that value, so `key == NULL`
-       and `asked == 0` are the same fact — and that equality is what decides, on the next four lines, both
-       which census row this fork files into AND whether it claims a replay slot at all. Those two used to be
-       read as one population by a reader quoting the site fraction against the vector; they are now the same
-       BRANCH, so the assert is what stops one edit splitting them. It costs one comparison per fork. */
+    /* The census namespaces part here, where the site knows which population it has. A branch over a value
+       concolic.c declines to spell (a dynamic key read on an ordinary object, a derivation over one, a comparison
+       between two) files a site row named by its shape: where a fork happened, not what it asked, so it is a third
+       population rather than a predicate. Nothing was asked: decide_key answered NULL, both arms are kept, and no
+       constraint or replay slot is recorded. */
+    /* The site rows and the forks that record nothing are one set: dec_key_hash maps NULL to 0 and nudges every
+       other key off it, so `key == NULL` and `asked == 0` are the same fact, which decides both the census row and
+       whether a replay slot is claimed. */
     DCHECK((key == NULL) == (asked == 0),
            "a fork is filing into the census under a NAME and into the decision vector under a question hash "
            "that disagree about whether this engine could spell its question — a site row is filed exactly "
            "when no key was spelled, and exactly then no slot is recorded and the sibling is handed its arm "
            "directly. Split them and a fork either records a slot no replay can check itself against, or hands "
            "away an arm it has also written into a path somebody will replay");
-    /* AND THE TWO ARMS OF THIS `if` ARE TWO KINDS OF FORK, NOT ONE FORK WITH A LABEL. A spelled branch RECORDS
-       its arm under the question both arms answer, so the sibling replays that slot and so does every later
-       flow that re-asks the question. An unspellable branch records NOTHING — there is no question here for a
-       replay to re-ask, so a slot would be a hole with an index and every such hole agrees with every other
-       (dec_key_hash carries what that cost, and dec_append now asserts it cannot happen). Its sibling is
-       handed the arm as a one-shot instead, which is the only consumer that ever needed it. */
+    /* The two arms of this `if` are two kinds of fork. A spelled branch records its arm under the question both
+       arms answer, so the sibling and every later flow that re-asks it replays that slot. An unspellable branch
+       records nothing (a slot would be a hole agreeing with every other) and hands its sibling the arm as a
+       one-shot. */
     if (key) {
         dblob = decide_fork_blob(g_c, !take, asked);
         fork_key_count(key, FORK_ROW_PREDICATE);
@@ -2049,48 +1240,28 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
     }
     pblob = concolic_pins_suspend();
     *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site);
-    /* THIS FLOW'S OWN ARM, onto the head the freeze above emptied — and only where there is a question to
-       record it under. Where there is not, this flow's path is UNCHANGED by the branch: it recorded no
-       constraint either (decide_arm's tail asks `if (key)` for the same reason), so what it carries forward is
-       exactly the set of decisions a later run could re-ask and check itself against. A resume of this flow
-       re-reaches the branch, finds nothing, and forks again — which is what it already did at every REPEAT of
-       this branch, since feasible refinement is keyed by an identity this operand has none of. */
+    /* This flow's own arm, onto the head the freeze emptied, and only where there is a question to record it
+       under. Otherwise the branch leaves this flow's path unchanged and records no constraint either (decide_arm's
+       tail asks `if (key)`), so a resume re-reaches the branch and forks again, as it does at every repeat of a
+       branch whose operand has no identity. */
     if (key) { dec_append(take, asked); g_c++; }
     return take;
 }
 
-/* THE SAME NEW DECISION IN A SESSION THAT EXPLORES NOTHING — the arm the SITE declared, RECORDED like any
- * other, and no sibling.
- *
- * IT IS THE RECORDING THAT MATTERS AS MUCH AS THE ARM. A non-forking flow is still a flow: its state is
- * replay(baseline, decision vector), the same @S candidate can be parked and resumed on it, and — the half
- * that breaks first — a browser component's INVARIANTS read back what its own ask decided (core/timing/
- * event_loop.h: the monotonicity assert reads event_loop_before_decided rather than re-evaluating, because
- * over an unknown a comparison is an arm and not a fact). Answer without recording and the ask and the read
- * become two facts about one question: the walk orders `a` before `b`, the assert asks and is told "not
- * decided", and the flow stands in no world at all. So this goes through dec_append and through decide_arm's
- * one constraint statement exactly as a forked arm does; the ONLY thing it does not do is mint a member.
- *
- * NOTHING IS DROPPED, WHICH IS WHY THIS IS NOT A CAP. The other arm is not truncated work that a bound threw
- * away — it is a world the SESSION declared it is not in. A session that explores runs both.
- *
- * A SITE WITH NO ANSWER CRASHES HERE, NAMING THE PREDICATE. SOLVER_NO_NONFORKING_ARM says the operands carry
- * nothing to decide from, and the seam has nothing better: picking 0 or 1 for a two-armed question the site
- * itself cannot answer is the "pick one and delete a program" this parameter exists to refuse. What the crash
- * names is the CALLER — whatever put an undecidable operand in front of this site in a session that cannot
- * explore its way out — and the key names the question so the caller can be found from it.
- * IT IS A `CHECK` AND NOT A `DCHECK`, WHICH IS A STATEMENT ABOUT WHAT THE VALUE BECOMES. It is appended to the
- * DECISION VECTOR, which flow.h defines a flow as, which the cold tier writes to disk and a later session
- * replays as arms — so a build with the assert compiled out would not merely take a wrong arm, it would record
- * a byte that is not an arm into a path that outlives the session and hand it back to a resume. That is
- * check.h's data-integrity clause: proceeding is worse than crashing, in every build. */
+/* The same new decision in a session that explores nothing: the arm the site declared, recorded like any other,
+ * and no sibling. Recording matters as much as the arm: a non-forking flow is still replay(baseline, decision
+ * vector), and a browser component's invariants read back what its own ask decided (core/timing/event_loop.h's
+ * monotonicity assert reads event_loop_before_decided, because over an unknown a comparison is an arm, not a
+ * fact). So it goes through dec_append and decide_arm's one constraint statement; only the member is not minted.
+ * Nothing is dropped: the other arm is a world the session declared it is not in. A site with no answer
+ * (SOLVER_NO_NONFORKING_ARM) crashes here naming the predicate, because picking an arm for a question the site
+ * cannot answer would delete a program at random; the fix is the caller that put an undecidable operand there.
+ * It is a CHECK because the value is appended to the decision vector, which the cold tier writes and a later
+ * session replays, so a release build would record a byte that is not an arm. */
 static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
     if (nonforking != 0 && nonforking != 1) {
-        /* THE KEY IS LENGTH-PREFIXED AND ITS FIELD SEPARATORS ARE CONTROL BYTES (concolic_ident_compose), so
-           the one thing the reader needs from it — the name of the predicate — is copied through
-           printable-only. NOT for the record's sake: check.h escapes what it emits, so a raw separator would
-           arrive intact and legal as `\u0001`. It is for the READER's, who is looking for an identifier and
-           would be handed a run of escapes in the middle of it. Same rule as engine.c's C-body fork. */
+        /* The key's field separators are control bytes (concolic_ident_compose), so the predicate's name is
+           copied printable-only for the reader looking for an identifier, as engine.c's C-body fork does. */
         char name[192];
         size_t i;
         for (i = 0; i + 1 < sizeof name && key && key[i]; i++)
@@ -2103,62 +1274,35 @@ static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
                     "front of this site in a non-forking session, not the site. The question was: %s",
                     key ? name : "(no source identity)");
     }
-    /* RECORDED ONLY WHERE THERE IS A QUESTION TO RECORD IT UNDER — dec_fork_here's rule, and the paragraph
-       above does not reach the other case. What that paragraph is about is the READ-BACK: a component's
-       invariant asks `concolic_branch_decided(key)` for what its own ask decided, and with no key there is no
-       constraint to record and no read-back to be answered, so the argument for recording simply has no
-       subject here. What is left is a slot carrying dec_key_hash's refusal, which is the hole with an index
-       this file now refuses everywhere (dec_append asserts it). A non-forking flow re-reaching this branch
-       re-derives the same arm from the same site declaration, which is what makes losing nothing here true
-       rather than merely cheap. */
+    /* Recorded only where there is a question to record it under, as in dec_fork_here: with no key there is no
+       constraint to read back, and a slot would carry dec_key_hash's refusal. A non-forking flow re-reaching this
+       branch re-derives the same arm from the same site declaration. */
     if (key) { dec_append(nonforking, asked); g_c++; }
     return nonforking;
 }
 
-/* THE DECISION ITSELF, over a predicate identified by `key` (NULL when the value tested has no identity this
-   engine can spell — uncertainty, which keeps both arms). Every caller of this is a place the program's
-   control flow turns on unknown input, and there are two of them because a decision is not an OP_if: a
-   BYTECODE BRANCH is one, and a NATIVE OPERATION whose completion depends on the same unknown is the other.
-   They share this because they are the same decision — the same vector slot, the same constraint, the same
-   replay on a resume — and the only difference is what the interpreter has to do about the arm afterwards. */
-/* EVERY SLOT IS WRITTEN AND READ WITH THE QUESTION IT ANSWERS — see the DecSeg struct for why the column
-   exists and dec_key_hash for what the name is. The check lives HERE and only here because this is the one
-   place a recorded slot is CONSUMED, and an identity that is not compared where it is consumed is a field
-   nobody will notice is wrong. */
-/* `nonforking` IS THE ASKING SITE'S OWN ANSWER FOR A SESSION THAT EXPLORES NOTHING — see solver/decide.h. It is
-   consulted at exactly one of the three ways a decision is reached, the NEW one, because the other two are
-   answers this flow already has and a session's policy cannot change what it already decided. */
-/* `real_arm` IS WHAT THE RUN OBSERVED and is consulted at exactly one of the three ways a decision is reached
- * — the NEW one — for `nonforking`'s reason exactly: the other two are answers this flow already HAS, and an
- * observation cannot change a decision that has been taken. A replayed arm is this flow's own recorded answer
- * and a refined one is a consequence of its own constraint; re-deciding either from an example would be the
- * second evaluator §Re-execution forbids, re-deciding a predicate from something other than the run. */
-/* `subject` IS THE VALUE THE DECISION IS ABOUT, AND IT IS HERE ONLY SO A FORK THAT ASKED NOTHING CAN NAME
- * WHERE IT HAPPENED. It is read at exactly one line — dec_fork_here's else arm, where `key` is NULL — and it
- * is never consulted for the ARM: a shape is not an identity and deciding a branch from one would let two
- * reads this engine cannot tell apart decide each other. Both entries assert it is a concolic before they get
- * here (decide_branch's guard, solver_outcome's DCHECK), so it is never a value with no record behind it. */
+/* The decision itself, over a predicate identified by `key` (NULL when the tested value has no identity this
+   engine can spell: uncertainty, which keeps both arms). Its two callers are the two places control flow turns on
+   unknown input: a bytecode branch and a native operation whose completion depends on it. They share the same
+   vector slot, constraint and replay; only what the interpreter does with the arm differs.
+   A decision is reached one of three ways: refined from the constraint, replayed from a recorded slot (the one
+   place a slot is consumed, so its question is compared here), or new. `nonforking` (the site's answer for a
+   session that explores nothing; see decide.h) and `real_arm` (what the run observed) are consulted only for a
+   new decision, since the other two are answers this flow already has, and re-deciding them from an example
+   would be a second evaluator. `subject` is read only by dec_fork_here's keyless arm to name the fork's site,
+   never for the arm; both entries assert it is a concolic (decide_branch's guard, solver_outcome's DCHECK). */
 static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int restartable, int nonforking,
                       int real_arm, int *forked, const char *site) {
     uint32_t asked = dec_key_hash(key);
     int arm;
     *forked = 0;
     if (g_pending >= 0) {
-        /* THE BIRTH HANDOFF, TAKEN AT THE FIRST DECISION AND NOWHERE ELSE — see DecideBlob's `pending`. It is
-           taken HERE, above every other arm, because "the first decision this flow reaches" is the whole of
-           what binds it to the branch it was minted over: left standing it would be applied to whatever
-           unspellable branch came next, which is the defect this shape removes one level down. It is cleared
-           before anything else can run, so it cannot survive into a second ask on any path out of here.
-           A SPELLED FIRST QUESTION DISCARDS IT RATHER THAN TAKING IT, IN EVERY BUILD, and that is a refusal
-           and not a fallback: there is one decision here, and this is what "the handoff does not name this
-           branch" means. The sibling re-reaches its ask as the first question it asks — engine_prepare_fork's
-           asserts about live frames and page activations are exactly that guarantee — so a spelled question
-           here is a seam bug, which the DCHECK names. Discarding costs nothing that matters: this flow then
-           reaches its own branch owing nothing and FORKS there like any other, so both arms still run. Taking
-           it would place one branch's arm on another, which is the state that must be impossible rather than
-           counted. It is the same shape dec_replay already has for a key mismatch — refuse, and let the branch
-           fork — rather than an abort, because a flow standing somewhere unexpected is permitted and a wrong
-           arm is not. */
+        /* The birth handoff, taken at the first decision and nowhere else (see DecideBlob's `pending`), and
+           cleared before anything else can run. A spelled first question discards it in every build: the sibling
+           re-reaches its ask first (engine_prepare_fork's asserts guarantee it), so a spelled question here is a
+           seam bug the DCHECK names, and applying the handoff would put one branch's arm on another. Discarding
+           costs a fork: the flow reaches its own branch owing nothing and forks there, as dec_replay does on a key
+           mismatch. */
         signed char owed = g_pending;
         g_pending = -1;
         DCHECK(key == NULL,
@@ -2171,139 +1315,67 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int
                    "a flow took its birth handoff with recorded arms still above its cursor — a handoff is "
                    "minted only at the end of the vector (decide_fork_handoff) and decide_resume asserts that "
                    "on the way in, so reaching here means the cursor moved while the handoff stood");
-            return owed;   /* no slot, no constraint, no sibling: this IS the other arm of a fork already made */
+            return owed;   /* no slot, no constraint, no sibling: this is the other arm of a fork already made */
         }
     }
-    /* THE DENOMINATOR OF THE ARM BELOW, RAISED ABOVE ALL THREE ARMS BECAUSE THAT IS WHAT MAKES IT ONE. A
-       decision with a spellable question is about to be answered exactly one of three ways and this counts the
-       ASK, so a zero `branchRefined` beside a zero `branchAsked` says no spellable question was REACHED rather
-       than that none was re-asked — two states that take opposite work and that no outcome row can separate.
-       It is above the birth handoff's early return by construction: that return is taken only for `key == NULL`
-       (the DCHECK one screen up is that guarantee), so nothing this counts is a handoff being spent. */
+    /* The ask, counted above all three arms so a zero `branchRefined` beside a zero `branchAsked` says no
+       spellable question was reached. It is below the handoff's early return, which is taken only for
+       `key == NULL`. */
     if (key) g_branch_asked++;
     if (key && (arm = concolic_branch_decided(key)) >= 0) {
-        g_branch_refined++;   /* the ask above was answered for free — see the declaration */
-        /* FEASIBLE REFINEMENT, AND IT IS ASKED FIRST. This flow has already decided this exact predicate, so
-           the other arm is CONTRADICTED: same unknown input, same test, one answer. Forking it again would add
-           a flow that explores nothing and still carries a COW delta, and a bundle testing one flag in twenty
-           places would cost a million of them. It consumes NO SLOT, precisely because it adds no decision — it
-           is a consequence of the ones already recorded.
-           THE ORDER IS THE WHOLE RULE, and it used to be the other way round for a reason that has been fixed
-           at its root instead. What the vector records is ONE SLOT PER BRANCH THIS FLOW HAD NOT ALREADY
-           DECIDED, so a replay reproduces the original run exactly when it asks the same question in the same
-           order: constraint first (no slot), then the recorded arm, then a new fork. Asking the vector first
-           only appeared to work because the one replaying flow this engine had — a snapshot-forked sibling —
-           replays exactly ONE slot, at a branch whose answer the fork had ALSO pre-recorded into its
-           constraint; the two agreed, and the vector had to win or the cursor would fall behind (the case the
-           deleted comment named: the false-arm sibling of `cfg.admin` reading the admin slot as its
-           `state.beta` decision). That pre-record is gone from the fork below, because the sibling re-executes
-           the branch and records the arm itself. With it gone the constraint is never ahead of the cursor, the
-           two orders stop competing, and a flow that replays its WHOLE path — the cold tier's, which starts at
-           cursor 0 with an empty constraint and re-runs the document — consumes exactly the slots the original
-           run recorded. Asking the vector first would have that flow consume a slot at every REPEAT test of a
-           flag the original decided for free, and every decision after the first repeat would be some other
-           predicate's answer. */
+        g_branch_refined++;   /* the ask above was answered without a slot or a fork; see the declaration */
+        /* Feasible refinement, asked first. This flow has already decided this predicate, so the other arm is
+           contradicted, and forking again would add a flow that explores nothing. It consumes no slot, because it
+           adds no decision. The order (constraint, then recorded arm, then a new fork) is what makes a replay
+           reproduce the original run: the vector holds one slot per branch the flow had not already decided, so a
+           cold-tier flow replaying its whole path from cursor 0 with an empty constraint consumes exactly the
+           recorded slots, and repeat tests of a decided flag cost none. A fork never pre-records the sibling's arm
+           into its constraint, so the constraint is never ahead of the cursor. */
     } else if (g_c < dec_total() && (arm = dec_replay(asked)) >= 0) {   /* REPLAY: a recorded decision */
-        /* the cursor moved inside dec_replay, and only because the slot answered THIS question */
+        /* the cursor moved inside dec_replay, and only because the slot answered this question */
     } else {
-        /* A NEW DECISION, OR ONE THIS FLOW'S VECTOR NO LONGER DESCRIBES — and after dec_leave_path those are
-           the same state, which is why there is one fork and not two.
-           THE SLOT MUST ANSWER THE QUESTION NOW BEING ASKED, and until dec_replay could say otherwise the
-           replay was POSITIONAL: it took slot g_c whatever the branch was, so a re-run that asked one more, one
-           fewer, or the same ones in another order consumed the next predicate's arm here and every
-           predicate's arm after it — a real arm, in range, past every assert on this path, all of which are
-           RANGE asserts. A clean resume and a scrambled one emitted byte-identical findings, which is why
-           nothing ever reported it. The mismatch is now a DIVERGENCE rather than an abort: the recorded tail
-           is left behind and this branch forks like any other. */
+        /* A new decision, or one this flow's vector no longer describes; after dec_leave_path those are the same
+           state, so there is one fork. A slot answering another question is a divergence, not an abort: the
+           recorded tail is left behind and this branch forks like any other. */
         if (g_c < dec_total()) dec_leave_path();
-        /* AND WHETHER "LIKE ANY OTHER" MEANS A FORK IS THE SESSION'S TO SAY, ASKED HERE AND NOWHERE ELSE. The
-           leave-the-path above happens either way — a recorded tail that answers other questions is unusable
-           to this run whatever the policy is — and only the last statement differs: a session that explores
-           mints the sibling, and one that does not takes the arm the SITE declared and records it. It is not a
-           fallback selecting between two implementations of a decision: there is one decision, and this is
-           what the other arm's absence means. */
+        /* Whether that means a fork is the session's to say, asked here only. Leaving the path happens either way;
+           a session that explores mints the sibling, and one that does not takes the arm the site declared. */
         arm = engine_session_forks() ? dec_fork_here(ctx, key, subject, asked, restartable, real_arm, forked,
                                                      site)
                                      : dec_answer_here(key, asked, nonforking);
     }
-    /* ONE PLACE, ALL THREE ARMS — a replayed arm and a refined one narrow this flow exactly as a forked one
-       does, and the fork path used to state it separately (inside dec_fork_here) so that the `!*forked` guard
-       here would not apply it twice. That guard was reading the FORK as its condition; `*forked` now says only
-       whether the caller owes a snapshot, which is a different fact, so the statement is made once. It is
-       still made ABOVE the freeze the fork took, which is the only ordering this constraint has. */
+    /* One place for all three arms: a replayed or refined arm narrows this flow exactly as a forked one does.
+       `*forked` says only whether the caller owes a snapshot. It is applied after the fork's freeze, so the
+       sibling's frozen constraint does not carry this flow's arm. */
     if (key) concolic_constrain_branch(key, arm);
     DCHECK(g_c <= dec_total(), "the decision cursor ran past the vector — a branch answered without consuming "
                                "its recorded slot, so the next one will read that slot as its own");
     return arm;
 }
 
-/* WHICH ARM WOULD A SESSION CARRYING REAL VALUES TAKE — the ONE observation this file makes about a branch,
- * and the fact BOTH of its consumers read: which sibling is the parent's continuation (dec_fork_here) and
- * whether the arm this flow ends on is FORCED (flow.h's `path_forced`). It is computed once, at the top of
- * decide_branch, precisely so those two cannot answer differently about one branch — a primary chosen by one
- * rule and a forced mark by another would be a flow whose own two records of one arm disagree, and neither
- * would be wrong at its own site.
+/* Which arm a session carrying real values would take: the one observation this file makes about a branch, read by
+ * dec_fork_here (which arm is the parent's continuation) and by flow.h's `path_forced`. It is computed once, at the
+ * top of decide_branch, so the two cannot disagree about one branch.
  *
- * WHAT MAKES IT AN OBSERVATION AND NOT AN INVENTION. A concolic value is a triple, and where the third member
- * is present the run has a CONCRETE example — a loaded config field, a modelled viewport's `matches`, an
- * `AbortSignal`'s real aborted state, the real bytes of `location.search`, AND THE RESULT OF A COMPARISON OVER
- * ANY OF THEM, which is the case this rule is mostly about: `concolic_cmp_hook` runs the engine's own §7.2.13
- * or §7.2.14 on the operands' examples, so `x === 'admin'` over a loaded `'admin'` arrives here carrying
- * `true`. §Learning-from-replies says what
- * that means at a branch: "at a branch the example marks the real arm PRIMARY; the forced sibling drops the
- * contradicted example, so only gate-DEPENDENT values degrade to a shape while gate-independent values stay
- * concrete". So the example ALREADY answers the question, by §7.1.2 ToBoolean over a value this engine
- * COMPUTED — nothing is solved, nothing is picked, and no predicate is re-decided from a recorded constraint.
- * That last clause is the line §Re-execution draws: the example rides the value because the interpreter ran
- * the real op, and reading it here is reading a value the run already has. Deriving the same answer from a
- * stored expression over the predicate would be the transform-expression that file forbids.
+ * It is an observation, not an invention: where a concolic carries a concrete example (a loaded config field, a
+ * modelled viewport's `matches`, an AbortSignal's state, `location.search`'s bytes, or a comparison over any of
+ * them, which `concolic_cmp_hook` computes by running §7.2.13 or §7.2.14 on the examples), §7.1.2 ToBoolean of
+ * that computed value answers the question. Nothing is solved or re-decided from a stored expression.
  *
- * A BRANCH WITH NO EXAMPLE ANSWERS -1, and that is a positive statement rather than a gap. Genuinely external
- * input and server-injected absent state are example-FREE by §Solver-half's design — that is what makes them
- * symbolic — so neither arm of `if (__FLAGS.admin)` over an absent record contradicts any observation, neither
- * is the "real" one, and nothing may be marked forced. Answering 0 or 1 there would be picking an arm to call
- * real, which is the invention this whole taxonomy exists to prevent.
- *
- * `JS_ToBool` IS THE RIGHT COERCION AND IT RUNS NO PAGE CODE. §7.1.2 ToBoolean has no ToPrimitive step — an
- * object is true, a string is its length — so this cannot re-enter the interpreter from inside a branch hook,
- * which is what makes it askable here at all. */
+ * A branch with no example answers -1: external input and absent server-injected state are example-free by design,
+ * so neither arm of `if (__FLAGS.admin)` contradicts an observation and neither may be marked forced.
+ * `JS_ToBool` runs no page code (§7.1.2 has no ToPrimitive step), so it can be asked inside a branch hook. */
 static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
     ConcolicExState st;
     JSValue ex;
     int real;
 
-    /* JS_UNDEFINED IS THE ABSENCE, WHICH IS concolic.h'S OWN SPELLING OF IT ("the concrete example (dup'd) or
-       JS_UNDEFINED"), and it is read here as the absence and never as a falsy example. The two are the same
-       tag, so a value whose example genuinely IS `undefined` is treated as carrying none — that is the
-       producer's encoding and not this reader's default.
-       THIS PARAGRAPH USED TO END "the alternative would be this file inventing a distinction the value class
-       does not make", and that clause is retired rather than deleted because it is what a reader re-derives
-       from one tag standing for two facts: the class DOES make the distinction now
-       (`concolic_example_state`), so the collapse here is a choice and no longer a limit.
-       THAT RESIDUAL IS BUILT AND IS KEPT IN ITS OWN WORDS, because the collapse is what a reader re-derives
-       from the JS_UNDEFINED in front of them. It read: "A DETERMINED ARM READS AS UNOBSERVED. What is not
-       covered: a condition whose value this flow's own equality PINNED, where the pinned value's own SPELLING
-       is the one `pin_mint` hands back as JS_UNDEFINED. Every OTHER falsy pin is already decided correctly by
-       the line below, because the test is the TAG and not truthiness — a pin of `null`, `0` or `""` arrives
-       non-undefined and reaches `JS_ToBool` — so the gap is the tag the absence shares and nothing wider …
-       What the next diff builds: read the state here and answer `JS_ToBool` for DETERMINED even where the value
-       is undefined, so dec_fork_here keeps the arm the proof names as primary and decide_note_forced_arm marks
-       the other FORCED. How its absence would show: a request built past `if (x === undefined) { … }`'s inner
-       gate graded as though nothing had been observed — §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED
-       under-claimed, which is the grade safeFetch's firing decision reads, so the under-claim is in the
-       direction that permits an act rather than refusing one."
-       THE STATE IS ASKED BEFORE THE VALUE AND BOTH COME OFF ONE DECISION, which is what makes this one reading
-       rather than two free to disagree: concolic.h says the state "IS DERIVED FROM THE ONE DECISION
-       `concolic_example` ITSELF SWITCHES ON and is never a second reading of the chain", so a DETERMINED here
-       and the bytes below are the same lookup's two halves. It takes no JSContext, mints nothing and is
-       side-effect-free, so asking it costs this branch hook nothing it is not already allowed to spend.
-       ONLY THE TAG MOVES AND ONLY FOR A PROOF. `CONCOLIC_EX_NONE` and `CONCOLIC_EX_CONTRADICTED` both still
-       answer UNOBSERVED through this line, which is the sound direction concolic.h names for them — NONE has no
-       bytes and CONTRADICTED has bytes this very path disproved — and `CONCOLIC_EX_HELD` cannot reach the
-       undefined tag with a real example, since an example that IS `undefined` is the producer's own encoding of
-       having none. So the one population that changes answer is a pin of `undefined`, and for it the flow has
-       PROVED the condition falsy: §7.1.2 ToBoolean of `undefined` is false, which is the arm a real session
-       takes, so the primary is kept and its sibling is marked FORCED. */
+    /* JS_UNDEFINED is concolic.h's spelling of an absent example, so a value whose example is `undefined` reads
+       as carrying none, except where `concolic_example_state` says DETERMINED: a pin of `undefined` proves the
+       condition falsy, so the primary is the false arm and its sibling is marked forced. The state and the value
+       come off one decision inside concolic.c, and asking the state is side-effect-free. NONE (no bytes) and
+       CONTRADICTED (bytes this path disproved) still answer unobserved, the sound direction; HELD cannot carry
+       `undefined` as a real example. */
     st = concolic_example_state(cond);
     ex = concolic_example(ctx, cond);
     if (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED) return REAL_ARM_UNOBSERVED;
@@ -2317,82 +1389,27 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
     return real;
 }
 
-/* AND THE ARM THIS FLOW ENDED ON, AGAINST THAT SAME OBSERVATION — CLAUDE.md
- * §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED in as many words: "a value exists only because a gate was
- * forced". It is a separate statement from the primacy above because the two are about different flows: the
- * primacy decides which arm THIS flow keeps at a NEW branch, and this fires for the arm this flow ends on
- * however it was reached — a fork's, a REPLAYED one (a cold resume re-running its recorded path) and a
- * constraint-REFINED one alike. A resumed flow whose provenance came back DERIVED would be the whole
- * discriminator lost at the tier that exists to preserve it.
- * SO A SIBLING MARKS ITSELF. The fork above hands the contradicted arm to the sibling and records it; the
- * sibling re-executes this branch when it resumes, replays that arm out of its own vector, and reaches this
- * line with itself switched in. Marking the sibling from here — at the fork, on the parent's behalf — would be
- * writing a fact about one flow while another is running, which is the same error one level down as reading a
- * park's provenance off the flow at join time.
- *
- * AND IT IS TWO STATEMENTS, WHICH ARE THE TWO CLAUSES OF ONE SENTENCE. §Learning-from-replies: "at a branch
- * the example marks the real arm PRIMARY; the forced sibling DROPS THE CONTRADICTED EXAMPLE, so only
- * gate-DEPENDENT values degrade to a shape while gate-independent values stay concrete." The first clause is
- * dec_fork_here's. This is the second, and it is not the same fact as the FORCED mark even though ONE
- * observation produces both: the mark is about the REQUEST this flow goes on to build (its provenance), and
- * the drop is about the VALUE this flow goes on to read (its example). A run that recorded only the mark would
- * report FORCED and still emit the contradicted bytes as a computed value; one that recorded only the drop
- * would degrade the value and still call the request DERIVED. They are made together, here, out of one
- * comparison, so neither can be added later and forgotten at the other's site.
- *
- * THE DROP IS KEYED BY THE VALUE'S IDENTITY AND SKIPPED WHERE THERE IS NONE. A concolic whose identity this
- * engine cannot spell has nowhere per-flow to file the fact, and filing it under anything shared would silence
- * that value in flows that proved nothing about it. The MARK still fires there — it needs no key — so the
- * request still states what it is, and only the degrade is missed.
- *
- * AND IT DROPS THE PREDICATE'S SUBJECT TOO, WHICH IS WHERE THE @H VALUE ACTUALLY LIVES. Dropping the
- * CONDITION's example is nearly free of consequence for an equality: a program rarely composes a URL out of a
- * comparison's boolean. What it composes one out of is the OPERAND — and on the arm that contradicts, that
- * operand's example is wrong too. `x === 'admin'` over an example of `'admin'` taken FALSE leaves a flow that
- * has recorded `x != 'admin'` and goes on reading `'admin'`, so `"/api/" + x` emits bytes this very path
- * disproved: §@H's "never invent" pointing the other way, and a WRONG report rather than a partial one.
- *
- * IT IS EXACT FOR AN EQUALITY AND IS NOT A CHAIN INVERSION. The comparison's example was COMPUTED from the
- * operand's by running §7.2.13 or §7.2.14 on it (concolic.c's cmp_example), so "the result's example is
- * contradicted, and the predicate is an equality about operand O" gives "O's example is contradicted" with no
- * step in between — the identical inference `concolic_pin` and `concolic_exclude` already make from the same
- * two facts on the same two arms. What §Re-execution forbids is deriving a value by INVERTING a transform,
- * and nothing here is inverted: both directions of the equality are read off observations this run made.
- * BOTH ARMS ARE COVERED AND THE PIN ONLY COVERS ONE. On the true arm of `x === 'admin'` over an example of
- * `'guest'`, concretize-on-pin makes a LATER MINT of `x` answer `'admin'`; a source held in a page variable is
- * never re-minted, so nothing at the mint reaches it. The degrade does, because it is asked at the READ.
- * AND THE DEGRADE IS NOT THE WHOLE ANSWER FOR THAT VALUE, WHICH IS WHAT THIS PARAGRAPH USED TO IMPLY. Dropping
- * `'guest'` stops the flow emitting bytes it disproved and leaves a SHAPE where the same gate DETERMINED
- * `'admin'` — §@H's wrong report rather than a partial one, at the commonest gated-endpoint shape a bundle
- * writes. concolic_example now asks the pin before it asks the example, under the `src_self` precondition, so
- * the two arms of this one observation land on the same value: the failing arm degrades it and the holding arm
- * concretizes it, wherever the page is holding it. Nothing here changes — the contradiction is still recorded
- * on both operands, and it is what the pin-free cases (an ordering, a loose equality, a call predicate) still
- * rest on entirely.
- *
- * THE SUBJECT IS NAMED BY ITS OWN IDENTITY AND NOT BY THE HOLE THE EXCLUSION USES, AND THAT PAIR IS NOT AN
- * INCONSISTENCY TO UNIFY. They are two names for two consumers: the hole is what the EMISSION reconstructs
- * from printed text (endpoint.c reads `page={state.page}` out of a URL and has nothing else), and the identity
- * is what an execution fact must be filed under. The hole cannot be that key — it is derived by stripping
- * braces, so it is lossy and not even total (`{}` has none while the value still has a source) — and the
- * identity cannot be the report's, because by the time a URL string carries a hole the value is gone. */
-/* AND IT IS ASKED OF AN OUTCOME FORK'S OPERAND TOO, WHICH IS THE SAME STATEMENT AND NOT AN ANALOGY. `v` is the
- * value the decision was ABOUT: a branch's condition, or the unknown OPERAND a native operation's completion
- * depends on. What makes the second one this function's business is the DEFINITION of a machine's `real`
- * declaration (quickjs.h): it is the completion the operation reaches WHEN RUN ON THE OPERAND'S EXAMPLE. So a
- * flow standing on some OTHER completion is standing where that example does not put it — `JSON.parse` threw
- * on a path whose example parses, §8.7's timeout was negative on a path whose example is 500 — and that is
- * "the arm this flow ends on contradicts the observation" in exactly the sense the mark and the drop are made
- * for. One inference, no step in between, and no transform inverted: both halves are read off observations the
- * run made, the same way the equality case is.
- * THE CMP-SUBJECT HALF IS SILENT THERE RATHER THAN WRONG. An operand is not a comparison result, so it carries
- * no `cmp_subj_ident` and the second contradiction does not fire — the operand IS the subject at an outcome,
- * and it is already named by its own identity above. */
-/* IT ANSWERS WHETHER IT MARKED, AND THAT RETURN IS THE ONLY SPELLING OF "THIS ARM CONTRADICTS ITS EXAMPLE"
-   THE REST OF THIS FUNCTION MAY READ. The pin below needs the same fact — a witness determined on a
-   contradicted arm is what solver/flow.h's `path_pinned` records — and re-deriving it from `real` and `arm` at
-   that second site would be two rules free to disagree about which arm proved what, which is the disagreement
-   the `eq_holds`/`eq_fails` pair a few lines down exists to prevent for the sibling records. One speller. */
+/* The arm this flow ended on, against the same observation: a request that exists only because a gate was forced.
+ * It fires for the arm this flow ends on however it was reached (a fork's, a replayed one, a refined one), so a
+ * cold-resumed flow keeps its provenance. A sibling marks itself: it re-executes this branch on resume and
+ * reaches this line switched in, so no fact is written about one flow while another runs.
+ * It makes the two clauses of §Learning-from-replies' sentence together, from one comparison: the forced mark is
+ * about the request this flow builds, and dropping the contradicted example is about the values it reads. The
+ * drop is keyed by the value's identity and skipped where there is none (filing under anything shared would
+ * silence that value in flows that proved nothing); the mark needs no key.
+ * It drops the predicate's subject too, where the @H value lives: `x === 'admin'` over an example of `'admin'`
+ * taken false would otherwise go on emitting `"/api/" + x` with bytes this path disproved. That is exact for an
+ * equality, not an inversion: the comparison's example was computed from the operand's (concolic.c's
+ * cmp_example), so a contradicted result about operand O contradicts O's example, the same inference
+ * `concolic_pin` and `concolic_exclude` make. concolic_example asks the pin first under `src_self`, so the holding
+ * arm concretizes the value wherever the page holds it and the failing arm degrades it. The subject is named by
+ * its identity, while the exclusion uses the hole, because the emission has only printed text. */
+/* It is asked of an outcome fork's operand too: a machine's `real` (quickjs.h) is the completion reached when run
+ * on the operand's example, so a flow on another completion (`JSON.parse` threw where the example parses, §8.7's
+ * timeout negative where the example is 500) contradicts that observation in the same sense. An operand carries no
+ * `cmp_subj_ident`, so the second contradiction stays silent; the operand is already named by its own identity. */
+/* It answers whether it marked, the one spelling of "this arm contradicts its example" the rest of decide_branch
+   reads, so the pin below records `path_pinned` off the same fact rather than re-deriving it. */
 static int decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
     const char *ident;
 
@@ -2408,8 +1425,8 @@ static int decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
     return 1;
 }
 
-/* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
-   where its sibling comes back, and it is the only thing that differs between them. */
+/* The one body behind both branch entries (see decide.h). `restartable` is the caller's declaration about where
+   its sibling comes back, the only thing that differs between them. */
 static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking,
                          const char *site) {
     const char *src = NULL, *tok = NULL;
@@ -2419,70 +1436,44 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
-    /* THE POLARITY BETWEEN THE VALUE THIS BRANCH TESTS AND THE PREDICATE IT IS ABOUT — read ONCE, here, and
-       applied at exactly two places: to the observation on the way in, and to the arm on the way out. Between
-       those two lines this whole function works in the PREDICATE's terms, which is what lets the pin, the
-       exclusion, the loose-equality domain, the bound and the call predicate below record off the same
-       readers with no case for a negation anywhere: `arm` means "the page's own gate answered true",
-       whichever way the page spelled the test. Everything that is not a negation answers 0 and reads exactly as it did. */
+    /* The polarity between the value this branch tests and the predicate it is about, read once and applied
+       twice: to the observation on the way in and to the arm on the way out. Between those lines the function
+       works in the predicate's terms, so the pin, exclusion, loose-equality domain, bound and call predicate
+       need no case for a negation: `arm` means "the page's own gate answered true". */
     neg = concolic_branch_neg(cond);
     DCHECK(neg == 0 || neg == 1,
            "a branch condition carries a polarity that is neither itself nor its complement — the arm below "
            "is XORed with this, so a third value would return an arm the interpreter reads as forked");
 
-    /* If the condition is a COMPARISON result (`x === 'admin'`), the taken arm may PIN the source to a concrete
-       value — CONCRETIZE-ON-PIN, so later reads compute the REAL @H value, not the shape. */
-    /* THE TOKEN'S KIND COMES BACK WITH IT, because a spelling is not a value. §7.1.19 ToString flattens
-       `undefined`, `null`, `0` and `false` onto text that is also a legal string operand, so a pin taken off
-       the spelling alone concretizes the source to that TEXT — `x === undefined` on its true arm made every
-       later read of `x` compute the nine characters "undefined", which is truthy where the flow had just
-       proved the value falsy. That is the one failure mode worse than not pinning at all: an absent pin forks
-       and explores both worlds, a wrongly typed one decides an arm nothing can contradict. */
+    /* If the condition is a comparison result (`x === 'admin'`), the taken arm may pin the source to a concrete
+       value (concretize-on-pin), so later reads compute the real @H value. The token's kind comes back with it,
+       because §7.1.19 ToString flattens `undefined`, `null`, `0` and `false` onto legal string text: a pin of
+       `x === undefined` taken off the spelling would make `x` the truthy nine characters "undefined". */
     op = concolic_cmp(cond, &src, &tok_kind, &tok);
 
-    /* THE OBSERVATION, MADE ONCE, BEFORE ANYTHING IS DECIDED — and read by both of the things that depend on
-       it: which arm this flow keeps if this branch is new, and whether the arm it ends on is FORCED. Taking it
-       twice would be two reads of one example with nothing forcing them to agree. */
+    /* The observation, made once before anything is decided, and read by both decisions that depend on it: which
+       arm this flow keeps if the branch is new, and whether the arm it ends on is forced. */
     real = decide_real_arm(ctx, cond);
-    /* …IN THE PREDICATE'S TERMS, because that is what `arm` is measured in below and the two are compared to
-       each other. The example rides the value the interpreter produced — `!p`'s example is the real `!` run on
-       `p`'s — so un-flipping it here is reading the same observation from the other end, never re-deriving it.
-       UNOBSERVED has no complement and must not acquire one: it is the positive statement that nothing this
-       run saw says which arm is real, and XORing it would turn that into the arm 0. */
+    /* In the predicate's terms, since `arm` below is. `!p`'s example is the real `!` run on `p`'s, so un-flipping
+       reads the same observation from the other end. UNOBSERVED has no complement. */
     if (real != REAL_ARM_UNOBSERVED) real ^= neg;
     key = decide_key(cond);
     arm = decide_arm(ctx, key, cond, restartable, nonforking, real, &forked, site);
     free(key);
-    /* AND WHETHER THAT FORK WAS TAKEN OVER A SUBJECT THIS FLOW HAD ALREADY PROVED — see the counter for what
-       the population is and why it is observed before anything refuses it. It is raised HERE because this is
-       the one line that holds both operands: `forked` is decide_arm's own answer about what just happened, and
-       `src` is the SUBJECT's source path as concolic_cmp read it off the comparison — neither is recoverable
-       later, and asking the pin of `cond` instead would answer about the comparison's own record. The pin this
-       consults is necessarily from an EARLIER branch of this flow, because the `concolic_pin` for THIS one is
-       written further down. */
+    /* Whether that fork was taken over a subject this flow had already proved (see the counter). Raised here,
+       the one line holding both `forked` (decide_arm's answer) and `src` (the subject's source as concolic_cmp
+       read it); the pin consulted is from an earlier branch, since this branch's `concolic_pin` is below. */
     if (forked && concolic_src_pinned(src)) g_fork_over_pinned++;
 
     forced_arm = decide_note_forced_arm(cond, real, arm);
 
-    /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
-    /* THE ROOT TRAVELS WITH THE PIN, and it is read off the COMPARISON RESULT rather than re-derived: pred_new
-       gives the result the tested operand's own root, so this is the same value's root by construction and not
-       a second lookup that could name a different one. It is what says WHOSE bytes this arm demanded — the
-       fact §Attacker-sources' unforgeable-origin rule is decided by, and the one thing no later reader can
-       recover, because by the time the value reaches a sink the identity that was pinned is gone. */
-    /* AND WHICH EQUALITY HELD TRAVELS WITH THE ARM, because the arm alone does not say what it PROVED. `op`
-       records which side of the branch makes the equality hold and is the same fact for `==` and `===`; what
-       differs is the conclusion that arm licenses, and only §7.2.13 IsLooselyEqual ( x, y ) versus §7.2.14
-       IsStrictlyEqual ( x, y ) decides it. This call used to carry the arm and nothing else, so a held
-       `x == undefined` pinned exactly as a held `x === undefined` did — while §7.2.13 steps 2 and 3 leave the
-       operand as EITHER of two values, and concretize-on-pin then decided every later branch over that source
-       out of a witness the run had not observed. concolic_pin splits the two writes on it; see its
-       declaration for the step-by-step reading and for why the principal DEMAND is made under both. */
-    /* WHICH SIDE OF THE EQUALITY THIS FLOW IS STANDING ON, SPELLED ONCE. Three sibling records now read it —
-       the pin, the exclusion and the loose-equality domain below — and three copies of
-       `(op == OPCMP_EQ && arm == 1) || …` are three rules free to disagree about which arm proved what, which
-       is the one disagreement that would file a pin on the arm that disproved it. `!=` is the same predicate
-       with its arms swapped, which is why neither name mentions the operator's spelling. */
+    /* The source equals tok on the arm that makes the equality true (EQ and true, or NE and false). The root
+       travels with the pin, read off the comparison result (pred_new gives it the tested operand's root): whose
+       bytes this arm demanded, which §Attacker-sources' origin rule needs and no later reader can recover. Which
+       equality held travels too: §7.2.13 IsLooselyEqual ( x, y )'s holding arm leaves the operand as either of
+       two values (steps 2 and 3), so concolic_pin splits its writes on the algorithm. `eq_holds`/`eq_fails` are
+       spelled once for the pin, the exclusion and the loose-equality domain, so the three cannot disagree about
+       which arm proved what. */
     eq_holds = (op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0);
     eq_fails = (op == OPCMP_EQ && arm == 0) || (op == OPCMP_NE && arm == 1);
     DCHECK(op == OPCMP_NONE ? (!eq_holds && !eq_fails) : (eq_holds != eq_fails),
@@ -2492,71 +1483,32 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
            "are recorded off the same run of the same gate");
     if (src && tok && eq_holds) {
         concolic_pin(src, concolic_root_c(cond), tok_kind, tok, concolic_cmp_algo(cond));
-        /* …AND THE PATH RECORDS THAT IT HAS NOW CHOSEN A WITNESS, where the arm that chose it is one this
-           run's own example CONTRADICTS. From this instant concolic_new's pin arm answers every later read of
-           `src` with `tok`, so every address the page composes from that source afterwards carries bytes THIS
-           ENGINE picked rather than bytes the document or the server supplied — and the trusted zone's firing
-           decision is the one thing that has to tell those apart (CLAUDE.md
-           §A-REQUEST-CARRIES-THE-PROVENANCE: "does this address carry a value this path pinned or
-           contradicted … and only then does the firing question read it").
-           IT IS RECORDED HERE, AT THE CHOICE, BECAUSE IT CANNOT BE RECOVERED AT THE ADDRESS. `pin_mint`
-           answers a read with a BARE primitive and `concolic_add_hook` derives nothing from two bare
-           operands, so the composed URL is a plain string that has forgotten where its bytes came from —
-           deliberately, since that forgetting is what stops a pinned source re-forking. solver/flow.h's field
-           carries the full reading and the residual.
-           NOT GATED ON THE ALGORITHM, unlike the loose-equality record below: §7.2.14 and §7.2.13 disagree
-           about what a HOLDING arm proves, and `concolic_pin` already refuses the loose one — so reaching
-           this line at all means a value was determined, which is the only thing this bit claims. */
+        /* The path records that it has chosen a witness on an arm this run's own example contradicts. From here
+           concolic_new's pin arm answers every read of `src` with `tok`, so addresses composed from that source
+           carry bytes this engine picked, which the trusted zone's firing decision must tell apart from observed
+           ones. It is recorded at the choice because the composed URL is a bare string by then (`pin_mint`
+           answers with a primitive and `concolic_add_hook` derives nothing from two); solver/flow.h's field has
+           the full reading. Not gated on the algorithm: reaching here means `concolic_pin` determined a value. */
         if (forced_arm) flow_mark_pinned_value();
     }
-    /* AND THE OTHER ARM, WHICH IS AN OBSERVATION AND NOT AN ABSENCE — the half this line did not have.
-       Forced multi-path runs BOTH arms of every `x === "admin"`, so the two branches of this `if` fire at
-       exactly the same rate: one flow leaves knowing the value IS "admin", and its sibling leaves having
-       PROVED it is not. The first fact rode the value as its example and reached the report; the second had
-       nowhere to go, so the sibling — which is the arm this tool exists to explore, the one the shipped
-       bundle did not take — emitted its parameter with the SAME BYTES as a parameter nothing had ever tested.
-       §Solver-half calls that a wrong report rather than a partial one, because the silence about the gate is
-       read as the positive statement "anything goes".
-       IT INVENTS NOTHING. `tok` is the concrete side the PAGE wrote, and `arm` is the arm this run took; the
-       line between a pin and a domain is whether a VALUE was determined, never whether a constraint was.
-       A NULL subject is a POSITIVE statement and the one thing this reads as one: an operand whose shape is
-       the unnameable `{}` has no hole the @H surface prints, so there is no name to file the fact under and
-       nothing downstream could read it if there were.
-       AND THIS ARM IS SOUND UNDER **BOTH** EQUALITIES, WHICH IS WHY IT TAKES NO ALGORITHM WHERE THE PIN DOES.
-       The two arms are not symmetric and reading them as symmetric is the mistake to avoid here: §7.2.14
-       IsStrictlyEqual ( x, y ) step 1 is "If SameType(x, y) is false, return false", so `x === tok` implies
-       SameType, and §7.2.13 IsLooselyEqual ( x, y ) step 1 — "If SameType(x, y) is true, then … Return
-       IsStrictlyEqual(x, y)" — then returns that same answer. So `x === tok` implies `x == tok`, and the
-       contrapositive is exactly this arm: a LOOSE equality that FAILED proves the operand is not the token,
-       every bit as strictly as a strict one that failed. Gating this on the algorithm alongside the pin would
-       delete a real observation on the arm the tool exists to explore, for a symmetry §7.2.13 does not have. */
+    /* The other arm, which is an observation, not an absence: forced execution runs both arms of every
+       `x === "admin"`, and the sibling has proved the value is not the token. Without this it would emit its
+       parameter with the same bytes as one never tested, which §Solver-half calls a wrong report. It invents
+       nothing: `tok` is the side the page wrote and `arm` the arm this run took. A NULL subject (the unnameable
+       `{}`) has no hole the @H surface prints. It is sound under both equalities: §7.2.14 IsStrictlyEqual
+       ( x, y ) step 1 makes `x === tok` imply SameType, and §7.2.13 IsLooselyEqual ( x, y ) step 1 then returns
+       the same answer, so `x === tok` implies `x == tok`, and a failed loose equality proves the operand is not
+       the token as strictly as a failed strict one. */
     else if (tok && eq_fails) {
         const char *subj = concolic_cmp_subject(cond);
         if (subj) concolic_exclude(subj, tok);
     }
-    /* AND THE HOLDING ARM OF A **LOOSE** EQUALITY, WHICH IS THE ONE ARM OF THE THREE THAT USED TO RECORD
-       NOTHING AT ALL. `concolic_pin` above refuses the value here and is right to — §7.2.13 IsLooselyEqual
-       ( x, y )'s holding arm leaves a SET, so writing a member of it would pick a WITNESS — but a refusal is
-       not a record, and the fact the flow observed had nowhere to go. §@H: "a shape carrying provenance alone
-       renders an UNCONSTRAINED parameter and a range-gated one with identical bytes, so its silence about the
-       gate is read as the positive statement 'anything goes'". The two arms of ONE `==` gate were disagreeing
-       about whether a gate had been seen at all — the failing arm carried an exclusion into the report and the
-       holding arm carried nothing.
-       IT IS A SIBLING OF THE TWO ABOVE AND NOT AN `else` OF THEM, exactly as the ordering and the call
-       predicate below are not: those two branch on which ARM the flow took, this on which ALGORITHM the page
-       wrote, and folding the second question into the first `if/else` chain would make their independence an
-       accident of ordering rather than a property the reads assert.
-       IT DOES NOT DEPEND ON `src`, WHICH IS WHY IT IS NOT INSIDE THE PIN'S `if`. A pin is keyed by `src`
-       because that is what a later READ concretizes through; a domain is keyed by the HOLE because that is all
-       the emission has (concolic_cmp_subject states the pair). The NULL subject is the positive statement the
-       exclusion reads it as: an operand whose shape is the unnameable `{}` has no hole the @H surface prints.
-       THE ALGORITHM IS ASKED ONLY WHERE THERE IS ONE. `concolic_cmp_algo` aborts on a predicate that is not an
-       equality rather than inventing a §7.2.13/§7.2.14 reading for it, so `eq_holds` — which is false for
-       every OPCMP_NONE — is its precondition and is evaluated first here by the `&&`.
-       IT INVENTS NOTHING, AND THE LINE IS THE SAME ONE THE PIN IS REFUSED BY: `tok` is the concrete side the
-       PAGE wrote and `arm` is the arm this run took, so what is recorded is that the page's own `==` against
-       that operand ANSWERED TRUE here. §@H draws the line at whether a VALUE was determined, never whether a
-       constraint was — and no value is determined by a predicate answering true. */
+    /* The holding arm of a loose equality: concolic_pin refuses a value here (§7.2.13's holding arm leaves a set,
+       and writing a member would pick a witness), but the observation is still recorded as a domain, so both arms
+       of one `==` gate reach the report. It is a sibling of the branches above, not an `else`, because it branches
+       on the algorithm the page wrote rather than the arm. It is keyed by the hole, as a domain is, not by `src`
+       (concolic_cmp_subject states the pair). `concolic_cmp_algo` aborts on a non-equality, so `eq_holds`, false
+       for every OPCMP_NONE, is evaluated first. No value is determined by a predicate answering true. */
     if (tok && eq_holds && concolic_cmp_algo(cond) == JS_CONCOLIC_EQ_LOOSE) {
         const char *subj = concolic_cmp_subject(cond);
         DCHECK(tok_kind != CONCOLIC_LIT_NONE,
@@ -2566,18 +1518,11 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
                "give those two gates holding sets with nothing in common");
         if (subj) concolic_looseeq(subj, tok_kind, tok);
     }
-    /* AND THE ORDERING, WHICH IS THE SAME OBSERVATION OVER AN ORDERED DOMAIN AND WHOSE *BOTH* ARMS CARRY ONE.
-       An equality splits into a determined VALUE and a determined non-value; an ordering determines no value
-       on either side and a BOUND on each, so this is a sibling of the two branches above rather than a third
-       case of them — which is why it is not an `else`: a comparison result is an equality or an ordering and
-       never both, and writing it as an `else` would make that mutual exclusion an accident of ordering rather
-       than a property concolic_rel asserts.
-       THE FALSE ARM'S RELATION IS §13.10.1's OWN, not a textual negation — rel_op_negate names the paired
-       production and states there what the pairing does with §7.2.12's `undefined`. `x < 5` taken false is
-       recorded as `x >= 5`.
-       IT INVENTS NO VALUE, which is the line §@H draws: `{int>5}` is what the run observed and `6` is what it
-       must never emit. Nothing here picks a member of the interval; the emission stays a domain-annotated
-       shape and the concrete example, where one exists, still comes only from a value the code COMPUTED. */
+    /* The ordering: the same observation over an ordered domain, with a bound on each arm and no value on
+       either. A sibling, not an `else`: a comparison result is an equality or an ordering, never both, which
+       concolic_rel asserts. The false arm's relation is §13.10.1's paired production (rel_op_negate states what
+       the pairing does with §7.2.12's `undefined`), so `x < 5` taken false records `x >= 5`. Nothing picks a
+       member of the interval: the emission stays a domain-annotated shape. */
     {
         const char *rtok = NULL, *rsubj = NULL;
         double rnum = 0;
@@ -2594,20 +1539,10 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
             concolic_bound(rsubj, arm ? rel : rel_op_negate(rel), rnum, rtok);
         }
     }
-    /* AND THE THIRD CLASS — a METHOD CALL over an unknown whose RESULT is the boolean this branch tests, which
-       is §@H's own headline shape (`{startsWith:/api}`) and was the one gate class that recorded nothing at
-       all. It is a sibling of the two above rather than a third case of them, and not an `else`, for the
-       reason the ordering is not: a condition is an equality, an ordering or a call result and never two, and
-       writing that as an `else` would make the mutual exclusion an accident of ordering instead of a property
-       the asserts state.
-       THE ARM *IS* THE FACT, which is why it is carried and not folded into the predicate the way an
-       ordering's is. `rel_op_negate` exists because §13.10.1 pairs `<` with `>=`; a method call has no paired
-       method, and inventing one would mean deciding what the method MEANS — the recogniser §RUN-DON'T-MATCH
-       forbids, arriving as a convenience at the one line that could most easily hide it. So the false arm is
-       recorded as the false arm: `startsWith("/api")` answered false is a fact, stated as one.
-       IT INVENTS NOTHING. The method is the name the page wrote, the arguments are the literals the page
-       passed, and the arm is the arm this run took — §@H's line is whether a VALUE was determined, and no
-       value is determined by a predicate answering true. */
+    /* The third class: a method call over an unknown whose result is the boolean tested, §@H's headline shape
+       (`{startsWith:/api}`). A sibling, not an `else`, for the ordering's reason. The arm is the fact, carried
+       rather than folded into the predicate: a method has no paired method, and inventing one would decide what the
+       method means. The method is the name the page wrote and the arguments the literals it passed. */
     {
         ConcolicCallPred sp;
         if (concolic_strpred(cond, &sp)) {
@@ -2625,38 +1560,21 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
             concolic_strpred_file(sp.subject, sp.method, sp.args, sp.nargs, arm);
         }
     }
-    /* NAMED RESIDUAL — A BARE TRUTHINESS GATE NARROWS, IS RECORDED, AND IS FILED UNDER A KEY THE @H SURFACE
-       CANNOT LOOK UP. It is the fourth arm of the one defect each recorder above was written to close: the
-       equality's failing arm, the loose equality's holding arm and the ordering's two arms each had nowhere
-       to go until one of them was built for it, and `if (cfg.admin)` still has nowhere to go.
-       WHAT IS NOT COVERED: a condition that IS the unknown rather than a predicate over one. `concolic_cmp`
-       answers OPCMP_NONE for it, `concolic_rel` REL_NONE and `concolic_strpred` 0, so not one of the four
-       recorders above fires — while ECMAScript §7.1.2 "ToBoolean ( arg )" over that operand is precisely the
-       narrowing they exist to carry, and the arm this flow took is the fact, exactly as it is for a call
-       predicate. THE OBSERVATION IS NOT LOST, WHICH IS WHAT MAKES THIS A RESIDUAL AND NOT A GAP: `decide_arm`
-       files it through `concolic_constrain_branch`, and that is what keeps N tests of one flag from costing
-       2^N flows. What it is filed UNDER is `decide_key`'s `branch` composition over the value's IDENTITY,
-       while `concolic_excluded`, `concolic_bound_read`, `concolic_strpred_read` and `concolic_looseeq_read`
-       are keyed `excl`, `bound`, `strpred` and `looseeq` over the HOLE. Those namespaces cannot collide —
-       `excl_key` states that as its own reason for composing rather than using the raw shape — so the fact
-       sits in the one constraint map under a key `kv_add`'s four reads have no spelling of.
-       WHAT THE NEXT DIFF BUILDS: a fifth recorder beside the four, keyed by
-       `concolic_hole_key(concolic_shape_c(cond))` as `concolic_cmp_subject` keys the others, filed on BOTH
-       arms because ToBoolean determines no value on either and a fact on each; read at `kv_add` under the
-       same `hole` the other four are gated on; merged across sightings by intersection in
-       extension/lib/learn.js as `intersectLooselyEquals` is, with its emitted name added to
-       `AST_PARAM_KEYS` in the same diff, that list's own crash being what refuses half of one. It states the
-       ARM and never a member of the set the false arm admits — naming one would be the WITNESS §@H refuses,
-       which is the same refusal `concolic_looseeq` makes for §7.2.13's holding arm and for the same reason.
-       HOW ITS ABSENCE WOULD SHOW: a param whose `valueClass` is "unknown" carries all four domain keys
-       absent, and every consumer reads that quadruple absence as the positive statement that no gate of any
-       kind held on every observed path — on a path where the flow both FORKED at the gate and was later
-       REFINED by it. Observe it at the @H record, by reading `valueClass` against the four keys beside it;
-       that the gate was reached at all is witnessed on the same surface by the forked arm's own endpoint.
-       RETIREMENT: this record goes when a branch over a bare unknown files under a hole key. */
-    /* AND BACK INTO THE VALUE'S TERMS. Everything above recorded a fact about the PREDICATE; the interpreter
-       asked about the CONDITION, and for a negation those are complements. The forked bit is unaffected —
-       whether a sibling was prepared is a fact about the branch and not about which way it reads. */
+    /* Named residual: a bare truthiness gate narrows and is recorded under a key the @H surface cannot look up.
+       Not covered: a condition that is the unknown itself (`if (cfg.admin)`), for which concolic_cmp,
+       concolic_rel and concolic_strpred all answer nothing, though §7.1.2 "ToBoolean ( arg )" narrows it. The
+       observation is kept: decide_arm files it through concolic_constrain_branch under decide_key's `branch`
+       identity, so N tests of one flag cost no forks; but `kv_add`'s four reads are keyed `excl`, `bound`,
+       `strpred` and `looseeq` over the hole, and none spells it.
+       Next diff builds: a fifth recorder keyed by `concolic_hole_key(concolic_shape_c(cond))`, filed on both arms
+       (ToBoolean determines no value on either), read at `kv_add` under the same hole, merged in
+       extension/lib/learn.js by intersection as `intersectLooselyEquals` is, with its name added to
+       `AST_PARAM_KEYS` in the same diff; it states the arm, never a member of the false arm's set.
+       How its absence would show: a param with `valueClass` "unknown" and all four domain keys absent, on a path
+       whose flow forked at the gate (witnessed by the forked arm's own endpoint) and was later refined by it. */
+    /* Back into the value's terms: everything above recorded facts about the predicate, and the interpreter asked
+       about the condition, which for a negation is the complement. The forked bit is about the branch, not its
+       reading. */
     arm ^= neg;
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
@@ -2677,156 +1595,38 @@ int solver_decide_restartable_at(JSContext *ctx, JSValueConst cond, int nonforki
     return r;
 }
 
-/* JSFlowControlHooks.outcome — the SAME decision asked from a C builtin, which has no OP_if to ask it at.
+/* JSFlowControlHooks.outcome: the same decision asked from a C builtin, which has no OP_if. `JSON.parse(x)` over
+ * unknown text completes with a value or a SyntaxError, both feasible, and picking one would delete the arm a
+ * `catch` lives on; the machine states the question and this answers it from the decision vector, so a parked
+ * sibling resumed next session takes the same arm. The key composes the operand's identity, the operation and the
+ * completion through the engine's one encoding, so `x === "a"` and `JSON.parse(x)` are two facts about one value;
+ * a machine asking at successive positions (an iteration over an unknown collection) puts the position in `op`.
  *
- * `JSON.parse(x)` over unknown text completes with a value or with a SyntaxError, and both are feasible; the
- * builtin cannot pick one, because picking DELETES the arm a `catch` and everything behind it lives on. So the
- * machine states the question and this answers it out of the flow's decision vector, exactly as a branch's arm
- * comes out of it — which is what makes a sibling parked today and resumed next session take the same arm.
- *
- * The KEY is the operand's IDENTITY plus the OPERATION, composed through the same encoding every other key in
- * this engine goes through — so `x === "a"` and `JSON.parse(x)` are two facts about one value and no spelling
- * of either can compose to the other's key. The operation string is the machine's, so a machine that asks the
- * same question at successive POSITIONS (an iteration over an unknown collection) says so there — each position
- * is its own predicate and must not be decided by the last one's answer.
- *
- * `real` IS THE ASKING MACHINE'S OWN STATEMENT, AND IT IS A PARAMETER FOR THE SAME REASON `nonforking` IS.
- * It is "which completion would a session carrying real values reach", and it decides TWO things at the branch
- * seam one function up: which arm the parent keeps, and whether the arm it ends on is FORCED. An outcome has
- * no condition and its arms are not booleans — they are numbered COMPLETIONS of a real operation over `over` —
- * so §7.1.2 ToBoolean of the operand's example answers a different question and must not be substituted for
- * this one. Where `over` carries an example the answer exists and is computable, but only by the MACHINE:
- * `JSON.parse` over the example `"{}"` completes normally and over `"#x"` throws, and this seam holds the
- * operand and the operation's NAME, never its semantics. Deciding from the name would be the recognizer
- * §C-stack bans, and taking completion 0 because machines number their ordinary one there would be inventing
- * which completion a real session reaches. So the machine says, at its own definition, and JS_OUTCOME_REAL_-
- * UNSTATED is its positive "I cannot say" — mapped here onto REAL_ARM_UNOBSERVED, which is the same claim
- * about the same fork made in this file's vocabulary, and translated rather than shared so that two seams
- * cannot drift into meaning the number instead of the statement.
- *
- * AND A STATED DECLARATION IS READ TWICE HERE, WHICH IS THE WHOLE OF WHAT IT BUYS. It goes to decide_arm, where
- * a NEW decision keeps the real completion for this flow and hands the other to the sibling; and it goes to
- * decide_note_forced_arm, where the arm this flow ACTUALLY ends on — new, replayed off its own vector, or
- * refined out of its own constraint — is compared against it, so the flow standing on a completion its
- * operand's example contradicts marks itself FORCED and stops believing that example. A machine that states
- * nothing reaches neither: both arms run and neither is marked, exactly as a branch over an example-free value
- * behaves. THE SECOND READ IS NOT OPTIONAL EXTRA CREDIT — a declaration consumed only by the primacy would be
- * an observation with a computed writer and no reader for the fact it exists to supply, which is the mirror of
- * the field nobody writes and is just as invisible: every request behind an outcome fork would keep reporting
- * DERIVED while the machine had already said which completion was real. */
-/* N COMPLETIONS ARE N-1 BINARY DECISIONS, WHICH IS WHY THERE IS NO N-WAY SLOT AND NO SIBLING QUEUE.
- *
- * THE ASSERT THAT STOOD HERE NAMED THE WRONG BUILD, AND THE CORRECTION IS RECORDED AT THE SITE THAT MADE THE
- * CLAIM because the next reader of this function is the one who would otherwise repeat it. It read "this
- * prepares ONE sibling per ask; build the N-1 sibling prepare (a queue engine_fork_finalize drains)", and both
- * halves of that instruction are wrong. The first premise is right — one ask can prepare exactly one sibling,
- * because engine_prepare_fork's handoff is a single slot and the step driver takes exactly one JS_FlowClone per
- * JS_STEP_FORK, so a second prepare inside one call overwrites the first's blobs. What does NOT follow is that
- * the seam must therefore learn to prepare several: a queue would need N-1 FRAMES out of the driver's one
- * clone, would have to be per-flow state that parks and resumes, and would put a QUEUE POSITION between a fork
- * and its sibling's rank — three problems the ask does not actually have.
- *
- * A DECISION VECTOR ALREADY RECORDS N-WAY OUTCOMES, ONE BIT AT A TIME. "Which of N completions" is the
- * elimination sequence "is it c0? is it c1? … " — N-1 genuine two-armed predicates, each with its own identity,
- * each recorded in one slot, each forking ONE sibling. The parent answers YES at the first question it reaches
- * as a NEW decision and returns; the sibling it minted carries the NO, resumes AT THE ASK (the driver takes the
- * clone with fork_phase still FORK_PH_ASK, so the machine re-enters here rather than past its own question),
- * replays its NO out of its own vector, reaches the NEXT question as new, and forks once itself. N flows, N-1
- * forks, one fork per ask — and the chain is drawn LAZILY, one link per time the scheduler picks that sibling,
- * so an N-way outcome does not build N-1 flows inside one step. That is the same argument flow_answer_fork
- * makes for taking one arm per step ("the scheduler re-ranks between each, which is what it is for"), reached
- * here for free instead of by a mechanism.
- *
- * EVERY REQUIREMENT A QUEUE WOULD HAVE HAD TO MEET IS MET BY CONSTRUCTION.
- *   - RANK-NEUTRALITY: each sibling is an ordinary dec_fork_here → engine_prepare_fork → engine_fork_finalize
- *     fork, minted at the instant of its OWN branch from a parent standing exactly there, so flow.c's
- *     whole-weight equality holds for it exactly as it holds for a bytecode branch. There is no queue position
- *     that could become a rank difference, because there is no queue.
- *   - PARKING: the chain's entire state IS the decision vector, which already freezes, parks to the cold tier
- *     and replays. Nothing new crosses a suspend, and in particular there is no malloc'd list whose head/tail
- *     pointers a context switch would revert while its nodes stayed reachable from nothing.
- *   - NO BOUNDS: N is whatever the machine declares and nothing here caps it. A flow ending on the last
- *     candidate carries N-1 slots, which is linear and is work, not truncation.
- *   - EXCLUSIVE AND EXHAUSTIVE: the questions partition [0, n). Every completion is the endpoint of exactly one
- *     path, and two paths differ in at least one recorded arm, so no timeline is fabricated and none is lost.
- *
- * THE KEY IS THE OPERAND'S IDENTITY, THE OPERATION, AND THE COMPLETION — three fields where it was two, and the
- * third is what makes the questions distinguishable facts rather than one question asked N-1 times. "Is this
- * operation's completion over this operand exactly c" is its own predicate for each c, exactly as decide_key's
- * own note says `x < 700` and `x < 300` are two facts about one source; keying the chain by POSITION instead
- * would be the defect that note describes, because position means a different completion the moment the order
- * changes and a replay would file one question's answer under another's.
- *
- * THE ORDER ASKS ABOUT `real` FIRST, AND THAT IS FORCED RATHER THAN CHOSEN. The parent must answer YES at the
- * question it asks as new, or it walks on to a second new question and prepares a second sibling into a
- * one-occupant slot. So the completion the parent keeps has to be the FIRST one asked about — and which
- * completion the parent keeps is not free either: §Learning-from-replies says "at a branch the example marks
- * the real arm PRIMARY", which dec_fork_here's own history is about (it hardcoded TRUE and pushed the arm a
- * real session takes into a sibling). Those two constraints have exactly one solution: ask about `real` first.
- * The rest follow in ascending order, skipping it.
- *
- * AND `real` IS DROPPED AFTER THE FIRST QUESTION, WHICH IS NOT A CONVENIENCE — IT IS THE SECOND CLAUSE OF THE
- * SAME SENTENCE. A flow standing at question 1 recorded NO at question 0, so its own path has already
- * contradicted the operand's example; §Learning-from-replies: "the forced sibling DROPS the contradicted
- * example". From there on nothing observed distinguishes the remaining candidates, so every later question is
- * asked with REAL_ARM_UNOBSERVED — which is also what keeps the one-fork-per-ask invariant true for a SIBLING:
- * dec_fork_here takes arm 1 for an unobserved real, so a new question always terminates the walk. The flow was
- * already marked FORCED at question 0, so nothing is lost by the later questions marking nothing.
- *
- * ONE BEHAVIOUR CHANGES FOR n == 2 AND IT IS A FIX. With `real` UNSTATED the old code kept completion 1 (take
- * = 1 meant the arm, and for an outcome the arm WAS the completion), while a session that does not fork takes
- * completion 0 — the driver's own `harm = 0` arm, which is why every machine numbers its ordinary completion
- * there. So the exploring primary and the @S candidate re-fire walked DIFFERENT completions of the same
- * unstated outcome, and the re-fire that must reproduce the primary's path did not. Asking about completion 0
- * first makes the two agree.
- *
- * AND THE WALK ANSWERS N QUESTIONS WHILE ASKING N-1 OF THEM, WHICH IS WHY IT MUST RECORD THE ONES IT DID NOT
- * ASK. This is the second half of the sentence above and it was missing. The order is a function of `real`, so
- * WHICH questions get slots is a function of the machine's EXAMPLE — and at n == 2 that is total:
- * `outcome_nth(0, 2, real)` IS `real`, so a flow whose example names completion 1 files the one question it
- * asks under "is it 1", and a flow whose example names 0, or which has none, files THE SAME BINARY FACT under
- * "is it 0". A predicate and its negation, under two keys. decide_key's own note is the precedent and it
- * settles the direction: `if (p)` and `if (!p)` are ONE constraint entry because "the polarity is applied to
- * the ARM by the caller and never to this key", and keying them apart makes a flow that has already fixed the
- * fact fork AGAIN and then stand on two arms that contradict each other.
- *
- * IT IS NOT A HAZARD BETWEEN TWO UNRELATED FLOWS — THIS SEAM MINTS THE FLOW THAT COLLIDES WITH ITS PARENT.
- * decide_note_forced_arm runs on every ask below, and an outcome sibling is BY CONSTRUCTION the flow standing
- * on the arm its operand's example does not name — so the seam contradicts that example (concolic.c's
- * `ex_contra`) at the very question that produced the sibling. The operand then answers with NO example on
- * that path, `real` is UNSTATED at the sibling's next ask over the SAME operand and operation, and the key it
- * composes is the other spelling of the fact its own parent recorded. Measured against core/idl_index_arg.c's
- * chain, which is the shape that asks one predicate at two entries: the parent answers `index == e` YES at the
- * one link its example names and files "is it completion 1"; the sibling of that link replays NO, loses the
- * example, walks to the past-the-end world, and at the NEXT member over the same index misses at `index == e`,
- * re-forks, and the arm it mints there answers "the index IS e" while the fact it inherited says it is not.
- * One value, two positions, one world — every arm in range and every assert on the path satisfied.
- *
- * THE CURE IS §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS' — N QUESTIONS OVER THE ONE FACT, NEVER N FACTS. The
- * fact is the COMPLETION this walk ended on; "is it c" for each c is a question asked of it. So the walk
- * SETTLES at its exit: for every completion the machine declared, it records the truth the decided completion
- * gives that question, whether or not this walk had a slot for it. It is entailment and not observation —
- * the header above states the questions partition [0, n), so a walk that ended on `c` has proved "not d" for
- * every other `d`, and a walk that fell through to the last candidate has proved that candidate.
- *
- * WHY NOT CANONICALISE THE KEY, WHICH IS decide_key's OTHER HALF. A branch has a POLARITY and an outcome has
- * an ORDER, and only the first collapses: `!p` is `p` with the arms swapped, while "is it 5" is not "is it 2"
- * under any transformation. Canonicalising would therefore have to rewrite what the walk ASKS, which is what
- * the decision vector records — every parked flow holding an outcome slot would diverge at it, at 28 ask sites.
- * The settle changes NO key that is asked, NO slot, and NO order, so a cold-tier flow replays byte-identically
- * and simply gains the entailed entries as it goes. What it costs is one constraint entry per completion the
- * walk did not ask about — for the n == 2 family that is one per ask — and that entry is the fact under its
- * other name, which is the whole point.
- *
- * AND IT IS ASSERTED BEFORE IT IS WRITTEN, so the settle cannot mask the thing it exists to prevent: a flow
- * whose constraint already DENIES the completion this walk is about to return is standing in the fabricated
- * timeline, and that is a should-never-happen rather than a state to overwrite. */
-/* THE ELIMINATION ORDER — the i-th completion asked about, as a permutation of [0, n).
- *
- * A FUNCTION AND NOT AN ARRAY because it is read on every ask of every replaying sibling and there is nothing
- * to own; a bijection, asserted by its caller, so that "the questions partition the completions" is checked
- * rather than believed. `real` is the machine's declaration or JS_OUTCOME_REAL_UNSTATED, and the unstated case
- * is plain ascending — which is the identity permutation, so a machine that states nothing pays nothing. */
+ * `real` is the machine's own statement of which completion a session carrying real values reaches, a parameter
+ * for `nonforking`'s reason: §7.1.2 ToBoolean of the operand's example answers a different question, and this
+ * seam holds the operation's name, never its semantics, so deciding from the name would be a recognizer.
+ * JS_OUTCOME_REAL_UNSTATED is the machine's "I cannot say", mapped onto REAL_ARM_UNOBSERVED. A stated `real` is
+ * read twice: by decide_arm (a new decision keeps the real completion) and by decide_note_forced_arm (the
+ * completion this flow ends on, however reached, is compared against it, so a contradicted flow marks itself
+ * forced). */
+/* N completions are N-1 binary decisions, so there is no N-way slot and no sibling queue. engine_prepare_fork's
+ * handoff holds one sibling and the step driver takes one JS_FlowClone per JS_STEP_FORK, so each ask asks "is it
+ * c?" for successive completions: the parent answers yes at the first question it reaches as new and returns; the
+ * sibling carries the no, resumes at the ask (fork_phase still FORK_PH_ASK), replays its no, reaches the next
+ * question as new and forks once itself. N flows, N-1 forks, drawn lazily one link per time the scheduler picks a
+ * sibling. Each sibling is an ordinary fork from a parent standing at its own branch (rank-neutral); the chain's
+ * state is the decision vector, which parks and replays; N is uncapped; and the questions partition [0, n).
+ * The order asks about `real` first, because the parent must answer yes at its first new question and
+ * §Learning-from-replies makes the real arm primary; the rest follow ascending. `real` is dropped after the first
+ * question, since a flow past it has contradicted the example, and an unobserved real makes dec_fork_here take arm
+ * 1, so a new question always ends the walk. With `real` unstated, completion 0 is asked first, matching the
+ * non-forking driver's `harm = 0`, so an @S re-fire walks the primary's completion.
+ * The walk answers N questions while asking N-1, so it settles at its exit (outcome_settle): which completions get
+ * slots depends on `real`, so one fact could otherwise sit under two keys (at n == 2, "is it 1" and "is it 0"), and
+ * the sibling this seam mints, whose example it contradicts, would compose the other spelling and re-fork it. */
+/* The elimination order: the i-th completion asked about, as a permutation of [0, n). A function, not an array,
+ * because it is read on every ask of every replaying sibling and has nothing to own; its caller asserts it is a
+ * bijection. With `real` unstated it is the identity permutation. */
 static int outcome_nth(int i, int n, int real) {
     int c;
 
@@ -2836,28 +1636,21 @@ static int outcome_nth(int i, int n, int real) {
     if (real == JS_OUTCOME_REAL_UNSTATED) c = i;
     else if (i == 0) c = real;
     else c = (i - 1 < real) ? (i - 1) : i;   /* ascending over the others: shift past the hole `real` left */
-    /* THE ORDER'S RANGE, ASSERTED AT ITS ORIGIN rather than at the one caller, because the value leaves here
-       as the seam's RETURN and lands in the step driver's `h->fork_arm` — where a completion outside the
-       declared set is a real arm the machine will switch on and has no algorithm for. */
+    /* The order's range, asserted at its origin: the value becomes the seam's return and the step driver's
+       `h->fork_arm`, where an undeclared completion is an arm the machine has no algorithm for. */
     DCHECK(c >= 0 && c < n,
            "the elimination order named a completion outside the ones the machine declared — the walk would "
            "hand the step driver an arm no branch of that machine answers");
     return c;
 }
 
-/* THE ONE SPELLER OF AN OUTCOME QUESTION'S KEY — "is this operation's completion over this operand exactly c".
- *
- * A FUNCTION AND NOT TWO COPIES OF A snprintf, because the walk below asks these keys and the settle beneath it
- * READS AND WRITES them, and two spellings of one key is precisely the defect both of them exist to close: the
- * settle would then record the fact under a name the walk never looks up, which is a write with no reader
- * standing next to a read with no writer — the pair §Architecture measures as concealing each other.
- * Returns a heap key the caller frees, or NULL for an operand whose identity this engine cannot spell. */
+/* The one speller of an outcome question's key, "is this operation's completion over this operand exactly c", used
+ * by the walk and by the settle, which must file facts under the names the walk looks up. Returns a heap key the
+ * caller frees, or NULL for an operand whose identity this engine cannot spell. */
 static char *outcome_key(JSValueConst over, const char *op, int c) {
-    /* SIZED FROM THE ONE BOUND ON `c` AND NOT FROM SLACK. solver_outcome asserts `n <= SOLVER_FORKED_BIT`
-       (0x100) and outcome_nth asserts `c < n`, so the widest decimal this can ever hold is `255` — three
-       digits and the terminator. A truncated completion would file two completions under one key and let one
-       question's record answer another's, which is the same merge a truncated operation string makes; the
-       DCHECKF below is the line that fails the day that bound and this size stop agreeing. */
+    /* Sized from the bound on `c`: solver_outcome asserts `n <= SOLVER_FORKED_BIT` (0x100) and outcome_nth
+       asserts `c < n`, so the widest value is `255`. A truncated completion would file two completions under one
+       key; the DCHECKF fails if the bound and this size stop agreeing. */
     char which[4];
     const char *f[3];
     int wrote = snprintf(which, sizeof which, "%d", c);
@@ -2870,20 +1663,13 @@ static char *outcome_key(JSValueConst over, const char *op, int c) {
     return concolic_ident_compose("outcome", f, 3);
 }
 
-/* THE WALK'S ANSWER, WRITTEN DOWN FOR EVERY QUESTION IT ANSWERED — see the header above for why N-1 asks leave
- * N facts and why the missing ones are the whole defect. `c` is the completion the walk ended on.
- *
- * ENTAILMENT, NOT OBSERVATION. The header states the questions partition [0, n) — exclusive and exhaustive is
- * the machine's own declaration — so "the completion is c" settles "is it d" for every d at once. Nothing here
- * asks anything, consumes a vector slot, or forks: this is the same kind of fact decide_arm's feasible-
- * refinement arm reads, recorded where it becomes known instead of only where it was asked.
- * IT RUNS AFTER THE FORK AND THAT ORDERING IS THE WHOLE OF ITS CORRECTNESS. dec_fork_here freezes the
- * constraint for the sibling BEFORE decide_arm applies the parent's own arm, so everything written here lands
- * in the parent's head alone — the sibling took the OTHER arm, will end on a different completion, and settles
- * its own when it re-enters and re-walks.
- * THE ASSERT IS THE POINT AND IT READS BEFORE IT WRITES. A recorded truth that disagrees with the completion
- * being returned is a flow standing on a world its own path denies; overwriting it would repair the entry and
- * leave the timeline, which is the concealment rather than the fix. */
+/* The walk's answer, written down for every question it answered. `c` is the completion the walk ended on, and
+ * the questions partition [0, n), so "the completion is c" settles "is it d" for every d: entailment, not
+ * observation, asking nothing, consuming no slot and forking nothing. It runs after the fork, and dec_fork_here
+ * freezes the sibling's constraint before decide_arm applies the parent's arm, so these entries land in the
+ * parent alone; the sibling settles its own when it re-walks. The assert reads before it writes: a recorded truth
+ * that disagrees with the returned completion is a flow standing in a world its own path denies, and overwriting
+ * it would hide that. */
 static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
     int d;
 
@@ -2892,17 +1678,8 @@ static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
         char *key = outcome_key(over, op, d);
         int want = (d == c), had;
 
-        /* NO KEY MEANS NOTHING IS RECORDED, WHICH IS THE SOUND ANSWER AND NOT A FALLBACK — and it carries no
-           assert of its own because there is no should-never-happen here to assert. This comment used to rest
-           on a DIFFERENT argument: that the walk above had already DCHECKed the key, so a NULL arriving here
-           had aborted one screen up and a second copy would be the same crash at a worse address. That assert
-           is gone — it was guarding an expectation over a value this engine declines to spell, and the walk
-           now decides such a value exactly as decide_branch does — so the argument it rested on is retired
-           with it, and what stands in its place is the simpler one it was standing in front of: an operand
-           with no identity has nothing to file a fact UNDER, and the settle's analogue of the walk keeping
-           both arms is recording neither. It is a `return` and not a `continue` because the operand and the
-           tag are the same at every d and only the completion differs, so a compose that failed once fails
-           for all of them. */
+        /* No key means nothing is recorded, the settle's analogue of the walk keeping both arms for an operand
+           with no identity. A `return`, because the operand is the same at every d. */
         if (!key) return;
         had = concolic_branch_decided(key);
         DCHECKF(had < 0 || had == want,
@@ -2923,35 +1700,12 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
     int i, forked = 0;
 
     if (!g_running) return -1;
-    /* THE OPERATION AND THE SITE ARE IN THIS FRAME AND WERE NOT IN THE MESSAGE, which is
-       §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE exactly: one shared seam, three callers in the
-       interpreter, and ONE reported line for all of them. A reader meeting this abort was told that "a native
-       operation" had asked wrongly and had no way to learn WHICH — the remedy ("fork only where the domain
-       permits more than one completion") names an action with no object, so the crash was rediscovered rather
-       than fixed. Both facts are PARAMETERS of this function: `op` is the operation string the caller composes
-       with its own cursor in it, and `site` is the ASKING OPCODE'S `__FILE__`/`__LINE__` pair, taken
-       at the ask and threaded through the hook.
-       AND THAT SENTENCE READ "the pair the macro threads" UNTIL THE MACRO WAS LOOKED AT, which is this very
-       rule's own defect committed in the commit that cited it. `solver_outcome` captures `SOLVER_SITE_HERE`
-       where the MACRO is written, and its only caller in the tree is ONE FORWARDING HOOK — so the first
-       version of this message promised the opcode's site and would have printed that hook's line for every
-       operation in the interpreter. §AN-ASSERT-THAT-NAMES-A-REMEDY says it in as many words: never captured
-       at an intermediate that would name one forwarding function for the whole tree. The retired wording is
-       recorded because it is what a reader re-derives from merely SEEING a `site` parameter: a threaded pair
-       is the caller's only if every hop forwards it, and `quickjs.h`'s `JS_FLOW_SITE_HERE` is where this one
-       now begins.
-       MEASURED: a native smoke aborted here with the fixture at `=> INCOMPLETE` and essentially every probe
-       row at 0, and the three candidate callers — a step machine's own fork, `LengthOfArrayLike>N` over an
-       argument-list coercion, and `ArraySetLength>N` — could only be separated by reading the interpreter and
-       guessing. One format string ends that.
-       AND THE TWO READINGS ARE STATED BECAUSE THEY TAKE OPPOSITE WORK. Either the CALLER's entry condition is
-       wrong — a chain that enters its ask phase over an operand whose domain permits one completion, which is
-       a guard owed at that chain — or the operand was DETERMINED by a pin after the chain decided to ask, which
-       is §CONCRETIZE-ON-PIN arriving between the decision and the seam and is a fact about the chain's
-       SEQUENCE rather than its condition. A reader who cannot tell them apart cannot aim the fix.
-       `op` MAY BE NULL HERE and the format is written for it: the `op != NULL` assert is further down, so this
-       one runs first and a caller that passed nothing would otherwise take the formatter into a null read while
-       reporting a different defect. */
+    /* The operation and the site go in the message, so a reader can tell which of the interpreter's callers
+       asked. `op` is the operation string the caller composes with its cursor in it; `site` is the asking
+       opcode's `__FILE__`/`__LINE__`, which begins at quickjs.h's `JS_FLOW_SITE_HERE` and is forwarded by every
+       hop. The two readings take opposite work: the caller's entry condition admits an operand with one
+       completion, or a pin determined the operand between the chain's decision to ask and this call. `op` may be
+       NULL here, since its own assert is further down. */
     DCHECKF(concolic_is(over),
             "the outcome seam was asked about a value that is not unknown — a native operation forks only "
             "where its operand's domain permits more than one completion. The operation is `%s` and the ASK "
@@ -2964,20 +1718,15 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
     DCHECK(n >= 2, "an outcome fork declaring fewer than two feasible completions — one completion is not a "
                    "fork, it is the answer, and a machine that reached this seam with one has handed the flow "
                    "a decision it had already made itself");
-    /* THE ONLY LIMIT ON N, AND IT IS THE RETURN PROTOCOL'S RATHER THAN A POLICY. The arm travels back to the
-       step driver in the low byte of one int and SOLVER_FORKED_BIT owns the next, so a completion at or above
-       that boundary would arrive at `harm &= 0xff` as a DIFFERENT completion with the fork bit set — a real
-       arm, in range, past every assert the driver has. Nothing here caps the WORK an N-way outcome is: widen
-       decide.h's SOLVER_FORKED_BIT and the driver's mask together and this moves with them. */
+    /* The only limit on N, the return protocol's: the arm crosses back in the low byte of one int and
+       SOLVER_FORKED_BIT owns the next, so a larger completion would arrive at `harm &= 0xff` as another
+       completion with the fork bit set. Widen SOLVER_FORKED_BIT and the driver's mask together to move it. */
     DCHECK(n <= SOLVER_FORKED_BIT,
            "an outcome fork declared more completions than the seam's return value can name — the arm crosses "
            "back to the step driver in the bits below SOLVER_FORKED_BIT, so a completion at or above it would "
            "be delivered as another completion carrying the fork bit");
-    /* THE SHAPE OF THE MACHINE'S DECLARATION, ASSERTED AT THE CONSUMER. `real` is a completion index or the
-       one sentinel; anything else is a machine answering some other question in this slot, and a value that
-       merely LOOKS like an arm is exactly what nothing downstream could catch — it would order the walk below
-       and decide_note_forced_arm would compare against it, so a wrong claim would arrive as a plausible
-       primacy rather than as a crash. */
+    /* The shape of the machine's declaration, asserted at the consumer: a value that merely looks like an arm
+       would order the walk and be compared against by decide_note_forced_arm. */
     DCHECK(real == JS_OUTCOME_REAL_UNSTATED || (real >= 0 && real < n),
            "an outcome fork's REAL completion is neither one of the completions the machine declared nor the "
            "positive 'this machine cannot say' — the seam cannot compute this one, so a third value is a site "
@@ -2990,113 +1739,59 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
            "operation is half the predicate, and two operations over one operand would be one fact");
     for (i = 0; i < n - 1; i++) {
         int c = outcome_nth(i, n, real);
-        /* THE MACHINE'S DECLARATION IS READ AT THE QUESTION IT IS ABOUT AND NOWHERE ELSE — see the note above.
-           At i == 0 the question IS "is the completion `real`", so the observed arm is 1; past it this flow has
-           already recorded that it is not, and an example its own path contradicts states nothing about which
-           of the rest it is. */
+        /* The machine's declaration is read at the question it is about: at i == 0 the question is "is the
+           completion `real`", so the observed arm is 1; past it, this flow has recorded that it is not. */
         int real_arm = (i == 0 && real != JS_OUTCOME_REAL_UNSTATED) ? 1 : REAL_ARM_UNOBSERVED;
         char *key;
         int arm;
 
-        /* THE ORDER IS A PERMUTATION, ASSERTED AT THE ONE PLACE IT COULD STOP BEING ONE. `real` is asked about
-           at position 0 and skipped by every later position, so meeting it again means the skip is wrong for
-           this (i, n, real) — and the cost of that is silent: one completion would be asked about twice and
-           another never, so a flow would end on a completion no question eliminated while every arm it
-           recorded stayed in range. */
+        /* The order is a permutation: `real` is asked at position 0 and skipped after, so meeting it again would
+           ask one completion twice and another never. */
         DCHECK(i == 0 || real == JS_OUTCOME_REAL_UNSTATED || c != real,
                "the elimination order asked about the machine's REAL completion a second time — the order must "
                "be a permutation of the completions, and a repeat leaves one of them with no question and one "
                "flow standing on a completion nothing eliminated");
         key = outcome_key(over, op, c);
-        /* A NULL KEY IS UNCERTAINTY AND IS DECIDED EXACTLY AS decide_branch DECIDES IT — no assert, because
-           there is nothing here that is not also true one screen up. This site used to abort on it, and the
-           abort's own text conceded the case was "sound"; an assert whose message says the behaviour beneath
-           it is correct is guarding an EXPECTATION, and this file's other seam over the same `decide_arm`
-           never had one. decide_branch composes `decide_key`, hands the result straight to decide_arm and
-           frees it, and its key is NULL for precisely the values this one's is — so two seams asked one
-           question and only one of them crashed, which is §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q" with the
-           two answers in one file.
-           IT IS NOT A CASE THIS ENGINE FAILED TO SPELL, IT IS ONE IT DECLINES TO, AND THE ROUTE IS A PROOF
-           RATHER THAN A SURVEY. concolic_new composes a source read's identity out of its `src`, so a source
-           has one whenever it has provenance; every derivation composes through ident_of_operand, which
-           answers NULL only for an operand `operand_kind` classifies CONCOLIC_LIT_NONE — an Object or a
-           Symbol, whose identity would be its ADDRESS — or for a concolic that already has none; and
-           concolic_ident_compose makes one absent member absent the whole composition. So an absent identity
-           bottoms out at an Object or a Symbol EVERY TIME, which is the classification literal_ident and
-           concolic_key_read_hook both declare correct in their own words ("the composition is ABSENT there
-           and every branch over the result keeps both arms"). outcome_key's own contract says it returns NULL
-           for one, and outcome_settle below reads that NULL as the sound answer — the PRODUCER and the other
-           CONSUMER agreed, and this line was the one site that did not.
-           WHAT IT COSTS IS FORKS AND NEVER THE ARM, which is the trade concolic.c prices in one line beside
-           the field itself: "Absence costs forks; a wrong identity costs the arm." Both completions stay, no
-           constraint is recorded, no replay slot is claimed, and dec_fork_here files the sibling under the
-           SITE row (FORK_ROW_SITE) that exists for exactly this population.
-           RESIDUAL — NARROWER THAN THE REPLAY THE REST OF THE SEAM GETS, AND CORRECT AS IT STANDS. NOT
-           COVERED: a second ask about the same operand and operation re-forks instead of being refined by the
-           first, because feasible refinement is keyed by an identity this operand has none of; and no replay
-           slot is claimed, so a later run re-reaching this completion re-forks rather than replaying it. The
-           immediate sibling still takes the other completion, because the fork HANDS it that arm
-           (decide.c's decide_fork_handoff) rather than recording a slot no replay could check itself against —
-           this sentence used to say the sibling replayed a slot carrying dec_key_hash's 0, and that slot was
-           the thing that made the replay positional over this whole population.
-           WHAT THE NEXT DIFF BUILDS: a spellable identity for an ordinary object —
-           one composed from PROGRAM FACTS rather than from a heap address, so it means the same thing on the
-           flow that minted it and on the flow that resumes it from the cold tier. THE MECHANISM EXISTS AND
-           REACHES ONE CLASS — quickjs's JS_CreationName pairs a site with the creating flow's own mint ordinal
-           and concolic.c's creation_name spells it — and its SITE is a bytecode body locator, which an
-           ordinary object does not have; so the composition is still absent HERE for want of a site rather
-           than for want of a design, which is a narrower claim than this sentence used to make and is the one
-           a reader should act on. HOW ITS ABSENCE WOULD
-           SHOW: the `_forkAt` census's SITE rows carry the operand's display shape, so a document whose
-           frontier grows at an unspellable outcome shows a large FORK_ROW_SITE row with no predicate row
-           beside it — the row saying WHERE with no key saying WHAT. */
-        /* NOT RESTARTABLE, AND THAT IS A STATEMENT ABOUT THE MACHINE RATHER THAN A DEFAULT. An outcome ask
-           comes from a C body that is mid-algorithm: re-running the flow's scheduler step would not re-reach
-           it, so its sibling's resume point can only be the step driver's snapshot of the machine.
-           AND NO NON-FORKING ARM, WHICH IS ALSO A STATEMENT AND NOT A HOLE. A machine reaches this entry only
-           through JSFlowControlHooks.outcome, and a session that does not fork installs no such hook — the
-           driver reads the absence and takes outcome 0 itself, which is why every step machine numbers its
-           ordinary completion there (core/timing/timer.c says so at §8.7's step 4). So this entry cannot be
-           reached in a non-forking session, and SOLVER_NO_NONFORKING_ARM is what says so: if it ever is, the
-           crash names the machine's question rather than recording an arm nobody chose. */
+        /* A NULL key is uncertainty, decided exactly as decide_branch decides it. An absent identity bottoms out
+           at an Object or Symbol (`operand_kind` classifies it CONCOLIC_LIT_NONE, whose identity would be its
+           address, and concolic_ident_compose propagates absence), which literal_ident and
+           concolic_key_read_hook declare correct. It costs forks, never the arm: both completions stay, no
+           constraint or slot is recorded, and dec_fork_here files the sibling under FORK_ROW_SITE.
+           Named residual. Not covered: a second ask about the same operand and operation re-forks rather than
+           being refined, and a later run re-reaching this completion re-forks rather than replaying; the
+           immediate sibling still takes the other completion through decide_fork_handoff. Next diff builds: a
+           spellable identity for an ordinary object from program facts (JS_CreationName pairs a site with the
+           creating flow's mint ordinal, but its site is a bytecode body locator, which an ordinary object lacks).
+           How its absence would show: a large FORK_ROW_SITE row in `_forkAt` with no predicate row beside it. */
+        /* Not restartable: an outcome ask comes from a C body mid-algorithm, so the sibling's resume point can only
+           be the step driver's snapshot of the machine. No non-forking arm: a session that does not fork installs
+           no outcome hook, and the driver takes outcome 0 itself (core/timing/timer.c states the convention at
+           §8.7's step 4), so SOLVER_NO_NONFORKING_ARM makes reaching here in such a session crash naming the
+           question. */
         arm = decide_arm(ctx, key, over, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked, site);
         free(key);
-        /* THE ARM THIS FLOW ENDS ON, AGAINST THE MACHINE'S DECLARATION — the same statement decide_branch
-           makes one screen up, made here BEFORE the forked bit is composed because the bit is a message to the
-           driver about snapshotting and is not part of the arm. It fires at most once per walk, at i == 0,
-           which is the only question `real` says anything about. */
+        /* The arm this flow ends on, against the machine's declaration, as decide_branch does, before the forked
+           bit (a message to the driver, not part of the arm) is composed. Only i == 0 can fire it. */
         decide_note_forced_arm(over, real_arm, arm);
         if (arm == 1) {
-            /* THE ANSWER, WRITTEN DOWN UNDER EVERY NAME IT HAS — see outcome_settle. It runs BELOW
-               decide_note_forced_arm because that call is what may have taken this operand's example away, and
-               it must run on the ARM that ended the walk rather than on the question that ended it: the walk
-               stops here having also proved "not d" for every completion it never reached. */
+            /* The answer, written under every name it has (see outcome_settle), after decide_note_forced_arm,
+               which may have taken this operand's example away, and on the arm that ended the walk, which also
+               proved "not d" for every completion it never reached. */
             outcome_settle(over, op, n, c);
             return forked ? (c | SOLVER_FORKED_BIT) : c;
         }
-        /* THE ONE-FORK-PER-ASK INVARIANT, ASSERTED WHERE IT WOULD BREAK. dec_fork_here keeps `real_arm` when
-           one is stated and arm 1 otherwise, and the two values this walk ever passes are 1 and UNOBSERVED —
-           so a NEW question always answers 1 and always returns above. Reaching here with a sibling prepared
-           means this flow is about to ask a SECOND new question in one call, and engine_prepare_fork's slot
-           holds one occupant: the second prepare would drop the first sibling's decision and pin blobs on the
-           floor, with the frozen prefix chain under them alive and named by nothing. */
+        /* One fork per ask: dec_fork_here keeps arm 1 for both values this walk passes (1 and UNOBSERVED), so a
+           new question always returns above. A sibling prepared here would precede a second prepare into
+           engine_prepare_fork's one-occupant slot, dropping the first sibling's blobs. */
         DCHECK(!forked,
                "an outcome question that ELIMINATED a completion still minted a sibling — the walk is about to "
                "ask a second new question inside one ask, and the step driver takes exactly ONE clone per "
                "JS_STEP_FORK, so the sibling prepared here has no frame coming and the next prepare overwrites "
                "its blobs");
     }
-    /* THE LAST CANDIDATE NEEDS NO QUESTION, AND THE FALL-THROUGH THEREFORE MINTS NOTHING. N-1 answers
-       eliminate N-1 completions, so the remaining one is determined — asking about it would record a slot
-       whose answer its own path already implies, and a replay could then diverge on a question it had settled.
-       The loop runs at least once (n >= 2), and its last statement is the assert above, so `forked` is 0 here
-       by that assert rather than by a second copy of it.
-       IT NEEDS NO QUESTION AND IT STILL NEEDS A RECORD, WHICH IS THE DISTINCTION THIS FALL-THROUGH USED TO
-       LOSE. "No slot" is about the decision VECTOR — a replay must not consume one here — and it was read as
-       "nothing is known", so the one completion this walk actually PROVED was the one completion it never
-       wrote down. A later ask over the same operand and operation that composes THIS completion's key (which
-       is what the same flow does the moment its example changes, and this seam is what changes it) then found
-       nothing recorded and re-forked a settled fact. */
+    /* The last candidate needs no question, since N-1 answers determine it, so the fall-through mints nothing and
+       claims no slot; `forked` is 0 here by the assert above. It still needs a record: the settle writes the
+       completion this walk proved, so a later ask that composes this completion's key finds it. */
     {
         int last = outcome_nth(n - 1, n, real);
         outcome_settle(over, op, n, last);
