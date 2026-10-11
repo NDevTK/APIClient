@@ -386,12 +386,15 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    possibly empty, of the minting flow's assumptions at the act, sorted by kind and then text:
      `{source, value, kind}` per pin in its constraint, the source path, the operand the page's own `===`
        determined it to be (its ToString) and that operand's type, as in `looselyEquals`;
-     `{decision, taken}` per branch whose taken arm contradicted the flow's own example and pinned nothing,
-       the condition's display shape and its ToBoolean on that path;
-     `{decision, completion}` per native operation whose real completion was contradicted, spelled
-       `op(operand)`, with the index of the completion the operation's machine declared and the flow took.
+     `{decision, taken}` per branch whose taken arm pinned nothing and was established by no observation
+       of the run (the flow's own example contradicts it, or there is none), the condition's display shape
+       and its ToBoolean on that path;
+     `{decision, completion}` per native operation that settled on a completion other than the one its
+       machine declared real (or the machine declared none), spelled `op(operand)`, with the index of the
+       completion the machine declared and the flow took.
    A decision states the arm taken and never a value satisfying it; @H invents none.
-   Named residual. Not covered: a forced arm whose predicate has no identity this engine can spell, a
+   A pin is listed whether or not an observation agreed with it: it is the value the path stands on.
+   Named residual. Not covered: an assumed arm whose predicate has no identity this engine can spell, a
    declined request's failure arm and a modelled close request mark the path forced and file no decision.
    Next diff: a decision row for each, keyed by the act's own name. How its absence shows: a `forced` row
    whose every witness element is an empty array. */

@@ -51,8 +51,8 @@ const hasHole = (s) => astAddressHasHole(s || "");
    abort are already merged into the cumulative record and are still relayed. The cost counters, the park
    residue and the right to overwrite the cross-session frontier entry are gated on `_run` at their sites. */
 /* `witness` on each @H row, per solver/endpoint.h: one element per distinct sighting witness, `null` where no
-   flow stood, else that sighting's entries — `{source, value, kind}` per pin, `{decision, taken}` per forced
-   branch, `{decision, completion}` per forced native completion. A row from an engine build that predates the
+   flow stood, else that sighting's entries — `{source, value, kind}` per pin, `{decision, taken}` per assumed
+   branch, `{decision, completion}` per assumed native completion. A row from an engine build that predates the
    key carries none, and then no row does (one instance emits one document shape). Beside `witnessClass`:
    `unasked` is exactly the row whose every element is `null` (the class is a MAX over the same sightings), and
    a `may-rest-on` row has a sighting whose path pinned a value, so some element holds a pin. */

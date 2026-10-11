@@ -46,7 +46,7 @@ typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
                  ConcolicLooseEq *leq; int nleq; int has_hole; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
 /* What one sighting's flow assumed (endpoint.h's `witness`): pins, each a source and the value its equality
-   determined, and forced decisions that determined no value, each the condition and the arm taken or the
+   determined, and assumed decisions that determined no value, each the condition and the arm taken or the
    operation and the completion. A record holds one Witness per distinct sighting witness and never merges two,
    since their union would state a combination no flow assumed. `asked` is 0 where no flow stood, so the
    question was not asked; an empty asked witness is the flow having assumed nothing. Entries are sorted, so
@@ -249,10 +249,10 @@ static void wit_pin_visit(const char *src, ConcolicLit kind, const char *val, vo
 }
 
 static void wit_decision_visit(ConcolicDecision what, const char *spelling, int taken, void *ud) {
-    DCHECK(spelling != NULL, "the constraint handed a witness a forced decision with no spelling");
+    DCHECK(spelling != NULL, "the constraint handed a witness an assumed decision with no spelling");
     DCHECKF(what == CONCOLIC_DECISION_BRANCH ? (taken == 0 || taken == 1)
                                              : (what == CONCOLIC_DECISION_OUTCOME && taken >= 0),
-            "the constraint handed a witness a forced decision of kind %d taking %d, which no arm states",
+            "the constraint handed a witness an assumed decision of kind %d taking %d, which no arm states",
             (int)what, taken);
     wit_add(ud, what == CONCOLIC_DECISION_BRANCH ? WIT_BRANCH : WIT_OUTCOME, spelling, NULL, CONCOLIC_LIT_NONE,
             taken);
@@ -274,7 +274,7 @@ static int wit_entry_cmp(const void *pa, const void *pb) {
     return a->taken - b->taken;
 }
 
-/* The running flow's witness, read at the act: its pin store and its forced decisions. Two decision keys whose
+/* The running flow's witness, read at the act: its pin store and its assumed decisions. Two decision keys whose
    spellings and arms agree state one assumption, so a repeat is kept once. */
 static Witness witness_now(void) {
     Witness w = { 0, NULL, 0, 0 };
@@ -283,7 +283,7 @@ static Witness witness_now(void) {
     if (flow_running() == NULL) return w;
     w.asked = 1;
     concolic_pins_each(wit_pin_visit, &w);
-    concolic_forced_decisions_each(wit_decision_visit, &w);
+    concolic_assumed_decisions_each(wit_decision_visit, &w);
     if (w.n > 1) qsort(w.e, (size_t)w.n, sizeof *w.e, wit_entry_cmp);
     for (i = 1, u = 1; i < w.n; i++) {
         if (wit_entry_cmp(&w.e[u - 1], &w.e[i]) == 0) { free(w.e[i].subject); free(w.e[i].value); continue; }
