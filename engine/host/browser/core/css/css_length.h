@@ -221,10 +221,10 @@ typedef struct {
    value in this realm. It is a normal form of the function and not a record of the operations: the monomials
    are sorted and merged, so two derivations of one function compose the same form. Sums, differences and
    products keep it (a font's ascent is the font size times a face metric); an extreme the facts' ranges do
-   not decide, a snap, a math function, a quotient by a derived length and a product of two atoms each become
-   one atom; a form wider than CSS_PX_FORM_MAX or a non-finite example leaves an opaque function of the same
-   set (`known` false). Read only where `env` is non-empty, since a determined length is its own constant;
-   every exponent names a fact in `env`, whose `val` is written. It is what lets core/frame/viewport.h say two
+   not decide, a snap, a math function, a quotient by a derived length, a product of two atoms and a form
+   wider than CSS_PX_FORM_MAX each become one atom; only a non-finite example, and arithmetic over one, leaves
+   an opaque function of the same set (`known` false). Read only where `env` is non-empty, since a determined
+   length is its own constant; every exponent names a fact in `env`, whose `val` is written. It is what lets core/frame/viewport.h say two
    lengths differ by a constant in every world. */
 typedef struct {
     bool          known;

@@ -174,7 +174,7 @@ static bool css_px_uses(CssPx a, int f)
 }
 
 /* `out`'s form becomes `p` in normal form, with each fact's value read off whichever operand used it — a fact
-   is one number per realm, so two operands that both used it agree. Too wide a form is opaque. */
+   is one number per realm, so two operands that both used it agree. Too wide a form is one atom. */
 static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
 {
     int i = 0, n = 0, f;
@@ -194,8 +194,11 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
         DCHECK(n == 0, "a length derived from no fact composed a form with a monomial over one");
         return;
     }
-    out->form.known = n <= CSS_PX_FORM_MAX;
-    if (!out->form.known) return;
+    if (n > CSS_PX_FORM_MAX) {
+        css_px_form_atom(out);
+        return;
+    }
+    out->form.known = true;
     out->form.n = n;
     out->form.c = p->c;
     memcpy(out->form.m, p->m, (size_t)n * sizeof p->m[0]);
@@ -346,10 +349,7 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     if (lo >= 0.0) win = want_hi ? &a : &b;
     else if (hi <= 0.0) win = want_hi ? &b : &a;
     /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
-       atom so that every place this one result is carried to can still subtract it.
-       Named residual. Not covered: a form too wide still leaves no form. Next diff: it mints an atom through
-       css_px_form_atom. How its absence shows: two lengths downstream of one such result that differ by a
-       constant and still cross the `long` boundary as two forks. */
+       atom so that every place this one result is carried to can still subtract it. */
     if (win == NULL) {
         DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
         css_px_form_atom(&out);
