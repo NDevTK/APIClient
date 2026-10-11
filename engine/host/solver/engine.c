@@ -16,6 +16,7 @@
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/witness_verify.h"
+#include "solver/post_index.h"
 #include "solver/flow.h"
 #include "solver/dyn_body.h"  /* a queued program's source text — one buffer, every timeline that holds it */
 #include "solver/decide.h"
@@ -11577,6 +11578,7 @@ void solver_frontier_free(JSContext *ctx)
        search store (flow_release does not call solve_flow_end; the scheduler does). */
     solve_free();
     witness_verify_free();
+    post_index_free();
     flow_registry_free(ctx);
     g_frontier_released = 1;
 }

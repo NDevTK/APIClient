@@ -65,6 +65,7 @@
 #include "solver/concolic.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
+#include "solver/post_index.h"
 #include "solver/world.h"
 
 /* THIS DOCUMENT'S WindowProxy is §7.2.3's ONE-per-navigable, and it is READ from where that rule lives
@@ -398,6 +399,58 @@ static const JSTrampStepDef js_window_deliver_def = {
     .steps = WM_DELIVER_STEPS
 };
 
+/* The routed post's index record (solver/post_index.h): every path at which the message holds one of this
+   sender's unknowns, with that unknown's source and shape, under the record's identity. */
+typedef struct { JSContext *ctx; JSValueConst syms; PostIndexSymbol *out; size_t n, cap; } PostPaths;
+
+static void post_paths_visit(void *opaque, uint32_t k, const char *path)
+{
+    PostPaths *pp = opaque;
+    JSValue rec = JS_GetPropertyUint32(pp->ctx, pp->syms, k);
+    JSValue sh = JS_GetPropertyUint32(pp->ctx, rec, 0), sr = JS_GetPropertyUint32(pp->ctx, rec, 1);
+    const char *shape = JS_ToCString(pp->ctx, sh), *src = JS_ToCString(pp->ctx, sr);
+
+    CHECK(shape != NULL && src != NULL, "window message: OOM reading a routed post's unknown");
+    if (pp->n == pp->cap) {
+        size_t c = pp->cap ? pp->cap * 2 : 4;
+        PostIndexSymbol *a = realloc(pp->out, c * sizeof *a);
+
+        CHECK(a != NULL, "window message: OOM indexing a routed post's unknowns");
+        pp->out = a;
+        pp->cap = c;
+    }
+    pp->out[pp->n].src = strdup(src);
+    pp->out[pp->n].shape = strdup(shape);
+    pp->out[pp->n].path = strdup(path);
+    CHECK(pp->out[pp->n].src && pp->out[pp->n].shape && pp->out[pp->n].path,
+          "window message: OOM indexing a routed post's unknowns");
+    pp->n++;
+    JS_FreeCString(pp->ctx, shape);
+    JS_FreeCString(pp->ctx, src);
+    JS_FreeValue(pp->ctx, sh);
+    JS_FreeValue(pp->ctx, sr);
+    JS_FreeValue(pp->ctx, rec);
+}
+
+/* The target's relation to the sending navigable, from the sender's side of the navigable tree. Proxies are
+   compared by identity: a navigable has one WindowProxy in an agent (window_proxy_for_document). */
+static const char *post_relation(JSContext *ctx, JSValueConst sender, JSValueConst target)
+{
+    JSValue sp = window_proxy_parent_navigable(ctx, sender), so = window_proxy_opener_navigable(ctx, sender);
+    JSValue tp = window_proxy_parent_navigable(ctx, target), to = window_proxy_opener_navigable(ctx, target);
+    const char *rel = "other";
+
+    if (JS_VALUE_GET_PTR(sp) == JS_VALUE_GET_PTR(target) && JS_IsObject(sp)) rel = "parent";
+    else if (JS_VALUE_GET_PTR(tp) == JS_VALUE_GET_PTR(sender) && JS_IsObject(tp)) rel = "child";
+    else if (JS_VALUE_GET_PTR(so) == JS_VALUE_GET_PTR(target) && JS_IsObject(so)) rel = "opener";
+    else if (JS_VALUE_GET_PTR(to) == JS_VALUE_GET_PTR(sender) && JS_IsObject(to)) rel = "opened";
+    JS_FreeValue(ctx, sp);
+    JS_FreeValue(ctx, so);
+    JS_FreeValue(ctx, tp);
+    JS_FreeValue(ctx, to);
+    return rel;
+}
+
 /* §9.3.3 STEP 8 ACROSS INSTANCES — an EMISSION, and every part of that word is load-bearing.
  *
  * The bytes are already serialized and immutable, so nothing has to un-send this when the posting flow parks or
@@ -431,6 +484,8 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     uint32_t nheld = structured_transfer_len(ctx, holders);
     JSValue syms = JS_GetPropertyUint32(ctx, entry, PQ_SYMBOLS);
     StructuredData plain = { NULL, 0 };
+    uint8_t *own_bytes;
+    size_t own_len;
 
     JS_FreeValue(ctx, holders);
     /* A TRANSFER DOES NOT CROSS AN INSTANCE YET, AND A DROPPED ONE IS WORSE THAN A THROW. §2.7.7 has already
@@ -450,15 +505,14 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     DCHECK(f != NULL, "a cross-instance post was made outside a flow — there would be no world to carry");
     bytes = JS_GetArrayBuffer(ctx, &blen, buf);
     DCHECK(bytes != NULL, "a queued window message held something that is not the bytes it stored");
+    own_bytes = bytes;
+    own_len = blen;
     /* The triples cross as their examples, the bytes a browser without the solver sends. Every routed sender
        is cross-origin to its receiver (an instance is one origin-keyed agent cluster of one browsing context
        group, and a WindowProxy does not leave its group), so window_message_deliver_remote mints the whole of
        `data` as attacker input and forks every branch on it; a sender's source name minted in that heap would
-       name the receiver's own input of the same name.
-       Named residual. Not covered: the receiver's finding parked on a sender demand cannot name which of
-       this sender's sources reached it. Next diff builds: the emission index, keeping each routed record's
-       triples here under the record's identity so the producer resolves `message.data:<id>.<path>`. Absence
-       shows as: a sink reached through a routed message that only a forged sender ever fires. */
+       name the receiver's own input of the same name. Which of this sender's sources sits at which path stays
+       here, in the routed-post index below. */
     if (structured_transfer_len(ctx, syms) > 0) {
         StructuredWithTransfer rec = { { bytes, blen }, JS_UNDEFINED, syms };
 
@@ -467,7 +521,6 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
         bytes = plain.buf;
         blen = plain.len;
     }
-    JS_FreeValue(ctx, syms);
     head = engine_record_head("windowproxy.post", world_doc_name(window_proxy_doc(target)), f);
 
     b64_cap = JS_Base64EncodedSize(blen) + 1;
@@ -487,6 +540,32 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     op = malloc(b64_cap);
     CHECK(op != NULL, "window message: OOM building the cross-instance post notice");
     snprintf(op, b64_cap, "%s\t%s\t%s", head, want_s ? want_s : "*", b64);
+    if (plain.buf) {
+        StructuredWithTransfer rec = { { own_bytes, own_len }, JS_UNDEFINED, syms };
+        PostPaths pp = { ctx, syms, NULL, 0, 0 };
+        JSValue source = JS_GetPropertyUint32(ctx, entry, PQ_SOURCE);
+        PostIndexHead h;
+        char id[17];
+        size_t i;
+
+        structured_symbol_paths(ctx, &rec, post_paths_visit, &pp);
+        window_message_record_id(op, id);
+        h.id = id;
+        h.target_doc = world_doc_name(window_proxy_doc(target));
+        h.target_origin = want_s ? want_s : "*";
+        h.relation = post_relation(ctx, source, target);
+        /* A message whose every unknown sits where the walk does not reach (residual at
+           structured_symbol_paths) states no path, and so no record. */
+        if (pp.n > 0) post_index_record(&h, pp.out, pp.n);
+        for (i = 0; i < pp.n; i++) {
+            free((char *)pp.out[i].src);
+            free((char *)pp.out[i].shape);
+            free((char *)pp.out[i].path);
+        }
+        free(pp.out);
+        JS_FreeValue(ctx, source);
+    }
+    JS_FreeValue(ctx, syms);
     engine_host_notify(ctx, op);
     free(head);
     free(op);
@@ -528,17 +607,26 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
    twice) share a name. Next diff builds: the per-record id engine.c's routed-record ledger names as its own
    residual, carried with the record, hashed here in place of the text. Absence shows as: a handler's second
    identical message reading the first one's pinned value. */
-void window_message_delivery_sources(const char *record, char *data_src, char *origin_src, size_t cap)
+void window_message_record_id(const char *record, char out[17])
 {
     uint64_t h = 1469598103934665603ull;
     const unsigned char *p;
+
+    DCHECK(record != NULL && *record, "a routed record's identity was asked of no record");
+    for (p = (const unsigned char *)record; *p; p++) { h ^= *p; h *= 1099511628211ull; }
+    snprintf(out, 17, "%016llx", (unsigned long long)h);
+}
+
+void window_message_delivery_sources(const char *record, char *data_src, char *origin_src, size_t cap)
+{
+    char id[17];
     int nd, no;
 
     DCHECK(record != NULL && *record && data_src != NULL && origin_src != NULL,
            "a routed delivery's sources were named from no record or into no room");
-    for (p = (const unsigned char *)record; *p; p++) { h ^= *p; h *= 1099511628211ull; }
-    nd = snprintf(data_src, cap, MESSAGE_DATA_SRC ":%016llx", (unsigned long long)h);
-    no = snprintf(origin_src, cap, MESSAGE_ORIGIN_SRC ":%016llx", (unsigned long long)h);
+    window_message_record_id(record, id);
+    nd = snprintf(data_src, cap, MESSAGE_DATA_SRC ":%s", id);
+    no = snprintf(origin_src, cap, MESSAGE_ORIGIN_SRC ":%s", id);
     CHECK(nd > 0 && (size_t)nd < cap && no > 0 && (size_t)no < cap,
           "window message: a delivery's source names did not fit their room");
     if (!concolic_source_declared_by(WM_COMPONENT, data_src))

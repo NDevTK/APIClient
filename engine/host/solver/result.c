@@ -23,6 +23,7 @@
 /* …and what the order above them was denominated in, which decides whether two of these documents may be
    compared at all. Composed by its owner — see result.h and quantum.h. */
 #include "solver/quantum.h"
+#include "solver/post_index.h"
 /* The realm count is the one heap-census row QuickJS cannot answer, and it is a browser fact: a child realm is
    built per flow that creates a navigable with an address, so the component holding the list answers. A
    per-flow capability must be reclaimed, so this count is a ceiling; navigable.c's OOM CHECK names it. */
@@ -1598,6 +1599,8 @@ char *result_heap_json(JSContext *ctx) {
 char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
+    /* The routed posts this sender made whose messages held unknowns (solver/post_index.h). */
+    char *posts = post_index_json();
     char *errs = errs_json_array(ERRS_STANDING);
     /* …and the ones this engine took back (see errs_json_array). Kept apart from `pageErrors`: a page that
        raised nothing and one that handled everything it raised are different pages. */
@@ -1714,6 +1717,7 @@ char *result_json(JSContext *ctx) {
                                 is also in exactly one of them and a consumer renders it once, under the context
                                 this array decides. */
                              "\"pageErrorsExplored\":%s,"
+                             "\"routedPosts\":%s,"
                              /* `_switches` is not `_unitsDone`'s denominator. A switch is counted only where the
                                 pick returns a different member (engine.c, beside flow_credit_pick); a unit at
                                 every entry into flow_step, so `_unitsDone / _switches` can exceed 1. The
@@ -1811,7 +1815,7 @@ char *result_json(JSContext *ctx) {
                                 whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
                              "\"_quantum\":%s,\"_park\":%s}",
-                     eps, sinks, errs, errsRetracted, errsExplored,
+                     eps, sinks, errs, errsRetracted, errsExplored, posts,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused, routedZeroDelivery,
@@ -1840,6 +1844,7 @@ char *result_json(JSContext *ctx) {
     free(errs);
     free(errsRetracted);
     free(errsExplored);
+    free(posts);
     free(wfq);
     free(cold);
     free(heap);

@@ -233,6 +233,14 @@ uint32_t structured_moved_len(JSContext *ctx, const StructuredWithTransfer *in, 
    (core/frame/window_message.c says why). `in` carries no holders. Returns 0 with `*out` owned, or -1 with the
    "DataCloneError" live. */
 int  structured_examples_serialize(JSContext *ctx, const StructuredWithTransfer *in, StructuredData *out);
+/* Calls `visit(opaque, k, path)` for every member path at which the record's body holds its symbol k: "" for
+   the body itself, ".a.0" for its `a[0]`, in the grammar a member read composes a shape in. Own enumerable
+   string-keyed members of ordinary objects and arrays are walked; a Map's or a Set's entries are not.
+   Named residual. Not covered: a symbol held only inside a Map or Set entry is visited at no path. Next diff
+   builds: the entry walk, with a path grammar for keyed and positional entries. Absence shows as: a routed
+   post's index record listing fewer paths than its message holds unknowns. */
+void structured_symbol_paths(JSContext *ctx, const StructuredWithTransfer *in,
+                             void (*visit)(void *opaque, uint32_t k, const char *path), void *opaque);
 void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d);
 
 #endif

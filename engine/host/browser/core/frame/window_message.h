@@ -27,6 +27,9 @@
 #define MESSAGE_DATA_SRC     "message.data"
 #define MESSAGE_ORIGIN_SRC   "message.origin"
 void window_message_delivery_sources(const char *record, char *data_src, char *origin_src, size_t cap);
+/* A routed record's identity: FNV-1a 64 over its whole text, as 16 hex digits and a NUL. The receiver names a
+   delivery's sources by it and the sender its routed-post index record (solver/post_index.h). */
+void window_message_record_id(const char *record, char out[17]);
 
 /* Installs `postMessage` on the global and mints this navigable's one WindowProxy. `origin` is this document's
    serialized origin — the value every message this window sends carries as `event.origin`, and the one a

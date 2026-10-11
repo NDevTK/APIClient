@@ -951,6 +951,99 @@ int structured_examples_serialize(JSContext *ctx, const StructuredWithTransfer *
     return rc;
 }
 
+void structured_symbol_paths(JSContext *ctx, const StructuredWithTransfer *in,
+                             void (*visit)(void *opaque, uint32_t k, const char *path), void *opaque)
+{
+    uint32_t ns = structured_transfer_len(ctx, in->symbols), i;
+    JSValue markers, root, seen, work, wpath;
+    uint32_t nseen = 0, nwork = 0;
+
+    DCHECK(visit != NULL, "a record's symbol paths were asked for with nothing to tell them to");
+    DCHECK(structured_transfer_len(ctx, in->holders) == 0,
+           "a record with data holders was walked for its symbol paths — a holder is a moved object, not data");
+    markers = JS_NewArray(ctx);
+    CHECK(!JS_IsException(markers), "structured clone: OOM building a record's symbol markers");
+    for (i = 0; i < ns; i++) {
+        JSValue m = JS_NewObject(ctx);
+
+        CHECK(!JS_IsException(m), "structured clone: OOM building a record's symbol markers");
+        JS_DefinePropertyValueUint32(ctx, markers, i, m, JS_PROP_C_W_E);
+    }
+    {
+        /* Symbol k resolves to marker k, so the walk below finds each by identity. */
+        SCReadMemory back = { markers, ns, 0, JS_UNDEFINED };
+        JSTransferReadHook hook;
+
+        hook.value_at = sc_memory_value;
+        hook.count = ns;
+        hook.opaque = &back;
+        root = sc_deserialize(ctx, &in->data, &hook);
+    }
+    /* An explicit stack of (value, path), so a deep message costs heap and never C stack; `seen` holds every
+       object already walked, so a cycle or a shared member is walked once. Own enumerable string-keyed members
+       only: the body is freshly deserialized ordinary data, which runs no page code to read. */
+    seen = JS_NewArray(ctx);
+    work = JS_NewArray(ctx);
+    wpath = JS_NewArray(ctx);
+    CHECK(!JS_IsException(seen) && !JS_IsException(work) && !JS_IsException(wpath),
+          "structured clone: OOM walking a record's symbol paths");
+    JS_DefinePropertyValueUint32(ctx, work, nwork, root, JS_PROP_C_W_E);
+    JS_DefinePropertyValueUint32(ctx, wpath, nwork++, JS_NewString(ctx, ""), JS_PROP_C_W_E);
+    while (nwork > 0) {
+        JSValue v = JS_GetPropertyUint32(ctx, work, nwork - 1);
+        JSValue pv = JS_GetPropertyUint32(ctx, wpath, nwork - 1);
+        const char *path = JS_ToCString(ctx, pv);
+        JSPropertyEnum *tab = NULL;
+        uint32_t len = 0, j;
+        bool walked = false;
+
+        nwork--;
+        JS_SetPropertyStr(ctx, work, "length", JS_NewUint32(ctx, nwork));
+        JS_SetPropertyStr(ctx, wpath, "length", JS_NewUint32(ctx, nwork));
+        CHECK(path != NULL, "structured clone: OOM reading a member path");
+        if (JS_IsObject(v)) {
+            for (i = 0; i < ns && !walked; i++) {
+                JSValue m = JS_GetPropertyUint32(ctx, markers, i);
+
+                if (JS_VALUE_GET_PTR(m) == JS_VALUE_GET_PTR(v)) { visit(opaque, i, path); walked = true; }
+                JS_FreeValue(ctx, m);
+            }
+            for (j = 0; j < nseen && !walked; j++) {
+                JSValue s = JS_GetPropertyUint32(ctx, seen, j);
+
+                walked = JS_VALUE_GET_PTR(s) == JS_VALUE_GET_PTR(v);
+                JS_FreeValue(ctx, s);
+            }
+        }
+        if (JS_IsObject(v) && !walked) {
+            JS_DefinePropertyValueUint32(ctx, seen, nseen++, JS_DupValue(ctx, v), JS_PROP_C_W_E);
+            CHECK(JS_GetOwnPropertyNames(ctx, &tab, &len, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0,
+                  "structured clone: a deserialized body's own members could not be listed");
+            for (j = 0; j < len; j++) {
+                const char *name = JS_AtomToCString(ctx, tab[j].atom);
+                char *child;
+
+                CHECK(name != NULL, "structured clone: OOM reading a member name");
+                child = malloc(strlen(path) + strlen(name) + 2);
+                CHECK(child != NULL, "structured clone: OOM composing a member path");
+                sprintf(child, "%s.%s", path, name);
+                JS_DefinePropertyValueUint32(ctx, work, nwork, JS_GetProperty(ctx, v, tab[j].atom), JS_PROP_C_W_E);
+                JS_DefinePropertyValueUint32(ctx, wpath, nwork++, JS_NewString(ctx, child), JS_PROP_C_W_E);
+                free(child);
+                JS_FreeCString(ctx, name);
+            }
+            JS_FreePropertyEnum(ctx, tab, len);
+        }
+        JS_FreeCString(ctx, path);
+        JS_FreeValue(ctx, pv);
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeValue(ctx, wpath);
+    JS_FreeValue(ctx, work);
+    JS_FreeValue(ctx, seen);
+    JS_FreeValue(ctx, markers);
+}
+
 void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d)
 {
     structured_data_free(ctx, &d->data);

@@ -147,6 +147,17 @@ function assertResultDocument(r) {
          "pageErrors and pageErrorsRetracted in the same composition, so its absence is that composition " +
          "changed under this reader and every engine-minted exploration throw would be reported to a person " +
          "as an error their own page raised");
+  /* `routedPosts` is this instance's routed-post index (solver/post_index.h): per cross-instance post whose
+     message held unknowns, which of the sender's sources sits at which member path, under the record identity
+     the receiver names its `message.data:<id>` source by. It is what joins a receiver's finding to its producer. */
+  DCHECK(Array.isArray(r.routedPosts) && r.routedPosts.every((p) =>
+           typeof p.id === "string" && /^[0-9a-f]{16}$/.test(p.id) && typeof p.target === "string" &&
+           typeof p.targetOrigin === "string" && typeof p.relation === "string" && Array.isArray(p.symbols) &&
+           p.symbols.length > 0 && p.symbols.every((s) => typeof s.source === "string" &&
+             typeof s.shape === "string" && typeof s.path === "string")),
+         "the engine's result document carries no well-formed routedPosts array — post_index.c writes each " +
+         "record with its 16-hex identity, target, targetOrigin, relation and at least one symbol, so a missing " +
+         "or short one is that composition changed under this reader");
   /* The cost counters are emitted by result.c in one composition, so the contract is all of them and a subset
      check would pass the very shapes it should reject. The registry families (the @S arrival census among
      them) are asserted from `_metricsSchema` below rather than listed here.
