@@ -2026,17 +2026,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        text child. css-text-4
        redefines it as a shorthand of `white-space-collapse`/`text-wrap-mode`, neither of which lexbor's property
        registry carries, so §16.6's longhand is the one this engine can answer.
-       css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand" (`auto | first | last`)
-       and §4.2.2 "Alignment Baseline Type: the alignment-baseline longhand" (`baseline | text-bottom |
-       alphabetic | ideographic | middle | central | mathematical | text-top`) both state `Computed value:
-       specified keyword` over a keyword-only `Value:` line, so the as-specified arm is the whole of their rule
-       as well. THEY ARE HERE BECAUSE `getComputedStyle(el).verticalAlign` READS ALL THREE BY NAME: §4.2 makes
-       `vertical-align` a shorthand over these two and `baseline-shift`, core/css/css_shorthand.c records the
-       row, and §6.6.1's shorthand step builds the answer out of each longhand's RESOLVED value — so modelling
-       two of the three would leave one third of one property's answer a specified value wearing the word
-       computed. They are also what CSS 2 §10.8's step 2 will read when its line boxes exist ("the inline-level
-       boxes are aligned vertically according to their `vertical-align` property"), and that step needs the
-       ALIGNMENT BASELINE and the SHIFT apart, which is exactly the split §4.2 makes.
        css-flexbox-1 §7.2.1 "The flex-grow property" and §7.2.2 "The flex-shrink property" say `Computed value:
        specified number` and `Computed value: specified value` over a `Value:` line of `<number [0,∞]>`, which is the
        as-specified rule under two spellings — a `<number>` has no unit, no percentage and no environment fact,
@@ -2056,8 +2045,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        not tell them apart could place neither. */
     case CSS_PROPERTY_FLOAT:
     case CSS_PROPERTY_WHITE_SPACE:
-    case CSS_PROPERTY_ALIGNMENT_BASELINE:
-    case CSS_PROPERTY_BASELINE_SOURCE:
     case CSS_PROPERTY_Z_INDEX:
     /* A `<number>` is carried as text with nothing lost, so the consumer compares the number, never the text:
        `0.0` and `0e0` are zero. */

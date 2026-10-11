@@ -21,15 +21,6 @@
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
 
-static char *th_computed(lxb_dom_element_t *el, const char *name)
-{
-    char *v = css_computed_value(el, name);
-
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
-                      "them is in lexbor's registry with an initial value, so the last layer always answers");
-    return v;
-}
-
 /* ---- §17.6 Borders' two models, asked once at the entry ---------------------------------------------------
    The vertical twin of core/layout/table_width.c's split, asked here too so a table whose height is asked
    without its width still meets it. The cell spacing in "the row heights plus any cell spacing or borders" is
@@ -171,15 +162,11 @@ typedef enum {
 static ThAlign th_cell_align(lxb_dom_element_t *cell)
 {
     CssLength shift = css_computed_length(cell, "baseline-shift");
-    char *ab;
-    bool middle;
 
     if (css_length_is_keyword(shift, CSS_KEYWORD_TOP)) return TH_ALIGN_TOP;
     if (css_length_is_keyword(shift, CSS_KEYWORD_BOTTOM)) return TH_ALIGN_BOTTOM;
-    ab = th_computed(cell, "alignment-baseline");
-    middle = strcmp(ab, "middle") == 0;
-    free(ab);
-    return middle ? TH_ALIGN_MIDDLE : TH_ALIGN_BASELINE;
+    return css_computed_keyword_is(cell, "alignment-baseline", CSS_KEYWORD_MIDDLE) ? TH_ALIGN_MIDDLE
+                                                                                    : TH_ALIGN_BASELINE;
 }
 
 /* §17.5.3's cell baseline: "The baseline of a cell is the baseline of the first in-flow line box in the cell,

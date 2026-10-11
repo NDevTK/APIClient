@@ -109,7 +109,18 @@
     X(INSET,              "inset") \
     X(OUTSET,             "outset") \
     X(INSIDE,             "inside") \
-    X(OUTSIDE,            "outside")
+    X(OUTSIDE,            "outside") \
+    X(BASELINE,           "baseline") \
+    X(TEXT_BOTTOM,        "text-bottom") \
+    X(ALPHABETIC,         "alphabetic") \
+    X(IDEOGRAPHIC,        "ideographic") \
+    X(MIDDLE,             "middle") \
+    X(CENTRAL,            "central") \
+    X(MATHEMATICAL,       "mathematical") \
+    X(HANGING,            "hanging") \
+    X(TEXT_TOP,           "text-top") \
+    X(FIRST,              "first") \
+    X(LAST,               "last")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -160,7 +171,9 @@ typedef enum {
     CSS_KEYWORDS_VISIBILITY,
     CSS_KEYWORDS_LINE_STYLE,
     CSS_KEYWORDS_POINTER_EVENTS,
-    CSS_KEYWORDS_LIST_STYLE_POSITION
+    CSS_KEYWORDS_LIST_STYLE_POSITION,
+    CSS_KEYWORDS_BASELINE_SOURCE,
+    CSS_KEYWORDS_ALIGNMENT_BASELINE
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

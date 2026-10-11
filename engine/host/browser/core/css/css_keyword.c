@@ -176,6 +176,18 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-lists-3 §3.5 "Positioning Markers: The list-style-position property": `inside | outside`. */
     case CSS_KEYWORDS_LIST_STYLE_POSITION:
         return k == CSS_KEYWORD_INSIDE || k == CSS_KEYWORD_OUTSIDE;
+    /* css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand": `auto | first | last`. */
+    case CSS_KEYWORDS_BASELINE_SOURCE:
+        return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_FIRST || k == CSS_KEYWORD_LAST;
+    /* css-inline-3 §4.2.2 "Alignment Baseline Type: the alignment-baseline longhand": `baseline |
+       <baseline-metric>`, `<baseline-metric> = text-bottom | alphabetic | ideographic | middle | central |
+       mathematical | hanging | text-top`. NAMED RESIDUAL: lexbor's longhand parser has no `hanging`, so a
+       declared `alignment-baseline: hanging` is dropped; the next diff is that keyword in lexbor's state
+       machine; its absence shows as such a declaration computing to the cascade's next value. */
+    case CSS_KEYWORDS_ALIGNMENT_BASELINE:
+        return k == CSS_KEYWORD_BASELINE || k == CSS_KEYWORD_TEXT_BOTTOM || k == CSS_KEYWORD_ALPHABETIC ||
+               k == CSS_KEYWORD_IDEOGRAPHIC || k == CSS_KEYWORD_MIDDLE || k == CSS_KEYWORD_CENTRAL ||
+               k == CSS_KEYWORD_MATHEMATICAL || k == CSS_KEYWORD_HANGING || k == CSS_KEYWORD_TEXT_TOP;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

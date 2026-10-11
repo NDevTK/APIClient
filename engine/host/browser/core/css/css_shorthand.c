@@ -523,14 +523,8 @@ static const char *const BORDER_PART_SHORTHAND[] = { "border-width", "border-sty
  * make the shorthand ambiguous and the split a guess — so the disjointness is asserted rather than assumed,
  * beside the round trip, in css_shorthand_init. */
 static const char *const BASELINE_SOURCE_KEYWORDS[] = { "first", "last" };
-/* §4.2.2's `Value:` line entire and in its own order. The SVG legacy spellings §4.2.2.1 lists are deliberately
-   absent: lexbor's `lxb_css_alignment_baseline_type_t` carries these eight and no others, so a declaration
-   naming one of the legacy values never reaches this component as a `vertical-align` at all. */
-static const char *const ALIGNMENT_BASELINE_KEYWORDS[] = {
-    "baseline", "text-bottom", "alphabetic", "ideographic", "middle", "central", "mathematical", "text-top"
-};
-/* §4.2.3's keyword arm; its `<length-percentage>` arm is core/css/css_length.h's production, asked below. */
-static const char *const BASELINE_SHIFT_KEYWORDS[] = { "sub", "super", "top", "center", "bottom" };
+/* §4.2.2's term is its longhand row's keyword set, and §4.2.3's keyword arm is its row's; the shift's
+   `<length-percentage>` arm is core/css/css_length.h's production, asked below. */
 /* Each longhand's own `Initial:` line — §4.2.1's `auto`, §4.2.2's `baseline`, §4.2.3's `0` — which is what an
    OMITTED term of the `||` is set to. §4.2 states the first of them outright ("if first or last is specified,
    it sets baseline-source, WHICH IS OTHERWISE RESET TO AUTO"), and CSS Cascade 5 §3 "Shorthand Properties"
@@ -611,9 +605,9 @@ static int vertical_align_term_of(const char *w, size_t n, const char **canon)
 {
     *canon = css_sh_keyword(BASELINE_SOURCE_KEYWORDS, CSS_SH_N(BASELINE_SOURCE_KEYWORDS), w, n);
     if (*canon) return 0;
-    *canon = css_sh_keyword(ALIGNMENT_BASELINE_KEYWORDS, CSS_SH_N(ALIGNMENT_BASELINE_KEYWORDS), w, n);
+    *canon = css_sh_keyword_in(CSS_KEYWORDS_ALIGNMENT_BASELINE, w, n);
     if (*canon) return 1;
-    *canon = css_sh_keyword(BASELINE_SHIFT_KEYWORDS, CSS_SH_N(BASELINE_SHIFT_KEYWORDS), w, n);
+    *canon = css_sh_keyword_in(CSS_KEYWORDS_BASELINE_SHIFT, w, n);
     if (*canon) return 2;
     /* §4.2.3's `<length-percentage>` carries NO range restriction — "raise (positive value) or lower (negative
        value)" — so a leading `-` is a value and not the invalid declaration it is for a `<line-width>`, and
@@ -2615,29 +2609,29 @@ void css_shorthand_init(void)
        than a dropped declaration. The `<length-percentage>` arm needs no row here: it is the fallback the
        partition reaches only after all three keyword sets have refused. */
     {
-        static const char *const *const VA_SETS[] = {
-            BASELINE_SOURCE_KEYWORDS, ALIGNMENT_BASELINE_KEYWORDS, BASELINE_SHIFT_KEYWORDS
-        };
-        static const unsigned VA_SET_N[] = {
-            CSS_SH_N(BASELINE_SOURCE_KEYWORDS), CSS_SH_N(ALIGNMENT_BASELINE_KEYWORDS),
-            CSS_SH_N(BASELINE_SHIFT_KEYWORDS)
-        };
+        unsigned k;
 
-        for (i = 0; i < CSS_SH_N(VA_SETS); i++)
-            for (j = 0; j < VA_SET_N[i]; j++) {
-                const char *canon = NULL;
-                const char *kw = VA_SETS[i][j];
-                /* The partition is run HERE and not inside the assert: it writes through `canon`, and a
-                   DCHECK's condition must be side-effect-free (check.h) so that the compiled-out build runs
-                   the same program as the dev one. */
-                int term = vertical_align_term_of(kw, strlen(kw), &canon);
+        for (k = CSS_KEYWORD_INVALID + 1; k < CSS_KEYWORD_COUNT; k++) {
+            const char *kw = css_keyword_name((CssKeyword)k), *canon = NULL;
+            int want = css_sh_keyword(BASELINE_SOURCE_KEYWORDS, CSS_SH_N(BASELINE_SOURCE_KEYWORDS), kw,
+                                      strlen(kw)) != NULL ? 0
+                       : css_keyword_set_has(CSS_KEYWORDS_ALIGNMENT_BASELINE, (CssKeyword)k) ? 1
+                       : css_keyword_set_has(CSS_KEYWORDS_BASELINE_SHIFT, (CssKeyword)k) ? 2 : -1;
+            int in = (want == 0) + css_keyword_set_has(CSS_KEYWORDS_ALIGNMENT_BASELINE, (CssKeyword)k) +
+                     css_keyword_set_has(CSS_KEYWORDS_BASELINE_SHIFT, (CssKeyword)k);
+            /* The partition is run HERE and not inside the assert: it writes through `canon`, and a DCHECK's
+               condition must be side-effect-free (check.h) so that the compiled-out build runs the same
+               program as the dev one. */
+            int term;
 
-                DCHECK(term == (int)i && canon != NULL && strcmp(canon, kw) == 0,
-                       "a keyword of one of css-inline-3 §4.2's three term sets is classified as another "
-                       "term's, so the sets are not disjoint and the shorthand's `||` cannot be split by the "
-                       "component value. Whichever set is scanned FIRST would take the shared word and the "
-                       "other longhand would silently read its initial value");
-            }
+            if (want < 0) continue;
+            term = vertical_align_term_of(kw, strlen(kw), &canon);
+            DCHECK(in == 1 && term == want && canon != NULL && strcmp(canon, kw) == 0,
+                   "a keyword of one of css-inline-3 §4.2's three term sets is classified as another "
+                   "term's, so the sets are not disjoint and the shorthand's `||` cannot be split by the "
+                   "component value. Whichever set is scanned FIRST would take the shared word and the "
+                   "other longhand would silently read its initial value");
+        }
     }
     /* THE THREE PART TABLES ARE ONE INDEX, and css_shorthand_component reads all three by it: the part index
        `border_part_index` answers with names the component grammar (BORDER_PARTS), the initial value the

@@ -101,7 +101,7 @@ static void lb_require_baseline_alignment(lxb_dom_element_t *el)
 {
     CssLength shift;
 
-    if (!lb_computed_is(el, "alignment-baseline", "baseline"))
+    if (!css_computed_keyword_is(el, "alignment-baseline", CSS_KEYWORD_BASELINE))
         DFAIL("CSS 2.2 §10.8's step 2 aligns this inline-level box \"according to their 'vertical-align' "
               "property\", and css-inline-3 §4.2.2 \"Alignment Baseline Type: the alignment-baseline "
               "longhand\" gives it a computed ALIGNMENT BASELINE that is not `baseline` — one of "
@@ -117,7 +117,7 @@ static void lb_require_baseline_alignment(lxb_dom_element_t *el)
               "rather than a per-box offset. BUILD css-inline-3 §4.2's baseline table for this box: the "
               "set of baselines a font has, which is what turns each keyword into an offset from the "
               "alphabetic one");
-    if (!lb_computed_is(el, "baseline-source", "auto"))
+    if (!css_computed_keyword_is(el, "baseline-source", CSS_KEYWORD_AUTO))
         DFAIL("css-inline-3 §4.2.1 \"Alignment Baseline Source: the baseline-source longhand\" gives this "
               "inline-level box a source of `first` or `last`, which selects WHICH of its own baseline sets "
               "aligns to the line — \"when an inline-level box has more than one possible source for baseline "
