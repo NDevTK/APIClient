@@ -324,6 +324,16 @@ function checkWitnessPool(pool, where) {
   return pool;
 }
 
+/* A method's witness pool; null for a method no bundle sighting reached (`_astInferred` false), undefined for
+   one whose every sighting came from an engine build that emitted no `witness`. */
+function methodWitnesses(m, where) {
+  DCHECK(!!m && typeof m === "object" && !Array.isArray(m),
+         "a witness pool was asked of something that is not a method record (" + where + ")");
+  if (!m._astInferred) return null;
+  if (m._astWitnesses === undefined) return undefined;
+  return checkWitnessPool(m._astWitnesses, where);
+}
+
 /* THE FOLD, WHERE TWO SIGHTINGS OF ONE ADDRESS MEET — the MOST OBSERVED of them, which is the rule the
    engine's own pending-line join uses and for the same argument: the two sightings are one ADDRESS, so if
    either was reached without standing on a contradicted arm then a real client's code computes it and the

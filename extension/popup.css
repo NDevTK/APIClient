@@ -2113,8 +2113,15 @@ details summary:hover {
 .ep-value-forced {
   color: #d29922;
 }
-.ep-params {
+.ep-params,
+.ep-witness {
   list-style: none;
+}
+.ep-witness li {
+  margin-bottom: 4px;
+}
+.ep-assumption {
+  word-break: break-all;
 }
 .ep-params li {
   margin-bottom: 4px;

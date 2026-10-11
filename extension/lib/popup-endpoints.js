@@ -1,7 +1,7 @@
 /* lib/popup-endpoints.js — the Endpoints panel: one row per method the forced execution learned (a method
    record with `_astInferred`, lib/learn.js), stating its verb, its address, the razor class its sightings
-   stated, the address's provenance, each parameter with the example values the run computed, and the
-   request body the run observed; a row's Send button opens the method in the Send panel. Every cell is a
+   stated, the address's provenance, what each sighting's flow assumed, each parameter with the example values
+   the run computed, and the request body the run observed; a row's Send button opens the method in the Send panel. Every cell is a
    producer field read as itself; a fact no hop carries reads "unknown". Built only through
    lib/dom-builder.js. */
 
@@ -34,7 +34,7 @@ function renderEndpointsPanel() {
     return;
   }
   const head = domElement("thead", {}, [domElement("tr", {}, ["Method", "Address", "Razor", "Provenance",
-    "Parameters", ""].map((h) => domElement("th", { scope: "col" }, [h])))]);
+    "Assumed", "Parameters", ""].map((h) => domElement("th", { scope: "col" }, [h])))]);
   domReplaceChildren(body, [domElement("table", { class: "ep-table" }, [head, domElement("tbody", {}, rows)])]);
 }
 
@@ -47,6 +47,7 @@ function endpointRow(svcName, doc, m) {
     domElement("td", { class: "ep-address" }, [endpointAddressCell(m, ep)]),
     domElement("td", {}, [endpointRazorCell(m, where)]),
     domElement("td", {}, [domElement("span", { class: "ep-grade ep-grade-" + prov }, [prov])]),
+    domElement("td", {}, [endpointWitnessCell(m, where)]),
     domElement("td", {}, [endpointParamsCell(doc, m, ep, where)]),
     domElement("td", {}, [endpointSendButton(svcName, m)]),
   ]);
@@ -107,6 +108,58 @@ function endpointRazorCell(m, where) {
       title: "the engine build that reported this method's sightings stated no razor class" }, [ENDPOINT_UNKNOWN]);
   }
   return domElement("span", {}, set.map((c) => domElement("span", { class: "ep-razor ep-razor-" + c }, [c])));
+}
+
+/* What each sighting's flow assumed (lib/endpoint-record.js's `methodWitnesses`), one line per sighting and
+   never merged. A sighting with assumptions reads "found by assuming" and its entries; a forced sighting with
+   none is solver/endpoint.h's named residual (a forced act that files no decision) and says so rather than
+   reading as nothing assumed; an unforced sighting with none assumed nothing and adds no line; a sighting no
+   flow stood at was not asked. */
+function endpointWitnessCell(m, where) {
+  const pool = methodWitnesses(m, where);
+  if (pool === undefined) {
+    return domElement("span", { class: "ep-unknown",
+      title: "the engine build that reported this method's sightings stated no witness" }, [ENDPOINT_UNKNOWN]);
+  }
+  const items = [];
+  for (const { provenance, assumed } of pool) {
+    const grade = domElement("span", { class: "ep-grade ep-grade-" + provenance }, [provenance]);
+    if (assumed === null) {
+      items.push(domElement("li", { class: "ep-none" }, [grade, " no flow stood at this sighting; not asked"]));
+    } else if (assumed.length === 0) {
+      if (provenance !== "forced") continue;
+      items.push(domElement("li", { class: "ep-unknown",
+        title: "the path was forced by an act that files no decision (solver/endpoint.h's witness residual)" },
+        [grade, " assumption not spellable"]));
+    } else {
+      const parts = [grade, " found by assuming "];
+      assumed.forEach((x, i) => {
+        if (i) parts.push("; ");
+        parts.push(domElement("code", { class: "ep-assumption" }, [endpointAssumptionText(x, where)]));
+      });
+      items.push(domElement("li", {}, parts));
+    }
+  }
+  if (items.length === 0) return domElement("span", { class: "ep-none" }, ["nothing assumed"]);
+  return domElement("ul", { class: "ep-witness" }, items);
+}
+
+/* One entry, in the three shapes extension/bridge.js asserts at the seam. A pin's String value is quoted so it
+   cannot read as the undefined, null, number or boolean of the same spelling. */
+function endpointAssumptionText(x, where) {
+  if ("source" in x) {
+    DCHECK(typeof x.source === "string" && typeof x.value === "string" && typeof x.kind === "string",
+           "a stored witness pin is not {source, value, kind} (" + where + "): " + JSON.stringify(x));
+    return x.source + " = " + (x.kind === "string" ? JSON.stringify(x.value) : x.value);
+  }
+  if ("taken" in x) {
+    DCHECK(typeof x.decision === "string" && typeof x.taken === "boolean",
+           "a stored witness branch is not {decision, taken} (" + where + "): " + JSON.stringify(x));
+    return x.decision + " → " + x.taken;
+  }
+  DCHECK(typeof x.decision === "string" && Number.isInteger(x.completion),
+         "a stored witness entry is none of the three shapes (" + where + "): " + JSON.stringify(x));
+  return x.decision + " → completion " + x.completion;
 }
 
 /* Path and query parameters from the method, then the fields of its request schema, then the body the flat
