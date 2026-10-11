@@ -15,6 +15,7 @@ either the mechanism or its absence, and an absence is a finding about this file
 | Web page and its bundle | untrusted | attacker code |
 | `intercept.js` (`MAIN` world, `document_start`, all frames) | untrusted | runs inside the page and holds nothing the page lacks |
 | `content.js` (isolated world, `document_idle`, all frames, `match_about_blank`, `match_origin_as_fallback`) | untrusted | a compromised renderer controls it; it carries material, never identity |
+| `doc-lifetime.js` (isolated world, `document_start`, same frames as `content.js`) | untrusted | opens its document's lifetime port and sends nothing on it; by closing the port early or never opening it, it can move only when its own document's request records are reclaimed |
 | Engine frame (`renderer.html`: QuickJS/WASM with Lexbor) | untrusted | executes the bundle; a sandboxed frame at an opaque origin that reaches the trusted zone only through `content.mojom.Renderer` |
 | Attacker tab (`ATTACKER_PAGE_URL` in `background.js`, used by live verify) | untrusted | a third-party document |
 | Offscreen document (`ast-worker.html`: `offscreen-brain.js`, `bridge.js`, `lib/*`) | trusted | the only zone that holds state, principals and network policy |
@@ -565,7 +566,9 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   blocks and modifies nothing, and relays each event to `lib/web-request.js`; and, in `wire.js`, to the 3xx and
   the `Set-Cookie` fields of its own fetch (no tab, no document), which it answers to the send that made it. Its records carry the person's Cookie and Set-Cookie: the log keeps neither value
   (Cookie only as the fact that one was sent, Set-Cookie not at all), and key extraction runs over the
-  page-settable headers alone.
+  page-settable headers alone. A document's records are reclaimed when Chrome closes its `doc-lifetime.js`
+  port with no reason (a closure for the back/forward cache carries one), and at its tab's close. The port's
+  sender is the browser's, so a renderer can end or prolong only its own document's records.
 - `manifest.json` requests `offscreen`, `cookies`, `declarativeNetRequestWithHostAccess`, `webNavigation`,
   `scripting`, `tabs`, `webRequest` and `unlimitedStorage`, and not `storage`, so `chrome.storage` is
   undefined in every context and a compromised renderer cannot read

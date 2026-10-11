@@ -55,6 +55,7 @@ Every engine instance runs in a **renderer**: an `<iframe sandbox="allow-scripts
 extension/
   intercept.js         Main-world fetch/XHR/WebSocket/EventSource capture
   content.js           Isolated-world relay; a seed it forwards is an address, never document bytes
+  doc-lifetime.js      Isolated-world port whose close tells the zone its document is gone
   background.js        Stateless service worker: offscreen lifecycle, browser events, privileged chrome.* calls
   speak-as-rule.js     The service worker's rule that makes a zone send carry a page's headers
   ast-worker.html      The offscreen document: the trusted zone's page

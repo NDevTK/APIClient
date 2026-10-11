@@ -21,13 +21,26 @@
 // shows as: a capture refused `status-mismatch`, or left waiting, on a page whose worker, service worker or
 // EventSource shares a (method, URL) with its own fetch() calls.
 
-/* requestId -> the request's record as its events arrive. A redirect reuses the requestId. */
+/* documentId -> the document's requests: `next` holds each key's request count in onBeforeRequest order (its
+   next ordinal) and the last requestId counted; `records` the records no capture has taken yet, by key and
+   ordinal; `waiting` the captures whose record is not complete yet, by key and ordinal. A document that left
+   keeps only `{tabId, left: true}`, so a late event or capture of it is told apart from a relay fault; its
+   tab's close deletes that too. */
+var _wrDocs = new Map();
+/* requestId -> the record of a request whose events are still arriving. A redirect reuses the requestId. */
 var _wrById = new Map();
-/* documentId -> (key -> the document's records of that key in onBeforeRequest order). */
-var _wrByDoc = new Map();
-/* documentId -> {tabId, keys: key -> (ordinal -> {capture, deliver})} for captures whose record is not
-   complete yet. */
-var _wrWaiting = new Map();
+/* Lifetime counts of how each record and capture ended, by outcome. */
+var webRequestCensus = { joined: 0, statusMismatch: 0, leftUnjoined: 0, leftFailed: 0, leftInFlight: 0,
+                         leftWaiting: 0, eventAfterLeft: 0, captureAfterLeft: 0 };
+
+function _wrDocOf(documentId, tabId) {
+  var d = _wrDocs.get(documentId);
+  if (d === undefined) {
+    d = { tabId: tabId, left: false, next: new Map(), records: new Map(), waiting: new Map() };
+    _wrDocs.set(documentId, d);
+  }
+  return d;
+}
 
 function _wrKey(method, url) {
   return method + " " + url;
@@ -97,31 +110,44 @@ function webRequestEvent(ev) {
          "background.js relayed a webRequest event without its requestId, documentId, url or method — it relays " +
          "only events of a document's own requests");
   var r = _wrById.get(ev.requestId);
+  var d = _wrDocs.get(ev.documentId);
+  if (r !== undefined) {
+    DCHECK(r.documentId === ev.documentId && d !== undefined && !d.left,
+           "the record of request " + ev.requestId + " outlived its document — webRequestDocumentLeft and " +
+           "webRequestTabRemoved take every in-flight record of the document out of _wrById");
+  } else if (d === undefined ? ev.ev !== "onBeforeRequest" : d.left) {
+    /* A request of a document that left (a keepalive fetch, or a request cancelled by the navigation whose
+       event the relay delivers after the document's port closed), or of a tab that closed. */
+    webRequestCensus.eventAfterLeft++;
+    return;
+  }
   if (ev.ev === "onBeforeRequest") {
-    if (r) return;   // a redirect's next hop: the record keeps the first request line and body
+    if (r !== undefined) return;   // a redirect's next hop: the record keeps the first request line and body
     DCHECK(ev.requestBody === undefined || webRequestStatesBody(ev.method),
            "webRequest reported a body for a " + ev.method + " request — this file takes the body from the " +
            "browser for POST and PUT alone and from intercept.js otherwise, so that split is now stale");
+    d = _wrDocOf(ev.documentId, ev.tabId);
+    var key = _wrKey(ev.method, ev.url);
+    var n = d.next.get(key);
+    if (n === undefined) { n = { count: 0, lastRequestId: null }; d.next.set(key, n); }
+    DCHECK(n.lastRequestId === null || Number(n.lastRequestId) < Number(ev.requestId),
+           "a webRequest onBeforeRequest arrived out of the browser's order for " + key + " (" + ev.requestId +
+           " after " + n.lastRequestId + ") — background.js relays through one chain, and the ordinal a " +
+           "capture joins on is this order");
     r = { requestId: ev.requestId, documentId: ev.documentId, tabId: ev.tabId, frameId: ev.frameId,
-          method: ev.method, url: ev.url, requestBodyRaw: ev.requestBody, requestHeaders: null,
+          method: ev.method, url: ev.url, ordinal: n.count, requestBodyRaw: ev.requestBody, requestHeaders: null,
           status: null, statusText: null, responseHeaders: null, redirects: [], done: false, failed: null,
           joined: false };
+    n.count++;
+    n.lastRequestId = ev.requestId;
     _wrById.set(ev.requestId, r);
-    var byKey = _wrByDoc.get(ev.documentId);
-    if (!byKey) { byKey = new Map(); _wrByDoc.set(ev.documentId, byKey); }
-    var key = _wrKey(ev.method, ev.url);
-    if (!byKey.has(key)) byKey.set(key, []);
-    var prev = byKey.get(key)[byKey.get(key).length - 1];
-    DCHECK(!prev || Number(prev.requestId) < Number(ev.requestId),
-           "a webRequest onBeforeRequest arrived out of the browser's order for " + key + " (" + ev.requestId +
-           " after " + (prev && prev.requestId) + ") — background.js relays through one chain, and the ordinal " +
-           "a capture joins on is this order");
-    r.ordinal = byKey.get(key).length;
-    byKey.get(key).push(r);
+    if (!d.records.has(key)) d.records.set(key, new Map());
+    d.records.get(key).set(r.ordinal, r);
     return;
   }
-  DCHECK(!!r, "a webRequest " + ev.ev + " arrived for request " + ev.requestId + " before its onBeforeRequest — " +
-              "the browser orders a request's events and the relay keeps that order");
+  DCHECK(r !== undefined, "a webRequest " + ev.ev + " arrived for request " + ev.requestId + " of a live " +
+         "document before its onBeforeRequest — the browser orders a request's events and the relay keeps that " +
+         "order");
   if (ev.ev === "onSendHeaders") {
     if (r.requestHeaders === null) r.requestHeaders = _wrHeaderMap(ev.requestHeaders);
   } else if (ev.ev === "onHeadersReceived") {
@@ -135,10 +161,13 @@ function webRequestEvent(ev) {
            "a webRequest record completed without the request headers and the final response's status and " +
            "headers its earlier events state");
     r.done = true;
-    _wrTryJoin(r);
+    _wrById.delete(r.requestId);
+    _wrTryJoin(d, r);
   } else if (ev.ev === "onErrorOccurred") {
     r.done = true;
     r.failed = ev.error;
+    _wrById.delete(r.requestId);
+    _wrTryJoin(d, r);
   } else {
     DFAIL("background.js relayed the webRequest event `" + ev.ev + "`, which this file does not take");
   }
@@ -167,16 +196,26 @@ function _wrHeader(map, name) {
   return map[name] !== undefined ? map[name] : "";
 }
 
-function _wrDeliver(r, w) {
-  DCHECK(!r.joined, "a webRequest record was joined to a second capture — each capture names one ordinal and " +
-                    "each ordinal holds one record");
+/* Settles the complete record `r` of document `d` with the capture `w` that names its ordinal: the record
+   leaves `d.records`, and the capture is delivered or refused by name. */
+function _wrSettle(d, r, w) {
+  DCHECK(!r.joined && r.done, "a webRequest record was settled twice, or before it completed — a settled " +
+                              "record leaves its document's records, and only a complete one is settled");
   r.joined = true;
+  d.records.get(_wrKey(r.method, r.url)).delete(r.ordinal);
+  if (r.failed !== null) {
+    console.warn("[web-request] " + r.method + " " + r.url + " capture refused: ordinal " + r.ordinal +
+                 " is a request that failed (" + r.failed + ")");
+    return;
+  }
   if (r.status !== w.capture.observedStatus) {
+    webRequestCensus.statusMismatch++;
     console.warn("[web-request] " + r.method + " " + r.url + " capture refused (status-mismatch): the page " +
                  "observed " + String(w.capture.observedStatus) + " and the browser reports " + r.status +
                  " for ordinal " + r.ordinal);
     return;
   }
+  webRequestCensus.joined++;
   w.deliver({
     url: r.url,
     method: r.method,
@@ -192,13 +231,12 @@ function _wrDeliver(r, w) {
   });
 }
 
-function _wrTryJoin(r) {
-  var docW = _wrWaiting.get(r.documentId);
-  var keyW = docW && docW.keys.get(_wrKey(r.method, r.url));
-  var w = keyW && keyW.get(r.ordinal);
-  if (!w) return;
+function _wrTryJoin(d, r) {
+  var keyW = d.waiting.get(_wrKey(r.method, r.url));
+  var w = keyW === undefined ? undefined : keyW.get(r.ordinal);
+  if (w === undefined) return;
   keyW.delete(r.ordinal);
-  _wrDeliver(r, w);
+  _wrSettle(d, r, w);
 }
 
 /* intercept.js's capture of one fetch() or XHR, from document `documentId`, joined to the browser's record
@@ -206,31 +244,105 @@ function _wrTryJoin(r) {
    arrived. The capture is the page's: a key or ordinal no record holds leaves it waiting, never asserted. */
 function webRequestJoin(documentId, tabId, capture, deliver) {
   var key = _wrKey(capture.method, capture.url);
-  var byKey = _wrByDoc.get(documentId);
-  var r = byKey && byKey.get(key) && byKey.get(key)[capture.seq];
-  if (r && r.done) {
-    if (r.failed !== null || r.joined) {
-      console.warn("[web-request] " + key + " capture refused: ordinal " + capture.seq + " is " +
-                   (r.joined ? "already joined" : "a request that failed (" + r.failed + ")"));
-      return;
-    }
-    _wrDeliver(r, { capture: capture, deliver: deliver });
+  var d = _wrDocs.get(documentId);
+  if (d !== undefined && d.left) {
+    webRequestCensus.captureAfterLeft++;
+    console.warn("[web-request] " + key + " capture refused: its document left");
     return;
   }
-  var docW = _wrWaiting.get(documentId);
-  if (!docW) { docW = { tabId: tabId, keys: new Map() }; _wrWaiting.set(documentId, docW); }
-  if (!docW.keys.has(key)) docW.keys.set(key, new Map());
-  if (docW.keys.get(key).has(capture.seq)) {
+  d = _wrDocOf(documentId, tabId);
+  var keyR = d.records.get(key);
+  var r = keyR === undefined ? undefined : keyR.get(capture.seq);
+  if (r !== undefined && r.done) {
+    _wrSettle(d, r, { capture: capture, deliver: deliver });
+    return;
+  }
+  var n = d.next.get(key);
+  if (r === undefined && n !== undefined && capture.seq < n.count) {
+    console.warn("[web-request] " + key + " capture refused: ordinal " + capture.seq + " is already joined");
+    return;
+  }
+  if (!d.waiting.has(key)) d.waiting.set(key, new Map());
+  if (d.waiting.get(key).has(capture.seq)) {
     console.warn("[web-request] " + key + " capture refused: ordinal " + capture.seq + " was captured twice");
     return;
   }
-  docW.keys.get(key).set(capture.seq, { capture: capture, deliver: deliver });
+  d.waiting.get(key).set(capture.seq, { capture: capture, deliver: deliver });
 }
 
-/* A tab closed: its documents' requests and waiting captures go with it. */
+/* Reclaims the live document `documentId`: every record and waiting capture it holds is counted by how it
+   ended, and its in-flight records leave _wrById. */
+function _wrReclaim(documentId, d) {
+  var left = { unjoined: 0, failed: 0, inFlight: 0, waiting: 0 };
+  for (var keyR of d.records.values()) {
+    for (var r of keyR.values()) {
+      if (!r.done) { left.inFlight++; _wrById.delete(r.requestId); }
+      else if (r.failed !== null) left.failed++;
+      else left.unjoined++;
+    }
+  }
+  for (var keyW of d.waiting.values()) left.waiting += keyW.size;
+  for (var rest of _wrById.values())
+    DCHECK(rest.documentId !== documentId, "request " + rest.requestId + " of document " + documentId +
+           " is in flight in _wrById and in none of the document's records, so it would outlive the document");
+  webRequestCensus.leftUnjoined += left.unjoined;
+  webRequestCensus.leftFailed += left.failed;
+  webRequestCensus.leftInFlight += left.inFlight;
+  webRequestCensus.leftWaiting += left.waiting;
+  if (left.unjoined + left.inFlight + left.waiting > 0)
+    console.warn("[web-request] document " + documentId + " left with " + left.unjoined + " complete record(s) " +
+                 "no capture joined, " + left.inFlight + " in flight and " + left.waiting + " capture(s) no " +
+                 "record completed");
+}
+
+/* The document `documentId` was destroyed (see webRequestDocumentPort): its records and waiting captures
+   are reclaimed, and it stays known as left until its tab closes. */
+function webRequestDocumentLeft(documentId, tabId) {
+  var d = _wrDocs.get(documentId);
+  if (d !== undefined && d.left) return;
+  if (d !== undefined) _wrReclaim(documentId, d);
+  _wrDocs.set(documentId, { tabId: d === undefined ? tabId : d.tabId, left: true });
+}
+
+/* The reason Chrome gives the receiving end of a content script's port it closes because the document
+   entered the back/forward cache (measured in Chrome 148). A port closed by the document's destruction has
+   no reason. */
+var _WR_PORT_CLOSED_FOR_BFCACHE =
+  "The page keeping the extension port is moved into back/forward cache, so the message channel is closed.";
+
+/* A document's lifetime port, opened by doc-lifetime.js in every frame and authenticated by the caller
+   (offscreen-brain.js). Chrome closes it when the document is destroyed, and when the document enters the
+   back/forward cache with the reason above; webNavigation tells neither apart (getFrame() answers null for
+   both). A destroyed document is reclaimed. A cached one is not, since it can come back with the same
+   documentId, and a restored document opens a new port. The page sends nothing on the port.
+   Named residual. Not covered: a cached document the browser evicts, which no event reports, keeps its
+   records until its tab closes. Next diff builds: reclaiming every cached document at the evictions this
+   extension causes itself, since a declarativeNetRequest session-rule update and a webRequest listener's
+   registration each flush the whole cache (measured, reason CacheFlushed). Absence shows as: the records of
+   a tab's cached documents counted only at the tab's close. */
+function webRequestDocumentPort(port, documentId, tabId) {
+  port.onMessage.addListener(function () {
+    console.warn("[web-request] document " + documentId + " sent a message on its lifetime port, which " +
+                 "carries none");
+  });
+  port.onDisconnect.addListener(function () {
+    var reason = chrome.runtime.lastError === undefined ? null : chrome.runtime.lastError.message;
+    if (reason === _WR_PORT_CLOSED_FOR_BFCACHE) return;
+    if (reason !== null) {
+      DFAIL("Chrome closed document " + documentId + "'s lifetime port for a reason this file does not know (" +
+            reason + ") — learn whether it is the document's destruction, and add it");
+      return;
+    }
+    webRequestDocumentLeft(documentId, tabId);
+  });
+}
+
+/* A tab closed, and every document of it with it: a live one is reclaimed, and the tab's left documents
+   are forgotten. */
 function webRequestTabRemoved(tabId) {
-  var docs = new Set();
-  for (var [id, r] of _wrById) if (r.tabId === tabId) { docs.add(r.documentId); _wrById.delete(id); }
-  for (var [d, w] of _wrWaiting) if (w.tabId === tabId) docs.add(d);
-  for (var doc of docs) { _wrByDoc.delete(doc); _wrWaiting.delete(doc); }
+  for (var [id, d] of _wrDocs) {
+    if (d.tabId !== tabId) continue;
+    if (!d.left) _wrReclaim(id, d);
+    _wrDocs.delete(id);
+  }
 }

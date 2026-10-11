@@ -27,6 +27,14 @@
     },
     {
       "matches": ["<all_urls>"],
+      "js": ["doc-lifetime.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": ["<all_urls>"],
       "js": ["check.js", "content.js"],
       "run_at": "document_idle",
       "all_frames": true,

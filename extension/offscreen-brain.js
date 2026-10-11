@@ -2550,6 +2550,7 @@ const CONTENT_TYPES = new Set([
 //   • CONTENT_TYPES from a web-page origin   → handleContentMessage (UNTRUSTED;
 //                    real browser-verified sender = tab/frame/url)
 //   • extension-page origin (popup)          → handlePopupMessage
+//   • a "document-lifetime" port (onConnect, below) → webRequestDocumentPort (lib/web-request.js)
 // sender.id is NOT a trust signal (every onMessage sender carries our id). The boundary is the sender's
 // browser-set url or origin, and __evt is honored ONLY from the extension origin, so a compromised renderer
 // can't forge a browser event (a TAB_REMOVED, a webRequest record) by broadcasting one to this document.
@@ -2613,6 +2614,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!fromExtDocument) return;
   handlePopupMessage(msg, sender, sendResponse);
   return true; // keep sendResponse alive for async handlePopupMessage
+});
+
+/* A document's lifetime port from doc-lifetime.js (lib/web-request.js's webRequestDocumentPort). Only a
+   content script's port is taken: one with a browser-stamped tab and documentId, from a web page and not an
+   extension URL. Anything else is closed unread. */
+chrome.runtime.onConnect.addListener((port) => {
+  const s = port.sender;
+  if (port.name !== "document-lifetime" || !s || s.id !== chrome.runtime.id || !s.tab ||
+      typeof s.documentId !== "string" || s.documentId === "" ||
+      (typeof s.url === "string" && s.url.startsWith(EXTENSION_ORIGIN + "/"))) {
+    port.disconnect();
+    return;
+  }
+  webRequestDocumentPort(port, s.documentId, s.tab.id);
 });
 
 const _chunkStreams = new Map();  // streamId -> { parts:[], received, total, payloadKey, envelope }
