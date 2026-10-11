@@ -30,10 +30,10 @@
    activation spends. 32 replays a body once per 32 levels and keeps an activation to 32 bodies. */
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
-/* Layout question bodies a resting drive opens per rest point. The floor is replay: each body that
+/* Layout question bodies a resting drive opens per rest point, 8. The floor is replay: each body that
    deferred re-runs from its start in the next activation. The ceiling is bound (2), measured by the
-   scrolling-area bracket the drive runs inside. */
-#define REST_UNIT_LAYOUT_BODIES_N   32u
+   scrolling-area bracket the drive runs inside; a cold node's bodies run to a few hundred microseconds each. */
+#define REST_UNIT_LAYOUT_BODIES_N   8u
 
 /* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
    node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A node whose
