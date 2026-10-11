@@ -7,8 +7,7 @@
  * element must be treated as if it had been replaced in the element tree by its contents". The sequence pierces
  * `contents` and nothing else; a `none` element is yielded and each walk skips it under its own CSS 2 §9.2
  * arm. The test reads the computed `display`, because box generation runs after the cascade (§1).
- * core/css/css_computed_value.h's `css_box_parent_display` reads the specified value for the same relation
- * because it runs inside the computation of `display` itself.
+ * core/css/css_computed_value.h's `css_box_parent_display` reads the same computed value for the same relation.
  * §2.5's Note keeps style on the document tree ("any semantics based on the document tree, such as
  * selector-matching, event handling, and property inheritance, are not affected"), so a walk reading an
  * inherited property of a member reads it off the member's own DOM parent, never off the box it is spliced

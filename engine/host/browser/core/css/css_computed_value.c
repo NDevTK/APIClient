@@ -292,43 +292,21 @@ static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name)
 
 /* ---- CSS Display §2.7 and §2.8's computed value ----------------------------------------------------------- */
 
-/* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, because `display:
-   contents` generates none and a flex item's container is therefore the first ancestor past it. The walk reads
-   SPECIFIED values on purpose: blockification never makes a box a flex or grid container and never stops one being
-   one, so the question this walk asks has the same answer either way, and asking for the computed value would
-   recurse up the whole ancestor chain to answer it. OWNED, or NULL at the root. THAT JUSTIFICATION IS ABOUT
-   BLOCKIFICATION AND IS NOW ONE OF TWO REASONS THE SPECIFIED VALUE COULD DIVERGE FROM THE COMPUTED ONE, which is
-   worth stating because the sentence above reads as covering both. css-display-3 §2.5's last sentence computes a
-   specified `contents` to `none` on Appendix B's population (`display_contents_computes_to_none` below), so for an
-   `<img>`, a `<select>`, a MathML element or a suppressed `svg` the two reads now DISAGREE: this walk skips past
-   such an ancestor as one that generates no box, where the truth is stronger — nothing in its subtree generates
-   one, so the element asking has no box for a box parent to be OF. THE WALK IS LEFT ALONE AND THE ANSWER IS
-   UNCHANGED BY THAT RULE, deliberately and not by omission: both consumers ask this only to find a FLEX OR GRID
-   CONTAINER, and each already refuses such a subtree by a second read that is not this one —
-   `uv_flex_item_container` (core/layout/used_value.c) asks the parent's OWN computed `display` beside this answer
-   precisely because "those are two reads that a spliced tree makes different values", and it now reads `none` there
-   where it read `contents` before, so it answers NULL either way. Teaching this walk the rule would change no
-   consumer's answer and would put css-display-3 §2.5's population behind a third predicate. RETIREMENT: this
-   paragraph goes when this walk's contract is asserted rather than described — a DCHECK at its exit that the value
-   it returns is the COMPUTED `display` of the element it read — because the divergence is then a crash at the one
-   site that could be wrong about it instead of a claim in a comment. */
+/* The element's BOX PARENT's computed `display`: the nearest ancestor element whose computed value is not
+   `contents`, since css-display-3 §2.5 "Box Generation: the none and contents keywords" makes a `contents`
+   element generate no box and a flex item's container is the first ancestor past it. Each ancestor's value is
+   its computed-style record's, derived once per job, so the walk costs a lookup per ancestor. Computed rather
+   than specified is also the stricter answer: §2.8's root `contents` reads `block`, and an Appendix B
+   `contents` that computes to `none` stops the walk as the no-box ancestor it is. */
 bool css_box_parent_display(const lxb_dom_node_t *n, CssDisplay *out)
 {
     const lxb_dom_node_t *p;
 
     DCHECK(n != NULL && out != NULL, "a box parent's `display` was asked of no node or into nowhere");
     for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent) {
-        CssDisplay v = cv_display_specified(lxb_dom_interface_element((lxb_dom_node_t *)p));
+        CssDisplay v = css_computed_display(lxb_dom_interface_element((lxb_dom_node_t *)p));
 
         if (!css_display_is_box(v, CSS_KEYWORD_CONTENTS)) { *out = v; return true; }
-        /* §2.8: "a display of contents computes to block on the root element", so the root is a box parent
-           however it is declared. */
-        if (css_is_root_element(p)) {
-            bool ok = css_display_parse("block", out);
-
-            DCHECK(ok, "css-display-3 §2.1's `block` does not parse as a display value");
-            return true;
-        }
     }
     return false;
 }

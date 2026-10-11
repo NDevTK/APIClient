@@ -3146,13 +3146,8 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
    "which element is the box parent" and "is it a flex container", and composing them out of a DOM pointer and
    a separate display read is that relation written twice, free to disagree about exactly the tree §2.5
    describes. `box_tree_parent` answers the first and this reads the second off the element it returns.
-   IT READS THE COMPUTED `display` WHERE `uv_box_kind` READS `css_box_parent_display`'s SPECIFIED ONE, which
-   core/layout/box_tree.h states as two readings of one relation rather than a disagreement — that entry is
-   inside the cascade and cannot ask for a computed value, and this one is not. The computed reading is also
-   the one core/layout/flex_item.c's `fi_require_container` asserts of every container it is handed, so a
-   container found here by the other reading would abort there. The two can differ only where §2.5's last
-   sentence suppresses `contents` to `none` on a replaced element, and a subtree under a computed `none`
-   generates no box for this walk to be asked about. */
+   It reads the computed `display`, as `uv_box_kind`'s `css_box_parent_display` does and as
+   core/layout/flex_item.c's `fi_require_container` asserts of every container it is handed. */
 static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box)
 {
     lxb_dom_element_t *container;

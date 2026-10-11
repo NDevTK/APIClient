@@ -198,8 +198,8 @@ bool css_computed_models_length(const char *name);
 lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el);
 
 /* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, which is not the
-   parent element when a `display: contents` ancestor sits between them, read as its specified value (see the
-   definition). FALSE at the root, with `*out` unwritten. Exported
+   parent element when a `display: contents` ancestor sits between them, read as its computed value. FALSE at the
+   root, with `*out` unwritten. Exported
    because it is the question "is this box a flex or grid ITEM", and TWO algorithms ask it: CSS Display §2.7's
    blockification here, and CSS 2.1 §10.3's box-type split in core/layout/used_value.c — a flex item's size is
    its container's algorithm and not §10's, so a used value derived from §10 for one would be an answer from
