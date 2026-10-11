@@ -48,7 +48,7 @@ async function initMsgConsole(req) {
 
   // Render all messages from the combined entry
   const historyEl = document.getElementById("ws-console-history");
-  historyEl.innerHTML = "";
+  historyEl.replaceChildren();
   const messages = req.messages;
   _renderConsoleMessages(historyEl, messages);
   historyEl.scrollTop = historyEl.scrollHeight;
@@ -71,16 +71,15 @@ async function initMsgConsole(req) {
 }
 
 function _renderConsoleMessages(container, messages) {
-  let html = "";
+  const rows = [];
   for (const msg of messages) {
     if (msg.dir === "close") {
       const time = new Date(msg.time).toLocaleTimeString();
-      html +=
-        `<div class="ws-msg ws-msg-close">` +
-        `<span class="ws-msg-dir">closed</span> ` +
-        `<span class="ws-msg-time">${esc(time)}</span>` +
-        (msg.body ? `<pre class="ws-msg-body">${esc(String(msg.body))}</pre>` : "") +
-        `</div>`;
+      rows.push(domElement("div", { class: "ws-msg ws-msg-close" }, [
+        domElement("span", { class: "ws-msg-dir" }, ["closed"]), " ",
+        domElement("span", { class: "ws-msg-time" }, [time]),
+        msg.body ? domElement("pre", { class: "ws-msg-body" }, [String(msg.body)]) : [],
+      ]));
       continue;
     }
     let bodyText = msg.body;
@@ -91,20 +90,34 @@ function _renderConsoleMessages(container, messages) {
     const dirLabel = msg.dir === "sent" ? "sent" : "received";
     const dirClass = msg.dir === "sent" ? "ws-msg-sent" : "ws-msg-recv";
     const time = new Date(msg.time).toLocaleTimeString();
-    html +=
-      `<div class="ws-msg ${dirClass}">` +
-      `<span class="ws-msg-dir">${esc(dirLabel)}</span> ` +
-      `<span class="ws-msg-time">${esc(time)}</span>` +
-      `<pre class="ws-msg-body">${esc(bodyText)}</pre></div>`;
+    rows.push(domElement("div", { class: "ws-msg " + dirClass }, [
+      domElement("span", { class: "ws-msg-dir" }, [dirLabel]), " ",
+      domElement("span", { class: "ws-msg-time" }, [time]),
+      // The body is the renderer's frame payload; an absent one renders as no text.
+      domElement("pre", { class: "ws-msg-body" }, [bodyText == null ? "" : String(bodyText)]),
+    ]));
   }
-  container.innerHTML = html;
+  domReplaceChildren(container, rows);
+}
+
+// The console's status badge: one span carrying the channel state's class and word.
+function _consoleStatus(statusEl, cls, word) {
+  domReplaceChildren(statusEl, [domElement("span", { class: cls }, [word])]);
+}
+
+// Appends one error row to the console history.
+function _consoleError(text) {
+  domAppendChildren(document.getElementById("ws-console-history"), [
+    domElement("div", { class: "ws-msg ws-msg-error" },
+               [domElement("span", { class: "ws-msg-dir" }, ["error"]), " ", text]),
+  ]);
 }
 
 async function refreshMsgConsole() {
   const statusEl = document.getElementById("ws-console-status");
   const sendBtn = document.getElementById("ws-console-send");
   if (!currentChannelId) {
-    statusEl.innerHTML = '<span class="ws-status-closed">NO CONNECTION</span>';
+    _consoleStatus(statusEl, "ws-status-closed", "NO CONNECTION");
     sendBtn.disabled = true;
     return;
   }
@@ -120,14 +133,14 @@ async function refreshMsgConsole() {
 
     if (currentChannelType === "postmessage" || currentChannelType === "msgchannel") {
       // postMessage / MessageChannel — always "active", no connection lifecycle
-      statusEl.innerHTML = '<span class="ws-status-open">ACTIVE</span>';
+      _consoleStatus(statusEl, "ws-status-open", "ACTIVE");
       sendBtn.disabled = false;
     } else {
       const names = { 0: "CONNECTING", 1: "OPEN", 2: "CLOSING", 3: "CLOSED" };
       const classes = { 0: "ws-status-connecting", 1: "ws-status-open",
         2: "ws-status-closing", 3: "ws-status-closed" };
       const rs = result.readyState;
-      statusEl.innerHTML = `<span class="${classes[rs] || "ws-status-closed"}">${names[rs] || "CLOSED"}</span>`;
+      _consoleStatus(statusEl, classes[rs] || "ws-status-closed", names[rs] || "CLOSED");
       sendBtn.disabled = rs !== 1;
     }
 
@@ -139,7 +152,7 @@ async function refreshMsgConsole() {
       if (wasAtBottom) historyEl.scrollTop = historyEl.scrollHeight;
     }
   } catch (_) {
-    statusEl.innerHTML = '<span class="ws-status-closed">UNKNOWN</span>';
+    _consoleStatus(statusEl, "ws-status-closed", "UNKNOWN");
     sendBtn.disabled = true;
   }
 }
@@ -173,13 +186,11 @@ async function sendConsoleMessage() {
          recipient into EVERY recipient — a human-typed payload broadcast at an origin nobody named. Refuse
          and say so, which is a state the operator can act on. */
       if (!_isRealTargetOrigin(currentTargetOrigin)) {
-        const historyEl = document.getElementById("ws-console-history");
-        historyEl.innerHTML +=
-          `<div class="ws-msg ws-msg-error"><span class="ws-msg-dir">error</span> ` +
-          `not sent: this channel's page-claimed source origin is ` +
-          `${esc(currentTargetOrigin === "" ? "(none stated)" : currentTargetOrigin)}, which is not an origin a ` +
-          `reply can be addressed to. A postMessage needs a real target origin; the wildcard would deliver ` +
-          `this payload to whatever document holds that window.</div>`;
+        _consoleError(
+          "not sent: this channel's page-claimed source origin is " +
+          (currentTargetOrigin === "" ? "(none stated)" : currentTargetOrigin) + ", which is not an origin a " +
+          "reply can be addressed to. A postMessage needs a real target origin; the wildcard would deliver " +
+          "this payload to whatever document holds that window.");
         sendBtn.textContent = "Send Message";
         await refreshMsgConsole();   // the same tail the sent path takes — it owns the button's state
         return;
@@ -202,17 +213,9 @@ async function sendConsoleMessage() {
       };
     }
     const result = await chrome.runtime.sendMessage(msgPayload);
-    if (result.error) {
-      const historyEl = document.getElementById("ws-console-history");
-      historyEl.innerHTML +=
-        `<div class="ws-msg ws-msg-error">` +
-        `<span class="ws-msg-dir">error</span> ${esc(result.error)}</div>`;
-    }
+    if (result.error) _consoleError(String(result.error));
   } catch (err) {
-    const historyEl = document.getElementById("ws-console-history");
-    historyEl.innerHTML +=
-      `<div class="ws-msg ws-msg-error">` +
-      `<span class="ws-msg-dir">error</span> ${esc(err.message)}</div>`;
+    _consoleError(String(err.message));
   }
   sendBtn.textContent = "Send Message";
   await refreshMsgConsole();
