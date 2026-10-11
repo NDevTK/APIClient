@@ -1068,10 +1068,13 @@ static BoxTreeChild bf_content_next(lxb_dom_element_t *el, BoxTreeChild n)
     }
 }
 
-static lxb_dom_node_t *bf_block_box_at(lxb_dom_element_t *el, BoxTreeChild at)
+/* The next block-level box at or after `at`. `*inline_seen`, when asked, is whether the positions passed on
+   the way hold an inline-level box: they are the run before the returned box. */
+static lxb_dom_node_t *bf_block_box_at(lxb_dom_element_t *el, BoxTreeChild at, bool *inline_seen)
 {
     BoxTreeChild n;
 
+    if (inline_seen != NULL) *inline_seen = false;
     for (n = at; box_tree_child_exists(n); n = bf_content_next(el, n)) {
         lxb_dom_element_t *box = box_tree_parent(n);
 
@@ -1086,8 +1089,10 @@ static lxb_dom_node_t *bf_block_box_at(lxb_dom_element_t *el, BoxTreeChild at)
            forcing the container "to have only block-level boxes inside it". */
         case BLOCK_FLOW_CHILD_BLOCK:
             return box_tree_child_node(n);
-        case BLOCK_FLOW_CHILD_NO_BOX:
         case BLOCK_FLOW_CHILD_INLINE:
+            if (inline_seen != NULL) *inline_seen = true;
+            break;
+        case BLOCK_FLOW_CHILD_NO_BOX:
         case BLOCK_FLOW_CHILD_FLOAT:
             break;
         /* css-lists-3 §3.5: an outside marker is "placed outside the principal block box", so it is not a box
@@ -1182,6 +1187,13 @@ bool block_flow_run_generates_box(lxb_dom_element_t *el, BlockFlowRun run)
     return false;
 }
 
+static lxb_dom_node_t *bf_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t *after, bool *inline_seen)
+{
+    DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's box list was enumerated with no container");
+    if (after == NULL) return bf_block_box_at(el, box_tree_first_child(el), inline_seen);
+    return bf_block_box_at(el, bf_content_next(el, box_tree_child_of_node(after)), inline_seen);
+}
+
 lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t *after)
 {
     DCHECK(el != NULL, "CSS 2.2 §9.2.1.1's box list was enumerated with no container");
@@ -1189,8 +1201,7 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
        consumer seeds each call with the box the last one returned, so the two answers cannot be the same node
        and the walk cannot revisit a position. A NULL `after` is the start of the content and not "no
        constraint" — the two would differ for a container whose FIRST content position is a block-level box. */
-    if (after == NULL) return bf_block_box_at(el, box_tree_first_child(el));
-    return bf_block_box_at(el, bf_content_next(el, box_tree_child_of_node(after)));
+    return bf_next_block_box(el, after, NULL);
 }
 
 /* §9.4.1's OWN question about the box list, asked ONCE rather than per run: has the box whose position was
@@ -1491,13 +1502,14 @@ static BfBox bf_table_box(lxb_dom_element_t *table)
 }
 
 /* The stack walk's loop state: the enumeration's place (`prev`, `brk`, `at_run`, and `wi` on a wrapper's
-   stack), the running position, the open run, and the run escaping through the top edge. `ifc` is the walk
+   stack), the running position, the open run, and the run escaping through the top edge. `run_inline` is
+   whether the enumeration passed an inline-level box between `prev` and `brk`. `ifc` is the walk
    having taken §9.4.2's branch, and `item` the atomic inline its line boxes' asks reached in the current
    run (line_box_atomics_ask's `from`). */
 typedef struct {
     lxb_dom_node_t *prev, *brk;
     size_t wi, item;
-    bool   ifc, at_run, escaping, placed;
+    bool   ifc, at_run, run_inline, escaping, placed;
     CssPx  pos;
     BfRun  run, esc_run;
 } BfWalk;
@@ -1514,6 +1526,7 @@ static bool bf_walk_stage(size_t body, lxb_dom_element_t *el, const BfWalk *w, c
     c.item = w->item;
     c.ifc = w->ifc;
     c.at_run = w->at_run;
+    c.run_inline = w->run_inline;
     c.escaping = w->escaping;
     c.placed = w->placed;
     c.pos = w->pos;
@@ -1539,6 +1552,7 @@ static bool bf_walk_resume(size_t body, lxb_dom_element_t *el, BfWalk *w, BfBox 
     w->item = c.item;
     w->ifc = c.ifc;
     w->at_run = c.at_run;
+    w->run_inline = c.run_inline;
     w->escaping = c.escaping;
     w->placed = c.placed;
     w->pos = c.pos;
@@ -1616,6 +1630,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     w.item = 0;
     w.ifc = false;
     w.at_run = true;
+    w.run_inline = false;
     w.escaping = esc_top;
     w.placed = false;
     w.pos = css_px(0.0);
@@ -1710,7 +1725,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
        no box for is skipped rather than placed, which is that section's sentence and not an optimisation — an
        empty anonymous box would take a height off the stack and be reported to every consumer of the
        enumeration. */
-    if (!resumed && !wrapper) w.brk = block_flow_next_block_box(el, NULL);
+    if (!resumed && !wrapper) w.brk = bf_next_block_box(el, NULL, &w.run_inline);
     for (;;) {
         lxb_dom_element_t *ce = NULL;
         BlockFlowRun anon_run;
@@ -1738,6 +1753,21 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
                 flow_placement_run_record(el, w.prev != NULL ? lxb_dom_interface_element(w.prev) : NULL, start);
             }
             if (!block_flow_run_generates_box(el, anon_run)) {
+                /* §9.2.1.1 wraps every run of inline-level content in an anonymous block box, and the
+                   enumeration that delimited this run classified each position it passed. */
+#if APICLIENT_DEV
+                {
+                    char pbuf[160], bbuf[160];
+
+                    DCHECKF(!w.run_inline,
+                            "%s: the box-list enumeration passed an inline-level box in the run after %s and "
+                            "before %s, and block_flow_run_generates_box answered that the run generates no "
+                            "anonymous block box; the two classify the same positions with the same per-child "
+                            "predicate", box_subject(el, nbuf, sizeof nbuf),
+                            w.prev != NULL ? box_subject_node(w.prev, pbuf, sizeof pbuf) : "the content's start",
+                            w.brk != NULL ? box_subject_node(w.brk, bbuf, sizeof bbuf) : "the content's end");
+                }
+#endif
                 w.at_run = false;
                 continue;
             }
@@ -1753,7 +1783,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             if (!bf_box(ce, pass, &b))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": a question beneath was deferred */
             w.prev = w.brk;
-            w.brk = block_flow_next_block_box(el, w.prev);
+            w.brk = bf_next_block_box(el, w.prev, &w.run_inline);
             w.at_run = true;
         } else {
             break;

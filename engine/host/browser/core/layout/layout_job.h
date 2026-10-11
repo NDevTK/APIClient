@@ -87,7 +87,7 @@ typedef struct {
 typedef struct {
     lxb_dom_node_t *prev, *brk;
     size_t wi, item;
-    bool   ifc, at_run, escaping, placed, has_line_box;
+    bool   ifc, at_run, run_inline, escaping, placed, has_line_box;
     CssPx  pos, run_pos, run_neg, esc_pos, esc_neg, baseline;
 } LayoutBfCursor;
 
