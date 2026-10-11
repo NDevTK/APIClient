@@ -946,6 +946,8 @@ const SPECS = [
     base: "https://drafts.csswg.org/css-writing-modes-4/", edition: "maintained", anchors: ["css-writing-modes-4"] },
   { key: "csstables3", label: "CSS Table Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-tables-3/", edition: "maintained", anchors: ["css-tables-3"] },
+  { key: "cssui4", label: "CSS Basic User Interface Module Level 4", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-ui-4/", edition: "maintained", anchors: ["css-ui-4"] },
   /* CSS LOGICAL PROPERTIES AND VALUES, AND THE THING THAT MADE IT WORTH A ROW IS THAT ITS SILENCE WAS ALREADY
      BENIGN — which is the state a missing row is LEAST likely to be in, and is why the usual argument for one
      does not fit. A standard with no row is counted and never checked, and CLAUDE.md's own split says whether
