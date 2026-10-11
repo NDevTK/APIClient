@@ -30716,18 +30716,11 @@ static inline bool tramp_body_is_plain(JSValueConst func) {
     if (JS_VALUE_GET_TAG(func) != JS_TAG_OBJECT) return false;
     fp = JS_VALUE_GET_OBJ(func);
     if (fp->class_id != JS_CLASS_BYTECODE_FUNCTION) return false;
-    /* THE CLASS is the object's own statement of how it is entered, and js_closure picks it from func_kind — a
-       coroutine FUNCTION has its own class, so asking func_kind again here answers a question the class already
-       answered. It answered it WRONG for one object: a MODULE's func_obj is created as JS_CLASS_BYTECODE_FUNCTION
-       on purpose (module code is never entered by an ordinary call) while its body is compiled async-kind whether
-       or not it has top-level await. Its two entries are different algorithms and neither is a coroutine create —
-       evaluation goes through js_execute_*_module's async frame without ever asking this, and LINKING runs the
-       hoisted-definition prologue (this === true), which the compiler ends in a PLAIN return. Excluding it here
-       sent that prologue to the generic C-recursive call, which is where the module graph still drove the page's
-       code from C. */
-    DCHECK(fp->u.func.function_bytecode->func_kind == JS_FUNC_NORMAL ||
-           fp->u.func.function_bytecode->func_kind == JS_FUNC_ASYNC,
-           "a JS_CLASS_BYTECODE_FUNCTION carrying a generator body — no route creates its coroutine");
+    /* The class is the object's own statement of how it is entered: js_closure, the class builder and
+       js_create_module_bytecode_function all pick it from func_kind, so the plain class holds a plain body. */
+    DCHECK(fp->u.func.function_bytecode->func_kind == JS_FUNC_NORMAL,
+           "a JS_CLASS_BYTECODE_FUNCTION carrying a coroutine body — every builder takes the class from "
+           "func_kind_to_class_id, so this object was built by one that does not");
     return true;
 }
 /* A bound function's chain, FLATTENED. `f.bind(a, x).bind(b, y)()` calls f with this = the INNERMOST bind's
