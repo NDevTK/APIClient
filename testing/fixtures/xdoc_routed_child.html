@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Routed post: receiver</title>
+<!-- The receiver half of xdoc_routed_post.html, served from the second origin (FIX_PORT=8766). Its handler
+     reads one member of the routed message and sinks it into markup and into a request address, so both
+     securitySinks and fetchCallSites name message.data:<id> at path ".q". -->
+<div id="o"></div>
+<script>
+window.addEventListener("message", (e) => {
+  document.getElementById("o").innerHTML = e.data.q;
+  fetch("/xdoc_routed_sink?q=" + encodeURIComponent(e.data.q));
+});
+</script>

@@ -2532,6 +2532,9 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
     cold: mine.map((r) => ({ lookup: ("coldLookup" in r) ? r.coldLookup : undefined,
                              other: ("coldOther" in r) ? r.coldOther : undefined,
                              bundleId: ("bundleId" in r) ? r.bundleId : undefined })),
+    /* Each row's findings over a routed message, joined to the sender's post by bridge.js (routedPostJoins).
+       `undefined` is a row whose record predates the field, distinct from an empty join. */
+    routedJoins: mine.map((r) => ("routedJoins" in r) ? r.routedJoins : undefined),
     /* A SEPARATE ARRAY AND NOT MORE KEYS ON THE ROW ABOVE, aligned with it index for index. Every member of
        `counters` is a TOTAL over the run; every member of this is a census, and two of its four are gauges. A
        reader compares WITHIN a kind and never across, and one object holding both invites exactly the

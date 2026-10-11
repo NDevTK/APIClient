@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>Routed post: sender</title>
+<!-- The routed-post join (extension/bridge.js routedPostJoins), driven live. This page posts a record built
+     from its own location.hash to a cross-origin child, and the child's handler sinks the member it reads.
+     Serve this directory twice with testing/fixtures_server.cjs, once with FIX_PORT=8765 and once with
+     FIX_PORT=8766, then: node testing/live-run.js 1 http://127.0.0.1:8765/xdoc_routed_post.html
+     Expected on the child's run row, in routedJoins: one record at path ".q" whose source is this page's
+     location.hash, with senderOrigin http://127.0.0.1:8765, relation "child" and targetOrigin
+     http://127.0.0.1:8766. The post waits for the child's load, because before it the frame holds its
+     initial about:blank document and a post naming the child's origin is dropped. -->
+<iframe id="c" src="http://127.0.0.1:8766/xdoc_routed_child.html"></iframe>
+<script>
+document.getElementById("c").addEventListener("load", () => {
+  frames[0].postMessage({ q: location.hash, k: "x" }, "http://127.0.0.1:8766");
+});
+</script>
