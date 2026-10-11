@@ -6,7 +6,8 @@
 //   1. own the offscreen document's lifecycle (create it; wake it on startup),
 //   2. forward browser events the offscreen can't observe (webNavigation +
 //      content-script messages + tab updates) to the brain,
-//   3. perform privileged chrome.tabs.* calls the offscreen can't, as RPC.
+//   3. perform privileged chrome.tabs.* calls the offscreen can't, as RPC, and own the live-verify attacker
+//      tab: it opens ATTACKER_PAGE_URL itself and keeps, in memory only, which tabs it opened for it.
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
 // broadcast reaches the offscreen); the SW stays out of those messages.
 
@@ -74,7 +75,10 @@ function toBrain(m) {
 // message. Navigation/activation/update are NOT forwarded — the brain prioritizes
 // by each document's own CONTENT_SEED arrival, not a tab-level main-frame guess.
 // (webNavigation is still used on demand — getAllFrames via __rpc for GET_FRAMES.)
-chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", tabId: tabId }); });
+chrome.tabs.onRemoved.addListener((tabId) => {
+  _attackerTabs.delete(tabId);
+  toBrain({ __evt: "TAB_REMOVED", tabId: tabId });
+});
 
 // ─── Privileged chrome.* RPC for the offscreen brain ──────────────────────────
 // The brain runs in a document and can't call chrome.tabs.*; it sends a {__rpc} message and the SW performs
@@ -94,6 +98,19 @@ chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", t
 // preferred: the MAIN world evaluates and dispatches a CustomEvent, and content.js's ISOLATED world relays it —
 // the same cross-world transport `__uasr_probe_hit` already uses, which is a `document` event rather than a
 // `window.postMessage` precisely so no page handler sees a `message` event that was not the page's.
+/* The live-verify attacker document's address, which only this worker opens. The payload is evaluated in an
+   ordinary tab of this page rather than served from it, so nothing is hosted and nothing but one GET of a
+   documentation domain's front page leaves the browser. That page sends no CSP, so the MAIN world can
+   evaluate; a page CSP without 'unsafe-eval' would refuse it, and `pocAttackerButton` reports the EvalError.
+   Named residual. Not covered: a `forgeable` principal demand (solve.h's `principalDemand`) states an origin
+   shape a fixed address meets only by coincidence, so `buildLiveDelivery` refuses such deliveries with the
+   shape stated. Next diff builds: a per-session address derived from the session's `principalGates`, plus
+   the person's statement of which origins they control. Absence shows as: a `forgeable` finding answering a
+   `pocWhy` that names a shape, beside `none` findings that arm a Run button. */
+const ATTACKER_PAGE_URL = "https://example.com/";
+/* The tabs `attackerPage.open` opened that are still open: the only tabs `scripting.exec` arms. It is this
+   worker's memory, so an eviction empties it and an injection after one is refused, never widened. */
+const _attackerTabs = new Set();
 const _PROBE_INJECTORS = {
   /* THE ATTACKER DOCUMENT'S RUN BUTTON, IN THE MAIN WORLD OF A REGISTRABLE ORIGIN. The user's click is the
      whole reason a button exists: HTML §7.2.2.1 "Opening and closing windows" step 12 reaches the rules for
@@ -168,7 +185,12 @@ async function _swRpc(msg) {
   const api = msg.api, args = msg.args || [];
   switch (api) {
     case "tabs.sendMessage": return chrome.tabs.sendMessage(...args);
-    case "tabs.create": return chrome.tabs.create(...args);
+    case "attackerPage.open": {
+      const tab = await chrome.tabs.create({ url: ATTACKER_PAGE_URL, active: true });
+      CHECK(!!tab && typeof tab.id === "number", "chrome.tabs.create answered no tab id for the attacker page");
+      _attackerTabs.add(tab.id);
+      return { id: tab.id, status: tab.status, url: ATTACKER_PAGE_URL };
+    }
     case "tabs.query": return chrome.tabs.query(...args);
     case "tabs.get": return chrome.tabs.get(...args);
     case "webNavigation.getAllFrames": return chrome.webNavigation.getAllFrames(...args);
@@ -199,6 +221,9 @@ async function _swRpc(msg) {
       if (!fn) throw new Error("unknown scripting op: " + o.op);
       CHECK(o.allFrames === undefined, "scripting.exec was asked for allFrames — it injects the top frame only, "
                                        + "and the one caller arms the attacker document, which is that frame");
+      CHECK(_attackerTabs.has(o.tabId), "scripting.exec was asked to arm tab " + o.tabId + ", which is not a tab "
+                                        + "attackerPage.open opened and that is still open — the injector runs "
+                                        + "only in the attacker page this worker created");
       const target = { tabId: o.tabId };
       const results = await chrome.scripting.executeScript({ target, world: "MAIN", func: fn, args: o.args || [] });
       return (results || []).map((r) => ({ frameId: r && r.frameId, result: r ? r.result : undefined }));

@@ -16,7 +16,7 @@ either the mechanism or its absence, and an absence is a finding about this file
 | `intercept.js` (`MAIN` world, `document_start`, all frames) | untrusted | runs inside the page and holds nothing the page lacks |
 | `content.js` (isolated world, `document_idle`, all frames, `match_about_blank`, `match_origin_as_fallback`) | untrusted | a compromised renderer controls it; it carries material, never identity |
 | Engine frame (`renderer.html`: QuickJS/WASM with Lexbor) | untrusted | executes the bundle; a sandboxed frame at an opaque origin that reaches the trusted zone only through `content.mojom.Renderer` |
-| Attacker tab (`ATTACKER_PAGE_URL` in `offscreen-brain.js`, used by live verify) | untrusted | a third-party document |
+| Attacker tab (`ATTACKER_PAGE_URL` in `background.js`, used by live verify) | untrusted | a third-party document |
 | Offscreen document (`ast-worker.html`: `offscreen-brain.js`, `bridge.js`, `lib/*`) | trusted | the only zone that holds state, principals and network policy |
 | Service worker (`background.js`) | trusted, stateless | owns the offscreen's lifecycle, forwards `TAB_REMOVED`, and performs privileged `chrome.*` calls for the offscreen only |
 | Popup (`popup.html`, `popup.js`, `lib/popup-*.js`) | trusted | an extension page that renders untrusted data |
@@ -332,7 +332,7 @@ surface that shows them the bytes, and what it owes is a destination this zone c
 | Renderer program assembly (`renderer-host.js`) | a constant list off the extension origin | none | no bundle influences it; a bundle-influenced name would make it analyzer HTTP |
 | The page's own traffic through `intercept.js`'s `fetch`, `XMLHttpRequest`, `WebSocket` and `EventSource` wrappers | the page | the page's | none needed: the wrapper calls the original and confers nothing |
 | Operator writes into a channel the page opened (`WS_SEND_MSG`, `PM_SEND_MSG`, `MC_SEND_MSG`) | the page opened the socket, port or window | the page's | the router's document→document rule; `documentId` routing; a postMessage target must be one real origin (`_isRealTargetOrigin` in `lib/popup-console.js`, DCHECKed in `lib/popup-handlers.js`) |
-| Live-verify attacker tab (`tabs.create` of `ATTACKER_PAGE_URL`) | a constant | the person's profile | one GET of a fixed documentation page |
+| Live-verify attacker tab (`attackerPage.open`: the service worker's `tabs.create` of its own `ATTACKER_PAGE_URL`) | a constant | the person's profile | one GET of a fixed documentation page |
 | Live-verify navigation (`window.open` of the delivery address) | the page the sink was observed on, plus a fragment or query the engine declared | the person's profile | the address (see Live verify); the person's click |
 
 The operator's channel writes are the one send outside `safeFetch`, and the reason is the reply's path: a
@@ -517,11 +517,14 @@ payload's code ran in the delivered document, not that the sink produced the cal
   its query) cleared and the payload appended at the component the engine declared. Every other mechanism
   (`plant`, `referring-address`, `user-file`, `cross-document-message`) answers a stated reason (`pocWhy`)
   instead of a PoC.
-- `EXPLOIT_PROBE_ARM` runs `armAttackerPage`: `tabs.create` of `ATTACKER_PAGE_URL` (`https://example.com/`),
-  a wait for the tab to complete, then `scripting.exec` with the named injector `pocAttackerButton`
-  (`background.js`), which renders a Run button in the attacker document's `MAIN` world. The offscreen selects
-  the injector by name and passes only serializable arguments, so it cannot inject code of its own composing.
-  The person's click is the user activation `window.open` needs.
+- `EXPLOIT_PROBE_ARM` runs `armAttackerPage`: the service worker's `attackerPage.open` opens its own
+  `ATTACKER_PAGE_URL` (`https://example.com/`) and records the tab in `_attackerTabs`; after a wait for the tab
+  to complete, `scripting.exec` with the named injector `pocAttackerButton` (`background.js`) renders a Run
+  button in the attacker document's `MAIN` world. `scripting.exec` `CHECK`s that the tab is one
+  `attackerPage.open` opened and is still open, and injects its top frame only. The offscreen selects the
+  injector by name and passes only serializable arguments, so it cannot inject code of its own composing, nor
+  name the address or the tab it runs in. The record is the worker's memory, so after an eviction an injection
+  is refused rather than allowed. The person's click is the user activation `window.open` needs.
 - The delivery is a real top-level navigation in the person's profile, with cookies, outside `safeFetch`. It is
   inside the model because of the address: scheme, host and path are the ones the person's browser already
   loaded, and the analyzer supplies only a fragment or query. The deny list's harm condition (credentialed and
@@ -599,7 +602,6 @@ Each residual states what is not covered, what would close it, and how its absen
 | Which document asked is the engine's word | the asking document's name is engine-stated, so an engine can name any document of its own instance, and the floor for a request is the most permissive record among that instance's documents rather than their join. Documents of one agent cluster share one heap and call into each other's realms, so which of them made a request is a fact only that heap holds | none in this design; a name outside the instance is refused | a request firing under a record that the document whose code made it does not carry |
 | A document the engine created in its own heap has its nearest provisioned ancestor's record | the zone never sees an in-heap creation's own words (a same-origin frame's sandbox attribute, a forced or driven navigation inside the instance), so such a document's requests are floored by its nearest provisioned ancestor's record and its own marks rest on the engine's per-request words | in-heap creations announced to the zone with their words, recorded as a provisioned document's are | an in-heap document's request firing at a default arm when the navigation that made its document was forced or driven |
 | An auxiliary opened without `noopener` | it shares its opener's group but lands in another tab, so `clusterKeyOf` splits the pair; `MessageSender` carries no opener | a browser-stated opener fact joined to the opener's group | an opener and its popup analysed in two instances |
-| The live-verify injector takes any tab | `scripting.exec` in `background.js` runs `pocAttackerButton`, whose argument is the code its button evaluates, in the top frame of whatever `tabId` the offscreen names. The service worker cannot tell the attacker tab from another, so a hole in the `OFFSCREEN_HREF` gate is click-triggered MAIN-world execution in any tab | the service worker admitting only a tab whose committed URL is the attacker page it was asked to open | a Run button appearing on a page other than `ATTACKER_PAGE_URL` |
 | Dev-build asserts on renderer-supplied input | `renderer-host.js`'s window handshake DCHECKs the frame's record. In dev a compromised renderer can make those handlers throw; in release a malformed reply reaches its consumers unvalidated | refuse a malformed record with the handshake's own error instead of asserting on it | a dev build throwing at those sites for a page's malformed reply |
 | Channels CSP does not govern, after a sandbox escape | an escape into `renderer.html`'s realm has no `chrome.*`, no principal and no `fetch`; whether it can reach the network through a channel CSP does not cover (such as WebRTC) or by navigating its own frame is not measured in this tree. The offscreen's `frame-src 'self'` is the policy that would answer the navigation half | a measured negative in real Chrome with a positive control beside it | traffic from the engine frame's process that no `safeFetch` call accounts for |
 
@@ -635,6 +637,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Another document (other origin, other frame, second document of the target origin) calls `apiclientsink` with a marker it read | mitigated: `_recordProbeHit` records it `attributed: false` with its reason |
 | The delivered page calls `apiclientsink` itself | residual, irreducible by this mechanism |
 | A compromised renderer reaches `chrome.tabs.*` or `chrome.scripting` through the service worker | mitigated: the service worker serves only the extension origin and pins `__rpc` to `OFFSCREEN_HREF` by equality |
+| A hole in that `__rpc` gate arms the live-verify injector in one of the person's tabs | mitigated: `scripting.exec` injects only into a tab `attackerPage.open` opened at the worker's own `ATTACKER_PAGE_URL`, a `CHECK` on the worker's record |
 | A sandboxed extension page impersonates a trusted extension document | mitigated: its origin is `"null"`, which fails every document→document check |
 | The bundle escapes the WASM sandbox into its host realm | out of model; the realm is `renderer.html` at a unique opaque origin with no `chrome.*`, no principal and no `connect-src`, reachable to the trusted zone only through validated `content.mojom.Renderer` records. See the residual on channels CSP does not govern |
 | A second instance is provisioned for an agent cluster that already has one | mitigated: `registerRenderer` refuses it with a `CHECK` in dev and release |

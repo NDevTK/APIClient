@@ -2093,49 +2093,19 @@ function startExploitProbe(msg) {
   return session;
 }
 
-/* THE ATTACKER DOCUMENT'S ADDRESS, AS A POLICY CONSTANT IN THE TRUSTED ZONE AND NOWHERE ELSE.
-   §LIVE-VERIFY needs the PoC to run at an origin a victim's own origin check can be tested against, and the
-   PROJECT OWNER decided which one: `https://example.com`, opened as an ordinary tab in the browser this
-   extension is already running in, with the payload EVALUATED there rather than served from there — so nothing
-   is hosted, no domain is registered and no local server exists to be a second document-load transport.
-   IT IS ONE GET OF A DOCUMENTATION DOMAIN'S FRONT PAGE AND NOTHING ELSE LEAVES THE BROWSER. The payload is
-   injected into the loaded document in this person's own browser; it is never sent anywhere. Measured with
-   `curl -sSI`: that address answers 200 `text/html` with NO `content-security-policy` and no
-   `x-frame-options`, which is why the MAIN world can evaluate at all — the page's CSP governs there, and an
-   attacker origin that shipped `script-src` without `'unsafe-eval'` would refuse the evaluation and say so.
-   NAMED RESIDUAL — A `forgeable` PRINCIPAL DEMAND NEEDS A CHOSEN ORIGIN AND THIS CONSTANT IS NOT ONE.
-     WHAT IS NOT COVERED: solve.h's `principalDemand` of `forgeable` states a SHAPE the victim's own
-   `event.origin` test demands (`endsWith`/`includes`/`startsWith` over a token the page named), and a fixed
-   attacker address satisfies such a shape only by coincidence. Those deliveries are still REFUSED by
-   `buildLiveDelivery` with the shape stated, which is correct and narrower than §Attacker-sources' SOLVING
-   half. What this covers is every delivery whose demand is `none` — any identity satisfies it — and every
-   `address` delivery, whose payload rides the victim's own URL and asks nothing of the attacker's origin.
-     WHAT THE NEXT DIFF BUILDS: this constant becomes a per-session address the offscreen derives from the
-   session's own `principalGates`, plus the person's statement of which origins they control — because an
-   origin that satisfies an `endsWith` shape is one somebody has to own, and picking one here would be §@H's
-   invention of `6` for `x > 5` one source kind over.
-     HOW ITS ABSENCE WOULD SHOW: a `forgeable` finding rendering a `pocWhy` naming a shape, in a panel where
-   every `none` and `address` finding beside it arms a real Run button. */
-const ATTACKER_PAGE_URL = "https://example.com/";
 
-/* OPEN THE ATTACKER TAB AND ARM ITS BUTTON. Two acts through the SW's relay, in this order, because the second
-   one is about a DOCUMENT and the first is what makes that document exist:
-     `tabs.create` — an ordinary navigation the browser performs, focused so the person can reach it. It is
-   `active` on purpose: the click IS the mechanism (HTML §7.2.2.1's window open steps reach the rules for
-   choosing a navigable at step 12, and a popup blocker is that algorithm answering with no navigable, which a
-   real user activation prevents and nothing this extension can fake does).
-     `scripting.exec` with the op `pocAttackerButton` — a NAMED injector the service worker holds. The offscreen
-   selects it by name and passes only serializable arguments, so this zone cannot inject code of its own
-   composing even though it is the only zone allowed to ask. That gate is background.js's and it is why the
-   whole delivery routes through here rather than through the popup.
-   THE LOAD IS WAITED FOR AND THE WAIT IS BOUNDED BY A STATED NUMBER OF ASKS, which is a UI round trip and not
-   the frontier: injecting into a tab still at `about:blank` would arm the button at the WRONG ORIGIN, which is
-   the one thing this whole change exists to fix. A tab that never completes is REPORTED rather than waited on
-   for ever, because an unbounded wait here is a popup that never answers.
-   NOTHING IS ASSERTED ABOUT WHAT THE INJECTOR RETURNS. It ran in a third-party document's MAIN world, so its
-   answer is page-reachable; the browser-stated half arrives later on the POC_RAN relay's own `_facts`. */
+/* Open the attacker tab and arm its button, two acts through the service worker's relay:
+   - `attackerPage.open`: the worker opens its own ATTACKER_PAGE_URL in a new, active tab and records it as the
+     one tab `scripting.exec` may arm. It is active because the person's click is the user activation HTML
+     §7.2.2.1's window open steps need to reach a navigable past a popup blocker.
+   - `scripting.exec` with op `pocAttackerButton`: a named injector the worker holds, given only serializable
+     arguments, so this zone cannot inject code of its own composing.
+   The load is waited for, by a stated number of asks (a UI round trip, not the frontier), because injecting
+   into a tab still at `about:blank` would arm the button at the wrong origin; a tab that never completes is
+   reported. Nothing is asserted about what the injector returns: it ran in a third-party MAIN world, and the
+   browser-stated half arrives later on the POC_RAN relay's own `_facts`. */
 async function armAttackerPage(ses) {
-  const tab = await swRpc("tabs.create", { url: ATTACKER_PAGE_URL, active: true });
+  const tab = await swRpc("attackerPage.open");
   const tabId = tab && tab.id;
   if (typeof tabId !== "number") {
     return { error: "the browser created no tab for the attacker page, so there is no document to arm" };
@@ -2155,7 +2125,7 @@ async function armAttackerPage(ses) {
   const results = await swRpc("scripting.exec", { op: "pocAttackerButton", tabId: tabId,
                                                   args: [ses.pocJs, ses.marker] });
   const top = (results || []).find(function (r) { return r && r.frameId === 0; }) || (results || [])[0];
-  return { success: true, attackerTabId: tabId, attackerPageUrl: ATTACKER_PAGE_URL,
+  return { success: true, attackerTabId: tabId, attackerPageUrl: tab.url,
            injected: !!(top && top.result && top.result.armed),
            pageClaimedOrigin: (top && top.result && top.result.attackerOrigin) || null };
 }
