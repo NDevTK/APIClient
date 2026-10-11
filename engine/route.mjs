@@ -935,9 +935,24 @@ if (!ends._routedTasksFired)
        'event at the receiving Window — §9.3.3 step 8.7 is the only end at which a page learns anything. The ends ' +
        `they did reach: declined by targetOrigin ${ends._routedTasksTargetOrigin}, target destroyed ` +
        `${ends._routedTasksTargetGone}, threw ${ends._routedTasksThrew}`);
-if (!got.length)
+/* No `/got` has two readings. The listener never ran, or it ran and composed an address the engine could not
+   ground, which it declines before any host sees it (pending_park_request's unaddressed refusal). The peer's
+   call-site table separates them: a `/got` site rooted in a routed delivery's `message.` sources is the second. */
+if (!got.length) {
+  const peer = JSON.parse(engines[1].str('qjs_result'));
+  if (!Array.isArray(peer.fetchCallSites) || typeof peer._cold.replyUnaddressed !== 'number')
+    fail(`[${engines[1].tag}] the result document carries no \`fetchCallSites\` list or no ` +
+         '`_cold.replyUnaddressed` — solver/result.c emits both, so an absent one is a producer that moved');
+  const sites = peer.fetchCallSites.filter((s) => s.url.includes('/got') && s.addressRoot !== null &&
+                                                  s.addressRoot.includes('message.'));
+  const classes = [...new Set(sites.map((s) => s.addressClass))].join('/');
+  if (sites.length)
+    fail(`the receiving page's \`message\` listener ran and composed its /got request at ${sites.length} ` +
+         `call site(s) rooted in a delivery's sources, address classes ${classes}, and none reached a host: ` +
+         `the peer declined ${peer._cold.replyUnaddressed} request(s) unaddressed. First: ${sites[0].url}`);
   fail('the receiving page never issued the request its `message` listener is written to issue, so the event ' +
        'fired at a Window whose listener is not the one the document registered');
+}
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
                   'and never used');
 /* A zero here would mean `w.length` resolved without reaching the peer: HTML §7.2.2.2 Indexed access on the
