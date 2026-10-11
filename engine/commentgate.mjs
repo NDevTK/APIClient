@@ -7,7 +7,8 @@
  *
  *   node engine/commentgate.mjs [--base <rev>] [--head <rev>]
  *
- * Defaults: base origin/main, head the working tree. Exit 0 pass, 1 refused, 2 usage or git failure.
+ * Defaults: base origin/main, head the working tree. The diff is taken from the merge base of the two.
+ * Exit 0 pass, 1 refused, 2 usage or git failure.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
@@ -34,7 +35,10 @@ for (let i = 0; i < argv.length; i++) {
 }
 const base = opt("--base") || "origin/main";
 const head = opt("--head");
-const range = head ? [base, head] : [base];
+/* The diff starts at the merge base, so it holds only what the head's own side added: against a base that is
+   not an ancestor (a lane behind main), a two-dot diff reads the base's newer blocks as the head growing them. */
+const forkPoint = git(["merge-base", base, head || "HEAD"]).trim();
+const range = head ? [forkPoint, head] : [forkPoint];
 
 /* C/C++ comments, skipping string and character literals. Consecutive `//` lines form one block. */
 function cComments(src) {
@@ -138,7 +142,7 @@ for (const f of files) {
   }
 }
 
-const what = head ? `${base}..${head}` : `${base}..working tree`;
+const what = head ? `${base}...${head}` : `${base}...working tree`;
 console.log(`[commentgate] ${what}: ${files.length} changed source file(s), ${judged} judged`);
 if (unparsed.length) {
   console.log(`[commentgate] REFUSED — could not parse ${unparsed.length} JS file(s), so their comments were not judged: ${unparsed.join(", ")}`);
