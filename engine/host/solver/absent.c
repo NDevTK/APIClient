@@ -201,11 +201,13 @@
 #include "solver/concolic.h"
 #include "browser/i18n_names.h"
 #include "browser/language_names.h"
+#include "browser/obsolete_names.h"
 #include "browser/platform_names.h"
 
 #define PLATFORM_NAMES_N ((int)(sizeof(PLATFORM_NAMES) / sizeof(PLATFORM_NAMES[0])))
 #define LANGUAGE_NAMES_N ((int)(sizeof(LANGUAGE_NAMES) / sizeof(LANGUAGE_NAMES[0])))
 #define I18N_NAMES_N ((int)(sizeof(I18N_NAMES) / sizeof(I18N_NAMES[0])))
+#define OBSOLETE_NAMES_N ((int)(sizeof(OBSOLETE_NAMES) / sizeof(OBSOLETE_NAMES[0])))
 
 /* MEMBERSHIP IN ONE OF THE GENERATED VOCABULARIES — ONE LOOKUP FOR ALL THREE, because three vocabularies
    asking one question through three copies of a binary search is three right answers to one question, which
@@ -265,7 +267,7 @@ static const char *names_find(const char *const *tbl, int n, const char *name, c
 }
 
 /* One flag per table; the host is one agent per instance and nothing here is entered from a second thread. */
-static int g_platform_sorted, g_language_sorted, g_i18n_sorted;
+static int g_platform_sorted, g_language_sorted, g_i18n_sorted, g_obsolete_sorted;
 
 #if APICLIENT_DEV
 /* THE THREE VOCABULARIES ARE DISJOINT, AND UNTIL THIS RAN THAT WAS TRUE ONLY BY CONVENTION. The lookup below
@@ -299,6 +301,20 @@ static void vocab_assert_disjoint(void)
         DCHECKF(dl == NULL, "\"%s\" is in BOTH browser/i18n_names.h and browser/language_names.h — ECMA-402 "
                             "putting a name ECMAScript §19 already names would mean this engine owes it under "
                             "two standards, which is a fact to read rather than to search past", I18N_NAMES[i]);
+    }
+    /* A removed name no live table holds: engine/obsoletegen.mjs subtracts the three, so an overlap here is a
+       live table regenerated after browser/obsolete_names.h — rerun that generator. */
+    for (i = 0; i < OBSOLETE_NAMES_N; i++) {
+        const char *dp = names_find(PLATFORM_NAMES, PLATFORM_NAMES_N, OBSOLETE_NAMES[i],
+                                    "Web IDL [Exposed=Window]", &g_platform_sorted);
+        const char *dl = names_find(LANGUAGE_NAMES, LANGUAGE_NAMES_N, OBSOLETE_NAMES[i],
+                                    "ECMAScript §19 global-object", &g_language_sorted);
+        const char *di = names_find(I18N_NAMES, I18N_NAMES_N, OBSOLETE_NAMES[i],
+                                    "ECMA-402 §8 The Intl Object", &g_i18n_sorted);
+
+        DCHECKF(dp == NULL && dl == NULL && di == NULL,
+                "\"%s\" is in browser/obsolete_names.h and in a live vocabulary — a standard still defines it, "
+                "so it is not removed from the platform; rerun engine/obsoletegen.mjs", OBSOLETE_NAMES[i]);
     }
 }
 #endif
@@ -382,13 +398,15 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  *
  * THE DENOMINATOR IS EMITTED BESIDE THE ROWS, because a count of unanswered names states nothing on its own:
  * seven is a different fact out of ten global misses than out of ten thousand. The reads this file was told
- * about with the GLOBAL as base partition into exactly three, and all three are emitted:
+ * about with the GLOBAL as base partition into exactly four, and all four are emitted:
  *   owed        — a standard owns the name and this realm has none: the rows below, summed.
+ *   removed     — a standard removed the name (browser/obsolete_names.h); absent, and nothing is owed.
  *   index       — an integer key on the global, refused by the arm that cites HTML §7.2.2.2 Indexed access on
  *                 the Window object.
  *   app state   — everything else: no vocabulary claimed the name.
- * `owed + index + appState == globalReads` is asserted in the composer, where all four are in one hand.
- * THE THIRD ARM IS NAMED FOR THE DECISION AND NOT FOR THE MINT, which it used to be and which stopped being
+ * `owed + removed + index + appState == globalReads` is asserted in the composer, where all five are in one
+ * hand.
+ * THE APP-STATE ARM IS NAMED FOR THE DECISION AND NOT FOR THE MINT, which it used to be and which stopped being
  * true the day a second entry reached this partition, and is MORE true with every entry since: a read that
  * performs no [[Get]] is classified by these same three arms and mints nothing, so a counter called "mints"
  * would have been a verb its own accessor no longer performs (CLAUDE.md §READ-THE-ACCESSOR). What a reader
@@ -582,9 +600,11 @@ typedef enum { ABSENT_ENTRY_READ, ABSENT_ENTRY_TYPEOF, ABSENT_ENTRY_IN, ABSENT_E
 typedef struct { const char *name; long reads; long by_entry[ABSENT_ENTRY_N]; AbsentVocab vocab; } OwedRow;
 static OwedRow *g_owed;
 static int g_owed_n, g_owed_cap;
-/* THE THREE ARMS OF THE GLOBAL MISS, EACH RAISED AT THE SITE THAT DECIDES IT — never one counter incremented
+/* THE ARMS OF THE GLOBAL MISS, EACH RAISED AT THE SITE THAT DECIDES IT — never one counter incremented
    in three places, because the whole value of the partition is that a reader can see WHICH arm moved. */
 static long g_owed_reads, g_index_refused, g_appstate_reads;
+/* AND THE FOURTH ARM: a name a standard removed (browser/obsolete_names.h), left absent as a browser leaves it. */
+static long g_removed_reads;
 /* AND THE POPULATION THEY PARTITION, RAISED SEPARATELY AT THE TOP OF THAT ARM. It is not the sum of the three
    — see the raise for why deriving it would make the composer's identity a restatement instead of a check. */
 static long g_global_reads;
@@ -705,7 +725,8 @@ static void owed_note(const char *name, AbsentVocab vocab, AbsentEntry entry)
    and that difference is not cosmetic — js_absent_ask FILTERS, the typeof arm has the identifier grammar and
    ASSERTS, and every OTHER no-[[Get]] arm FILTERS because its key is the page's own ToPropertyKey result.
    One rule, three reasons; a reader who takes the reason for the rule will put an assert on a page's bytes.
-   Returns 1 when the read is LEFT ALONE — a standard owes the name, or it is an integer key on the global —
+   Returns 1 when the read is LEFT ALONE — a standard owes the name, a standard removed it, or it is an
+   integer key on the global —
    and 0 when no vocabulary claimed it, which is the arm the read hook mints an unknown on and the two
    operator entries simply record. `key` is the atom already spelled by ns_key_str.
    `entry` IS WHICH OF THE THREE ASKED AND IS THE CALLER'S TO STATE, for the reason the engine's own operator
@@ -750,6 +771,13 @@ static int global_miss_note(const char *key, JSAtom name, AbsentEntry entry)
            something about a run: the names THIS DOCUMENT asked a standard for that this realm did not
            answer. See the census banner above owed_note for the population and the denominator. */
         owed_note(owed, vocab, entry);
+        return 1;
+    }
+    /* A NAME A STANDARD REMOVED is neither owed nor app state: every browser answers it absent, so the read is
+       left alone and nothing is owed for it. The tables are disjoint (vocab_assert_disjoint), so asking after
+       the live ones decides nothing by order. */
+    if (names_find(OBSOLETE_NAMES, OBSOLETE_NAMES_N, key, "removed-interface", &g_obsolete_sorted)) {
+        g_removed_reads++;
         return 1;
     }
     /* AND AN INDEX IS NOT A FIELD OF A RECORD AT ALL, WHICH IS A QUESTION ABOUT THE KEY SPACE AND NOT
@@ -846,6 +874,7 @@ char *absent_json(void)
        and for the same reason. */
     static const char KEY_READS[] = "_reads of the global object this file was asked about";
     static const char KEY_OWED[]  = "_of those, reads of a name below — a standard owns it and this realm has none";
+    static const char KEY_REMOVED[] = "_of those, a name a standard removed — absent, as in a browser";
     static const char KEY_INDEX[] = "_of those, refused as an integer key on the global";
     static const char KEY_APP[]   = "_of those, no standard owns the name — server-injected app state";
     /* THE FIRST OF THE CUTS OF THE SAME DENOMINATOR, NONE OF WHICH IS ONE OF THE ARMS ABOVE — see
@@ -955,10 +984,10 @@ char *absent_json(void)
            "that leaks hands back a fraction of a denominator that is not the number of reads. Every raise of "
            "the total is owed_note's and owed_note raises exactly one row with it, so a mismatch is a row "
            "dropped by the grow path or a total raised by a second writer");
-    DCHECK(g_owed_reads + g_index_refused + g_appstate_reads == g_global_reads,
-           "the three arms of the global miss do not sum to the reads this hook was asked about — the "
+    DCHECK(g_owed_reads + g_removed_reads + g_index_refused + g_appstate_reads == g_global_reads,
+           "the four arms of the global miss do not sum to the reads this hook was asked about — the "
            "denominator is raised ONCE at the top of that arm and each arm raises its own counter, so this "
-           "fires exactly when a fourth way out of the block was added without classifying its read. Every "
+           "fires exactly when a fifth way out of the block was added without classifying its read. Every "
            "number in this census is a fraction of that denominator, so an unclassified arm does not make one "
            "row wrong, it makes the whole object a partition of a population it no longer covers");
     /* AND THE SECOND CUT IS CONTAINED IN THE POPULATION IT IS A CUT OF, which is the one property of a share
@@ -1041,6 +1070,7 @@ char *absent_json(void)
     for (pass = 0; pass < 2; pass++) {
         len = absent_emitf(out, cap, 0, "{\"%s\":%ld", KEY_READS, g_global_reads);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_OWED, g_owed_reads);
+        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_REMOVED, g_removed_reads);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_INDEX, g_index_refused);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_APP, g_appstate_reads);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_TYPEOF, g_unresolved_reads);
@@ -1152,7 +1182,7 @@ void absent_free(void)
     free(g_owed);
     g_owed = NULL;
     g_owed_n = g_owed_cap = 0;
-    g_owed_reads = g_index_refused = g_appstate_reads = g_global_reads = 0;
+    g_owed_reads = g_removed_reads = g_index_refused = g_appstate_reads = g_global_reads = 0;
     /* EVERY CUT, AND A FORGOTTEN ONE IS LOUD RATHER THAN SILENT — which is why this stays a written list and
        is not a hazard to record. The denominator above is zeroed here; a cut that was not would exceed it on
        the very first census of the NEXT agent, and the composer's per-cut containment DCHECKF fires with both
