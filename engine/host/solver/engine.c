@@ -1,57 +1,52 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
-#include "core/mime/mime_type.h"   /* §4.4 "Is a JavaScript MIME type": what makes a reply a PROGRAM
-                                       rather than a Response, asked at the fetch delivery below */
+#include "core/mime/mime_type.h"   /* §4.4 "Is a JavaScript MIME type": what makes a reply a program rather
+                                       than a Response, asked at the fetch delivery below */
 #include "core/fetch/scheme_fetch.h"   /* Fetch §4.3 Scheme fetch: who answers a park's address — this agent
                                           or the host — asked once, at the one place a park takes one */
 #include "solver/engine.h"
-#include "quickjs-step.h"   /* a host answer is TAKEN by a step machine, and a throw ends it JS_STEP_ABRUPT */
-#include "core/html/unhandled_rejection.h"   /* HTML §8.1.4.7 Unhandled promise rejections: what the browser
-                                                half owes this checkpoint — "notify about rejected promises"
-                                                runs at every microtask checkpoint. (This comment sat on the
-                                                idl_args.h line below, and read §8.1.7.5, which is "Dealing
-                                                with the event loop from other specifications".) */
+#include "quickjs-step.h"   /* a host answer is taken by a step machine, and a throw ends it JS_STEP_ABRUPT */
+#include "core/html/unhandled_rejection.h"   /* HTML §8.1.4.7 Unhandled promise rejections: "notify about
+                                                rejected promises" runs at every microtask checkpoint */
 #include "core/events/report_exception.h"   /* HTML §8.1.4.4 step 8: what a classic script's abrupt completion
                                                owes the page, as the frame the scheduler runs it as */
 #include "core/html/close_request.h"   /* HTML §6.10.1 Close requests: the global task its preamble queues,
-                                          as the frame a MODELLED potential close request runs as */
+                                          as the frame a modelled potential close request runs as */
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/flow.h"
-#include "solver/dyn_body.h"  /* a queued program's SOURCE TEXT — one buffer, every timeline that holds it */
+#include "solver/dyn_body.h"  /* a queued program's source text — one buffer, every timeline that holds it */
 #include "solver/decide.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "solver/value_dump.h"   /* a host instrument's completion value, dumped with its examples resolved */
-#include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
+#include "core/dom/document.h"   /* which document a parked program belongs to: the realm it is compiled in */
 #include "core/dom/document_current_script.h"   /* §4.12.1.1's bracket around the classic arm of a row */
-#include "core/dom/node.h"       /* the ELEMENT a row is the program of, crossing a park as its wrapper */
-#include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src` against §8.1.3.2's API base URL (§4.4
-                                        stood here and is "Grouping content") — the ONE
-                                        statement of it, and the only thing this file needed core/url/url.h for */
+#include "core/dom/node.h"       /* the element a row is the program of, crossing a park as its wrapper */
+#include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src` against §8.1.3.2's API base URL */
 #include "core/html/cors_settings_attribute.h"   /* HTML §2.5.4: the CORS settings attribute credentials
                                                    mode an element's `crossorigin` state names, which is what a
                                                    §4.12.1.1 park states as its request's credentials mode */
-#include "core/html/nonce_attribute.h"   /* §4.12.1.1 reads el's [[CryptographicNonce]] SLOT, not its attribute */
+#include "core/html/nonce_attribute.h"   /* §4.12.1.1 reads el's [[CryptographicNonce]] slot, not its attribute */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
-#include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
+#include "core/frame/remote_op.h"        /* the receiving half of a cross-agent operation: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
 #include "core/frame/navigable.h"   /* HTML §7.3.1 Navigables: tree order over this agent's navigables */
-#include "core/frame/window_proxy.h" /* which realm of this agent a DOCUMENT NAME is, in the asking timeline */
+#include "core/frame/window_proxy.h" /* which realm of this agent a document name is, in the asking timeline */
 #include "core/frame/document_lifecycle.h"   /* HTML §7.4.6.1: what a navigation does to the Document it replaces */
 #include "core/timing/event_loop.h"   /* HTML §8.1.7.3 Processing model: the clock's second mover — the work the
                                          running flow retired, which the interpreter reports and this file relays */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
-#include "solver/cold.h"      /* the park and the resume themselves; their CENSUS is composed in result.c */
-#include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
+#include "solver/cold.h"      /* the park and the resume themselves; their census is composed in result.c */
+#include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what this host can measure */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
-#include "solver/reply_decode.h" /* …and what the reply BODY itself teaches — see engine_provide */
-#include "solver/pending_index.h" /* WHICH records a reply answers, without walking the frontier to find out */
+#include "solver/reply_decode.h" /* …and what the reply body itself teaches — see engine_provide */
+#include "solver/pending_index.h" /* which records a reply answers, without walking the frontier to find out */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
-#include "solver/attr_shadow.h" /* …and the taint shadow, whose entries ARE GC objects and are leaked by two hosts */
+#include "solver/attr_shadow.h" /* …and the taint shadow, whose entries are GC objects and are leaked by two hosts */
 #include "solver/metrics.h"     /* the agent's metrics block, released with the agent */
 #include "check.h"
 #include <time.h>
@@ -60,16 +55,13 @@
 #include <stdio.h>
 #include <string.h>
 
-/* THE DOM IDENTITY MAP'S SIZE, for the diagnostic line below — REGISTERED rather than reached for. Including
-   the DOM's header here made the SOLVER depend on lexbor for one statistic, and through that on every host
-   that links the scheduler: the streams gate could not build a real AbortSignal because the chain from it
-   reached this line. A host with no document registers none and the diagnostic reports zero, which is what a
-   run with no wrapped nodes should say. */
+/* The DOM identity map's size, for the diagnostic line below. The DOM layer registers it, so the solver does not
+   depend on lexbor (and through it every host that links the scheduler) for one statistic. A host with no
+   document registers none and the diagnostic reports zero. */
 static void (*g_wrap_stats)(long *n, long *cap);
 
-/* ONE CLAIMANT, AND NULL GIVES IT BACK. The slot is the frontier's and the answer is the DOM's, so the DOM
-   layer releases it at its own release — which the whole platform runs before solver_agent_free — and the
-   assert down there is what makes that ordering a checked fact rather than a remembered one. */
+/* One claimant; NULL gives the slot back. The DOM layer releases it at its own release, which the platform runs
+   before solver_agent_free, and the assert makes that ordering checked. */
 void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
 {
     DCHECK(fn == NULL || g_wrap_stats == NULL,
@@ -79,65 +71,25 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
 }
 
 
-/* WHAT A PARK'S ADDRESS IS, WRITTEN ONTO THE RECORD IN ONE PLACE — AND FETCH §4.3 Scheme fetch ASKED ON THE
- * WAY IN.
- *
- * WHY THE TWO ARE ONE FUNCTION. §4.3 switches on "request's current URL's scheme" and answers `about`, `blob`
- * and `data` INSIDE this agent — Fetch §2.1 URL's "A local scheme is `about`, `blob`, or `data`" — while only
- * its "HTTP(S) scheme" row reaches HTTP fetch. The register this writes into is read by ONE party that can act
- * on an address, and that party is the trusted zone, which fetches nothing but an HTTP(S) scheme. So an address
- * and the question "who answers it" are not two facts a park states in two places: writing the first without
- * asking the second is what parks a flow on an answer that can only ever be a refusal, and the page then sees a
- * load failure for bytes that were already in this address space.
- *
- * WHAT THAT COST, AND WHY IT IS ONE DOOR AND NOT ONE PER ENTRY. Several entries reach this register with an
- * address — a `fetch()`/`fetch_owe` request, a document's own external `<script src>`, an injected or `as soon
- * as possible` one, a dynamic `import()`, and a browser algorithm's own subresource (`engine_pending_resource_
- * url`) — and §4.3 was asked at ONE of them, because that one has a `deliver` closure to run the answer's
- * processResponse steps through and the rest had none. The count is deliberately not written down: an entry
- * added later is what this paragraph exists to be true of, and a number is what stops being true when one is. A question some entries ask
- * and others do not is one missing capability wearing two names: `<script src="data:text/javascript,…">` and
- * `import("data:text/javascript,…")` were not requests that failed, they were entries that never ran §4.3 at
- * all. The three doors without a closure do not need one — §4.3's answer IS the reply record their delivery
- * already reads off this register (flow_deliver_one_reply), so the answer is placed ON THE ENTRY, `haveValue`
- * and all, exactly as engine_provide places the host's, and the same delivery runs for both.
- *
- * THE SWITCH IS NOT RESTATED HERE. This runs core/fetch/scheme_fetch.h's own algorithm over the request, so an
- * arm added there is answered at every park at the same instant, and this file holds no opinion about schemes.
- * §4.3's network error crosses as JS_NULL, which is what core/fetch/fetch.h documents a network error as and
- * what every delivery on this register already reads: a script that did not load runs nothing.
- *
- * AND THE FIELDS STILL GO ON THE RECORD FIRST, LOCAL ANSWER OR NOT. Fetch §2.2.5 Requests' DESTINATION and the
- * park's provenance belong to the REQUEST rather than to its transport — a `data:` URL script IS a code load —
- * so the record states them whether or not anything outside this agent will ever read them, and a record whose
- * fields depended on who answered it would be two shapes wearing one name. */
-/* §3.1.7's answer for the row this flow is EXECUTING — defined with the other cursor accessors far below and
-   declared here because §8.1.6.7.3's descendant script fetch options need it at the module park. */
+/* §3.1.7's answer for the row this flow is executing; defined with the other cursor accessors below and declared
+   here because §8.1.6.7.3's descendant script fetch options need it at the module park. */
 static lxb_dom_element_t *flow_dyn_el(const Flow *f);
 
-/* HTML §4.12.1.1 "Processing model"'S THREE METADATA MEMBERS FOR A `script` ELEMENT, borrowed from the
- * element and released by the caller — the ONE place this engine reads them, because all three script-owed
- * parks want the same three facts about the same kind of element.
+/* HTML §4.12.1.1 Processing model: the three metadata members a `script` element's request carries, borrowed
+ * from the element and released by the caller with script_csp_meta_free. All three script parks read them here.
  *
- * §4.12.1.1's `prepare the script element` states all three, in its own words: "Let cryptographic nonce be
- * el's [[CryptographicNonce]] internal slot's value"; "If el has an integrity attribute, then let integrity
- * metadata be that attribute's value" / "Otherwise, let integrity metadata be the empty string"; and "Let
- * parser metadata be "parser-inserted" if el is parser-inserted, and "not-parser-inserted" otherwise". So a
- * `<script>` is a STATING producer and never csp_request_metadata_unstated's — which matters at the one shape
- * modern CSP is actually written in: `<script nonce=x>` under `script-src 'nonce-x'` must not report blocked.
+ * "Let cryptographic nonce be el's [[CryptographicNonce]] internal slot's value"; integrity metadata is the
+ * `integrity` attribute's value or the empty string; parser metadata is "parser-inserted" if el is
+ * parser-inserted and "not-parser-inserted" otherwise. A `<script>` therefore states its metadata (it is never
+ * csp_request_metadata_unstated's), so `<script nonce=x>` under `script-src 'nonce-x'` is not blocked.
+ * The nonce is the slot, not the attribute: HTML §2.5.6 Nonce attributes blanks the attribute after hiding while
+ * the slot keeps the value (core/html/html_link.c reads it the same way).
  *
- * THE NONCE IS THE SLOT AND NOT THE ATTRIBUTE, for core/html/html_link.c's reason exactly: HTML §2.5.6 "Nonce
- * attributes" makes the two diverge on purpose — after its hiding step the attribute is blank while the slot
- * holds the nonce — so reading the attribute would hand CSP bytes the element no longer has, and under
- * `script-src 'nonce-…'` that is the difference between a script the policy admits and one it refuses.
- *
- * NO ELEMENT IS A STATED ANSWER AND NOT A HOLE. A dynamic `import()` has no element; its request's options are
- * §8.1.6.7.3's "descendant script fetch options given originalFetchOptions, url, and settingsObject", whose
- * step 1 COPIES the referrer's options — so the nonce is the IMPORTING script's, which is this flow's
- * executing row's element, and NULL there is a program no `<script>` produced (a lazy chunk, a `javascript:`
- * URL, an @S candidate) whose options carry the empty string. Its integrity is that algorithm's step 2,
- * "resolving a module integrity metadata with url and settingsObject", which with no import map in this
- * engine is the empty string. */
+ * A NULL element is a stated answer. A dynamic `import()` takes §8.1.6.7.3's descendant script fetch options,
+ * whose step 1 copies the referrer's options, so the nonce is the importing row's element's; NULL there is a
+ * program no `<script>` produced (a lazy chunk, a `javascript:` URL, an @S candidate), whose options carry the
+ * empty string. Its integrity (step 2, resolving a module integrity metadata) is the empty string because this
+ * engine has no import map. */
 typedef struct {
     CspRequestMetadata m;
     JSValue            nonce_slot;   /* owned by the holder */
@@ -149,51 +101,40 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
     ScriptCspMeta h;
     size_t integrity_n = 0;
     const lxb_char_t *integrity = NULL;
-    /* UNPLACED until the switch below states one — the sentinel core/frame/policy_container.h keeps for
-       exactly this, so an enumerator nobody mapped is an abort rather than whichever value zero means. */
+    /* Unplaced until the switch below states one (core/frame/policy_container.h's sentinel), so an enumerator
+       nobody mapped aborts rather than taking whatever zero means. */
     CspParserMetadata parser = CSP_PARSER_METADATA_UNPLACED;
 
     h.nonce_slot = JS_UNDEFINED;
     h.nonce = NULL;
-    /* THE ELEMENT ARRIVES OVER A SEAM, SO ITS TYPE IS ASSERTED WHERE IT ARRIVES AND NOT ONLY WHERE IT IS READ.
-       This record is composed for a queued script row, and the three parks named below reach it from three
-       different places; what every one of them hands over is supposed to be an ELEMENT of a live tree. A
-       dangling or foreign pointer here is not caught by `if (el)` — it is non-NULL — and it reaches
-       core/html/nonce_attribute.c's slot read, where it was MEASURED killing the renderer with an
-       out-of-bounds length on 4 of 9 app.gitpod.io drives of two release artifacts. The assert at that site
-       says WHICH operand is wrong; this one says the seam handed over something that is not an element at
-       all, which is a different repair in a different file. */
+    /* The element arrives over a seam from three parks, so its type is asserted here as well as at the read:
+       a dangling or foreign pointer is non-NULL, passes `if (el)`, and would reach
+       core/html/nonce_attribute.c's slot read. That read's own assert names the bad operand; this one says the
+       seam handed over something that is not an element at all, which is a repair in a different file. */
     DCHECK(el == NULL || lxb_dom_interface_node(el)->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "§4.12.1.1's script metadata was composed for a node that is not an ELEMENT — every park that "
            "reaches this line holds an element of a live tree, so another node type means the pointer this "
            "seam carried names freed or foreign memory and the nonce read below walks it");
     if (el) {
         h.nonce_slot = nonce_attribute_current(ctx, el);
-        /* AN UNKNOWN NONCE IS AN UNDECIDED PREDICATE AND HAS NO ANSWER HERE — core/html/html_link.c states the
-           whole argument at its own read and this is the same one: §2.5.6's slot holds a JS value so that
+        /* An unknown nonce is an undecided predicate: §2.5.6's slot holds a JS value so that
            `s.nonce = location.hash.slice(1)` survives as a source, and CSP §6.7.2.3 step 3.1 asks whether it is
-           IDENTICAL to a policy's base64-value, which an unconstrained domain answers neither way. The arm must
-           FORK; a coerced example reports one world's verdict as though it were both. */
+           identical to a policy's base64-value, which an unconstrained domain answers neither way. The arm must
+           fork; a coerced example would report one world's verdict as both (core/html/html_link.c, same read). */
         DCHECK(!concolic_is(h.nonce_slot),
                "a `script` element's [[CryptographicNonce]] is an unknown external value, and CSP §6.7.2.3 "
                "step 3.1 compares it against this policy's nonce-source expressions for identity — which an "
                "unconstrained domain does not answer. Fork the request here into the matching and "
                "non-matching arms and let each carry the narrowed domain, the way an opaque operand forks "
                "every other predicate; a coerced example reports ONE arm's verdict as though it were both");
-        /* THE SLOT READ CAN NOW REFUSE, AND A REFUSAL IS NOT OOM — two states behind one answer, separated
-           here because the composed one names the wrong subsystem. §2.5.6's read builds a JS string out of a
-           `nonce` attribute's bytes, and engine/qjs/quickjs.c's string constructor now BOUNDS the length it was
-           handed before it reads through the pointer: an oversized one is refused with a RangeError instead of
-           walking the heap, which is the repair for the measured out-of-bounds kill. That refusal arrives HERE
-           as an exception in the slot, and `JS_ToCString` of an exception is NULL — the same NULL an allocation
-           failure produces. Reporting it as OOM is the plausible-wrong-diagnosis this file rates below silence:
-           it names memory for a defect that is a corrupt length, in a subsystem that is working. */
+        /* The slot read can refuse, and a refusal is not OOM. engine/qjs/quickjs.c's string constructor bounds
+           the length it is handed and throws a RangeError for an oversized one; that arrives here as an
+           exception in the slot, and `JS_ToCString` of an exception is NULL, the same NULL an allocation failure
+           gives. The two are separated so the message names a corrupt length rather than memory. */
         if (JS_IsException(h.nonce_slot)) {
-            /* IT IS STILL FATAL, AND THAT IS CORRECT RATHER THAN A CONCESSION. A length this codebase computed
-               came back larger than any JS string can hold, so a dev build has already aborted inside the
-               string constructor with the caller's own stack above it; in release there is no narrower answer
-               this record can carry, because §4.12.1.1's metadata is what the request is graded on and a
-               request composed from a nonce nobody could read would report a load a browser refuses. */
+            /* Fatal by design: a dev build has already aborted inside the string constructor with the caller's
+               stack above it, and in release no narrower record exists, since §4.12.1.1's metadata grades the
+               request and a nonce nobody could read would report a load a browser refuses. */
             CHECK_FAIL("§4.12.1.1: a `script` element's [[CryptographicNonce]] could not be READ — §2.5.6's "
                        "slot held bytes whose length the engine's own string constructor refused, which is a "
                        "corrupt or stale attribute length rather than an allocation failure. The dev build "
@@ -203,34 +144,22 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
         CHECK(h.nonce != NULL, "§4.12.1.1: OOM reading a script element's cryptographic nonce metadata");
         integrity = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"integrity", 9, &integrity_n);
     }
-    /* …AND FETCH §2.2.5's PARSER METADATA, WHICH §4.12.1.1 COMPUTES FROM THIS ELEMENT: "Let parser metadata be
-       "parser-inserted" if el is parser-inserted, and "not-parser-inserted" otherwise". CSP §6.7.1.1 step 1.3
-       decides a 'strict-dynamic' request by this field ALONE — Blocked for "parser-inserted", Allowed
-       otherwise, with the host list never consulted — so it is the one member of this record whose absence
-       inverts a directive rather than narrowing it.
-       IT IS READ OFF THE ELEMENT AND NOT TAKEN AS A PARAMETER, because two of this file's three script parks
-       have no caller that knows: `engine_pending_docscript` runs from `flow_step` against a ROW, and a
-       dynamic `import()`'s metadata is the IMPORTING script's (§8.1.4.2's get-the-descendant-script-fetch-
-       options step 1, "Let newOptions be a copy of originalOptions", which copies this member exactly as it
-       copies the nonce). The element is the one thing all three still hold.
+    /* Fetch §2.2.5's parser metadata, computed by §4.12.1.1 from this element. CSP §6.7.1.1 step 1.3 decides
+       a 'strict-dynamic' request by this field alone (Blocked for "parser-inserted", Allowed otherwise, host
+       list never consulted), so its absence inverts a directive rather than narrowing it. It is read off the
+       element rather than passed in because `engine_pending_docscript` runs from `flow_step` against a row, and
+       a dynamic `import()` copies the importing script's options (§8.1.4.2 descendant script fetch options
+       step 1); the element is what all three parks hold.
 
-       NAMED RESIDUAL — WHAT IS NOT COVERED: a Document this engine LOADS never runs §4.12.1.1 over its own
-       markup `<script>` elements at all (core/html/html_script.h's `html_script_parser_inserted` residual
-       says why: the parse happens before the Document has a realm, so the parser's own door returns and
-       core/loader/document_scripts.c's inventory runs those rows instead). Those elements therefore answer
-       UNSTATED, and this states §2.2.5's own initial value for them — "Unless otherwise stated, it is the
-       empty string" — which is a true statement about the request THIS engine built and a narrower one than
-       the request a browser builds, where the same element is "parser-inserted".
-       WHAT THE NEXT DIFF BUILDS: the Document and realm ordering html_script.h already names — HTML §7.5.1
-       "Shared document creation infrastructure" step 9's Document and step 7.5's realm existing BEFORE §7.5.2
-       "Loading HTML documents" step 3 creates the parser — after which that door prepares the markup's own
-       scripts and this read answers PARSER_INSERTED for them with nothing here to change.
-       HOW ITS ABSENCE SHOWS: a loaded document's markup `<script src>` whose policy carries 'strict-dynamic'
-       and whose element matches neither a nonce-source (§6.7.1.1 step 1.1) nor a listed digest (step 1.2)
-       LOADS here and is refused by a browser — so an @S breakout measured against that document reports a
-       sink reachable through a script the real page never runs. An INJECTED `<script>` is unaffected, which
-       is the population 'strict-dynamic' exists for and the one @S constructs: it reaches this file through
-       §4.12.1.1, so it answers NOT_PARSER_INSERTED and is Allowed exactly as a browser allows it. */
+       Named residual. Not covered: a Document this engine loads never runs §4.12.1.1 over its own markup
+       `<script>` elements (core/html/html_script.h's `html_script_parser_inserted` residual: the parse happens
+       before the Document has a realm, so core/loader/document_scripts.c's inventory runs those rows). They
+       answer unstated, and this writes §2.2.5's initial value, the empty string, where a browser writes
+       "parser-inserted". Next diff builds: the Document (HTML §7.5.1 step 9) and realm (step 7.5) existing
+       before §7.5.2 Loading HTML documents step 3 creates the parser; this read then answers parser-inserted
+       unchanged. Absence shows as: a loaded document's markup `<script src>` under 'strict-dynamic' that
+       matches no nonce-source or digest (§6.7.1.1 steps 1.1, 1.2) loads here and is refused by a browser.
+       Injected scripts, the population @S constructs, are unaffected. */
     switch (html_script_parser_metadata(el)) {
     case HTML_SCRIPT_PARSER_METADATA_PARSER_INSERTED:     parser = CSP_PARSER_METADATA_PARSER_INSERTED; break;
     case HTML_SCRIPT_PARSER_METADATA_NOT_PARSER_INSERTED: parser = CSP_PARSER_METADATA_NOT_PARSER_INSERTED; break;
@@ -245,52 +174,31 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
     return h;
 }
 
-/* FETCH §2.2.5 "Requests"' CREDENTIALS MODE FOR A PARK WHOSE REPLY IS A PROGRAM — the parks in this file
-   that build their own request record AND whose reply is a program, which is a strict subset of the ones that
-   never reach `fetch_owe` (a browser algorithm's own subresource does neither). `fetch_owe` is where every
-   other producer's mode is asserted (core/fetch/fetch.c). All of them take the SAME answer and it is the
-   element's:
-   HTML §4.12.1.1 "Processing model" — "Let module script credentials mode be the CORS settings attribute
-   credentials mode for el's crossorigin content attribute" — and then "Let options be a script fetch options
-   whose … credentials mode is module script credentials mode", for a CLASSIC external script exactly as for
-   a module one. §8.1.4.2 "Fetching scripts"' set up the classic script request then
-   "set request's … credentials mode to options's credentials mode", so the element's `crossorigin` state IS the request's
-   mode, and a dynamic `import()` inherits it unchanged: §8.1.4.2's get the descendant script fetch options
-   step 1 is "Let newOptions be a copy of originalOptions", which touches integrity and fetch priority and
-   nothing else.
-   IT IS §2.5.4's TABLE AND NOT §2.5.1's, AND THE TWO DISAGREE. core/html/cors_settings_attribute.h holds
-   both and says why they are two entries: §2.5.1's create a potential-CORS request answers `include` for the
-   No CORS state (which is what makes a bare `<img src>` carry cookies), and §2.5.4's CORS settings attribute
-   credentials mode answers `same-origin` for it. A `<script src>` with no `crossorigin` attribute is
-   `same-origin`, which is why a same-origin chunk load carries the session in a real browser and a
-   cross-origin one does not.
-   NULL IS A STATED ANSWER AND NOT A HOLE, for the reason `script_csp_meta` gives about the same operand one
-   function up: a row no `<script>` element produced — a lazy chunk, an @S candidate, a `javascript:` URL —
-   has no attribute to read, and §8.1.4.2 names the answer for it, "The default script fetch options are a
-   script fetch options whose … credentials mode is `same-origin`". That is §2.5.4's own No CORS row too, so
-   the two arms agree and the NULL arm is stated rather than defaulted into the other. */
+/* Fetch §2.2.5 Requests' credentials mode for a park that builds its own request record and whose reply is a
+   program; every other producer's mode is asserted at `fetch_owe` (core/fetch/fetch.c).
+   HTML §4.12.1.1: "Let module script credentials mode be the CORS settings attribute credentials mode for el's
+   crossorigin content attribute", and the script fetch options carry it for classic and module scripts alike.
+   §8.1.4.2's set up the classic script request copies it onto the request, and a dynamic `import()` inherits
+   it (descendant script fetch options step 1 copies the options).
+   This is §2.5.4's table, not §2.5.1's, and the two differ for the No CORS state: §2.5.1 answers `include`
+   (a bare `<img src>` carries cookies), §2.5.4 answers `same-origin` (a `<script src>` without `crossorigin`
+   carries the session same-origin only). core/html/cors_settings_attribute.h holds both.
+   NULL is a row no `<script>` produced (a lazy chunk, an @S candidate, a `javascript:` URL): §8.1.4.2's default
+   script fetch options say `same-origin`, which is also §2.5.4's No CORS row. */
 static FetchCredentialsMode script_credentials_mode(lxb_dom_element_t *el)
 {
     return el ? cors_settings_attribute_credentials(cors_settings_attribute_state(el))
               : FETCH_CREDENTIALS_SAME_ORIGIN;
 }
 
-/* FETCH §2.2.5 "Requests"' MODE FOR A SCRIPT PARK, AND IT IS NOT THE SIBLING ABOVE'S ALGORITHM — which is the
-   whole reason it is a second function rather than a second return from that one.
-   THE TWO SPLIT ON THE SCRIPT'S TYPE AND THE CREDENTIALS DO NOT. HTML §8.1.4.2 "Fetching scripts"' fetch a
-   classic script says "Let request be the result of creating a potential-CORS request given url, `script`, and
-   corsSetting", so a CLASSIC script's mode is §2.5.1's — `no-cors` for an element with no `crossorigin`
-   attribute, which is the ordinary `<script src>` on every page. Its fetch a single module script instead says
-   "Let request be a new request whose URL is url, mode is `cors`", flatly, so a MODULE script's mode is `cors`
-   whatever the element says. The credentials mode agrees across the two because "set up the classic script
-   request" OVERWRITES it from the script fetch options (§2.5.4's answer) while leaving the mode alone.
-   READING §2.5.4's NOTE INSTEAD WOULD HAVE GOT THE CLASSIC ARM WRONG, and silently: that note says these are
-   "more modern features, where the request's mode is always `cors`", which is TRUE OF THE CREDENTIALS-ONLY
-   REPURPOSING it describes and false of the request classic-script fetching creates. `cors` here would make
-   SRI §3.8.2's early-allow arm fire for a `<script src integrity>` with no `crossorigin`, which is precisely
-   the no-CORS external script an integrity policy exists to refuse — and nothing would crash.
-   NO ELEMENT IS THE No CORS STATE and not a missing answer: §2.5.4's missing value default is No CORS, so a
-   park with no element creates its request with the same corsSetting an attribute-less element has. */
+/* Fetch §2.2.5 Requests' mode for a script park, which, unlike the credentials mode, depends on the script's
+   type. HTML §8.1.4.2's fetch a classic script creates a potential-CORS request (§2.5.1), so an element with no
+   `crossorigin` is `no-cors`; fetch a single module script creates a request whose mode is `cors`
+   unconditionally. Set up the classic script request overwrites the credentials mode and leaves the mode alone.
+   §2.5.4's note ("the request's mode is always `cors`") describes the credentials-only repurposing, not
+   classic-script fetching; following it would let SRI §3.8.2's early-allow arm fire for a `<script src
+   integrity>` with no `crossorigin`, the no-CORS script an integrity policy exists to refuse.
+   No element is the No CORS state, §2.5.4's missing value default. */
 static FetchMode script_request_mode(ScriptType stype, lxb_dom_element_t *el)
 {
     if (stype == SCRIPT_TYPE_MODULE) return FETCH_MODE_CORS;
@@ -305,65 +213,39 @@ static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
     h->nonce_slot = JS_UNDEFINED;
 }
 
-/* WHICH OF THE THREE PROGRAM DOORS THIS PARK IS, which is the one place in this engine where the @H
-   surface's mechanism cannot be a literal at the call. Every other recorder IS its mechanism — a `<link>`
-   element's algorithm, an XHR's send, a `fetch()`'s step machine — and this one line sees the whole set that
-   solver/pending.h's own `pending_kind_is_program` enumerates, so what it states has to be read off the park.
-   THE SET IS EXACTLY THAT PREDICATE'S TRUE ARM AND THE ARMS BELOW ARE ITS THREE, so this switch's fallthrough
-   is a GUARD rather than an unbuilt capability (CLAUDE.md §AND-A-CRASH-IN-THE-`default:`-ARM): the operand is
-   an enumeration THIS codebase owns, and the caller has already refused every value that is not one of these
-   three. What reaches it is a program kind added to that predicate's true arm and not here — which is a door
-   nobody named, not a park nobody handled.
-   THREE TOKENS AND NOT ONE, WHICH IS THE POINT AND IS THE CASE CLAUDE.md NAMES BY HAND: an injected `src` and
-   an `import()` reporting one word is the residual it cites as worth keeping, and the reason the three are
-   worth separating is what they are evidence OF. A document's own external script is markup; a script an
-   insertion prepared and a dynamic `import()` are code this engine RAN, and a lazy chunk reached through the
-   third is the address CLAUDE.md §What-the-tool-produces' headline claim is most about. Folded to one token
-   the emitted surface cannot tell the `<head>` from the router.
-   AND WHICH OF THE FIRST TWO IS THE PARSER-INSERTED MARK AND NOT THE KIND, WHICH IS WHAT THE SECOND ARGUMENT
-   IS FOR AND IS THE ARGUMENT THIS FUNCTION USED TO GET WRONG IN BOTH DIRECTIONS AT ONCE. A kind is chosen for
-   a QUEUE POSITION and a door asks about ORIGIN — solver/pending.h's `PROV_OBSERVED` records that sentence
-   about the GRADE, names the two ends the pair comes apart at, and BOTH of them are doors here.
-   HTML §4.12.1.1 "Processing model" branches on `el has an async attribute or el's force async is true`
-   FIRST and on `el is not parser inserted` only after it, and core/loader/document_scripts.c's
-   `script_block_schedule` is those two tests in that order — so a PARSER-INSERTED `<script async src>`
-   joins the `set of scripts that will execute as soon as possible`, takes FLOW_PENDING_SCRIPT, and was
-   reported through `injected-script`, whose reach column says no parse of the served bytes finds the
-   address, FOR AN ELEMENT THE SERVED BYTES CARRY (core/frame/navigable.c's child-document inventory walk
-   states by construction that every row of it is parser-inserted, and it is the ASAP arm that parks); while
-   the `async` IDL setter clearing `force async` on an element no parser touched reaches the second branch,
-   takes FLOW_PENDING_DOCSCRIPT, and was reported through `document-script` — `markup`, for an address only the
-   page's own code composed. The first OVER-credits CLAUDE.md §What-the-tool-produces' razor on a shape real
-   bundles ship constantly, which is the exact over-credit the retired `epEmitted - epPreProgram` subtraction
-   is recorded for; the second publishes a positive FALSE claim about what a `<script src>` scan reaches. ONE
-   MARK ANSWERS BOTH, it is `PROV_OBSERVED`'s own first conjunct, and it is on the park one field from the
-   grade the caller already reads.
-   THE MODULE ARM READS NO MARK AND THAT IS NOT AN OMISSION: `pending_prov_compose` refuses a parser-inserted
-   park of any kind but these two BY NAME, because §4.12.1.1 gives `parser document` to `script` elements only
-   and a dynamic `import()` has no element at all. A test here would be a second copy of that refusal.
-   IT IS STILL NARROWER THAN THE REACH IT DECIDES — NAMED RESIDUAL. WHAT IS NOT COVERED: a `<script src>` a
-   `document.write` put in the tree. §4.12.1.1's `parser document` is non-null for it —
-   core/html/html_script.c's `html_script_parser_inserted` prepares the element at every non-fragment
-   `</script>` the tokenizer closes, and core/html/document_open.c records at its own site that a written
-   external script IS prepared and reaches the same program-compile as one the markup carried — so it takes
-   `document-script`, which endpoint.h classes `markup`, while the bytes that named the element came out of
-   RUNNING CODE and no parse of the served document reaches the address. That is the UNDER-crediting
-   direction, so the razor's floor falls rather than rising, and it is a false statement about a parse either
-   way. WHAT THE NEXT DIFF BUILDS: the fact this mark is a proxy for — whether the bytes the element was
-   parsed out of are the RESPONSE's — stated by the producers that hold it and carried beside
-   `parser_inserted` on the park. It may NOT be inferred from WHICH producer parked instead:
-   core/loader/xml_document.c records that a LOAD's own scripts return at §4.12.1.1 step 18 in this engine
-   today and that the two parsers will still agree the day that order is corrected, so a rule keyed on the
-   producer goes stale on exactly that diff. HOW ITS ABSENCE WOULD SHOW: a document whose only external
-   script is one a `document.write` wrote reports a nonzero `epReach.markup`, so the razor publishes a
-   smaller floor than the run earned. */
+/* Which @H door a program park is: the one recorder whose mechanism cannot be a literal at the call, because
+   it sees every kind solver/pending.h's `pending_kind_is_program` admits. The switch covers exactly that
+   predicate's true arm, and the caller has refused everything else, so the fallthrough is a guard over an
+   enumeration this codebase owns: what reaches it is a program kind added to the predicate and not here.
+
+   Three tokens, because they are evidence of different things: a document's own external script is markup;
+   an injected script and a dynamic `import()` are code this engine ran, and a lazy chunk reached through the
+   third is what the runtime-only razor is most about.
+
+   The first two are separated by the parser-inserted mark, not the kind. A kind is a queue position and a
+   door is about origin (solver/pending.h's `PROV_OBSERVED`). HTML §4.12.1.1 tests "el has an async attribute
+   or el's force async is true" before "el is not parser inserted" (core/loader/document_scripts.c's
+   `script_block_schedule` keeps that order), so a parser-inserted `<script async src>` takes
+   FLOW_PENDING_SCRIPT, and a script-created element whose `async` setter cleared force async takes
+   FLOW_PENDING_DOCSCRIPT. Keyed on the kind, the first would over-credit the razor and the second would claim
+   a markup scan reaches an address only page code composed. The module arm reads no mark because
+   `pending_prov_compose` refuses a parser-inserted park of any other kind (§4.12.1.1 gives `parser document`
+   to `script` elements only).
+
+   Named residual. Not covered: a `<script src>` written by `document.write`. Its `parser document` is non-null
+   (core/html/html_script.c prepares it at the tokenizer's `</script>`; core/html/document_open.c), so it takes
+   `document-script`, classed `markup` by endpoint.h, although running code produced the bytes; the razor's
+   floor falls. Next diff builds: producers stating whether the element's bytes are the response's, carried
+   beside `parser_inserted` on the park. It may not be inferred from which producer parked, because
+   core/loader/xml_document.c records that a load's own scripts return at §4.12.1.1 step 18 today and that
+   order is due to change. Absence shows as: a document whose only external script was written by
+   `document.write` reports a nonzero `epReach.markup`. */
 static int program_load_door(int kind, int parser_inserted)
 {
     switch (kind) {
-    /* ONE KIND-TEST AND ONE MARK-TEST FOR THE TWO ELEMENT DOORS, NEVER TWO KIND-TESTS. Both queue positions
-       hold parser-inserted AND script-created elements — core/html/html_script.c hands the same
-       `parser_inserted` to both of its destinations and chooses between them on the SCHEDULE — so the mark
-       is what separates these two doors and the kind is only what says a mark is readable at all. */
+    /* One kind test and one mark test for the two element doors: both queue positions hold parser-inserted
+       and script-created elements (core/html/html_script.c chooses between them on the schedule), so the mark
+       separates the doors and the kind only says the mark is readable. */
     case FLOW_PENDING_DOCSCRIPT:
     case FLOW_PENDING_SCRIPT:    return parser_inserted ? EPD_DOCUMENT_SCRIPT : EPD_INJECTED_SCRIPT;
     case FLOW_PENDING_MODULE:    return EPD_MODULE_IMPORT;
@@ -373,33 +255,40 @@ static int program_load_door(int kind, int parser_inserted)
                "apart, so this is a program kind added to that predicate's true arm without saying which "
                "mechanism composes its address, and the @H row for every such load would name a mechanism "
                "nothing ran", kind);
-    /* THE RELEASE ARM IS DELIBERATELY THE REFUSED VALUE AND NOT A PLAUSIBLE DOOR. `endpoint_door_token`'s
-       `CHECK` is fatal in EVERY build, so a release engine reaching here aborts at the emit naming the door
-       rather than publishing whichever of the three a fallback happened to pick — CLAUDE.md §BUT-THE-ARM-
-       BENEATH-A-`DFAIL`-IS-A-SHIPPED-CODE-PATH: the two components' release arms of one algorithm are chosen
-       together here rather than locally, so the pair cannot compose into a row that reads as a measurement. */
+    /* The release arm returns the refused value rather than a plausible door: `endpoint_door_token`'s CHECK is
+       fatal in every build, so a release engine aborts at the emit naming the door instead of publishing
+       whichever door a fallback picked. The two components' release arms are designed together. */
     return EPD_UNSTATED;
 }
 
+/* Writes a park's address onto its record and asks Fetch §4.3 Scheme fetch who answers it, in one function.
+ * §4.3 answers `about`, `blob` and `data` inside this agent (Fetch §2.1 URL: "A local scheme is `about`,
+ * `blob`, or `data`"); only its HTTP(S) scheme row reaches HTTP fetch, which is all the trusted zone reading this
+ * register fetches. Recording an address without asking would park a flow on an answer that can only be a
+ * refusal, and the page would see a load failure for bytes already in this address space.
+ *
+ * Every entry that parks an address comes here: `fetch()`/`fetch_owe`, a document's external `<script src>`, an
+ * injected or as-soon-as-possible script, a dynamic `import()`, and a browser algorithm's own subresource
+ * (`engine_pending_resource_url`). A local answer is placed on the entry, `haveValue` included, exactly as
+ * engine_provide places the host's, so flow_deliver_one_reply delivers both the same way and no entry needs a
+ * `deliver` closure. The scheme switch is core/fetch/scheme_fetch.h's. The record's destination and provenance
+ * are written whoever answers, because they belong to the request (a `data:` URL script is a code load). */
 static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
 {
     JSValue reply = JS_UNDEFINED;
-    /* §4.1 step 6's answer, and the address every step below reads. `up_url` is OWNED and is NULL when the
-       step returned without modifying the request, which is why the two are separate: `use_url` is what to
-       read and `up_url` is what to free. */
+    /* §4.1 step 6's answer, the address every later step reads. `up_url` is owned and NULL when step 6 left
+       the request unchanged; `use_url` is what to read, `up_url` what to free. */
     char *up_url = NULL;
     const char *use_url;
-    /* §4.3's request, which is this one with step 6's address on it — a COPY because the caller's record is
-       `const` and belongs to the component that built it. */
+    /* §4.3's request: this one with step 6's address, copied because the caller's record is `const`. */
     FetchRequest sf;
-    /* WHAT THIS PARK IS, read once below and used by the program gate and by the @H door it states. */
+    /* The park's kind, read once for the program gate and the @H door. */
     int pkind;
 
-    /* THE METHOD AND THE URL ARE THE REQUEST'S IDENTITY, and both are what this park is keyed on: the join
-       lists the PAIR and engine_provide delivers against it (engine.h). Fetch §2.2.5 Requests: "A request has an
-       associated method (a method). Unless stated otherwise it is `GET`" — so every request HAS one, and a
-       producer that reaches a park without stating it is a component that dropped a field, not a request that
-       lacks one. Answering "assume GET" would file a POST's park under a GET and collect the GET's body. */
+    /* Method and URL are the request's identity and the park's key: the join lists the pair and engine_provide
+       delivers against it (engine.h). Fetch §2.2.5 Requests: "Unless stated otherwise it is `GET`", so every
+       request has a method; a park without one is a producer that dropped a field, and assuming GET would file a
+       POST under a GET and collect the GET's body. */
     DCHECK(req != NULL && req->url != NULL && *req->url,
            "a park was given an address that is not one — every caller of this door resolved a URL before it "
            "reached here, and an entry with no address is one the join can neither list nor answer");
@@ -407,38 +296,22 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "a request parked on an ADDRESS without stating its METHOD — the reply seam is keyed on the pair "
            "(engine.h), so an unnamed method would park this request under another one's identity and settle "
            "it with that request's body. Name the method at the component that built the request");
-    /* AND THE DESTINATION, WHICH A PARK CANNOT DERIVE AND MUST BE TOLD (Fetch §2.2.5 Requests). The empty
-       string is a real destination and a real answer; a NULL is a producer that stated none.
-       THE ARGUMENT THAT STOOD HERE IS RETIRED AND IS REWRITTEN RATHER THAN DELETED, since it is the one a
-       reader re-derives. It said that a `fetch()` and a `<link rel=preload as=script>` were the same KIND of
-       park with opposite answers to whether the reply may be ingested as code, so the kind could not say it —
-       and they are no longer the same kind: FLOW_PENDING_RESOURCE exists precisely because that conflation
-       had a consumer INSIDE this file, whose delivery compiled a `modulepreload`'s ES module as a classic
-       program. WHAT SURVIVES IS STRONGER THAN THE RETIRED FORM AND IS WHY THE FIELD STAYS: a kind names whose
-       ALGORITHM is owed the reply, and one algorithm asks with MANY destinations — `as=script`, `as=style`
-       and `as=font` are one FLOW_PENDING_RESOURCE and three CORB classes. No kind can ever carry that, so the
-       record does. */
+    /* The destination, which a park cannot derive (Fetch §2.2.5 Requests). The empty string is a real
+       destination; NULL is a producer that stated none. The field stays even though FLOW_PENDING_RESOURCE now
+       separates code-bearing parks by kind, because one algorithm asks with many destinations: `as=script`,
+       `as=style` and `as=font` are one FLOW_PENDING_RESOURCE and three CORB classes. */
     DCHECK(req->destination != NULL,
            "a request parked on an ADDRESS without stating its DESTINATION — Fetch §2.2.5 Requests gives every "
            "request one (\"unless stated otherwise it is the empty string\"), and the trusted zone reads it to "
            "decide whether the reply may be ingested as CODE. A park that does not say would have its reply "
            "classified by whichever arm the zone happens to write first, which is how a cross-origin HTML body "
            "gets compiled. Name the destination at the component that built the request");
-    /* AND THE CREDENTIALS MODE, WHICH A PARK CANNOT DERIVE EITHER AND WHICH DECIDES WHOSE SESSION PAYS.
-       Fetch §2.2.5 Requests gives every request one ("unless stated otherwise, it is `same-origin`"), and
-       `same-origin` is a POSITIVE answer a producer may state — which is exactly why the zero is refused
-       here rather than turned into it: core/fetch/fetch.h's `FETCH_CREDENTIALS_UNPLACED` is what a zero-fill
-       leaves, so writing §2.2.5's default for it would make "the algorithm says same-origin" and "nobody
-       plumbed this" the same bytes on the wire. `fetch_owe` asserts the same thing at the other door
-       (core/fetch/fetch.c) and this is the CONSUMER'S half of it, which is what reaches the parks in this
-       file that build their own record and never pass that door. */
-    /* AND ITS MODE, THE CONSUMER'S HALF OF THE GUARD `fetch_owe` MAKES AT THE OTHER DOOR — and the one field
-       on this record whose wrong value fails at NO consumer. The destination is refused by three of them and
-       the credentials mode is fatal at the wire spelling; the MODE has a single reader, §4.1 step 7's
-       Integrity Policy disjunct below, whose early-allow arm is a conjunction with it — so a zero here does
-       not produce a wrong wire value or an abort, it silently REFUSES a `<script src integrity crossorigin>`
-       that a browser loads, and the only trace is an endpoint surface smaller than the real page's. This is
-       the door the parks in this file reach that never pass fetch_owe. */
+    /* The credentials mode, which decides whose session pays. §2.2.5 defaults it to `same-origin`, a positive
+       answer a producer may state, so the zero (core/fetch/fetch.h's `FETCH_CREDENTIALS_UNPLACED`) is refused
+       rather than turned into it. And the mode, whose only reader is §4.1 step 7's Integrity Policy disjunct
+       below: a zero produces no wrong wire value and no abort, it silently refuses a `<script src integrity
+       crossorigin>` a browser loads. Both are the consumer's half of the guards `fetch_owe` makes
+       (core/fetch/fetch.c), for the parks in this file that build their own record and never pass that door. */
     DCHECK(req->mode != FETCH_MODE_UNPLACED,
            "a request parked on an ADDRESS without stating its MODE — Fetch §2.2.5 \"Requests\" gives every "
            "request one, and §4.1 step 7's Integrity Policy check reads it in a conjunction with the "
@@ -454,96 +327,55 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "writes as its else. State the mode the algorithm creating this request names "
            "(core/html/cors_settings_attribute.h holds HTML §2.5.1's and §2.5.4's two answers over an "
            "element's `crossorigin` state, and they differ)");
-    /* THE ADDRESS AS THE @H SURFACE MUST SEE IT, FOR THE THREE PARKS WHOSE REPLY BECOMES A PROGRAM — asked
-       HERE, at the consumer, for the reason step 7 below is asked here and in the same words: a copy per
-       entry cannot report the entry that has none.
-       IT IS THE ONE ENDPOINT QUESTION NO COMPOSING COMPONENT COULD ANSWER. Every other request in this engine
-       is recorded by the component that BUILT it — core/fetch/fetch.c, core/xhr/xml_http_request.c,
-       core/html/html_form.c, core/html/html_image.c, core/html/html_link.c — because each of those holds a
-       method, a header list and a body the page composed. A PROGRAM load holds none of that: HTML §4.12.1.1
-       "Processing model" hands this register an ADDRESS and an element, and its three producers are a
-       `<script src>` an insertion prepared, a document's own external script taking its slot, and a dynamic
-       `import()`. All three arrive here and nowhere else, so this is the only line that sees the set.
-       WHAT ITS ABSENCE COST IS THE PRODUCT'S OWN HEADLINE CLAIM — the API surface a bundle CAN reach and did
-       not, of which a lazy chunk is the address that claim is most about. Every one of them was fetched,
-       executed and learned from, and none of them was ever NAMED. A `<link
-       rel=modulepreload>` chunk WAS named, because that algorithm's own component records it, so a document
-       that preloads its graph reported its chunks and a document that only loads them reported none: one
-       surface with two answers, decided by which element the bundler happened to emit.
-       THE GRADE IS THE PARK'S OWN AND IS READ RATHER THAN RECOMPUTED. `engine_prov_of_running_path` is what
-       the neighbouring recorders call and it is the WRONG answer here twice over: solver/engine.h states in
-       its own words that it can never answer `observed`, and `observed`'s first conjunct is HTML §4.12.1.1
-       "Processing model"'s `parser document` — which is exactly what a document's own markup `<script src>`
-       has and what this
-       register already composed one line before `pending_push` returned. Asking a second time would be two
-       computations of one fact, free to disagree; reading PEND_PROV cannot.
-       AND THAT PARAGRAPH CARRIED A CLAIM ABOUT THIS TREE WHICH IS RETIRED RATHER THAN DELETED, because a
-       reader re-derives it from the sentence above: it said the grade's parser-inserted conjunct is INFERRED
-       FROM THE PARK'S KIND and pointed at a named residual at `pending_prov_compose` for it. There is no such
-       residual — grep solver/pending.c — and the conjunct is a PARAMETER: `pending_push` takes it,
-       solver/pending.h's `PROV_OBSERVED` records the kind-as-proxy reading as the argument that parameter
-       RETIRED, and `pending_prov_compose`'s own `DCHECKF` admits a parser-inserted park of EITHER element
-       kind by name. What the kind was still standing in for is the @H DOOR below, which is the one place the
-       fact had left to be repaired, and the mark read there is that repair.
-       BEFORE STEP 6 AND BEFORE STEP 7, which is where core/html/html_link.c and core/fetch/fetch.c put
-       theirs and for their stated reason: the endpoint is what the page's code COMPOSED, so a policy that
-       refuses it and an upgrade that rewrites it both leave a request the bundle can still make. */
-    /* READ ONCE AND USED TWICE — the gate below and the door it states are two questions about ONE park, and
-       this file's own argument two paragraphs up (the grade is READ rather than recomputed because "asking a
-       second time would be two computations of one fact, free to disagree") is the same argument for a second
-       `pending_get_int` of the same field. */
+    /* The address as the @H surface sees it, for the three parks whose reply becomes a program. Every other
+       request is recorded by the component that built it (core/fetch/fetch.c, core/xhr/xml_http_request.c,
+       core/html/html_form.c, core/html/html_image.c, core/html/html_link.c), which holds the method, headers and
+       body. A program load holds none of that: HTML §4.12.1.1 hands this register an address and an element, and
+       its producers (an injected `<script src>`, a document's own external script, a dynamic `import()`) all
+       arrive here and nowhere else, so this is the only line that sees the set. (`<link rel=modulepreload>` is
+       recorded by its own component; this names the loads themselves, preloaded or not.)
+       The grade is the park's own PEND_PROV, read rather than recomputed: `engine_prov_of_running_path` can never
+       answer `observed` (solver/engine.h), and `observed`'s first conjunct, §4.12.1.1's `parser document`, is the
+       parser-inserted parameter `pending_push` already composed. A second computation could disagree.
+       Recorded before steps 6 and 7, as core/html/html_link.c and core/fetch/fetch.c do theirs: the endpoint is
+       what the page's code composed, so a policy refusing it or an upgrade rewriting it leaves a request the
+       bundle can still make. `pkind` is read once for the gate and the door. */
     pkind = (int)pending_get_int(e, PEND_KIND);
     if (pending_kind_is_program(pkind)) {
-        /* THE GRADE AND THE MARK ARE READ ONCE EACH, for `pkind`'s reason exactly: the door and the assert
-           below are two questions about the same two register fields, and a second read of either would be a
-           second copy free to disagree with the first. */
+        /* The grade and the mark are read once each, for the same reason as `pkind`. */
         int prov = (int)pending_get_int(e, PEND_PROV);
         int door = program_load_door(pkind, (int)pending_get_int(e, PEND_PARSER_INS));
         JSValue uv = JS_NewString(ctx, req->url);
         CHECK(!JS_IsException(uv), "engine: OOM naming a program load for the endpoint surface");
-        /* AND THE TWO READINGS OF ONE PARK AGREE, WHICH IS THE ONE INVARIANT THIS LINE CAN HOLD AND IS WHAT
-           MAKES THE DOOR'S REPAIR CHECKABLE RATHER THAN MERELY ARGUED. `observed` is the parser-inserted mark
-           AND an unforced path (solver/pending.h's `PROV_OBSERVED`), and the door above is now that same mark
-           read off the same register field, so a park graded `observed` whose door is not `document-script`
-           means the two compositions have come apart over ONE mark.
-           BOTH SIDES ARE THIS CODEBASE'S OWN, which is what makes it a DCHECK rather than a refusal
-           (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE): a flag whichever of this engine's components inserted
-           the element stated, and a path the solver owns — no byte a page or a server wrote reaches either.
-           IT IS NOT VACUOUS: two functions compose these from one field, so a change to either alone fires
-           here. AND THE CONVERSE IS NOT ASSERTED AND IS NOT TRUE — a `document-script` row is graded `forced`
-           whenever its path stood on a contradicted arm, which is a real row and not a drift. */
+        /* The two readings of one park agree: `observed` is the parser-inserted mark and an unforced path
+           (solver/pending.h's `PROV_OBSERVED`), and the door is the same mark read off the same field, so an
+           `observed` park whose door is not `document-script` means the two compositions came apart. Both sides
+           are this codebase's own, so this is a DCHECK. The converse does not hold: a `document-script` row is
+           graded `forced` whenever its path stood on a contradicted arm. */
         DCHECKF(prov != PROV_OBSERVED || door == EPD_DOCUMENT_SCRIPT,
                 "a program park graded `observed` states the @H door %d rather than `document-script` — the "
                 "grade's first conjunct is HTML §4.12.1.1 \"Processing model\"'s `parser document` and this "
                 "door is now that same mark read off the same register field, so the two compositions have "
                 "come apart over one park of kind %d, and the row about to be emitted would say a markup "
                 "parse cannot reach an address its own element carries", door, pkind);
-        /* HTML §8.1.4.2 "Fetching scripts" creates every one of these requests without setting a method, so
-           it is Fetch §2.2.5 "Requests"' `GET` — and `req->method` is what the producer stated one frame up
-           and what `pending_park_request`'s own method DCHECK at this function's entry has already refused to
-           be absent, so it is read rather than restated. */
+        /* HTML §8.1.4.2 sets no method, so it is Fetch §2.2.5's `GET`; `req->method` is what the producer
+           stated, already asserted present at this function's entry. */
         endpoint_record(ctx, req->method, uv, NULL, 0, NULL, prov, door);
         JS_FreeValue(ctx, uv);
     }
-    /* FETCH §4.1 "Main fetch" STEP 6, AND IT RUNS BEFORE THE KEY IS COMPOSED — WHICH IS THE ORDERING THIS
-       WHOLE PARK DEPENDS ON. The reply seam is keyed on (method, url); step 6 REWRITES that url; so composing
-       PEND_URL from the pre-upgrade address and then fetching the post-upgrade one parks the request under an
-       address the host is never asked for, and the flow waits forever on a reply nobody owes it. Nothing
-       crashes when that happens — the entry simply never settles — which is why the order is stated here
-       rather than left to whoever reads the two lines.
-       IT IS ASKED AT THE CONSUMER AS WELL AS AT THE PRODUCERS for the reason step 7 is: the parks in this
-       file that build their own record pass no producer's door, so a step asked only at the builders is a
-       step those never take. It is IDEMPOTENT (core/fetch/fetch.h), so the producer having already run
-       it cannot make this answer differ. */
+    /* Fetch §4.1 Main fetch step 6, run before the key is composed. The reply seam is keyed on (method, url) and
+       step 6 rewrites the url, so a PEND_URL composed from the pre-upgrade address would park the request under
+       an address the host is never asked for, and the entry would silently never settle. It is asked at this
+       consumer as well as at the producers, because the parks in this file pass no producer's door; it is
+       idempotent (core/fetch/fetch.h), so a producer having run it changes nothing. */
     up_url = fetch_main_upgrade(ctx, req->url, req->destination, req->initiator);
     use_url = up_url ? up_url : req->url;
     pending_set(e, PEND_URL, JS_NewString(ctx, use_url));
     pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
     pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
-    /* THE ONE WIRE SPELLING IS `fetch_credentials_token`'S AND NOBODY ELSE'S (core/fetch/fetch.h), so this
-       is a call and not three literals; it is FATAL on the unplaced zero, which is the release backstop
-       under the DCHECK above. UNCONDITIONAL, so a record that still carries pending.h's JS_NULL is one this
-       door never ran on rather than one whose producer said nothing. */
+    /* `fetch_credentials_token` owns the one wire spelling (core/fetch/fetch.h) and is fatal on the unplaced
+       zero, the release backstop under the DCHECK above. Written unconditionally, so a record still carrying
+       pending.h's JS_NULL is one this door never ran on. */
     pending_set(e, PEND_CREDENTIALS, JS_NewString(ctx, fetch_credentials_token(req->credentials)));
     if (req->headers && req->headers->n > 0) {
         JSValue hl = pending_list_new();
@@ -554,122 +386,83 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     }
     if (req->body) pending_set_bytes(e, PEND_BODY, req->body, req->body_len);
 
-    /* FETCH §4.1 "Main fetch" STEP 7, AND IT IS THE CLOSURE THIS CONVERGENCE IS FOR — asked HERE, at the
-       consumer, and not only at the components that build requests. Step 7 precedes §4.3's scheme fetch (step
-       12), so this is the last line before the last moment a request can be answered without one, and every
-       async request in this engine passes it: a `fetch()` reaches it through fetch_owe's provider edge, and
-       every other park in this file reaches it directly — the three PROGRAM parks, and the browser-algorithm
-       subresource park an `<img>` and a `<link>` now take. The two elements USED to come through fetch_owe,
-       and moved with the kind that stops their replies being compiled as programs.
-       THAT IS WHY A `<script src>` HAD NO CHECK AND NOTHING SAID SO. Step 7 was FOUR hand-written copies, one
-       per request-creating component, and §4.12.1.1's fetch was simply not one of the four — so CSP §6.7.1.1
-       "Script directives pre-request check", whose principal subject is a script element, was reachable only
-       through `<link rel=preload as=script>`. A copy per entry cannot report the entry that has none; a
-       consumer that refuses to serve an unchecked request can, and a NEW park added later cannot forget.
-       IT IS A SECOND EVALUATION FOR THE REQUESTS THAT CAME THROUGH fetch_owe, AND THAT IS NOT A SECOND POLICY.
-       fetch_main_blocked is a pure function of (this document's policy container, the URL, the destination,
-       the metadata), and the record carries the same metadata its builder was checked with — so the two
-       evaluations cannot disagree, and a component whose own check ALLOWED never reaches a park that blocks.
-       What the second evaluation buys is that no future producer can reach the host without one.
-       A BLOCKED REQUEST IS §5.6's NETWORK ERROR, WHICH IS THE SAME JS_NULL §4.3's own error arm writes four
-       lines below — and for the three PROGRAM kinds that value is HTML §4.12.1.1's "null (representing an
-       error)": flow_deliver_one_reply's null arm marks the element's result null and "execute the script
-       element" step 4 fires `error` at it with the row running NOTHING. So a script a policy refuses reports
-       to the page through the element's own `onerror`, which is what a browser does, and nothing here had to
-       know that — the delivery owns the algorithm and this line states the outcome. */
+    /* Fetch §4.1 Main fetch step 7, asked at the consumer. It precedes §4.3 (step 12), and every async request
+       passes here: a `fetch()` through fetch_owe's provider edge, and the three program parks and the
+       browser-algorithm subresource park (`<img>`, `<link>`) directly. Asked only at the request-building
+       components, it would miss any park that builds its own record, as §4.12.1.1's fetch once did, leaving CSP
+       §6.7.1.1 Script directives pre-request check unasked for `<script src>`.
+       For requests that came through fetch_owe this is a second evaluation of the same policy:
+       fetch_main_blocked is a pure function of (the document's policy container, URL, destination, metadata),
+       and the record carries the metadata its builder was checked with, so the two cannot disagree.
+       A blocked request is §5.6's network error, JS_NULL. For the three program kinds that is §4.12.1.1's "null
+       (representing an error)": flow_deliver_one_reply's null arm marks the element's result null and "execute
+       the script element" step 4 fires `error` at it, so a refused script reaches the page's `onerror`. */
     DCHECK(req->metadata.nonce != NULL && req->metadata.integrity != NULL,
            "a request reached the park stating NO §2.2.5 metadata — both fields are non-NULL in every legal "
            "value (core/frame/policy_container.h), so a NULL is a zero-filled FetchRequest whose producer "
            "never said which of the two claims it is making, and §4.1 step 7 below would compare a policy's "
            "nonce-source expressions against a pointer nobody wrote");
-    /* …AND STEP 7 IS ASKED OF THE ADDRESS STEP 6 LEFT, never of `req->url`. Judging the pre-upgrade address
-       here would refuse an `<img src="http://…">` on an https page that a browser upgrades and loads, and the
-       park would then answer a NETWORK ERROR for a request whose key names the upgraded address — two wrong
-       answers from one mis-ordering, neither of which aborts. */
+    /* Step 7 judges the address step 6 left, never `req->url`: judging the pre-upgrade address would refuse an
+       `<img src="http://…">` on an https page that a browser upgrades and loads, and answer a network error
+       under a key naming the upgraded address. */
     if (fetch_main_blocked(ctx, use_url, req->destination, req->metadata, req->mode)) {
         pending_set(e, PEND_VALUE, JS_NULL);
         pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
         free(up_url);
         return;
     }
-    /* FETCH §4.3 Scheme fetch. §5.4's CAPTURED blob URL entry is JS_UNDEFINED because no standard but the
-       Request constructor has one to have captured, and a Request never reaches a park — it reaches
-       `fetch_owe`, which runs §4.3 with its own captured entry and a `deliver` closure before this register is
-       ever touched (core/fetch/scheme_fetch.h). */
-    /* §4.3 IS RUN OVER THE UPGRADED ADDRESS TOO — a copy of the record with `url` replaced, rather than the
-       caller's, because the record is `const` and belongs to the component that built it. Handing §4.3 the
-       PRE-upgrade address would make a `data:` or `blob:` arm answer for one address while the park's key
-       names another; for the http(s) row it would send the trusted zone the address step 6 exists to replace,
-       which is the mixed-content load a browser never makes. */
+    /* Fetch §4.3 Scheme fetch, over the upgraded address (a copy of the `const` record with `url` replaced).
+       Handing it the pre-upgrade address would let a `data:` or `blob:` arm answer for one address while the key
+       names another, and send the trusted zone the mixed-content address step 6 replaces. §5.4's captured blob
+       URL entry is JS_UNDEFINED: only the Request constructor captures one, and a Request reaches `fetch_owe`,
+       which runs §4.3 with its own entry and a `deliver` closure before touching this register
+       (core/fetch/scheme_fetch.h). */
     sf = *req;
     sf.url = use_url;
     switch (scheme_fetch(ctx, &sf, JS_UNDEFINED, &reply)) {
-    /* §4.3's "HTTP(S) scheme" row — "Return the result of running HTTP fetch given fetchParams". This is the
-       ONE outcome the host is shown, and the entry stays outstanding until engine_provide answers it. */
+    /* §4.3's HTTP(S) scheme row, "Return the result of running HTTP fetch given fetchParams": the one outcome
+       the host is shown. The entry stays outstanding until engine_provide answers it. */
     case SCHEME_FETCH_NETWORK:
         free(up_url);
         return;
-    /* §4.3 built the whole response inside this agent. It is the same reply record a host delivers, so it goes
-       where a host's goes and the delivery cannot tell them apart — which is right, because the standard does
-       not either: `data:text/javascript,…` is a 200 whose body is the URL's own bytes. */
+    /* §4.3 built the whole response inside this agent. It is the same reply record a host delivers and goes
+       where a host's goes, as the standard has it: `data:text/javascript,…` is a 200 whose body is the URL's. */
     case SCHEME_FETCH_RESPONSE:
         pending_set(e, PEND_VALUE, reply);
         break;
-    /* §4.3's network error — a `data:` URL §6 refuses, a `blob:` the store does not name, `about:config`, a
-       `file:` URL, and every scheme its switch does not list. JS_NULL is what core/fetch/fetch.h documents a
-       network error as, and it is the same value the trusted zone delivers for one. */
+    /* §4.3's network error: a `data:` URL §6 refuses, a `blob:` the store does not name, `about:config`, a
+       `file:` URL, and every scheme the switch does not list. JS_NULL is the network-error value. */
     case SCHEME_FETCH_NETWORK_ERROR:
         pending_set(e, PEND_VALUE, JS_NULL);
         break;
     }
     free(up_url);
-    /* LAST, AND THAT ORDER IS THE FRONTIER'S OUTSTANDING SET. `haveValue` is the write that takes a record OUT
-       of that set (solver/pending.c's pend_index_sync), so the address and the method must already be on the
-       record when it lands — otherwise the set is keyed after it was answered and the host is offered a
-       request nobody is waiting for. */
+    /* Last: `haveValue` takes the record out of the frontier's outstanding set (solver/pending.c's
+       pend_index_sync), so the address and method must already be on it, or the host is offered a request
+       nobody is waiting for. */
     pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
 }
 
-/* FETCH-AWAIT parking: a host fetch registers its resolve capability on THE RUNNING FLOW. A flow that awaits it
-   suspends its async body; the flow's own pending register is delivered from when the reply arrives — each awaiting
-   async body's reaction enqueues as a job in that flow's queue — and it resumes. Per-flow (not global) so one
-   flow's delivery never resolves another flow's fetch (which would route the reaction to the wrong flow's COW — a
-   leak + contamination).
-   THERE IS ONE FORM, and it names a URL. A second form used to take the value UP FRONT, for an edge that
-   already had the bytes; nothing in the engine ever did — the Fetch component and the module loader both owe
-   theirs to the trusted host — and its only caller was a fixture stub standing in for a host that did not
-   answer. With the host answering, that stub and this form both go. */
-/* The same park, with the URL the HOST must fetch. The value arrives later through engine_provide; until it
-   does the flow cannot finish, which is what keeps the reply-gated code reachable. */
+/* Fetch-await parking: a host fetch registers its resolve capability on the running flow's own pending register,
+   with the URL the host must fetch. A flow that awaits it suspends; when the reply arrives through
+   engine_provide, each awaiting async body's reaction enqueues as a job in that flow's queue and it resumes.
+   Until then the flow cannot finish, which keeps the reply-gated code reachable. The register is per flow so one
+   flow's delivery never resolves another's fetch, which would route the reaction into the wrong COW delta. */
 void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const FetchRequest *req) {
     Flow *f = flow_running();
-    /* THE METHOD AND THE URL ARE THE REQUEST'S IDENTITY, and both are what this park is keyed on: the join
-       lists the PAIR and engine_provide delivers against it (engine.h). The rest of the request — headers and
-       body — rides the record for the host that will issue it: `safeFetch` decides SOP/CORS/method/credentials,
-       and it cannot decide about a method it was never told. */
+    /* The rest of the request (headers, body) rides the record for the host that issues it: `safeFetch`
+       decides SOP/CORS/method/credentials and cannot decide about a method it was not told. */
     const char *url = req ? req->url : NULL;
     JSValue e;
-    /* A PARK NEEDS A FLOW TO PARK ON, AND THE ENTRIES THAT HAVE ONE ARE THE ONES THAT RUN AS FLOWS. The
-       register this pushes onto is `f->pending` — per-flow, because §State-isolation forbids a global one (one
-       flow's delivery resolving another flow's fetch routes the reaction into the wrong COW) — so a caller
-       with no flow has nowhere to be owed an answer and nowhere to resume.
-       THE LINE HERE USED TO CLAIM THE PRECONDITION ALWAYS HOLDS: "a live fetch is ALWAYS issued from a running
-       flow — both explore and @S verify are the ONE scheduler now (run_scheduler), so flow_running() is set".
-       That is true of script and of every enqueued job, and it is FALSE of the pre-boot BASELINE, which is
-       where this engine performs the steps a browser performs during TREE CONSTRUCTION. Three lines of HTML
-       falsify it — a document whose whole content is one `<link rel=preload as=font>` and no script at all
-       aborts here — because core/dom/document.c's parsed-tree walk runs at baseline (its own comment: "this
-       line is still the pre-boot BASELINE") and HTML §4.2.4.3 "Fetching and processing a resource from a link
-       element" ends in "Fetch request", with no task and no microtask anywhere in it.
-       WHY `<img>` DOES NOT REACH THIS AND `<link>` DOES, WHICH IS THE WHOLE OF THE DIFFERENCE: §4.8.4.3.5's
-       "update the image data" queues the SPEC'S OWN microtask before it fetches, and a queued job is a flow, so
-       the image walk hands its fetch to a flow by the standard's own structure. The link has no such step. That
-       is an accident of two algorithms, not a design, and it is why the crash belongs at the entry rather than
-       here: this park is right to refuse, and a second park that answered without a flow would be the global
-       register §State-isolation bans.
-       SO THE FIX IS AT THE BASELINE ENTRY — the parsed-tree walk may RECORD an address (an endpoint is not a
-       request) but may not ISSUE one; the issue belongs to the boot flow, beside where that document's parsed
-       scripts are driven. core/html/html_link.c asserts that at its own baseline entry and names it. */
+    /* A park needs a flow to park on: `f->pending` is per flow, so a caller with none has nowhere to be owed an
+       answer or to resume. Script and every enqueued job have one; the pre-boot baseline does not, and it is
+       where this engine performs the steps a browser performs during tree construction. core/dom/document.c's
+       parsed-tree walk runs there, and HTML §4.2.4.3 Fetching and processing a resource from a link element ends
+       in "Fetch request" with no task or microtask, so a document whose only content is
+       `<link rel=preload as=font>` reaches this with no flow. (`<img>` does not: §4.8.4.3.5's update the image
+       data queues a microtask before it fetches, and a queued job is a flow.) The fix belongs at the baseline
+       entry: the walk may record an address but not issue a request; the boot flow issues it.
+       core/html/html_link.c asserts that at its own baseline entry. */
     DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow — see the comment "
                       "above this line: the callers that HAVE a flow are script and enqueued jobs, and the "
                       "caller that does not is the pre-boot baseline tree walk performing a step HTML defines "
@@ -678,123 +471,92 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
                      /*parser_inserted*/0, flow_work_seq_next());   /* a `fetch()` or an XHR — page code composed it */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
-    /* AND WHICH DOCUMENT ASKED — the same sentence the `<script src>` park one entry down already makes, and
-       the one this park was for a while the only one NOT making. The realm this chokepoint was entered with IS
-       the asking document's; `flow_step`'s is the SESSION's, so a delivery that re-derived this would compile
-       a reply in whichever realm the session happens to be rooted at rather than in the document that asked.
-       IT IS CARRIED RATHER THAN DEFAULTED, and the difference is not theoretical: `PEND_DOC` defaults to 0,
-       which is a real document id, so a delivery reading an unset field gets a plausible answer rather than an
-       absent one — the shape §A-FIELD-A-CONSUMER-DEFAULTS names, one field short of a wrong document. */
+    /* Which document asked: the realm this chokepoint was entered with. `flow_step`'s realm is the session's,
+       so a delivery re-deriving it would compile the reply in whichever realm the session is rooted at. It is
+       carried rather than defaulted because `PEND_DOC`'s default 0 is a real document id. */
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
-    /* THE ADDRESS AND EVERYTHING THAT TRAVELS WITH IT GO ON THROUGH THE ONE DOOR, which is also where §4.3
-       Scheme fetch is asked. It answers NETWORK for every request that reaches HERE — `fetch_owe` and
-       `fetch()` run §4.3 with their own `deliver` closure and return before touching this register when it
-       answers locally — so a local answer landing on this entry is not a case this park has to handle
-       differently, it is a case that means one of those two seams stopped asking. */
+    /* The address and what travels with it go through the one door, which also asks §4.3. Requests reaching
+       here always get NETWORK: `fetch_owe` and `fetch()` run §4.3 with their own `deliver` closure and return
+       before touching this register when it answers locally, so a local answer here means one of those seams
+       stopped asking. With no address, the caller supplied the value up front and owes the host nothing. */
     if (url) pending_park_request(ctx, e, req);
-    /* NO ADDRESS AT ALL is the one park that is answered by its own caller: it carries the value up front and
-       owes the host nothing. It is not §4.3's business — there is no URL to switch on. */
     else pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
     JS_FreeValue(ctx, e);
 }
 
-/* PARK ON A DYNAMIC `import()`. The same register and the same URL, and a DIFFERENT delivery: a module load is
-   owed SOURCE TEXT, so the delivery settles `resolve` with the reply's body rather than with the reply record a
-   `fetch()` becomes a Response from. */
+/* Parks a dynamic `import()`. The same register and URL as a fetch, with a different delivery: a module load is
+   owed source text, so the delivery settles `resolve` with the reply's body rather than the reply record a
+   `fetch()` makes a Response from. */
 void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueConst reject, const char *url) {
     Flow *f = flow_running();
-    /* …AND ITS DESTINATION IS `script`, WHICH IS WHAT MAKES A CHUNK A CODE LOAD AT THE CHOKEPOINT. HTML
-       §8.1.6.7.3 HostLoadImportedModule: "Let destination be `script`" — and for a dynamic `import()` nothing
-       overrides it (loadState is undefined outside a worklet or service worker), so this is the destination
-       the fetch carries. It is STATED on the record rather than reported through a register of specifiers
-       beside it: a side list one producer fills answers for that producer and is silently absent for every
-       other, which is how a document's own `<script src>` reached the trusted zone with no load class at all.
-       The METHOD is `GET`: a chunk load states its own. */
+    /* The destination is `script` (HTML §8.1.6.7.3 HostLoadImportedModule: "Let destination be `script`";
+       loadState is undefined outside a worklet or service worker), which is what makes a chunk a code load at
+       the chokepoint. It is stated on the record, not in a side register of specifiers that only one producer
+       would fill. The method is `GET`. */
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
                          /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
                          /* …and so is the credentials mode, off the same element */
                          FETCH_CREDENTIALS_UNPLACED };
-    /* …AND FETCH §2.2.5's METADATA, WHICH FOR A DYNAMIC IMPORT IS THE REFERRER'S. HTML §8.1.6.7.3
-       HostLoadImportedModule: "Let fetchOptions be the result of getting the descendant script fetch options
-       given originalFetchOptions, url, and settingsObject" — and THAT ALGORITHM IS §8.1.4.2 "Fetching
-       scripts"' and not this section's, which is a distinction the citation has to make because the two
-       numbers name two documents' worth of steps: §8.1.4.2's "get the descendant script fetch options" step 1
-       is "Let newOptions be a copy of originalOptions", so the CRYPTOGRAPHIC NONCE is copied unchanged from
-       the script performing the import, which is the element whose program this flow is running. Its step 2 is
-       "Let integrity be the result of resolving a module integrity metadata with url and settingsObject",
-       which reads an IMPORT MAP's integrity map; this engine has no import map, so it resolves to the empty
-       string, and that is a stated answer rather than a field nobody plumbed. flow_dyn_el answers NULL for a
-       program no `<script>` produced — a lazy chunk, an @S candidate, a `javascript:` URL — whose options
-       carry the empty string. */
+    /* Fetch §2.2.5's metadata, which for a dynamic import is the referrer's. HostLoadImportedModule gets "the
+       descendant script fetch options given originalFetchOptions, url, and settingsObject", an algorithm of
+       §8.1.4.2 Fetching scripts: its step 1 copies the options, so the cryptographic nonce is the importing
+       script's (the element whose program this flow runs), and its step 2 resolves module integrity metadata
+       from an import map, which this engine does not have, so integrity is the empty string. flow_dyn_el is
+       NULL for a program no `<script>` produced (a lazy chunk, an @S candidate, a `javascript:` URL), whose
+       options carry the empty string. */
     ScriptCspMeta meta;
     JSValue e;
     DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
     meta = script_csp_meta(ctx, flow_dyn_el(f));
     req.metadata = meta.m;
-    /* …AND ITS CREDENTIALS MODE, WHICH FOR A DYNAMIC IMPORT IS THE REFERRING SCRIPT'S — see
-       `script_credentials_mode`. §8.1.4.2's get the descendant script fetch options COPIES it, so the
-       element whose program this flow is running decides it, and a chunk imported from a row no `<script>`
-       produced takes §8.1.4.2's default script fetch options. */
+    /* The credentials mode is the referring script's, copied by the same step (see
+       `script_credentials_mode`); a row no `<script>` produced takes the default script fetch options. */
     req.credentials = script_credentials_mode(flow_dyn_el(f));
-    /* …AND ITS MODE. A dynamic `import()` is fetched by HTML §8.1.4.2's fetch a single module script, whose
-       request is created with `mode is "cors"` outright — so this is the module arm and never the element's. */
+    /* The mode: HTML §8.1.4.2's fetch a single module script creates the request with mode "cors" outright,
+       so this is the module arm and never the element's. */
     req.mode = script_request_mode(SCRIPT_TYPE_MODULE, flow_dyn_el(f));
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f),
                      /*parser_inserted*/0, flow_work_seq_next());   /* a dynamic `import()` — §16.2.1.8 is reached by RUNNING code */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
-    /* AND THE HALF THE LOAD'S FAILURE IS OWED FROM, which this park did not take and the caller therefore
-       freed unused. A load has two outcomes and this is the only park whose failure is a REJECTION rather
-       than an event at an element: HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest,
-       loadState, payload)"'s onSingleFetchComplete makes a null moduleScript "ThrowCompletion(a new
-       TypeError)", and ECMAScript §13.3.10.3 "ContinueDynamicImport ( promiseCapability, moduleCompletion )"
-       calls "promiseCapability.[[Reject]]" with it. Without it the delivery had exactly one thing it could do
-       with a network error — settle `resolve` with the empty source text, which compiles and evaluates an
-       EMPTY MODULE — so `import(u).catch(h)` ran `h` never and a bundle's fallback chunk was unreachable. */
+    /* The reject half, which carries the load's failure: this is the only park whose failure is a rejection
+       rather than an event at an element. HTML §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete makes
+       a null moduleScript "ThrowCompletion(a new TypeError)", and ECMAScript §13.3.10.3 ContinueDynamicImport
+       calls "promiseCapability.[[Reject]]" with it. Without this the delivery could only settle `resolve` with
+       empty source text, evaluating an empty module, so `import(u).catch(h)` would never run `h`. */
     DCHECK(JS_IsFunction(ctx, reject),
            "a dynamic import parked with no REJECT capability — JS_NewPromiseCapability mints both halves and "
            "this park is what the failure arm reaches the second one through, so a record without it could "
            "answer a network error only by settling the SUCCESS half with bytes that never arrived");
     pending_set(e, PEND_REJECT, JS_DupValue(ctx, reject));
-    /* AND §4.3 Scheme fetch WITH IT — `import("data:text/javascript,export default 1")` is a load this agent
-       answers out of the specifier's own bytes, and the promise this park settles is the one
-       JS_ModuleLoadPending is about to be handed. */
+    /* And §4.3 Scheme fetch with it: `import("data:text/javascript,export default 1")` is answered from the
+       specifier's own bytes, settling the promise JS_ModuleLoadPending is about to be handed. */
     pending_park_request(ctx, e, &req);
     script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
 
-/* PARK ON A BROWSER ALGORITHM'S OWN SUBRESOURCE FETCH — HTML §4.2.4.3 "Fetching and processing a resource
- * from a link element"'s two built link types, and HTML §4.8.4.3.5 "Updating the image data". The same
- * register, the same dedup, the same stall accounting, and a delivery that differs from `fetch()`'s by ONE
- * step: the reply record goes to that algorithm's completion steps and nothing is queued as a program. See
- * solver/pending.h's FLOW_PENDING_RESOURCE for what that step was doing to a `modulepreload`.
+/* Parks a browser algorithm's own subresource fetch: HTML §4.2.4.3 Fetching and processing a resource from a
+ * link element's built link types, and HTML §4.8.4.3.5 Updating the image data. Same register, dedup and stall
+ * accounting as `fetch()`; the delivery differs in one step: the reply record goes to that algorithm's
+ * completion steps and nothing is queued as a program (solver/pending.h's FLOW_PENDING_RESOURCE).
  *
- * WHY THIS IS AN ENTRY HERE RATHER THAN A FLAG ON `fetch_owe`, AND IT IS THE SHAPE THE THREE PROGRAM PARKS
- * ALREADY HAVE. `fetch_owe` is the door for a request whose reply is owed to a `fetch()`-SHAPED park, and the
- * parks whose reply is owed to some other algorithm build their own record and pass it — core/html/
- * html_script.c reaches engine_pending_script_url for HTML §4.12.1.1 "Processing model"'s fetch in exactly
- * this way. Everything `fetch_owe` does before the provider, `pending_park_request` does at the consumer and
- * says so at each of them: Fetch §4.1 "Main fetch" step 6's upgrade, its step 7's
- * CSP/mixed-content/integrity-policy walk, Fetch §4.3 "Scheme fetch", and the
- * method/url/destination/mode/credentials guards. The ONE guard that lived only at that door is the
- * destination ENUMERATION, and it is asked below rather than lost.
+ * It is an entry rather than a flag on `fetch_owe`, the shape the three program parks have: `fetch_owe` serves
+ * `fetch()`-shaped parks, and a park owed to another algorithm builds its own record. Everything `fetch_owe`
+ * does before the provider, `pending_park_request` does at the consumer (Fetch §4.1 Main fetch steps 6 and 7,
+ * §4.3 Scheme fetch, the method/url/destination/mode/credentials guards); the destination enumeration, the one
+ * guard that lived only at that door, is asked below.
  *
- * IT DOES NOT ANSWER A `data:` URL IN PLACE, WHICH IS THE ONE OBSERVABLE THAT MOVES AND IT MOVES TOWARD THE
- * STANDARD. `fetch_owe` runs Fetch §4.3 with the closure in hand and calls it synchronously for a scheme this
- * agent answers; `pending_park_request` writes the record and `haveValue`, and the delivery calls the closure
- * on the next pass — which is the route a dynamic `import("data:text/javascript,…")` already takes through
- * that same door, so this is the established answer and not a second one. HTML §4.6.8.12's step 14 steps and
- * §4.8.4.3.5's are a fetch's processResponse, which no browser runs inside the algorithm that issued it. */
+ * A `data:` URL is not answered in place: `pending_park_request` writes the record and `haveValue`, and the
+ * delivery calls the closure on the next pass, the same route as `import("data:…")`. HTML §4.6.8.12's step 14
+ * steps and §4.8.4.3.5's are a fetch's processResponse, which no browser runs inside the issuing algorithm. */
 void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const FetchRequest *req) {
     Flow *f = flow_running();
     JSValue e;
-    /* A PARK NEEDS A FLOW, and core/html/html_link.c asserts the same thing at its own trigger with the
-       reason: HTML §4.2.4.3 ends in "Fetch request" with no task and no microtask anywhere in it, so the
-       parser's own elements are served inside a flow rather than issued from the baseline tree walk. The
-       image half never needed that guard — §4.8.4.3.5's "update the image data" queues the STANDARD'S OWN
-       microtask before it fetches, and §scheduler makes every enqueued job a flow. Both ends assert it
-       because only one of them can name the entry that arrived without one. */
+    /* A park needs a flow. core/html/html_link.c asserts the same at its trigger: HTML §4.2.4.3 ends in "Fetch
+       request" with no task or microtask, so parsed link elements are served inside a flow rather than from
+       the baseline tree walk. The image half queues §4.8.4.3.5's own microtask first, and every job is a flow.
+       Both ends assert, because only one of them can name the entry that arrived without one. */
     DCHECK(f != NULL, "a browser algorithm's subresource fetch was issued outside a running flow — it ends in "
                       "a fetch and a fetch parks on the FLOW's own register, so a caller with none has "
                       "nowhere to be owed a reply. core/html/html_link.c's trigger names the four entries "
@@ -804,68 +566,49 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
            "and HTML §4.8.4.3.5 each state theirs as a fetch's processResponse (HTML §4.6.8.12's step 14, "
            "HTML §4.6.8.20's), and a record without them owes its reply to nobody: the element would never "
            "fire `load` or `error` and the page would wait forever");
-    /* THE DESTINATION ENUMERATION, WHICH IS THE ONE THING `fetch_owe` ASKED THAT THIS PATH NO LONGER PASSES.
-       Fetch §2.2.5 "Requests" gives every request a destination and the trusted zone reads it to decide
-       whether the reply may be ingested as CODE; its consumers do not fail alike on a word §2.2.5 does not
-       define, so the check belongs where the component that built the request is still on the stack. `fetch`
-       is a POTENTIAL destination (Fetch §2.2.7 "Miscellaneous") and not a destination — HTML §4.6.8.20's
-       step 3 translates it to the empty string, which passes. */
+    /* The destination enumeration, the one check `fetch_owe` made that this path does not pass. The trusted
+       zone reads the destination to decide whether the reply may be ingested as code, and its consumers do not
+       fail alike on an undefined word, so it is checked while the building component is on the stack. `fetch`
+       is a potential destination (Fetch §2.2.7 Miscellaneous), which HTML §4.6.8.20 step 3 translates to the
+       empty string. */
     DCHECK(fetch_is_destination_type(req->destination),
            "a browser algorithm's subresource fetch stated a DESTINATION that is not one Fetch §2.2.5 "
            "\"Requests\" enumerates — run Fetch §2.2.7 \"Miscellaneous\"' translate a potential destination "
            "over the `as` keyword before stating it, as HTML §4.6.8.20's step 3 does");
-    /* A BROWSER ALGORITHM'S SUBRESOURCE, SO NO `script` ELEMENT AND NOTHING FOR HTML §4.12.1.1
-       "Processing model" TO HAVE GIVEN A `parser document` TO. */
+    /* A browser algorithm's subresource: no `script` element, so no §4.12.1.1 `parser document`. */
     e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f),
                      /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
-    /* AND WHICH DOCUMENT ASKED — the same sentence the parks above make, and for the same reason:
-       `PEND_DOC` defaults to 0, which is a real document id, so a delivery reading an unset field gets a
-       plausible answer rather than an absent one. */
+    /* Which document asked, as in the parks above: `PEND_DOC`'s default 0 is a real document id. */
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     pending_park_request(ctx, e, req);
     JS_FreeValue(ctx, e);
 }
 
-/* PARK ON AN INJECTED SCRIPT. `document.body.appendChild(s)` with `s.src` set is the other way a page loads code
-   conditionally, and it has no promise for the reply to settle — the reply IS more program. The flow parks on
-   the URL exactly as a fetch does (same register, same dedup, same stall accounting) and the delivery queues the
-   body as this flow's next script, so the loaded code runs in the world that injected it: its COW delta, its
-   pins, its position in the BFS. A sibling that never took that branch never sees the script. */
-/* …AND THE `set of scripts that will execute as soon as possible` PARKS THE SAME WAY, which is why this is one
-   entry and no longer takes the flow as a parameter. A member of that set has no POSITION to hold — §13.2.7
-   waits for the set only before the load event — so its reply becomes a program whenever it is delivered,
-   exactly as an injected script's does. A script whose position IS fixed takes a slot instead
-   (engine_queue_docscript_url), and the second caller this used to have, which registered a joined document's
-   own <script src> against a flow that was not running, went with that. */
-/* …AND IT CARRIES THE ELEMENT'S TYPE, because the reply is a PROGRAM and §4.12.1.1's "execute the script
-   element" switches on that type. It used to be decoded and evaluated as CLASSIC unconditionally, which was a
-   restatement of the gap this park sat behind rather than a fact about these entries: `<script type=module src>`
-   injected by page code is how a modern bundle loads a chunk, and it was the shape that aborted. */
-/* …AND IT CARRIES THE ELEMENT, which is the fact a park is where you LOSE. The flow reaches this line with
-   the node in hand (core/html/html_script.c's insertion half) and comes back to a URL and a reply, so without
-   this the element is gone by the time the reply is a program — and HTML §4.12.1.1 "Processing model"'s
-   "execute the script element" is a switch on EL whose classic arm sets §3.1.7's `currentScript` to it. It
-   crosses as the node's WRAPPER (solver/pending.h's `scriptEl`), because this record is made of JS values. */
+/* Parks an injected script: `document.body.appendChild(s)` with `s.src` set. There is no promise to settle; the
+   reply is more program. The flow parks on the URL as a fetch does (same register, dedup and stall accounting)
+   and the delivery queues the body as this flow's next script, so the loaded code runs in the world that
+   injected it (its COW delta, its pins, its BFS position); a sibling that never took the branch never sees it.
+   The set of scripts that will execute as soon as possible parks the same way: a member has no position to hold
+   (§13.2.7 waits for the set only before the load event), so its reply becomes a program whenever delivered. A
+   script with a fixed position takes a slot instead (engine_queue_docscript_url).
+   The park carries the element's type, because §4.12.1.1's "execute the script element" switches on it
+   (`<script type=module src>` is how a bundle loads a chunk), and the element itself, which would otherwise be
+   lost across the park: the classic arm sets §3.1.7's `currentScript` to it. The element crosses as its wrapper
+   (solver/pending.h's `scriptEl`) because the record is made of JS values. */
 void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el,
                                int parser_inserted) {
     Flow *f = flow_running();
-    /* §8.1.4.2's fetch, whose decode and whose evaluation entry the TYPE decides — and whose method is Fetch
-       §2.2.5 Requests' `GET`.
-       …AND ITS DESTINATION IS `script` FOR BOTH TYPES THE PARK CARRIES. A classic external script is HTML
-       §8.1.4.2 Fetching scripts' "fetch a classic script", whose request is created with `script`; a
-       `<script type=module src>` is §8.1.4.2's "fetch an external module script graph", which fetches a
-       single module script with the destination `script` too.
-       So the type decides the DECODE and the evaluation entry, and it does not decide this: either way the
-       reply becomes a program, which is precisely what CORB exists to keep cross-origin data out of. */
+    /* §8.1.4.2's fetch: the type decides the decode and the evaluation entry, not the request. The method is
+       Fetch §2.2.5's `GET`, and the destination is `script` for both types: "fetch a classic script" creates the
+       request with `script`, and "fetch an external module script graph" fetches a single module script with
+       `script` too. Either way the reply becomes a program, which is what CORB keeps cross-origin data out of. */
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
                          /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
                          /* …and so is the credentials mode, off the same element */
                          FETCH_CREDENTIALS_UNPLACED };
-    /* …AND §4.12.1.1's THREE METADATA MEMBERS, off the element this park already carries. This is the entry the
-       whole convergence was built for: `<script nonce=x src=…>` under `script-src 'nonce-x'` is the shape
-       modern CSP is written in, and until step 7 was asked at the park no `<script src>` in this engine was
-       checked against a policy at all. */
+    /* §4.12.1.1's three metadata members, off the element, so `<script nonce=x src=…>` under
+       `script-src 'nonce-x'` is checked by step 7 at the park. */
     ScriptCspMeta meta;
     JSValue e;
     DCHECK(f != NULL, "a <script src> was parked on outside a running flow");
@@ -876,52 +619,45 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
            "so no such element ever reaches a park");
     meta = script_csp_meta(ctx, el);
     req.metadata = meta.m;
-    /* …AND ITS CREDENTIALS MODE, off the same element and by §4.12.1.1's own step — see
-       `script_credentials_mode`. `<script crossorigin=use-credentials src>` is the population this states
-       for: without it the park carried a zero-fill and the chunk was fetched with the mode nobody named. */
+    /* The credentials mode, off the same element by §4.12.1.1's own step (see `script_credentials_mode`), so
+       `<script crossorigin=use-credentials src>` is fetched with the mode it names. */
     req.credentials = script_credentials_mode(el);
-    /* …AND ITS MODE, WHICH IS THE ONE FIELD THIS PARK'S `stype` DECIDES BESIDES THE DECODE. A classic external
-       script takes §2.5.1's mode off the element and a `<script type=module src>` is `cors` flatly — see
-       script_request_mode for why §2.5.4's note does not answer the classic arm. */
+    /* The mode, which `stype` decides besides the decode: §2.5.1's mode off the element for a classic script,
+       `cors` for a module (see script_request_mode). */
     req.mode = script_request_mode(stype, el);
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f), flow_path_pinned(f),
                      parser_inserted, flow_work_seq_next());
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
-    /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
-       chokepoint was entered with is that tree's document — the reply is compiled there rather than in
-       whichever realm the session happens to be rooted at. */
+    /* Which document's program the reply will be: the realm this chokepoint was entered with is the document
+       the element was inserted into, not whichever realm the session is rooted at. */
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
-    /* AND WHOSE ELEMENT IT IS. NULL is not a shape this park can have — every caller reaches it from
-       §4.12.1.1's own steps over an element — so it is asserted rather than defaulted past. */
+    /* Whose element it is. Every caller reaches this from §4.12.1.1's steps over an element, so NULL is
+       asserted rather than defaulted past. */
     DCHECK(el != NULL, "a <script src> was parked on with no element — §4.12.1.1 reaches this destination only "
                        "from `prepare the script element`, whose whole subject is EL, and a row without one "
                        "would run the fetched program with this document's currentScript left null");
     pending_set(e, PEND_SCRIPT_EL, node_wrap(ctx, lxb_dom_interface_node(el)));
-    /* AND THE ADDRESS LAST, THROUGH THE ONE DOOR, which is where §4.3 Scheme fetch is asked. Every field above
-       belongs to the ELEMENT and is on the record before the answer can be, so an injected
-       `<script src="data:text/javascript,…">` that §4.3 answers on this line is delivered into a record that
-       already knows its type, its document and its element. */
+    /* The address last, through the one door that asks §4.3 Scheme fetch: every field above belongs to the
+       element, so an injected `<script src="data:…">` answered on this line lands in a record that already knows
+       its type, document and element. */
     pending_park_request(ctx, e, &req);
     script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
 
-/* A PEER HOLDS A REFERENCE INTO THIS DOCUMENT — see engine.h's engine_set_referenced. It is a property of the
-   INSTANCE and not of a session, so it is set once by the host that provisioned this instance and survives
-   every session boundary; it is read by flow_step (a timeline that may not finish) and by the slice (a
-   frontier that may not be declared exhausted), which are the two halves of one statement. */
+/* A peer holds a reference into this document (engine.h's engine_set_referenced). It belongs to the instance,
+   not a session: set once by the host that provisioned the instance, it survives every session boundary. It is
+   read by flow_step (a timeline that may not finish) and by the slice (a frontier that may not be declared
+   exhausted). */
 static int g_referenced;
 
 /* The browser layer's document-load lifecycle, asked when a flow has run everything the document gave it. */
 static int (*g_docdone_hook)(JSContext *ctx);
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx))
 {
-    /* THE ASSERT COULD NOT BE WRITTEN UNTIL THE CLAIM MOVED, and that is why it was not. This slot was being
-       claimed from core/dom/document.c's per-DOCUMENT install, so a page with one <iframe> claimed it twice and
-       an assert here would have aborted every multi-document run before the release existed to make it true —
-       the crash without the fix. The claim is document_init's now and it is given back at document_agent_free,
-       so both halves hold: one claimant, and NULL is the release. A second claim on a one-entry slot silently
-       stops the first from running, which is a member doing half its job with nothing to say so. */
+    /* One claimant, and NULL is the release: document_init claims the slot once per agent and
+       document_agent_free gives it back. A second claim on a one-entry slot would silently stop the first from
+       running. */
     DCHECK(fn == NULL || g_docdone_hook == NULL,
            "a second component claimed §13.2.7's document-load lifecycle step — one call of it answers for "
            "EVERY document of this agent (it walks navigable_tree_order), so the claim is one per agent and was "
@@ -929,9 +665,8 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx))
     g_docdone_hook = fn;
 }
 
-/* THE EVENT LOOP'S TIMER STEP, registered by the timer component for the reason the document hook is: naming
-   it here would make the scheduler depend on the browser half. Asked only where this flow has nothing else to
-   run, which is the one moment virtual time may move — see timer.h. */
+/* The event loop's timer step, registered by the timer component so the scheduler does not depend on the browser
+   half. Asked only where this flow has nothing else to run, the one moment virtual time may move (timer.h). */
 static int (*g_timer_hook)(JSContext *ctx);
 void engine_set_timer_hook(int (*fn)(JSContext *ctx))
 {
@@ -941,11 +676,10 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx))
     g_timer_hook = fn;
 }
 
-/* THE EVENT LOOP'S OTHER CLOCK-DRIVEN SOURCE — §8.1.7.3's in-parallel half, which queues an update-the-
-   rendering task on the rendering task source when a navigable has a rendering opportunity. Registered by the
-   rendering component for the reason the timer step is: naming it here would make the scheduler depend on the
-   browser half. It is asked immediately BEFORE the timer step and yields to a timer that expires first, so the
-   ONE virtual clock still runs its two sources in the order their moments fall. */
+/* The event loop's other clock-driven source: §8.1.7.3's in-parallel half, which queues an update-the-rendering
+   task on the rendering task source when a navigable has a rendering opportunity. Registered by the rendering
+   component, like the timer step. It is asked immediately before the timer step and yields to a timer that
+   expires first, so the one virtual clock runs its two sources in the order their moments fall. */
 static int (*g_rendering_hook)(JSContext *ctx);
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx))
 {
@@ -955,11 +689,10 @@ void engine_set_rendering_hook(int (*fn)(JSContext *ctx))
     g_rendering_hook = fn;
 }
 
-/* THE EVENT LOOP'S IDLE RUNG — Cooperative Scheduling of Background Tasks §5.1 and §5.2, registered by the
-   component that owns them for the reason the two above are: naming it here would make the scheduler depend on
-   the browser half. It is asked BELOW both clock-driven sources because §5.1's own note places it there ("when
-   it determines that the event loop is OTHERWISE IDLE"), and it is NOT a third clock: an idle period is due
-   whenever nothing else is, so it asks the virtual clock nothing and defers to both by position alone. */
+/* The event loop's idle rung: Cooperative Scheduling of Background Tasks §5.1 and §5.2, registered by the
+   component that owns them. It is asked below both clock-driven sources because §5.1 places it there ("when it
+   determines that the event loop is otherwise idle"). It is not a third clock: an idle period is due whenever
+   nothing else is, so it asks the virtual clock nothing and defers to both by position alone. */
 static int (*g_idle_hook)(JSContext *ctx);
 void engine_set_idle_hook(int (*fn)(JSContext *ctx))
 {
@@ -970,32 +703,19 @@ void engine_set_idle_hook(int (*fn)(JSContext *ctx))
     g_idle_hook = fn;
 }
 
-/* THE CLOCK BOUNDARY'S OWN ARRIVAL COUNT, WHICH IS THE DISCRIMINATOR ITS THREE OUTCOME ROWS STRUCTURALLY
-   CANNOT BE. `queue-rendering-opportunity`, `fire-due-timer` and `start-or-run-an-idle-period` are raised only
-   when their hook TAKES the step, so each is a census of an OUTCOME over a gated operation and a 0 there is two
-   opposite things: the rung was asked and the clock legitimately had nothing due, or no dispatch ever descended
-   far enough to ask it. Those take opposite work — the first is a fact about the page's own timers and frames,
-   the second is a fact about the arms ABOVE this boundary — and the three rows cannot separate them at any
-   value. Recorded at the ASK, ahead of the gate, which is the only recording point that answers "did anyone
-   ask" rather than "did anything come of it".
-   IT COUNTS THE ARRIVAL AND NOT THE INVOCATION, which is why the hook's NULL test moved inside: an arm whose
-   hook is absent is skipped without asking, so counting invocations would make the chain identity below depend
-   on which components happened to register, and an UNINSTALLED clock would read exactly like a never-reached
-   one. Counting arrivals keeps the identity true unconditionally and leaves a missing registration visible as
-   asks above zero with its own outcome row at zero.
-   NEVER RESET, AND THAT IS THE LOAD-BEARING HALF RATHER THAN AN OVERSIGHT. These are asserted against
-   `g_step_unit_runs`, which nothing releases, so a per-SESSION reset would make the identity false from the
-   first engine_session_close onward — the scheduler's `g_orphan_asks` is the opposite choice one rung up (it IS
-   cleared there) and is the wrong precedent to copy for exactly that reason. solver/concolic.c states the
-   general shape: two counters of different reset scope are "two scopes, two populations", and neither may be
-   differenced against the other. A reader wanting these per session differences two censuses.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no arm is narrowed by one, and no rung is
-   skipped because one is large. */
+/* The clock boundary's arrival counts. `queue-rendering-opportunity`, `fire-due-timer` and
+   `start-or-run-an-idle-period` count outcomes (raised only when the hook takes the step), so their zero means
+   either "asked, nothing due" or "never reached"; these count the ask, ahead of the gate, to separate the two.
+   They count arrivals rather than invocations (the hook's NULL test is inside), so the chain identity below holds
+   whichever components registered, and a missing registration shows as asks above zero with its outcome at zero.
+   Never reset: they are asserted against `g_step_unit_runs`, which nothing releases, so a per-session reset
+   would break the identity (the scheduler's `g_orphan_asks`, cleared per session, is not the precedent here).
+   Counters of different reset scope are not differenced against each other; read per-session values as the
+   difference of two censuses. A report only: nothing branches on them. */
 static long g_clock_render_asks, g_clock_timer_asks, g_clock_idle_asks;
 
-/* ONE PER RUNG RATHER THAN ONE SHARED HELPER, because the three are at three DIFFERENT rungs of an `else if`
-   chain and the whole value of the pair below is that it pins that order: a single helper taking a hook pointer
-   would count three arrivals into one place and the chain's shape would stop being checkable. */
+/* One function per rung rather than a shared helper: the three are different rungs of one `else if` chain, and
+   counting them separately is what lets the identity pin the chain's order. */
 static int engine_clock_render_asked(JSContext *ctx) {
     g_clock_render_asks++;
     return g_rendering_hook != NULL && g_rendering_hook(ctx);
@@ -1009,10 +729,9 @@ static int engine_clock_idle_asked(JSContext *ctx) {
     return g_idle_hook != NULL && g_idle_hook(ctx);
 }
 
-/* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a PARSE produced,
-   registered by the link component for the reason the two above are: naming it here would make the scheduler
-   depend on the browser half. It is asked AHEAD of everything else a flow could do, which is the position and
-   not a preference — see the arm in flow_step. */
+/* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for elements a parse produced,
+   registered by the link component. It is asked ahead of everything else a flow could do, by position
+   (see the arm in flow_step). */
 static int (*g_link_connected_hook)(JSContext *ctx);
 void engine_set_link_connected_hook(int (*fn)(JSContext *ctx))
 {
@@ -1023,8 +742,8 @@ void engine_set_link_connected_hook(int (*fn)(JSContext *ctx))
     g_link_connected_hook = fn;
 }
 
-/* THE END OF A MICROTASK CHECKPOINT — HTML §8.1.7.3, registered by the browser component that owns what HTML
-   invokes there. See engine.h; the one caller today is Indexed Database §2.7.1's transaction cleanup. */
+/* The end of a microtask checkpoint (HTML §8.1.7.3), registered by the browser component that owns what HTML
+   invokes there; see engine.h. Its one caller is Indexed Database §2.7.1's transaction cleanup. */
 static void (*g_checkpoint_hook)(JSContext *ctx);
 void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx))
 {
@@ -1034,274 +753,120 @@ void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx))
     g_checkpoint_hook = fn;
 }
 
-/* THE SESSION. The dispatch loop is not a function that drains — it is a state machine its HOST steps, because
-   the cooperative-quantum yield in CLAUDE.md's §scheduler is exactly that: after a bounded wall-clock slice the
-   scheduler RETURNS so the one thread pumps its message port, streams findings, interleaves other documents,
-   and then resumes the byte-identical frontier. A `for(;;)` that runs to exhaustion cannot do any of it, and in
-   the extension it freezes the worker outright. The state that used to be the loop's C locals lives here so a
-   return between two iterations costs nothing to resume from.
-   ALL OF IT IN ONE PLACE. Two of these sat here and four beside the loop eight hundred lines below, which is
-   one piece of state with two homes — and the split is not cosmetic: everything above the second home could
-   read half the session and not the other half, so a router that needs to know whether a session is live had to
-   be written somewhere it could see g_sess_live rather than where it belongs. */
+/* The session. The dispatch loop is a state machine its host steps, not a function that drains: the cooperative
+   quantum yield returns after a slice so the one thread can pump its message port, stream findings and
+   interleave other documents, then resume the byte-identical frontier. A loop run to exhaustion would freeze the
+   extension's worker. The loop's state lives here, in one place, so a return between iterations costs nothing
+   and every function can see all of it (a router asking whether a session is live reads g_sess_live). */
 static JSContext *g_sess_ctx;
-/* WHICH DOCUMENT THE SEQUENCE BELOW BELONGS TO, said rather than implied by `g_sess_ctx`. A session is opened
-   over the instance's ROOT document (world.h's world_local_doc — the one the host named the agent for), and its
-   scripts are that document's; every other program a flow runs names its own document, which is what lets a
-   child navigable's scripts be work items of this frontier at all. It is the handle and not the realm for the
-   reason a queued program's is: a handle survives a park and a realm does not. */
+/* Which document the sequence below belongs to. A session is opened over the instance's root document
+   (world.h's world_local_doc, the one the host named the agent for); every other program a flow runs names its
+   own document, which is what lets a child navigable's scripts be work items of this frontier. It is the handle,
+   not the realm, because a handle survives a park and a realm does not. */
 static uint32_t g_sess_doc;
-/* THE ROOT DOCUMENT'S SCRIPT INVENTORY, AND IT IS A SEED RATHER THAN A SEQUENCE — which is the whole of this
-   change and the reason four parallel arrays and an offset are gone.
-   WHAT WAS WRONG WITH THE OTHER SHAPE. A flow's cursor used to walk TWO representations: this document's
-   scripts, held here in `bodies`/`srcs`/`types` and addressed as [0, n), and then the flow's OWN rows, held in
-   the seven-column dyn table and addressed as [n, n + dyn_n) through a `- n` offset. Two representations of one
-   thing is exactly one thing too many, and the position that fell between them was not hypothetical: HTML
-   §4.12.1.1 "Processing model" ends "prepare the script element" with "Otherwise, immediately execute the
-   script element el, even if other scripts are already executing", so a program a page `eval`s or injects from
-   its SECOND-to-last <script> belongs at the slot after that script — a slot INSIDE the static half, which the
-   dyn table could not name. engine_queue_into carried a `CHECK` there rather than a DCHECK, so a real page that
-   did it aborted the engine in RELEASE as well as in dev, and a real page did.
-   WHAT IT IS NOW. There is ONE representation: every flow's programs are rows of the dyn table, and this is
-   only the template each flow of this document is SEEDED from at the moment it is created. Nothing reads it at
-   a compile, at a drain or at a cursor — engine_seed_scripts is its one reader — so the cursor has one address
-   space and `- n` has nothing left to subtract.
-   THE ADDRESS IS RESOLVED ONCE, HERE, and that is HTML §4.12.1.1 "Processing model"'s own sentence: "Let url
-   be the result of encoding-parsing a URL given src, relative to el's node document" is computed once per
-   ELEMENT, and both of the things this engine asks it for — §8.1.4.2's fetch and, for a module, the record's
-   identity — must be the same answer. Resolving it per seed instead would ask the question again mid-session,
-   under whichever flow's delta happened to be applied, so a `<base href>` one timeline wrote would silently
-   re-point another timeline's bundle.
-   `body` AND `url` ARE TWO INDEPENDENT ITEMS OF ONE SCRIPT, NOT TWO SPELLINGS OF ONE. HTML §8.1.4.1 "Scripts"
-   says so of the base URL field itself: "Null or a base URL used for resolving module specifiers. When
-   non-null, this will either be the URL from which the script was obtained, for external scripts, or the
-   document base URL of the containing document, for inline scripts." So `body` answers HAVE I GOT THE SOURCE
-   TEXT (NULL until a reply carries it, which is what parks a flow on the row) and `url` answers WHERE DID THE
-   BYTES COME FROM (NULL for a `<script>` with no `src`, whose base URL HTML §4.12.1.1 "Processing model"
-   takes from the document).
-   A row with BOTH is the ordinary end state of an external script — §8.1.4.2 "Fetching scripts": "Let script
-   be the result of creating a classic script given sourceText, settingsObject, response's URL, options,
-   mutedErrors, and url" — and it is what a host that already holds the response hands over. An exactly-one-of
-   invariant stood here and it was WRONG in exactly that case: it read "the source has not arrived yet" as "the
-   script has no address", so the address of every pre-fetched external script was DROPPED at this build and
-   the program compiled under its DOCUMENT's name. For a module that name is the module map KEY, so a document
-   with two `<script type=module src>` had one module.
-   A row that is NEITHER is not a row: a `src` that does not encoding-parse becomes NO ROW AT ALL —
-   §4.12.1.1's "if url is failure … fire an event named error at el, and return" means that element runs no
-   script, so there is nothing for the sequence to hold. Both strings are this table's own: it is built in
-   engine_sched_begin and freed in engine_session_close, which is the one place a session ends. */
+/* The root document's script inventory: a seed, not a sequence. Every flow's programs are rows of its own dyn
+   table, and this is only the template each flow of this document is seeded from when created;
+   engine_seed_scripts is its one reader. One address space is required by HTML §4.12.1.1, whose "immediately
+   execute the script element el, even if other scripts are already executing" puts a program `eval`ed or
+   injected from the second-to-last `<script>` at a slot between two document scripts.
+   The address is resolved once, here: §4.12.1.1 encoding-parses `src` once per element, and both the fetch
+   (§8.1.4.2) and a module's record identity must get that answer. Resolving per seed would ask again under
+   whichever flow's delta is applied, so one timeline's `<base href>` would re-point another's bundle.
+   `body` and `url` are independent (HTML §8.1.4.1 Scripts: the base URL is "the URL from which the script was
+   obtained, for external scripts, or the document base URL of the containing document, for inline scripts").
+   `body` is NULL until a reply carries the source, which parks a flow on the row; `url` is NULL for a `<script>`
+   without `src`. Both set is an external script whose response the host already handed over; dropping its
+   address would compile it under the document's name, which for a module is the module map key. Neither set is
+   no row: a `src` that fails to parse fires `error` and runs nothing (§4.12.1.1). The strings are owned:
+   built in engine_sched_begin, freed in engine_session_close. */
 typedef struct RootScript {
-    /* THIS ROW'S SOURCE TEXT, or NULL while the flow is still owed it — and ONE buffer for the whole session,
-       because the table is read once per BASE flow (engine_seed_root_flow is the seed hook, so the boot flow,
-       every cold-resumed replay and every @S candidate session read it) and a document's own bundle is the
-       largest program this engine holds. It was a `char *` the seed strdup'd into every one of them. */
+    /* This row's source text, or NULL while the flow is still owed it. One buffer for the session, because the
+       table is read by every base flow (engine_seed_root_flow is the seed hook: the boot flow, each cold-resumed
+       replay, each @S candidate session) and a document's own bundle is the largest program this engine holds. */
     DynBody *body;
     char *url;           /* §4.12.1.1's encoding-parsed address, or NULL for a `<script>` with no `src` */
     ScriptType type;     /* which of §8.1.4.4 "Calling scripts"'s two algorithms evaluates it */
-    /* THE `script` ELEMENT THE ROW IS THE PROGRAM OF — §4.12.1.1's "execute the script element" is a switch on
-       EL, and its "classic" arm sets that document's HTML §3.1.7 `currentScript` to it for the whole of the
-       run. It is here for the reason `type` is: by the time the scheduler holds a body the element is behind
-       it, and this is the last table that still knows.
-       BORROWED, unlike the two strings above — it names a node of the tree this session was opened over, and
-       the tree outlives the session. It is also why this pointer may never be PARKED: the cold tier stores a
-       recipe and replays the document from its first script, so the rows are rebuilt and a node's address is
-       never asked to mean anything outside the session that read it. */
+    /* The `script` element the row is the program of: §4.12.1.1's "execute the script element" switches on el,
+       and its classic arm sets HTML §3.1.7 `currentScript` to it for the run. By the time the scheduler holds a
+       body the element is behind it, and this is the last table that knows it. Borrowed: the tree outlives the
+       session. It is never parked, because the cold tier stores a recipe and replays from the first script, so a
+       node address is never asked to mean anything outside the session that read it. */
     lxb_dom_element_t *el;
 } RootScript;
 static RootScript *g_root_scripts;
-/* THE NAME THE NEXT ROW OF ANY FLOW'S SEQUENCE TAKES IS NO LONGER THIS FILE'S TO MINT, and the counter that
-   stood here is deleted rather than kept beside the one that replaced it. It said: ONE counter for the
-   instance and not one per flow, because sibling arms mint independently and a register entry a fork SHARES
-   would resolve to a different row in each arm; starting at 1 so that 0 — the register field's own default —
-   is a name no row can answer to. Every word of that is still the contract and is now solver/flow.c's
-   g_work_seq, which issues the same names to a flow's QUEUED CALLBACKS as well, so a row and a job of one
-   flow are comparable by when they were queued. Two counters would have made them incomparable again, which
-   is the whole thing the move is for. */
+/* The name the next row of any flow's sequence takes is minted by solver/flow.c's g_work_seq: one counter per
+   instance (sibling arms mint independently, and a register entry a fork shares must resolve to one row in
+   every arm), starting at 1 so 0, the register field's default, names no row, and shared with a flow's queued
+   callbacks so a row and a job of one flow compare by when they were queued. */
 static int g_root_n;
-/* AND THE PARTITION OF IT THAT DECIDES WHETHER THIS RUN EVER LEARNED AN ENDPOINT AT ALL. A seeded row either
-   already HAS its source text — an inline `<script>`, or an external one whose response the host handed over
-   — or it does not, and a row that does not is a row the seed turns into a DYN_SCRIPT_SRC whose body is its
-   own address, which PARKS the flow on the reply door. So `rootProgramsAwaitedAtSeed` is the number of reply-door
-   openings this document owes for its OWN BUNDLE, and it is the denominator `replyAsked` has never had.
-   `replyAsked == rootProgramsAwaitedAtSeed` IS THE PRODUCT'S HEADLINE VERDICT AND IT WAS BEING COUNTED BY HAND. The
-   reply door is a fetch, an injected `<script src>`, the document's own script slots and a dynamic `import()`
-   (solver/result.c), so a run whose asks exactly equal what the bundle owes has issued NO page `fetch()`, no
-   XHR and no dynamic `import()` — it learned nothing, and §What-the-tool-produces is the whole of what it was
-   for. That reading has already settled a real question about a real page, and it settled it by somebody
-   counting a document's `<script src>` elements off the page and writing "ten script rows" into a comment,
-   which is in no log and comparable with no other document.
-   AND THAT VERDICT IS AN `IF` AND IS STATED AS THE VERDICT, SO THE CONVERSE IS WHAT A READER TAKES — AND THE
-   CONVERSE IS FALSE, ON A REAL PAGE, WITH THE COUNTEREXAMPLE REPRODUCING. `asks exactly equal what the bundle
-   owes ⇒ it learned nothing` is sound. What a reader standing at a census does is read the INEQUALITY and
-   conclude the run learned something, and `replyAsked` counts EVERY reply-door opening — which includes the
-   openings the MARKUP named and the seed never awaited, because a `<link>` element is not a program row.
-   So a document with one stylesheet per chunk clears the inequality by its own `<head>` and has learned
-   nothing at all.
-   MEASURED at bed765f, two fresh browsers per document, 90 s wall budget, wall-denominated slice, terminal
-   censuses, with the endpoint columns IDENTICAL across both runs of each document while the work counters
-   differed 2.5x: `gitlab.com/explore` reads `rootProgramsAwaitedAtSeed 31` against `replyAsked 48`, an excess
-   of SEVENTEEN — and its door histogram is `document-script: 31, link-element: 17`, so the 31 awaited rows ARE
-   the 31 script doors and the whole excess is stylesheets. That run's razor is `unproven: 48, runtime-only: 0`:
-   every address it emitted was in the served markup, nothing was learned, and the inequality held by 17.
-   `play.grafana.org` reads 5 against 23 with `fetch: 4` doors and a razor of `runtime-only: 1`, so there the
-   inequality IS evidence — which is why this is a correction and not a refutation of the pair.
-   THE DISCRIMINATOR IS ALREADY PRINTED BESIDE IT AND IS THE DOOR HISTOGRAM, which is what makes this a repair
-   a reader can perform rather than a caution. A `document-script` or `link-element` opening is the MARKUP's
-   own; `fetch`, `xhr`, `module-import` and `beacon` are the RUN's. So the quantity this verdict wants is
-   `replyAsked` less the markup doors, which on that gitlab run is 48 - 48 = ZERO and agrees with the razor
-   exactly, and on grafana is 23 - 6 = 17 beside four emitted `fetch` doors.
-   IT IS THE §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS SHAPE AND NOT A WRONG COUNT. `replyAsked` answers HOW MANY
-   OPENINGS THE DOOR GOT, honestly; this record asked it to answer DID THIS RUN LEARN, and the two agree on
-   every document whose markup names no subresource it does not execute. Neither number is repaired by the
-   other and nothing here changes what either counts.
-   RETIREMENT: this record goes when the census composes the markup-less remainder itself, so a reader cannot
-   be handed `replyAsked` against this pair without the door partition that decides what the gap is made of.
-   RAISED AT THE ONE LINE `g_root_n` IS, ON THE SAME FIELD THE SEED ITSELF BRANCHES ON — engine_seed_scripts
-   chooses DYN_PAGE_SCRIPT or DYN_SCRIPT_SRC by `rows[i].body`, so keying these on that same column is what
-   stops the census and the seed being two opinions about one row. The identity against `g_root_n` is asserted
-   at engine_frontier_census, where all three are in one hand, for the reason `g_finished`'s arms are. */
-/* AND `AT SEED` IS IN THE NAME BECAUSE A READER WITH THIS FILE OPEN GOT IT WRONG, WHICH IS THE ONLY EVIDENCE
-   a naming argument can have. Both arms are written at the ONE line below and never again: nothing updates
-   them when a reply lands, because the pair is a DENOMINATOR — a fact about what the DOCUMENT owes, fixed
-   the moment its rows are seeded — and that is what makes `replyAsked` readable against it at all. They are
-   therefore neither of the two kinds §CLAUDE.md's counter rule names: not a GAUGE, which states what is true
-   now, and not a LIFETIME COUNTER, which may be differenced across samples. They are a CONSTANT, and a
-   constant that decreases would be a broken seed rather than progress.
-   THE MISREADING IT INVITES IS SPECIFIC AND EXPENSIVE. Read as live, `…Awaited 17` says seventeen of the
-   document's programs are STILL owed bytes — and a frontier standing at program 7's door then reads as a
-   delivery that never arrived, which sends the next reader to the reply seam. On the run that produced those
-   numbers the door had answered every opening it was given (`replyAsked 21 == replyAnswered 21`, at the
-   FIRST census, before any fork), so that reading was available and wrong, and the work it would have
-   dispatched was at a component with nothing wrong in it.
-   THE FIX IS THE NAME AND NOT THIS PARAGRAPH. §CLAUDE.md: a counter states its KIND at the point it is
-   EMITTED, in the key rather than in a comment no consumer reads — a reader is standing at the census line,
-   not here. What this record adds that the name cannot is the direction of the error, which is the half that
-   decides where a misled reader goes.
-   THE LIVE COMPANION THIS RECORD ASKED FOR IS BUILT AND IS `engine_rows_awaiting_bytes` — the census emits
-   it as `rowsAwaitingBytes`, so the misreading now has a row that answers it and the pair reads as the
-   CONSTANT beside the GAUGE it always was. The clause that stood here said the question was "not answered
-   anywhere", which is the shape CLAUDE.md rates worst in this direction: an absence asserted in the present
-   tense is read by exactly one person, the one about to build it, and it goes on arguing for a second row
-   after the first has landed. It is kept in its own words for the half that is still load-bearing and that a
-   reader WILL otherwise re-derive wrongly — the row is NOT a walk of `g_root_scripts`, which learns nothing
-   after the seed (its `.body` is written at one line and never again), and it is not document-wide either: a
-   program row's kind lives on EACH FLOW's own table and a delivery rewrites the flow's, so the honest answer
-   is per-flow and the shape of the row is a question about the delivery's fan-out rather than about this
-   pair. What must not follow from this pair is an INEQUALITY: the gauge counts rows across every member and
-   a fork copies them, so it stands ABOVE `…AwaitedAtSeed` on any forking frontier and below it as soon as
-   one member is sold — neither direction is a broken count, which is why there is no assert between them. */
+/* The seed's partition of `g_root_n`: rows that already have their source text (an inline `<script>`, or an
+   external one whose response the host handed over) and rows that do not, which the seed turns into
+   DYN_SCRIPT_SRC rows that park the flow on the reply door. `rootProgramsAwaitedAtSeed` is the number of
+   reply-door openings the document owes for its own bundle: a run whose `replyAsked` equals it issued no page
+   `fetch()`, XHR or dynamic `import()` and learned nothing. The converse does not hold: `replyAsked` also
+   counts openings the markup named that are not program rows (a `<link>` stylesheet), so the inequality alone
+   is not evidence of learning. Subtract the markup doors (`document-script`, `link-element`) shown in the door
+   histogram; `fetch`, `xhr`, `module-import` and `beacon` are the run's.
+   Both arms are written at the one line `g_root_n` is, keyed on the same `rows[i].body` column
+   engine_seed_scripts branches on; the identity against `g_root_n` is asserted at engine_frontier_census. They
+   are a constant fixed at seed (hence `AtSeed`), neither a gauge nor a lifetime counter: they do not fall as
+   replies land. The live companion is `engine_rows_awaiting_bytes` (`rowsAwaitingBytes`), a per-flow walk,
+   because a delivery rewrites each flow's own table. There is no inequality between the two: forks copy rows,
+   so the gauge stands above the constant on a forking frontier and below it once a member is sold. */
 static int g_root_n_held, g_root_n_awaited;
 static Flow *g_sess_cur;
 static int g_sess_live;
-/* THE FINISH `g_sess_cur` IS OWED, DEFERRED ACROSS ONE RETURN TO THE HOST — @PERWORLD, and it exists for
-   exactly one reason: a member's LAST moment is the only moment its world is complete, and that moment is
-   INSIDE flow_finish's caller rather than at a yield.
-   WHY A DEFERRAL RATHER THAN A DIFFERENT PLACE TO YIELD. flow_finish unapplies the COW delta and the DOM
-   delta (`cow_unapply`, `dom_unapply`) — that IS the finish — so after it there is no world left to render
-   and before it there is no way to hand the host a turn without leaving the finish undone. The two facts
-   cannot be reconciled inside one call, so the finish is SPLIT ACROSS the return: the slice yields with the
-   member standing and its deltas applied, the host renders, and the next entry into this function performs
-   the finish that was owed. Nothing else is deferred and nothing is skipped.
-   IT IS A FLAG AND NOT A SECOND `Flow *`, because the flow it names is already held in `g_sess_cur` and a
-   second pointer would be a second answer to "which member is the scheduler holding" — the shape this file
-   already refuses for the pick. The pair is asserted where it is consumed.
-   EVERY PATH THAT COULD REACH `engine_session_close` WITH ONE OUTSTANDING RUNS THROUGH THE CONSUMER FIRST,
-   which is why there is no second discharge site: the three calls to that function are the park at this
-   function's own entry and the two exits below its loop, and the consumer stands ABOVE all three. The one
-   state this cannot cover is a host that never steps again, and that host's session is torn down whole. */
+/* The finish owed to `g_sess_cur`, deferred across one return to the host. A member's last moment is the only one
+   at which its world is complete, and it is inside flow_finish's caller: flow_finish unapplies the COW and DOM
+   deltas (`cow_unapply`, `dom_unapply`), so after it there is nothing to render, and before it the host cannot
+   be handed a turn. The finish is split across the return: the slice yields with the member's deltas applied,
+   the host renders, and the next entry performs the finish. It is a flag rather than a second `Flow *`, since
+   `g_sess_cur` already names the member, and the pair is asserted where consumed. Every path to
+   `engine_session_close` (the park at the slice's entry and the two exits below its loop) runs through the
+   consumer first; a host that never steps again has its session torn down whole. */
 static int g_sess_finish_owed;
 
-/* THE URLS THE HOST OWES, newline-joined across every live flow, or "" — one register, the flows' own. The
-   buffer is this function's and is valid until the next call. */
-/* THE URLS THE HOST OWES, newline-joined across every live flow, DEDUPED. Several flows park on the same URL —
-   a candidate re-fire re-runs the same fetches the exploring flow made — and engine_provide fills every entry
-   that names it, so listing it twice makes the host provide twice and the second call finds nothing left. The
-   list is a set of requests, not a list of waiters. */
-/* A SYNCHRONOUS REQUEST ONLY THE HOST CAN ANSWER, and the mechanism a cross-document read rides.
- *
- * WHY IT IS NOT A FETCH. A fetch hands the page a promise and the flow keeps running; this one BLOCKS, because
- * the value has to appear at the call site that asked for it. `iframe.contentWindow.document.body` must answer
- * on the line after the append, and one instance is one document, so the answer is in another instance and not
- * available in this turn. The flow therefore SUSPENDS exactly as it suspends at an await or a loop back-edge,
- * siblings run, and it resumes with the value.
- *
- * WHY THE RENDEZVOUS IS AN ID AND NOT THE REQUEST TEXT. A fetched body is shared by every flow waiting on that
- * URL, which is right for a resource. An answer here is computed under the ASKING FLOW'S WORLD — two arms of a
- * fork that navigated a frame differently must not resolve to one Window — so answers are never shared, and
- * two identical questions are two requests. */
+/* A synchronous request only the host can answer, which a cross-document read rides. Unlike a fetch it blocks:
+ * `iframe.contentWindow.document.body` must answer on the line after the append, and the answer lives in another
+ * instance, so the flow suspends as at an await or a loop back-edge, siblings run, and it resumes with the value.
+ * The rendezvous is an id, not the request text: an answer is computed under the asking flow's world (two arms
+ * that navigated a frame differently must not resolve to one Window), so answers are never shared and two
+ * identical questions are two requests. */
 static uint32_t g_next_req = 1;
 
-/* HOW MANY SYNCHRONOUS REQUESTS THIS DOCUMENT HAS EVER ISSUED, AND HOW MANY THE HOST HAS EVER ANSWERED — the
- * next two facts in `finished`/`deepest`'s family, and they exist for the same reason those two do: the
- * question they answer had to be ARGUED from a census instead of read off one.
+/* How many synchronous requests this document has issued, and how many the host has answered. `blocked` and
+ * `owed` are levels and cannot tell a host paying promptly from one that never pays (members keep arriving in
+ * both); starvation is a rate, and these are the counts that have one. `hostAnswered: 0` beside `blocked: 6583`
+ * says the flows are unpaid, not mis-ranked.
  *
- * `blocked` and `owed` are LEVELS. They say how much of the frontier is waiting right now, and no single
- * reading of a level can tell a host that is paying promptly from a host that has never paid at all: a
- * document whose flows are answered within a quantum and one whose flows are parked forever both report a
- * frontier with thousands of members waiting, because in both of them the members keep arriving. Starvation is
- * a RATE, and these two are the only numbers this engine holds that have one. `hostAnswered: 0` beside
- * `blocked: 6583` ends that diagnosis in a glance — those flows are not mis-ranked, they are unpaid — and a gap
- * between the two that only ever widens is a host that is not paying at the rate the document asks.
- *
- * They are CUMULATIVE and they are read by NOTHING but the census (§NO BOUNDS): no pick, no weight and no exit
- * consults them, so there is no spelling of them that can truncate work.
- *
- * THEY COUNT ONE POPULATION, AND THE TWO WAYS THAT STOPPED BEING TRUE ARE WHY THE PAIR IS NOW SPELLED THIS WAY.
- * The census asserts `answered <= asked`, which is only a real invariant if an ASK is every id the host will be
- * shown and a PAYMENT is the one delivery that SETTLES one of them. Both halves were broken, and neither was a
- * counter surviving a session boundary — that hypothesis cannot produce this ordering at all, because these
- * three are never reset (see engine_session_close), so a carried total carries BOTH and preserves their order.
- *   - THE ASK WAS COUNTED AT AN ENTRY POINT INSTEAD OF AT THE MINT. This comment used to claim "every issue of
- *     a request passes through engine_host_request", and a SECOND mint sat in engine_sibling_assemble: an
- *     unanswered request is RE-ISSUED under a fresh id when a blocked flow forks, the host is shown that id
- *     like any other (engine_host_requests joins every unanswered HOSTREQ across every flow), the host pays it
- *     — and nothing counted the ask. That is why the count now rides `mint_req` and not a call site: a third
- *     minting site cannot forget what it does not have to remember.
- *   - AND A SECOND PEER TIMELINE'S ANSWER IS NOT A SECOND PAYMENT. See g_host_answers_extra below.
- */
+ * Cumulative, never reset (see engine_session_close), and read only by the census. They count one population:
+ * the census asserts `answered <= asked`, so an ask is counted at `mint_req` (every id the host will be shown,
+ * including a fork's re-issue in engine_sibling_assemble), and a payment is the one delivery that settles an id
+ * (a further peer timeline's answer goes to g_host_answers_extra). */
 static long g_host_asked;
 static long g_host_answered;
-/* …AND HOW MANY ANSWERS LANDED ON A REQUEST THAT WAS ALREADY SETTLED, which is a DIFFERENT POPULATION and was
- * being added into the one above. A peer's document state IS its flows, so one rendezvous has one answer per
- * peer TIMELINE and every one of them is true (engine_host_answer's `extra` arm records each and an arm forks
- * over it) — but only the FIRST of them settles the ask: it is the one that writes the value, clears the flow's
- * host-owed mark and makes the flow askable again. The rest arrive at a register entry that already has its
- * value and unblock nothing.
- * Merging them destroyed the one thing the pair is for. The rate is meant to separate "this frontier is waiting
- * because of the RANKING" from "because the host has not paid", and a peer holding four timelines answered one
- * ask four times — so a document in which the host settles almost nothing and a chatty peer answers a handful
- * of cross-instance reads reads as a host paying three times what it was asked. Measured on the two-instance
- * fixture: eleven asks settled, thirty-three deliveries credited.
- * It is counted rather than dropped because it is the ONLY number that says how many peer timelines this
- * instance was answered out of, which is exactly what the answer-fork machinery is judged by. */
+/* Answers that landed on a request already settled: a different population. A peer's document state is its
+ * flows, so one rendezvous gets one true answer per peer timeline (engine_host_answer's `extra` arm records
+ * each and an arm forks over it), but only the first settles the ask: it writes the value, clears the flow's
+ * host-owed mark and makes the flow askable again. Folding these into `g_host_answered` would make a chatty peer
+ * read as a host paying more than it was asked. Counted because it is the only number saying how many peer
+ * timelines this instance was answered out of. */
 static long g_host_answers_extra;
-/* …AND HOW MANY ARRIVED WHEN THERE WAS NOTHING LEFT TO CONSUME THEM. A peer answers BY RUNNING A PROGRAM, so
- * its completion is produced on ITS timeline and relayed by a zone that cannot know what became of the asker in
- * the meantime — and §Time-travel's Level-1 eviction makes "the peer outlives the asking instance's park" the
- * ORDINARY case rather than the exotic one. So an answer arriving after this session closed is not a bug in
- * anybody's routing: the flow that asked is written down as a recipe, and the replay RE-ISSUES the request and
- * is answered with today's value. It is REFUSED rather than written (see engine_host_answer) and counted here,
- * because a refusal nobody can see is a drop: `hostAnswersLate` climbing while `hostAnswered` does not is a
- * host paying an instance that has already stopped listening. */
+/* Answers that arrived when nothing was left to consume them. A peer answers by running a program on its own
+ * timeline, relayed by a zone that cannot know what became of the asker, and Level-1 eviction makes a peer
+ * outliving the asker's park the ordinary case. The asking flow is a recipe whose replay re-issues the request
+ * and gets today's value, so a late answer is refused (engine_host_answer) and counted here: `hostAnswersLate`
+ * climbing while `hostAnswered` does not is a host paying an instance that stopped listening. */
 static long g_host_answers_late;
-/* …AND HOW MANY THIS ENGINE WITHDREW BEFORE ANYBODY ANSWERED THEM. It is the fourth member of the family above
- * and it exists for the family's own reason: the pair is a RATE, and a rate whose numerator can never reach its
- * denominator reports a host that is not paying. A terminated id is an ask the engine took BACK (Fetch §2
- * Infrastructure's terminate a fetch controller — see engine_host_terminate), so it is neither a payment nor an
- * unpaid ask, and folding it into either is the same defect as folding an extra peer TIMELINE's answer into
- * `g_host_answered`: one number describing two populations, with only the ORDER of the two to say so.
- * NOT RESET at a session boundary, with the other four and for their reason. */
+/* Requests this engine withdrew before anybody answered them (Fetch §2 Infrastructure's terminate a fetch
+ * controller; see engine_host_terminate). A withdrawn id is neither a payment nor an unpaid ask, so it has its
+ * own count rather than being folded into either side of the rate. Not reset at a session boundary. */
 static long g_host_terminated;
 
-/* THE ONE PLACE A RENDEZVOUS ID IS MINTED, and therefore the one place an ASK is counted. There are two callers
-   — a machine issuing a request, and a blocked flow's fork re-issuing the one record it may not share — and
-   until this existed each of them carried its own `g_next_req++` and its own copy of the wrap CHECK, while only
-   one of them carried the count. A fact answered from two places is answered differently from one of them
-   eventually; the fix is never to add the missing line at the second site, it is to leave the second site
-   nothing to remember.
-   A REUSED ID ANSWERS THE WRONG QUESTION, which is why the wrap is a CHECK and not a DCHECK: the answer is
-   routed by this number alone, so a wrapped counter delivers one flow's cross-document read into another flow's
-   call site, in a world that never asked the question, and that is not a state to proceed from in release. */
+/* The one place a rendezvous id is minted, and so the one place an ask is counted. Its two callers are a machine
+   issuing a request and a blocked flow's fork re-issuing the one record it may not share. The wrap is a CHECK:
+   the answer is routed by this number alone, so a reused id would deliver one flow's cross-document read into
+   another flow's call site, in a world that never asked. */
 static uint32_t mint_req(void)
 {
     uint32_t id = g_next_req++;
@@ -1311,64 +876,36 @@ static uint32_t mint_req(void)
     return id;
 }
 
-/* WHAT A SOLD FLOW TOOK WITH IT — the same family as the three above and sitting with them, because every one
- * of these is a fact about a debt the host is carrying and what became of the flow that was owed it; the pager
- * far below is only where the number is WRITTEN. Two counts and not one, because a paged flow owes TWO
- * different debts settled through different doors: a fetch reply is paired by (method, url) against the
- * host's own pending list, and a synchronous request is routed BY ID to a call site. One count for both was
- * a real defect and a silent one — a sold HOSTREQ entry inflated the fetch side, so the very next reply the
- * host genuinely mispaired spent that credit and the assert written to catch it (main.c's provide pairing)
- * said nothing.
- * Split at the sale, by kind, so each door consumes only its own — and on this side by what is still OWED,
- * because an ANSWERED fetch entry sold with a flow is a reply the host has already sent and can never send
- * again (pending.h, pending_owed_replies): the residue of the same over-credit, wearing the other half of the
- * register.
+/* What a sold flow took with it, split by debt because the two settle through different doors: a fetch reply is
+ * paired by (method, url) against the host's pending list, a synchronous request is routed by id. A shared count
+ * would let a sold host-request entry absorb a real mispairing that main.c's provide-pairing assert exists to
+ * catch. On the fetch side only what is still owed counts: an answered entry sold with a flow is a reply the host
+ * already sent (pending.h, pending_owed_replies).
  *
- * A flow BLOCKED on the host is the cheapest member to page — its recipe re-issues the request in the session
- * that resumes it and gets today's answer, which is §Time-travel's whole point — so the tail is very often a
- * flow the host is mid-fetch for. The reply then arrives for a URL nobody is parked on any more, and that is
- * not the host mispairing its list: it is a park that happened between the ask and the answer. Counted rather
- * than assumed, so the pairing assert stays armed for the case it was written for and is answered exactly once
- * per reply the sale made unnecessary. */
+ * A flow blocked on the host is the cheapest member to page (its recipe re-issues the request on resume), so the
+ * tail is often a flow the host is mid-fetch for, and its reply arrives for a URL nobody is parked on. That is a
+ * park between ask and answer, not a mispairing; it is counted so the pairing assert stays armed and is answered
+ * once per reply the sale made unnecessary. */
 static long g_paged_owed;
-/* …AND THE REQUEST SIDE, WHICH IS REPORTED RATHER THAN SPENT. It is not a credit: one request may still be
- * owed N answers by N peer timelines, so a per-entry credit is a number that runs out and then aborts under
- * the message written for a DIFFERENT door — the exact "right crash for the wrong reason" this file is being
- * corrected for. It is stated in the abort that cannot tell those doors apart (engine_host_answer) and on the
- * @COLD census line, and it decides nothing. */
+/* The request side, reported rather than spent: one request may still be owed N answers by N peer timelines, so
+ * a per-entry credit would run out and abort under another door's message. It is stated in engine_host_answer's
+ * abort and on the @COLD census line, and decides nothing. */
 static long g_paged_reqs;
 
-/* HOW MANY FLOWS THIS SESSION ACTUALLY SOLD. The pager's whole claim is that `live` stops tracking `flows`
-   under pressure, and until this counter existed that claim had no WRITER: `live < flows` is equally the
-   signature of flows FINISHING, and `_park`'s record count is two record kinds (segments and flows) added
-   together, so neither of the two numbers a run already printed can answer "did it page". CLAUDE.md's rule is
-   that a consumer never defaults a producer's field; the same rule read forwards is that a measurement gets a
-   producer before it gets quoted. */
+/* Flows this instance has sold. `live < flows` is equally the signature of flows finishing, and `_park`'s record
+   count sums two record kinds, so neither answers "did it page"; this counter does. */
 static long g_flows_sold;
-/* …AND THE TWO POPULATIONS IT IS THE SUM OF — the same split `g_finished` carries and for the same reason,
-   with one asymmetry that makes this the sharper half: a parked @S candidate session comes back WITHOUT the
-   ladder it stood on (solver/flow.h — `cand_surv` and `cand_rung` are observations of a re-execution and
-   deliberately do not cross the tier), so selling one costs the search a measured distance that selling an
-   exploration flow does not cost. One counter said neither. */
+/* The two populations it sums, split like `g_finished`. A parked @S candidate comes back without its ladder
+   (solver/flow.h: `cand_surv` and `cand_rung` are re-execution observations that do not cross the tier), so
+   selling one costs the search a measured distance that selling an exploration flow does not. */
 static long g_flows_sold_flows, g_flows_sold_cands;
-/* …AND WHETHER THE REFUSAL EDGE WAS EVER ASKED, WHICH `sold` STRUCTURALLY CANNOT SAY. `sold: 0` is produced by
-   three runs that take OPPOSITE work and it reads identically for all of them: one that never met the RAM
-   floor (no pressure — the frontier fits), one whose refusal arrived OUTSIDE the safepoint (the reclaim is
-   armed only across the flow step, so an allocation refused anywhere else is declined here and the frontier is
-   never consulted), and one that met the floor holding nothing but the running flow (the pager's honest end,
-   and the only one of the three in which paging has actually run out). Three states behind one answer is what
-   CLAUDE.md's @S rule names, and the cure is the one this document already uses twice: `host_asked` is what
-   makes `host_answered` readable, and solver/result.c's `resumed` row was added one field over for exactly
-   this — a zero that meant BOTH "no residue was handed to this session" and "a rebuild carried nothing". The
-   seam states that it was CONSULTED, so its answer stops being readable as its absence.
-   THE FOUR ARE AN EXACT PARTITION, WHICH IS WHY THIS IS THREE ROWS AND NOT A FLAG. Every call to
-   engine_reclaim_tail returns after exactly one of the two refusals or the sale below, and a sale gives back
-   exactly one flow, so `asks == unarmed + floor + sold` holds by construction — asserted at
-   engine_frontier_census, where all four are in one hand, so an arm added to that hook later without a counter
-   fires there instead of silently re-labelling one of these.
-   THEY ARE THE INSTANCE'S TOTALS like `g_flows_sold` beside them, never a session's: the pressure a run met is
-   a fact about the instance, and a count that restarted would answer "did this session meet the floor" to a
-   reader asking whether the edge has ever fired at all. */
+/* Whether the refusal edge was asked, which `sold` cannot say: `sold: 0` reads the same for a run that never met
+   the RAM floor, one whose refusal arrived outside the safepoint (the reclaim is armed only across the flow
+   step, so elsewhere it is declined and the frontier never consulted), and one that met the floor holding only
+   the running flow (the pager's real end). Every engine_reclaim_tail call returns after exactly one of the two
+   refusals or a sale of exactly one flow, so `asks == unarmed + floor + sold`, asserted at
+   engine_frontier_census so an arm added later without a counter fires there. Instance totals like
+   `g_flows_sold`, never per session: the question is whether the edge has ever fired. */
 static long g_reclaim_asks, g_reclaim_unarmed, g_reclaim_floor;
 
 int engine_take_paged_owed(void) {
