@@ -23452,7 +23452,7 @@ static __exception int js_operator_private_in(JSContext *ctx, JSValue *sp)
 }
 
 
-static __exception int js_operator_typeof(JSContext *ctx, JSValue op1)
+static __exception int js_operator_typeof(JSContext *ctx, JSValueConst op1)
 {
     JSAtom atom;
     uint32_t tag;
@@ -23501,6 +23501,13 @@ static __exception int js_operator_typeof(JSContext *ctx, JSValue op1)
         break;
     }
     return atom;
+}
+
+/* ECMA-262 §13.5.3 The typeof Operator over a value the caller holds concretely: the string it evaluates to.
+   Public so a host deriving an unknown's type from its example runs the operator, not a copy of its table. */
+JSValue JS_TypeOf(JSContext *ctx, JSValueConst v)
+{
+    return JS_AtomToString(ctx, js_operator_typeof(ctx, v));
 }
 
 static __exception int js_operator_delete(JSContext *ctx, JSValue *sp)

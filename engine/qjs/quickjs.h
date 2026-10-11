@@ -1459,6 +1459,8 @@ JS_EXTERN JSValue JS_ToObject(JSContext *ctx, JSValueConst val);
 JS_EXTERN JSValue JS_ToObjectString(JSContext *ctx, JSValueConst val);
 
 JS_EXTERN bool JS_IsFunction(JSContext* ctx, JSValueConst val);
+/* ECMA-262 §13.5.3 The typeof Operator's result string for a concrete value (owned by the caller). */
+JS_EXTERN JSValue JS_TypeOf(JSContext *ctx, JSValueConst val);
 JS_EXTERN bool JS_IsAsyncFunction(JSValueConst val);
 JS_EXTERN bool JS_IsConstructor(JSContext* ctx, JSValueConst val);
 JS_EXTERN bool JS_SetConstructorBit(JSContext *ctx, JSValueConst func_obj, bool val);

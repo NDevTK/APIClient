@@ -4348,13 +4348,24 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
 /* `typeof` an unknown is unknown. A concolic is a host object of a callable class (so `x.indexOf(...)` works),
    so a plain typeof would answer "function" and `typeof x === "function"` would take an arm decided by the
    solver's representation. The answer is a concolic carrying the operand's root, so the comparison after it
-   forks. */
+   forks. Its example is the operator run on the operand's example, where the operand holds one this flow has
+   not contradicted: a session sending that value gets that type, and an address composed from it is sent. */
 JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     const char *sh, *f[1];
     char *shape, *ident;
-    JSValue r;
+    JSValue r, example = JS_UNDEFINED;
+    ConcolicExState st;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
+    st = concolic_example_state(v);
+    if (st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED) {
+        JSValue ex = concolic_example(ctx, v);
+
+        DCHECK(!concolic_is(ex), "an unknown's example is itself an unknown — concolic_example answers bytes");
+        example = JS_TypeOf(ctx, ex);
+        JS_FreeValue(ctx, ex);
+        CHECK(!JS_IsException(example), "concolic: OOM spelling the type of an unknown's example");
+    }
     /* The operand's shape, not its src: every derivation off one source inherits the src, so `typeof (x+1)`
        and `typeof (x+2)` would share a shape over two identities, and the page wrote typeof of the derived
        value. */
@@ -4362,7 +4373,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     shape = shapef("typeof %s", sh ? sh : "{}");
     f[0] = concolic_ident_c(v);
     ident = concolic_ident_compose("typeof", f, 1);
-    r = concolic_derived(ctx, shape, shape, concolic_root_c(v), root_whose_of(v), ident, JS_UNDEFINED);
+    r = concolic_derived(ctx, shape, shape, concolic_root_c(v), root_whose_of(v), ident, example);
     free(shape);
     return r;
 }
