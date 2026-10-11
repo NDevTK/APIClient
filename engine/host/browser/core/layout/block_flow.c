@@ -177,7 +177,9 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
              shape that list does not reach. */
           table_wrapper_generates(d);
     if (bfc) return true;
-    if (bf_computed_is(el, "overflow-x", "visible") && bf_computed_is(el, "overflow-y", "visible")) return false;
+    if (css_computed_keyword_is(el, "overflow-x", CSS_KEYWORD_VISIBLE) &&
+        css_computed_keyword_is(el, "overflow-y", CSS_KEYWORD_VISIBLE))
+        return false;
     /* §9.4.1's own parenthesis — "except when that value has been propagated to the viewport" — and the rule
        it is excepting is css-overflow-3 §3.1.4 "Overflow Viewport Propagation", which ends "The element from
        which the value is propagated must then have a used overflow value of visible". A box whose USED

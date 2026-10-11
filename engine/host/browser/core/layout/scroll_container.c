@@ -13,9 +13,6 @@
 #include "core/dom/element_view.h"
 #include "core/layout/scroll_container.h"
 
-/* §3.1's `Value:` line is `visible | hidden | clip | scroll | auto`; any other computed value crashes rather
-   than reading as non-clipping. `overlay` is "a legacy value alias of auto", resolved at parse time by Lexbor's
-   value table, so it never reaches a computed value. */
 /* The computed keyword on one axis, classified once. The scroll-container and content-clip questions differ
    only at `clip`, which is non-scrollable but clips to the padding edge, so both read this one classification
    rather than one bit. */
@@ -23,25 +20,18 @@ typedef enum { SC_OVERFLOW_VISIBLE = 0, SC_OVERFLOW_CLIP, SC_OVERFLOW_SCROLLABLE
 
 static ScOverflow sc_axis_overflow(lxb_dom_element_t *el, bool vertical)
 {
-    char *v = css_computed_value(el, vertical ? "overflow-y" : "overflow-x");
-    ScOverflow k;
+    CssKeyword v = css_computed_keyword(el, vertical ? "overflow-y" : "overflow-x");
 
-    DCHECK(v != NULL, "the cascade produced no computed `overflow-x`/`overflow-y` — css-overflow-3 §3.1 gives "
-                      "the properties an `Initial:` value of `visible`, so the cascade's last layer answers for "
-                      "every element");
-    if (strcmp(v, "scroll") == 0 || strcmp(v, "auto") == 0 || strcmp(v, "hidden") == 0)
-        k = SC_OVERFLOW_SCROLLABLE;
-    else if (strcmp(v, "clip") == 0)
-        k = SC_OVERFLOW_CLIP;
-    else
-        k = SC_OVERFLOW_VISIBLE;
-    DCHECK(k != SC_OVERFLOW_VISIBLE || strcmp(v, "visible") == 0,
-           "a computed `overflow-x`/`overflow-y` is none of the five keywords css-overflow-3 §3.1's `Value:` "
-           "line declares (`visible | hidden | clip | scroll | auto`). `overlay` is that section's legacy ALIAS "
-           "of `auto` and is resolved before a computed value exists, so this is a declaration the cascade "
-           "should have refused or an alias that was carried through");
-    free(v);
-    return k;
+    switch (v) {
+    case CSS_KEYWORD_SCROLL:
+    case CSS_KEYWORD_AUTO:
+    case CSS_KEYWORD_HIDDEN:  return SC_OVERFLOW_SCROLLABLE;
+    case CSS_KEYWORD_CLIP:    return SC_OVERFLOW_CLIP;
+    case CSS_KEYWORD_VISIBLE: return SC_OVERFLOW_VISIBLE;
+    default:
+        DFAILF("a computed `overflow-x`/`overflow-y` is keyword %u, outside the row's set", (unsigned)v);
+        return SC_OVERFLOW_VISIBLE;
+    }
 }
 
 /* §3.1's scrollable values: "The scroll, auto, and hidden values are known as the scrollable values of
@@ -62,17 +52,6 @@ static bool sc_axis_value_clips(lxb_dom_element_t *el, bool vertical)
 static bool sc_overflow_applies(lxb_dom_element_t *el)
 {
     return css_property_applies(el, "overflow-x");
-}
-
-static bool sc_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = css_computed_value(el, name);
-    bool same;
-
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models");
-    same = strcmp(v, kw) == 0;
-    free(v);
-    return same;
 }
 
 /* css-overflow-3 §3.1.4 "Overflow Viewport Propagation": "UAs must apply the overflow values set on the root
@@ -107,7 +86,8 @@ bool scroll_container_propagates_overflow_to_viewport(lxb_dom_element_t *el)
     rel = lxb_dom_interface_element(root);
     tag = lxb_dom_element_local_name(rel, &taglen);
     if (root->ns != LXB_NS_HTML || taglen != 4 || memcmp(tag, "html", 4) != 0) return false;
-    return sc_computed_is(rel, "overflow-x", "visible") && sc_computed_is(rel, "overflow-y", "visible");
+    return css_computed_keyword_is(rel, "overflow-x", CSS_KEYWORD_VISIBLE) &&
+           css_computed_keyword_is(rel, "overflow-y", CSS_KEYWORD_VISIBLE);
 }
 
 bool scroll_container_is(lxb_dom_element_t *el)

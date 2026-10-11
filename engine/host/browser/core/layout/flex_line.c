@@ -58,24 +58,6 @@ static double fl_magnitude(double v)
     return v < 0.0 ? -v : v;
 }
 
-/* Keyword-valued properties only. Length-valued ones (sizes, margins, `flex-basis`) go through
-   `css_computed_length_is` (core/css/css_computed_value.h), whose `CssPx` keeps a `50vw` value's environment
-   fact; the text entry refuses them. */
-static bool fl_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = css_computed_value(el, name);
-    bool same;
-    char nbuf[160];
-
-    DCHECKF(v != NULL,
-            "%s, property `%s`: the cascade produced no computed value for a property this engine models — "
-            "every one of them is in lexbor's registry with an initial value, so the last layer always answers",
-            box_subject(el, nbuf, sizeof nbuf), name);
-    same = strcmp(v, kw) == 0;
-    free(v);
-    return same;
-}
-
 /* css-writing-modes-4 §7.2 "Dimensional Mapping"'s physical names of the four main-axis properties read here,
    for a vertical (`vertical`) or horizontal main axis. css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings"
    decides which physical axis (`flex_container_axis_is_vertical`, core/layout/flex_item.h); §7.2 says which
@@ -283,7 +265,8 @@ static CssPx fl_automatic_minimum_main(lxb_dom_element_t *el, CssPx inner_main, 
 
     /* §4's anonymous item has `overflow: visible` (non-scrollable) and no declaration to cap or clamp. */
     if (el == NULL) return out;
-    if (!fl_computed_is(el, prop.overflow, "visible") && !fl_computed_is(el, prop.overflow, "clip"))
+    if (!css_computed_keyword_is(el, prop.overflow, CSS_KEYWORD_VISIBLE) &&
+        !css_computed_keyword_is(el, prop.overflow, CSS_KEYWORD_CLIP))
         return css_px(0.0);
     /* "capped by the specified size suggestion (if one exists)", whose own definition is "If the item's
        preferred main size is definite and not automatic, then the specified size suggestion is that size." */

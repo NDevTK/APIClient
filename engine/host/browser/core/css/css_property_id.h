@@ -49,7 +49,8 @@ typedef enum {
  * box-model lengths nor limits: a baseline shift's percentage refers to the used `line-height`, which no cascade
  * step holds, so it survives to the computed value; a flex basis adds `content` to `width`'s keywords.
  * Each KEYWORD row's property states `Computed value: specified keyword`, or `specified value` over a
- * keyword-only grammar, and is held as its ID; css_keyword.c cites the property with its set. */
+ * keyword-only grammar, and is held as its ID; css_keyword.c cites the property with its set. The overflow axes'
+ * one value-to-value rule is css_computed_value.c's cv_keyword. */
 #define CSS_PROPERTY_LIST(X)                                                                          \
     X(MARGIN_TOP,          "margin-top",          LXB_CSS_PROPERTY_MARGIN_TOP,     LENGTH, ALL, MARGIN)           \
     X(MARGIN_RIGHT,        "margin-right",        LXB_CSS_PROPERTY_MARGIN_RIGHT,   LENGTH, ALL, MARGIN)           \
@@ -98,13 +99,13 @@ typedef enum {
     X(LIST_STYLE_POSITION, "list-style-position", LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LIST_STYLE_POSITION) \
     X(ALIGNMENT_BASELINE,  "alignment-baseline",  LXB_CSS_PROPERTY_ALIGNMENT_BASELINE, KEYWORD, ALL, ALIGNMENT_BASELINE)\
     X(BASELINE_SOURCE,     "baseline-source",     LXB_CSS_PROPERTY_BASELINE_SOURCE, KEYWORD, ALL, BASELINE_SOURCE) \
+    X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     KEYWORD, ALL, OVERFLOW)        \
+    X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     KEYWORD, ALL, OVERFLOW)        \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
  * its arm of css_computed_value.c's derivation. */
 #define CSS_PROPERTY_TEXT_LIST(X)                                                                     \
-    X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     TEXT, ALL, UNTYPED)            \
-    X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     TEXT, ALL, UNTYPED)            \
     X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT, ALL, UNTYPED)            \
     X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT, ALL, UNTYPED)            \
     X(TEXT_ALIGN_ALL,      "text-align-all",      LXB_CSS_PROPERTY_TEXT_ALIGN_ALL, TEXT, ALL, UNTYPED)            \

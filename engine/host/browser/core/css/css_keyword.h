@@ -120,7 +120,9 @@
     X(HANGING,            "hanging") \
     X(TEXT_TOP,           "text-top") \
     X(FIRST,              "first") \
-    X(LAST,               "last")
+    X(LAST,               "last") \
+    X(CLIP,               "clip") \
+    X(SCROLL,             "scroll")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -173,7 +175,8 @@ typedef enum {
     CSS_KEYWORDS_POINTER_EVENTS,
     CSS_KEYWORDS_LIST_STYLE_POSITION,
     CSS_KEYWORDS_BASELINE_SOURCE,
-    CSS_KEYWORDS_ALIGNMENT_BASELINE
+    CSS_KEYWORDS_ALIGNMENT_BASELINE,
+    CSS_KEYWORDS_OVERFLOW
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

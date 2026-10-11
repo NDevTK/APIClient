@@ -301,12 +301,10 @@ bool element_view_has_box(const lxb_dom_node_t *n)
    in the given axis) is neither `visible` nor `clip`; and the body's OWN is neither. */
 static bool ev_axis_clips_or_scrolls(const lxb_dom_node_t *el, bool vertical)
 {
-    char *v = css_computed_value(lxb_dom_interface_element((lxb_dom_node_t *)el),
-                                 vertical ? "overflow-y" : "overflow-x");
-    bool yes = v != NULL && strcmp(v, "visible") != 0 && strcmp(v, "clip") != 0;
+    CssKeyword k = css_computed_keyword(lxb_dom_interface_element((lxb_dom_node_t *)el),
+                                        vertical ? "overflow-y" : "overflow-x");
 
-    free(v);
-    return yes;
+    return k != CSS_KEYWORD_VISIBLE && k != CSS_KEYWORD_CLIP;
 }
 
 static bool ev_potentially_scrollable(const EvTarget *t, bool vertical)

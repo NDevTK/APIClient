@@ -290,58 +290,6 @@ static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name)
     return sub != NULL ? sub : css_cv_strdup("unset");
 }
 
-/* ---- css-overflow-3 §3.1 "Managing Overflow: the overflow-x, overflow-y, and overflow properties" ------- */
-/* EVERY BARE § BELOW IS css-overflow-3's AND EACH ONE SAYS SO. An unlevelled `css-overflow` names no document
-   — the levelled shortname is what identifies one — so a number written without it is placed by whatever this
-   file cites most, which here is the cascade, whose §3.1 is "Property Aliasing" and decides nothing about
-   overflow. */
-
-/* css-overflow-3 §3.1: "The scroll, auto, and hidden values are known as the scrollable values of overflow." */
-static bool overflow_scrollable(const char *v)
-{
-    return css_cv_is(v, "scroll") || css_cv_is(v, "auto") || css_cv_is(v, "hidden");
-}
-
-/* css-overflow-3 §3.1's legacy alias — `overlay` IS `auto`, so it aliases before every question is asked of it. */
-static const char *overflow_alias(const char *v)
-{
-    return css_cv_is(v, "overlay") ? "auto" : v;
-}
-
-static bool overflow_value(const char *v)
-{
-    return overflow_scrollable(v) || css_cv_is(v, "visible") || css_cv_is(v, "clip");
-}
-
-/* css-overflow-3 §3.1's one computed-value rule, which is why "usually specified value, but see text" is not
-   "as specified":
-   "if the other axis specifies a scrollable value, a specified value of visible computes to auto, enabling
-   scrolling in its axis". It reads the other axis's SPECIFIED value, so there is no recursion between the two
-   and no order in which they must be asked. */
-static char *computed_overflow(lxb_dom_element_t *el, const char *name, char *spec)
-{
-    bool xaxis = strcmp(name, "overflow-x") == 0;
-    char *other = css_cv_specified(el, xaxis ? "overflow-y" : "overflow-x");
-    const char *self_v, *other_v;
-    char *out;
-
-    DCHECK(other != NULL,
-           "§7's defaulting produced no SPECIFIED value for the other overflow axis — lexbor's property "
-           "registry carries `overflow-x` and `overflow-y` with an initial value of `visible`, so §7.1's "
-           "arm always answers and a NULL here is a defaulting step that stopped early");
-    self_v = overflow_alias(spec);
-    other_v = overflow_alias(other);
-    DCHECK(overflow_value(self_v) && overflow_value(other_v),
-           "an overflow axis cascaded to a value outside css-overflow-3 §3.1's grammar — lexbor validates the "
-           "longhand and css_shorthand.c validates the `overflow` shorthand, so a third writer has reached the "
-           "cascade without a grammar");
-    out = (css_cv_is(self_v, "visible") && overflow_scrollable(other_v)) ? css_cv_strdup("auto")
-                                                                        : css_cv_strdup(self_v);
-    free(other);
-    free(spec);
-    return out;
-}
-
 /* ---- CSS Display §2.7 and §2.8's computed value ----------------------------------------------------------- */
 
 /* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, because `display:
@@ -1527,9 +1475,8 @@ static bool cv_keyword_of(CssPropertyId id, char *spec, CssKeyword *out)
     return true;
 }
 
-/* The derivation of one keyword-shaped computed value, made on its first ask in a hold. The specified keyword
-   IS the computed one, so the derivation is CSS Cascade §7's defaulting and the parse. */
-static CssKeyword cv_keyword(lxb_dom_element_t *el, CssPropertyId id)
+/* A keyword row's SPECIFIED value: CSS Cascade §7's defaulting and the parse. */
+static CssKeyword cv_keyword_specified(lxb_dom_element_t *el, CssPropertyId id)
 {
     const char *name = css_property_name(id);
     CssKeyword k = CSS_KEYWORD_INVALID;
@@ -1559,6 +1506,28 @@ static CssKeyword cv_keyword(lxb_dom_element_t *el, CssPropertyId id)
     DCHECKF(cascaded != NULL, "`%s`: §7.1 produced no INITIAL value for a keyword-shaped property", name);
     ok = cv_keyword_of(id, cascaded, &k);
     DCHECKF(ok, "`%s`: the initial value is not in the row's keyword set", name);
+    return k;
+}
+
+/* css-overflow-3 §3.1: "The scroll, auto, and hidden values are known as the scrollable values of overflow." */
+static bool overflow_scrollable(CssKeyword k)
+{
+    return k == CSS_KEYWORD_SCROLL || k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_HIDDEN;
+}
+
+/* The derivation of one keyword-shaped computed value, made on its first ask in a hold: the specified keyword,
+   then the row's own value-to-value rule where its `Computed value:` line has one. The overflow axes' is
+   css-overflow-3 §3.1's "usually specified value, but see text": "if the other axis specifies a scrollable
+   value, a specified value of visible computes to auto, enabling scrolling in its axis". It reads the other
+   axis's SPECIFIED value, so there is no recursion between the two. */
+static CssKeyword cv_keyword(lxb_dom_element_t *el, CssPropertyId id)
+{
+    CssKeyword k = cv_keyword_specified(el, id);
+
+    if ((id == CSS_PROPERTY_OVERFLOW_X || id == CSS_PROPERTY_OVERFLOW_Y) && k == CSS_KEYWORD_VISIBLE &&
+        overflow_scrollable(cv_keyword_specified(el, id == CSS_PROPERTY_OVERFLOW_X ? CSS_PROPERTY_OVERFLOW_Y
+                                                                                   : CSS_PROPERTY_OVERFLOW_X)))
+        return CSS_KEYWORD_AUTO;
     return k;
 }
 
@@ -1990,9 +1959,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
            "css_style_declaration.c's unregistered-initial table, whose own invariant asserts that every row "
            "it carries has a non-empty one and that no row's name is in that registry");
     switch (id) {
-    case CSS_PROPERTY_OVERFLOW_X:
-    case CSS_PROPERTY_OVERFLOW_Y:
-        return computed_overflow(el, name, spec);
     case CSS_PROPERTY_TEXT_ALIGN_ALL:
     case CSS_PROPERTY_TEXT_ALIGN_LAST:
         return computed_text_align(el, name, spec);

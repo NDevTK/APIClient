@@ -188,6 +188,12 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
         return k == CSS_KEYWORD_BASELINE || k == CSS_KEYWORD_TEXT_BOTTOM || k == CSS_KEYWORD_ALPHABETIC ||
                k == CSS_KEYWORD_IDEOGRAPHIC || k == CSS_KEYWORD_MIDDLE || k == CSS_KEYWORD_CENTRAL ||
                k == CSS_KEYWORD_MATHEMATICAL || k == CSS_KEYWORD_HANGING || k == CSS_KEYWORD_TEXT_TOP;
+    /* css-overflow-3 §3.1 "Managing Overflow: the overflow-x, overflow-y, and overflow properties": `visible |
+       hidden | clip | scroll | auto`. `overlay` is a legacy value alias of `auto`, converted at parse time
+       (css-cascade-5 §4.1.1 "Value Aliasing"), so it is in no computed value and in no set. */
+    case CSS_KEYWORDS_OVERFLOW:
+        return k == CSS_KEYWORD_VISIBLE || k == CSS_KEYWORD_HIDDEN || k == CSS_KEYWORD_CLIP ||
+               k == CSS_KEYWORD_SCROLL || k == CSS_KEYWORD_AUTO;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

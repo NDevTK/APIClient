@@ -257,13 +257,16 @@ static bool sh_length_component(const char *w, size_t n, bool percentage_too)
     return css_length_is_length_unit(w + k, n - k);
 }
 
-/* css-overflow §3.1's value grammar for `overflow-x`/`overflow-y`, plus the LEGACY ALIAS the same section
-   requires ("User agents must also support the overlay keyword as a legacy value alias of auto"). The alias is
-   a SPECIFIED value in its own right and is mapped where the section's other value-to-value rule lives — the
-   computed value — so this component keeps it. */
-static const char *const OVERFLOW_KEYWORDS[] = {
-    "visible", "hidden", "clip", "scroll", "auto", "overlay"
-};
+/* One `overflow` component: a keyword of the overflow rows' set, or css-overflow-3 §3.1's `overlay`, "a legacy
+   value alias of auto", which css-cascade-5 §4.1.1 "Value Aliasing" converts at parse time ("the legacy syntax
+   is converted into the new syntax, resulting in a declared value different from the parsed input"). NAMED
+   RESIDUAL: lexbor's `overflow-x`/`overflow-y` parsers do not accept `overlay`, so the longhands drop it; the
+   next diff is the alias in lexbor's two state machines; its absence shows as `overflow-x: overlay` computing
+   to the cascade's next value rather than to `auto`. */
+static const char *sh_overflow_keyword(const char *w, size_t n)
+{
+    return css_word_is(w, n, "overlay") ? "auto" : css_sh_keyword_in(CSS_KEYWORDS_OVERFLOW, w, n);
+}
 
 /* css-align-3 §7.3 "Default Alignment Shorthand: the place-items property"' and css-align-3 §6.3
    "Self-Alignment Shorthand: the place-self property"' COMPONENT GRAMMARS. THE FIRST COMPONENT IS THIS ENGINE'S `align-items`
@@ -1418,8 +1421,8 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        overflow-y in that order. If the second value is omitted, it is copied from the first." */
     n = css_shorthand_components(value, w, wl, 2);
     if (n < 1) return NULL;
-    kw[0] = css_sh_keyword(OVERFLOW_KEYWORDS, CSS_SH_N(OVERFLOW_KEYWORDS), w[0], wl[0]);
-    kw[1] = (n > 1) ? css_sh_keyword(OVERFLOW_KEYWORDS, CSS_SH_N(OVERFLOW_KEYWORDS), w[1], wl[1]) : kw[0];
+    kw[0] = sh_overflow_keyword(w[0], wl[0]);
+    kw[1] = (n > 1) ? sh_overflow_keyword(w[1], wl[1]) : kw[0];
     if (!kw[0] || !kw[1]) return NULL;   /* a value outside the grammar: the declaration is invalid */
     return css_sh_strdup(kw[axis]);
 }

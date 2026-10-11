@@ -31,15 +31,6 @@ static char *lb_computed(lxb_dom_element_t *el, const char *name)
     return v;
 }
 
-static bool lb_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = lb_computed(el, name);
-    bool same = strcmp(v, kw) == 0;
-
-    free(v);
-    return same;
-}
-
 /* CSS 2 §8.1 "Box dimensions"' border width on one side, in CSS pixels, read as a computed value:
    css-backgrounds-3 §3.3's `Computed value:` line is "absolute length, snapped as a border width", so the
    computed value is the used one for the inline boxes this file reads it of. */
@@ -238,7 +229,8 @@ static LbExtent lb_strut_extent(lxb_dom_element_t *el)
    visible computes to auto") can only turn `visible` into `auto`, never the reverse. */
 static bool lb_inline_block_overflow_excepts_baseline(lxb_dom_element_t *el)
 {
-    return !(lb_computed_is(el, "overflow-x", "visible") && lb_computed_is(el, "overflow-y", "visible"));
+    return !(css_computed_keyword_is(el, "overflow-x", CSS_KEYWORD_VISIBLE) &&
+             css_computed_keyword_is(el, "overflow-y", CSS_KEYWORD_VISIBLE));
 }
 
 /* CSS 2 §8.1 "Box dimensions"' three edges between a box's top margin edge and its top content edge: the
