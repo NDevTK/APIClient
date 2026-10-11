@@ -177,7 +177,7 @@ function _repinTo(frameId) {                            // explicit (re)selectio
 function _refreshSendEnabled() {
   const b = document.getElementById("btn-send");
   if (!b) return;
-  const target = (currentReplayRequest && currentReplayRequest.documentId) || currentDocumentId();
+  const target = sendPanelDocumentId();
   const settling = Date.now() < _navBlockUntil;
   b.disabled = _sendInProgress || _pinStale || !target || settling;
   /* "WAITING FOR THE PAGE'S DOCUMENT TO BE READY…" IS TRUE OF EXACTLY ONE OF THE THREE WAYS THERE IS NO
@@ -508,6 +508,7 @@ document.addEventListener("DOMContentLoaded", async () => {
      fields it was written for. `input` carries typing, `change` carries selects and radios. */
   document.getElementById("panel-send").addEventListener("input", renderSendUrl);
   document.getElementById("panel-send").addEventListener("change", renderSendUrl);
+  wireSendIdentityExamples();
 
   // HAR export
   document.getElementById("btn-export-har").addEventListener("click", exportHar);

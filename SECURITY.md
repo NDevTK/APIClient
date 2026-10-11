@@ -195,6 +195,10 @@ renderer, so a compromised renderer can neither read nor forge an operator's rep
   worker's frameless hop. `lib/popup-handlers.js` hands the sender down to every send. A compromised
   extension page could therefore send as any observed frame, and the extension pages' Trusted Types policy
   and CSP are what bound that.
+- The Send panel's identity preview (`SEND_IDENTITY_PREVIEW`, `operatorIdentityPreview` in `lib/send.js`)
+  `CHECK`s the same sender predicate. It answers the popup the frame's Origin, Referer, partition key and
+  the names of the cookies a send would carry, with the rule that excluded each other name, and never a
+  cookie value.
 - Every caller also states whose act it is, and `pageContextRequireUserInitiated` `CHECK`s
   `PAGE_CONTEXT_USER_INITIATED`. The automatic discovery sweep (`handleResponseBody`) states
   `PAGE_CONTEXT_TOOL_INITIATED`, and `fetchDiscoveryForService` routes it to `safeFetch`.

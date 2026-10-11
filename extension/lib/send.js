@@ -829,8 +829,7 @@ async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, op
   if (!URL.canParse(url)) return { error: "blocked: invalid URL" };
   const identity = await frameIdentity(tabId, documentId);
   if (identity === null) return { error: "the frame this request speaks as is gone (document " + documentId + ")" };
-  const facts = identityFor(identity, { url, requestInit: opts.requestInit }, "strict-origin-when-cross-origin");
-  const mode = opts.requestInit.mode === null ? "cors" : opts.requestInit.mode;
+  const { facts, mode } = _operatorFacts(identity, url, opts.requestInit);
   const body = opts.body === null ? null : opts.bodyEncoding === "base64" ? base64ToUint8(opts.body) : opts.body;
   const r = await safeFetchOperator(url, { sender, identity: facts, method: opts.method, mode, body,
                                           headers: Object.keys(opts.headers).map((k) => [k, String(opts.headers[k])]),
@@ -852,6 +851,51 @@ async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, op
              body: uint8ToBase64(r.body), bodyEncoding: "base64" };
   return { ok: r.ok, status: r.status, statusText: r.statusText, headers: r.headers,
            body: new TextDecoder().decode(r.body) };
+}
+
+/* The facts an operator send as `identity` applies to `url`, and its logical mode: what the send and its
+   preview both compute, so the preview cannot describe another request. */
+function _operatorFacts(identity, url, requestInit) {
+  return { facts: identityFor(identity, { url, requestInit }, "strict-origin-when-cross-origin"),
+           mode: requestInit.mode === null ? "cors" : requestInit.mode };
+}
+
+/* The Send panel's identity preview: what an operator send of `method` to `url` as the frame `documentId`
+   carries, by the calls operatorSendAsFrame makes, never their values for cookies. `stated` is the panel's
+   typed {origin, referer}. Answers lib/identity-preview.js's record: {error}, or the frame's browser-stamped
+   identity, the Origin (Fetch §3.2 "`Origin` header") and Referer (Referrer Policy §8.3) the frame's own send
+   carries, the headers sent once the stated ones replace them, the cookie names with each excluded name's
+   rule, and identityProducibleBy's answer. */
+async function operatorIdentityPreview(sender, tabId, documentId, url, method, requestInit, stated) {
+  CHECK(senderIsExtensionDocument(sender),
+        "an identity preview was asked from " + JSON.stringify(sender && sender.origin) + " — it reads the " +
+        "person's cookie names, which only an extension document may, as only one may send with them");
+  if (!URL.canParse(url) || !/^https?:$/.test(new URL(url).protocol))
+    return { error: "the address is not an http(s) URL, so the send path will refuse it" };
+  const identity = await frameIdentity(tabId, documentId);
+  if (identity === null) return { error: "the frame this request speaks as is gone (document " + documentId + ")" };
+  const { facts, mode } = _operatorFacts(identity, url, requestInit);
+  const origin = speakAsOrigin(facts.origin, method, mode, url, facts.referrerPolicy);
+  const sent = { origin: stated.origin !== null ? stated.origin : origin,
+                 referer: stated.referer !== null ? stated.referer : facts.referrer };
+  const statedRefusal = safeFetchStatedRefusal(stated);
+  const cookies = await cookieNamesFor(facts, url);
+  const speaking = stated.origin !== null ? stated.origin : identity.origin;
+  const pk = identity.partitionKey;
+  const preview = {
+    frame: { origin: identity.origin, docUrl: identity.docUrl,
+             partitionKey: { topLevelSite: pk.topLevelSite, hasCrossSiteAncestor: pk.hasCrossSiteAncestor } },
+    method, mode, origin, referer: facts.referrer, policy: facts.referrerPolicy,
+    policySource: requestInit.referrerPolicy === null || requestInit.referrerPolicy === "" ? "default" : "request",
+    referrerSource: requestInit.referrer === null || requestInit.referrer === "about:client" ? "client"
+      : requestInit.referrer === "" ? "none" : "request",
+    sent, statedRefusal, credentials: facts.credentials, cookieArm: cookies.arm, cookieNames: cookies.names,
+    excluded: cookies.excluded,
+    producibleBy: statedRefusal !== null ? null
+      : identityProducibleBy(identity, facts, speaking, sent, method, mode, url),
+  };
+  checkIdentityPreview(preview, "operatorIdentityPreview");
+  return preview;
 }
 
 /**

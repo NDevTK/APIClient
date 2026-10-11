@@ -539,6 +539,14 @@ function _drainBuildQueue(queue) {
   }
 }
 
+/* A chip offering `value` to its field, and its mark ({cls, text, title}, or null for none) beside it. The
+   mark sits beside the chip, never in it: a click copies the chip's text into the input. */
+function offeredValueChip(value, mark) {
+  const chip = domElement("span", { class: "ast-value-chip" }, [String(value)]);
+  if (mark === null) return chip;
+  return [chip, " ", domElement("span", { class: mark.cls, title: mark.title }, [mark.text])];
+}
+
 function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   depth = depth || 0;
   const wrapper = domElement("div", { class: "form-field" });
@@ -796,13 +804,10 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   /* A chip for an offered value. One only this tool's drives computed (`_astDrivenValues`) is still offered,
      since its drive forced nothing and computed it from real inputs, but it says so: no path the page itself
      ran was seen computing it. */
-  /* The mark sits beside the chip, never in it: a click copies the chip's text into the input. */
   function _astValueChip(fd, v) {
-    const chip = domElement("span", { class: "ast-value-chip" }, [String(v)]);
-    if (fd._astDrivenValues === null || fd._astDrivenValues.indexOf(v) < 0) return chip;
-    return [chip, " ", domElement("span", { class: "ast-driven-mark",
-                                            title: "computed only inside this tool's drive of code the page " +
-                                                   "never called" }, ["(driven)"])];
+    if (fd._astDrivenValues === null || fd._astDrivenValues.indexOf(v) < 0) return offeredValueChip(v, null);
+    return offeredValueChip(v, { cls: "ast-driven-mark", text: "(driven)",
+                                 title: "computed only inside this tool's drive of code the page never called" });
   }
 
   /* THE VALUES THIS RUN COULD ONLY REACH BY FORCING A GATE — ON THEIR OWN ROW, SAYING SO, AND NOWHERE ELSE
@@ -1768,7 +1773,7 @@ async function sendRequest() {
   // unless a valid send target is READY (a live pinned documentId or a replay's
   // captured one), the pin isn't a confirmed cross-origin swap, we're past the
   // brief post-change settle, and no send is already running.
-  const _target = (currentReplayRequest && currentReplayRequest.documentId) || currentDocumentId();
+  const _target = sendPanelDocumentId();
   if (_sendInProgress || _pinStale || !_target || Date.now() < _navBlockUntil) {
     _refreshSendEnabled();
     return;
@@ -1946,7 +1951,7 @@ async function sendRequest() {
   const msg = {
     type: "SEND_REQUEST",
     tabId: replayTabId,
-    documentId: currentReplayRequest?.documentId ?? currentDocumentId(),
+    documentId: sendPanelDocumentId(),
     endpointKey: epKey,
     service: _svc,
     methodId: _mid,

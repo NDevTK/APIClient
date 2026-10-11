@@ -260,16 +260,25 @@
           </select>
         </div>
         <!-- An Origin and a Referer the person states in place of the frame's own, for testing a server's
-             CORS or CSRF checks. Empty sends the frame's own; sendPanelStatedHeaders (lib/popup-send.js) reads
-             both on every send and export. -->
+             CORS or CSRF checks. Empty sends the frame's own, derived at send; sendPanelStatedHeaders
+             (lib/popup-send.js) reads both on every send and export. The example lines, the cookie jar row
+             and the marks are renderSendIdentity's, from the offscreen's SEND_IDENTITY_PREVIEW. -->
         <div class="send-url-row">
           <label class="send-url-label" for="send-stated-origin">Origin</label>
-          <input id="send-stated-origin" type="text" spellcheck="false" placeholder="the frame's own">
+          <input id="send-stated-origin" type="text" spellcheck="false" list="send-origin-domain"
+                 placeholder="blank: the frame's own, derived at send">
+          <span id="send-stated-origin-mark" class="send-provenance-mark"></span>
+          <datalist id="send-origin-domain"></datalist>
         </div>
+        <div id="send-origin-example" class="field-ast-values"></div>
         <div class="send-url-row">
           <label class="send-url-label" for="send-stated-referer">Referer</label>
-          <input id="send-stated-referer" type="text" spellcheck="false" placeholder="the frame's own">
+          <input id="send-stated-referer" type="text" spellcheck="false"
+                 placeholder="blank: the frame's own, derived at send">
+          <span id="send-stated-referer-mark" class="send-provenance-mark"></span>
         </div>
+        <div id="send-referer-example" class="field-ast-values"></div>
+        <div id="send-jar-row" class="field-ast-values"></div>
         <button id="btn-send" type="button">Send Request</button>
         <div class="export-row">
           <span class="export-label">Export:</span>
@@ -358,6 +367,7 @@
     <script src="lib/popup-console.js"></script>
     <script src="lib/popup-reqlog.js"></script>
     <script src="lib/popup-security.js"></script>
+    <script src="lib/identity-preview.js"></script>
     <script src="lib/popup-send.js"></script>
     <script src="lib/popup-discovery.js"></script>
     <script src="lib/popup-endpoints.js"></script>

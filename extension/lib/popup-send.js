@@ -479,6 +479,7 @@ function renderSendUrl() {
      is no address for this row to be about and an address left standing would be about the last endpoint. */
   if (currentBodyMode === "msgconsole") {
     row.classList.add("hidden");
+    renderSendIdentity(null);
     return;
   }
   row.classList.remove("hidden");
@@ -500,6 +501,7 @@ function renderSendUrl() {
     value.classList.add("send-url-none");
     value.textContent = "no address — this panel has nothing to send";
     row.appendChild(value);
+    renderSendIdentity(null);
     return;
   }
   value.textContent = sent;
@@ -543,6 +545,7 @@ function renderSendUrl() {
     "Cookie, Origin and Referer cannot be typed as headers: the browser owns them, and Origin and Referer " +
     "are stated only in their own fields below."]));
   if (URL.canParse(sent)) renderSendPolicyVerdict(row, new URL(sent).href);
+  renderSendIdentity(URL.canParse(sent) ? new URL(sent).href : null);
   row.appendChild(domElement("div", { class: "send-url-note" }, [
     "Not decided here: an API key whose learned location is the URL is attached downstream as a `key` " +
     "query parameter, from a key store this panel cannot read — whether that happens to this request is " +
@@ -555,8 +558,7 @@ function renderSendUrl() {
 var _sendPolicyAsked = 0;
 function renderSendPolicyVerdict(row, url) {
   var asked = ++_sendPolicyAsked;
-  var documentId = currentReplayRequest !== null && currentReplayRequest.documentId
-    ? currentReplayRequest.documentId : currentDocumentId();
+  var documentId = sendPanelDocumentId();
   var line = domElement("div", { class: "send-url-note" }, ["Content Security Policy: asking the frame's document…"]);
   row.appendChild(line);
   var say = function (text) { if (asked === _sendPolicyAsked) line.textContent = "Content Security Policy: " + text; };
@@ -574,6 +576,101 @@ function renderSendPolicyVerdict(row, url) {
              ", which is none of allowed, blocked, report-only and unknown");
       say("unknown — no running engine instance holds this frame's document.");
     }
+  });
+}
+
+/* The document a Send speaks as: the replayed record's, else the pinned frame's while it is live; null when
+   neither is. Send, its readiness gate and every row that describes the send ask this one function. */
+function sendPanelDocumentId() {
+  return currentReplayRequest !== null && currentReplayRequest.documentId
+    ? currentReplayRequest.documentId : currentDocumentId();
+}
+
+/* The Send panel's identity rows: the Origin and Referer the frame's own send carries, as an example chip
+   beside each field, and the cookie jar the send speaks with. Every fact is the offscreen's
+   SEND_IDENTITY_PREVIEW answer (lib/send.js operatorIdentityPreview, which calls what the send calls), so
+   nothing here derives one. A blank field is the frame's own, derived at send, and its example follows the
+   URL, method, mode, frame and credentials mode; a typed one is the operator's and follows nothing.
+   `url` is the parsed address, or null when there is none. Answers arriving after a newer render are dropped.
+   Not covered: a jar other than the picked frame's, and stating that no Origin goes out. The next diff has
+   operatorSendAsFrame take a stated partition key and an absent Origin. Their absence shows as a jar row
+   whose only choice is the credentials mode, and an Origin domain with no "none" member. */
+var _sendIdentityAsked = 0;
+function renderSendIdentity(url) {
+  var asked = ++_sendIdentityAsked;
+  var el = function (id) {
+    var e = document.getElementById(id);
+    DCHECK(!!e, "the Send panel carries no #" + id + " — extension/popup.html declares the identity rows");
+    return e;
+  };
+  var originEx = el("send-origin-example"), refererEx = el("send-referer-example"), jar = el("send-jar-row");
+  var typed = sendPanelStatedHeaders();
+  var mark = function (id, stated) {
+    el(id).textContent = stated ? "(operator)" : "(derived)";
+    el(id).title = stated ? "typed by you: it follows neither the frame, the URL nor the method"
+                          : "blank: the send derives it from the frame, as shown below";
+  };
+  mark("send-stated-origin-mark", typed.origin !== null);
+  mark("send-stated-referer-mark", typed.referer !== null);
+  var origins = [];
+  availableFrames.forEach(function (f) { var o = _origOf(f); if (o !== "" && origins.indexOf(o) < 0) origins.push(o); });
+  domReplaceChildren(el("send-origin-domain"), origins.concat(["null"]).map(function (o) {
+    return domElement("option", { value: o }, []);
+  }));
+  var label = function (text) { return domElement("span", { class: "ast-values-label" }, [text]); };
+  var say = function (text) {
+    [originEx, refererEx, jar].forEach(function (e) { domReplaceChildren(e, [text]); });
+  };
+  var documentId = sendPanelDocumentId();
+  if (url === null) { say(""); return; }
+  if (!documentId) { say("no document is targeted, so no identity is derived"); return; }
+  say("asking the frame's document…");
+  chrome.runtime.sendMessage({ type: "SEND_IDENTITY_PREVIEW", documentId: documentId, url: url,
+                               httpMethod: currentRequestMethod, requestInit: sendPanelRequestInit(),
+                               stated: typed }).then(function (p) {
+    checkIdentityPreview(p, "renderSendIdentity");
+    if (asked !== _sendIdentityAsked) return;
+    if (typeof p.error === "string") { say(p.error); return; }
+    var derived = function (title) { return { cls: "send-provenance-mark", text: "(derived)", title: title }; };
+    var how = p.method + " in mode " + p.mode;
+    domReplaceChildren(originEx, [label("Frame's own:"), " ", p.origin === null
+      ? "none: Fetch §3.2 Origin header appends no Origin to this " + how
+      : offeredValueChip(p.origin, derived("Fetch §3.2 Origin header, for the frame " + p.frame.origin +
+                                           "'s own " + how))]);
+    var policy = p.policy + (p.policySource === "request" ? ", the request's own" : ", the default, as the " +
+                 "frame's own policy is not read");
+    var source = p.referrerSource === "client" ? "the frame's URL " + p.frame.docUrl
+      : p.referrerSource === "request" ? "the request's referrer" : "no referrer, which the request states";
+    domReplaceChildren(refererEx, [label("Frame's own:"), " ", p.referer === null
+      ? "none: " + source + " under " + policy + " (Referrer Policy §8.3)"
+      : offeredValueChip(p.referer, derived("Referrer Policy §8.3 over " + source + ", under " + policy))]);
+    var pk = p.frame.partitionKey;
+    var lines = [domElement("div", {}, [label("Cookie jar:"), " ",
+      domElement("span", { class: "send-jar-key" }, [pk.topLevelSite + (pk.hasCrossSiteAncestor ? ", cross-site ancestor" : "")]),
+      " ", domElement("span", { class: "send-provenance-mark",
+                                title: "chrome.cookies.getPartitionKey for the frame's document" }, ["(observed)"]),
+      " credentials " + p.credentials])];
+    lines.push(domElement("div", {}, [
+      p.cookieArm === "jar" ? "Sends the browser's jar for this URL: " : "Sends: ",
+      p.cookieNames.length === 0 ? "no cookies" : p.cookieNames.join(", ")]));
+    p.excluded.forEach(function (x) { lines.push(domElement("div", {}, ["Not sent: " + x.name + ", " + x.rule])); });
+    if (p.producibleBy === null) lines.push(domElement("div", {}, ["Refused at send: " + p.statedRefusal]));
+    else if (p.producibleBy.producible) lines.push(domElement("div", {}, ["A real frame sends this: " + p.producibleBy.by]));
+    else lines.push(domElement("div", {}, ["No real frame sends this: " + p.producibleBy.reasons.join("; ") +
+                                           ". It is sent as your act."]));
+    domReplaceChildren(jar, lines);
+  });
+}
+
+/* A click on a frame's-own chip copies it into its field, which makes it the operator's. */
+function wireSendIdentityExamples() {
+  [["send-origin-example", "send-stated-origin"], ["send-referer-example", "send-stated-referer"]].forEach(function (pair) {
+    document.getElementById(pair[0]).addEventListener("click", function (e) {
+      if (!e.target.classList.contains("ast-value-chip")) return;
+      var input = document.getElementById(pair[1]);
+      input.value = e.target.textContent;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
   });
 }
 

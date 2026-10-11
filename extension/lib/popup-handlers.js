@@ -532,6 +532,21 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       return true;
     }
 
+    case "SEND_IDENTITY_PREVIEW": {
+      // The Send panel's identity rows (lib/popup-send.js renderSendIdentity), over the fields SEND_REQUEST sends.
+      DCHECK(typeof msg.url === "string" && typeof msg.httpMethod === "string" && msg.httpMethod !== "" &&
+             !!msg.requestInit && ["credentials", "mode", "referrer", "referrerPolicy"].every((k) =>
+               msg.requestInit[k] === null || typeof msg.requestInit[k] === "string") &&
+             !!msg.stated && ["origin", "referer"].every((k) => msg.stated[k] === null || typeof msg.stated[k] === "string"),
+             "SEND_IDENTITY_PREVIEW arrived without the url, method, requestInit and stated {origin, referer} " +
+             "the Send panel's send would carry, so the preview would describe another request");
+      const _ipdoc = _docFromMsg(msg);
+      if (!_ipdoc) { sendResponse({ error: "no document for request" }); return; }
+      operatorIdentityPreview(sender, _ipdoc.tabId, _ipdoc.documentId, msg.url, msg.httpMethod, msg.requestInit,
+                              msg.stated).then(sendResponse);
+      return true;
+    }
+
     case "WS_SEND_MSG": {
       if (tabId == null) return;
       // documentId-ONLY routing: a frameId is reused across navigations and

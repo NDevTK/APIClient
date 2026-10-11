@@ -2098,6 +2098,20 @@ function fetchForbiddenRequestHeader(pairs) {
   return null;
 }
 
+/* The person's typing is input: a stated value that is not what its header carries is refused, never sent.
+   Answers the refusal reason, or null. The operator tier and lib/send.js's identity preview both ask it. */
+function safeFetchStatedRefusal(stated) {
+  if (stated.origin !== null && stated.origin !== "null" &&
+      !(URL.canParse(stated.origin) && /^https?:$/.test(new URL(stated.origin).protocol) &&
+        new URL(stated.origin).origin === stated.origin))
+    return "stated-origin-not-an-origin:" + stated.origin;
+  if (stated.referer !== null &&
+      !(URL.canParse(stated.referer) && /^https?:$/.test(new URL(stated.referer).protocol) &&
+        new URL(stated.referer).href === stated.referer && !stated.referer.includes("#")))
+    return "stated-referer-not-a-url:" + stated.referer;
+  return null;
+}
+
 /* The operator tier: a request the person composed in the popup, sent as the identity of a frame they
    picked (`opts.identity`, identityFor's answer over lib/request-identity.js's frameIdentity). Any method and
    a body. No firing decision and no destructive deny list: a person authorized these bytes at a surface that
@@ -2125,15 +2139,8 @@ async function safeFetchOperator(url, opts) {
         "an operator send states no {origin, referer} — lib/send.js passes the Send panel's fields, or " +
         "PAGE_CONTEXT_STATED_NONE for a probe");
   var stated = opts.stated;
-  // The person's typing is input: a value that is not what the header carries is refused, never sent.
-  if (stated.origin !== null && stated.origin !== "null" &&
-      !(URL.canParse(stated.origin) && /^https?:$/.test(new URL(stated.origin).protocol) &&
-        new URL(stated.origin).origin === stated.origin))
-    return _refused("network", "stated-origin-not-an-origin:" + stated.origin, [], {});
-  if (stated.referer !== null &&
-      !(URL.canParse(stated.referer) && /^https?:$/.test(new URL(stated.referer).protocol) &&
-        new URL(stated.referer).href === stated.referer && !stated.referer.includes("#")))
-    return _refused("network", "stated-referer-not-a-url:" + stated.referer, [], {});
+  var statedRefusal = safeFetchStatedRefusal(stated);
+  if (statedRefusal !== null) return _refused("network", statedRefusal, [], {});
   var parsed;
   try { parsed = new URL(String(url)); } catch (e) { return _refused("network", "bad-url", [], {}); }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
@@ -2193,6 +2200,7 @@ async function safeFetchOperator(url, opts) {
 if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
   self.safeFetchOperator = safeFetchOperator;
+  self.safeFetchStatedRefusal = safeFetchStatedRefusal;
   self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchWiden = safeFetchWiden;

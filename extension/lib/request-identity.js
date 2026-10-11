@@ -1,8 +1,9 @@
 // lib/request-identity.js — who a request the trusted zone sends speaks as. An identity is a document: its
 // origin and URL, and its cookie partition key. identityFor turns an identity and a request into the
 // facts a send applies (Origin, Referer, credentials, partition key); cookieHeaderFor computes the Cookie
-// a document of that identity would send (RFC 6265bis §5.2 and §5.8.3). Loaded after lib/site.js and
-// lib/referrer-policy.js, which it calls.
+// a document of that identity would send (RFC 6265bis §5.2 and §5.8.3), and cookieNamesFor and
+// identityProducibleBy state the same facts for the operator's preview. Loaded after lib/site.js and
+// lib/referrer-policy.js; identityProducibleBy also calls lib/speak-as.js, which loads after it.
 
 /* A frame the person picked, from browser-stamped facts only: webNavigation's record of the document and
    chrome.cookies' partition key for it, both looked up by the document's `documentId`. Resolves to null
@@ -89,26 +90,107 @@ function pageRequestIdentity(origin, docUrl, url, credentials, mode, referrerPol
                      "strict-origin-when-cross-origin");
 }
 
-/* The cookies a document of this identity sends with `url`, as {wire, cookie}: `wire` is the credentials
-   mode the zone's own fetch uses, and `cookie` a Cookie value the send sets, or null.
-   - omit, and same-origin to another origin: nothing.
-   - same-site: the browser's own jar, which is the page's: `wire` "include" and no Cookie set.
-   - cross-site: RFC 6265bis §5.8.3 excludes every cookie whose same-site-flag is not "None" (the Lax
-     exception is for navigations), so the unpartitioned SameSite=None cookies plus this partition's;
-     `wire` "omit", so the extension's own jar adds nothing and a reply's Set-Cookie is not stored.
-   Not covered: the creation-time order between the two lists (chrome.cookies states no creation time, so
-   each list keeps its own order and the merge is by path length only), a same-site send's partitioned
-   cookies, and the person's third-party-cookie setting. Their absence shows as a Cookie header whose
-   order, or whose partitioned or unpartitioned members, differ from the page's own request. */
+/* Which cookies a document of this identity sends with `url`, as {arm, wire, rule}. `wire` is the
+   credentials mode the zone's own fetch uses.
+   - "none": omit, or same-origin to another origin (Fetch §2.2.5 "Requests"); `rule` says which.
+   - "jar": same-site: the browser's own jar, which is the page's: `wire` "include" and no Cookie set.
+   - "listed": cross-site: `_crossSiteCookies`' list, set as the Cookie; `wire` "omit", so the extension's
+     own jar adds nothing and a reply's Set-Cookie is not stored. */
+function cookieArmFor(identityFacts, url) {
+  const { credentials, sameSite, origin } = identityFacts;
+  if (credentials === "omit")
+    return { arm: "none", wire: "omit", rule: "the credentials mode is omit (Fetch §2.2.5 Requests)" };
+  if (credentials === "same-origin" && new URL(url).origin !== origin)
+    return { arm: "none", wire: "omit", rule: "the credentials mode is same-origin and " + new URL(url).origin +
+                                             " is not " + origin + " (Fetch §2.2.5 Requests)" };
+  return sameSite ? { arm: "jar", wire: "include", rule: null } : { arm: "listed", wire: "omit", rule: null };
+}
+
+/* The cookies of the partition `partitionKey` for `url`. chrome.cookies states a partitioned cookie's key on
+   the cookie, so each answer is asserted to be of the partition asked for. */
+async function _partitionedCookies(url, partitionKey) {
+  const list = await swRpc("cookies.getAll", { url, partitionKey });
+  for (const c of list)
+    DCHECK(!!c.partitionKey && c.partitionKey.topLevelSite === partitionKey.topLevelSite,
+           "chrome.cookies.getAll for the partition " + JSON.stringify(partitionKey) + " answered the cookie " +
+           JSON.stringify(c.name) + " of the partition " + JSON.stringify(c.partitionKey) + " — a send that " +
+           "joins this list to the unpartitioned one would carry an unpartitioned cookie twice");
+  return list;
+}
+
+/* RFC 6265bis §5.8.3 "Retrieval Algorithm" for a cross-site request that is not a navigation: a cookie whose
+   same-site-flag is not "None" is excluded (the Lax exception is for navigations), so the unpartitioned
+   SameSite=None cookies plus the request's partition's, as {sent, excluded: [{name, rule}]}.
+   Not covered: the creation-time order between the two lists (chrome.cookies states no creation time, so each
+   list keeps its own order and the merge is by path length only), and the person's third-party-cookie
+   setting. Their absence shows as a Cookie header whose order or members differ from the page's own. */
+async function _crossSiteCookies(url, partitionKey) {
+  const all = await swRpc("cookies.getAll", { url });
+  const excluded = all.filter((c) => c.sameSite !== "no_restriction").map((c) => ({ name: c.name,
+    rule: "SameSite " + c.sameSite + " on a cross-site request that is not a navigation (RFC 6265bis §5.8.3)" }));
+  const sent = all.filter((c) => c.sameSite === "no_restriction").concat(await _partitionedCookies(url, partitionKey))
+    .map((c, i) => ({ c, i })).sort((a, b) => (b.c.path.length - a.c.path.length) || (a.i - b.i)).map((x) => x.c);
+  return { sent, excluded };
+}
+
+/* The cookies a document of this identity sends with `url`, as {wire, cookie}: `cookie` is the Cookie value
+   the send sets, or null, on cookieArmFor's arms. */
 async function cookieHeaderFor(identityFacts, url) {
-  const { credentials, sameSite, partitionKey, origin } = identityFacts;
-  if (credentials === "omit" || (credentials === "same-origin" && new URL(url).origin !== origin))
-    return { wire: "omit", cookie: null };
-  if (sameSite) return { wire: "include", cookie: null };
-  const unpartitioned = (await swRpc("cookies.getAll", { url })).filter((c) => c.sameSite === "no_restriction");
-  const partitioned = await swRpc("cookies.getAll", { url, partitionKey });
-  const list = unpartitioned.concat(partitioned).map((c, i) => ({ c, i }))
-    .sort((a, b) => (b.c.path.length - a.c.path.length) || (a.i - b.i)).map((x) => x.c);
-  if (list.length === 0) return { wire: "omit", cookie: null };
-  return { wire: "omit", cookie: list.map((c) => (c.name !== "" ? c.name + "=" : "") + c.value).join("; ") };
+  const arm = cookieArmFor(identityFacts, url);
+  if (arm.arm !== "listed") return { wire: arm.wire, cookie: null };
+  const { sent } = await _crossSiteCookies(url, identityFacts.partitionKey);
+  if (sent.length === 0) return { wire: "omit", cookie: null };
+  return { wire: "omit", cookie: sent.map((c) => (c.name !== "" ? c.name + "=" : "") + c.value).join("; ") };
+}
+
+/* The cookie names, never values, a send as this identity carries, as {arm, names, excluded: [{name, rule}]}
+   on cookieArmFor's arms; a "jar" send carries the browser's unpartitioned jar for `url`.
+   Not covered: a same-site send's partitioned cookies, which the zone's fetch does not carry. They are listed
+   as excluded under that rule, so their absence shows in the preview as that rule. */
+async function cookieNamesFor(identityFacts, url) {
+  const arm = cookieArmFor(identityFacts, url);
+  const pk = identityFacts.partitionKey;
+  if (arm.arm === "listed") {
+    const { sent, excluded } = await _crossSiteCookies(url, pk);
+    return { arm: arm.arm, names: sent.map((c) => c.name), excluded };
+  }
+  const unpartitioned = await swRpc("cookies.getAll", { url });
+  const partitioned = await _partitionedCookies(url, pk);
+  if (arm.arm === "none")
+    return { arm: arm.arm, names: [],
+             excluded: unpartitioned.concat(partitioned).map((c) => ({ name: c.name, rule: arm.rule })) };
+  return { arm: arm.arm, names: unpartitioned.map((c) => c.name),
+           excluded: partitioned.map((c) => ({ name: c.name, rule: "partitioned under " + pk.topLevelSite +
+             ", which a same-site send from this extension does not carry" })) };
+}
+
+/* Whether a real frame could send this request: one speaking as `speaking` (the Origin the request carries as
+   its own, stated or the frame's) from the frame `identity`, whose partition key is the jar, with `facts`
+   (identityFor's answer) and the `sent` {origin, referer} headers. Answers {producible, by, reasons}, where
+   `reasons` names each header no document of `speaking` under that top-level site sends.
+   - Jar: RFC 6265bis §5.2.1 "Document-based requests" makes a document's site for cookies opaque when it or
+     an ancestor is not same site with the top-level origin; the key's hasCrossSiteAncestor states that.
+   - Origin and Sec-Fetch-Site: speakAsOrigin's and speakAsFetchSite's answers for a document of `speaking`.
+   - Referer: Fetch §5.4 "Request class" makes a referrer of another origin "client". */
+function identityProducibleBy(identity, facts, speaking, sent, method, mode, url) {
+  const pk = identity.partitionKey;
+  const reasons = [];
+  const speakingSite = speaking === "null" ? null : siteOf(speaking + "/");
+  if (!pk.hasCrossSiteAncestor && speakingSite !== null && speakingSite !== pk.topLevelSite)
+    reasons.push("the jar is " + pk.topLevelSite + " with no cross-site ancestor, which no document of " +
+                 speaking + " holds: that document is itself cross-site with the top-level site");
+  const own = speakAsOrigin(speaking, method, mode, url, facts.referrerPolicy);
+  if (sent.origin !== own)
+    reasons.push("a document of " + speaking + " sends " + (own === null ? "no Origin" : "Origin " + own) +
+                 " on this request (Fetch §3.2 Origin header)");
+  const frameSite = speakAsFetchSite(identity.origin, url), speakingFetchSite = speakAsFetchSite(speaking, url);
+  if (urlPotentiallyTrustworthy(new URL(url)) && frameSite !== speakingFetchSite)
+    reasons.push("Sec-Fetch-Site stays the frame's " + frameSite + ", and a document of " + speaking + " sends " +
+                 speakingFetchSite);
+  if (sent.referer !== null && (speaking === "null" || new URL(sent.referer).origin !== speaking))
+    reasons.push("a document of " + speaking + " sends no Referer of another origin (Fetch §5.4 Request class)");
+  const where = !pk.hasCrossSiteAncestor ? "" :
+    speakingSite === pk.topLevelSite ? " nested inside a cross-site frame" : " embedded";
+  return { producible: reasons.length === 0, reasons,
+           by: "a document of " + speaking + where + " under the top-level site " + pk.topLevelSite };
 }

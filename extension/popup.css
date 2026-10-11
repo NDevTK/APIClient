@@ -1471,6 +1471,15 @@ details summary:hover {
   background: #263445;
   border-color: #58a6ff;
 }
+/* The Send panel's identity rows (lib/popup-send.js renderSendIdentity): where a value came from, beside it. */
+.send-provenance-mark {
+  color: #8b949e;
+  font-size: 10px;
+}
+.send-jar-key {
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  color: #c9d1d9;
+}
 
 /* THE FORCED POOL READS AS A WARNING BECAUSE IT IS ONE. The row above is what the panel prefills and
    autocompletes from; this one is a value that exists only because a gate was forced, offered to a
