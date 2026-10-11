@@ -2137,11 +2137,12 @@ static bool wpt_answer_host_requests(JSContext *ctx)
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
         n = (size_t)(end - tab - 1);
-        /* EVERY CROSS-AGENT OPERATION ROUTES THE SAME WAY — a member of a navigable's Window, and the four
-           internal methods a lent object performs ([[Get]], [[Set]], [[Delete]], [[Call]]). They differ in what
-           the peer resolves, not in who resolves it, which is why this is a prefix and not a list: an operation
-           added to remote_object.c reaches its instance with nothing here to remember. */
-        if (!strncmp(tab + 1, "windowproxy.get\t", 16) || !strncmp(tab + 1, "object.", 7)) {
+        /* Every cross-agent operation routes the same way: a member of a navigable's Window, the close of a
+           traversable, and the internal methods a lent object performs ([[Get]], [[Set]], [[Delete]],
+           [[Call]]). They differ in what the peer resolves, not in who resolves it, so this is a prefix and
+           not a list: a row added to core/frame/remote_op.c's OPS table reaches its instance with nothing here
+           to remember. */
+        if (!strncmp(tab + 1, "windowproxy.", 12) || !strncmp(tab + 1, "object.", 7)) {
             /* THE RECORD IS RELAYED WHOLE, so it is copied at ITS OWN LENGTH. It was copied into a 512-byte
                stack buffer with the over-long ones SKIPPED, which parks the asking flow forever the first time
                an operation carries a value — an encoded string is base64 and an argument list has no length. */
@@ -2342,7 +2343,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
            file that reports nothing and is killed at the gate's wall backstop ten minutes later, with the
            runner asleep and the op that caused it named nowhere. A missing route is a capability this host has
            not built — §Offensive programming's second kind — so it says which one, at the line that met it.
-           Every op the engine raises today is routed above (windowproxy.get, object.*, document.fetch,
+           Every op the engine raises today is routed above (windowproxy.*, object.*, document.fetch,
            xhr.send), so this cannot fire for anything that exists; it fires for the next one added. */
         else {
             DFAIL("a cross-agent operation reached this host under a verb it does not route — the flow that "

@@ -1688,11 +1688,11 @@ async function main() {
                         'rendezvous inside that instance, so an unreadable one would answer whatever request ' +
                         'zero belongs to');
       e.answered.set(key, Promise.resolve());
-      /* EVERY CROSS-AGENT OPERATION ROUTES THE SAME WAY — a member of a navigable's Window, and the four
-         internal methods a lent object performs. They differ in what the peer resolves, not in who resolves
-         it, which is why this is a PREFIX and not a list: an operation added to remote_object.c reaches its
-         instance with nothing here to remember. */
-      if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
+      /* Every cross-agent operation routes the same way: a member of a navigable's Window, the close of a
+         traversable, and the internal methods a lent object performs. They differ in what the peer resolves,
+         not in who resolves it, so this is a prefix and not a list: a row added to core/frame/remote_op.c's
+         OPS table reaches its instance with nothing here to remember. */
+      if (op.startsWith('windowproxy.') || op.startsWith('object.')) {
         askOperation(e, id, op);
       } else if (op.startsWith('document.fetch\t')) {
         /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` — §7.4.5's load for a document THIS instance holds,
@@ -1739,7 +1739,8 @@ async function main() {
            outside is indistinguishable from a page that is merely slow. */
         e.ready.push(declineAnswer(id,
           `\`${op.slice(0, 120)}\` — an operation this zone does not carry. It routes ` +
-          '`windowproxy.get`, the `object.*` internal methods, `document.fetch` and `xhr.send`, and an ' +
+          'the `windowproxy.*` operations, the `object.*` internal methods, `document.fetch` and `xhr.send`, ' +
+          'and an ' +
           'operation outside ' +
           'those is one the engine emits for and nothing performs'));
       }

@@ -5,6 +5,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
+#include "core/frame/document_lifecycle.h"
 #include "core/frame/remote_object.h"
 #include "core/frame/remote_op.h"
 /* §7.2.1.3.1 CrossOriginProperties ( O )'s list, asked rather than copied — a `windowproxy.get` names a member
@@ -15,7 +16,7 @@
 /* WHICH OPERATION A RECORD IS, and everything that is a fact about it, on one row. The verb, how many fields
    it carries and the program that performs it were three lists in the host this was hoisted out of, and the
    field count came back as the wrong one once already. */
-enum { OP_WPGET, OP_GET, OP_SET, OP_DELETE, OP_APPLY, OP_HAS, OP_N };
+enum { OP_WPGET, OP_WPCLOSE, OP_GET, OP_SET, OP_DELETE, OP_APPLY, OP_HAS, OP_N };
 
 /* `need` is the MINIMUM: `object.apply` carries one field per argument and there is no ceiling on how many may
    cross — a bound on the argument count is a bound on which calls this engine can make.
@@ -35,6 +36,11 @@ static const struct { const char *verb; int need; const char *program; } OPS[OP_
        this document's script ran; the receiver is JS_GetGlobalObject, not the `globalThis` binding, which is
        an ordinary writable data property of the global that a page may reassign like any other. */
     { "windowproxy.get", 5, "__apiclientOp(__apiclientGetter, __apiclientThis, __apiclientArgs)" },
+    /* HTML §7.3.1.6 "Navigable destruction"'s close a top-level traversable on THIS document's traversable,
+       asked by another agent's definitely-close task. The record has no operand: the document is the
+       traversable. The callee is a C function made here, not the page's `close`, which a page may replace and
+       which would re-decide §7.2.2.1 step 6 against this document as the incumbent. */
+    { "windowproxy.close", 4, "__apiclientOp()" },
     /* ECMA-262 10.1.8 — pure syntax, so nothing the page owns is between the operation and its answer. */
     { "object.get",      6, "__apiclientLent[__apiclientKey]" },
     /* 10.1.9 through %Reflect.set%: an assignment expression completes with the VALUE, and 10.5.9 step 8 asks
@@ -60,6 +66,15 @@ static const struct { const char *verb; int need; const char *program; } OPS[OP_
 };
 
 struct RemoteOp { int op; char *text; char **f; int nf; };
+
+/* The program's callee for `windowproxy.close`: `ctx` is the realm the function was made in, the named
+   document's, so it names the traversable. Completes with undefined, as §7.3.1.6's algorithm returns nothing. */
+static JSValue remote_op_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    document_lifecycle_close_traversable(ctx);
+    return JS_UNDEFINED;
+}
 
 /* ---- THE TWO INTRINSICS, PER REALM ----------------------------------------------------------------------- */
 
@@ -302,6 +317,11 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
         JS_SetPropertyStr(ctx, g, "__apiclientThis", JS_GetGlobalObject(ctx));
         JS_SetPropertyStr(ctx, g, "__apiclientArgs", args);
         JS_SetPropertyStr(ctx, g, "__apiclientOp", realm_value_get(ctx, g_apply_slot));
+    } else if (op->op == OP_WPCLOSE) {
+        JSValue fn = JS_NewCFunction(ctx, remote_op_close, "close", 0);
+
+        CHECK(!JS_IsException(fn), "remote op: the callee of a cross-agent close could not be allocated");
+        JS_SetPropertyStr(ctx, g, "__apiclientOp", fn);
     } else {
         /* THE OBJECT IS NAMED BY (GENERATION, ID) — see remote_object.h. An id alone is an index into
            whichever of this document's sessions happens to be running when the record lands, and it is IN

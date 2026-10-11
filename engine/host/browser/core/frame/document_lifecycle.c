@@ -1,6 +1,8 @@
 /* HTML §7.5.9 unloading documents, §7.5.10 destroying documents, and the §7.3 close path — see
    document_lifecycle.h. */
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -19,7 +21,9 @@
 #include "core/html/html_iframe.h"
 #include "core/html/user_activation.h"
 #include "core/timing/timer.h"
+#include "solver/engine.h"   /* the cross-agent close: a host request and its addressee */
 #include "solver/flow.h"   /* §7.5.10 step 5's OTHER task queue: the running flow's own program sequence */
+#include "solver/world.h"    /* the cross-agent close record's document name and world */
 
 /* THE THREE PER-DOCUMENT OPERATIONS, and why they are ONE fan-out with three bodies.
  *
@@ -729,7 +733,33 @@ static const char *const CLOSE_STEPS[] = { CLOSE_STAGES(JS_STEP_STAGE_LABEL) NUL
 
 typedef struct {
     JSStepHdr hdr;
+    /* The rendezvous of the cross-agent close, 0 until the record is sent; a POD the frame clone copies. */
+    uint32_t req;
 } CloseState;
+
+/* Sends HTML §7.3.1.6 "Navigable destruction"'s close a top-level traversable to the agent holding the
+   traversable's active document, as a `windowproxy.close` record (core/frame/remote_op.h's grammar: the
+   document, the asking world with its ancestry, and the addressee). The fit of every field is CHECKed,
+   for proxy_get_step's reason: a truncated name reaches no instance and a truncated addressee names a
+   timeline this flow never committed to. */
+static uint32_t close_request_peer(JSContext *ctx, JSValueConst proxy)
+{
+    const char *doc = world_doc_name(window_proxy_doc(proxy));
+    Flow *f = flow_running();
+    char op[2048], *addr;
+    int n;
+
+    DCHECK(f != NULL, "definitely close ran outside a flow, so there is nothing to park on the peer's answer");
+    addr = engine_flow_addressee(ctx, f, doc);
+    n = snprintf(op, sizeof op, "windowproxy.close\t%s\t", doc);
+    CHECK(n > 0 && (size_t)n < sizeof op,
+          "a cross-agent close's target document name did not fit its record");
+    n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
+    n += snprintf(op + n, sizeof op - (size_t)n, "\t%s", addr ? addr : ENGINE_ADDRESSEE_NONE);
+    free(addr);
+    CHECK((size_t)n < sizeof op, "a cross-agent close's addressee did not fit its record");
+    return engine_host_request(ctx, op);
+}
 
 static int js_close_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -743,27 +773,30 @@ static int js_close_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
            "§7.3's definitely close was given a navigable that is not a TOP-LEVEL traversable — §7.2.2.1 step "
            "2 returns for one, and a frame is closed by removing its container");
 
-    /* AND THE ACTIVE DOCUMENT EVERY ONE OF THOSE STEPS READS MAY BE A PEER'S. §7.3.1.6 navigable destruction's
-       definitely close is written over traversable's ACTIVE DOCUMENT — its inclusive descendant navigables,
-       §7.5.9's unload over them, then §7.5.10's destroy — and each of those runs IN THE AGENT THAT HOLDS THAT
-       DOCUMENT: unload fires `beforeunload` and `unload` at the page's own listeners and destroy tears down its
-       Window. This agent holds none of it for a remote navigable, so the fan-out below would walk an EMPTY
-       subtree and complete — the opener's copy of is closing true, the peer still running, its unload listeners
-       never fired, and nothing anywhere to say the close did not happen.
-       IT IS THE MIRROR OF THE READ AND IT WANTS THE SAME MECHANISM. §7.2.2.1's `closed` is ASKED of the agent
-       whose record the standard names (window_proxy.c's proxy_get_step); this is that agent being TOLD, so it
-       is a cross-agent operation the peer performs by running close() on its own root — one more row in
-       remote_op.c's OPS table, and the two hosts that route by verb widened past `windowproxy.get`
-       (extension/bridge.js, engine/route.mjs). Setting is closing here is NOT part of that gap and is correct
-       as it stands: it is monotonic, so this agent's true is the standard's answer for its own reads. */
-    DCHECK(!window_proxy_is_remote(proxy),
-           "§7.3.1.6's definitely close reached a top-level traversable whose ACTIVE DOCUMENT is in another "
-           "instance. Steps 1-3 are performed ON THAT DOCUMENT — the beforeunload/unload fan-out is over its "
-           "subtree and fires at its own listeners, and the destroy tears down its Window — so running them "
-           "here walks an empty subtree and leaves the peer alive with its unload never fired. Build the "
-           "cross-agent operation: a row in remote_op.c's OPS table whose program runs close() on the peer's "
-           "own root, and widen the by-verb routing in extension/bridge.js and engine/route.mjs past "
-           "`windowproxy.get` so it reaches the instance that holds the document");
+    /* Definitely close is written over the traversable's active document: its descendants' beforeunload and
+       unload fire at that document's own listeners, and the destroy tears down its Window. When another agent
+       holds that document, the steps run there: this task asks that agent to close the traversable
+       (document_lifecycle_close_traversable, the peer's half) and parks until it answers. The answer is the
+       peer's acknowledgement, since definitely close returns nothing; its value is not read. Is closing was
+       set by §7.2.2.1 step 6.1 before this task was queued, and it is monotonic, so this agent's own reads of
+       `closed` are already the standard's answer. */
+    if (window_proxy_is_remote(proxy)) {
+        JSValue ack;
+        int completion = ENGINE_COMPLETION_NORMAL;
+
+        if (s->req == 0) {
+            s->req = close_request_peer(ctx, proxy);
+            return JS_STEP_YIELD;   /* park; siblings run until the peer answers */
+        }
+        if (!engine_host_answered(s->req, NULL)) return JS_STEP_YIELD;
+        ack = engine_host_take(ctx, s->req, &completion);
+        s->req = 0;
+        DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+               "a peer answered a cross-agent close with a throw — its program is "
+               "document_lifecycle_close_traversable, a C body that completes normally on every path");
+        JS_FreeValue(ctx, ack);
+        return JS_STEP_DONE;
+    }
 
     /* STEPS 1-2: toUnload is the active document's INCLUSIVE DESCENDANT NAVIGABLES, and checking if unloading
        is canceled over that list is the beforeunload fan-out — the subtree rooted here, one task per document.
@@ -1047,6 +1080,20 @@ void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy)
        first and reads the `closed` step 6.1 just made true. */
     enqueue_job(ctx, proxy, &js_close_def, &g_close_stepid, "definitelyClose", LC_AFTER_NONE,
                 TASK_SOURCE_DOM_MANIPULATION);   /* §7.2.2.1 step 6.2 */
+}
+
+void document_lifecycle_close_traversable(JSContext *ctx)
+{
+    JSValueConst proxy = document_window_proxy(ctx);
+
+    DCHECK(window_proxy_is(proxy),
+           "a peer's close reached a realm whose global is not a navigable's WindowProxy");
+    /* The record is another instance's text, so a navigable this agent holds as nested is refused with
+       §7.2.2.1 step 2's return rather than asserted: the asker's copy and this one disagree. */
+    if (!window_proxy_is_top_level(proxy)) return;
+    if (window_proxy_closing(proxy)) return;      /* §7.3.1.6 close a top-level traversable, step 1 */
+    window_proxy_set_closing(ctx, proxy);         /* the asker's §7.2.2.1 step 6.1, on this agent's record */
+    descend_enqueue(ctx, proxy, LC_BEFOREUNLOAD, LC_AFTER_UNLOAD);   /* step 2: definitely close, steps 1-3 */
 }
 
 void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy)

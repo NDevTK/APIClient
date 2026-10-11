@@ -487,7 +487,9 @@ async function service(e) {
     /* A CROSS-AGENT OPERATION IS RECORDED THE FIRST TIME IT IS ASKED and never answered here, because there is
        nothing in the ABI to ask the peer WITH. It is not skipped silently: leaving it out of the accounting is
        how a seam whose read half has never run reports OK. */
-    if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
+    /* By namespace, as the offscreen routes it (extension/bridge.js): `windowproxy.close` reaches the peer
+       through this same arm, and this driver's documents close no peer, so every record it sees here is a read. */
+    if (op.startsWith('windowproxy.') || op.startsWith('object.')) {
       const key = `${e.tag}#${id}`;
       /* AN UNANSWERED REQUEST IS RE-REPORTED EVERY STEP, so the first sighting is the one that acts. */
       if (reads.has(key)) continue;

@@ -17,9 +17,8 @@ static const char HTML_WINDOWOPENERCLOSE[] =
        no ancestor), and step 3 holds because the popup is an auxiliary browsing context whose opener browsing
        context is this document's, with which the incumbent is same origin. So the walk climbs the popup's
        `opener` link before it answers. Step 6.1 then sets is closing and queues the task that definitely
-       closes the traversable; that task's run over a document another instance holds is
-       document_lifecycle.c's named missing capability (the cross-agent close operation), which this
-       document reaches after its fetch is issued. */
+       closes the traversable. Another instance holds the popup's document, so after this document's fetch
+       is issued that task sends a `windowproxy.close` record and parks on the peer's answer. */
     "var _wo = '';"
     "try { var _wox = open('https://other.test/p'); _wox.close(); _wo = _wox.closed === true ? 'X' : 'x'; }"
     " catch (e) { _wo = 'E' + e.name; }"

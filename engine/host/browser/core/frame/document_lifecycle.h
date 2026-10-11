@@ -79,6 +79,18 @@ void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy);
    definitely close, which fires beforeunload over the whole subtree, then unloads it, then destroys it. */
 void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy);
 
+/* HTML §7.3.1.6 "Navigable destruction"'s close a top-level traversable, performed by the agent that holds
+   the traversable's active document when another agent's definitely-close task asks it (a `windowproxy.close`
+   record, core/frame/remote_op.c). `ctx` is that document's realm and names the traversable. The asker has
+   already decided §7.2.2.1 step 6's three conjuncts against its own incumbent; this runs step 1's is-closing
+   return, records the asker's step 6.1 on this agent's copy, and definitely closes.
+   Named residual. Not covered: the record does not say which origin asks, so this agent cannot re-check
+   §7.3.2.2's familiar with against the asker, and an instance that never opened this window can close it.
+   Next diff builds: the trusted zone stamps the asking document's origin on the record, as it does for
+   `windowproxy.post`, and this re-runs familiar with against it. Absence shows as a popup's unload firing
+   after a close() from an instance with no opener or ancestor link to it. */
+void document_lifecycle_close_traversable(JSContext *ctx);
+
 /* HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION, for the
  * Document a navigation has REPLACED — the entry a NAVIGATION reaches this file through, and it is NOT
  * §7.3.1.6's.

@@ -4044,10 +4044,12 @@ async function engineServiceHostRequests(eng) {
        and the internal methods a lent object performs ([[Get]], [[Set]], [[Delete]], [[Call]]) run the peer's
        code, so an answer computed here would be wrong. This zone carries the record to the holder (SECURITY.md:
        only it knows which instance that is) and the completion back.
-       Matched by prefix, not a list, so an operation added to remote_object.c needs nothing here: each names
-       its target document in the same field. Nothing is answered inside the ask; the peer answers by running a
-       program as a flow, and the completion arrives through its notices (hostNotice). */
-    if (op.startsWith("windowproxy.get\t") || op.startsWith("object.")) {
+       Matched by prefix, not a list, so a row added to core/frame/remote_op.c's OPS table under either
+       namespace needs nothing here: each names its target document in the same field. `windowproxy.close` is
+       one of them, the definitely-close task of a traversable whose document the peer holds. Nothing is
+       answered inside the ask; the peer answers by running a program as a flow, and the completion arrives
+       through its notices (hostNotice). */
+    if (op.startsWith("windowproxy.") || op.startsWith("object.")) {
       /* An unanswered request is re-reported every step (engine_host_requests does not dedupe), so asking on
          every sighting would perform the peer's operation once per step. */
       if (eng._remoteAsked.has(id)) continue;
