@@ -1313,6 +1313,10 @@ FlowKeyChecks flow_key_checks(void);
 /* Lifetime count of queue entries the order's index took across every runnable ask (flow.c's flow_ix_query):
    the index's own work beside `scan<Entry>Weights`, the members it weighed. Never reset; may be differenced. */
 int64_t flow_ix_entries(void);
+/* …and of the members those asks weighed, the ones whose bound stood at least half a quantum above their weight:
+   the carry bit (`k + K + carry`) the bound does not read put them in reach, where the rest were within the
+   rounding margin of the answer. A subset of the runnable entries' `scan<Entry>Weights`. Lifetime. */
+int64_t flow_ix_carried(void);
 
 /* Lifetime count of rank changes (raises of frontier_rank_changed): the denominator of the hook's rescan count.
  * The hook rescans when `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur` (engine.c), so its cadence is

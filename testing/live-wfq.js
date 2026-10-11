@@ -196,22 +196,22 @@ function branchScope() {
 }
 
 /* THE COST SCOPE — WHAT ASKING THIS ORDER COST, which every row in the two lists above is silent about
-   because every row above is about what the order DECIDED. result.c publishes ten rows here and states
+   because every row above is about what the order DECIDED. result.c publishes eleven rows here and states
    what they are FOR in its own words: "the tail is not being reached" has two causes — "not enough thread
    time for the members standing, or the thread spent asking the order rather than running it" — and no
    other row on that line separates them.
 
    THEY HAD NO LIVE-PAGE READER AT ALL, which is the same defect one scope over from the minter triple and
-   is why the check below is written the way `branchScope` is. `engine/build.mjs` reads all ten and
+   is why the check below is written the way `branchScope` is. `engine/build.mjs` reads all eleven and
    `engine/solvergate.mjs` reads three, and both of those drive the SMOKE FIXTURE — whose fork factor,
    frontier growth and dispatch count are its author's design decisions rather than a document's. So the
    one question a growing frontier poses about the ORDERING'S OWN COST — does a dispatch weigh a
    constant number of members or all of them — was measurable only where the population was chosen.
 
-   THE KINDS, FROM result.c's OWN TEXT AND NOT FROM THE NAMES. All ten are LIFETIME COUNTS and may be
+   THE KINDS, FROM result.c's OWN TEXT AND NOT FROM THE NAMES. All eleven are LIFETIME COUNTS and may be
    differenced: `preemptAsksLifetime` is stated as one outright ("solver/engine.c never resets it, so two
    censuses carrying one `workDone` give a RATE over the interval between them, and that is the only
-   reading a wall-denominated quantum leaves quotable at all"), and the nine `scan*` rows are the same
+   reading a wall-denominated quantum leaves quotable at all"), and the ten `scan*` rows are the same
    kind by the same argument — they count WALKS AND WEIGHINGS PERFORMED, which nothing takes back. They
    are COUNTS AND NOT CLOCKS on purpose: solver/flow.h's FLOW_SCANS says a duration here "would be a fact
    about the machine and these are facts about what the engine did", and this host's quantum is
@@ -220,7 +220,7 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
               "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
               /* …and the order's index's own work, the queue entries its runnable asks took, beside the
                  weighings above that are those asks' members (solver/metrics/wfq_frontier.def). */
-              "scanIndexEntries",
+              "scanIndexEntries", "scanIndexCarried",
               "preemptAsksLifetime",
               /* …AND WHICH HALF OF THE HOOK'S KEY MOVED WHEN IT MISSED. `scanRivalRuns` is close to half of
                  all the frontier weighing this engine does and is keyed on a DISJUNCTION — the frontier
@@ -229,7 +229,7 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
                  miss is the order genuinely having changed; a `cur` miss is a walk for a frontier in which
                  only the EXCLUDED member moved. `rivalMissBoth` is what prices either repair: where both
                  halves moved in one interval, removing one invalidator buys NOTHING because the other would
-                 have forced the same walk. LIFETIME counts like the ten above, differenceable for the same
+                 have forced the same walk. LIFETIME counts like the eleven above, differenceable for the same
                  reason, and a PARTITION of `scanRivalRuns` — which is checked below rather than assumed. */
               "rivalMissGen", "rivalMissCur", "rivalMissBoth"];
 

@@ -241,6 +241,11 @@ METRIC(scan_census_weights, "scanCensusWeights", LIFETIME, "weighing", PROCESS, 
    whole cost of an ask that does not walk; per ask against `members` and `families` it says
    which of the two the index pays for (solver/flow.c's flow_ix_query states the residual). */
 METRIC(scan_index_entries, "scanIndexEntries", LIFETIME, "entry", PROCESS, "solver/flow.c", INT)
+/* …and of the members those asks weighed, the ones the bound reached only because it does not
+   read the carry bit (bound at least half a quantum above weight). Against the runnable
+   weighings it splits what the index pays for: the carry's slack, or members truly within
+   the rounding margin of the answer, which on a tied frontier are its ties. */
+METRIC(scan_index_carried, "scanIndexCarried", LIFETIME, "weighing", PROCESS, "solver/flow.c", INT)
 /* …and how often the hook was asked. The rival rescan is close to half of all frontier
    weighing; this tells a cache that absorbs nothing (repair the cache) from a generation
    moving as fast as the hook is consulted (the page branching). `scanRivalRuns /

@@ -3410,12 +3410,13 @@ static void flow_ix_rekey(Flow *f) {
 
 /* What one ask of the index answered: the maximum (`best`, `bw`) with the incumbent folded in, whether the
    incumbent was weighed, whether a never-dispatched member other than it weighs exactly `bw` (the plateau and
-   starvation rows' question), and the work: members weighed and queue entries taken. */
+   starvation rows' question), and the work: members weighed and queue entries taken, and of the members weighed
+   the ones whose bound stood at least half a quantum above their weight, the carry bit the bound does not read. */
 typedef struct {
     Flow *best;
     double bw;
     int seeded, never_tie;
-    int64_t weighed, entries;
+    int64_t weighed, entries, carried;
 } FlowIxAnswer;
 
 static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double bound, double off, unsigned char kind) {
@@ -3431,7 +3432,7 @@ static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double bound, double off, u
    Members are compared by weight and then registry slot, the walk's first maximum. Pure: it writes only the queue
    nodes, which nothing reads outside one query. */
 static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
-    FlowIxAnswer a = { NULL, 0.0, 0, 0, 0, 0 };
+    FlowIxAnswer a = { NULL, 0.0, 0, 0, 0, 0, 0 };
     FlowIxNode *q = NULL;
     double sw = 0.0, nmax = 0.0;
     int nseen = 0;
@@ -3473,6 +3474,9 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
             if (m == seed || m == exclude) continue;
             w = flow_weight(m);
             a.weighed++;
+            /* The margin is far below half a quantum, so this partitions the weighed by what put them in reach:
+               a bound read past the carry bit, against a bound that was tight. */
+            if (e->key - w >= 0.5 * FLOW_AGE_QUANTUM) a.carried++;
             DCHECKF(w < e->key && m->ix_m.key == flow_ix_member_key(m),
                     "the order's index bounded a member at or below its weight, or holds a stale key for it "
                     "(weight %.17g, bound %.17g, key %.17g, fresh key %.17g) — the margin's derivation is wrong or "
@@ -3899,6 +3903,7 @@ static void flow_count_plateau(const Flow *seed, const FlowIxAnswer *a) {
    better flow takes the thread at the next opcode. The seed is a live member (engine.c drops an incumbent the
    seeding paged out before asking), so it is read through its handle. */
 static int64_t g_ix_entries;   /* lifetime: queue entries the index's asks took, published as `scanIndexEntries` */
+static int64_t g_ix_carried;   /* …and members weighed past the carry bit, published as `scanIndexCarried` */
 static Flow *flow_pick(const Flow *seed, const Flow *exclude, FlowScan why) {
     FlowIxAnswer a;
     CHECK((unsigned)why < (unsigned)FLOW_SCAN_N,
@@ -3911,11 +3916,13 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, FlowScan why) {
     a = flow_ix_query(seed, exclude);
     g_scan_weights[why] += a.weighed;
     g_ix_entries += a.entries;
+    g_ix_carried += a.carried;
     if (why == FLOW_SCAN_NEXT) flow_count_plateau(seed, &a);
     return a.best;
 }
 
 int64_t flow_ix_entries(void) { return g_ix_entries; }
+int64_t flow_ix_carried(void) { return g_ix_carried; }
 
 #if APICLIENT_DEV
 /* The index against the frontier it indexes, asked at every census: the eager checks in flow_ix_query see only
