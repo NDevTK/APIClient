@@ -942,8 +942,8 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    which is a value-dependent behaviour split rather than a narrower mechanism. How its absence would show: two
    sibling flows for every repeated `===` against one BigInt-valued source, where a string-valued source
    produces one; the fork census names the predicate. */
-void        concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val,
-                         JSConcolicEqOp algo);
+int         concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val,
+                         JSConcolicEqOp algo);   /* 1 when the value was written, 0 when refused */
 /* One pin of the running flow, as concolic_pins_each hands it over: `src` is the source path the pin is keyed
    under (what a later read concretizes through), `val` the §7.1.19 ToString ( argument ) spelling of the
    operand the page's equality wrote, and `kind` what that spelling denotes. All three are borrowed from the
@@ -956,6 +956,24 @@ typedef void (*ConcolicPinVisit)(const char *src, ConcolicLit kind, const char *
    holds no kind it refuses, a key is unique in its segment, and a copy-up never drops a pin). The visitor
    must not write the constraint. */
 void concolic_pins_each(ConcolicPinVisit visit, void *ud);
+/* A FORCED DECISION THAT DETERMINED NO VALUE — the other half of what a flow assumed. A pin states an arm that
+   determined a value; an ordering, a failed or loose equality, a call predicate, a truthiness test or a
+   native operation's completion determines none, and on an arm the flow's own example contradicts that arm is
+   an assumption the pin store cannot state. It is recorded as the decision taken, never as a value.
+   BRANCH: `spelling` is the condition's shape and `taken` its §7.1.2 ToBoolean ( argument ) on this path.
+   OUTCOME: `spelling` is `op(operand)` and `taken` the completion index the asking machine declared. */
+typedef enum { CONCOLIC_DECISION_NONE = 0, CONCOLIC_DECISION_BRANCH, CONCOLIC_DECISION_OUTCOME } ConcolicDecision;
+/* decide.c's note on a contradicted branch arm that pinned nothing: `key` is the branch's constraint key,
+   whose truth decide_arm has recorded as `arm` (asserted), `shape` the condition's display shape and `neg`
+   the polarity between the condition and its predicate. The first spelling of one key is kept. */
+void concolic_note_forced_branch(const char *key, const char *shape, int arm, int neg);
+/* …and on an outcome walk whose real completion was contradicted: `key` is the settled completion's outcome
+   key, whose truth outcome_settle has recorded as 1 (asserted). */
+void concolic_note_forced_outcome(const char *key, const char *op, const char *operand_shape, int completion);
+typedef void (*ConcolicDecisionVisit)(ConcolicDecision what, const char *spelling, int taken, void *ud);
+/* Visits every forced decision the running flow's constraint holds, once per key, with concolic_pins_each's
+   walk, order and invariants. Borrowed for the visit; the visitor must not write the constraint. */
+void concolic_forced_decisions_each(ConcolicDecisionVisit visit, void *ud);
 /* THE HOLE A REPORT PRINTS, SPELLED ONCE — the joint between a constraint recorded at a BRANCH and a domain
    emitted at a REQUEST, which are the two ends §Solver-half's two-facts rule has to connect.
    A shape is what the @H surface renders where the code computed no value, and the BRACES DO NOT SIT IN THE

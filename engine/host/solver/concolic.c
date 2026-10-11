@@ -716,6 +716,10 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    leq: the loose equalities that held, each as the operand the page wrote and its kind. A strict equality's
    holding arm determines a value (`val`); a loose one's (§7.2.13 IsLooselyEqual ( x, y )) bounds the operand
    to a set only that algorithm can read; both failing arms are `excl`. An exact repeat adds nothing. */
+/* fdec, fdec_what, fdec_arm, fdec_neg: this flow took an arm its own example contradicts at the decision this
+   key names, and the arm determined no value (a pin states the ones that did). `fdec` is the decision as the
+   page wrote it; for a branch `fdec_arm` is the predicate's arm and `fdec_neg` the polarity `fdec` reads it in,
+   for an outcome `fdec_arm` is the completion. Written once per key by concolic_note_forced_branch/_outcome. */
 /* One side of an interval, with its spelling. The number is what a merge orders bounds by; the text is the
    page's own §6.1.6.1.20 Number::toString ( x, radix ) of the literal, so nothing re-spells a double and
    reports a bound the source does not contain. */
@@ -723,7 +727,8 @@ typedef struct { double num; char *txt; signed char present; signed char inclusi
 typedef struct { BoundSide lo, hi; } Bound;
 typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
-                 signed char truth; signed char pinned_root; signed char ex_contra; } Cons;
+                 signed char truth; signed char pinned_root; signed char ex_contra;
+                 char *fdec; int fdec_arm; signed char fdec_what; signed char fdec_neg; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
 /* The one copy of one side, used by the fork's copy-up; a field added to BoundSide must be copied here or a
@@ -753,6 +758,7 @@ static void cons_entry_free(Cons *e) {
     free(e->pred);
     for (i = 0; i < e->nleq; i++) concolic_looseeq_release(&e->leq[i]);
     free(e->leq);
+    free(e->fdec);
 }
 /* …and one measurement: the freeze's byte census reads exactly the fields the free above disposes of. */
 static long cons_entry_bytes(const Cons *e) {
@@ -774,6 +780,7 @@ static long cons_entry_bytes(const Cons *e) {
     }
     n += (long)e->nleq * (long)sizeof(ConcolicLooseEq);
     for (i = 0; i < e->nleq; i++) n += (long)strlen(e->leq[i].tok) + 1;
+    if (e->fdec) n += (long)strlen(e->fdec) + 1;
     return n;
 }
 
@@ -922,6 +929,11 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].truth = below ? below->truth : -1;
     g_pins[g_pins_n].pinned_root = below ? below->pinned_root : 0;
     g_pins[g_pins_n].ex_contra = below ? below->ex_contra : 0;
+    g_pins[g_pins_n].fdec = (below && below->fdec) ? strdup(below->fdec) : NULL;
+    CHECK(!(below && below->fdec) || g_pins[g_pins_n].fdec, "concolic: OOM copying an inherited forced decision");
+    g_pins[g_pins_n].fdec_what = below ? below->fdec_what : (signed char)CONCOLIC_DECISION_NONE;
+    g_pins[g_pins_n].fdec_arm = below ? below->fdec_arm : 0;
+    g_pins[g_pins_n].fdec_neg = below ? below->fdec_neg : 0;
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
@@ -937,8 +949,9 @@ static int root_member(const char *root, int i, const char **p, size_t *n);
    downstream can recover the mark: by the time a value reaches a sink the pinned identity is gone and only the
    root survives the derivations. The root is marked even when it equals the identity (`event.origin === X`,
    the spelling bundles write); the second write is then a no-op through `cons_entry`. */
-void concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val, JSConcolicEqOp algo) {
+int concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val, JSConcolicEqOp algo) {
     Cons *c;
+    int wrote = 0;
     /* The two writes are one act and two decisions, separated by the algorithm (concolic.h reads §7.2.13
        IsLooselyEqual ( x, y ) step by step). A holding `===` determines the operand (§7.2.14 IsStrictlyEqual
        ( x, y ) step 1: "If SameType(x, y) is false, return false"); a holding `==` leaves a set, so pinning it
@@ -963,7 +976,7 @@ void concolic_pin(const char *src, const char *root, ConcolicLit kind, const cha
        This refusal precedes the root mark as well: the store cannot express the operand at all, so a mark alone
        would record a demand for a principal nothing could later name. The loose case below differs: the token
        is expressible and the demand observed; only the determination is missing. */
-    if (kind == CONCOLIC_LIT_BIGINT || kind == CONCOLIC_LIT_NONE) return;
+    if (kind == CONCOLIC_LIT_BIGINT || kind == CONCOLIC_LIT_NONE) return 0;
     /* The determination, which only §7.2.14 makes. §7.2.13's holding arm leaves the operand in a set
        (`x == undefined` admits null by step 2, `x == 0` admits a numeric-looking String by step 6 and a Boolean
        by step 9, and an Object reaches the page's own ToPrimitive by step 12), so writing one member here
@@ -982,6 +995,7 @@ void concolic_pin(const char *src, const char *root, ConcolicLit kind, const cha
         free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
         c->valkind = (signed char)kind;
         g_pin_any = 1;   /* the one write of a pin value, so the one place the latch can be raised */
+        wrote = 1;
         /* `c` is dead from here: cons_entry may grow the head by realloc, so nothing below reaches through it. */
     }
     /* Marked on every member, because a root may name a set. concolic_principal_pinned looks each declared
@@ -1004,6 +1018,7 @@ void concolic_pin(const char *src, const char *root, ConcolicLit kind, const cha
             free(one);
         }
     }
+    return wrote;
 }
 /* The hole key (see concolic.h). One speller, because it is read at two ends that would otherwise normalise the
    same hole differently and never meet. */
@@ -1536,10 +1551,12 @@ int concolic_src_pinned(const char *src) {
     return (e && e->val) ? 1 : 0;
 }
 
-/* One entry of the enumeration (concolic.h). `e` is entry `i` of the segment whose index is `hash`; the head is
-   one such segment. The visible copy of a key is the one cons_lookup answers, so a shadowed entry is skipped
-   and its key is visited where the nearer copy stands. */
-static void pins_each_entry(const Cons *seg, int i, const int *hash, int cap, ConcolicPinVisit visit, void *ud) {
+/* One entry of an enumeration over the constraint (concolic.h's concolic_pins_each and
+   concolic_forced_decisions_each). `e` is entry `i` of the segment whose index is `hash`; the head is one such
+   segment. The visible copy of a key is the one cons_lookup answers, so a shadowed entry is skipped and its
+   key is visited where the nearer copy stands. Asserts the store's invariants on every entry it reads. */
+typedef void (*ConsVisit)(const Cons *e, void *ud);
+static void cons_each_entry(const Cons *seg, int i, const int *hash, int cap, ConsVisit visit, void *ud) {
     const Cons *e = &seg[i];
     const Cons *seen;
 
@@ -1555,24 +1572,113 @@ static void pins_each_entry(const Cons *seg, int i, const int *hash, int cap, Co
             "the store holds a BigInt pin under `%s`, a kind concolic_pin refuses because pin_mint cannot mint "
             "it back", e->key);
     DCHECK(!e->val || g_pin_any, "a pin is stored while the agent's pin latch says no flow ever pinned one");
+    DCHECKF(!e->fdec == (e->fdec_what == (signed char)CONCOLIC_DECISION_NONE),
+            "the forced decision under `%s` and its kind disagree about whether one is recorded — the note "
+            "writes both", e->key);
+    DCHECKF(e->fdec_what != (signed char)CONCOLIC_DECISION_BRANCH ||
+            ((e->fdec_arm == 0 || e->fdec_arm == 1) && (e->fdec_neg == 0 || e->fdec_neg == 1) &&
+             e->truth == e->fdec_arm),
+            "the forced branch under `%s` states an arm the constraint's own truth for that key does not — "
+            "decide_arm records the truth before the note, and nothing rewrites either", e->key);
+    DCHECKF(e->fdec_what != (signed char)CONCOLIC_DECISION_OUTCOME || (e->fdec_arm >= 0 && e->truth == 1),
+            "the forced outcome under `%s` names a completion its key's settled truth denies — outcome_settle "
+            "records truth 1 under the completion's key before the note", e->key);
     seen = cons_lookup(e->key);
     if (seen != e) {
         DCHECKF(!e->val || (seen && seen->val),
                 "a nearer copy of `%s` dropped the pin the entry under it holds — cons_entry's copy-up carries "
                 "the value, and nothing clears one", e->key);
+        DCHECKF(!e->fdec || (seen && seen->fdec),
+                "a nearer copy of `%s` dropped the forced decision the entry under it holds", e->key);
         return;
     }
-    if (e->val) visit(e->key, (ConcolicLit)e->valkind, e->val, ud);
+    visit(e, ud);
 }
 
-void concolic_pins_each(ConcolicPinVisit visit, void *ud) {
+static void cons_each(ConsVisit visit, void *ud) {
     const ConsSeg *s;
     int i;
 
-    DCHECK(visit != NULL, "the pin store was enumerated with no visitor");
-    for (i = 0; i < g_pins_n; i++) pins_each_entry(g_pins, i, g_pins_hash, g_pins_hash_cap, visit, ud);
+    for (i = 0; i < g_pins_n; i++) cons_each_entry(g_pins, i, g_pins_hash, g_pins_hash_cap, visit, ud);
     for (s = g_pins_base; s; s = s->base)
-        for (i = 0; i < s->n; i++) pins_each_entry(s->e, i, s->hash, s->hash_cap, visit, ud);
+        for (i = 0; i < s->n; i++) cons_each_entry(s->e, i, s->hash, s->hash_cap, visit, ud);
+}
+
+typedef struct { ConcolicPinVisit visit; void *ud; } PinsEach;
+static void pins_each_one(const Cons *e, void *ud) {
+    const PinsEach *p = ud;
+    if (e->val) p->visit(e->key, (ConcolicLit)e->valkind, e->val, p->ud);
+}
+
+void concolic_pins_each(ConcolicPinVisit visit, void *ud) {
+    PinsEach p;
+
+    DCHECK(visit != NULL, "the pin store was enumerated with no visitor");
+    p.visit = visit; p.ud = ud;
+    cons_each(pins_each_one, &p);
+}
+
+typedef struct { ConcolicDecisionVisit visit; void *ud; } DecisionsEach;
+static void decisions_each_one(const Cons *e, void *ud) {
+    const DecisionsEach *d = ud;
+    if (!e->fdec) return;
+    d->visit((ConcolicDecision)e->fdec_what, e->fdec,
+             e->fdec_what == (signed char)CONCOLIC_DECISION_BRANCH ? (e->fdec_arm ^ e->fdec_neg) : e->fdec_arm,
+             d->ud);
+}
+
+void concolic_forced_decisions_each(ConcolicDecisionVisit visit, void *ud) {
+    DecisionsEach d;
+
+    DCHECK(visit != NULL, "the forced decisions were enumerated with no visitor");
+    d.visit = visit; d.ud = ud;
+    cons_each(decisions_each_one, &d);
+}
+
+void concolic_note_forced_branch(const char *key, const char *shape, int arm, int neg) {
+    Cons *c;
+
+    DCHECK(key != NULL && shape != NULL, "a forced branch was noted with no key or no spelling");
+    DCHECK((arm == 0 || arm == 1) && (neg == 0 || neg == 1), "a forced branch was noted with no arm");
+    c = cons_entry(key);
+    DCHECKF(c->truth == arm,
+            "a forced branch was noted under `%s` for an arm the constraint does not hold — decide_arm records "
+            "the arm before decide_branch notes it", key);
+    if (c->fdec) {
+        DCHECKF(c->fdec_what == (signed char)CONCOLIC_DECISION_BRANCH && c->fdec_arm == arm,
+                "a branch noted forced under `%s` was noted again for a different decision", key);
+        return;   /* `if (p)` and `if (!p)` are one decision; the first spelling states it */
+    }
+    c->fdec = strdup(shape);
+    CHECK(c->fdec, "concolic: OOM recording a forced decision");
+    c->fdec_what = (signed char)CONCOLIC_DECISION_BRANCH;
+    c->fdec_arm = arm;
+    c->fdec_neg = (signed char)neg;
+}
+
+void concolic_note_forced_outcome(const char *key, const char *op, const char *operand_shape, int completion) {
+    Cons *c;
+    char *spelled;
+
+    DCHECK(key != NULL && op != NULL, "a forced outcome was noted with no key or no operation");
+    DCHECK(completion >= 0, "a forced outcome was noted with no completion");
+    /* Spelled before the entry is taken: shapef allocates through reclaim, and cons_entry's result is dead
+       across anything that may grow the head. */
+    spelled = shapef("%s(%s)", op, operand_shape ? operand_shape : "{}");
+    c = cons_entry(key);
+    DCHECKF(c->truth == 1,
+            "a forced outcome was noted under `%s`, a completion the constraint has not settled — outcome_settle "
+            "runs before the note", key);
+    if (c->fdec) {
+        DCHECKF(c->fdec_what == (signed char)CONCOLIC_DECISION_OUTCOME && c->fdec_arm == completion,
+                "an outcome noted forced under `%s` was noted again for a different completion", key);
+        free(spelled);
+        return;
+    }
+    c->fdec = spelled;
+    c->fdec_what = (signed char)CONCOLIC_DECISION_OUTCOME;
+    c->fdec_arm = completion;
+    c->fdec_neg = 0;
 }
 
 static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {

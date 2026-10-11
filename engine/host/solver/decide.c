@@ -1432,7 +1432,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     const char *src = NULL, *tok = NULL;
     ConcolicLit tok_kind = CONCOLIC_LIT_NONE;
     char *key;
-    int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm;
+    int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm, pinned = 0;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
@@ -1459,7 +1459,6 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     if (real != REAL_ARM_UNOBSERVED) real ^= neg;
     key = decide_key(cond);
     arm = decide_arm(ctx, key, cond, restartable, nonforking, real, &forked, site);
-    free(key);
     /* Whether that fork was taken over a subject this flow had already proved (see the counter). Raised here,
        the one line holding both `forked` (decide_arm's answer) and `src` (the subject's source as concolic_cmp
        read it); the pin consulted is from an earlier branch, since this branch's `concolic_pin` is below. */
@@ -1482,7 +1481,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
            "value), and one that is must stand on exactly one, or a pin and the exclusion that contradicts it "
            "are recorded off the same run of the same gate");
     if (src && tok && eq_holds) {
-        concolic_pin(src, concolic_root_c(cond), tok_kind, tok, concolic_cmp_algo(cond));
+        pinned = concolic_pin(src, concolic_root_c(cond), tok_kind, tok, concolic_cmp_algo(cond));
         /* The path records that it has chosen a witness on an arm this run's own example contradicts. From here
            concolic_new's pin arm answers every read of `src` with `tok`, so addresses composed from that source
            carry bytes this engine picked, which the trusted zone's firing decision must tell apart from observed
@@ -1572,6 +1571,10 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        `AST_PARAM_KEYS` in the same diff; it states the arm, never a member of the false arm's set.
        How its absence would show: a param with `valueClass` "unknown" and all four domain keys absent, on a path
        whose flow forked at the gate (witnessed by the forked arm's own endpoint) and was later refined by it. */
+    /* What this flow assumed here, when the arm contradicts its own example and determined no value: the pin
+       above states an arm that did, and an endpoint's witness reads both (solver/endpoint.c). */
+    if (forced_arm && !pinned && key) concolic_note_forced_branch(key, concolic_shape_c(cond), arm, neg);
+    free(key);
     /* Back into the value's terms: everything above recorded facts about the predicate, and the interpreter asked
        about the condition, which for a negation is the complement. The forked bit is about the branch, not its
        reading. */
@@ -1695,9 +1698,20 @@ static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
     }
 }
 
+/* The completion this walk ended on, filed as a forced decision under its settled key when the walk's first
+   question contradicted the machine's real completion (decide_note_forced_arm answered that it marked). An
+   operand with no identity has no key, as outcome_settle answers for it. */
+static void outcome_note_forced(JSValueConst over, const char *op, int c) {
+    char *key = outcome_key(over, op, c);
+
+    if (!key) return;
+    concolic_note_forced_outcome(key, op, concolic_shape_c(over), c);
+    free(key);
+}
+
 int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, int real,
                       const char *site) {
-    int i, forked = 0;
+    int i, forked = 0, forced = 0;
 
     if (!g_running) return -1;
     /* The operation and the site go in the message, so a reader can tell which of the interpreter's callers
@@ -1772,12 +1786,13 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
         free(key);
         /* The arm this flow ends on, against the machine's declaration, as decide_branch does, before the forked
            bit (a message to the driver, not part of the arm) is composed. Only i == 0 can fire it. */
-        decide_note_forced_arm(over, real_arm, arm);
+        if (decide_note_forced_arm(over, real_arm, arm)) forced = 1;
         if (arm == 1) {
             /* The answer, written under every name it has (see outcome_settle), after decide_note_forced_arm,
                which may have taken this operand's example away, and on the arm that ended the walk, which also
                proved "not d" for every completion it never reached. */
             outcome_settle(over, op, n, c);
+            if (forced) outcome_note_forced(over, op, c);
             return forked ? (c | SOLVER_FORKED_BIT) : c;
         }
         /* One fork per ask: dec_fork_here keeps arm 1 for both values this walk passes (1 and UNOBSERVED), so a
@@ -1795,6 +1810,7 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
     {
         int last = outcome_nth(n - 1, n, real);
         outcome_settle(over, op, n, last);
+        if (forced) outcome_note_forced(over, op, last);
         return last;
     }
 }

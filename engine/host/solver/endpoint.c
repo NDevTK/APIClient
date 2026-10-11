@@ -45,6 +45,15 @@ typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
                  ConcolicPred *pred; int npred;
                  ConcolicLooseEq *leq; int nleq; int has_hole; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
+/* What one sighting's flow assumed (endpoint.h's `witness`): pins, each a source and the value its equality
+   determined, and forced decisions that determined no value, each the condition and the arm taken or the
+   operation and the completion. A record holds one Witness per distinct sighting witness and never merges two,
+   since their union would state a combination no flow assumed. `asked` is 0 where no flow stood, so the
+   question was not asked; an empty asked witness is the flow having assumed nothing. Entries are sorted, so
+   two witnesses compare by their members and not by the order the constraint chain held them in. */
+typedef enum { WIT_PIN = 0, WIT_BRANCH, WIT_OUTCOME } WitWhat;
+typedef struct { WitWhat what; char *subject; char *value; ConcolicLit kind; int taken; } WitEntry;
+typedef struct { int asked; WitEntry *e; int n, cap; } Witness;
 /* `is_asset` is what the resource at this address turned out to be, written after the record exists. Whether a
    static asset is an endpoint is decided by bytes (magic bytes and content type, not a URL suffix), which arrive on
    a reply, while a request is recorded before its policy check (a request a policy refuses is still one the bundle
@@ -93,7 +102,8 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     unknown ranges are named on `params`, set beside named fields (the span params say where a
                     reviewer edits, these bytes what stands there now). It makes no replay claim, since some bytes
                     are an unknown's example, so it cannot share `body_b64`'s key. */
-                 char *body_mime, *body_b64, *body_shape, *body_example_b64; } Endpoint;
+                 char *body_mime, *body_b64, *body_shape, *body_example_b64;
+                 Witness *wit; int nwit, witcap; } Endpoint;
 
 /* See endpoint.h. The switch is generated from the list the enum is, so a door added to `ENDPOINT_DOORS` gains its
    arm in the same expansion, unlike `ep_loc_name`'s hand-kept table, which needs a `CHECK` at every subscript. The
@@ -212,6 +222,107 @@ const char *endpoint_witness_class_token(int cls) {
 static int witness_class_now(void) {
     if (flow_running() == NULL) return EPW_UNASKED;
     return engine_pinned_of_running_path() ? EPW_MAY_REST_ON : EPW_NO_WITNESS;
+}
+
+static void wit_add(Witness *w, WitWhat what, const char *subject, const char *value, ConcolicLit kind, int taken) {
+    WitEntry *x;
+
+    if (w->n >= w->cap) {
+        int nc = w->cap ? w->cap * 2 : 4;
+        WitEntry *ne = realloc(w->e, (size_t)nc * sizeof *ne);
+        CHECK(ne, "endpoint: OOM recording a sighting's witness");
+        w->e = ne; w->cap = nc;
+    }
+    x = &w->e[w->n++];
+    x->what = what;
+    x->subject = strdup(subject);
+    x->value = value ? strdup(value) : NULL;
+    CHECK(x->subject && (!value || x->value), "endpoint: OOM recording a sighting's witness");
+    x->kind = kind;
+    x->taken = taken;
+}
+
+static void wit_pin_visit(const char *src, ConcolicLit kind, const char *val, void *ud) {
+    DCHECK(src != NULL && val != NULL && kind != CONCOLIC_LIT_NONE,
+           "the pin store handed a witness a pin with no source, value or kind");
+    wit_add(ud, WIT_PIN, src, val, kind, 0);
+}
+
+static void wit_decision_visit(ConcolicDecision what, const char *spelling, int taken, void *ud) {
+    DCHECK(spelling != NULL, "the constraint handed a witness a forced decision with no spelling");
+    DCHECKF(what == CONCOLIC_DECISION_BRANCH ? (taken == 0 || taken == 1)
+                                             : (what == CONCOLIC_DECISION_OUTCOME && taken >= 0),
+            "the constraint handed a witness a forced decision of kind %d taking %d, which no arm states",
+            (int)what, taken);
+    wit_add(ud, what == CONCOLIC_DECISION_BRANCH ? WIT_BRANCH : WIT_OUTCOME, spelling, NULL, CONCOLIC_LIT_NONE,
+            taken);
+}
+
+static int wit_str_cmp(const char *a, const char *b) {
+    if (!a || !b) return (a != NULL) - (b != NULL);
+    return strcmp(a, b);
+}
+
+static int wit_entry_cmp(const void *pa, const void *pb) {
+    const WitEntry *a = pa, *b = pb;
+    int r;
+
+    if (a->what != b->what) return (int)a->what - (int)b->what;
+    if ((r = strcmp(a->subject, b->subject)) != 0) return r;
+    if ((r = wit_str_cmp(a->value, b->value)) != 0) return r;
+    if (a->kind != b->kind) return (int)a->kind - (int)b->kind;
+    return a->taken - b->taken;
+}
+
+/* The running flow's witness, read at the act: its pin store and its forced decisions. Two decision keys whose
+   spellings and arms agree state one assumption, so a repeat is kept once. */
+static Witness witness_now(void) {
+    Witness w = { 0, NULL, 0, 0 };
+    int i, u;
+
+    if (flow_running() == NULL) return w;
+    w.asked = 1;
+    concolic_pins_each(wit_pin_visit, &w);
+    concolic_forced_decisions_each(wit_decision_visit, &w);
+    if (w.n > 1) qsort(w.e, (size_t)w.n, sizeof *w.e, wit_entry_cmp);
+    for (i = 1, u = 1; i < w.n; i++) {
+        if (wit_entry_cmp(&w.e[u - 1], &w.e[i]) == 0) { free(w.e[i].subject); free(w.e[i].value); continue; }
+        w.e[u++] = w.e[i];
+    }
+    if (w.n > 1) w.n = u;
+    return w;
+}
+
+static int witness_has_pin(const Witness *w) {
+    for (int i = 0; i < w->n; i++) if (w->e[i].what == WIT_PIN) return 1;
+    return 0;
+}
+
+static int witness_same(const Witness *a, const Witness *b) {
+    if (a->asked != b->asked || a->n != b->n) return 0;
+    for (int i = 0; i < a->n; i++) if (wit_entry_cmp(&a->e[i], &b->e[i]) != 0) return 0;
+    return 1;
+}
+
+static void witness_free(Witness *w) {
+    for (int i = 0; i < w->n; i++) { free(w->e[i].subject); free(w->e[i].value); }
+    free(w->e);
+    w->e = NULL; w->n = w->cap = 0;
+}
+
+/* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same
+   statement and is freed, anything else is one more. `*w` is empty afterwards either way. */
+static void endpoint_witness_add(Endpoint *e, Witness *w) {
+    for (int i = 0; i < e->nwit; i++)
+        if (witness_same(&e->wit[i], w)) { witness_free(w); w->asked = 0; return; }
+    if (e->nwit >= e->witcap) {
+        int nc = e->witcap ? e->witcap * 2 : 2;
+        Witness *nw = realloc(e->wit, (size_t)nc * sizeof *nw);
+        CHECK(nw, "endpoint: OOM filing a sighting's witness");
+        e->wit = nw; e->witcap = nc;
+    }
+    e->wit[e->nwit++] = *w;
+    w->e = NULL; w->n = w->cap = 0; w->asked = 0;
 }
 
 /* See endpoint.h. A union rather than an intersection, for the address class's own merge's reason: each operand is
@@ -1715,6 +1826,15 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* And what the path that composed it had chosen, read on the same line and for the same reason: a fact about
        the running flow, which nothing below may re-ask. */
     int wcls = witness_class_now();
+    /* …and what that flow assumed, read at the same instant from the same flow. A path that chose a witness on
+       a contradicted arm (`may-rest-on`) holds the pin it chose. */
+    Witness wit = witness_now();
+    DCHECK((wcls == EPW_UNASKED) == !wit.asked,
+           "the witness class and the witness disagree about whether a flow stood at this sighting — both ask "
+           "flow_running at one instant");
+    DCHECK(wcls != EPW_MAY_REST_ON || witness_has_pin(&wit),
+           "a sighting's path pinned a value on a contradicted arm (`may-rest-on`) and its pin store holds no "
+           "pin — the pin and the path bit are written on one line of decide.c and both ride the fork");
     /* And which sources the address's bytes entered through, copied here: `concolic_root_c` points into the value's
        own record, borrowed for this call, and the record below outlives it. NULL for a non-concolic value and for
        one whose bytes entered through nothing minted as a source; `addr_class` tells them apart (see the struct). */
@@ -1789,6 +1909,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                `if (wcls == EPW_MAY_REST_ON)` would leave an `unasked` record `unasked` for ever once a later
                sighting read `no-witness`. */
             if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
+            endpoint_witness_add(&g_eps[i], &wit);
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 flow_credit_emit(1.0);
             /* The arm the surface has no row for: a merge teaches the record structure and moves no census figure
@@ -1823,6 +1944,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
        `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
     e->witness_class = wcls;
+    endpoint_witness_add(e, &wit);
     /* And the ask and the mint are one instant. The bit is monotone and raised `++`-only at engine.c's single
        program-start line, so the two differ only if something on the path above (a display spelling, a path scan,
        a JSON body parse) runs page code. None does; the assert keeps a later diff from splitting the ask census's
@@ -1853,6 +1975,7 @@ done:
     /* The root this call copied and no record took: a merge that did not raise the class. Both arms that keep it
        NULL the local on the same line. */
     free(aroot);
+    witness_free(&wit);   /* empty: endpoint_witness_add took or freed it on every arm that reaches here */
     kv_free(&kvb);
 }
 
@@ -2853,6 +2976,8 @@ void endpoint_free(void) {
         free(g_eps[i].params);
         for (int j = 0; j < g_eps[i].nh; j++) { free(g_eps[i].hdrs[j].name); free(g_eps[i].hdrs[j].value); }
         free(g_eps[i].hdrs);
+        for (int j = 0; j < g_eps[i].nwit; j++) witness_free(&g_eps[i].wit[j]);
+        free(g_eps[i].wit);
     }
     free(g_eps); g_eps = NULL; g_eps_n = g_eps_cap = 0;
     /* And the ask counters beside the array they are a fact about. One process runs many sessions and this is the
