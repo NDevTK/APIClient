@@ -767,8 +767,9 @@ async function child(docPath, schedName) {
       if (initiator !== "parser" && initiator !== "script")
         gateFail(`a pending line states the initiator \`${initiator}\`, which is neither token ` +
                  "solver/engine.h declares — the vocabulary moved under every host that reads it");
-      if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced")
-        gateFail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
+      if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced" &&
+          provenance !== "driven")
+        gateFail(`a pending line states the provenance \`${provenance}\`, which is none of the four tokens ` +
                  "solver/engine.h declares — the vocabulary moved under every host that reads it");
       /* `computedType` IS THIS ZONE'S DECISION, AND WITHOUT IT THIS GATE COULD NOT MEASURE A REPLY AT ALL.
          The sniff belongs to whoever READ the bytes, so fetch_reply_computed_type asserts the field rather

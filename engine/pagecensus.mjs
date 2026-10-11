@@ -434,8 +434,8 @@ for (;;) {
     if (initiator !== "parser" && initiator !== "script")
       fail(`a pending line states the initiator \`${initiator}\`, which is neither token solver/engine.h ` +
            "declares — the vocabulary moved under every host that reads it");
-    if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced")
-      fail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
+    if (provenance !== "observed" && provenance !== "derived" && provenance !== "forced" && provenance !== "driven")
+      fail(`a pending line states the provenance \`${provenance}\`, which is none of the four tokens ` +
            "solver/engine.h declares — the vocabulary moved under every host that reads it");
 
     /* TWO FACTS, TWO NAMES — THE ADDRESS TO FETCH AND THE KEY THAT ANSWERS THE PARK, WHICH THIS LOOP HELD

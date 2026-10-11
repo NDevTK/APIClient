@@ -1518,8 +1518,9 @@ static int wpt_issue_pending(void)
                "the pending join stated a pinned mark that is neither token engine.h declares");
         DCHECK(!strcmp(provenance, PENDING_PROVENANCE_OBSERVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
-               !strcmp(provenance, PENDING_PROVENANCE_FORCED),
-               "the pending join stated a provenance that is none of the three tokens engine.h declares");
+               !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
+               !strcmp(provenance, PENDING_PROVENANCE_DRIVEN),
+               "the pending join stated a provenance that is none of the four tokens engine.h declares");
         /* …AND FETCH §2.2.5's CREDENTIALS MODE, ASSERTED THE SAME WAY AND THROUGH THE ONE MAPPING THAT OWNS
            THE THREE WORDS (core/fetch/fetch.h). This runner's loopback corpus has no session to spend, so it
            issues every park whatever the mode says — but the vocabulary is the producer's contract and this
@@ -1907,7 +1908,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            record, naming what moved. That is the same read wpt_route_pending already makes of the pending
            line's provenance for the same reason — counted, never acted on. */
         DCHECK(!strcmp(f[15], PENDING_PROVENANCE_OBSERVED) || !strcmp(f[15], PENDING_PROVENANCE_DERIVED) ||
-               !strcmp(f[15], PENDING_PROVENANCE_FORCED),
+               !strcmp(f[15], PENDING_PROVENANCE_FORCED) || !strcmp(f[15], PENDING_PROVENANCE_DRIVEN),
                "the create notice's fifteenth field is not one of the three provenance tokens engine.h "
                "declares — a field was inserted into the record and this walk's indices did not move with it, "
                "so the CSP container below is about to be taken from one field too early and the policy text "
@@ -2031,7 +2032,8 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                "a route declaration named no address — solver/route_seed.c refuses an empty one at the "
                "emitting end, so a record that arrives with one is a writer this host no longer shares a "
                "grammar with and the field it read as an address is somebody else's");
-        DCHECK(!strcmp(f[2], PENDING_PROVENANCE_DERIVED) || !strcmp(f[2], PENDING_PROVENANCE_FORCED),
+        DCHECK(!strcmp(f[2], PENDING_PROVENANCE_DERIVED) || !strcmp(f[2], PENDING_PROVENANCE_FORCED) ||
+               !strcmp(f[2], PENDING_PROVENANCE_DRIVEN),
                "a route declaration carries a provenance token that is neither `derived` nor `forced` — a "
                "declaration is made by RUNNING the page's code and no load of anything produces one, so "
                "`observed` is unreachable for it and any other word is a field read at the wrong offset");

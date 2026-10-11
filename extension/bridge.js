@@ -956,7 +956,8 @@ function frontierPlace(e, when) {
   /* How the load that stored it got its address: absent (an entry written before the field existed, see
      frontierProvenance) or one of the three words; a fourth would reach `safeFetch` as an invented grade. */
   DCHECK(e.provenance === undefined || e.provenance === PROVENANCE_OBSERVED ||
-         e.provenance === PROVENANCE_DERIVED || e.provenance === PROVENANCE_FORCED,
+         e.provenance === PROVENANCE_DERIVED || e.provenance === PROVENANCE_FORCED ||
+         e.provenance === PROVENANCE_DRIVEN,
          "a cold-tier entry " + when + " stating the provenance `" + String(e.provenance) + "`, which is none " +
          "of the three — the re-derivation of a shed entry is decided from this word, and one the chokepoint " +
          "does not know would abort the fetch rather than be refused by the policy it names");
@@ -2624,7 +2625,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          stopped stating one could fire a request whose values exist only past a gate. The chokepoint CHECKs the
          vocabulary again in release; this names the producer. */
       DCHECK(q.provenance === PROVENANCE_OBSERVED || q.provenance === PROVENANCE_DERIVED ||
-             q.provenance === PROVENANCE_FORCED,
+             q.provenance === PROVENANCE_FORCED || q.provenance === PROVENANCE_DRIVEN,
              "the engine's xhr.send record states the provenance `" + q.provenance + "`, which is none of " +
              "the three solver/engine.h declares — xhr_request_op writes one on every record from " +
              "engine_provenance_of_running_path, and the firing decision is made from it, so an absent or " +
@@ -2730,7 +2731,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      navigable, swapped-to document, cold rehydration) rather than the chokepoint at whichever park runs
      first. It applies to runs that persist nothing too, since their requests still fire by it. */
   DCHECK(msg.provenance === PROVENANCE_OBSERVED || msg.provenance === PROVENANCE_DERIVED ||
-         msg.provenance === PROVENANCE_FORCED,
+         msg.provenance === PROVENANCE_FORCED || msg.provenance === PROVENANCE_DRIVEN,
          "a document is being rooted with the reach grade `" + String(msg.provenance) + "`, which is none of " +
          "CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three — every composer of an AST_ANALYZE states one " +
          "(the ambient seed `observed`, a declared route the join of the declaring document's grade and its " +
@@ -3029,9 +3030,10 @@ function pendingRequest(line) {
         "GetPending stated an initiator this zone does not know: `" + initiator + "` — solver/engine.h " +
         "declares exactly `parser` and `script`, and a third value would be answered by whichever arm a " +
         "consumer happened to write first");
-  CHECK(provenance === "observed" || provenance === "derived" || provenance === "forced",
+  CHECK(provenance === PROVENANCE_OBSERVED || provenance === PROVENANCE_DERIVED ||
+        provenance === PROVENANCE_FORCED || provenance === PROVENANCE_DRIVEN,
         "GetPending stated a provenance this zone does not know: `" + provenance + "` — solver/engine.h " +
-        "declares exactly `observed`, `derived` and `forced`, and a fourth value would be answered by " +
+        "declares exactly `observed`, `derived`, `forced` and `driven`, and a fifth value would be answered by " +
         "whichever arm the firing policy happens to be written with as its else");
   CHECK(pinned === "pinned" || pinned === "unpinned",
         "GetPending stated a witness mark this zone does not know: `" + pinned + "` — solver/engine.h " +
@@ -3263,6 +3265,9 @@ const ROUTE_SEED_NOTICE = "document.seed";
 const PROVENANCE_OBSERVED = "observed";
 const PROVENANCE_DERIVED = "derived";
 const PROVENANCE_FORCED = "forced";
+/* Minted inside the engine's drive of a function the page never called: safe-fetch.js reads it as this tool's
+   act. */
+const PROVENANCE_DRIVEN = "driven";
 /* The witness mark's two words, solver/engine.h's `PENDING_PINNED_*`: a separate field from provenance
    (provenance says what a reply is worth; this says whether the act may be spent). `unstated` is not here: it
    is safe-fetch.js's word for a record with no mark (its `_PINNED_MARKS` lists all three), and the engine
@@ -3588,9 +3593,9 @@ async function hostNotice(eng, line) {
            "load it at all is made from");
     /* Enumerated, not defaulted. `observed` is unreachable for a declaration (HTML §7.4.4 is reached only by
        running the page's code), so a record carrying it is a field read at the wrong offset. */
-    DCHECK(f[2] === PROVENANCE_DERIVED || f[2] === PROVENANCE_FORCED,
-           "a route declaration carries the provenance `" + f[2] + "`, which is neither `derived` nor " +
-           "`forced` — those are the only two a declaration can have, so this is either the field split at " +
+    DCHECK(f[2] === PROVENANCE_DERIVED || f[2] === PROVENANCE_FORCED || f[2] === PROVENANCE_DRIVEN,
+           "a route declaration carries the provenance `" + f[2] + "`, which is none of `derived`, `forced` " +
+           "and `driven` — those are the only three a declaration can have, so this is either the field split at " +
            "the wrong tab or an engine speaking a vocabulary this zone does not");
     /* A route of this document, established from the two addresses: HTML §7.2.5 The History interface's
        can-have-its-URL-rewritten already refuses a cross-origin rewrite in the engine, and this zone checks the
@@ -4958,7 +4963,7 @@ const _hostOps = {
          the store, whose entries outlive their build, separately from engineRoot's assert, which is owed to the
          fetch closures. */
       DCHECK(eng.msg.provenance === PROVENANCE_OBSERVED || eng.msg.provenance === PROVENANCE_DERIVED ||
-             eng.msg.provenance === PROVENANCE_FORCED,
+             eng.msg.provenance === PROVENANCE_FORCED || eng.msg.provenance === PROVENANCE_DRIVEN,
              "a run about to park its residue carries the provenance `" + String(eng.msg.provenance) +
              "` — every composer of an AST_ANALYZE states one (the ambient seed `observed`, a declared route " +
              "and a child navigable the JOIN of the reaching document's grade and their own word, a " +

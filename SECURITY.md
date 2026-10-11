@@ -274,9 +274,9 @@ not. Nothing is refused at every setting.
 | Signal | Values | Reliability |
 |--------|--------|-------------|
 | `destination` | `program`, `subresource`, `navigation`, `value` | stated (engine) |
-| `actor` | `page`, `tool` | certain: a literal in trusted-zone source at every caller |
-| `provenance` | `observed`, `derived`, `forced` | stated (engine) |
-| `doc-reach` | `observed`, `derived`, `forced` | stated (the zone that loaded the document) |
+| `actor` | `page`, `tool` | certain: a literal in trusted-zone source at every caller, narrowed to `tool` by `provenance=driven` |
+| `provenance` | `observed`, `derived`, `forced`, `driven` | stated (engine) |
+| `doc-reach` | `observed`, `derived`, `forced`, `driven` | stated (the zone that loaded the document) |
 | `cookies` | `yes`, `no` | certain |
 | `header-authority` | `none`, `unknown` | certain |
 | `witness` | `pinned`, `unpinned`, `unstated` | stated (engine) |
@@ -297,6 +297,12 @@ both `observed` (this is also what fires the seeded document load); the analysed
 address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`); and a child navigable the page
 named (`destination=navigation`, `actor=page`, `provenance=derived`). Probes, discovery and tool-composed data
 requests fire only at an origin a person widened.
+
+`driven` is the engine's word for a request minted inside its own drive of a function the page never called
+(`flow_path_driven`, asserted at `endpoint_record`). The page's code composed it, but it exists because this
+tool called that code, so it is this tool's act: the `actor` row reads `tool` for it, and neither the data-request
+arm nor the navigation arm admits it. The engine's word can only narrow `actor`, never widen it. A program or
+subresource load a drive reaches still fires by its destination arm, which is the app's own public code.
 
 - A person widens an origin through the popup's `EGRESS_POLICY` command (`renderEgressPolicy` in `popup.js`,
   which states `initiator: "user-initiated"`). The router admits it only on the document→document rule,

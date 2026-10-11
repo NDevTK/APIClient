@@ -253,7 +253,7 @@ const _ENDPOINT_SOURCES = ["ast_analysis", "ast_shape_origin"];
    popup.html (before lib/popup-send.js, which renders it). A second copy of the three words is two
    vocabularies free to drift, and the drift is silent — a comparison against a word the producer stopped
    emitting is simply never true, and a `forced` endpoint then renders as one the bundle can reach. */
-const CALLSITE_PROVENANCE = Object.freeze(["observed", "derived", "forced"]);
+const CALLSITE_PROVENANCE = Object.freeze(["observed", "derived", "forced", "driven"]);
 
 function isCallSiteProvenance(p) { return CALLSITE_PROVENANCE.indexOf(p) >= 0; }
 
@@ -363,7 +363,9 @@ function provenanceOffersExample(p) {
          " — every producer of a value states the grade of the sighting that computed it, so a word outside " +
          "that set is that producer and this vocabulary having parted, and this predicate would answer " +
          "`offerable` for a value nothing graded");
-  return p !== "forced";
+  /* `driven` is a sighting inside the engine's drive of uncalled code; its values join the forced pool (see
+     solver/pending.h's PROV_DRIVEN for the residual). */
+  return p !== "forced" && p !== "driven";
 }
 
 /* THE PER-VALUE FOLD ITSELF — most-observed, performed as a MOVE BETWEEN POOLS, spelled ONCE.

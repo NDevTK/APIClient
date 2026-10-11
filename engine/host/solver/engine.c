@@ -466,7 +466,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
        core/html/html_link.c asserts that at its own baseline entry. */
     DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow — the flowless caller is "
                       "the pre-boot baseline tree walk; issue the fetch from the boot flow, not from the walk");
-    e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f), flow_path_pinned(f),
+    e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());   /* a `fetch()` or an XHR — page code composed it */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
@@ -515,7 +515,7 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        so this is the module arm and never the element's. */
     req.mode = script_request_mode(SCRIPT_TYPE_MODULE, flow_dyn_el(f));
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
-    e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f),
+    e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());   /* a dynamic `import()` — §16.2.1.8 is reached by RUNNING code */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     /* The reject half, which carries the load's failure: this is the only park whose failure is a rejection
@@ -576,7 +576,7 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
            "enumerate — run Fetch §2.2.7's translate a potential destination over the `as` keyword first, as HTML "
            "§4.6.8.20 step 3 does");
     /* A browser algorithm's subresource: no `script` element, so no §4.12.1.1 `parser document`. */
-    e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f),
+    e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
     /* Which document asked, as in the parks above: `PEND_DOC`'s default 0 is a real document id. */
@@ -623,7 +623,7 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     /* The mode, which `stype` decides besides the decode: §2.5.1's mode off the element for a classic script,
        `cors` for a module (see script_request_mode). */
     req.mode = script_request_mode(stype, el);
-    e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f), flow_path_pinned(f),
+    e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      parser_inserted, flow_work_seq_next());
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* Which document's program the reply will be: the realm this chokepoint was entered with is the document
@@ -943,7 +943,7 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
                       "suspend and nothing to resume with the answer");
     DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
     /* A synchronous cross-agent read names a request id and no markup. */
-    e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f), flow_path_pinned(f),
+    e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
     id = mint_req();   /* the ask half of the rate above, counted at the mint */
@@ -2959,10 +2959,11 @@ const char *engine_provenance_token(int prov) {
     case PROV_OBSERVED: return PENDING_PROVENANCE_OBSERVED;
     case PROV_DERIVED:  return PENDING_PROVENANCE_DERIVED;
     case PROV_FORCED:   return PENDING_PROVENANCE_FORCED;
+    case PROV_DRIVEN:   return PENDING_PROVENANCE_DRIVEN;
     }
     /* A CHECK, not a DCHECK, for engine_pending_split's reason: the trusted zone's firing decision reads this
        field, and a release fallthrough would emit whatever was left in the register. */
-    CHECK_FAILF("engine: a park's provenance is %d, which is none of the three pending.h defines — the trusted "
+    CHECK_FAILF("engine: a park's provenance is %d, which is none of the four pending.h defines — the trusted "
                 "zone's firing decision reads this field", prov);
 }
 
@@ -2975,6 +2976,8 @@ int engine_prov_of_running_path(void)
 {
     const Flow *f = flow_running();
 
+    /* The drive decides first, as pending_prov_compose's does: an act inside it is this tool's. */
+    if (f != NULL && flow_path_driven(f)) return PROV_DRIVEN;
     return f != NULL && flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED;
 }
 
@@ -3021,6 +3024,8 @@ static int prov_of_token(const char *tok, size_t n) {
         return PROV_DERIVED;
     if (n == sizeof PENDING_PROVENANCE_FORCED - 1 && !memcmp(tok, PENDING_PROVENANCE_FORCED, n))
         return PROV_FORCED;
+    if (n == sizeof PENDING_PROVENANCE_DRIVEN - 1 && !memcmp(tok, PENDING_PROVENANCE_DRIVEN, n))
+        return PROV_DRIVEN;
     CHECK_FAILF("engine: a line this join wrote carries the provenance token `%.*s`, which it cannot have "
                 "written — the buffer is this function's alone", (int)n, tok);
 }
@@ -3272,7 +3277,7 @@ const char *engine_pending_fetches(void) {
                         /* The nesting is checked where the pair is made, the one place able to compose a pair
                            neither the park nor the chokepoint saw; it fails if either field is again folded by
                            an extremum of its own. */
-                        DCHECKF(!mo_pinned || mo_prov == PROV_FORCED,
+                        DCHECKF(!mo_pinned || mo_prov == PROV_FORCED || mo_prov == PROV_DRIVEN,
                                 "this join folded a (provenance, witness) pair no park can hold — provenance "
                                 "%d with the witness mark SET, where solver/flow.h declares `path_pinned` "
                                 "strictly inside `path_forced`. The fold takes ONE member's pair whole for "
@@ -3434,8 +3439,9 @@ void engine_pending_split(char *line, const char **method, const char **destinat
            "by whichever of its arms happened to be the default");
     DCHECK(!strcmp(*provenance, PENDING_PROVENANCE_OBSERVED) ||
            !strcmp(*provenance, PENDING_PROVENANCE_DERIVED) ||
-           !strcmp(*provenance, PENDING_PROVENANCE_FORCED),
-           "a pending line's PROVENANCE is none of the three tokens engine.h declares — the trusted zone's "
+           !strcmp(*provenance, PENDING_PROVENANCE_FORCED) ||
+           !strcmp(*provenance, PENDING_PROVENANCE_DRIVEN),
+           "a pending line's PROVENANCE is none of the four tokens engine.h declares — the trusted zone's "
            "FIRING decision reads this field, and CLAUDE.md forbids a reply to a FORCED request ever being "
            "reported as OBSERVED, which a defaulted fourth value is exactly how it would be");
     /* The credentials mode, through core/fetch/fetch.h's one mapping, `fetch_credentials_of_token`, which is
@@ -3568,7 +3574,8 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
            issued is engine_pending_fetches' deduplicated line, graded most observed over the records on the pair
            (the argument is at that join). The sets are the same by construction: the join lists a record exactly
            when it has an address and no value, which is the index's membership predicate. Most observed is `min`,
-           because pending.h numbers PROV_OBSERVED < PROV_DERIVED < PROV_FORCED as the join's order. */
+           because pending.h numbers PROV_OBSERVED < PROV_DERIVED < PROV_FORCED < PROV_DRIVEN as the join's
+           order. */
         {
             int rp = (int)pending_get_int(p, PEND_PROV);
 
@@ -5599,7 +5606,7 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
     /* The mode, off the element: fetch a classic script creates a potential-CORS request, so a document's own
        `<script src>` without `crossorigin` is `no-cors`, which is what an integrity policy refuses. */
     req.mode = script_request_mode(SCRIPT_TYPE_CLASSIC, f->dyn_el[at]);
-    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f), flow_path_pinned(f),
+    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f), flow_path_pinned(f), flow_path_driven(f),
                      parser_inserted, flow_work_seq_next());
     /* Which row this park is for, by name: the row's `dyn_id` rather than its position, which holds only while
        the set is fixed (solver/flow.h), and this entry outlives §4.12.1.1's immediate interposition and

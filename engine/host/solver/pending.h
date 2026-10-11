@@ -120,6 +120,14 @@
 #define PROV_OBSERVED 0
 #define PROV_DERIVED  1
 #define PROV_FORCED   2
+/*   DRIVEN   — it was minted inside a drive of a function the page never called (engine.c's orphan drive), so it
+ *              is this tool's act, whatever arms its path forced. Weakest in the join's order: a request any
+ *              member made outside a drive is one the page makes, and the drive's own copy adds nothing.
+ *              NAMED RESIDUAL. Not covered: a drive that forced no arm computes its values from real inputs,
+ *              which could be offered as examples as `derived` ones are. The next diff carries the forced bit
+ *              beside this one so the example pools can read both. Its absence shows as an unused endpoint
+ *              whose every value sits in the forced pool although its drive forced no branch. */
+#define PROV_DRIVEN   3
 /* THE COMPOSITION, IN ONE PLACE, FROM THE TWO FACTS AND THEIR TWO OWNERS. The parser-inserted mark is the
    BROWSER's (only the party that inserted the element knows whether a parser did it — core/html/html_script.h
    states the same thing about its own parameter), and the forced mark is the FLOW's (only the solver knows
@@ -129,7 +137,7 @@
    `kind` COMPUTES NOTHING AND IS TAKEN FOR THE ASSERTS, exactly as `pending_pinned_compose` below takes it:
    it is the one coordinate a reader of either abort would otherwise have to reconstruct. It used to be the
    FIRST conjunct's proxy; see PROV_OBSERVED above for what that cost and why a kind cannot answer this. */
-int pending_prov_compose(int kind, int path_forced, int parser_inserted);
+int pending_prov_compose(int kind, int path_forced, int path_driven, int parser_inserted);
 /* …AND WHETHER THIS PARK'S REPLY BECOMES A PROGRAM, WHICH IS THE ONE QUESTION THE THREE KINDS ABOVE ALREADY
    ANSWER TOGETHER AND WHICH NOTHING COULD ASK. Their own documentation names them as a set — an injected
    `<script src>`, a document's own external script and a dynamic `import()` — and FLOW_PENDING_RESOURCE's
@@ -357,7 +365,7 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     X(PARSER_INS, "parserIns", PEND_SHARE, JS_NewBool(pend_ctx(), parser_inserted))    \
     /* what this request is evidence of, composed from the pusher's markup fact and its path */ \
     X(PROV,       "prov",      PEND_SHARE,                                             \
-      JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced, parser_inserted))) \
+      JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced, path_driven, parser_inserted))) \
     /* …and whether the ADDRESS may rest on a witness this engine chose, which PROV cannot say */ \
     X(PINNED,     "pinned",    PEND_SHARE,                                             \
       JS_NewBool(pend_ctx(), pending_pinned_compose(kind, path_forced, path_pinned)))  \
@@ -729,8 +737,8 @@ int  pending_entry_host_owed(JSValueConst e);
    `html_script_prepare`'s own `parser_inserted` parameter is answered by the caller and for the same reason.
    ZERO IS A POSITIVE STATEMENT — no parser inserted the element this request is for — which is the truth for
    a `fetch()`, an `import()`, a subresource and a script page code injected — and never a hole. */
-JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted,
-                     uint64_t work_seq);
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int path_driven,
+                     int parser_inserted, uint64_t work_seq);
 
 /* THE ARRIVAL STAMP OF THE OLDEST ENTRY THIS REGISTER CAN ACTUALLY DELIVER, or 0 for a register that can
  * deliver none — the one question the ladder's delivery arm has to ask to be IN the arrival order rather than

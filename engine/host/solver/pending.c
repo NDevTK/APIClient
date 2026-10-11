@@ -558,8 +558,11 @@ static int pend_own_count(JSValueConst e);
    parser-inserted park is a request a real load makes ONLY while the path that produced the row has stood on
    no contradicted arm, because a `document.write` on a forced arm produces a parser-inserted row of that
    flow's own sequence and of nothing else. Taking either fact alone reports the other one's answer. */
-int pending_prov_compose(int kind, int path_forced, int parser_inserted)
+int pending_prov_compose(int kind, int path_forced, int path_driven, int parser_inserted)
 {
+    DCHECK(path_driven == 0 || path_driven == 1,
+           "a park stated a drive mark that is neither set nor clear — it comes from flow_path_driven, so a "
+           "third value is a caller that computed this somewhere else");
     DCHECK(path_forced == 0 || path_forced == 1,
            "a park stated a forced-path mark that is neither set nor clear — it comes from flow_path_forced, "
            "which asserts the same thing at the other end, so a third value is a caller that computed this "
@@ -588,6 +591,9 @@ int pending_prov_compose(int kind, int path_forced, int parser_inserted)
             "`parser document` to `script` elements only, and this register's other kinds are parks no "
             "element causes, so this request would be graded `observed` on a flag nothing could have set",
             kind);
+    /* The drive decides first: the request exists because this engine called the function, so it is this
+       tool's act whatever the path forced or whoever inserted the element. */
+    if (path_driven) return PROV_DRIVEN;
     if (path_forced) return PROV_FORCED;
     return parser_inserted ? PROV_OBSERVED : PROV_DERIVED;
 }
@@ -643,8 +649,8 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned)
     return path_pinned;
 }
 
-JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted,
-                     uint64_t work_seq)
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int path_driven,
+                     int parser_inserted, uint64_t work_seq)
 {
     JSValue e;
 

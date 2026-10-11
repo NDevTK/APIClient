@@ -1251,9 +1251,9 @@ async function main() {
         throw new Error(`a document.seed notice was short of its fields: ${record} — solver/route_seed.c ` +
                         'writes the ADDRESS and the PROVENANCE with one snprintf, and the second is the ' +
                         'whole of what this zone decides whether to load it from');
-      if (f[2] !== 'derived' && f[2] !== 'forced')
-        throw new Error(`a document.seed notice states the provenance \`${f[2]}\`, which is neither ` +
-                        '`derived` nor `forced` — a declaration is made by RUNNING the page\'s code and no ' +
+      if (f[2] !== 'derived' && f[2] !== 'forced' && f[2] !== 'driven')
+        throw new Error(`a document.seed notice states the provenance \`${f[2]}\`, which is none of ` +
+                        '`derived`, `forced` and `driven` — a declaration is made by RUNNING the page\'s code and no ' +
                         'load of anything produces one, so `observed` is unreachable on this record and any ' +
                         'other word is a field read at the wrong tab');
       const seedAbs = new URL(f[1], e.docUrl).href;

@@ -347,18 +347,20 @@ function _modeOf(opts) {
 // "Processing model"'s parser-inserted script, a `script` whose parser document is non-null); a zone that
 // originated an act states it for itself. This file decides from it and may not re-derive it: nothing in an
 // address distinguishes a request a session would have made from one that exists because a gate was forced.
-var _PROVENANCE_TYPES = ["observed", "derived", "forced"];
+// `driven` is a request minted inside the engine's own drive of a function the page never called: this tool's
+// act, whatever its path forced. The actor row reads it (see that row).
+var _PROVENANCE_TYPES = ["observed", "derived", "forced", "driven"];
 // Every caller must state one, and it is a CHECK: the firing decision and the deny list's scope rest on it,
 // and a missing or invented word must not be answered by whichever arm it happens to fall to. The value
 // crosses from the untrusted engine, and asserting it at the chokepoint covers both hosts. There is no
 // `unknown` grade: a request whose provenance is not established crashes at the decision rather than loading.
 function _provenanceOf(opts) {
   CHECK(typeof opts.provenance === "string" && _PROVENANCE_TYPES.indexOf(opts.provenance) >= 0,
-        "safeFetch was called with a PROVENANCE that is none of the three CLAUDE.md " +
+        "safeFetch was called with a PROVENANCE that is none of the four CLAUDE.md " +
         "§A-REQUEST-CARRIES-THE-PROVENANCE declares (solver/engine.h's PENDING_PROVENANCE_*): " +
         JSON.stringify(opts.provenance) + " — this file decides whether to FIRE the request from it, and " +
         "an absent or invented value takes the same arm `derived` does, which is the arm that spends the " +
-        "network. State `observed`, `derived` or `forced` and mean it");
+        "network. State `observed`, `derived`, `forced` or `driven` and mean it");
   return opts.provenance;
 }
 /* How the document holding this request was itself reached. `provenance` is a fact about this request and
@@ -383,7 +385,7 @@ function _docReachOf(opts) {
    this tool chose to open is itself such a page, so the composition is the weaker grade. The order is an
    explicit map, not array positions, so a word added to the vocabulary cannot silently re-rank the others;
    the CHECKs make an unranked word a crash rather than an `undefined` that compares false. */
-var _REACH_RANK = { observed: 0, derived: 1, forced: 2 };
+var _REACH_RANK = { observed: 0, derived: 1, forced: 2, driven: 3 };
 function safeFetchReachJoin(outer, own) {
   CHECK(_PROVENANCE_TYPES.indexOf(outer) >= 0 && _PROVENANCE_TYPES.indexOf(own) >= 0,
         "two reach grades were composed and one of them is not a word this file declares (" +
@@ -647,8 +649,11 @@ var _SIGNALS = [
      a person reads "and this is a request this tool composed rather than one your page made". `certain`, the
      one gating row that can say so: it is a literal in trusted-zone source at every asker, while the grades
      beside it are words the attacker-controlled engine composes. */
+  /* A request the engine states it minted inside its own drive of uncalled code (`provenance=driven`) is this
+     tool's act although the page's code composed it, so the row reads `tool` for it. The engine's word can
+     only narrow the row, never widen it: `page` still needs the asker's literal. */
   { name: "actor", gates: true, certainty: "certain", values: _ACTOR_WORDS,
-    of: function (f) { return f.actor; } },
+    of: function (f) { return f.actor === "page" && f.provenance === "driven" ? "tool" : f.actor; } },
   /* The request's provenance (see `_provenanceOf`). `stated`: the engine composes it at the park from the
      park's kind and the flow's `path_forced`, and the CHECK catches only a word outside the three. */
   { name: "provenance", gates: true, certainty: "stated", values: _PROVENANCE_TYPES,
@@ -1150,7 +1155,7 @@ function _firingRefusal(facts) {
   /* The nesting, asserted at the consumer: solver/flow.h declares `path_pinned` strictly inside
      `path_forced`, so a request that is not `forced` cannot carry a witness this engine chose
      (`pending_pinned_compose` asserts the other end). */
-  CHECK(facts.provenance === "forced" || facts.pinned !== "pinned",
+  CHECK(facts.provenance === "forced" || facts.provenance === "driven" || facts.pinned !== "pinned",
         "a request states that its address may rest on a witness this engine DETERMINED, while stating a " +
         "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
         "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");

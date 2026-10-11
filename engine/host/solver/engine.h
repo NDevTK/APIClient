@@ -636,6 +636,7 @@ void engine_unload_document(uint32_t doc);
 #define PENDING_PROVENANCE_OBSERVED "observed" /* a real load of this document makes exactly this request */
 #define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
 #define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
+#define PENDING_PROVENANCE_DRIVEN   "driven"   /* minted inside a drive of a function the page never called */
 
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
  * because provenance grades what a reply is worth while this decides whether the act may be spent, and a
@@ -653,7 +654,7 @@ void engine_unload_document(uint32_t doc);
 /* The provenance word for a request built by running the page's code rather than by a park: a navigation
  * (core/frame/navigable.c's §7.4.5 "Populating a session history entry" load and `navigable.create`) or a route
  * declaration (solver/route_seed.c). One composition in one place, read off the running flow.
- *   It answers `derived` or `forced`, never `observed`: `observed`'s first conjunct is HTML §4.12.1.1's parser
+ *   It answers `derived`, `forced` or `driven`, never `observed`: `observed`'s first conjunct is HTML §4.12.1.1's parser
  * document, which only a park record carries, and no element is in scope where code runs. With no running flow
  * the answer is `derived`, which under-claims (costing a per-origin authorisation) rather than over-claims
  * into the observed pool; a caller for which a flow-less act is a broken invariant asserts it (route_seed.c

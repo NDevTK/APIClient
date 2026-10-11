@@ -101,7 +101,8 @@ function _renderServiceGrouping() {
            this says whether a real client's code composes it at all. A forced-only method inflating the UNUSED
            headline is the fabrication at the level of the COUNT: "N things the bundle can do but didn't", of
            which some are requests no client makes. */
-        if (methodProvenance(m, "lib/popup-send.js service summary") === "forced") forced++;
+        const _g = methodProvenance(m, "lib/popup-send.js service summary");
+        if (_g === "forced" || _g === "driven") forced++;
       }
     }
     if (total > 0) {

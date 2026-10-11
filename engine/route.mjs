@@ -437,8 +437,8 @@ async function service(e) {
        never verified is the one that would carry a producer's drift into every assertion below it. */
     if (initiator !== 'parser' && initiator !== 'script')
       fail(`a pending line states the initiator \`${initiator}\`, which is neither token solver/engine.h declares`);
-    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
-      fail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
+    if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced' && provenance !== 'driven')
+      fail(`a pending line states the provenance \`${provenance}\`, which is none of the four tokens ` +
            'solver/engine.h declares');
     if (pinned !== 'pinned' && pinned !== 'unpinned')
       fail(`a pending line states the pinned mark \`${pinned}\`, which is neither token solver/engine.h ` +
@@ -809,9 +809,9 @@ async function drainNotices(e) {
       if (f.length < 3 || !f[1] || !f[2])
         fail(`a document.seed notice was short of its fields — every declaration names the ADDRESS and the ` +
              `PROVENANCE the trusted zone decides whether to load it from: ${n}`);
-      if (f[2] !== 'derived' && f[2] !== 'forced')
-        fail(`a document.seed notice carries the provenance \`${f[2]}\`, which is neither \`derived\` nor ` +
-             `\`forced\` — a declaration is made by RUNNING the page's code and no load produces one, so ` +
+      if (f[2] !== 'derived' && f[2] !== 'forced' && f[2] !== 'driven')
+        fail(`a document.seed notice carries the provenance \`${f[2]}\`, which is none of \`derived\`, ` +
+             `\`forced\` and \`driven\` — a declaration is made by RUNNING the page's code and no load produces one, so ` +
              `\`observed\` is unreachable for it and any other word is a field read at the wrong tab`);
       fail(`a document at \`${f[1]}\` was declared a page of its own application, and this driver holds no ` +
            `frontier to make it a work item on. It provisions PEERS for a cross-instance fixture (a create, ` +

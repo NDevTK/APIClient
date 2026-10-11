@@ -771,8 +771,9 @@ static int fixture_provide(JSContext *ctx) {
                "the pending join stated a pinned mark that is neither token engine.h declares");
         DCHECK(!strcmp(provenance, PENDING_PROVENANCE_OBSERVED) ||
                !strcmp(provenance, PENDING_PROVENANCE_DERIVED) ||
-               !strcmp(provenance, PENDING_PROVENANCE_FORCED),
-               "the pending join stated a provenance that is none of the three tokens engine.h declares");
+               !strcmp(provenance, PENDING_PROVENANCE_FORCED) ||
+               !strcmp(provenance, PENDING_PROVENANCE_DRIVEN),
+               "the pending join stated a provenance that is none of the four tokens engine.h declares");
         /* …AND FETCH §2.2.5's CREDENTIALS MODE, through the one mapping that owns the three words
            (core/fetch/fetch.h), which is fatal on a word §2.2.5 does not define — so the call IS the assert
            and this fixture reads the field it is handed rather than dropping it. */
@@ -5255,9 +5256,12 @@ static int hostreq_answer_all(JSContext *ctx)
             DCHECK((plen == strlen(PENDING_PROVENANCE_DERIVED) &&
                     !memcmp(tab + 1, PENDING_PROVENANCE_DERIVED, plen)) ||
                    (plen == strlen(PENDING_PROVENANCE_FORCED) &&
-                    !memcmp(tab + 1, PENDING_PROVENANCE_FORCED, plen)),
-                   "a route declaration stated a provenance that is neither `derived` nor `forced` — the only "
-                   "two words a declaration can carry, so any other is a field read at the wrong offset");
+                    !memcmp(tab + 1, PENDING_PROVENANCE_FORCED, plen)) ||
+                   (plen == strlen(PENDING_PROVENANCE_DRIVEN) &&
+                    !memcmp(tab + 1, PENDING_PROVENANCE_DRIVEN, plen)),
+                   "a route declaration stated a provenance that is none of `derived`, `forced` and `driven` — "
+                   "the only three words a declaration can carry, so any other is a field read at the wrong "
+                   "offset");
             g_seed_declarations++;
             if (alen == strlen(FIXTURE_DECLARED_ROUTE) &&
                 !memcmp(addr, FIXTURE_DECLARED_ROUTE, alen) &&

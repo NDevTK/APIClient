@@ -1626,9 +1626,18 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* What this sighting is evidence of, asserted at the mint for `kv_add`'s reason: every site that records an
        endpoint passes through here. A value outside the vocabulary is the dangerous one: `0` is `observed`, so an
        uninitialised grade reads as the strongest claim this surface makes. */
-    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
-            "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h defines — "
-            "the grade is part of the record's identity and is emitted on it. method=%s", prov, method);
+    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED || prov == PROV_DRIVEN,
+            "an endpoint was recorded with the provenance %d, which is none of the four solver/pending.h "
+            "defines; the grade is part of the record's identity and is emitted on it. method=%s", prov, method);
+    /* An act minted inside a drive of a function the page never called states `driven`: it is this tool's act,
+       and any other grade would let the trusted zone fire it as the page's. A reply chunk is exempt, being
+       graded by the request it answers, whose join may hold a page member's grade. */
+    {
+        const Flow *rf = flow_running();
+        DCHECKF(door == EPD_REPLY_CHUNK || rf == NULL || !flow_path_driven(rf) || prov == PROV_DRIVEN,
+                "an endpoint minted inside a drive of a function the page never called has provenance %d, not "
+                "`driven`; its producer must ask flow_path_driven. method=%s", prov, method);
+    }
     /* And which mechanism composed the address, asserted at the same mint for the same reason. A membership test
        despite its spelling: `ENDPOINT_DOORS` gives its members no explicit values, so the enum is dense from
        `EPD_UNSTATED` to `EPD_COUNT`. `EPD_UNSTATED` is 0 so that a producer that forgets is refused here rather than

@@ -1049,6 +1049,14 @@ void flow_mark_forced_arm(void) {
     g_running->path_forced = 1;
 }
 
+int flow_path_driven(const Flow *f) {
+    DCHECK(f != NULL, "a flow was asked whether it is a drive of uncalled code, of no flow");
+    DCHECK(f->orphan == 0 || f->orphan == 1,
+           "a flow's orphan mark is neither set nor clear — engine.c's orphan seed writes it as a constant and a "
+           "fork copies it, so any other value is memory this field does not own");
+    return f->orphan;
+}
+
 int flow_path_forced(const Flow *f) {
     DCHECK(f != NULL, "a flow's path was asked whether it stood on a forced arm, of no flow");
     DCHECK(f->path_forced == 0 || f->path_forced == 1,

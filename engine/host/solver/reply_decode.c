@@ -362,8 +362,8 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
        missing one is `observed`, the strongest of the three, which is exactly the fabrication
        §A-REQUEST-CARRIES-THE-PROVENANCE forbids. It is asked before the shape test below because a network
        error's grade is as much a fact as a body's. */
-    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
-            "a reply arrived carrying the provenance %d, which is none of the three solver/pending.h defines — "
+    DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED || prov == PROV_DRIVEN,
+            "a reply arrived carrying the provenance %d, which is none of the four solver/pending.h defines — "
             "everything this file learns is filed under it, so an unrecognised grade would file a forced "
             "route's chunk addresses beside a real load's. request=%s %s", prov, method, url);
     /* A NETWORK ERROR IS AN ANSWER, and it carries no record at all. This is a shape test on what the host

@@ -2658,7 +2658,8 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            the spelling the chokepoint's own CHECK compares, so the two ends of the contract are asserted in one
            language. */
         DCHECKF(!d->request_pinned ||
-                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_FORCED),
+                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_FORCED) ||
+                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_DRIVEN),
                 "an XMLHttpRequest composed a (provenance, witness) pair no park can hold — provenance `%s` "
                 "with the witness mark SET, where solver/flow.h declares the mark strictly inside the "
                 "forced-path bit. Both come from the running path on adjacent lines, so a disagreement is one "
