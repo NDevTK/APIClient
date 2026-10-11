@@ -12404,11 +12404,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        right is that `q` — and not some other field, and not the address — carries `{state}.q`. Two unscoped
        clauses asserted only that the action was derived and that the shape reached the document; a submission
        that lost the value while any other statement carried that shape read green. Split in two so the
-       absent-record reading and the wrong-value reading are not one 0. */
-    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"/api/search\"") != NULL,
+       absent-record reading and the wrong-value reading are not one 0. The address is the ABSOLUTE one:
+       HTML §4.10.22.3 "Form submission algorithm" lets parsed action be "the result of encoding-parsing a
+       URL given action, relative to submitter's node document", and that URL is what the request carries. */
+    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"https://x.test/api/search\"") != NULL,
              "§4.10 submit() derived the GET at all — NO /api/search record exists, so the form was never "
              "submitted and nothing below this is about the entry list");
-    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "/api/search", "q", "{state}.q"),
+    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "https://x.test/api/search", "q", "{state}.q"),
              "§4.10 the record EXISTS and its `q` does not carry `{state}.q` as a whole value — the named "
              "field lost its SOURCE in the entry list, or an invented value stands where the source belongs");
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "\"off\""),
@@ -12418,9 +12420,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* requestSubmit(): the CANCELLED form's action must never appear, and the uncancelled one's must. */
     fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "/api/never"),
              "§4.10 requestSubmit()'s CANCELLED form never reached its action");
-    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"/api/didsubmit\""),
+    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"https://x.test/api/didsubmit\""),
              "§4.10 requestSubmit()'s uncancelled form reached its action");
-    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "/api/didsubmit", "ok", "rs"),
+    fold_row(&nodealgo_tt, &nodealgo_why, param_value_is(js, "https://x.test/api/didsubmit", "ok", "rs"),
              "§4.10 the uncancelled form's entry list carried the control's VALUE: /api/didsubmit's `ok` is "
              "not `rs`. Asked of this record's own param because `\"rs\"` unscoped was two bytes any other "
              "statement could answer, and the form reaching its action is the clause above it");

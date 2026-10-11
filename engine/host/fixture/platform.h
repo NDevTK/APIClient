@@ -1302,7 +1302,7 @@ static const char HTML_PLATFORM[] =
        `WebSocket` reaches a realm; the diff that installs it owes this block a subject that is still absent.
        Two spellings, one row: `window.WebSocket` is a [[Get]] missing the global's whole prototype chain and
        reaches JSConcolicHooks.absent; `typeof WebSocket` is an unresolvable Reference that ECMAScript
-       §13.5.3.1 "Runtime Semantics: Evaluation" step 2.a answers before step 2.b's GetValue, recorded by
+       §13.5.3.1 "Runtime Semantics: Evaluation" step 2.a answers before step 3's GetValue, recorded by
        JSConcolicHooks.absent_unresolved. Neither throws or forks.
        What to observe in the run's `_absent`: the `"WebSocket"` row puts 1 in `read` and 1 in `typeof`, and
        the typeof member reads at least 1; every bucket is emitted including zero. No probe row: a census
