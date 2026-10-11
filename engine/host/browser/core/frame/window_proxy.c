@@ -919,6 +919,13 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
            "§7.3.2.1 says which it is: the creator's for a nested navigable, the origin of the initial "
            "about:blank Document for an auxiliary one, which is the origin this same call is being given");
     p->top_level_origin = top_level_origin;   /* borrowed: an origin lives for the agent */
+    DCHECK(JS_IsUndefined(parent) || window_proxy_is(parent),
+           "a navigable was minted with a §7.3.1.3 parent that is neither a WindowProxy nor JS_UNDEFINED — §7.2.2.4 "
+           "makes a parent a navigable, and every walk up the tree (familiar with, `top`, the navigable-null "
+           "walk) reads the slot as one");
+    DCHECK(JS_IsNull(opener) || window_proxy_is(opener),
+           "a navigable was minted with a §7.2.2.4 opener that is neither a WindowProxy nor JS_NULL — an opener "
+           "is a browsing context's, and §7.3.2.2's familiarity walk climbs the slot as a navigable");
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     /* §7.3.1.3: a navigable is created with no container and then given one ("Let navigable be a new navigable …
@@ -1057,6 +1064,13 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->origin = origin;   /* borrowed, and never same origin with this agent's; see origin_parse */
     p->name   = name && *name ? proxy_strdup(name) : NULL;
     p->name_known = 1;   /* §7.4 named it, in this instance, before the notice crossed */
+    DCHECK(JS_IsUndefined(parent) || window_proxy_is(parent),
+           "a navigable was minted with a §7.3.1.3 parent that is neither a WindowProxy nor JS_UNDEFINED — §7.2.2.4 "
+           "makes a parent a navigable, and every walk up the tree (familiar with, `top`, the navigable-null "
+           "walk) reads the slot as one");
+    DCHECK(JS_IsNull(opener) || window_proxy_is(opener),
+           "a navigable was minted with a §7.2.2.4 opener that is neither a WindowProxy nor JS_NULL — an opener "
+           "is a browsing context's, and §7.3.2.2's familiarity walk climbs the slot as a navigable");
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     p->container = JS_NULL;   /* §7.3.1.3's link is written by the create, exactly as it is for a local one */
@@ -1412,29 +1426,10 @@ bool window_proxy_closing(JSValueConst proxy)
 }
 
 /* §7.3.2.2's familiar with (see window_proxy.h). A is the incumbent realm's browsing context, which is this
-   agent's, so every "A's active document's origin" below is origin_agent() and every "is A" is this realm's own
-   Window or its proxy. */
-static bool proxy_is_incumbent_window(JSContext *ctx, JSValueConst v)
-{
-    JSValue g = JS_GetGlobalObject(ctx);
-    bool same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
-
-    JS_FreeValue(ctx, g);
-    return same || JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(document_window_proxy(ctx));
-}
-
-/* Is this link of a navigable chain same origin with the incumbent? A link is a navigable's proxy, or this agent's
-   own Window, which the second test answers: an agent is origin-keyed, so its Window's origin is the incumbent's,
-   and §7.1.1 step 1 answers it true whatever that origin is, opaque included, which is why this is `true` and not
-   a test against "null". */
-static bool link_same_origin_as_incumbent(JSContext *ctx, JSValueConst v)
-{
-    ProxyData *q = JS_GetOpaque(v, g_proxy_class);
-
-    if (q) return proxy_same_origin(q);
-    return proxy_is_incumbent_window(ctx, v);
-}
-
+   agent's, so every "A's active document's origin" below is origin_agent() and each same-origin test is
+   proxy_same_origin; A itself is this realm's own proxy, whose origin is the agent's. Every link of the chain is
+   a WindowProxy: the walk starts at one and climbs `parent` and `opener` slots, which both mints assert hold a
+   WindowProxy or the slot's absence. The record of each link is dereferenced in release, so each is a CHECK. */
 bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
 {
     JSValue b = JS_DupValue(ctx, proxy);
@@ -1449,10 +1444,8 @@ bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
         ProxyData *p = JS_GetOpaque(b, g_proxy_class);
         JSValue anc;
 
-        if (link_same_origin_as_incumbent(ctx, b)) { ok = true; break; }    /* step 1 */
-        /* Step 3's chain has reached a link that is not a navigable's proxy: this agent's own Window, A itself,
-           which step 1 has just answered for. */
-        if (!p) break;
+        CHECK(p != NULL, "§7.3.2.2's B is not a WindowProxy — B is the asked navigable or an opener link");
+        if (proxy_same_origin(p)) { ok = true; break; }                     /* step 1 */
         {                                                                   /* step 2: A's top-level is B */
             JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
             bool is_b = JS_VALUE_GET_PTR(top) == JS_VALUE_GET_PTR(b);
@@ -1466,15 +1459,16 @@ bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
             ProxyData *q = JS_GetOpaque(anc, g_proxy_class);
             JSValue up;
 
-            if (link_same_origin_as_incumbent(ctx, anc)) { ok = true; break; }
-            if (!q) break;                       /* the chain's end, and it was not same origin */
+            CHECK(q != NULL, "a §7.3.2.2 ancestor of B is not a WindowProxy — the loop stops at JS_UNDEFINED");
+            if (proxy_same_origin(q)) { ok = true; break; }
             up = JS_DupValue(ctx, q->parent);
             JS_FreeValue(ctx, anc);
             anc = up;
         }
         JS_FreeValue(ctx, anc);
         if (ok) break;
-        if (JS_IsNull(p->opener) || JS_IsUndefined(p->opener)) break;       /* B is not auxiliary */
+        DCHECK(!JS_IsUndefined(p->opener), "a navigable's opener slot holds JS_UNDEFINED — the mints write JS_NULL");
+        if (JS_IsNull(p->opener)) break;                                    /* B is not auxiliary */
         {
             JSValue o = JS_DupValue(ctx, p->opener);
             JS_FreeValue(ctx, b);
