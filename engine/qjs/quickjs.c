@@ -71046,6 +71046,7 @@ static int js_execute_sync_module(JSContext *ctx, JSModuleDef *m,
                   "js_execute_async_module; settling its capability while the body is suspended frees the flow "
                   "state its completion still reads");
             JSValue m_obj, resolve_funcs[2], ret_val;
+            js_module_eval_capture(ctx, m);   /* the body ran since this record was announced */
             m->async_evaluation = true;
             m->async_evaluation_timestamp = ctx->rt->module_async_evaluation_next_timestamp++;
             m_obj = JS_NewModuleValue(ctx, m);
@@ -71075,6 +71076,8 @@ static int js_module_eval_finish(JSContext *ctx, JSModuleDef *m, JSModuleDef **p
 
     bool exec_async = false;
 
+    /* Announced again for js_module_eval_after_child's reason: the children's bodies ran since the entry. */
+    js_module_eval_capture(ctx, m);
     if (m->pending_async_dependencies > 0) {
         DCHECK(!m->async_evaluation, "!m->async_evaluation");
         m->async_evaluation = true;
@@ -71137,6 +71140,11 @@ static int js_module_eval_finish(JSContext *ctx, JSModuleDef *m, JSModuleDef **p
    whose frame has just been popped — which is the one point the recursion reached it from. */
 static int js_module_eval_after_child(JSContext *ctx, JSModuleDef *m, JSModuleDef *m1, JSValue *pvalue)
 {
+    /* Both records are announced here and not only where the walk entered them: a child's body runs between
+       that entry and this call, and a fork inside it freezes the running flow's head, so the earlier
+       announcement no longer stands for the writes below. */
+    js_module_eval_capture(ctx, m);
+    js_module_eval_capture(ctx, m1);
     DCHECK(m1->status == JS_MODULE_STATUS_EVALUATING || m1->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m1->status == JS_MODULE_STATUS_EVALUATED, "m1->status == JS_MODULE_STATUS_EVALUATING || m1->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m1->status == JS_MODULE_STATUS_EVALUATED");
     if (m1->status == JS_MODULE_STATUS_EVALUATING) {
         m->dfs_ancestor_index = min_int(m->dfs_ancestor_index,
@@ -71497,6 +71505,7 @@ static JSValue js_evaluate_module(JSContext *ctx, JSModuleDef *m)
                "a module whose evaluation started has no capability — its consumers have nothing to wait on");
         return js_dup(m->promise);
     }
+    js_module_eval_capture(ctx, m);   /* `m` may be the cycle root this function moved to, never announced */
     m->eval_started = true;
     {
         JSValue cap = js_module_eval_capability(ctx, m);
