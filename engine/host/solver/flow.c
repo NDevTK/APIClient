@@ -1563,117 +1563,79 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
            "flow change its own rank by branching, which is the one thing the WFQ may never let it do");
 }
 
-/* RELEASE ONE FLOW — see flow.h. This is where every field a Flow owns is given back, and the only place. */
+/* Release one flow (flow.h): the one place every field a Flow owns is given back. */
 void flow_release(JSContext *ctx, Flow *f) {
-    /* THE SCHEDULER IS NOT SWITCHED INTO IT. Everything below is released as PARKED state — the heap delta's
-       head is freed rather than unapplied, the DOM head's created nodes are destroyed on the assumption they
-       are detached, and the decision/pin state is read out of blobs rather than out of decide.c's live globals.
-       All three are false for the running flow, and each fails differently and late; asked once, here. */
+    /* The flow is not switched in. Everything below is released as parked state: the heap delta's head is freed
+       rather than unapplied, the DOM head's created nodes are destroyed as detached, and the decision and pin state
+       is read out of blobs rather than decide.c's live globals. All three are false for the running flow. */
     DCHECK(f != g_running,
            "the RUNNING flow was released — its heap delta, its document writes and its decision state are all "
            "live rather than parked, so this frees one copy of each while the scheduler still holds the other");
-    /* A PAGED FLOW IS NOT A DROPPED ONE, which is the only thing this assert is about. A continuation left
-       parked here is an async activation nobody will ever resume — UNLESS THIS FLOW was written to the cold
-       tier, in which case its recipe replays the code that created that continuation and re-parks it in the
-       next session. That is the whole claim the cold tier makes, so it is stated where the drop would
-       otherwise be asserted rather than by teaching the assert to tolerate a NULL.
-       IT ASKS THE FLOW, NOT THE ENGINE, and that is the correction a partial park forces. `engine_frontier_paged`
-       answers for the whole session, so once ANY park had happened it excused the release of every flow —
-       including one the park never wrote. A partial self-park releases a written TAIL while everything above it
-       keeps running and stays unwritten, so the engine-wide answer is true and false at the same moment; the
-       per-flow one is exact in both directions. */
-    /* AND IT IS THE SAME QUESTION FOR ALL FIVE THINGS A RELEASED FLOW CAN STILL BE CARRYING, which is why they
-       are ONE assert and not one assert plus four silent frees. `paged` was asked of the parked continuation
-       alone, and the four things released below it — the suspended FRAME (this flow's whole heap-frame chain,
-       every activation it is stopped across), the REPLIES the host still owed it, the JOBS on its queue, and
-       its own loaded chunk BODIES — were given back with nothing saying whether they were work items being
-       dropped. Every one of them is a work item on the ONE frontier, and §scheduler forbids dropping one; the
-       justification written beside the frees is precisely the cold tier's ("the recipe re-enqueues the
-       reactions and re-issues the requests as it replays"), which is the `paged` flag and nothing else. So a
-       flow that was NOT written out may hold none of them, and the honest teardown of a session that ends over
-       live flows either paged them or had nothing to lose.
-       THIS IS THE ONE THAT FIRES ON THE SMOKE HOST'S GIVE-UP PATH — a provider that answers nothing ends
-       run_scheduler, main.c tears the instance down, and flow_registry_free releases survivors that are
-       suspended mid-frame with replies outstanding. That abort is the point: it names the flows a run threw
-       away at the moment it threw them, which no counter, no census line and no result field has ever said. */
-    /* A ROUTED DELIVERY IS ON THAT LIST NOW, and it was the one work item this walk never mentioned: flow_remove
-       silently `free`d the record and the sender origin, so a peer's message died here with nothing to say so —
-       the precise shape §Offensive-programming calls the concealment rather than the symptom. It belongs behind
-       `paged` like the rest: the cold tier writes the queue as 'm' records, so a WRITTEN flow's deliveries are
-       in its recipe and an unwritten one's are being dropped. */
+    /* A paged flow is not a dropped one. Five things a released flow can still carry are work items on the one
+       frontier: a parked continuation, the suspended frame (its whole heap-frame chain), replies the host still owes
+       it, queued jobs and a peer's routed deliveries. Dropping a work item is forbidden
+       unless the flow was written to the cold tier, whose recipe replays the code that created each of them (the
+       reactions are re-enqueued, the requests re-issued, and deliveries are in the recipe as 'm' records). So a flow
+       not written out may hold none of them, and they are one assert, not one assert plus silent frees. It asks the
+       flow, not the engine: `engine_frontier_paged` answers for the whole session, and a partial self-park writes a
+       tail while flows above it run on unwritten, so only the per-flow answer is exact.
+       The smoke host's give-up path fires this: a provider that answers nothing ends run_scheduler, main.c tears the
+       instance down, and flow_registry_free releases survivors suspended mid-frame with replies outstanding. The
+       abort names the flows a run threw away at the moment it threw them. */
     DCHECK(f->paged || (f->parked == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
            "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions, "
            "replies the host still owed it, or a peer's routed message — and it was never written to the cold "
            "tier, so nothing replays it and every one of those is a work item the ONE frontier just dropped");
-    /* AND THE PARKED CONTINUATIONS ARE RELEASED HERE, BECAUSE THE FLOW OWNS THEM. Three lines used to null a
-       set of raw fields under the claim that "`opaque` is an activation reachable from the frame chain
-       released just below, so what goes is the intention to resume it and not the memory." That was false at
-       every one of the sites that park — each takes a reference and only the resume gives it back — and false
-       by construction for the flow this leak was found through, whose `frame` was NULL, so there was no chain
-       below it to be reachable from. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn) and
-       each site states its own release next to where it takes it, so this line calls one function over the
-       whole set rather than knowing three shapes and one park.
-       `paged` DOES NOT EXCUSE IT, and conflating the two debts is how this survived. The assert above is about
-       a dropped WORK ITEM, and the recipe genuinely does replay a paged flow's continuation — that argument is
-       sound and unchanged. It says nothing about the MEMORY the old continuations still hold here, which no
-       recipe frees and no gc_obj_list walk can see, because neither the activations nor their TrampFrames are
-       GC objects. That was 4 surviving frames at flow_registry_free's census with nothing naming the owner.
-       The half-a-park assert that stood here is GONE with the fields it read: a set is one pointer, so there
-       are no halves to disagree, and what it was really guarding — that every member carries a resume, a
-       disposer and a realm — is asserted over the whole ring, at the two lines that can walk it
-       (JS_PutParkedFlows and JS_FreeParkedFlows). */
-    /* AND A PROGRAM THIS FLOW WAS STILL PARSING, which is the sixth thing on the list above and the one that
-       is NOT behind `paged`. Every other work item there is unrecoverable if it is dropped unwritten; a
-       suspended COMPILE is re-derivable from the row's own bytes, so a recipe that replays the document
-       replays the parse and the memory is this flow's to give back either way. It is released through the
-       engine's own entry rather than freed, because what it holds is the descent's: every frame's atoms, the
-       chunk array, the token and the JSFunctionDef chain. A no-op on a NULL slot. */
+    /* And the parked continuations are released here, because the flow owns them: every park takes a reference that
+       only the resume gives back. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn), so this calls
+       one function over the set. `paged` does not excuse it: the assert above is about a dropped work item, while
+       the memory the continuations hold is freed by no recipe and is invisible to the gc_obj_list walk (neither the
+       activations nor their TrampFrames are GC objects). That every member carries a resume, a disposer and a realm
+       is asserted over the whole ring in JS_PutParkedFlows and JS_FreeParkedFlows.
+       A program this flow was still parsing is not behind `paged`: a suspended compile is re-derivable from the
+       row's bytes, so the memory is this flow's to give back either way. It is released through the engine's entry
+       because it holds the descent's state (every frame's atoms, the chunk array, the token and the JSFunctionDef
+       chain). A no-op on a NULL slot. */
     JS_FlowCompileDrop(ctx, &f->compile);
     JS_FreeParkedFlows(f->parked);
     f->parked = NULL;
-    /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain — every activation, closure
-       and local it is suspended across — so one left behind retains the entire realm, and the runtime's leak
-       walk reports it as a Window, a context and seventeen hundred anonymous Functions with nothing naming the
-       owner. That is precisely the shape a leak takes when the ROOT is one dropped handle. */
+    /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain (every activation, closure and
+       local it is suspended across), so leaving it retains the entire realm, and the runtime's leak walk reports a
+       Window, a context and many anonymous Functions with nothing naming the owner. */
     if (f->frame) { JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; }
-    /* the REPLIES it was still owed. Each entry is a request the host never answered; the whole register is one
-       JS value, so its resolve capabilities, its reply values and every string in it go with one release. */
+    /* The replies it was still owed: the register is one JS value, so its resolve capabilities, reply values and
+       strings go with one release. */
     pending_free(ctx, &f->pending);
-    /* THE UNSTARTED OPERATIONS GO WITH IT — one release for the array and every [record, token] pair it names,
-       exactly as the register above. That they are gone at all is asserted by the caller (flow_finish, the
-       pager), because a dropped record is a peer suspended forever and freeing it quietly is how that stays
-       invisible; this is the release, not the check. */
+    /* The unstarted operations: one release for the array and every [record, token] pair. That they are gone is
+       asserted by the caller (flow_finish, the pager), since a dropped record is a peer suspended for ever; this is
+       the release, not the check. */
     JS_FreeValue(ctx, f->perform_q); f->perform_q = JS_UNDEFINED;
-    /* AND THE ROUTED DELIVERIES, one release for the array and every [record, senderOrigin] pair it names. That
-       they are gone at all is asserted above and by the caller, never cleaned up quietly here. */
+    /* And the routed deliveries, one release for the array and every [record, senderOrigin] pair; that they are gone
+       is asserted above and by the caller. */
     JS_FreeValue(ctx, f->deliver_q); f->deliver_q = JS_UNDEFINED;
-    /* AND WHICH SENDING TIMELINES IT WAS IN — one release for the array and every [vector, taken, arm] row it
-       names. It is NOT on the work-item list the assert above refuses to drop, and that is the distinction
-       rather than an omission: a commitment is not work owed to anybody, it is what this timeline WAS. A flow
+    /* And which sending timelines it was in, one release for the array and every [vector, taken, arm] row. Not on
+       the work-item list above: a commitment is not work owed to anybody but what this timeline was, and a flow
        that has ended has no timeline left to be wrong about. */
     JS_FreeValue(ctx, f->deliver_world_q); f->deliver_world_q = JS_UNDEFINED;
     cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
-    /* THE HEAD BEFORE THE CHAIN BELOW IT: a head node inserted under a segment's node is that node's child, and
-       a child must be freed before the parent it hangs under is freed deep. */
+    /* The head before the chain below it: a head node inserted under a segment's node is that node's child, and a
+       child is freed before its parent is freed deep. */
     if (f->dom) dom_buf_free(f->dom, f->dom_n);
     f->dom = NULL; f->dom_n = f->dom_cap = 0;
     dom_base_release(f->dom_base); f->dom_base = NULL;
     decide_blob_free(f->dec_blob); f->dec_blob = NULL;
     concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
-    /* THE BODY COLUMN GIVES A REFERENCE BACK, IT DOES NOT FREE. A program's text is shared by every timeline
-       holding that program (solver/dyn_body.h), so what a flow owns is one reference and not the buffer; the
-       last flow to leave is the one that frees it, and which flow that is, is not knowable here. The other two
-       columns are this flow's own strings and are freed. */
+    /* The body column gives a reference back rather than freeing: a program's text is shared by every timeline
+       holding it (solver/dyn_body.h), and the last flow to leave frees it. The other two columns are this flow's
+       own strings. */
     for (int k = 0; k < f->dyn_n; k++) { dyn_body_unref(f->dyn[k]); free(f->dyn_token[k]); free(f->dyn_url[k]); }
     free(f->dyn); f->dyn = NULL;
     free(f->dyn_cand); f->dyn_cand = NULL;
     free(f->dyn_type); f->dyn_type = NULL;
     free(f->dyn_url); f->dyn_url = NULL;
-    /* THE ELEMENT COLUMN IS THE ONE THAT FREES NOTHING BUT ITSELF — a row's `script` element is a BORROWED node
-       of the document's tree, owned by that tree (or, for a node a flow created, by that flow's DOM delta, which
-       dom_buf_free above has already discarded). Freeing an entry here would destroy a node the document still
-       holds; leaking one is impossible because there is nothing to leak. */
+    /* The element column frees only itself: a row's `script` element is a borrowed node of the document's tree,
+       owned by that tree or, for a node a flow created, by the flow's DOM delta, which dom_buf_free discarded. */
     free(f->dyn_el); f->dyn_el = NULL;
     free(f->dyn_doc); f->dyn_doc = NULL;
     free(f->dyn_id); f->dyn_id = NULL;
@@ -1681,17 +1643,14 @@ void flow_release(JSContext *ctx, Flow *f) {
     free(f->dyn_token); f->dyn_token = NULL;
     free(f->dyn_pos); f->dyn_pos = NULL;
     f->dyn_n = f->dyn_cap = 0;
-    /* AND THE UNDRAINED MICROTASKS AND TASKS — one release for the array and every record it names, exactly
-       as the three queues above. That they are gone at all is asserted at the top of this function; this is
-       the release, not the check. */
+    /* And the undrained microtasks and tasks, one release for the array and every record; that they are gone is
+       asserted at the top of this function. */
     JS_FreeValue(ctx, f->jobs); f->jobs = JS_UNDEFINED;
-    /* AND ITS WORLD DIES WITH IT, WHICH IS THE ONE THING A RELEASE OWES SOMEBODY ELSE'S INSTANCE. Every other
-       line above gives back memory this process owns; this one is the only state a released flow leaves in
-       ANOTHER heap. A peer that has ever been posted to or read by this flow holds a COW segment keyed on its
-       world, materialized on arrival and released only when told — so a flow that leaves the frontier with no
-       announcement is a segment that peer carries for the rest of its process, and a peer holding one cannot
-       park at all (cold.c refuses it, correctly: a foreign segment has no recipe of ours). The ancestors whose
-       last live descendant this flow was die with it, which is why this is a list and not a name. */
+    /* And its world dies with it, the one state a released flow leaves in another instance's heap. A peer that was
+       ever posted to or read by this flow holds a COW segment keyed on its world, materialized on arrival and
+       released only when told, so an unannounced departure is a segment that peer carries for the rest of its
+       process, and a peer holding one cannot park (cold.c refuses: a foreign segment has no recipe of ours). The
+       ancestors whose last live descendant this flow was die with it, hence a list. */
     {
         const char *const *gone;
         int n = world_flow_gone(f->world, &gone);
@@ -1701,30 +1660,23 @@ void flow_release(JSContext *ctx, Flow *f) {
 }
 
 void flow_registry_free(JSContext *ctx) {
-    /* A FLOW LEFT IN THE FRONTIER IS THE ORDINARY CASE, NOT AN ERROR: the session closes over its survivors by
+    /* A flow left in the frontier is the ordinary case, not an error: the session closes over its survivors by
        design (engine_sched_step's exhausted path leaves every host-owed flow alive, and in the product a parked
-       flow OUTLIVES the session entirely). So this is the teardown for a flow that never finished, and it is
-       the SAME operation as evicting one and as finishing one — which is why it is one call and not a fourteen-
-       field list restated here. It used to be that list, it released four of the fields and left the rest, and
-       the drift was invisible until a leak walk named a Window nobody owned. */
-    /* WHO LEFT THEM, RECORDED AT THE RELEASE, because by the assert below every owner is gone. That census is
-       a GATE and says only that frames survived — the reader stands at the wreckage with nothing naming the
-       flow that made it, which is the same failure as an OOM that does not say what it was allocating. A flow's
-       heap chain is its own (JS_FlowClone deep-copies rather than shares), so the count NOT dropping when a
-       suspended flow is released is a fact about THAT flow, and this loop is the last moment it exists to be
-       named.
-       IT RECORDS RATHER THAN ASSERTS, and it calls nothing. "A released flow must drop a frame" is not
-       something this file can claim today — flow_step's JS_FLOW_DETACHED arm hands a base to an awaited promise
-       and leaves `frame` NULL on purpose — and a probe that reached for a serializer here could abort the
-       teardown of every session over a question only this drive asks. So it reads four fields it already owns
-       and carries them into the abort that already exists. */
+       flow outlives the session). The teardown for a flow that never finished is the same operation as evicting
+       and finishing one, so it is one call.
+       Who left them is recorded at each release, because by the assert below every owner is gone and the census
+       there only says frames survived. A flow's heap chain is its own (JS_FlowClone deep-copies), so a count that
+       does not drop when a suspended flow is released is a fact about that flow. It records rather than asserts
+       and calls nothing: flow_step's JS_FLOW_DETACHED arm hands a base to an awaited promise and leaves `frame`
+       NULL on purpose, so "a released flow must drop a frame" is not claimable here; it reads four fields it owns
+       and carries them into the existing abort. */
 #if APICLIENT_DEV
     int rel_i = 0, culprit = -1, culprit_frame = 0, culprit_park = 0, culprit_paged = 0, culprit_started = 0;
     JSRuntime *rrt = JS_GetRuntime(ctx);
 #endif
     while (g_flows_n) {
-        /* …AND WHICH ARM OF `g_departures` THIS ONE IS, raised on the line that performs it and above
-           the dev/release split because the departure happens in both. See g_departures_teardown. */
+        /* And which arm of `g_departures` this one is, raised on the line that performs it and above the
+           dev/release split because the departure happens in both. See g_departures_teardown. */
         g_departures_teardown++;
 #if APICLIENT_DEV
         Flow *rf = g_flows[0];
@@ -1733,8 +1685,8 @@ void flow_registry_free(JSContext *ctx) {
         int before = JS_TrampFrameCount(rrt);
 
         flow_release(ctx, rf);
-        /* THE LAST SUSPENDED FLOW WHOSE RELEASE FREED NO FRAME — the newest candidate wins, because a chain
-           that outlives the frontier was left by the last release that failed to take one. */
+        /* The last suspended flow whose release freed no frame; the newest candidate wins, because a chain that
+           outlives the frontier was left by the last release that failed to take one. */
         if ((had_frame || had_park) && JS_TrampFrameCount(rrt) == before) {
             culprit = rel_i; culprit_frame = had_frame; culprit_park = had_park;
             culprit_paged = paged; culprit_started = started;
@@ -1745,21 +1697,14 @@ void flow_registry_free(JSContext *ctx) {
 #endif
     }
     free(g_flows); g_flows = NULL; g_flows_cap = 0;
-    /* AND THE WORLD NAMESPACE GOES DOWN AFTER THEM, WHICH IS THE ORDER RATHER THAN A DETAIL. It came up with
-       the frontier and it outlives it by exactly one step, because releasing a flow ANNOUNCES the death of the
-       world it held — the registry is what names that world, so freeing it first left every release walking a
-       table that had already gone. Any segment this instance still holds for a PEER's world is then a foreign
-       flow's state in this document: nothing else is going to free it, and it is malloc'd, so the runtime's GC
-       walk would never name it. */
+    /* And the world namespace goes down after the flows: releasing a flow announces the death of its world, and the
+       registry is what names that world. Any segment this instance still holds for a peer's world is a foreign
+       flow's malloc'd state that nothing else frees and the GC walk never names. */
     world_registry_free(ctx);
-    /* NOT ONE HEAP CALL FRAME AND NOT ONE STEP MACHINE MAY OUTLIVE THE FRONTIER, and this is the only point in
-       the program where that is a decidable question. A TrampFrame and a suspended builtin's state are the two
-       largest things in the @HEAP line's `unattributed` residual, they are invisible to the runtime's own
-       gc_obj_list walk (neither is a GC object), and every one of them belongs to some flow's suspended chain —
-       so with every flow released the census must be zero. It was NOT: JS_FlowFree could not tear down a
-       DEEP-suspended flow at all, and each survivor took its whole activation chain with it into nothing with
-       no counter anywhere naming the owner. The census exists precisely so that question has an answer; asking
-       it here is what turns it into a gate rather than a number in a progress line. */
+    /* Not one heap call frame and not one step machine may outlive the frontier, and this is the one point where
+       that is decidable. A TrampFrame and a suspended builtin's state are the two largest things in the @HEAP
+       line's `unattributed` residual, invisible to gc_obj_list (neither is a GC object), and each belongs to some
+       flow's suspended chain, so with every flow released the census must be zero. This makes it a gate. */
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
 #if APICLIENT_DEV
@@ -1777,25 +1722,20 @@ void flow_registry_free(JSContext *ctx) {
                "the frontier is gone and STEP MACHINES are still live — a continuation-holding builtin's state "
                "outlived the flow that was suspended inside it, along with every argument it captured");
     }
-    /* AND NOT ONE NODE OF THE FORK TREE, which is the same question the four frozen chains are asked below: every
-       reference on a node is its own flow's or a live descendant's, and both are gone by here. It is also what
-       makes acct_compress_dead's re-pointing checkable rather than argued — a node it re-pointed and failed to
-       release holds the whole ancestry above it, and a node is not a GC object, so nothing else would ever
-       name the owner. It is also the only thing that would catch a family ROOT kept alive by a `family` tag
-       nobody dropped: a departing flow clears its own (acct_depart), so a survivor here names the exit that
-       did not. */
+    /* And not one node of the fork tree: every reference on a node is its own flow's or a live descendant's, and
+       both are gone. This makes acct_compress_dead's re-pointing checkable (a node it re-pointed and failed to
+       release holds the ancestry above it, and a node is not a GC object), and it catches a family root kept alive
+       by a `family` tag nobody dropped: a departing flow clears its own (acct_depart), so a survivor names the exit
+       that did not. */
     DCHECK(g_acct_live == 0,
            "a FORK-TREE node outlived the frontier — its only references are a released flow's own and a live "
            "descendant's, so one still live is a reference nobody dropped and the whole ancestry it names is "
            "unreachable memory");
-    /* AND NOT ONE FROZEN SEGMENT, which is the other side of the release above and the reason it can be trusted.
-       A segment of the heap chain or the document chain is referenced ONLY by the deltas forked below it and by
-       the segments above it — the world registry's foreign segments and the frontier's flows, both released by
-       the two lines above — so with all of them gone the count must be zero, exactly as decide_free asserts for
-       the third chain built on the same primitive. A non-zero one is a delta reference nobody dropped: pure
-       garbage holding no live JSValue, invisible to the runtime's gc_obj_list walk, and previously visible only
-       as a process that grew by a delta per flow. This is the assertion that makes cow_delta_release's and
-       dom_base_release's refcount arithmetic checkable rather than argued. */
+    /* And not one frozen segment. A segment of the heap or document chain is referenced only by the deltas forked
+       below it and the segments above it, the world registry's foreign segments and the frontier's flows, both
+       released above, so the count must be zero, as decide_free asserts for the third chain on the same primitive.
+       A non-zero count is a delta reference nobody dropped, holding no live JSValue and invisible to gc_obj_list.
+       This makes cow_delta_release's and dom_base_release's refcount arithmetic checkable. */
     {
         long segs = 0, entries = 0;
         cow_chain_stats(&segs, &entries);
@@ -1809,26 +1749,18 @@ void flow_registry_free(JSContext *ctx) {
                "flows below it created, so nothing will ever destroy them or take them out of the identity map "
                "that names them");
     }
-    /* AND THE DECISION STATE THE FRONTIER STANDS ON, released HERE and not by each host. Every flow's parked
-       vector is a reference on a shared frozen chain, and the running flow holds one more in decide.c's
-       globals; the blobs went with the flows in the loop above. Putting it in the three hosts' teardowns
-       instead would be the hand-copied list build.mjs warns about — a host that forgot
-       the line would leak the whole chain with nothing to say so, which is exactly how the world registry's
-       own release came to be missing from one of them. It belongs to the frontier, so it goes down with it.
-       THE FLOWS ARE NOT THE ONLY HOLDER, WHICH THIS USED TO SAY THEY WERE ("so this is the last of them"). An
-       open @S search holds one too — solve.c's add_pending freezes the path its candidates are re-injected at,
-       and that blob belongs to the SEARCH rather than to any flow, because a search outlives the flow that
-       detected it and is still seedable at the next drain. Its give-back is solve_free, which solver_agent_free
-       therefore calls BEFORE this function; the sentence that claimed otherwise is why that call sat after it
-       and why decide_free's assert fired on every page that forked before its first tainted sink. */
+    /* And the decision state the frontier stands on, released here and not by each host. Every flow's parked vector
+       is a reference on a shared frozen chain, and the running flow holds one more in decide.c's globals; the blobs
+       went with the flows. A line in each of the three hosts' teardowns would be a hand-copied list a host can
+       forget. The flows are not the only holder: an open @S search holds one (solve.c's add_pending freezes the
+       path its candidates are re-injected at), and that blob belongs to the search, which outlives the flow that
+       detected it. Its give-back is solve_free, so solver_agent_free calls that before this function, or
+       decide_free's assert fires. */
     decide_free();
-    /* AND THE PATH CONSTRAINT THE SAME DECISIONS WERE MADE UNDER, which is the FOURTH chain built on the same
-       refcounted immutable segment and the only one with no teardown at all. Its blobs went with the flows; the
-       one reference left is the globals', held by whichever flow was switched out last — every session has
-       leaked that flow's frozen constraint, its entries and every key and value string in them, with no counter
-       naming an owner because a segment is not a GC object. Released here for the reason the decision chain is:
-       it belongs to the frontier, and putting it in the three hosts' teardowns instead is the hand-copied list
-       that has already drifted once. */
+    /* And the path constraint the same decisions were made under, the fourth chain on the same refcounted immutable
+       segment. Its blobs went with the flows; the one reference left is the globals', held by whichever flow was
+       switched out last, and without this release a session leaks that flow's frozen constraint, its entries and
+       every key and value string, with nothing naming an owner. Released here for the decision chain's reason. */
     concolic_clear_pins();
     {
         long segs = 0, entries = 0, bytes = 0;
@@ -1838,143 +1770,115 @@ void flow_registry_free(JSContext *ctx) {
                "flow's blob or the running flow's globals, and both are gone by here, so one still live is a "
                "blob nobody released and the whole narrowing it names is unreachable memory");
     }
-    /* AND THE PARK DOCUMENT WRITTEN OUT OF THIS FRONTIER, released here for the same reason the decision chain
-       is: it is the frontier's own residue, the host has already read it out of the result document by the
-       time any teardown runs, and putting the free in each host's teardown instead would be the hand-copied
-       list that has already drifted once. */
+    /* And the park document written out of this frontier, the frontier's own residue, released here for the same
+       reason: the host has read it out of the result document before any teardown runs. */
     cold_free();
-    /* …AND THE LEDGER COUNT THE ASK CENSUS cold_free JUST RESET IS READ AGAINST, ON THE NEXT LINE AND NOT IN
-       SOME OTHER TEARDOWN. The two numbers are only comparable while they describe ONE document, and putting
-       the reset anywhere else would make that agreement a convention two files have to keep rather than a
-       fact one call states. The flows are already gone by here (the release loop at the top of this function),
-       so no member survives holding a row this line is about to stop counting. */
+    /* And the ledger count the ask census cold_free just reset is read against, reset on the next line: the two
+       are comparable only while they describe one document. The flows are already gone, so no member holds a row
+       this stops counting. */
     g_world_commit_rows = 0;
-    /* AND THE PENDING REGISTER'S INTERNED FIELD NAMES, for the same reason and in the same place: the corpus
-       hosts take a runtime down and bring another up per file, so an atom left here is a handle into a freed
-       table that the next session's first push would write through. */
+    /* And the pending register's interned field names, here for the same reason: the corpus hosts take a runtime
+       down and bring another up per file, so an atom left here is a handle into a freed table the next session's
+       first push would write through. */
     pending_free_ctx(ctx);
 }
 
-/* EVERY FLOW EVER CREATED. Reported beside the switch count for the same reason that one is: without it, a run
-   that takes twenty minutes instead of three is a number with no decomposition — "the frontier grew" and "each
-   flow got slower" look identical from outside, and they need opposite fixes. */
+/* Every flow ever created, reported beside the switch count: without it "the frontier grew" and "each flow got
+   slower" look identical, and they need opposite fixes. */
 static long g_flows_created;
 
-/* IS EVERY WORLD MINTED FROM HERE ON OWED AN IMAGE? flow.h's `flow_paint_every_world` holds the argument and
-   why it is one-way. Read at the ONE constructor below, so a mode turned on mid-run covers exactly the
-   members born after it and the frontier walk covers exactly the ones already standing — between them, every
-   world of a run that asked. Zero-initialised, which is the answer for a host that never asked. */
+/* Is every world minted from here on owed an image? flow.h's `flow_paint_every_world` holds the argument and why it
+   is one-way. Read at the one constructor below, so a mode turned on mid-run covers the members born after it and
+   the frontier walk covers those already standing. Zero is the answer for a host that never asked. */
 static int g_paint_every_world;
 long flow_created_count(void) { return g_flows_created; }
 
-/* THE ONE CONSTRUCTOR. Every flow is born here with a world already decided, so no flow can exist without one
-   and no caller can hand one a second. */
+/* The one constructor. Every flow is born here with a world already decided, so no flow exists without one and no
+   caller can hand one a second. */
 static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     g_flows_created++;
     if (g_flows_n >= g_flows_cap) {
         int nc = g_flows_cap ? g_flows_cap * 2 : 32;
-        /* THE REGISTRY IS WHAT THE SALE WALKS. This allocation can page a flow out (solver/reclaim.h), and the
-           pager's own flow_remove swap-removes from THIS array — so the array, its count and its capacity must
-           all still describe the buffer that exists for the whole of the ask. Publishing the doubled capacity
-           first would advertise room the buffer does not have to the one caller guaranteed to be inside it. */
+        /* The registry is what the sale walks: this allocation can page a flow out (solver/reclaim.h), and the
+           pager's flow_remove swap-removes from this array, so the array, its count and its capacity must describe
+           the buffer that exists for the whole ask. The doubled capacity is published only after the realloc. */
         Flow **nf = reclaim_realloc(g_flows, (size_t)nc * sizeof(Flow *));
         CHECK(nf, "flow_add: OOM growing the frontier — a dropped flow corrupts BFS exploration");
         g_flows = nf; g_flows_cap = nc;
     }
     Flow *f = reclaim_calloc(1, sizeof(Flow));
     CHECK(f, "flow_add: OOM allocating a flow — a dropped flow corrupts the frontier");
-    /* AND IT IS BORN OWING THE HOST AN IMAGE IF THE HOST ASKED FOR EVERY WORLD — @PERWORLD. HERE, at the one
-       constructor, because that is the only line every timeline passes through: a mark laid down by walking
-       the frontier names the members standing at that instant, and an arm that is forked, runs and ends
-       BETWEEN two host returns is never standing at one. The host exists only at round boundaries, so this is
-       not a cadence it could have chosen more finely — it is the population it cannot address at all.
-       IT IS THE MINT AND NOT THE FORK. `flow_add_unseeded` is one caller of two kinds (a from-baseline root
-       and a branch's arm) and marking there would have covered the arms and missed whatever else this engine
-       learns to mint; the question "was this world ever photographed" is asked of a WORLD, and this is where
-       a world is decided (the line above mints one, and no flow can exist without one). */
+    /* And it is born owing the host an image if the host asked for every world (@PERWORLD). Marked at the one
+       constructor because every timeline passes it: a frontier walk names only the members standing at that
+       instant, and an arm forked, run and ended between two host returns is never standing at one. At the mint and
+       not at the fork: `flow_add_unseeded` has two kinds of caller (a from-baseline root and a branch's arm), and
+       the question "was this world ever photographed" is asked of a world, decided here. */
     if (g_paint_every_world) flow_set_paint_owed(f);
     f->fn = JS_DupValue(ctx, fn);
-    /* THE PENDING REGISTER IS EMPTY, AND EMPTY IS NOT AN ARRAY. Most flows never park on anything, so
-       allocating one per flow would put a JSObject on the heap for every member of a frontier that reached
-       29550 on this fixture — and the blockedness question the preempt hook asks at every suspend point would
-       then have to read a property off it instead of testing a tag. (It used to say "a length": the hook no
-       longer walks and no longer reads one, and what it would read on an empty Array now is the register's own
-       count of the synchronous requests it is owed — same cost, same argument, different slot.) It is minted
-       by the first push. */
+    /* The pending register is empty, and empty is not an array. Most flows never park on anything, so an Array per
+       flow would put a JSObject on the heap for every member of a frontier tens of thousands strong, and the
+       blockedness question the preempt hook asks at every suspend point would read a property off it instead of
+       testing a tag (on an empty Array it would read the register's count of the synchronous requests it is owed).
+       Minted by the first push. */
     f->pending = JS_UNDEFINED;
-    /* …AND THE OPERATION QUEUE, empty for the same reason and stated the same way: a peer asks this document
-       nothing at all in most sessions, and JS_UNDEFINED is not what a calloc leaves behind. */
+    /* And the operation queue, empty for the same reason: a peer asks most documents nothing, and JS_UNDEFINED is
+       not what calloc leaves behind. */
     f->perform_q = JS_UNDEFINED;
-    /* …AND THE DELIVERY QUEUE, the same sentence a third time: no peer posts to most documents, and an Array
-       per flow would put a JSObject on the heap for every member of a frontier that reached 29550 here. */
+    /* And the delivery queue, the same: no peer posts to most documents. */
     f->deliver_q = JS_UNDEFINED;
-    /* …AND WHICH SENDING TIMELINES THIS ONE IS IN, empty because a flow that has received nothing has
-       committed to nothing — which is a POSITIVE statement and not a hole: with no commitment recorded, every
-       sender's world is still one this timeline may be in. */
+    /* And which sending timelines this one is in, empty because a flow that has received nothing has committed to
+       nothing: with no commitment recorded, every sender's world is still one this timeline may be in. */
     f->deliver_world_q = JS_UNDEFINED;
-    /* …AND THE JOB QUEUE, the same sentence a fourth time: most flows are enqueued nothing, and an Array per
-       flow would put a JSObject on the heap for every member of a frontier that reached 29550 here. */
+    /* And the job queue, the same: most flows are enqueued nothing. */
     f->jobs = JS_UNDEFINED;
-    /* …and the register's own context, named HERE because this is the one point every flow passes through.
-       Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
+    /* And the register's own context, named here because every flow passes this point; a line in each host's setup
+       would be a hand-copied list. */
     pending_set_ctx(ctx);
-    /* `cpu_gen` beside `cpu` because the two are ONE quantity (flow_own_silence): the burn, and the account
-       generation that says which silence window it is a burn in. Zero here matches the fresh account minted
-       below, whose `emit_gen` is also zero, so a flow that is never charged reads a current window holding
-       nothing rather than a stale mark holding whatever the field last contained. */
+    /* `cpu_gen` beside `cpu` because they are one quantity (flow_own_silence): the burn and the account generation
+       naming its window. Zero matches the fresh account minted below, whose `emit_gen` is also zero, so an
+       uncharged flow reads a current window holding nothing. */
     f->val = 0.0; f->cpu = 0; f->cpu_gen = 0; f->visits = 0;
-    /* …AND THE DISPATCH COUNT, WHICH NOTHING ELSE EVER WRITES TO ZERO. Every other quantity on this line has a
-       second writer that resets it (flow_credit_emit), which is exactly why `picks` exists and exactly why its
-       only zero has to be here: a member arrives never-chosen, and from then on the number only rises. */
+    /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
+       rises. */
     f->picks = 0;
-    /* …AND ITS PLACE IN THE FORK TREE, minted HERE because this is the one point every flow passes through, so
-       no flow can exist without a node for its arms to be charged to. A from-baseline flow's node is a ROOT
-       (`up` NULL); flow_fork_inherit is the only thing that ever attaches one under another. */
+    /* And its place in the fork tree, minted here so no flow exists without a node its arms can be charged to. A
+       from-baseline flow's node is a root (`up` NULL); flow_fork_inherit alone attaches one under another. */
     f->acct = reclaim_calloc(1, sizeof *f->acct);
     CHECK(f->acct, "flow_add: OOM allocating a flow's fork-tree node — a flow whose arms cannot be charged back "
                    "lets a fork chain burn the thread forever without its rank ever moving");
     f->acct->owner = f; f->acct->refcount = 1;
-    /* …AND IT OPENS A BRANCH BUCKET OF ITS OWN, WHICH IS TRUE AT THIS INSTANT AND NOT A PLACEHOLDER. A flow
-       with no parent yet IS a top-level arm; flow_fork_inherit is the only thing that ever moves it into
-       another's, and it does so as a departure from this bucket and an arrival in that one so neither counter
-       ever falls. Depth zero for the same reason — this node is a root until something says otherwise, which
-       is the identical sentence `family` one line down already makes about the account. */
+    /* And it opens a branch bucket of its own, true at this instant: a flow with no parent is a top-level arm.
+       flow_fork_inherit alone moves it into another's, as a departure from this bucket and an arrival in that one,
+       so neither counter falls. Depth zero likewise. */
     f->acct->branch = f->acct; f->acct->sub_born = 1;
-    /* …AND THE BUCKET'S OWN CONTRIBUTION TO ITS MEMBERS' WEIGHT, DERIVED FROM THE FIELD ON THE LINE ABOVE
-       RATHER THAN WRITTEN AS THE LITERAL IT EVALUATES TO. `1.0` is what this is, and spelling it that way
-       would make acct_branch_offset's guard a comparison against a constant somebody typed. Derived, that
-       guard compares two evaluations of ONE expression on ONE operand, which is the only form in which an
-       equality of doubles is exact rather than a tolerance. */
+    /* And the bucket's contribution to its members' weight, derived from the field above rather than written as the
+       literal `1.0`, so acct_branch_offset's guard compares two evaluations of one expression on one operand, the
+       one form in which an equality of doubles is exact. */
     f->acct->sub_offset = 1.0 / (double)f->acct->sub_born;
     f->acct->depth = 0;
-    /* …AND IT IS ITS OWN FAMILY UNTIL SOMETHING SAYS OTHERWISE. A from-baseline flow founds a family and keeps
-       this; a FORK joins its parent's (flow_fork_inherit) and this root becomes a plain ancestry node. Pointed
-       here rather than left NULL so no flow can exist without an account for the aging term OR THE REWARD to
-       read, which is the same reason the node above is minted here. The node arrives zeroed from
-       `reclaim_calloc`, so a fresh family stands at reward 0 and silence 0 — which is what the fork's and the
-       arrival's preconditions both check for, and which is why neither of them has to assign a fresh one. */
+    /* And it is its own family until something says otherwise: a from-baseline flow founds a family and keeps this;
+       a fork joins its parent's (flow_fork_inherit) and this root becomes a plain ancestry node. Pointed here so no
+       flow exists without an account for the aging term and the reward to read. The node arrives zeroed from
+       `reclaim_calloc`, so a fresh family stands at reward 0 and silence 0, which the fork's and the arrival's
+       preconditions check. */
     f->family = f->acct;
     g_acct_live++;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
-    /* NOTHING INTERPOSED YET — flow.h states why the pair is what says so and why -1 is a cursor no program
-       can be standing at rather than a sentinel this initialisation invents. */
+    /* Nothing interposed yet; flow.h says why the pair is what says so and why -1 is a cursor no program can stand
+       at. */
     f->imm_at = -1; f->imm_next = 0;
     f->world = w;
-    /* THE SLOT AND THE MEMBER ARE WRITTEN AS ONE STATEMENT, because they are one fact (flow.h's `reg_i`) and
-       because this is the only line the frontier ever gains a member on. Establishing the handle anywhere but
-       adjacent to the store would be a second writer for a relation whose whole value is that it has one.
-       IT IS ASSIGNED HERE AND NOT AT THE calloc ABOVE, and the difference is not cosmetic: `reclaim_calloc`
-       can PAGE A FLOW OUT (the capacity comment above says so), and the pager departs through flow_remove's
-       swap-remove — so `g_flows_n` may have FALLEN between the capacity check and this line. It can never
-       have risen, because this line is the only thing that raises it. Reading it here is therefore reading it
-       at the instant the store happens, which is the only instant at which it names this flow's slot. */
+    /* The slot and the member are written as one statement, because they are one fact (flow.h's `reg_i`) and this
+       is the one line the frontier gains a member on. Assigned here and not at the calloc: `reclaim_calloc` can
+       page a flow out, and the pager departs through flow_remove's swap-remove, so `g_flows_n` may have fallen
+       since the capacity check (it cannot have risen; only this line raises it). Read here, it names this flow's
+       slot. */
     f->reg_i = g_flows_n;
     g_flows[g_flows_n++] = f;
-    /* …AND THE ARRIVAL COUNTED AS AN ARRIVAL. This line is the only place the frontier ever GAINS a member,
-       which is what lets `g_arrivals` be a definition rather than an estimate; the rank change below is
-       raised here too and by eight other sites, so it cannot answer this and must not be read as though it
-       could. See the banner at `g_arrivals`. */
+    /* And the arrival counted as an arrival: this is the one place the frontier gains a member, so `g_arrivals` is
+       a definition. The rank change below is also raised by other sites, so it cannot answer this. See the banner
+       at `g_arrivals`. */
     g_arrivals++;
     frontier_rank_changed();   /* frontier changed: the newcomer may outrank the flow holding the thread */
     return f;
