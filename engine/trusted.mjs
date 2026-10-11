@@ -481,7 +481,7 @@ async function main() {
   if (!seeded)
     throw new Error(`the chokepoint refused the seed: ${seed.statusText} — the document a session is rooted ` +
                     'at is the whole of this process\'s input, and there is no tree to build from nothing. ' +
-                    'The refusal names its own ground (`blocked-scheme:`, `blocked-private-from-public`, ' +
+                    'The refusal names its own ground (`blocked-scheme:`, `blocked-local-network:`, ' +
                     '`blocked-corb:<rule>:<type>`), which is the answer rather than a symptom of one');
 
   /* HTML §7.4.5 "Populating a session history entry" determines the loaded Document's ORIGIN over the

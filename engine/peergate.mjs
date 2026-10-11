@@ -97,10 +97,10 @@ const EXT_DIR = join(ENGINE, '..', 'extension');
 /* TWO AUTHORITIES, ONE PORT, AND THE PAIR IS A CHOICE WITH A REASON RATHER THAN A CONVENIENCE. HTML's origin
    is the (scheme, host, port) tuple, and `127.0.0.1` and `localhost` are two different HOSTS — an IPv4 address
    and a domain — so one listening socket serves two ORIGINS with no second port, no TLS and no /etc/hosts
-   edit. They also both classify PRIVATE under `safe-fetch.js` (`_isPrivateHost` answers true for the literal
-   "localhost" and for the IPv4 loopback block), which is what makes the pair reachable at all: that file
-   blocks a private target only when the PAGE principal is not itself private, so private->private is allowed
-   by its own rule. That is asserted below against the real file rather than asserted here in prose. */
+   edit. They are both `loopback` under `safe-fetch.js` (`_ipAddressSpace` answers it for the name "localhost"
+   and for the IPv4 loopback block), which is what makes the pair reachable at all: that file refuses a target
+   only when it is less public than the PAGE principal, so loopback->loopback is allowed by its own rule. That
+   is asserted below against the real file rather than asserted here in prose. */
 const SEED_HOST = '127.0.0.1';
 const PEER_HOST = 'localhost';
 
@@ -514,7 +514,7 @@ async function main() {
   else if (probe.status === 0)
     record('pna', 'wrong', `the chokepoint refused it: ${probe.statusText}`);
   else
-    record('pna', 'pass', `status ${probe.status} — private->private is allowed by that file's own rule`);
+    record('pna', 'pass', `status ${probe.status} — loopback->loopback is allowed by that file's own rule`);
   const probeCount = wire.length;
 
   /* ── THE RUN ───────────────────────────────────────────────────────────────────────────────────────────── */

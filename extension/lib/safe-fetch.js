@@ -36,8 +36,8 @@ function _NO_BYTES() { return new Uint8Array(0); }
    about the origin, so the grade answers one question: would a real browser performing this request also
    produce a network error?
      "network" — yes, and the network error is the faithful answer: Fetch §4.3 "Scheme fetch" ends "Return a
-                 network error", a failed §4.10 "CORS check" makes §4.4 "HTTP fetch" return one, and PNA and
-                 CORB refuse their cases. The flow resumes down its failure path correctly.
+                 network error", a failed §4.10 "CORS check" makes §4.4 "HTTP fetch" return one, and Local
+                 Network Access and CORB refuse their cases. The flow resumes down its failure path correctly.
      "decline" — only this tool refuses, because spending an act on a request no client makes is a policy
                  question. There is no observation to hand back, so the flow parks, which is a search not yet
                  solved and never a verdict, and fires the day the origin is widened.
@@ -1267,24 +1267,53 @@ function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   return null;
 }
 
-// Private, loopback and link-local classification for the origin-relative SSRF rule: RFC 1918, 127/8,
-// 169.254/16, `0.0.0.0`, `::`, `::1`, IPv6 unique-local (fc00::/7) and `fe80:` link-local, `localhost`,
-// `.local` and `.localhost`. A request is refused only when the target is private and the page principal is
-// not; private to private and anything to public are allowed, as on the web.
-//
-// Every host here comes from the WHATWG URL parser, so it is canonical: IPv4 is dotted-quad (the parser folds
-// decimal, octal and hex spellings, so `http://2130706433/` is `127.0.0.1`), and IPv6 is the serializer's
-// shortest lowercase hex with no dotted tail (`[::ffff:127.0.0.1]` arrives as `[::ffff:7f00:1]`). RFC 4291
-// §2.5.5.2's IPv4-mapped and §2.5.5.1's IPv4-compatible forms denote an IPv4 address, so `_v4OfIPv6`
-// converts them and the IPv4 rules classify them once.
-function _v4OfIPv6(h) {
-  var m = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
-  if (!m) return null;
-  var hi = parseInt(m[1], 16), lo = parseInt(m[2], 16);
-  return ((hi >> 8) & 255) + "." + (hi & 255) + "." + ((lo >> 8) & 255) + "." + (lo & 255);
+/* The IP address space of a host, for the origin-relative SSRF rule: Local Network Access §2.1 "IP Address
+   Space"'s three spaces, `loopback` less public than `local` less public than `public`, and its "Non-public IP
+   address blocks" table, row for row:
+     127.0.0.0/8 loopback · 10.0.0.0/8 local · 100.64.0.0/10 local · 172.16.0.0/12 local · 192.168.0.0/16 local ·
+     198.18.0.0/15 loopback · 169.254.0.0/16 local · 0.0.0.0/32 loopback · 0.0.0.0/8 local · ::1/128 loopback ·
+     fc00::/7 local · fe80::/10 local · fec0::/10 local · ::/128 loopback · 2001:db8::/32 local ·
+     3fff::/20 local · ::ffff:0:0/96 "see mapped IPv4 address".
+   Every other address is `public`. Two names are classified by the standards that define them rather than by
+   resolution: `localhost` and `*.localhost` are loopback (RFC 6761 §6.3 "Domain Name Reservation Considerations
+   for "localhost."": they "will always resolve to the respective IP loopback address"), and `*.local` is local
+   (Local Network Access §2.5 "Mixed Content" names a `.local` domain as a request known to be a local network
+   request). Any other name is `public` here; what it resolves to is not visible to this zone, which is the
+   private-network-by-name residual in SECURITY.md.
+   Every host comes from the WHATWG URL parser, so it is canonical: IPv4 is dotted-quad (the parser folds
+   decimal, octal and hex spellings, so `http://2130706433/` is `127.0.0.1`), and IPv6 is the serializer's
+   lowercase hex pieces with at most one `::` and no dotted tail. */
+function _v4Octets(host) {
+  var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  return m ? [+m[1], +m[2], +m[3], +m[4]] : null;
 }
-function _isPrivateHost(host) {
-  if (!host) return false;
+function _v6Pieces(host) {
+  if (host.indexOf(":") < 0) return null;
+  var halves = host.split("::");
+  DCHECK(halves.length <= 2, "an IPv6 host carries two `::` — the WHATWG IPv6 serializer compresses one run");
+  var head = halves[0] === "" ? [] : halves[0].split(":");
+  var tail = halves.length === 2 ? (halves[1] === "" ? [] : halves[1].split(":")) : [];
+  var fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  var parts = head.concat(new Array(fill).fill("0"), tail);
+  DCHECK(parts.length === 8 && parts.every(function (p) { return /^[0-9a-f]{1,4}$/.test(p); }),
+         "an IPv6 host is not eight hex pieces once expanded (" + host + ") — the URL parser serializes every " +
+         "IPv6 address as hex pieces, so this host did not come from URL.hostname");
+  return parts.map(function (p) { return parseInt(p, 16); });
+}
+function _v4Space(o) {
+  if (o[0] === 127) return "loopback";
+  if (o[0] === 10) return "local";
+  if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return "local";
+  if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return "local";
+  if (o[0] === 192 && o[1] === 168) return "local";
+  if (o[0] === 198 && (o[1] === 18 || o[1] === 19)) return "loopback";
+  if (o[0] === 169 && o[1] === 254) return "local";
+  if (o[0] === 0 && o[1] === 0 && o[2] === 0 && o[3] === 0) return "loopback";
+  if (o[0] === 0) return "local";
+  return "public";
+}
+function _ipAddressSpace(host) {
+  if (!host) return "public";
   host = String(host).toLowerCase().replace(/^\[|\]$/g, "");
   /* The canonical form is the contract: a literal with both a colon and a dot is the dotted IPv4-in-IPv6
      text no URL parser emits, so its caller passed a raw string instead of `URL.hostname`. */
@@ -1292,14 +1321,28 @@ function _isPrivateHost(host) {
          "a host reached the SSRF classifier as an IPv4-in-IPv6 literal with a dotted tail (" + host + ") — " +
          "the WHATWG IPv6 serializer emits hex pieces only, so this host did not come from URL.hostname and " +
          "is about to be classified by rules written for the form that one produces");
-  var v4 = _v4OfIPv6(host);
-  if (v4) host = v4;
-  return host === "localhost" || host === "0.0.0.0" || host === "::" || host === "::1" ||
-    host.endsWith(".local") || host.endsWith(".localhost") ||
-    /^127\./.test(host) || /^169\.254\./.test(host) || /^10\./.test(host) ||
-    /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^(fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:)/.test(host);
+  if (host === "localhost" || host.endsWith(".localhost")) return "loopback";
+  if (host.endsWith(".local")) return "local";
+  var o = _v4Octets(host);
+  if (o) return _v4Space(o);
+  var p = _v6Pieces(host);
+  if (!p) return "public";
+  var zero5 = p[0] === 0 && p[1] === 0 && p[2] === 0 && p[3] === 0 && p[4] === 0;
+  if (zero5 && p[5] === 0xffff)
+    return _v4Space([p[6] >> 8, p[6] & 255, p[7] >> 8, p[7] & 255]);
+  if (zero5 && p[5] === 0 && p[6] === 0 && (p[7] === 0 || p[7] === 1)) return "loopback";
+  if ((p[0] & 0xfe00) === 0xfc00) return "local";
+  if ((p[0] & 0xffc0) === 0xfe80) return "local";
+  if ((p[0] & 0xffc0) === 0xfec0) return "local";
+  if (p[0] === 0x2001 && p[1] === 0x0db8) return "local";
+  if (p[0] === 0x3fff && (p[1] & 0xf000) === 0) return "local";
+  return "public";
 }
+/* Local Network Access §2.1's "less public than": loopback is less public than local and public, and local is
+   less public than public. A request is refused when its target is less public than the page principal, which
+   is §2.2 "Local Network Request"'s definition of the request a browser would gate. */
+var _SPACE_RANK = { loopback: 0, local: 1, public: 2 };
+function _lessPublicThan(lhs, rhs) { return _SPACE_RANK[lhs] < _SPACE_RANK[rhs]; }
 /* The destructive-path deny list: the one place this project matches on a name, and it matches only to
    refuse. A wrong deny costs one unfired request that forced execution still derives and reports, while a
    wrong assert would fabricate a finding that propagates, so over-broad is its cheap direction.
@@ -1557,7 +1600,9 @@ async function safeFetch(url, opts) {
      call as `opts.pageUrl` (its `MessageSender.url`, never `sender.tab.url`, so a sub-frame of a tab whose top
      is localhost does not inherit a private classification). It is per call, not a global, because the
      trusted zone interleaves many renderers. A cross-origin script acts with the origin of the page it is
-     loaded into, never its own host. A private target is refused only when the principal is not private.
+     loaded into, never its own host. A target is refused when its IP address space is less public than the
+     principal's (`_ipAddressSpace`, Local Network Access §2.1): a public page reaches neither the person's
+     network nor their machine, and a page on the local network does not reach the machine's loopback.
      `opts.pageUrl` is never on the wire: the trusted zone composes it (in the extension, from
      `_browserFacts`' `url`, minted from `MessageSender` and DCHECKed non-empty there). So an absent or
      unparseable principal is this zone's bug and is DCHECKed; with the DCHECKs compiled out it classifies
@@ -1577,13 +1622,14 @@ async function safeFetch(url, opts) {
          "the page principal handed to the SSRF classifier is not a parseable URL (`" + opts.pageUrl +
          "`) — the browser states this address and this zone only carries it, so a string a URL parser " +
          "refuses is our copy of it corrupted rather than anything the analysed page did");
-  /* `!!_pageUrl &&` is the release arm under the DCHECKs above: an unparseable principal classifies public,
+  /* `_pageUrl ?` is the release arm under the DCHECKs above: an unparseable principal classifies public,
      which is this gate's fail-closed answer. */
-  var _pagePrivate = !!_pageUrl && _isPrivateHost(_pageUrl.hostname);
-  /* Network: host permissions bypass the browser's own answer, and this reinstates it. Private Network
-     Access, and Fetch §4.10 "CORS check" besides, refuse a public page a private host. */
-  if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
-    return _refused("network", "blocked-private-from-public", [parsed.href], {});
+  var _pageSpace = _pageUrl ? _ipAddressSpace(_pageUrl.hostname) : "public";
+  /* Network: host permissions bypass the browser's own answer, and this reinstates it for the addresses this
+     zone can classify. Local Network Access §2.2 "Local Network Request" is the request a browser gates. */
+  var _targetSpace = _ipAddressSpace(parsed.hostname);
+  if (_lessPublicThan(_targetSpace, _pageSpace))
+    return _refused("network", "blocked-local-network:" + _targetSpace + "-from-" + _pageSpace, [parsed.href], {});
   /* The person's stated table is awaited, not assumed (see `_EXPLORED_STATING`); waiting at the chokepoint
      covers every door this zone has. It comes after the gates that refuse a request on facts about itself,
      which owe the policy nothing. Once the table is stated the test is false and costs no microtask, and
@@ -1671,11 +1717,13 @@ async function safeFetch(url, opts) {
   var _resourceSameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(_finalOrigin) &&
                             _finalOrigin === _pageOrigin;
   /* Network: SSRF via redirect. The initial check cannot see a 3xx into the intranet, so the landed host is
-     re-judged before the body is read, and a public page's request that landed on a private host never feeds
-     internal data into the analysis. PNA and CORS both refuse this in a browser. Without a redirect
-     `_finalUrl` is `parsed` and this re-asks the same question. */
-  if (_isPrivateHost(_finalUrl.hostname) && !_pagePrivate)
-    return _refused("network", "blocked-private-redirect", [parsed.href], {});
+     re-judged before the body is read, and a request that landed on a host less public than its page never
+     feeds internal data into the analysis. Local Network Access and CORS both refuse this in a browser. Without
+     a redirect `_finalUrl` is `parsed` and this re-asks the same question. */
+  var _landedSpace = _ipAddressSpace(_finalUrl.hostname);
+  if (_lessPublicThan(_landedSpace, _pageSpace))
+    return _refused("network", "blocked-local-network-redirect:" + _landedSpace + "-from-" + _pageSpace,
+                    [parsed.href], {});
   /* The deny list again, on the landed URL. The redirect has already been followed, so this cannot unsend
      anything; it refuses to ingest. Following a redirect the server chose is the server's behaviour, and the
      act this list guards is initiating the request, which the pre-request check decided. */

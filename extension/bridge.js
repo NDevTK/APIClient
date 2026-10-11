@@ -1732,7 +1732,7 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    and `unavailable` names why in the closed vocabulary the popup renders (status/empty/network). `bytes: null`
    is a load that did not load: the navigable exists and shows an error page. A third outcome, `declined`, is
    below. The chokepoint's refusals arrive as `kind: "network"` with the rule in `statusText`
-   (`blocked-signal:`, `blocked-scheme:`, `blocked-private-from-public`).
+   (`blocked-signal:`, `blocked-scheme:`, `blocked-local-network:`).
    Emptiness is not judged here: an OK zero-length body is an ordinary empty Document; refusing one is a seed's
    rule, stated at the seed. */
 /* `fromReach` is how the document issuing this navigation was itself reached, distinct from `provenance` (the
@@ -1844,7 +1844,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
            "exploitable");
     DCHECK(typeof r.statusText === "string",
            "safeFetch answered a document load with no statusText — every refusal it makes carries its REASON " +
-           "there (`blocked-scheme:`, `blocked-private-from-public`, `blocked-corb:`), which is the whole of " +
+           "there (`blocked-scheme:`, `blocked-local-network:`, `blocked-corb:`), which is the whole of " +
            "what a seeded page that could not be loaded has to tell its reader");
     /* Fetch §2.2.6 Responses' URL list, whose last item is the response's URL. Only this zone saw the redirect
        chain, and the engine determines the Document's origin over this string: a same-origin request that

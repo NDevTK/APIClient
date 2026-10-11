@@ -1380,7 +1380,7 @@ function renderDeepStatus() {
            "that the page could not be analysed without saying why, which is the silence it replaces");
     /* `detail` IS THE CHOKEPOINT'S OWN REFUSAL REASON and it is shown verbatim, not summarised. It is the one
        string that distinguishes a server that would not answer (`Failed to fetch`) from a request this tool
-       REFUSED to make (`blocked-scheme:about:`, `blocked-private-from-public`), and the two need opposite
+       REFUSED to make (`blocked-scheme:about:`, `blocked-local-network:local-from-public`), and the two need opposite
        things from the person reading this row. It was a content script's own exception text before the load
        moved to the chokepoint; it is a named rule now. */
     const reason = ps.kind === "status" ? `the server answered ${ps.status} to it`
