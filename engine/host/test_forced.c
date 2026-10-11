@@ -11687,6 +11687,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&fragbase_tt, &fragbase_why, !!strstr(js, "fbsub") && !strstr(js, "/fbsub/fragbase.js"),
              "the preload was resolved against the base element placed after it — DOM §4.2.3 insert runs the "
              "link's insertion steps before the next node is inserted, so the base was not yet in the tree");
+    /* The same order inside one body call that inserts several nodes: `head.append(link, base)` and a
+       DocumentFragment's two children, each link resolved before the base after it is in the tree. */
+    const char *fragbasem_why = NULL; int fragbasem_tt = 1;
+    fold_row(&fragbasem_tt, &fragbasem_why, !!strstr(js, "fragbase2.js") && !!strstr(js, "fragbase3.js"),
+             "NOT REACHED: there is no request for fragbase2.js or fragbase3.js, so a link's insertion steps "
+             "never ran");
+    fold_row(&fragbasem_tt, &fragbasem_why,
+             !!strstr(js, "/fbsub/fragbase2.js") && !strstr(js, "/fbsub2/fragbase2.js") &&
+             !!strstr(js, "/fbsub2/fragbase3.js") && !strstr(js, "/fbsub3/fragbase3.js"),
+             "a link inserted with a base after it in one append or one DocumentFragment was resolved against "
+             "that base — DOM §4.2.3 insert runs each node's insertion steps before the next node is inserted");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15505,6 +15516,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "frag-ce", fragce_tt, "/api/fragce", SESS_EXPLORE, fragce_why },
         { "frag-script", fragscript_tt, "/api/fragscript", SESS_EXPLORE, fragscript_why },
         { "frag-base", fragbase_tt, "/api/fragbase", SESS_EXPLORE, fragbase_why },
+        { "frag-base-multi", fragbasem_tt, "/api/fragbase", SESS_EXPLORE, fragbasem_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },

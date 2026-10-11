@@ -1997,9 +1997,8 @@ typedef struct {
    enqueued for upgrade twice. Each of those is a real effect on a real document with nothing to say it
    happened twice, which is exactly the shape §7.4's double load had. */
 enum {
-    /* §4.13.3's upgrade, §4.2.6's style-block update and the rest of the per-node insertion steps — and the
-       removing steps' pair of them. None can ask anything, so they all run in one step and the phase is past
-       them before the step that can is reached. */
+    /* Nothing asked yet: an inserted node's other insertion steps ran at the chokepoint, and a removed node's
+       removing steps, which ask nothing, run in one step here. */
     TS_NODE_EFFECTS = 0,
     TS_NODE_AUTOFOCUS         /* HTML §6.6.7's insertion steps, whose step 5 can FORK */
 };
@@ -2242,6 +2241,54 @@ static bool tree_steps_can_run(const lxb_dom_node_t *n)
     return document_realm_of(n) != NULL;
 }
 
+/* DOM §4.2.3 insert step 7.7.1, "Run the insertion steps with inclusiveDescendant", for every insertion step that
+   cannot rest, run HERE because the chokepoint is inside insert's per-node loop: Lexbor is handed one node of
+   `nodes` at a time, so a later node of the same insert is not yet in the tree. §6.6.7's autofocus step can fork
+   and is the walk's (TS_NODE_AUTOFOCUS). Each runs in the node's own document's realm, not the mutating one's.
+   None may change the tree, which would record a tree step of its own, asserted. */
+static void tree_steps_insertion_steps(lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *n;
+
+    for (n = root; n; ) {
+        JSContext *ctx = document_realm_of(n);
+        int recorded = g_ts_n;
+
+        DCHECK(ctx != NULL, "insert's insertion steps reached a node in a document with no realm — "
+                            "tree_steps_can_run asked this of the root it was handed");
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            lxb_dom_element_t *el = lxb_dom_interface_element(n);
+            JSValue w;
+
+            /* HTML §4.2.5.3 "Pragma directives"' Content security policy state, first because it grows the CSP
+               list the link fetch below is judged under; "at the time of inserting the meta element to the
+               document" is its own moment. */
+            document_meta_csp_inserted(el);
+            /* HTML §4.2.5.1's meta `referrer`: "if any meta element element is inserted into the document". */
+            document_meta_referrer_changed(el);
+            /* HTML §4.8.2 "The source element"'s insertion steps: a media parent with no src starts resource
+               selection. */
+            media_element_source_inserted(ctx, el);
+            /* HTML §4.8.3 "The img element"'s insertion steps: a relevant mutation (§4.8.4.3.2). */
+            html_image_inserted(ctx, el);
+            /* HTML §4.6.8.20's "becomes browsing-context connected" fetch, whose link options read the
+               document's base URL now, before a later node of this insert (a base) is in the tree. */
+            html_link_inserted(ctx, el);
+            /* HTML §4.2.6's update a style block, "it becomes connected": DOM §4.2.3's own worked example applies
+               the style rules here, before a script earlier in the fragment runs in the post-connection steps. */
+            html_style_element_update(el);
+            /* HTML §4.11.4's dialog insertion steps: a dialog that arrives open runs the dialog setup steps. */
+            w = node_wrap(ctx, n);
+            html_dialog_insertion_steps(ctx, w);
+            JS_FreeValue(ctx, w);
+        }
+        DCHECK(g_ts_n == recorded,
+               "an insertion step mutated the node tree — §4.2.3 says they \"must not modify the node tree that "
+               "insertedNode participates in\"");
+        n = shadow_root_next_in_shadow_including(ctx, n, root);
+    }
+}
+
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)
 {
     int inserted = phase == NODE_TREE_INSERTED;
@@ -2251,6 +2298,7 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
     if (phase == NODE_TREE_REMOVED) return;
     if (!root || !node_is_connected(root)) return;
     if (!tree_steps_can_run(root)) return;
+    if (inserted) tree_steps_insertion_steps(root);
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
         TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
@@ -2552,11 +2600,7 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
    phase is over too. `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm
    is delivered back to the same call site inside the same node's phase. */
 /* `open`: the member is still inside its insert's per-node loop (idl_args.c's held batch), so the walk runs the
-   insertion steps of the entries recorded so far and answers 0 at their end without beginning insert step 12.
-   NAMED RESIDUAL: a member that inserts several nodes in ONE body call (`append(a, b)`, `replaceChildren`) runs
-   every node's insertion steps after its last node is in the tree, where insert runs each inside the per-node
-   loop. The next diff runs the insertion steps that cannot rest at the chokepoint, leaving only §6.6.7's forking
-   step to this walk. Its absence shows as `head.append(link, base)` resolving the link against that base. */
+   insertion steps of the entries recorded so far and answers 0 at their end without beginning insert step 12. */
 static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue in, JSValue **out_cb,
                            int *out_argc, bool open)
 {
@@ -2632,110 +2676,9 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
-            if (b->nphase == TS_NODE_EFFECTS) {
-                /* THE ENQUEUE ORDER THIS BLOCK MUST NOT DISTURB — see the note where insert step 7.7.3 used to
-                   sit, below. The chokepoint has ALREADY enqueued this batch's connectedCallback, upgrade and
-                   disconnectedCallback reactions, so an insertion or removing step that enqueues one HERE lands
-                   behind them, and §4.13.6's queue is FIFO. Nothing in this block does today; the count says so
-                   rather than a paragraph claiming it. It is a plain global read and not a per-flow one because
-                   this block CANNOT PARK — its own enum says "None can ask anything, so they all run in one
-                   step and the phase is past them before the step that can is reached" — so no sibling flow can
-                   enqueue between the two reads. §6.6.7's autofocus, the one step that CAN fork, is therefore
-                   outside the bracket: a fork's two arms share one global counter and it could not see them. */
-                uint64_t ce_mark = custom_elements_reactions_enqueued();
-                /* HTML §4.2.5.3 "Pragma directives"' CONTENT SECURITY POLICY STATE. Its five steps are written
-                   over a `<meta>` that is IN a Document, and HTML says which moment that is in its own words
-                   beside them: "At the time of inserting the meta element to the document, it is possible that
-                   some resources have already been fetched. For example, images might be stored in the list of
-                   available images prior to dynamically inserting a meta element with an http-equiv attribute
-                   in the Content security policy state." So a policy a SCRIPT installs is enforced exactly like
-                   one the parser found, and this seam is where the scripted one arrives. Without it the batch
-                   walk over the parsed tree (core/dom/document.c's document_policy_new) was the only delivery
-                   there was, and it necessarily ran BEFORE the script did — so the Document was judged under a
-                   more permissive CSP list than the real page has, which for this engine is a breakout the real
-                   policy kills reported as a working exploit.
-                   IT IS FIRST IN THIS BLOCK because it is the one entry that changes the POLICY every other
-                   one is judged under: `<link>`'s fetch below goes through CSP §4.1.2, and a list this same
-                   batch is still growing must be grown before it is asked. It is here rather than on node.c's
-                   tree-hook list for the reason its neighbours are: an HTML ELEMENT INSERTION STEPS entry needs
-                   this seam's position, and it reads the inserted node's OWN document rather than the mutating
-                   realm's active one. */
-                document_meta_csp_inserted(el);
-                /* HTML §4.2.5.1's meta `referrer`, which runs "if any meta element element is inserted into the
-                   document", here for the CSP pragma's reason above. */
-                document_meta_referrer_changed(el);
-                /* HTML §4.8.2 "The source element": "The source HTML element INSERTION steps, given
-                   insertedNode, are: Let parent be insertedNode's parent. If parent is a media element that
-                   has no src attribute…" — which is how a `<video>` with no `src` and only `<source>` children
-                   ever loads anything. It is here rather than on node.c's tree-hook list because that list is
-                   the DOM's own step families and this is an HTML ELEMENT INSERTION STEPS entry, which needs
-                   this seam's realm (the inserted node's document, not the mutating one) and its position
-                   (DOM §4.2.3 insert step 7.7, before step 8's mutation record). */
-                media_element_source_inserted(ctx, el);
-                /* HTML §4.8.4.3.2: "The img or source HTML element insertion steps … count the mutation as a
-                   relevant mutation" — so an `img` created with `createElement`, given a `src` and then
-                   INSERTED updates its image data at the insertion, exactly as one whose `src` was written
-                   after insertion does. HTML §4.8.3 "The img element" is where the steps themselves are
-                   written ("The img HTML element insertion steps, given insertedNode, are…"). It is here
-                   rather than on node.c's tree-hook list for the reason the one above it is: an HTML ELEMENT
-                   INSERTION STEPS entry needs this seam's realm (the inserted node's document, not the
-                   mutating one) and its position. */
-                html_image_inserted(ctx, el);
-                /* HTML §4.6.8.20: "The appropriate times to fetch and process the linked resource … When the
-                   external resource link's link element becomes browsing-context connected." This is the seam
-                   the whole lazy-chunk idiom runs through — a `<link rel=preload as=script>` is configured with
-                   `createElement` and only becomes a request when it is INSERTED, and the `load` its response
-                   fires is what creates the `<script src>` that insert step 12 then prepares. It is here rather
-                   than on node.c's tree-hook list for the reason the two above it are: an HTML ELEMENT
-                   INSERTION STEPS entry needs this seam's realm (the inserted node's document, not the mutating
-                   one) and its position. */
-                html_link_inserted(ctx, el);
-                /* HTML §4.2.6's SECOND TRIGGER — "the element is not on the stack of open elements ... and it
-                   becomes connected". `<style>` is the element whose insertion CREATES a CSS style sheet, and
-                   the algorithm decides for itself whether this element is one. IT IS AN INSERTION STEP AND
-                   THE DOM'S OWN WORKED EXAMPLE TURNS ON THAT: §4.2.3 walks through a fragment holding a
-                   <script> and a <style>, and "The HTML Standard's insertion steps run for the style element;
-                   they immediately apply its style rules to the document", after which "The HTML Standard's
-                   post-connection steps run for the script element; they run the script, which immediately
-                   observes the style rules that were applied in the above step." The script is FIRST in that
-                   fragment, so the phase split is the only thing that gives the example its answer. */
-                html_style_element_update(el);
-                /* HTML §4.11.4's DIALOG HTML ELEMENT INSERTION STEPS, 2 steps: a `<dialog>` that arrives
-                   ALREADY OPEN runs the dialog setup steps, which establish its §6.10.2 close watcher. The
-                   attribute change steps above cannot cover this edge and the standard's own note beside their
-                   step 5 says why — the parser sets `open` before the element is inserted, so those steps see
-                   a disconnected node — which makes this the entry that gives a parsed `<dialog open>` a
-                   watcher, and therefore the entry that lets §4.11.4's request to close the dialog ASSERT at
-                   its step 3 rather than test. */
-                {
-                    JSValue w = node_wrap(ctx, n);
-                    html_dialog_insertion_steps(ctx, w);
-                    JS_FreeValue(ctx, w);
-                }
-                /* THE CUSTOM-ELEMENT ENQUEUE IS NOT HERE, AND ITS ABSENCE IS THE MECHANISM. Insert step 7.7.3
-                   is a SIBLING of step 7.7.1's insertion steps inside one loop, not a part of them, and
-                   `remove` separates the two further still — its step 11 runs the removing steps and its step
-                   13 enqueues disconnectedCallback, two top-level steps apart. Only the insertion and removing
-                   steps are deferred to this drain, because only they park; the enqueue allocates a reaction
-                   and pushes it, so it runs where the standard puts it, at the DOM mutation chokepoint
-                   (core/dom/node.c's node_custom_element_reactions_tree_steps). While it was deferred here and §4.5 adopt step
-                   3.3.3's `adoptedCallback` was not, every cross-document move enqueued « adopted,
-                   disconnected, connected » for an order the standard writes « disconnected, adopted,
-                   connected ». */
-                DCHECK(custom_elements_reactions_enqueued() == ce_mark,
-                       "an INSERTION STEP enqueued a custom element callback reaction, and this drain runs "
-                       "after core/dom/node.c's node_custom_element_reactions_tree_steps has already enqueued insert step "
-                       "7.7.3's — so §4.13.6's FIFO queue now delivers this node's connectedCallback BEFORE "
-                       "the reaction its own insertion steps produced, which §4.2.3 step 7.7 orders the other "
-                       "way round. Move that step's enqueue to the chokepoint beside 7.7.3, or build the "
-                       "per-node interleaving of 7.7.1 and 7.7.3 that having both in one place would give");
-                /* THE PHASE MOVES BEFORE THE STEP THAT CAN ASK, and that placement is the whole mechanism:
-                   everything above is DONE for this node, and a re-entry that ran it again would start one
-                   `<video>`'s resource selection twice, request one `<link>`'s resource twice and enqueue one
-                   custom element's upgrade twice — real effects on a real document with nothing to say they
-                   happened twice. */
-                b->nphase = TS_NODE_AUTOFOCUS;
-            }
+            /* The node's other insertion steps ran at the chokepoint (tree_steps_insertion_steps); only §6.6.7's,
+               which can fork, is left to this walk. */
+            if (b->nphase == TS_NODE_EFFECTS) b->nphase = TS_NODE_AUTOFOCUS;
             DCHECK(b->nphase == TS_NODE_AUTOFOCUS,
                    "§4.2.3's insertion steps resumed in a phase this walk never parks in — the only rest point "
                    "inside a node is §6.6.7's step 5, and a resume anywhere else means a phase was set by "
@@ -2767,7 +2710,10 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
                        "asked the first half of");
             }
         } else {
-            uint64_t ce_mark = custom_elements_reactions_enqueued();   /* see the insert side's bracket */
+            /* The chokepoint already enqueued `remove` steps 13/14.2's disconnectedCallback, so a removing step
+               that enqueued a reaction here would land behind it in §4.13.6's FIFO queue. This block cannot
+               park, so a plain global count brackets it. */
+            uint64_t ce_mark = custom_elements_reactions_enqueued();
 
             DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
                    "§4.2.3's REMOVING steps resumed mid-node — nothing in them asks anything, so there is no "
