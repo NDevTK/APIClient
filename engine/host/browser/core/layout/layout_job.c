@@ -27,15 +27,21 @@ typedef struct {
 } LjEntry;
 
 /* One memo slot, live when `gen` equals its job's. `rest` is the job's rest count when the answer was
-   recorded, which is how a hit after a later rest is told apart. */
+   recorded, which is how a hit after a later rest is told apart. The answer is held out of line, in the job's
+   answer chunks: it carries concolic lengths with their facts inline, so a slot holding it would make every
+   probe and every growth of the table move kilobytes per question. */
 typedef struct {
     const lxb_dom_element_t *el;
     LayoutQuestionKind       kind;
     unsigned                 code;
     uint64_t                 gen;
     uint64_t                 rest;
-    LayoutBfAnswer           a;
+    LayoutBfAnswer          *a;
 } LjSlot;
+
+/* Answers per chunk of the job's answer storage. Chunks never move, so a slot's pointer survives the table's
+   growth; they are reused from the start when the memo is emptied. */
+#define LJ_ANSWER_CHUNK ((size_t)64)
 
 struct LayoutJob {
     LjEntry  *stack;
@@ -47,6 +53,8 @@ struct LayoutJob {
     size_t    scan;      /* elements a resting drive's float search may still examine in this activation */
     bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
+    LayoutBfAnswer **answers;   /* chunks of LJ_ANSWER_CHUNK answers, owned */
+    size_t    answer_chunks, answer_cap, answer_used;
     size_t    memo_cap;  /* a power of two, or zero before the first answer */
     size_t    memo_used;
     uint64_t  gen;       /* starts at 1, so a zeroed slot is never live */
@@ -117,9 +125,41 @@ static void lj_memo_shed(LayoutJob *job)
 {
     job->gen++;
     job->memo_used = 0;
+    job->answer_used = 0;
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
     line_box_record_release(&job->line_boxes);
+}
+
+/* The storage for the next memoized answer, from the job's chunks; it lives until the memo is emptied. */
+static LayoutBfAnswer *lj_answer_alloc(LayoutJob *job)
+{
+    size_t c = job->answer_used / LJ_ANSWER_CHUNK;
+
+    if (c == job->answer_chunks) {
+        if (job->answer_chunks == job->answer_cap) {
+            size_t cap = job->answer_cap != 0 ? job->answer_cap * 2 : 16;
+            LayoutBfAnswer **v = realloc(job->answers, cap * sizeof *v);
+
+            CHECK(v != NULL, "a layout job's answer storage could not grow");
+            job->answers = v;
+            job->answer_cap = cap;
+        }
+        job->answers[c] = malloc(LJ_ANSWER_CHUNK * sizeof **job->answers);
+        CHECK(job->answers[c] != NULL, "a layout job's answer storage could not grow");
+        job->answer_chunks++;
+    }
+    return &job->answers[c][job->answer_used++ % LJ_ANSWER_CHUNK];
+}
+
+static void lj_answers_free(LayoutJob *job)
+{
+    size_t i;
+
+    for (i = 0; i < job->answer_chunks; i++) free(job->answers[i]);
+    free(job->answers);
+    job->answers = NULL;
+    job->answer_chunks = job->answer_cap = job->answer_used = 0;
 }
 
 /* ---- the stack ------------------------------------------------------------------------------------------ */
@@ -183,6 +223,7 @@ void layout_job_free(LayoutJob *job)
     line_box_record_release(&job->line_boxes);
     free(job->stack);
     free(job->memo);
+    lj_answers_free(job);
     free(job);
 }
 
@@ -396,7 +437,7 @@ LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
         if (s->gen == job->gen) {
             METRIC_ADD(bf_served, 1);
             if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
-            *out = s->a;
+            *out = *s->a;
             return LAYOUT_ASK_ANSWERED;
         }
     }
@@ -436,7 +477,8 @@ void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer)
     s->code = e->q.code;
     s->gen = job->gen;
     s->rest = job->rests;
-    s->a = *answer;
+    s->a = lj_answer_alloc(job);
+    *s->a = *answer;
     job->memo_used++;
     job->n--;
     job->nest--;

@@ -33,9 +33,9 @@
 
 /* The record's storage, owned by a layout job. `tab` is a power-of-two table, NULL with `cap` 0 before the
    first entry; `release` frees it and leaves the record empty. */
-struct FpEntry;
+struct FpSlot;
 typedef struct {
-    struct FpEntry *tab;
+    struct FpSlot  *tab;
     size_t          cap, used;
 } FlowPlacementRecord;
 void flow_placement_record_release(FlowPlacementRecord *r);
