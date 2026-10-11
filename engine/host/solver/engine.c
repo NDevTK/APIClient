@@ -3612,6 +3612,15 @@ const char *engine_pending_fetches(void) {
                         FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
                                                                     cred_of_token(c, cl));
                         int mo_driven = driven_v && driven_is_yes(join + v_at, v_len);
+                        /* The egress policy judges the line as one request, so its (provenance, witness, drive)
+                           vector must be one some member holds: a vector composed across members is an act no
+                           member would have been permitted. */
+                        DCHECK((mo_prov == cur_prov && mo_pinned == cur_pinned &&
+                                mo_driven == driven_is_yes(join + v_at, v_len)) ||
+                               (mo_prov == prov_v && mo_pinned == pinned_v && mo_driven == driven_v),
+                               "a folded request line states a (provenance, witness, drive) vector neither the line "
+                               "nor the member it folds holds — the zone judges the line as one request, so the "
+                               "fold would fire an act no member was permitted as the page's own");
                         if (new_asker) {
                             join_set_field(&join, &n_out, &cap, a_end, 0, asker);
                             join_set_field(&join, &n_out, &cap, a_end, 0, ",");
