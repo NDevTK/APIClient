@@ -123,6 +123,9 @@ static int64_t g_departures = 0;
    `g_departures` is raised on the line that removes. */
 static int64_t g_departures_teardown = 0;
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
+/* How many times the thread changed hands (flow_set_running), for the life of the process: never reset, so two
+   readings that agree name one tenure of one flow and not two tenures of it with another flow's between. */
+static uint64_t g_running_switches = 0;
 
 /* The fork tree, which the aging term is about, and the one thing in this file that is not a property of a single
  * flow. The term demotes "a monopolizer that burns CPU without emitting", and a fork chain is one monopolizer
@@ -627,6 +630,8 @@ void flow_registry_init(const char *doc_name) {
 
 unsigned flow_frontier_gen(void) { return g_gen; }
 
+uint64_t flow_running_switches(void) { return g_running_switches; }
+
 /* How many times the order changed, for the life of this instance: the denominator the preempt hook's rescan
    count has and `scanNextRuns` is not. See solver/flow.h. */
 long flow_rank_changes(void) { return g_rank_changes; }
@@ -758,6 +763,7 @@ void  flow_set_running(Flow *f) {
                "account's reward is that clock, so the stamp must leave the weight the pick compared unchanged");
     }
     g_running = f;
+    g_running_switches++;
     /* The clock is not moved here. Serving the clock at a dispatch sets it to the winner's own queue coordinate,
        so an unplaced never-run account R stands at `g_vt + 1.0 + distance(R)` while the flow just dispatched stands
        at `g_vt + 1/(1+visits) + distance`: R outranks it strictly once it has completed one unit, with no term of

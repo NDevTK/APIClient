@@ -242,8 +242,9 @@ long engine_work_done(void);
 uint64_t engine_preempt_asks(void);
 
 /* Which key of the preempt hook's rival cache had moved when it missed; a partition of `scanRivalRuns`. The
-   cache is keyed on the frontier generation or the incumbent, and the two misses call for different work: a
-   generation miss is the page branching, an incumbent (`cur`) miss is a rescan over an unmoved generation.
+   cache is keyed on the frontier generation or the incumbent's tenure (flow_running_switches), and the two
+   misses call for different work: a generation miss is the page branching, a `cur` miss a rescan over an
+   unmoved generation.
    A cached top-two fold does not answer a `cur` miss: the carry bit (solver/flow.c's flow_silence_carry)
    reorders members with no generation bump, and flow_pick_skipped drops the excluded member before weighing,
    so the old incumbent re-enters a population the pair never held. A sound fold retains the pair over the
@@ -256,7 +257,7 @@ uint64_t engine_preempt_asks(void);
    partition; no policy reads them. */
 typedef struct {
     uint64_t gen;    /* the frontier generation had moved and the incumbent had not */
-    uint64_t cur;    /* the incumbent had changed and the generation had not */
+    uint64_t cur;    /* the incumbent's tenure had changed and the generation had not */
     uint64_t both;   /* both had moved in one interval — neither invalidator alone explains this walk */
 } EngineRivalMiss;
 EngineRivalMiss engine_rival_miss(void);

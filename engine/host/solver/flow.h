@@ -1499,6 +1499,11 @@ void  flow_paint_every_world(void);
    it. */
 unsigned flow_frontier_gen(void);
 
+/* How many times flow_set_running has handed the thread over. "The running flow switches" is a change of this
+   count and not of flow_running()'s identity: a member can hold the thread for a whole step that consults the
+   value yield not once (a refused request's rest) and then hand it back to the flow it took it from. */
+uint64_t flow_running_switches(void);
+
 /* The running flow (scheduler-set). Detectors credit emitted value to it; the scheduler ages it. */
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);

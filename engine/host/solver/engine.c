@@ -7134,6 +7134,9 @@ static int64_t engine_now_ms(void);   /* the wall clock, for the gap census belo
    safe across the key: a flow leaving the frontier changes membership and raises the generation, asserted where
    the pointer is taken. */
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static Flow *g_rival = NULL;
+/* The tenure `g_seen_cur` was read in (flow_running_switches): the cached rival may itself have held the thread,
+   and been charged, between two consultations that both see the same incumbent. */
+static uint64_t g_seen_switch = 0;
 /* Which half of that key moved each time (solver/engine.h explains the reading and why the third row is not a
    rounding row). Raised in the rescan branch after the key compare and before the walk, so they partition
    `scanRivalRuns` by construction. Lifetime counts, raised in every build; only the census reads them. */
@@ -7276,9 +7279,9 @@ static int preempt_hook(int kind) {
        The key is a disjunction whose halves are read apart (solver/engine.h's EngineRivalMiss), captured before
        the assignments below overwrite them. */
     const int rival_gen_moved = (flow_frontier_gen() != g_seen_gen);
-    const int rival_cur_moved = (cur != g_seen_cur);
+    const int rival_cur_moved = (cur != g_seen_cur || flow_running_switches() != g_seen_switch);
     if (rival_gen_moved || rival_cur_moved) {   /* (1) rescan for the rival only on change */
-        g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
+        g_seen_gen = flow_frontier_gen(); g_seen_cur = cur; g_seen_switch = flow_running_switches();
         /* Under the walk's own `cur` test, so these partition `scanRivalRuns`, not consultations: a miss with no
            incumbent calls no flow_rival_of. The identity is asserted at the census (solver/result.c). */
         if (cur) {
