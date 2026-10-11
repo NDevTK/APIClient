@@ -45,6 +45,7 @@ typedef struct FpEntry {
     bool                     has_origin;
     bool                     has_cb_width;
     bool                     has_anon;
+    bool                     anon_served;   /* the anonymous boxes have been served at least once */
 } FpEntry;
 
 
@@ -348,6 +349,20 @@ bool flow_placement_anon_ask(const lxb_dom_element_t *el, const BlockFlowAnonBox
     return true;
 }
 
+bool flow_placement_anon_first_serve(const lxb_dom_element_t *el)
+{
+    size_t i;
+    FlowPlacementRecord *r = layout_job_placement();
+
+    DCHECK(r != NULL && r->cap != 0, "a first serve was asked of a placement record that holds nothing");
+    i = fp_probe(r->tab, r->cap, el);
+    DCHECK(r->tab[i].el == el && r->tab[i].has_anon,
+           "a first serve was asked for a container whose anonymous boxes the record does not hold");
+    if (r->tab[i].anon_served) return false;
+    r->tab[i].anon_served = true;
+    return true;
+}
+
 void flow_placement_anon_record(const lxb_dom_element_t *el, const BlockFlowAnonBox *v, size_t n)
 {
     size_t i;
@@ -377,6 +392,7 @@ void flow_placement_anon_record(const lxb_dom_element_t *el, const BlockFlowAnon
     }
     tab[i].anon_n = n;
     tab[i].has_anon = true;
+    tab[i].anon_served = false;
 }
 
 bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out)

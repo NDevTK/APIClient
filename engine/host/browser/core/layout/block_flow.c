@@ -2831,17 +2831,16 @@ static bool bf_same_px(CssPx a, CssPx b)
     return a.px == b.px || (a.px != a.px && b.px != b.px);
 }
 
-/* A served enumeration re-derived and compared, on every sixteenth serve: a key that omits an operand of the
-   walk answers a second asker with the first asker's boxes. The re-derivation runs in a drive of its own. */
+/* A served enumeration re-derived and compared at its first serve: a key that omits an operand of the walk
+   answers a second asker with the first asker's boxes. The re-derivation runs in a drive of its own. */
 static void bf_anon_recheck(lxb_dom_element_t *el, const BlockFlowAnonBox *held, size_t hn)
 {
-    static unsigned long long serves;
     BlockFlowAnonBox *fresh = NULL;
     LayoutJobDrive d;
     size_t n = 0, i;
     char nbuf[160];
 
-    if (serves++ % 16 != 0) return;
+    if (!flow_placement_anon_first_serve(el)) return;
     layout_job_drive_begin(&d);
     while (!bf_anon_boxes_compute(el, &fresh, &n)) (void)block_flow_drive_deferred(&d);
     layout_job_drive_end(&d);

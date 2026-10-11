@@ -119,6 +119,9 @@ void flow_placement_cb_width_record(const lxb_dom_element_t *el, CssPx width, co
 bool flow_placement_anon_peek(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n);
 bool flow_placement_anon_ask(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n);
 void flow_placement_anon_record(const lxb_dom_element_t *el, const BlockFlowAnonBox *v, size_t n);
+/* True exactly once per recorded container, at its first serve: when the served answer is re-derived and
+   compared. Asserts the record holds `el`'s boxes. */
+bool flow_placement_anon_first_serve(const lxb_dom_element_t *el);
 
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent, so each
    may be differenced across two samples. `asks` counts §9.4.1 stack positions asked, `served` those this
