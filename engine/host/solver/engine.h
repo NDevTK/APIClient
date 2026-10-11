@@ -67,11 +67,12 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
    "prepare the script element" with "Otherwise, immediately execute the script element el, even if other
    scripts are already executing". It takes the slot after the inserting program (DYN_POS_IMMEDIATE) and
    nothing already in the sequence runs in between. It is a separate entry so callers of the tail entry cannot
-   pick it by accident. The type is always classic: every module has gone to one of §4.12.1.1's lists before
-   this step. `el` and `body_n` are as for engine_queue_element_script. The task source is
-   TASK_SOURCE_NOT_A_TASK because no task runs it, and engine_queue_into asserts that a task never takes
+   pick it by accident. `stype` is classic or an inline import map: every module has gone to one of
+   §4.12.1.1's lists before this step. `el` and `body_n` are as for engine_queue_element_script. The task source
+   is TASK_SOURCE_NOT_A_TASK because no task runs it, and engine_queue_into asserts that a task never takes
    DYN_POS_IMMEDIATE. */
-void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el);
+void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
+                                   lxb_dom_element_t *el);
 /* Hold an external `<script src>`'s position in the running flow's sequence. HTML §4.12.1.1 fixes its order
    against its neighbours (a pending parsing-blocking script, §13.2.6.4.8; the list of scripts that execute
    when parsing finishes, run in order by §13.2.7), so the row holds only the URL, the flow waits at it, and

@@ -252,6 +252,10 @@
     /* error, and the work each names is at opposite ends of the engine: one  */ \
     /* is at the compile and one is at the network.                           */ \
     X(SCRIPT_LOAD_FAILED, "script-load-failed")                                   \
+    /* HTML §4.12.1.1 "execute the script element"'s `importmap` arm: a row  */ \
+    /* that registers an import map and runs nothing, or installs the report  */ \
+    /* of its parse result's error to rethrow.                                */ \
+    X(REGISTER_IMPORT_MAP, "register-an-import-map")                              \
     X(RESUME_PROGRAM,     "resume-program")                                       \
     /* AND THE RESUME HAS FOUR OUTCOMES AND HAD ONE NAME, which is the SAME   */ \
     /* defect as the block above and one rung lower down. A resume ends in    */ \

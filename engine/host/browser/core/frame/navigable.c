@@ -731,10 +731,10 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
            would have come back a SyntaxError from a parser that is perfectly correct. The DCHECK that stood
            here aborted the whole engine on any child navigable whose document had one — one of three, with
            engine_join_document's and core/html/html_script.c's, all three naming this column. */
-        DCHECK(script_type_executes(ds.types[i]),
-               "a document's script inventory holds a row whose type executes nothing — document_exec_scripts "
-               "drops an import map, a set of speculation rules and §4.12.1.1's null type before any of them "
-               "becomes a row, so a fourth answer here means the types column was never written for this row");
+        DCHECK(script_type_is_sequenced(ds.types[i]),
+               "a document's script inventory holds a row of a type no sequence holds — document_exec_scripts "
+               "drops a set of speculation rules and §4.12.1.1's null type before either becomes a row, so this "
+               "answer means the types column was never written for this row");
         if (ds.bodies[i]) {
             /* WHERE AN INLINE ENTRY LANDS IS ITS SCHEDULE'S ANSWER, AND THE TWO ANSWERS ARE DIFFERENT SPEC
                STEPS. §4.12.1.1 "Processing model" reaches `immediately execute the script element` only for
@@ -745,11 +745,10 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
                a flag: the standard runs them at two different times, and a module has a graph to LOAD before
                its result exists, which is exactly why the standard does not run it in place. */
             if (ds.sched[i] == SCRIPT_SCHED_IMMEDIATE) {
-                DCHECK(ds.types[i] == SCRIPT_TYPE_CLASSIC,
+                DCHECK(ds.types[i] == SCRIPT_TYPE_CLASSIC || ds.types[i] == SCRIPT_TYPE_IMPORTMAP,
                        "an inline entry of a document's script inventory reached `immediately execute the "
-                       "script element` with a type other than classic — §4.12.1.1 sends every module to one "
-                       "of the three lists before that step, so the schedule and the type disagree about one "
-                       "element");
+                       "script element` as a module — §4.12.1.1 sends every module to one of the three lists "
+                       "before that step, so the schedule and the type disagree about one element");
                 /* THE ELEMENT ENTRY, because this row HAS an element: the element-less entry
                    (engine_queue_fetched_script) is for a program no `<script>` caused, and a row seeded out of
                    a document's inventory is never one.

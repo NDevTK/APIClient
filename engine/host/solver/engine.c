@@ -34,6 +34,7 @@
 #include "core/html/referrer_policy_attribute.h"   /* HTML §2.5.5: a script element's referrer policy */
 #include "core/html/nonce_attribute.h"   /* §4.12.1.1 reads el's [[CryptographicNonce]] slot, not its attribute */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
+#include "core/loader/import_map.h"   /* HTML §8.1.4.2's resolve a module integrity metadata */
 #include "core/loader/document_scripts.h"   /* §4.12.1.1's schedule, for engine_run's caller that states none */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent operation: what performs it */
@@ -92,8 +93,8 @@ static lxb_dom_element_t *flow_dyn_el(const Flow *f);
  * A NULL element is a stated answer. A dynamic `import()` takes §8.1.6.7.3's descendant script fetch options,
  * whose step 1 copies the referrer's options, so the nonce is the importing row's element's; NULL there is a
  * program no `<script>` produced (a lazy chunk, a `javascript:` URL, an @S candidate), whose options carry the
- * empty string. Its integrity (step 2, resolving a module integrity metadata) is the empty string because this
- * engine has no import map. */
+ * empty string. Its integrity is step 2's resolve a module integrity metadata, which
+ * engine_pending_module_url writes over the element's. */
 typedef struct {
     CspRequestMetadata m;
     JSValue            nonce_slot;   /* owned by the holder */
@@ -547,15 +548,19 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     /* Fetch §2.2.5's metadata, which for a dynamic import is the referrer's. HostLoadImportedModule gets "the
        descendant script fetch options given originalFetchOptions, url, and settingsObject", an algorithm of
        §8.1.4.2 Fetching scripts: its step 1 copies the options, so the cryptographic nonce is the importing
-       script's (the element whose program this flow runs), and its step 2 resolves module integrity metadata
-       from an import map, which this engine does not have, so integrity is the empty string. flow_dyn_el is
-       NULL for a program no `<script>` produced (a lazy chunk, an @S candidate, a `javascript:` URL), whose
-       options carry the empty string. */
+       script's (the element whose program this flow runs), and its step 2 replaces the integrity metadata with
+       resolve a module integrity metadata's answer from the global's import map. flow_dyn_el is NULL for a
+       program no `<script>` produced (a lazy chunk, an @S candidate, a `javascript:` URL), whose options carry
+       the empty string. */
     ScriptCspMeta meta;
     JSValue e;
+    char *integrity;
     DCHECK(f != NULL, "a dynamic import was issued outside a running flow");
     meta = script_csp_meta(ctx, flow_dyn_el(f));
     req.metadata = meta.m;
+    integrity = import_map_module_integrity(ctx, url);
+    req.metadata.integrity = integrity;
+    req.metadata.integrity_len = strlen(integrity);
     /* The credentials mode is the referring script's, copied by the same step (see
        `script_credentials_mode`); a row no `<script>` produced takes the default script fetch options. */
     req.credentials = script_credentials_mode(flow_dyn_el(f));
@@ -586,6 +591,7 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        specifier's own bytes, settling the promise JS_ModuleLoadPending is about to be handed. */
     pending_park_request(ctx, e, &req);
     script_csp_meta_free(ctx, &meta);
+    free(integrity);
     JS_FreeValue(ctx, e);
 }
 
@@ -6013,11 +6019,15 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
            "a queued program's kind and its rendezvous token disagree — a cross-agent operation's row must "
            "carry the token of the peer waiting on its completion, and no other kind may carry one, because "
            "only that kind's completion is ever read as an answer");
-    /* The sequence holds only executable programs: §4.12.1.1's null type, an import map and speculation rules
-       run nothing, and document_exec_scripts and html_script_prepare drop them before here. */
-    DCHECK(script_type_executes(stype),
-           "a program was queued with a script type that does not execute — §4.12.1.1's null type, import maps and "
-           "speculation rules are not programs");
+    /* The sequence holds programs and inline import maps: §4.12.1.1's null type and speculation rules take no
+       position, and document_exec_scripts and html_script_prepare drop them before here. */
+    DCHECK(script_type_is_sequenced(stype),
+           "a row was queued with a script type no sequence holds — §4.12.1.1's null type and speculation rules "
+           "take no position");
+    /* An import map is an element's inline text: §4.12.1.1 fires `error` at an external one. */
+    DCHECK(stype != SCRIPT_TYPE_IMPORTMAP || (kind == DYN_PAGE_SCRIPT && url == NULL && el != NULL),
+           "an import map row was queued that is not an element's inline text — only an inline `importmap` "
+           "script takes a position");
     /* An address belongs to a row whose bytes came from one (§8.1.4.2 bases the script on the response's URL);
        an inline row has none and §4.12.1.1 answers from the document ("let base URL be el's node document's
        document base URL"). A DYN_SCRIPT_SRC row's address is its own body until the reply arrives. */
@@ -6234,10 +6244,10 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
            "a document's scripts were seeded onto a flow that already holds programs or has moved past its first — a "
            "flow is seeded once, at creation");
     for (i = 0; i < n; i++) {
-        DCHECK(script_type_executes(rows[i].type),
-               "a script table holds a row whose type executes nothing — §4.12.1.1's null type, an import map "
-               "and a set of speculation rules are registered or ignored rather than evaluated, so "
-               "document_exec_scripts drops all three before they become rows");
+        DCHECK(script_type_is_sequenced(rows[i].type),
+               "a script table holds a row of a type no sequence holds — §4.12.1.1's null type and a set of "
+               "speculation rules are ignored or registered elsewhere, so document_exec_scripts drops both "
+               "before they become rows");
         DCHECK(rows[i].body != NULL || rows[i].url != NULL,
                "a script table row holds neither source text nor an address — a refused row keeps its `src` "
                "text as its body, so a row that is nothing would park the flow on nothing for the rest of the "
@@ -6592,11 +6602,15 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
    computes SCRIPT_SCHED_IMMEDIATE). The type is classic, not a parameter: "If el's type is `classic` and el has a
    src attribute, or el's type is `module`" sends every module to one of the lists above, and an inline module has a
    graph to load before its result exists. */
-void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el) {
+void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
+                                   lxb_dom_element_t *el) {
     DCHECK(el != NULL, "an inline classic script was queued to run immediately with no element — §4.12.1.1's prepare "
                        "the script element is about el");
+    DCHECK(stype == SCRIPT_TYPE_CLASSIC || stype == SCRIPT_TYPE_IMPORTMAP,
+           "a script was queued to run immediately as a module — §4.12.1.1 sends every module to one of its lists "
+           "before \"immediately execute the script element\"");
     /* No fetch is owed (see engine_queue_element_script). */
-    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, TASK_SOURCE_NOT_A_TASK,
+    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, TASK_SOURCE_NOT_A_TASK,
                     DYN_POS_IMMEDIATE, el, /*parser_inserted*/0);
 }
 
@@ -8086,10 +8100,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 body = dyn_body_text(f->dyn[f->script_i]);
                 body_n = dyn_body_len(f->dyn[f->script_i]);
                 kind = flow_dyn_kind(f);
-                /* The sequence holds only executable scripts (engine_queue_into asserts it where rows are made). */
-                DCHECK(script_type_executes(stype),
-                       "a row of this flow's script sequence carries a type that does not execute — every row is "
-                       "classic or module");
+                /* engine_queue_into asserts the row types where rows are made. */
+                DCHECK(script_type_is_sequenced(stype),
+                       "a row of this flow's script sequence carries a type no sequence holds — every row is "
+                       "classic, module or an inline import map");
                 if (kind == DYN_SCRIPT_SRC) {
                     /* An external script of some document of this agent, at its position. The row holds its address
                        (§4.12.1.1's encoding-parsed url, never the raw attribute, which the host would resolve
@@ -8517,6 +8531,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    (solver/absent.h). */
                 if (!ext && flow_dyn_kind(f) == DYN_PAGE_SCRIPT)
                     src_flags = JS_EVAL_FLAG_INLINE_SCRIPT;
+            }
+            /* HTML §4.12.1.1 "execute the script element"'s `importmap` arm: "Register an import map given el's
+               relevant global object and el's result", the result being HTML §8.1.4.8's create an import map
+               parse result over the source text and step 34's base URL, which `prog_name` is for an inline row.
+               Nothing runs, so the row is left here; a parse result whose error to rethrow is set is reported
+               (§8.1.4.6) as a frame, the shape §8.1.4.4 step 8's report takes, and leaves the row when it ends. */
+            if (stype == SCRIPT_TYPE_IMPORTMAP) {
+                DCHECK(flow_dyn_url(f) == NULL,
+                       "an import map row carries an address — only an inline `importmap` script is a row");
+                if (import_map_create_and_register(prog_ctx, body, body_n, prog_name) < 0) {
+                    JSValue exc = JS_GetException(prog_ctx);
+                    f->frame = report_exception_flow(prog_ctx, exc);
+                    JS_FreeValue(prog_ctx, exc);
+                    f->reporting = 1;
+                    g_step_unit = STEP_UNIT_REGISTER_IMPORT_MAP;
+                    return 0;
+                }
+                g_step_unit = STEP_UNIT_REGISTER_IMPORT_MAP;
+                ENGINE_LEAVE_ROW(f);
+                return 0;
             }
             /* A module is a different algorithm, not a flag: §8.1.4.4 has two entries and they part here. A classic
                script is a program: JS_FlowNew wraps it in a preemptible frame the scheduler resumes, and it
@@ -10006,10 +10040,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                "§4.12.1.1's \"if url is failure … fire an event named error at el, and return\" means such an "
                "element runs no script and takes no position, so a row that is nothing is a row the seed would "
                "park a flow on and never fill");
-        DCHECK(script_type_executes(types[i]),
-               "a row of the root document's script inventory holds a type that executes nothing — an import "
-               "map and a set of speculation rules are registered rather than run and §4.12.1.1's null type "
-               "runs nothing at all, so document_exec_scripts drops all three before they reach a session");
+        DCHECK(script_type_is_sequenced(types[i]),
+               "a row of the root document's script inventory holds a type no sequence holds — a set of "
+               "speculation rules is registered rather than run and §4.12.1.1's null type runs nothing at all, "
+               "so document_exec_scripts drops both before they reach a session");
         /* And the element the row is the program of: §4.12.1.1's "execute the script element" switches on el, and
            its classic arm sets this document's §3.1.7 `currentScript` to it. Borrowed: it names a node of the tree
            this session was opened over, which outlives the session. An absent column is a positive statement, "no
@@ -10209,9 +10243,9 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
           "engine: OOM building a joined document's script table — without it the document is parsed, given a "
           "realm and never executes a line, which is indistinguishable from a document that had no scripts");
     for (i = 0; i < n; i++) {
-        DCHECK(script_type_executes(types[i]),
-               "a joined document's script inventory holds a row whose type executes nothing — document_exec_scripts "
-               "drops import maps, speculation rules and the null type before they become rows");
+        DCHECK(script_type_is_sequenced(types[i]),
+               "a joined document's script inventory holds a row of a type no sequence holds — "
+               "document_exec_scripts drops speculation rules and the null type before they become rows");
         DCHECK(bodies[i] != NULL || srcs[i] != NULL,
                "a joined document's script inventory holds an entry with neither source text nor an address — "
                "§4.12.1.1's \"if url is failure … fire an event named error at el, and return\" means such an "

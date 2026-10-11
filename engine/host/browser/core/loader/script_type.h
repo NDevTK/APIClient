@@ -39,6 +39,14 @@ static inline int script_type_executes(ScriptType t)
     return t == SCRIPT_TYPE_CLASSIC || t == SCRIPT_TYPE_MODULE;
 }
 
+/* THE THREE A FLOW'S SCRIPT SEQUENCE HOLDS: the two above and an inline import map, which "execute the script
+   element" registers at its position — a classic script before it resolves specifiers without it and one after
+   it with it, so its place among the programs is part of what it means. Speculation rules are not built. */
+static inline int script_type_is_sequenced(ScriptType t)
+{
+    return script_type_executes(t) || t == SCRIPT_TYPE_IMPORTMAP;
+}
+
 /* WHEN THE ELEMENT RUNS — the LAST steps of §4.12.1.1's "prepare the script element", which sort the element into
  * one of the Document's four script queues (or run it on the spot). It is a second fact about the element that
  * only the element knows, and it is beside `type` because the two answer together: the tail branches on `async`,

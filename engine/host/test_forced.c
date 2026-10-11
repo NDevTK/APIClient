@@ -713,6 +713,10 @@ static const TfServed TF_SERVED[] = {
      * THE FOUR ADDRESSES ARE DISTINCT AND NONE IS ANOTHER'S PREFIX, for the `mdmod.js` body's reason:
      * emitted_records matches `"url":"<addr>"` with its closing quote, and a row a sibling statement's
      * record could answer is a row that cannot fail. */
+    /* …AND A MODULE UNDER `/chunk/`, whose own URL is the referrer the import map's `/chunk/` scope matches. */
+    { "https://x.test/chunk/mdscope.js", "text/javascript",
+      "import('mdscoped').then(function(){ fetch('/api/imscopein?w=siLOADED'); },"
+      " function(e){ fetch('/api/imscopein?w=' + e.name); });" },
     { "https://x.test/chunk/mdhost.js", "text/javascript",
       "import mhDef, { mhTag } from './mddep.js';"
       "fetch('/api/mhhost?w=mhHOST');"
@@ -10224,6 +10228,47 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&ms_eval, &ms_eval_why, param_value_is(js, "/api/modeval", "w", "meDEF"),
              "an `import()` inside a dynamic function's body did not load the module — its referrer is "
              "JS_EVAL_SCRIPT_NAME, which module_loader.c resolves against the API base URL");
+    /* HTML §8.1.5.3 "Import map processing model" — core/loader/import_map.c. */
+    const char *im_ask_why = NULL; int im_ask = 1;
+    fold_row(&im_ask, &im_ask_why, param_value_is(js, "/api/imask", "w", "imASK"),
+             "NOT REACHED: there is no /api/imask record, so the import-map statement never ran");
+    const char *im_map_why = NULL; int im_map = 1;
+    fold_row(&im_map, &im_map_why, param_value_is(js, "/api/immap", "w", "imDEF"),
+             "a bare specifier the first import map maps did not load its module — `TypeError` is either no map "
+             "registered or the second map's conflicting rule (to the JSON-served `/chunk/mdbad.js`) having "
+             "replaced the first's");
+    const char *im_merge_why = NULL; int im_merge = 1;
+    fold_row(&im_merge, &im_merge_why, param_value_is(js, "/api/immerge", "w", "imgDEF"),
+             "a bare specifier only the second import map maps did not load — the merge did not add a new map's "
+             "rule for a specifier the existing map lacks");
+    const char *im_skip_why = NULL; int im_skip = 1;
+    fold_row(&im_skip, &im_skip_why, param_value_is(js, "/api/imskip", "w", "isGOOD"),
+             "an import map whose other entries are invalid did not register its valid one — an invalid address, "
+             "an empty key or an unknown top-level key is skipped or nulled, never thrown");
+    const char *im_null_why = NULL; int im_null = 1;
+    fold_row(&im_null, &im_null_why, param_value_is(js, "/api/imnull", "w", "TypeError"),
+             "a specifier whose import map address is invalid did not reject with TypeError — sort and normalize a"
+             " module specifier map sets it to null, and resolve an imports match throws on a null entry");
+    const char *im_scope_out_why = NULL; int im_scope_out = 1;
+    fold_row(&im_scope_out, &im_scope_out_why, param_value_is(js, "/api/imscopeout", "w", "TypeError"),
+             "a mapping scoped to `/chunk/` applied to the document's own referrer");
+    const char *im_scope_in_why = NULL; int im_scope_in = 1;
+    fold_row(&im_scope_in, &im_scope_in_why, param_value_is(js, "/api/imscopein", "w", "siLOADED"),
+             "a mapping scoped to `/chunk/` did not apply to a module served from under `/chunk/`");
+    const char *im_late1_why = NULL; int im_late1 = 1;
+    fold_row(&im_late1, &im_late1_why, param_value_is(js, "/api/imlate1", "w", "TypeError"),
+             "`/chunk/mdlate.js`, served as JSON, did not reject with TypeError — the reach witness for the resolved "
+             "module set record the second import map is merged against");
+    const char *im_late2_why = NULL; int im_late2 = 1;
+    fold_row(&im_late2, &im_late2_why, param_value_is(js, "/api/imlate2", "w", "TypeError"),
+             "a later import map's rule for a specifier already in the resolved module set was merged — `ilLOADED` "
+             "is `/chunk/mdlate.js` remapped to `/chunk/mdmod.js`, where the merge removes rules that impact an "
+             "already resolved module");
+    const char *im_err_why = NULL; int im_err = 1;
+    fold_row(&im_err, &im_err_why, param_value_is(js, "/api/imerr", "w", "imSYNTAX")
+                                   && !param_value_is(js, "/api/imerr", "w", "imNONE"),
+             "an import map that does not parse was not reported at the global as its SyntaxError (HTML §8.1.4.8's"
+             " register an import map)");
     /* §9.3.3's CROSS-DOCUMENT MESSAGE, IN TWO ROWS BECAUSE A MISSING FORK TOKEN HAS TWO READINGS. The first
        is that the DELIVERY ran at all: step 7 serializes in the posting turn and step 8 delivers in a LATER
        task, so an absent handler emission is the SCHEDULE and says nothing whatever about what the record
@@ -15223,6 +15268,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
         { "mod-typeask", mod_typeask, "/api/modtypeask", SESS_EXPLORE, mod_typeask_why },
         { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
+        { "im-ask", im_ask, "/api/imask", SESS_EXPLORE, im_ask_why },
+        { "im-map", im_map, "/api/imask", SESS_EXPLORE, im_map_why, .gate = "im-ask" },
+        { "im-merge", im_merge, "/api/imask", SESS_EXPLORE, im_merge_why, .gate = "im-ask" },
+        { "im-skip", im_skip, "/api/imask", SESS_EXPLORE, im_skip_why, .gate = "im-ask" },
+        { "im-null", im_null, "/api/imask", SESS_EXPLORE, im_null_why, .gate = "im-ask" },
+        { "im-scope-out", im_scope_out, "/api/imask", SESS_EXPLORE, im_scope_out_why, .gate = "im-ask" },
+        { "im-scope-in", im_scope_in, "/api/imask", SESS_EXPLORE, im_scope_in_why, .gate = "im-ask" },
+        { "im-late1", im_late1, "/api/imlate1", SESS_EXPLORE, im_late1_why },
+        { "im-late2", im_late2, "/api/imask", SESS_EXPLORE, im_late2_why, .gate = "im-ask" },
+        { "im-err", im_err, "/api/imerr", SESS_EXPLORE, im_err_why },
         { "mod-spec-bare-ask", ms_bare_ask, "/api/modbareask", SESS_EXPLORE, ms_bare_ask_why },
         { "mod-spec-bare", ms_bare, "/api/modbareask", SESS_EXPLORE, ms_bare_why, .gate = "mod-spec-bare-ask" },
         { "mod-spec-same-ask", ms_same_ask, "/api/modsameask", SESS_EXPLORE, ms_same_ask_why },

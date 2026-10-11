@@ -94,10 +94,13 @@ ScriptSchedule script_block_schedule(lxb_dom_element_t *el, ScriptType ty, bool 
                                      bool force_async) {
     bool external = scr_has_attr(el, "src", 3);   /* the ATTRIBUTE, not a non-empty value */
 
-    DCHECK(script_type_executes(ty),
-           "a script element's schedule was asked for a type that executes nothing — an import map and a set of "
-           "speculation rules are registered rather than run, and §4.12.1.1's null type runs nothing at all, so "
-           "none of them joins any of the Document's script queues");
+    DCHECK(script_type_is_sequenced(ty),
+           "a script element's schedule was asked for a type this engine sequences nothing for — a set of "
+           "speculation rules is registered rather than run, and §4.12.1.1's null type runs nothing at all, so "
+           "neither joins any of the Document's script queues");
+    DCHECK(ty != SCRIPT_TYPE_IMPORTMAP || !external,
+           "an external import map's schedule was asked for — §4.12.1.1's src branch fires `error` at it and "
+           "returns before any destination");
     DCHECK(!(parser_inserted && force_async),
            "a parser-inserted script element was said to have `force async` true — §4.12.1.1 has the HTML and XML "
            "parsers set it FALSE on every element they insert, so the two cannot both hold and the caller has "
@@ -231,7 +234,11 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
                                         : NULL;
         ScriptType ty = script_block_type(el);
         ScriptSchedule sc;
-        if (!script_type_executes(ty)) continue;   /* a data block is parsed, never run */
+        /* A data block runs nothing. NAMED RESIDUAL: an import map with a `src` is dropped here too, where
+           §4.12.1.1's src branch queues an `error` event at it; the next diff fires it from the caller that
+           holds a realm, as for `src=""`. Its absence shows as an `onerror` on an external import map that
+           never runs. */
+        if (!script_type_is_sequenced(ty) || (ty == SCRIPT_TYPE_IMPORTMAP && has_src)) continue;
         /* A PARSE PRODUCT IS PARSER-INSERTED, WITH `force async` FALSE — §4.12.1.1 states both of the parser, so
            they are facts about this scan and not defaults it picks. An element a SCRIPT inserted goes through
            html_script.c's half of §4.12.1.1 instead, where neither is true. */

@@ -32,6 +32,7 @@
 #include "core/dom/document.h"         /* the current settings object's API base URL */
 #include "core/events/event_target.h"  /* EVENT_HANDLER_SCRIPT_NAME, a null referrer */
 #include "core/url/url.h"
+#include "core/loader/import_map.h"
 #include "core/loader/module_loader.h"
 
 /* HTML §8.1.5.1 "The resolution algorithm"'s resolve a URL-like module specifier. Fills `out` and returns
@@ -78,37 +79,55 @@ static bool ml_referrer_base_url(JSContext *ctx, const char *referrer, UrlRecord
 
 /* HTML §8.1.5.1 "The resolution algorithm"'s resolve a module specifier, as quickjs's normalize hook: it
    returns the serialized URL (js_malloc'd; js_host_resolve_imported_module frees it), which is the module map
-   key and the address the load parks, or NULL with a TypeError thrown.
-   NAMED RESIDUAL. Not covered: the import map steps 5, 10 and 11 read (HTML §8.1.5.2 "Import maps") and step
-   13's resolved module set; this engine parses no `<script type=importmap>`, so importMap is empty. The next
-   diff builds HTML §8.1.5.3 "Import map processing model" onto the Window. Its absence shows as a bundle that
-   imports bare specifiers through an import map rejecting every such import with a TypeError. */
+   key and the address the load parks, or NULL with a TypeError thrown. The import map half (steps 4-5 and
+   9-11, and step 13's resolved module set) is core/loader/import_map.c's. */
 static char *module_normalize(JSContext *ctx, const char *referrer, const char *specifier, void *opaque)
 {
-    UrlRecord base, as_url;
-    char *serialized, *out = NULL;
+    UrlRecord base, as_url, result;
+    char *serialized_base = NULL, *normalized = NULL, *serialized, *out = NULL;
+    bool have_as_url;
+    int r;
 
     (void)opaque;
     DCHECK(specifier != NULL, "a module specifier was resolved with no specifier");
     url_record_init(&base);
     url_record_init(&as_url);
+    url_record_init(&result);
     if (!ml_referrer_base_url(ctx, referrer, &base)) {
         JS_ThrowTypeError(ctx, "the module referrer '%s' names no base URL", referrer);
         goto done;
     }
-    /* Steps 7-13 over an empty import map: the result is asURL. */
-    if (!ml_resolve_url_like(specifier, &base, &as_url)) {
+    /* Steps 6-8. */
+    serialized_base = url_serialize(&base, false);
+    CHECK(serialized_base != NULL, "OOM serializing a module referrer's base URL");
+    have_as_url = ml_resolve_url_like(specifier, &base, &as_url);
+    normalized = have_as_url ? url_serialize(&as_url, false) : strdup(specifier);
+    CHECK(normalized != NULL, "OOM normalizing a module specifier");
+    /* Steps 9-11. */
+    r = import_map_resolve(ctx, serialized_base, normalized, have_as_url ? &as_url : NULL, &result);
+    if (r < 0) goto done;
+    /* Step 12. */
+    if (r == 0 && have_as_url) {
+        CHECK(url_record_copy(&result, &as_url), "OOM copying a resolved module specifier");
+        r = 1;
+    }
+    if (r == 0) {
         /* Step 14. */
         JS_ThrowTypeError(ctx, "Failed to resolve module specifier \"%s\". Relative references must start "
                                "with either \"/\", \"./\", or \"../\".", specifier);
         goto done;
     }
-    serialized = url_serialize(&as_url, false);
+    /* Step 13. */
+    import_map_add_resolved(ctx, serialized_base, normalized, have_as_url ? &as_url : NULL);
+    serialized = url_serialize(&result, false);
     CHECK(serialized != NULL, "OOM serializing a resolved module specifier");
     out = js_strdup(ctx, serialized);
     free(serialized);
     /* js_strdup's NULL has thrown the OOM, which rejects the import like any other abrupt resolution. */
 done:
+    free(normalized);
+    free(serialized_base);
+    url_record_free(&result);
     url_record_free(&as_url);
     url_record_free(&base);
     return out;

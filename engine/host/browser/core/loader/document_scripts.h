@@ -54,8 +54,8 @@ unsigned document_bundle_id(lxb_html_document_t *dom);
    analyses. A column three callers must remember to apply is a column two of them will drop (the same drift
    that left script seeding in one host of three), so the run order is the producer's answer and the schedule
    stays for the one question the order does not answer — see script_sched_run_rank and script_sched_is_ordered.
-   `types[i]` is entry i's HTML §4.12.1.1 type — CLASSIC or MODULE, never a non-executing one — and it is what
-   decides which of §8.1.4.4's two algorithms runs it ("run a classic script", which produces a COMPLETION, vs
+   `types[i]` is entry i's HTML §4.12.1.1 type — CLASSIC, MODULE or inline IMPORTMAP — and it decides which
+   of §8.1.4.4's two algorithms runs a program, or registers the map ("run a classic script", a COMPLETION, vs
    "run a module script", which produces a PROMISE). It is here rather than recomputed at the compile because
    the element is the only thing that knows: by the time the scheduler holds a body, the <script> it came from
    is behind it, and a kind recomputed from the TEXT would be a guess about a fact the DOM already stated.

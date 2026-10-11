@@ -78,6 +78,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/events/report_exception.h"   /* §8.1.4.4 step 8's report — see "execute the script element" below */
+#include "core/loader/script_type.h"         /* ScriptType: which arm of "execute the script element" a report owes */
 
 /* IS THIS NODE A `script` ELEMENT? The INTERNED TAG ID and the pair of namespaces a `script` can be in —
    HTML's `script` and SVG's are both script elements, and lexbor's own `lxb_html_tree_node_is` answers only
@@ -146,6 +147,7 @@ typedef struct {
     char              *text;
     size_t             text_n;
     lxb_dom_element_t *el;
+    ScriptType         type;   /* CLASSIC or IMPORTMAP — step 6's two arms with no position; NONE when empty */
 } ScriptImmediate;
 
 /* Release what a report owns and leave it empty. Idempotent, so a caller that has already handed the text to
@@ -194,6 +196,7 @@ typedef struct {
     char               *text;
     size_t              text_n;
     lxb_dom_element_t  *el;
+    ScriptType          type;    /* step 6's arm: CLASSIC runs the program, IMPORTMAP registers the map */
     uint8_t             stage;   /* SX_* in html_script.c — which step of "execute the script element" */
     uint8_t             phase;   /* step_call_run's own cursor */
     JSValue             cb[SCRIPT_EXEC_CB_SLOTS];

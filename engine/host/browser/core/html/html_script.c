@@ -23,6 +23,7 @@
 #include "core/events/event.h"           /* §4.12.1.1's error arm dispatches an Event, so it MINTS one */
 #include "core/events/event_target.h"    /* …through DOM §2.9's one dispatch, which runs the PAGE's listeners */
 #include "core/idl_args.h"       /* the `async` attribute's setter, declared like every other IDL member's */
+#include "core/loader/import_map.h"   /* HTML §8.1.5.3, "execute the script element"'s `importmap` arm */
 #include "core/url/url.h"        /* HTML §4.12.1.1's "encoding-parsing a URL given src, relative to el's node document" */
 #include "core/loader/document_scripts.h"   /* HTML §4.12.1.1's type-string steps, asked ONCE for both halves */
 #include "core/html/html_script.h"
@@ -446,7 +447,7 @@ void html_script_install(JSContext *ctx, JSValueConst proto)
    stands nowhere near one. The children changed steps below no longer come through here at all: they record. */
 static void script_post_connection(JSContext *ctx, lxb_dom_element_t *el, ScriptImmediate *imm)
 {
-    imm->text = NULL; imm->text_n = 0; imm->el = NULL;
+    imm->text = NULL; imm->text_n = 0; imm->el = NULL; imm->type = SCRIPT_TYPE_NONE;
     /* "The HTML element post-connection steps only run when the inserted element is still CONNECTED" — a
        script mutated while detached prepares when it is inserted, through the insertion half, and preparing it
        here as well would run one element's code twice. */
@@ -641,7 +642,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     DCHECK(imm != NULL, "§4.12.1.1 was prepared with nowhere to report step 36 — the record is mandatory because "
                         "the one destination it names is a nested run, and a caller with nowhere to put it is "
                         "a caller that would silently drop the page's own code");
-    imm->text = NULL; imm->text_n = 0; imm->el = NULL;
+    imm->text = NULL; imm->text_n = 0; imm->el = NULL; imm->type = SCRIPT_TYPE_NONE;
     if (!html_script_is(n)) return;
     /* HTML §4.12.1.1's `parser document`, RECORDED BEFORE STEP 1 AND THEREFORE ON EVERY PATH THROUGH THESE STEPS.
        The caller states it and this is the only place it is written. It goes ahead of step 1 rather than
@@ -689,36 +690,20 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        halves of §4.12.1.1 must not disagree about what a `type` attribute means. */
     {
         st = script_block_type(el);
-        /* HTML's null and the two data types: "No script is executed." An import map and a set of speculation
-           rules are REGISTERED on the relevant global rather than evaluated, which is a capability this engine
-           does not have — and their absence is honest, because neither runs code. */
-        if (!script_type_executes(st)) {
-            /* …BUT ONLY *NULL* LEAVES THE ALGORITHM AT THIS STEP, AND THE OTHER TWO LEAVE IT AT STEP 33.
-               §4.12.1.1's type switch returns in exactly one arm, its last: step 13 is "Otherwise, return.
-               (No script is executed, and el's type is left as null.)" — and `importmap` and
-               `speculationrules` are not that arm, they are steps 11 and 12, which SET el's type and fall
-               through. So they walk on through step 15's "Set el's already started to true." and step 18's
-               "If scripting is disabled for el, then return." and only then reach step 33, "If el has a src
-               content attribute:", whose FIRST sub-step is "If el's type is \"importmap\" or
-               \"speculationrules\", then queue an element task on the DOM manipulation task source given el
-               to fire an event named error at el, and return". Collapsing those returns into this one is
-               wrong in two observable ways at once — the element is left UNMARKED, so a later prepare runs
-               the whole algorithm again, and the `error` the standard owes is never fired.
-               IT CRASHES RATHER THAN FIRING THE EVENT FROM HERE, because firing it at step 13 would be the
-               observable half of a step whose other half (step 15's `already started`, and step 18's scripting-disabled
-               test, which can legitimately suppress the event entirely) would still be missing — a half-fix
-               wearing a fixed one. What the next diff builds is the fall-through: the two data types reach
-               steps 15 and 18 alongside the executing types and branch at step 33, where
-               html_script_queue_error is already waiting for them. Its absence shows as this abort, on markup
-               no browser supports either (§4.12.1.1's own note: "External import maps and speculation rules
-               are not currently supported"), which is why it is reachable at all rather than common. */
-            DCHECK(!has_src || (st != SCRIPT_TYPE_IMPORTMAP && st != SCRIPT_TYPE_SPECULATIONRULES),
-                   "a `<script type=importmap|speculationrules>` carries a `src` — HTML §4.12.1.1 "
-                   "\"Processing model\" does NOT return for these at its type step (only a null type does), "
-                   "so this element owes step 15's `already started` mark, step 18's scripting-disabled test "
-                   "and then the src branch's `queue an element task on the DOM manipulation task source "
-                   "given el to fire an event named error at el`. Let the two data types fall through to "
-                   "those steps and branch at the src step, where html_script_queue_error is");
+        /* HTML's null and speculation rules: "No script is executed." An import map goes on, to be registered
+           at "execute the script element". */
+        if (!script_type_is_sequenced(st)) {
+            /* ONLY *NULL* LEAVES THE ALGORITHM AT THIS STEP; `speculationrules` is step 12, which sets el's type
+               and falls through to step 15's `already started`, step 18's scripting-disabled test and step 33's
+               src branch, whose first sub-step fires `error` at an external one. Returning here leaves the
+               element unmarked and the `error` unfired, so the external case crashes rather than being
+               half-done; speculation rules are not built, which keeps the inline case honestly absent. */
+            DCHECK(!has_src || st != SCRIPT_TYPE_SPECULATIONRULES,
+                   "a `<script type=speculationrules>` carries a `src` — HTML §4.12.1.1 \"Processing model\" "
+                   "does NOT return for it at its type step (only a null type does), so this element owes step "
+                   "15's `already started` mark, step 18's scripting-disabled test and then the src branch's "
+                   "`queue an element task on the DOM manipulation task source given el to fire an event named "
+                   "error at el`. Let it fall through to those steps as `importmap` does");
             return;
         }
         /* A MODULE TRAVELS THIS ROUTE NOW, and the row is what carries it: the flow's dynamic sequence has a
@@ -738,7 +723,9 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
         if (parser_inserted) script_set_force_async(ctx, n, false);
         /* HTML §4.12.1.1's LAST STEPS, asked of the same element by the same function the document scan asks — one
            element, one classification. */
-        sched = script_block_schedule(el, st, parser_inserted, script_force_async(ctx, n));
+        /* An import map leaves at step 33 or step 35 below, before any destination is read. */
+        sched = st == SCRIPT_TYPE_IMPORTMAP ? SCRIPT_SCHED_IMMEDIATE
+                                            : script_block_schedule(el, st, parser_inserted, script_force_async(ctx, n));
     }
     /* STEP 15 — "Set el's already started to true." IT WAS MISSING, and the two shapes it costs are both
        ordinary: `s.textContent = code; s.src = "/chunk.js"` prepared the element TWICE (the children-changed
@@ -860,6 +847,25 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
 
         free(csp_text);
         if (!allowed) return;
+    }
+    /* THE `importmap` TYPE'S TWO EXITS. Step 33's first sub-step: "If el's type is \"importmap\" or
+       \"speculationrules\", then queue an element task on the DOM manipulation task source given el to fire an
+       event named error at el, and return." Otherwise step 35's `importmap` arm creates the parse result and
+       marks el ready, and the last step immediately executes el, whose `importmap` arm registers it — reported
+       through `imm`, because a parse error is reported (§8.1.4.6) and that runs the page's `error` listeners. */
+    if (st == SCRIPT_TYPE_IMPORTMAP) {
+        char *txt;
+
+        if (has_src) { html_script_queue_error(ctx, el); return; }
+        txt = dom_child_text_content(n, &n_len);
+        DCHECK(txt != NULL && n_len != 0,
+               "§4.12.1.1's step 15 marked an `importmap` script already started and then found it has no text — "
+               "step 6 returns for an element with no `src` whose source text is empty");
+        imm->text = txt;
+        imm->text_n = n_len;
+        imm->el = el;
+        imm->type = SCRIPT_TYPE_IMPORTMAP;
+        return;
     }
     /* An UNKNOWN src is a URL this engine cannot fetch, but it is still a request the page makes — recorded so
        it reaches the @H surface as the shape it is, rather than disappearing. */
@@ -1041,6 +1047,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                     imm->text[n_len] = '\0';
                     imm->text_n = n_len;
                     imm->el = el;
+                    imm->type = SCRIPT_TYPE_CLASSIC;
                 }
             }
             free(txt);
@@ -1130,7 +1137,7 @@ void html_script_parser_inserted(lxb_dom_node_t *script)
        own permission ("user agents are explicitly allowed to avoid executing script elements inserted via this
        method") is why nothing else in this tree reports it. */
     if (imm.text) {
-        engine_queue_script_immediate(document_doc(ctx), imm.text, imm.text_n, imm.el);
+        engine_queue_script_immediate(document_doc(ctx), imm.text, imm.text_n, imm.type, imm.el);
         html_script_immediate_free(&imm);
     }
     }
@@ -1147,6 +1154,7 @@ void html_script_immediate_free(ScriptImmediate *imm)
     imm->text = NULL;
     imm->text_n = 0;
     imm->el = NULL;
+    imm->type = SCRIPT_TYPE_NONE;
 }
 
 /* WHICH STEP OF "execute the script element" THE STATE IS AT. Declared rather than numbered ad hoc, because a
@@ -1162,6 +1170,7 @@ void html_script_exec_init(ScriptExec *x)
     x->text = NULL;
     x->text_n = 0;
     x->el = NULL;
+    x->type = SCRIPT_TYPE_NONE;
     x->stage = SX_IDLE;
     x->phase = 0;
     x->cb[0] = JS_UNDEFINED;
@@ -1182,10 +1191,14 @@ void html_script_exec_begin(ScriptExec *x, ScriptImmediate *imm)
     DCHECK(imm->text != NULL && imm->el != NULL,
            "§4.12.1.1 step 36's run was begun on an EMPTY report — an empty record is the positive statement "
            "that this preparation owed no nested run, so beginning one means the caller did not look");
+    DCHECK(imm->type == SCRIPT_TYPE_CLASSIC || imm->type == SCRIPT_TYPE_IMPORTMAP,
+           "§4.12.1.1 step 36's report names a type \"execute the script element\" has no nested arm for — "
+           "a module takes a position in the sequence instead");
     x->text = imm->text;
     x->text_n = imm->text_n;
     x->el = imm->el;
-    imm->text = NULL; imm->text_n = 0; imm->el = NULL;
+    x->type = imm->type;
+    imm->text = NULL; imm->text_n = 0; imm->el = NULL; imm->type = SCRIPT_TYPE_NONE;
     x->stage = SX_RUN;
 }
 
@@ -1223,9 +1236,11 @@ void html_script_exec_release(JSContext *ctx, ScriptExec *x)
    the classic script", which is step 6's third sub-step: the report happens while the bracket is still open. */
 static void script_exec_finish(JSContext *ctx, ScriptExec *x)
 {
-    document_current_script_restore(ctx, x->el, x->old);
+    /* Only the classic arm opened the bracket. */
+    if (x->type == SCRIPT_TYPE_CLASSIC) document_current_script_restore(ctx, x->el, x->old);
     x->old = JS_UNDEFINED;
     x->el = NULL;
+    x->type = SCRIPT_TYPE_NONE;
     x->stage = SX_IDLE;
 }
 
@@ -1253,6 +1268,21 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
                    "answer routed into this one");
             JS_FreeValue(ctx, in);
             DCHECK(x->text != NULL, "step 36's run reached its compile with no source text");
+            /* Step 6's `importmap` arm: "Register an import map given el's relevant global object and el's
+               result", the result created over the source text and step 34's base URL. An error to rethrow is
+               reported by the stage below, which runs no bracket for this arm. */
+            if (x->type == SCRIPT_TYPE_IMPORTMAP) {
+                int rr = import_map_create_and_register(ctx, x->text, x->text_n, document_base_url(ctx));
+
+                free(x->text);
+                x->text = NULL;
+                x->text_n = 0;
+                if (rr == 0) { script_exec_finish(ctx, x); return 0; }
+                x->exc = JS_GetException(ctx);
+                x->stage = SX_REPORT;
+                in = JS_UNDEFINED;
+                goto report;
+            }
             /* §4.12.1.1 STEP 34's CLASSIC ARM — "let script be the result of creating a classic script using
                source text, settings object, base URL, and options" — performed HERE rather than where the step
                is numbered, which is unobservable and is what lets the report cross from `prepare` as BYTES:
@@ -1342,6 +1372,7 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
        injected script that throws must therefore NOT complete the mutation that inserted it — `appendChild`
        does not throw what the injected program threw — and the `error` listeners this report fires are the
        page's own code, which is why it is a request and not a call. */
+report:
     DCHECK(x->stage == SX_REPORT, "\"execute the script element\" is standing in a stage it has no steps for");
     r = report_exception_run(ctx, &x->rx, x->exc, in, out_cb, out_argc);
     if (r) return r;

@@ -10,6 +10,22 @@
 static const char HTML_MODULES[] =
     "<!doctype html><html>"
     "<body>"
+    /* HTML §8.1.5.3 "Import map processing model", read by the `im-*` rows. The first map's invalid address and
+       empty key are normalized to a null entry and skipped (the parse does not throw), its unknown top-level key
+       is ignored, and its scope applies only to referrers under `/chunk/`. The classic script between the maps
+       resolves `/chunk/mdlate.js` (an address this host serves as JSON, so its load rejects), which puts it in
+       the resolved module set, so the second map's rule for it is dropped by the merge, as is its rule for
+       `mdlib`, which the first map already has; its `mdlib2` is added. The third map does not parse and is
+       reported at the global as a SyntaxError, which the listener only stores: a later statement reads it, so
+       a driven call of the listener cannot answer for the report. */
+    "<script type=importmap>{\"imports\": {\"mdlib\": \"/chunk/mdmod.js\", \"mdbadaddr\": \"not a url\","
+    " \"\": \"/chunk/mdmod.js\", \"mdgood\": \"/chunk/mdmod.js\"},"
+    " \"scopes\": {\"/chunk/\": {\"mdscoped\": \"/chunk/mdmod.js\"}}, \"bogus\": 1}</script>"
+    "<script>var imErr = null; window.addEventListener('error', function(e){ imErr = e.error; });"
+    " import('/chunk/mdlate.js').then(function(){ fetch('/api/imlate1?w=ilLOADED'); }, function(e){ fetch('/api/imlate1?w=' + e.name); });</script>"
+    "<script type=importmap>{\"imports\": {\"mdlib2\": \"/chunk/mdmod.js\", \"mdlib\": \"/chunk/mdbad.js\","
+    " \"/chunk/mdlate.js\": \"/chunk/mdmod.js\"}}</script>"
+    "<script type=importmap>{not json</script>"
     /* The boot fork: `cfg.admin` forks here, so every later test of it in this document is decided inside the
        two arms that already exist rather than forking where it stands. */
     "<script>var cfg = { admin: state.admin }; if (cfg.admin) { cfg.arm = 'A'; } else { cfg.arm = 'P'; }</script>"
@@ -84,6 +100,16 @@ static const char HTML_MODULES[] =
     "(async function(){ fetch('/api/modsameask?w=muASK'); try { var a = await import('/chunk/mdmod.js'), b = await import('./chunk/../chunk/mdmod.js'); fetch('/api/modsame?w=' + (a === b ? 'muSAME' : 'muTWO')); } catch (e) { fetch('/api/modsame?w=' + e.name); } })();"
     /* …and the two referrers that name no script: an event handler (HTML §8.1.8.1 "Event handlers" step 3.11
        nulls its [[ScriptOrModule]], so it resolves against the API base URL) and a dynamic function's body. */
+    "fetch('/api/imerr?w=' + (imErr instanceof SyntaxError ? 'imSYNTAX' : 'imNONE'));"
+    "(async function(){ fetch('/api/imask?w=imASK');"
+    " try { var ima = await import('mdlib'); fetch('/api/immap?w=' + (ima.default && ima.default.tag === 'mmDEF' ? 'imDEF' : 'imNODEF')); } catch (e) { fetch('/api/immap?w=' + e.name); }"
+    " try { var imb = await import('mdlib2'); fetch('/api/immerge?w=' + (imb.default && imb.default.tag === 'mmDEF' ? 'imgDEF' : 'imgNODEF')); } catch (e) { fetch('/api/immerge?w=' + e.name); }"
+    " try { await import('mdgood'); fetch('/api/imskip?w=isGOOD'); } catch (e) { fetch('/api/imskip?w=' + e.name); }"
+    " try { await import('mdbadaddr'); fetch('/api/imnull?w=inLOADED'); } catch (e) { fetch('/api/imnull?w=' + e.name); }"
+    " try { await import('mdscoped'); fetch('/api/imscopeout?w=soLOADED'); } catch (e) { fetch('/api/imscopeout?w=' + e.name); }"
+    " try { await import('/chunk/mdscope.js'); } catch (e) { fetch('/api/imscopein?w=' + e.name); }"
+    " try { await import('/chunk/mdlate.js'); fetch('/api/imlate2?w=ilLOADED'); } catch (e) { fetch('/api/imlate2?w=' + e.name); }"
+    " })();"
     "var mdh = document.createElement('div');"
     "mdh.setAttribute('onclick', `fetch('/api/modhandlerask?w=ehASK'); import('./chunk/mdmod.js').then(function(n){ fetch('/api/modhandler?w=' + (n.default && n.default.tag === 'mmDEF' ? 'ehDEF' : 'ehNODEF')); }, function(e){ fetch('/api/modhandler?w=' + e.name); });`);"
     "mdh.dispatchEvent(new Event('click'));"
