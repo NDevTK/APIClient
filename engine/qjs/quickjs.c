@@ -35307,6 +35307,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* func_obj get contains a pointer to JSFuncAsyncState */
             /* the stack frame is already allocated */
             sf = &s->frame;
+            DCHECK(rt->current_stack_frame != sf,
+                   "a flow base was entered while it is the running frame — linking it would make the chain a "
+                   "self-loop; its resume has to wait for the base to return");
             if (unlikely(s->base_kind == FLOW_BASE_STEP_ROOT && !s->tramp_top)) {
                 /* FRESH call-root step base (reaction_call_flow_init): cur_func is a step closure, not bytecode, so
                    there is no `b`. Dispatch the pre-pushed [this, closure, arg] through do_step_tramp; itail=1 routes
