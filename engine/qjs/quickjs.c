@@ -53409,7 +53409,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
            whatever its declaration says it is. */
         *out_kind = ((JSAsyncSettle *)st)->cont_kind;
         return ((JSAsyncSettle *)st)->cont;
-    case CONT_PROMISE_ALL:
+    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET:
         /* JSPromiseAll HAS no requester field: a combinator is reached from an opcode and settles a capability,
            so nothing waits on the record. Stated rather than defaulted — if one is ever added it belongs here,
            and the DCHECK on the sibling's links is what will say so. */
@@ -53445,7 +53445,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
     case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
-    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP:
+    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
@@ -53501,7 +53501,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((struct JSKeyedInv *)st)->outer = outer; ((struct JSKeyedInv *)st)->outer_kind = outer_kind; return;
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
     case CONT_OP_KEYED: case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
-    case CONT_ASYNC_FROM_SYNC: case CONT_WITH_HAS: case CONT_NONE:
+    case CONT_PROMISE_ALL_NEXT_GET: case CONT_ASYNC_FROM_SYNC: case CONT_WITH_HAS: case CONT_NONE:
         break;
     /* No arm yet, as in cont_outer_get. */
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
@@ -53511,7 +53511,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
     case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
-    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP:
+    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
@@ -54605,7 +54605,9 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_free_rt(rt, st);
         return;
     }
-    case CONT_PROMISE_ALL: {
+    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: {
+        /* both roles of one JSPromiseAll: the combinator's own state (9), or the requester of GetIterator
+           step 5.b's `next` read (52). */
         js_promise_all_end(ctx, (struct JSPromiseAll *)st);
         js_free_rt(rt, st);
         return;
@@ -54699,7 +54701,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
     case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
-    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP:
+    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
