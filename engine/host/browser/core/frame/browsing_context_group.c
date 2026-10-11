@@ -6,6 +6,7 @@
 
 #include "check.h"
 #include "core/frame/browsing_context_group.h"
+#include "core/frame/navigable_notice.h"   /* the provisioning notices' field tables */
 #include "core/frame/window_proxy.h"
 #include "solver/engine.h"
 #include "solver/world.h"
@@ -101,33 +102,22 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
        the navigable's CURRENT document, which is the one the swap supersedes, so the name is unique by the same
        induction every other document name here rests on. */
     swapped = world_mint_doc(window_proxy_doc(proxy));
-    /* NO CREATOR FIELD AND NO POLICY FIELD, because §7.3.2.3 creates this browsing context "with null, null,
-       and group": there is no creator to clone a policy container from and none to inherit an opener policy
-       from. A field that is always empty is a field no reader can validate, so the record does not carry one.
-       NO TOP-LEVEL CREATION URL EITHER: the swapped-to navigable IS a top-level traversable, so HTML §8.1.3.1's
-       top-level creation URL for its environments is its own address — one fact, stated once, derived by the
-       zone from the address it is already given rather than sent twice and able to disagree.
-       A FOURTH FIELD THAT IS THE NAVIGATION'S AND NOT THE RECORD'S: what this load is evidence of. It is the
-       one field that is NOT derivable by the zone — every other fact here it can compute from the address or
-       from §7.3.2.3's own "null, null, and group", and this one is a statement about the PATH the engine ran,
-       which nothing outside the engine can see. TAB-SAFE by its vocabulary: solver/engine.h's three tokens are
-       ASCII lowercase letters.
-       SIZED FROM THIS ARRAY AND NOT BY HAND — the same primitive the create arm uses, and it is here for a
-       reason that had not yet cost anything: this record's slack constant was written when it carried three
-       fields, the provenance field made it four, and the constant was generous enough to absorb the extra TAB.
-       The create arm's was EXACT and the identical edit truncated it. A producer that is correct only because
-       its hand-computed slack happened to be loose is one field away from the same defect, so the arithmetic
-       goes rather than being corrected. */
-    const char *const fields[] = {
-        world_doc_name(swapped),
-        url,
-        origin_serialized(origin),
-        provenance,
-        driven,
-        pinned,
+    /* The provision record (navigable_notice.h). It has no creator and no policy field, because §7.3.2.3 creates
+       this browsing context "with null, null, and group": there is no creator to clone a policy container from
+       and none to inherit an opener policy from. It has no top-level creation URL either, since the swapped-to
+       navigable is a top-level traversable and HTML §8.1.3.1's URL is its own address, which the zone derives.
+       The provenance and the two marks are statements about the path the engine ran, which nothing outside the
+       engine can see; each is ASCII lowercase (solver/engine.h), so none holds a TAB. */
+    const char *const fields[NAVIGABLE_PROVISION_N] = {
+        [NAVIGABLE_PROVISION_DOCUMENT] = world_doc_name(swapped),
+        [NAVIGABLE_PROVISION_ADDRESS] = url,
+        [NAVIGABLE_PROVISION_ORIGIN] = origin_serialized(origin),
+        [NAVIGABLE_PROVISION_PROVENANCE] = provenance,
+        [NAVIGABLE_PROVISION_DRIVEN] = driven,
+        [NAVIGABLE_PROVISION_PINNED] = pinned,
     };
 
-    op = engine_notice_build("navigable.swap", fields, sizeof fields / sizeof fields[0]);
+    op = engine_notice_build("navigable.swap", fields, NAVIGABLE_PROVISION_N);
     engine_host_notify(ctx, op);
     free(op);
     /* AND THE OLD BROWSING CONTEXT IS DISCARDED — step 10's note, "browsingContext will not be used by the new

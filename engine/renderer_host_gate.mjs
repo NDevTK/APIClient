@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { runInThisContext } from 'node:vm';
+import { NAVIGABLE_NOTICE } from './noticegen.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT = join(ENGINE, '..', 'extension');
@@ -737,11 +738,8 @@ try {
          'under that name. A drive that drained without one is either a flow that never ran behind the frame ' +
          'boundary or a notice that did not survive the typed wire, and until this phase existed neither ' +
          `would have been visible to anything (drained=${drained})`);
-  /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
-     origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
-     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>ancestorOrigins<TAB>
-     creationSandboxFlags<TAB>provenance<TAB>group<TAB>driven<TAB>pinned<TAB>openerNavigable<TAB>policy`, built by
-     core/frame/navigable.c. The policy is LAST
+  /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — navigable_notice.h's create table, built by
+     core/frame/navigable.c and indexed here through noticegen.mjs. The policy is LAST
      because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
      field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
      HTML §7.1.4's three values are fixed tokens, RFC 8941 §3.3.3 "Strings" excludes a tab from the `report-to`
@@ -753,26 +751,27 @@ try {
      those names contain spaces ("sandboxed navigation browsing context flag").
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 19)
-    fail(`the create notice carries ${create.length} field(s) where the record has nineteen — ` +
+  const C = NAVIGABLE_NOTICE.create;
+  if (create.length < C.parts)
+    fail(`the create notice carries ${create.length} part(s) where the table has ${C.parts} — ` +
          `\`${create.join(' | ')}\``);
-  if (create[3] !== CHILD_ADDR)
-    fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
+  if (create[C.address] !== CHILD_ADDR)
+    fail(`the child navigable was announced at \`${create[C.address]}\` and this document opened \`${CHILD_ADDR}\` — ` +
          'the address is what the peer instance would be provisioned to load, so an operation that took it ' +
          'from anywhere but the call that named it would materialize the wrong document');
-  if (create[4] !== new URL(CHILD_ADDR).origin)
-    fail(`the child's origin was announced as \`${create[4]}\` and its address serializes to ` +
+  if (create[C.origin] !== new URL(CHILD_ADDR).origin)
+    fail(`the child's origin was announced as \`${create[C.origin]}\` and its address serializes to ` +
          `\`${new URL(CHILD_ADDR).origin}\` — the origin is the peer's PRINCIPAL and is the half of the agent ` +
          'cluster key SECURITY.md requires to be browser-stated');
-  if (create[2] !== 'opener')
-    fail(`the notice names \`${create[2]}\` as the creator and this document was init'd as \`opener\` — the ` +
+  if (create[C.creator] !== 'opener')
+    fail(`the notice names \`${create[C.creator]}\` as the creator and this document was init'd as \`opener\` — the ` +
          'creator is what says which instance the child is a child OF, and a wrong one routes the peer\'s ' +
          'answers to a document that did not open it');
-  if (create[1] === create[2] || create[1] === '')
-    fail(`the child navigable was announced under the creator's own name (\`${create[1]}\`) — the name is ` +
+  if (create[C.child] === create[C.creator] || create[C.child] === '')
+    fail(`the child navigable was announced under the creator's own name (\`${create[C.child]}\`) — the name is ` +
          'minted in the creating instance and is the whole of how the host knows which instance to provision ' +
          'and route to');
-  if (create[5] === '')
+  if (create[C.topLevelUrl] === '')
     fail('the create notice carries no top-level creation URL — HTML §8.1.3.1 makes it the creator\'s to ' +
          'state and the peer cannot derive it, so an empty one is a document the peer would build with no ' +
          'answer for a fact it is required to have');
@@ -787,8 +786,8 @@ try {
      cross-instance child could not inherit at all — the crash that named this capability — and it goes with
      the crash rather than being kept beside it. This document sends no CSP, so the policy IS empty here; what
      is asserted is the self-origin, which is present either way because §7.1.7 clones the container whole. */
-  if (create[6] !== new URL(OPENER_ADDR).origin)
-    fail(`the create notice's CSP self-origin is \`${create[6]}\` and the CREATOR's origin is ` +
+  if (create[C.cspSelfOrigin] !== new URL(OPENER_ADDR).origin)
+    fail(`the create notice's CSP self-origin is \`${create[C.cspSelfOrigin]}\` and the CREATOR's origin is ` +
          `\`${new URL(OPENER_ADDR).origin}\` — CSP §2.2 makes a CSP list a struct of policies AND a ` +
          'self-origin, and §7.1.7\'s clone keeps the origin it was cloned FROM. A self-origin that is the ' +
          'child\'s address means `script-src \'self\'` on the creator would permit the child\'s origin and ' +
@@ -800,13 +799,15 @@ try {
      only place a header could be read. This opener is init'd with no response headers at all, so §7.1.4's
      obtain answered its own initial value; what is asserted is that the record SAYS so in the section's own
      token rather than leaving the field empty, because an embedder policy has no absence to spell. */
-  if (create[7] !== 'unsafe-none' || create[9] !== 'unsafe-none')
-    fail(`the create notice's §7.1.4 embedder policy values are \`${create[7]}\`/\`${create[9]}\` and this ` +
+  if (create[C.coep] !== 'unsafe-none' || create[C.coepReportOnly] !== 'unsafe-none')
+    fail(`the create notice's §7.1.4 embedder policy values are ` +
+         `\`${create[C.coep]}\`/\`${create[C.coepReportOnly]}\` and this ` +
          'document was init\'d with no response headers, so HTML §7.1.4\'s obtain answered `unsafe-none` for ' +
          'both. A field that is empty or carries something else is an engine that stopped writing the item, ' +
          'and the peer would create the child claiming a policy no response ever stated');
-  if (create[8] !== '' || create[10] !== '')
-    fail(`the create notice carries a §7.1.4 reporting endpoint (\`${create[8]}\`/\`${create[10]}\`) and no ` +
+  if (create[C.coepEndpoint] !== '' || create[C.coepReportOnlyEndpoint] !== '')
+    fail(`the create notice carries a §7.1.4 reporting endpoint ` +
+         `(\`${create[C.coepEndpoint]}\`/\`${create[C.coepReportOnlyEndpoint]}\`) and no ` +
          'response header on this document could have named one — §7.1.4 makes both endpoints the EMPTY ' +
          'STRING initially and only a `report-to` parameter writes one');
   /* HTML §7.3.1.3's PARENT NAVIGABLE, AND THIS PHASE IS THE ONE THAT PROVES THE `u` ARM RATHER THAN THE OTHER.
@@ -816,8 +817,8 @@ try {
      empty. That pairing is the whole reason the parent is a field of its own: an auxiliary navigable and a
      child navigable differ here and NOWHERE ELSE on this record, so a gate that only checked the container
      would pass for a build that had confused the two. */
-  if (create[11] !== 'u')
-    fail(`the create notice's §7.3.1.3 parent navigable is \`${create[11]}\` and this document created the ` +
+  if (create[C.parent] !== 'u')
+    fail(`the create notice's §7.3.1.3 parent navigable is \`${create[C.parent]}\` and this document created the ` +
          'child with `window.open`, which HTML §7.3.1.7 step 8 makes an AUXILIARY navigable — a top-level ' +
          'traversable that is its own top and links back through `opener`. `u` is core/frame/remote_object.h\'s ' +
          'undefined and is the positive statement that there is no parent; anything else here would give the ' +
@@ -828,8 +829,9 @@ try {
      word rather than by leaving the field empty. Checking it beside the parent is what makes the pair
      meaningful: the two links are true or false together, so a build that computed §9.5 over some element it
      found anyway would send a feature map here and fail this line. */
-  if (create[12] !== 'null')
-    fail(`the create notice's §7.3.1.3 container statement is \`${create[12]}\` and this document created the ` +
+  if (create[C.containerPolicy] !== 'null')
+    fail(`the create notice's §7.3.1.3 container statement is \`${create[C.containerPolicy]}\` and this ` +
+         `document created the ` +
          'child with `window.open` — HTML §7.3.1.7 step 8 makes that an AUXILIARY navigable, which no element ' +
          'presents, so Permissions Policy §9.5\'s "container is null" is what the record must say. A feature ' +
          'map here would be §9.5 run over an element that presents some other navigable, and the peer would ' +
@@ -842,8 +844,9 @@ try {
      composed list here would be §3.1.3 run against a parent this navigable does not have, and the peer would
      answer `location.ancestorOrigins` with a frame tree the creator never built — which no page could tell
      from the truth, since the member's whole job is to report a tree the reader cannot otherwise see. */
-  if (create[13] !== 'none')
-    fail(`the create notice's §3.1.3 ancestor origins statement is \`${create[13]}\` and this document ` +
+  if (create[C.ancestorOrigins] !== 'none')
+    fail(`the create notice's §3.1.3 ancestor origins statement is \`${create[C.ancestorOrigins]}\` and this ` +
+         `document ` +
          'created the child with `window.open` — HTML §7.3.1.7 step 8 makes that an AUXILIARY navigable, ' +
          'which has no container document, so §3.1.3\'s step 3 returns the empty list and `none` is what the ' +
          'record must say. A list here would give the peer ancestors it has none of');
@@ -860,8 +863,8 @@ try {
      origin) and therefore its own agent cluster — a second cross-origin peer of a different shape than this
      phase provisions. It is named rather than left implied, because a gate that only ever sees `none` on a
      field would pass for a build that hardcoded it. */
-  if (create[14] !== 'none')
-    fail(`the create notice's §7.1.5 creation sandboxing flag set is \`${create[14]}\` and this document ` +
+  if (create[C.sandboxFlags] !== 'none')
+    fail(`the create notice's §7.1.5 creation sandboxing flag set is \`${create[C.sandboxFlags]}\` and this document ` +
          'created the child with `window.open` from an UNSANDBOXED page — §7.1.5 answers a navigable with no ' +
          'embedder element from its POPUP sandboxing flag set, which §7.1\'s rules for choosing a navigable ' +
          'fill only when the opener\'s own set carries the sandbox-propagates-to-auxiliary flag, and this ' +
@@ -878,34 +881,35 @@ try {
      that answered `forced` for everything, and `forced` is the arm both hosts REFUSE TO LOAD at an unwidened
      origin — so an engine that composed this field the wrong way round would provision no peer at all and
      this gate would report the refusal as a design decision. */
-  if (create[15] !== 'derived')
-    fail(`the create notice states the provenance \`${create[15]}\` and this document created the child by ` +
+  if (create[C.provenance] !== 'derived')
+    fail(`the create notice states the provenance \`${create[C.provenance]}\` and this document created the child by ` +
          'RUNNING `window.open` on a path that stood on no contradicted arm — solver/engine.h composes that ' +
          'as `derived`. `observed` would be an engine claiming a real load of this document makes this ' +
          'request, and `forced` is the arm both hosts decline to load at an unwidened origin, so a wrong ' +
          'word here is a peer that is never provisioned or a reply carried into the observed pool');
   /* HTML §7.3.1.7: `window.open` without `noopener` creates an auxiliary navigable given this document's
      browsing context, so it is in this document's group and its opener is this document's identity. */
-  if (create[16] !== 'creator')
-    fail(`the create notice places the popup in group \`${create[16]}\` and this document opened it without ` +
+  if (create[C.group] !== 'creator')
+    fail(`the create notice places the popup in group \`${create[C.group]}\` and this document opened it without ` +
          '`noopener` — §7.3.1.7 creates it given this browsing context, in this document\'s group');
   /* The opener's `window.open` runs in the page's own script, not in a drive of uncalled code. */
-  if (create[17] !== 'undriven')
-    fail(`the create notice states the drive mark \`${create[17]}\` and this document created the child from ` +
+  if (create[C.driven] !== 'undriven')
+    fail(`the create notice states the drive mark \`${create[C.driven]}\` and this document created the child from ` +
          'its own top-level script, which no drive of uncalled code ran');
-  if (create[18] !== 'unpinned')
-    fail(`the create notice states the witness mark \`${create[18]}\` and this document's \`window.open\` ` +
+  if (create[C.pinned] !== 'unpinned')
+    fail(`the create notice states the witness mark \`${create[C.pinned]}\` and this document's \`window.open\` ` +
          'address is a literal its own script spelled, which no equality pinned');
-  if (!create[19] || create[19][0] !== 'W')
-    fail(`the create notice's §7.2.2.4 opener is \`${create[19]}\` and this document opened the popup without ` +
+  if (!create[C.opener] || create[C.opener][0] !== 'W')
+    fail(`the create notice's §7.2.2.4 opener is \`${create[C.opener]}\` and this document opened the popup without ` +
          '`noopener` — the opener is this document\'s navigable identity, a `W` record');
-  if (create.slice(20).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(20).join('\t')}\`) and this ` +
+  if (create.slice(C.policy).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(C.policy).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
-  console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +
-              `announced at ${create[3]} (origin ${create[4]}, tlu ${create[5]}, csp self-origin ` +
-              `${create[6]}) by creator \`${create[2]}\``);
+  console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[C.child]}\` ` +
+              `announced at ${create[C.address]} (origin ${create[C.origin]}, tlu ${create[C.topLevelUrl]}, csp ` +
+              `self-origin ` +
+              `${create[C.cspSelfOrigin]}) by creator \`${create[C.creator]}\``);
   /* NO `teardown()` HERE, AND THAT IS DELIBERATE RATHER THAN AN OMISSION. `Teardown` is the call that makes the
      runtime walk gc_obj_list and report a leaked GC object; this frontier is mid-flight ON PURPOSE — the drive
      stopped at the notice — so its live flow state is reachable and a walk would report it as a leak. The

@@ -54,6 +54,7 @@
 #include "core/frame/remote_object.h"
 #include "core/frame/remote_op.h"
 #include "core/html/html_iframe.h"
+#include "core/frame/navigable_notice.h"   /* the provisioning notices' field tables */
 #include "core/frame/navigable.h"
 #include "solver/world.h"
 #include "solver/cow.h"
@@ -1658,9 +1659,14 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
     engine_route(ctx, record, from_origin);
 }
 
+/* Field `id` of a split create or provision record (navigable_notice.h): the operation name is f[0]. */
+#define WPT_CREATE(id) f[1 + NAVIGABLE_CREATE_##id]
+#define WPT_PROVISION(id) f[1 + NAVIGABLE_PROVISION_##id]
+
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[21]; int nf = 0; char *q;
+    /* The create record is the longest this router splits; every other arm reads a prefix of the array. */
+    char *f[1 + NAVIGABLE_CREATE_N]; int nf = 0; char *q;
     /* The record the emitting engine wrote, kept whole: the split below writes NULs into `line`, and a routed
        post crosses verbatim for the receiving engine's own entry to parse. */
     char *whole = strdup(line);
@@ -1668,65 +1674,50 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* The split stops at the last field and keeps the remainder verbatim, because the last field of a
        navigable.create is a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 21; q++)
+    for (q = line, f[nf++] = q; *q && nf < 1 + NAVIGABLE_CREATE_N; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 21 && !strcmp(f[0], "navigable.create")) {
-        /* Fields 5 to 10 are items of HTML §7.1.7's clone of the creator's container, which the hosting instance
-           cannot derive: 5 is HTML §8.1.3.1's top-level creation URL, 6 CSP §2.2's self-origin, 7 to 10 §7.1.4's
-           embedder policy (value, reporting endpoint, report-only value, report-only endpoint). 11 is HTML
-           §7.3.1.3's parent navigable, the tree link only this process holds. 12 is §7.3.1.3's container element's
-           Permissions Policy §9.5 result, which only the creating instance can compute. 13 is HTML §3.1.3
-           "Ancestor origins"' internal ancestor origin objects list, computed here because a serialization drops
-           the origin record (§7.1.1 decides an opaque origin by identity). 14 is HTML §7.1.5 "Sandboxing"'s
-           creation sandboxing flag set, comma-separated because its flag names contain spaces. 15 is the
-           navigation's provenance (`observed`/`derived`/`forced`), which with 17 and 18 is handed to the child as
-           its arrival (solver/engine.h's engine_set_arrival); this runner decides no fetch from them, since it
-           fetches only from wptserve with no cookie jar. 16 is the browsing context group, 17 the drive mark, 18
-           the witness mark, 19 HTML §7.2.2.4 "Accessing related windows"' opener in the parent's grammar (`N` for
-           none). The CSP policy is field 20, the remainder, because none of the earlier fields can contain a tab
-           and a raw CSP header can. The token asserts on 15 to 18 are the index check: a field inserted before
-           the policy shifts them and fires here, where the count check alone would hand the policy a token. */
-        DCHECK(!strcmp(f[15], PENDING_PROVENANCE_OBSERVED) || !strcmp(f[15], PENDING_PROVENANCE_DERIVED) ||
-               !strcmp(f[15], PENDING_PROVENANCE_FORCED),
-               "the create notice's fifteenth field is not one of the three provenance tokens engine.h "
-               "declares — a field was inserted into the record and this walk's indices did not move with it, "
-               "so the CSP container below is about to be taken from one field too early and the policy text "
-               "carries the token that displaced it");
-        /* Field 16 is which browsing context group the new navigable is in, `creator` or `new` (HTML §7.3.1.7's
-           noopener arm). This runner provisions one child per notice and keys nothing on a group, so the token is
-           read for the grammar only, as field 15 is. */
-        DCHECK(!strcmp(f[16], "creator") || !strcmp(f[16], "new"),
-               "the create notice's sixteenth field is not `creator` or `new` — a field was inserted into the "
-               "record and this walk's indices did not move with it, so the policy below is one field early");
-        /* Field 17 is whose act the navigation is (solver/engine.h's PENDING_DRIVEN_*), read for the same
-           grammar check and for no decision. */
-        DCHECK(!strcmp(f[17], PENDING_DRIVEN_YES) || !strcmp(f[17], PENDING_DRIVEN_NO),
-               "the create notice's seventeenth field is not a drive-mark token engine.h declares — the walk's "
-               "indices and the record's fields have parted");
-        DCHECK(!strcmp(f[18], PENDING_PINNED_YES) || !strcmp(f[18], PENDING_PINNED_NO),
-               "the create notice's eighteenth field is not a witness-mark token engine.h declares — the walk's "
-               "indices and the record's fields have parted");
-        /* Field 19 is the opener and the policy is field 20. The child's arrival is fields 15, 17 and 18 in
-           engine.h's arrival word. */
+    if (nf == 1 + NAVIGABLE_CREATE_N && !strcmp(f[0], "navigable.create")) {
+        /* The fields are navigable_notice.h's create table. The provenance and the two marks are the child's
+           arrival (solver/engine.h's engine_set_arrival); this runner decides no fetch from them, since it
+           fetches only from wptserve with no cookie jar, and it keys nothing on the group. The token asserts
+           check the record against the table this binary was compiled with. */
+        DCHECK(!strcmp(WPT_CREATE(PROVENANCE), PENDING_PROVENANCE_OBSERVED) ||
+               !strcmp(WPT_CREATE(PROVENANCE), PENDING_PROVENANCE_DERIVED) ||
+               !strcmp(WPT_CREATE(PROVENANCE), PENDING_PROVENANCE_FORCED),
+               "the create notice's provenance field is not one of the three provenance tokens engine.h declares — "
+               "navigable.c composed it from navigable_notice.h's table, so the writer and this reader disagree");
+        DCHECK(!strcmp(WPT_CREATE(GROUP), "creator") || !strcmp(WPT_CREATE(GROUP), "new"),
+               "the create notice's group field is not `creator` or `new` — the record and the table have parted");
+        DCHECK(!strcmp(WPT_CREATE(DRIVEN), PENDING_DRIVEN_YES) || !strcmp(WPT_CREATE(DRIVEN), PENDING_DRIVEN_NO),
+               "the create notice's drive mark is not a token engine.h declares — the record and the table have "
+               "parted");
+        DCHECK(!strcmp(WPT_CREATE(PINNED), PENDING_PINNED_YES) || !strcmp(WPT_CREATE(PINNED), PENDING_PINNED_NO),
+               "the create notice's witness mark is not a token engine.h declares — the record and the table "
+               "have parted");
         char arrival[64];
-        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", f[15], f[17], f[18]) < (int)sizeof arrival,
+        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", WPT_CREATE(PROVENANCE), WPT_CREATE(DRIVEN),
+                       WPT_CREATE(PINNED)) < (int)sizeof arrival,
               "wpt: a create notice's three marks did not fit an arrival word — each is one of engine.h's words");
-        wpt_spawn_child(f[1], f[3], f[4], f[20], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13],
-                        f[14], f[19], arrival);
+        wpt_spawn_child(WPT_CREATE(CHILD), WPT_CREATE(ADDRESS), WPT_CREATE(ORIGIN), WPT_CREATE(POLICY),
+                        WPT_CREATE(CSP_SELF_ORIGIN), WPT_CREATE(TOP_LEVEL_URL), WPT_CREATE(COEP),
+                        WPT_CREATE(COEP_ENDPOINT), WPT_CREATE(COEP_REPORT_ONLY),
+                        WPT_CREATE(COEP_REPORT_ONLY_ENDPOINT), WPT_CREATE(PARENT), WPT_CREATE(CONTAINER_POLICY),
+                        WPT_CREATE(ANCESTOR_ORIGINS), WPT_CREATE(SANDBOX_FLAGS), WPT_CREATE(OPENER), arrival);
         free(whole);
         return;
     }
-    /* `navigable.swap <new doc> <url> <origin> <provenance> <driven> <pinned>`: HTML §7.1.3.2's browsing context
-       group swap, the same provisioning act as a create in a different record. There is no creator (§7.3.2.3
-       creates the new browsing context "with null, null, and group"), so there is no policy container to clone
-       and no opener policy to inherit; and the swapped-to navigable is a top-level traversable, so HTML
-       §8.1.3.1's top-level creation URL is its own address, derived here and passed twice below. The provenance
-       and both marks are the child's arrival (engine.h's engine_set_arrival) and decide no fetch. A new group is
-       a new process here for the reason a cross-origin child is: SECURITY.md keys an instance on `(browsing
-       context group, origin)`, and a swap changes the first half. */
-    if (nf == 7 && !strcmp(f[0], "navigable.swap")) {
+    /* `navigable.swap`, navigable_notice.h's provision record: HTML §7.1.3.2's browsing context group swap, the
+       same provisioning act as a create in a different record. There is no creator (§7.3.2.3 creates the new
+       browsing context "with null, null, and group"), so there is no policy container to clone and no opener
+       policy to inherit; and the swapped-to navigable is a top-level traversable, so HTML §8.1.3.1's top-level
+       creation URL is its own address, derived here and passed twice below. The provenance and both marks are
+       the child's arrival (engine.h's engine_set_arrival) and decide no fetch. A new group is a new process here
+       for the reason a cross-origin child is: SECURITY.md keys an instance on `(browsing context group, origin)`,
+       and a swap changes the first half. */
+    if (nf == 1 + NAVIGABLE_PROVISION_N && !strcmp(f[0], "navigable.swap")) {
         char arrival[64];
-        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", f[4], f[5], f[6]) < (int)sizeof arrival,
+        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", WPT_PROVISION(PROVENANCE), WPT_PROVISION(DRIVEN),
+                       WPT_PROVISION(PINNED)) < (int)sizeof arrival,
               "wpt: a provisioning record's three marks did not fit an arrival word");
         /* With no creator every container item takes its spec value. The CSP list is empty, and an empty policy
            resolves no `'self'`, so there is no self-origin. §7.1.4's item is "a new embedder policy", spelled out
@@ -1738,23 +1729,26 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         /* §7.1.5's set is empty, in that section's own word: a top-level browsing context's creation sandboxing
            flags are its popup sandboxing flag set, which §7.1.5 makes empty at creation and only §7.3.1.7's rules
            for choosing a navigable populate, and no `window.open` reaches a swapped-to context. */
-        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
+        wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "",
+                        WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
                         SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);
         free(whole);
         return;
     }
-    /* `navigable.navigate <new doc> <url> <origin> <provenance> <driven> <pinned>`: a top-level traversable whose
-       navigation response's origin is another agent's, with §7.1.3.2 keeping the browsing context
-       (core/frame/navigable.c's nav_navigate_to_peer). The child is the swap's in every field: a top-level
-       document with no creator-side container, no parent, no element presenting it and its own address as its
-       top-level creation URL. The provenance and both marks are its arrival. */
-    if (nf == 7 && !strcmp(f[0], "navigable.navigate")) {
+    /* `navigable.navigate`, the same provision record: a top-level traversable whose navigation response's origin
+       is another agent's, with §7.1.3.2 keeping the browsing context (core/frame/navigable.c's
+       nav_navigate_to_peer). The child is the swap's in every field: a top-level document with no creator-side
+       container, no parent, no element presenting it and its own address as its top-level creation URL. The
+       provenance and both marks are its arrival. */
+    if (nf == 1 + NAVIGABLE_PROVISION_N && !strcmp(f[0], "navigable.navigate")) {
         char arrival[64];
-        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", f[4], f[5], f[6]) < (int)sizeof arrival,
+        CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", WPT_PROVISION(PROVENANCE), WPT_PROVISION(DRIVEN),
+                       WPT_PROVISION(PINNED)) < (int)sizeof arrival,
               "wpt: a provisioning record's three marks did not fit an arrival word");
-        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
+        wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "",
+                        WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "", "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
                         SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);

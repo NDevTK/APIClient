@@ -69,7 +69,7 @@ const ZONE = (() => {
   sandbox.globalThis = sandbox;
   sandbox.module = { exports: {} };
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/safe-fetch.js', 'bridge.js'])
+  for (const f of ['check.js', 'lib/safe-fetch.js', 'lib/navigable-notice.js', 'bridge.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   return sandbox;
 })();

@@ -9330,6 +9330,13 @@ STAGES.push(onHost(runProgram("record-field contract audit", [join(ENGINE, "fiel
                        "at the ROOT — make the consumer DCHECK the field (extension/check.js mirrors check.h) " +
                        "or delete the half of the contract that has gone stale. There is no baseline to " +
                        "update: the count IS the disagreement."), STAGE_HOST.SOURCE));
+/* The provisioning notices' field table: extension/lib/navigable-notice.js must be what navigable_notice.h
+   renders, since bridge.js indexes the engine's notices by it. The node readers refuse a stale copy on import;
+   this stage states the same disagreement for a build that runs none of them. */
+STAGES.push(onHost(runProgram("notice field table", [join(ENGINE, "noticegen.mjs"), "--check"],
+                       "extension/lib/navigable-notice.js is not what core/frame/navigable_notice.h renders. " +
+                       "Run `node engine/noticegen.mjs` and commit the result with the header change."),
+                   STAGE_HOST.SOURCE));
 /* THE THIRD AREA: does each component install the surface its Web IDL declares. It gates nothing and nothing
    gates it — it compiles no C and reads no artifact, so it asks its question of the SOURCES whatever the two
    programs above did, and a link failure can never take the member census out of the run with it.

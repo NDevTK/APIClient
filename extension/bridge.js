@@ -3680,18 +3680,18 @@ const PINNED_NO = "unpinned";
 
 /* What this zone owes a one-way notice. Each op is an action only this zone can take (SECURITY.md: the
    offscreen alone knows which instance holds which document); ops not listed here are described at their arms.
-   `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <cspSelfOrigin> <coep> <coepEndpoint>
-   <coepReportOnly> <coepReportOnlyEndpoint> <parentNavigable> <containerPolicy> <ancestorOrigins>
-   <creationSandboxFlags> <provenance> <group> <driven> <pinned> <csp>` — the engine has named the document and handed the page a
-   WindowProxy for it; this provisions (or joins) an instance under that name, loading the child's document
-   through the safeFetch chokepoint.
-   `navigable.swap <new document> <url> <origin> <provenance> <driven> <pinned>` — see that arm.
-   `navigable.navigate <new document> <url> <origin> <provenance> <driven> <pinned>` — see that arm.
+   `navigable.create`, fields as navigable_notice.h declares them — the engine has named the document and
+   handed the page a WindowProxy for it; this provisions (or joins) an instance under that name, loading the
+   child's document through the safeFetch chokepoint.
+   `navigable.swap` and `navigable.navigate`, that header's provision record — see those arms.
    `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed verbatim to the instance holding
    <target>, with this engine's origin stamped on it: the untrusted engine may not state its own origin, since
    a forgeable event.origin defeats every origin check in every bundle. */
 async function hostNotice(eng, line) {
   const f = line.split("\t");
+  /* Field indices from lib/navigable-notice.js, which engine/noticegen.mjs writes from the engine's
+     navigable_notice.h, so no index here is written by hand. */
+  const C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
   /* `navigable.request <creator> <destination> <referrer policy> <url>` — a child navigable's HTML §7.4.5 request
      facts, which a sub-frame seed of that address speaks with (seedChildRequest). */
   if (f[0] === "navigable.request") {
@@ -3701,26 +3701,31 @@ async function hostNotice(eng, line) {
     return;
   }
   if (f[0] === "navigable.create") {
-    /* The count covers every field the reader below indexes and moves when the record grows, because the
-       field added last is the one a stale count would let arrive as `undefined`. */
-    DCHECK(f.length >= 21 && (f[16] === "creator" || f[16] === "new") && (f[17] === DRIVEN_YES || f[17] === DRIVEN_NO) && (f[18] === "pinned" || f[18] === "unpinned"), "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, which browsing context group the navigable is in (`creator` or `new`), its drive mark, its witness mark, §7.2.2.4's opener, and the policy");
-    if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
-    /* Field 16: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing context
+    /* The count is the table's, so it moves with the record; the three token checks catch a record and a
+       table that have parted. */
+    DCHECK(f.length >= C.parts && (f[C.group] === "creator" || f[C.group] === "new") &&
+           (f[C.driven] === DRIVEN_YES || f[C.driven] === DRIVEN_NO) &&
+           (f[C.pinned] === "pinned" || f[C.pinned] === "unpinned"),
+           "a navigable.create notice does not match lib/navigable-notice.js's table — navigable.c composes it "
+           + "from navigable_notice.h, and noticegen.mjs writes the table from the same header, so the "
+           + "extension's copy is stale or the engine is from another revision");
+    if (hostHolderOf(f[C.child])) return;   // already provisioned: the engine announces a document once
+    /* The group: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing context
        group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's group, where the
        peer holds a WindowProxy for the creator (its `parent`, or its `opener`) and the engine raised its own flag
        at the emission (core/frame/navigable.c). This is the zone's record of that, read when the instance is
        re-rooted and by the join arms below. */
-    const _inCreatorGroup = f[16] === "creator";
+    const _inCreatorGroup = f[C.group] === "creator";
     if (_inCreatorGroup) eng.referenced = 1;
-    /* Field 15 is the engine's word for what this navigation is evidence of, field 17 its drive mark and field
-       18 its witness mark; navigationLoad and the chokepoint decide on them, and this arm passes them through. */
+    /* The provenance is the engine's word for what this navigation is evidence of, beside its drive mark and
+       witness mark; navigationLoad and the chokepoint decide on them, and this arm passes them through. */
     /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
-    const loaded = await eng.fetchedDocument(f[3], f[15], f[17], f[18], /*refusalArm*/"none",
-                                             DOCUMENT_REQUEST_UNSTATED);
-    childRequestAlias(f[2], f[3], loaded.url);
+    const loaded = await eng.fetchedDocument(f[C.address], f[C.provenance], f[C.driven], f[C.pinned],
+                                             /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED);
+    childRequestAlias(f[C.creator], f[C.address], loaded.url);
     /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
-       this zone followed), not the notice's f[4]: SECURITY.md makes routing and the origin stamped on a
+       this zone followed), not the notice's origin field: SECURITY.md makes routing and the origin stamped on a
        delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
        is rooted at (HTML §7.5.1 Shared document creation infrastructure's `creationURL`).
        Named residual: a child whose creator applied `sandbox` without `allow-same-origin` has an opaque origin
@@ -3748,8 +3753,9 @@ async function hostNotice(eng, line) {
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
                   origin: originOf(loaded.url),
                   groupId: _inCreatorGroup ? eng.groupId : "noopener:" + (_nextNoopenerGroup++),
-                  provenance: self.safeFetchReachJoin(eng.msg.provenance, f[15]),
-                  arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[15]), f[17], f[18]),
+                  provenance: self.safeFetchReachJoin(eng.msg.provenance, f[C.provenance]),
+                  arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[C.provenance]), f[C.driven],
+                                       f[C.pinned]),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* The response's own header list, whole; the creator's container is relayed separately below. */
     DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
@@ -3769,37 +3775,36 @@ async function hostNotice(eng, line) {
        fields: their values are fixed tokens, and `report-to` is a structured-field string (RFC 8941 §3.3.3
        Strings: printable ASCII %x20-%x7E, no tabs). Relayed verbatim; only the receiving engine maps the tokens,
        and it crashes on an unknown one (see NEW_EMBEDDER_POLICY). */
-    /* The policy is the remainder from field 20; every field added to the record is added in front of it, so
-       this index and the count above move together. A wrong index would join a neighbouring field onto the
-       creator's CSP, which CSP's parser drops as an unreadable directive without a crash. */
-    const inherited = { csp: f.slice(20).join("\t"), selfOrigin: f[6],
-                        embedder: { value: f[7], endpoint: f[8],
-                                    reportOnlyValue: f[9], reportOnlyEndpoint: f[10] } };
-    /* HTML §7.3.1.3 Child navigables' parent navigable at field 11, separate from the container policy: an
+    /* The policy is the remainder from the table's last field; navigable_notice.h asserts it is last. */
+    const inherited = { csp: f.slice(C.policy).join("\t"), selfOrigin: f[C.cspSelfOrigin],
+                        embedder: { value: f[C.coep], endpoint: f[C.coepEndpoint],
+                                    reportOnlyValue: f[C.coepReportOnly],
+                                    reportOnlyEndpoint: f[C.coepReportOnlyEndpoint] } };
+    /* HTML §7.3.1.3 Child navigables' parent navigable, separate from the container policy: an
        auxiliary navigable (`window.open`) has a full container and no parent. It is the emitting engine's own
        navigable identity (core/frame/remote_object.h), relayed verbatim; only the receiving engine decodes it,
        and it crashes on an unparseable record. A one-letter tag and '.'-terminated base64 contain no tab. */
-    const parentNavigable = f[11];
-    /* HTML §7.2.2.4's opener at field 19, in the parent's grammar (`N` for none); only the receiving engine
+    const parentNavigable = f[C.parent];
+    /* HTML §7.2.2.4's opener, in the parent's grammar (`N` for none); only the receiving engine
        decodes it (navigable_root_opener). */
-    const openerNavigable = f[19];
-    /* The container answer at field 12, the other §7.3.1.3 link: a child `<iframe>` has both links and an
+    const openerNavigable = f[C.opener];
+    /* The container answer, the other §7.3.1.3 link: a child `<iframe>` has both links and an
        auxiliary navigable has neither. It carries Permissions Policy §9.5's result, computable only in the
        creating engine, which holds the element and the child's origin. Relayed verbatim; feature tokens and
        `Enabled`/`Disabled` contain no tab. */
-    const containerPolicy = f[12];
-    /* The internal ancestor origin objects list (HTML §3.1.3 Ancestor origins) at field 13, a third algorithm
+    const containerPolicy = f[C.containerPolicy];
+    /* The internal ancestor origin objects list (HTML §3.1.3 Ancestor origins), a third algorithm
        over inputs neither field above carries. The answer travels rather than the inputs because §3.1.3 asks
        whether an ancestor is same origin with the parent document's origin, and opaque origins are compared by
        identity while all serialize to `null` (a `data:` document is in its own instance because it is
        opaque). Entries are origin serializations joined by SPACE, which URL §3.2 Host miscellaneous forbids in
        a host, as it does TAB. */
-    const ancestorOrigins = f[13];
-    /* The creation sandboxing flag set (HTML §7.1.5 Sandboxing) at field 14, not an item of the policy
+    const ancestorOrigins = f[C.ancestorOrigins];
+    /* The creation sandboxing flag set (HTML §7.1.5 Sandboxing), not an item of the policy
        container; it reads the embedder element and its node document's active flags, so the creating engine
        computes it. Members are joined by COMMA because §7.1.5's flag names contain spaces. Relayed verbatim;
        the receiving engine crashes on a word outside that section. */
-    const creationSandboxFlags = f[14];
+    const creationSandboxFlags = f[C.sandboxFlags];
     DCHECK(typeof creationSandboxFlags === "string" && creationSandboxFlags !== "",
            "a navigable.create notice carried no HTML §7.1.5 CREATION SANDBOXING FLAG SET — navigable.c " +
            "writes that section's own flag names on every record, and its word for the empty set where there " +
@@ -3875,8 +3880,8 @@ async function hostNotice(eng, line) {
              "child's proxy will arrive at a heap entitled to have finished");
       /* The bytes are on the message here, the one caller for which that holds: `msg` is the object this zone
          composed for the announced child. */
-      await engineJoin(holder, msg.pageHtml, msg, f[1], f[5], inherited, parentNavigable, openerNavigable,
-                       containerPolicy,
+      await engineJoin(holder, msg.pageHtml, msg, f[C.child], f[C.topLevelUrl], inherited, parentNavigable,
+                       openerNavigable, containerPolicy,
                        ancestorOrigins, creationSandboxFlags);
       return;
     }
@@ -3885,7 +3890,7 @@ async function hostNotice(eng, line) {
        because one round's notices are acted on in order: a page opens a window and posts to it in one turn, so
        the instance must exist before the post is routed. Referenced, since the notice itself proves a
        WindowProxy is held for it. */
-    await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], inherited, parentNavigable,
+    await engineCreate("", msg.pageHtml, msg, false, f[C.child], f[C.topLevelUrl], inherited, parentNavigable,
                        openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags, 1)._readyP;
     return;
   }
@@ -3903,13 +3908,14 @@ async function hostNotice(eng, line) {
      Absence shows as a swapped-to document whose content or headers differ from the response that decided
      the swap when the server answers the two requests differently. */
   if (f[0] === "navigable.swap") {
-    DCHECK(f.length >= 7 && !!f[1] && !!f[2] && !!f[4] && !!f[5] && !!f[6],
+    DCHECK(f.length >= P.parts && !!f[P.document] && !!f[P.address] && !!f[P.provenance] && !!f[P.driven] &&
+           !!f[P.pinned],
            "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
            "address it is loading, the origin it computed and what the navigation that caused the swap is " +
            "EVIDENCE OF; a record missing either of the first two names a Document this zone cannot provision " +
            "while the navigable it replaces is already closed, and one missing the last leaves the load below " +
            "with nothing to be decided from");
-    DCHECK(!hostHolderOf(f[1]),
+    DCHECK(!hostHolderOf(f[P.document]),
            "§7.1.3.2's swap named a document this pool already holds — the name is minted fresh for each swap " +
            "(solver/world.h), so a collision is one instance provisioned for two Documents, which is one heap " +
            "answering for two");
@@ -3918,8 +3924,8 @@ async function hostNotice(eng, line) {
        an address this zone declined at `document.fetch`. */
     /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
        an empty Uint8Array. */
-    const swapped = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none",
-                                              DOCUMENT_REQUEST_UNSTATED);
+    const swapped = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
+                                              /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED);
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -3931,13 +3937,14 @@ async function hostNotice(eng, line) {
     DCHECK(typeof swapped.url === "string" && swapped.url !== "",
            "the swapped-to document load answered no RESPONSE URL — §7.1.3.2 provisions a new instance from " +
            "the address the Document is at, which after a redirect is not the address the swap requested");
-    /* The reach grade is the join of the creating document's grade and the engine's word (`f[4]`), as for a
+    /* The reach grade is the join of the creating document's grade and the engine's provenance field, as for a
        created child, and is stated on every analyze record. */
     const swapMsg = { type: "AST_ANALYZE", pageHtml: swapped.bytes === null ? new Uint8Array(0) : swapped.bytes,
                       sourceUrl: swapped.url, origin: originOf(swapped.url),
                       groupId: "swap:" + (_nextSwapGroup++),
-                      provenance: self.safeFetchReachJoin(eng.msg.provenance, f[4]),
-                      arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[4]), f[5], f[6]),
+                      provenance: self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]),
+                      arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]), f[P.driven],
+                                           f[P.pinned]),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
     /* No inherited policy: a swapped-to Document has no creator to clone a container from (HTML §7.3.2.1 with
@@ -3956,7 +3963,7 @@ async function hostNotice(eng, line) {
     /* Not referenced: the old browsing context "will not be used by the new Document" (HTML §7.1.3.2's note)
        and the emitting engine discards it after writing this notice, so the opener's handle answers about the
        document it had (its `closed` is true) and nothing holds a proxy for this one. */
-    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, null, "u", "N", "null",
+    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[P.document], swapped.url, null, "u", "N", "null",
                        "none", "none", 0)._readyP;
     return;
   }
@@ -3969,23 +3976,25 @@ async function hostNotice(eng, line) {
      container and no ancestor list, and its own address is its top-level creation URL. Referenced, since the
      emitting engine's proxy names it. This zone loads the bytes, for the swap arm's reason. */
   if (f[0] === "navigable.navigate") {
-    DCHECK(f.length >= 7 && !!f[1] && !!f[2] && !!f[4] && !!f[5] && !!f[6],
+    DCHECK(f.length >= P.parts && !!f[P.document] && !!f[P.address] && !!f[P.provenance] && !!f[P.driven] &&
+           !!f[P.pinned],
            "a navigable.navigate notice was short of its fields — the engine writes the new document's name, " +
            "the address, the origin it computed, the navigation's provenance, its drive mark and its witness " +
            "mark, and the load below is decided from the last three");
-    DCHECK(!hostHolderOf(f[1]),
+    DCHECK(!hostHolderOf(f[P.document]),
            "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
-    const navd = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none",
-                                           DOCUMENT_REQUEST_UNSTATED);
+    const navd = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
+                                           /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED);
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
            "the instance is provisioned from all three");
     const navMsg = { type: "AST_ANALYZE", pageHtml: navd.bytes === null ? new Uint8Array(0) : navd.bytes,
                      sourceUrl: navd.url, origin: originOf(navd.url), groupId: eng.groupId,
-                     provenance: self.safeFetchReachJoin(eng.msg.provenance, f[4]),
-                     arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[4]), f[5], f[6]),
+                     provenance: self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]),
+                     arrival: arrivalWord(self.safeFetchReachJoin(eng.msg.provenance, f[P.provenance]), f[P.driven],
+                                          f[P.pinned]),
                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(navd.headers)) navMsg.responseHeaders[_n] = navd.headers[_n];
     const _nkey = clusterKeyOf(navMsg);
@@ -4001,12 +4010,12 @@ async function hostNotice(eng, line) {
              "out, and every instance of a group either was provisioned for a peer's navigable or created one");
       /* No creator: the join's grammar for that is the empty CSP pair and the new embedder policy, as for a
          tab's top-level navigation joining its cluster. */
-      await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[1], navd.url,
+      await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[P.document], navd.url,
                        { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY }, "u", "N", "null", "none", "none");
       return;
     }
     /* No creator: engineCreate's grammar for that is `null`, as for the swap arm. */
-    await engineCreate("", navMsg.pageHtml, navMsg, false, f[1], navd.url, null, "u", "N", "null",
+    await engineCreate("", navMsg.pageHtml, navMsg, false, f[P.document], navd.url, null, "u", "N", "null",
                        "none", "none", 1)._readyP;
     return;
   }

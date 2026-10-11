@@ -7,6 +7,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/frame/navigable.h"
+#include "core/frame/navigable_notice.h"   /* the provisioning notices' field tables */
 #include "core/frame/window_proxy.h"
 #include "core/frame/policy_container.h"
 #include "core/frame/sandboxing.h"
@@ -507,10 +508,16 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
        adopted: this agent does not host it (solver/world.h). */
     incoming = world_mint_doc(window_proxy_doc(proxy));
     {
-        const char *const fields[] = { world_doc_name(incoming), url, origin_serialized(origin), provenance,
-                                       driven, pinned };
+        const char *const fields[NAVIGABLE_PROVISION_N] = {
+            [NAVIGABLE_PROVISION_DOCUMENT] = world_doc_name(incoming),
+            [NAVIGABLE_PROVISION_ADDRESS] = url,
+            [NAVIGABLE_PROVISION_ORIGIN] = origin_serialized(origin),
+            [NAVIGABLE_PROVISION_PROVENANCE] = provenance,
+            [NAVIGABLE_PROVISION_DRIVEN] = driven,
+            [NAVIGABLE_PROVISION_PINNED] = pinned,
+        };
 
-        op = engine_notice_build("navigable.navigate", fields, sizeof fields / sizeof fields[0]);
+        op = engine_notice_build("navigable.navigate", fields, NAVIGABLE_PROVISION_N);
     }
     engine_host_notify(ctx, op);
     free(op);
@@ -4366,67 +4373,48 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         opener_id = remote_object_encode(ctx, (is_child || (feat && feat->noopener)) ? JS_NULL
                                                                                      : document_window_proxy(ctx));
         CHECK(opener_id != NULL, "navigable: OOM naming this navigable's §7.2.2.4 opener for a peer instance");
-        /* THE RECORD, FIELD BY FIELD, AND ITS SIZE IS A FUNCTION OF THIS ARRAY. engine_notice_build walks it
-           twice — once to size, once to write — so the TAB in front of every field is paid for by the same
-           edit that adds the field, and `sizeof fields / sizeof fields[0]` is the count nobody restates.
-           IT WAS A FORMAT STRING BESIDE A HAND-SUMMED LENGTH PLUS A SLACK CONSTANT, and the constant paid for
-           the operation name, the NUL and ONE TAB PER FIELD. Adding the provenance field below moved the sum
-           and left the constant, so the record was assembled one byte short and snprintf truncated it —
-           silently, because truncating is what snprintf is for. The byte it dropped was the record's last, the
-           last field is the policy, and the policy was EMPTY in the fixture that caught it: the final TAB
-           went, and seventeen fields reached every reader as sixteen. With a non-empty policy that same byte
-           comes off the END OF THE POLICY TEXT, which nothing counts and no reader can see.
-           NO FIELD BEFORE THE LAST MAY CONTAIN A TAB, and that is asserted for ALL of them in
-           engine_notice_build rather than for the three that were once spelled out here. The reasons are
-           per-field and they are this record's grammar: an origin's serialization cannot hold one (URL §3.2
-           "Host miscellaneous" makes TAB a forbidden host code point), nor can HTML §7.1.4's three fixed
-           tokens, nor RFC 8941 §3.3.3 "Strings"' `report-to` endpoints, nor remote_object.c's one-letter tag
-           over '.'-terminated base64, nor Permissions Policy §4.1's feature tokens and §4.2's
-           `Enabled`/`Disabled`, nor HTML §3.1.3's ancestor list (origin serializations joined by SPACE, and
-           §3.2 forbids SPACE in a host too), nor §7.1.5's flag names joined by COMMA. A tab in any of them is
-           that grammar having changed under a record that splits on one, and the creator's policy text would
-           land on the wrong field.
-           AND THE FIFTEENTH FIELD IS WHAT THIS NAVIGATION IS EVIDENCE OF — CLAUDE.md
-           §A-REQUEST-CARRIES-THE-PROVENANCE's `observed`/`derived`/`forced`, the same word the SAME-ORIGIN arm
-           puts on its load job, taken from the same local.
-           IT IS THE ONE FIELD THE HOST'S DECISION TO SPEND THE NETWORK IS MADE FROM, and until it existed the
-           host had nothing: §Attacker-sources puts the WHOLE of a navigation's safety in the choice of address
-           ("a navigation whose provenance is not established CRASHES at the decision rather than proceeding"),
-           and a record that named the address and said nothing about who named it left one host declining
-           every child navigable it was ever told about and the other firing every one of them CREDENTIALED.
-           IT SITS BEFORE THE POLICY FOR THE REASON EVERYTHING ELSE DOES: the policy is the record's remainder
-           because a raw CSP header may contain HTAB, and this vocabulary is three words of ASCII lowercase
-           letters (solver/engine.h), so it can never be the field that cannot be split. */
+        /* The record's fields, in navigable_notice.h's order. No field but the last may contain a TAB, which
+           engine_notice_build asserts for all of them, and each grammar here guarantees it: an origin
+           serialization (URL §3.2 "Host miscellaneous" forbids TAB in a host), HTML §7.1.4's tokens, RFC 8941
+           §3.3.3 strings, remote_object.c's identities, Permissions Policy §4.1's tokens, HTML §3.1.3's
+           SPACE-joined list, §7.1.5's COMMA-joined flag names and solver/engine.h's lowercase marks. The
+           creator's raw CSP header may hold one, so it is the remainder.
+           The provenance is what the zone decides whether to spend the network on: a navigation's safety is
+           its choice of address, so the zone needs to know whose path chose it. It is the same word the
+           same-origin arm puts on its load job, taken from the same local. */
         /* HTML §7.3.1.7 "the rules for choosing a navigable": with `noopener` the new top-level traversable is
            created given a null opener, which §7.3.2.1 "Creating browsing contexts" builds in a new browsing
            context group; a child and an auxiliary navigable with an opener are in this document's group. The
            same fact decides whether the peer holds a WindowProxy for this document (below), and it crosses on
            the notice because the zone keys an instance on (group, origin). */
         const bool peer_in_creator_group = is_child || !(feat && feat->noopener);
-        const char *const fields[] = {
-            world_doc_name(child),
-            world_doc_name(document_doc(ctx)),
-            addr,
-            origin_serialized(origin),
-            tlu,
-            creator_policy.self_origin,
-            embedder_policy_value_token(creator_policy.embedder.value),
-            creator_policy.embedder.endpoint,
-            embedder_policy_value_token(creator_policy.embedder.report_only_value),
-            creator_policy.embedder.report_only_endpoint,
-            parent_id,
-            container_policy,
-            ancestor_origins,
-            sandbox_flags,
-            provenance,
-            peer_in_creator_group ? "creator" : "new",
-            driven,   /* whose act it is (solver/engine.h's PENDING_DRIVEN_*), read by the zone's `actor` row */
-            pinned,   /* whether its path chose a witness (PENDING_PINNED_*), read by the navigation default */
-            opener_id,   /* the opener's identity (remote_object.h), or N; field 19 */
-            creator_policy.csp ? creator_policy.csp : "",
+        /* Placed by navigable_notice.h's table, so no index here is written by hand; a field the table
+           declares and this list omits is NULL, which engine_notice_build refuses. */
+        const char *const fields[NAVIGABLE_CREATE_N] = {
+            [NAVIGABLE_CREATE_CHILD] = world_doc_name(child),
+            [NAVIGABLE_CREATE_CREATOR] = world_doc_name(document_doc(ctx)),
+            [NAVIGABLE_CREATE_ADDRESS] = addr,
+            [NAVIGABLE_CREATE_ORIGIN] = origin_serialized(origin),
+            [NAVIGABLE_CREATE_TOP_LEVEL_URL] = tlu,
+            [NAVIGABLE_CREATE_CSP_SELF_ORIGIN] = creator_policy.self_origin,
+            [NAVIGABLE_CREATE_COEP] = embedder_policy_value_token(creator_policy.embedder.value),
+            [NAVIGABLE_CREATE_COEP_ENDPOINT] = creator_policy.embedder.endpoint,
+            [NAVIGABLE_CREATE_COEP_REPORT_ONLY] =
+                embedder_policy_value_token(creator_policy.embedder.report_only_value),
+            [NAVIGABLE_CREATE_COEP_REPORT_ONLY_ENDPOINT] = creator_policy.embedder.report_only_endpoint,
+            [NAVIGABLE_CREATE_PARENT] = parent_id,
+            [NAVIGABLE_CREATE_CONTAINER_POLICY] = container_policy,
+            [NAVIGABLE_CREATE_ANCESTOR_ORIGINS] = ancestor_origins,
+            [NAVIGABLE_CREATE_SANDBOX_FLAGS] = sandbox_flags,
+            [NAVIGABLE_CREATE_PROVENANCE] = provenance,
+            [NAVIGABLE_CREATE_GROUP] = peer_in_creator_group ? "creator" : "new",
+            [NAVIGABLE_CREATE_DRIVEN] = driven,   /* read by the zone's `actor` row */
+            [NAVIGABLE_CREATE_PINNED] = pinned,   /* read by the zone's `witness` row */
+            [NAVIGABLE_CREATE_OPENER] = opener_id,
+            [NAVIGABLE_CREATE_POLICY] = creator_policy.csp ? creator_policy.csp : "",
         };
 
-        op = engine_notice_build("navigable.create", fields, sizeof fields / sizeof fields[0]);
+        op = engine_notice_build("navigable.create", fields, NAVIGABLE_CREATE_N);
         engine_host_notify(ctx, op);
         free(op);
         free(parent_id);

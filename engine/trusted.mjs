@@ -94,7 +94,7 @@
  * establish that address's provenance — so, CLAUDE.md §Attacker-sources being explicit that a navigation whose
  * provenance is not established CRASHES at the decision, it refused every one of them and the whole
  * cross-instance surface below was a design that had never run. The three provisioning records now STATE what
- * the navigation is evidence of (`navigable.create` field 15, `navigable.swap` field 4, and the load job's own
+ * the navigation is evidence of (the `navigable.create` and `navigable.swap` provenance fields, and the load job's own
  * `document.fetch`), composed in the engine from the one fact only the engine can see: whether the flow that
  * built the address had stood on an arm its own concrete example contradicts. An OBSERVED or DERIVED address
  * is navigated; a FORCED one waits on the PER-ORIGIN WIDENING (`--explore <origin>`), which is a person saying
@@ -141,6 +141,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
+import { NAVIGABLE_NOTICE } from './noticegen.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = join(ENGINE, '..', 'extension');
@@ -605,13 +606,15 @@ async function main() {
      feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
      engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
      rather than by SPACE, because that section's flag names CONTAIN spaces.
-     THE POLICY IS THE REMAINDER FROM FIELD 20 AND THAT INDEX MOVES WITH THE RECORD — a slice one short does
-     not fail, it silently joins the field before the policy onto the FRONT of it, which is a creator's CSP
-     arriving at the peer with an extra unparseable directive and every `@S` verdict decided against it. The
-     OPENER (field 19) is in this list, after the parent, in qjs_init's order. The PROVENANCE (field 15), the
-     GROUP (field 16) and the two MARKS (fields 17, 18) are not: they decide the LOAD and which instance hosts it. */
+     Every index is navigable_notice.h's, through noticegen.mjs, so the policy's slice moves with the record:
+     a slice one short would join the field before the policy onto its front. The opener is in this list,
+     after the parent, in qjs_init's order. The provenance, the group and the two marks are not: they decide
+     the load and which instance hosts it. */
+  const C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
   const createFacts = (f) =>
-    [f[5], b64(f.slice(20).join('\t')), f[6], f[7], f[8], f[9], f[10], f[11], f[19], f[12], f[13], f[14]];
+    [f[C.topLevelUrl], b64(f.slice(C.policy).join('\t')), f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint],
+     f[C.coepReportOnly], f[C.coepReportOnlyEndpoint], f[C.parent], f[C.opener], f[C.containerPolicy],
+     f[C.ancestorOrigins], f[C.sandboxFlags]];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -1214,10 +1217,10 @@ async function main() {
     const f = record.split('\t');
 
     if (f[0] === 'navigable.create') {
-      /* NINETEEN FIELDS, and the count MOVES when the record grows: the field added last is exactly the one
-         an unmoved count would let arrive as `undefined`, and every one of them below is read. */
-      if (f.length < 21 || (f[16] !== 'creator' && f[16] !== 'new') ||
-          (f[17] !== 'driven' && f[17] !== 'undriven') || (f[18] !== 'pinned' && f[18] !== 'unpinned'))
+      /* The count is the table's (noticegen.mjs reads navigable_notice.h), so it moves with the record. */
+      if (f.length < C.parts || (f[C.group] !== 'creator' && f[C.group] !== 'new') ||
+          (f[C.driven] !== 'driven' && f[C.driven] !== 'undriven') ||
+          (f[C.pinned] !== 'pinned' && f[C.pinned] !== 'unpinned'))
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
                         'child, the creator, the address, the origin, §8.1.3.1\'s top-level creation URL, CSP ' +
                         '§2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s parent ' +
@@ -1230,25 +1233,19 @@ async function main() {
          re-announcing it under the same name. A second instance would give one document two heaps and two
          object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent and
          which nothing downstream could tell from the routing. */
-      if (holderOf(f[1])) return;
-      /* FIELD 16: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing
+      if (holderOf(f[C.child])) return;
+      /* The group: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing
          context group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's. In
          the creator's group the peer holds a WindowProxy for the creator, whose engine raised its own flag at
          the emission (core/frame/navigable.c); this is the zone's record of that. */
-      const inCreatorGroup = f[16] === 'creator';
+      const inCreatorGroup = f[C.group] === 'creator';
       if (inCreatorGroup) e.referenced = 1;
       const group = inCreatorGroup ? e.group : newGroup();
-      /* FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF, AND IT IS WHY THIS ARM STOPPED BEING A BLANK REFUSAL.
-         `null` here meant "the record does not state it", and §Attacker-sources makes an unestablished
-         provenance a crash at the decision — so every cross-origin child navigable any page ever created was
-         declined at every unwidened origin, which is every origin by default. The create notice now carries
-         the word, so a child a page's own code named on a path that stood on no contradicted arm is `derived`,
-         which is the capability §What-the-tool-produces exists for.
-         Field 17 is whose act it is and field 18 whether its path chose a witness; the default fires the
-         page's own `unpinned` child, as it fires the page's `fetch()`, and every other grade waits on
-         `--explore`. */
-      const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, f[15], f[17], f[18],
-                                    e.docReach);
+      /* The provenance is what the navigation is evidence of, the drive mark whose act it is and the witness
+         mark whether its path chose one. The default fires the page's own `unpinned` child, as it fires the
+         page's `fetch()`, and every other grade waits on `--explore`. */
+      const loaded = await navigate(f[C.address], e.docUrl, `navigable.create ${f[C.child]}`, f[C.provenance],
+                                    f[C.driven], f[C.pinned], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
@@ -1266,27 +1263,27 @@ async function main() {
          document, which the bill would have to carry. Absence shows as: a holder's own request refused on
          `doc-reach` at an origin whose table permits the holder's reach, after a forced-grade child joined it. */
       const childOrigin = new URL(loaded.url).origin;
-      const reach = ZONE.safeFetchReachJoin(e.docReach, f[15]);
+      const reach = ZONE.safeFetchReachJoin(e.docReach, f[C.provenance]);
       const holder = clusterOf(group, childOrigin);
       if (holder) {
         if (holder === e || holder.referenced !== 1)
-          throw new Error(`navigable.create ${f[1]} would join instance [${holder.tag}], which ` +
+          throw new Error(`navigable.create ${f[C.child]} would join instance [${holder.tag}], which ` +
                           `${holder === e ? 'is its own creator — a same-origin child never leaves its ' +
                           'creator\'s heap' : 'holds no peer reference — every instance of a group was ' +
                           'provisioned for a peer\'s navigable or created one'}`);
-        holder.docs.push(f[1]);
+        holder.docs.push(f[C.child]);
         holder.docReach = ZONE.safeFetchReachJoin(holder.docReach, reach);
-        holder.ready.push(['join', loaded.url, f[1], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
-                           ...createFacts(f), arrivalWord(reach, f[17], f[18])].join('\t'));
+        holder.ready.push(['join', loaded.url, f[C.child], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
+                           ...createFacts(f), arrivalWord(reach, f[C.driven], f[C.pinned])].join('\t'));
         retryHeld();
         flush();
         return;
       }
-      /* REFERENCED, AND THE CREATE NOTICE IS ITSELF THE PROOF: the creating engine minted `f[1]` because its
+      /* REFERENCED, AND THE CREATE NOTICE IS ITSELF THE PROOF: the creating engine minted the child because its
          page already holds a WindowProxy for this navigable, which is the only reason a delivery has to be
          routed here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document,
          so this document's timelines may not run out before they do. */
-      await provision({ docId: f[1], url: loaded.url, origin: childOrigin, group,
+      await provision({ docId: f[C.child], url: loaded.url, origin: childOrigin, group,
                         headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f),
                         /* AND UNDER BOTH GRADES, WHICH IS WHAT `safeFetchReachJoin` IS FOR: this
                            document exists because the creating one did, so it is reached under the weaker of
@@ -1294,7 +1291,7 @@ async function main() {
                            notice's word alone would let a child of a document this zone chose to open read
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
-                        docReach: reach, arrival: arrivalWord(reach, f[17], f[18]),
+                        docReach: reach, arrival: arrivalWord(reach, f[C.driven], f[C.pinned]),
                         referenced: 1 });
       return;
     }
@@ -1307,14 +1304,16 @@ async function main() {
        URL. A new GROUP is a new instance for the same reason a cross-origin child is: SECURITY.md keys one on
        `(browsing context group, origin)` and a swap changes the first half. */
     if (f[0] === 'navigable.swap') {
-      if (f.length < 7 || !f[1] || !f[2] || !f[4] || !f[5] || !f[6])
-        throw new Error(`a navigable.swap notice was short of its fields: ${record} — the fourth is what the ` +
+      if (f.length < P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
+          !f[P.pinned])
+        throw new Error(`a navigable.swap notice was short of its fields: ${record} — the provenance is what the ` +
                         'navigation that caused the swap is EVIDENCE OF, taken off that navigation\'s own ' +
                         'load job (core/frame/browsing_context_group.c), and the load below is decided from it');
-      if (holderOf(f[1])) return;
+      if (holderOf(f[P.document])) return;
       /* AND IT IS THE SAME NAVIGATION'S WORD, which is what keeps a swap from being a door an address this
          zone declined at `document.fetch` could be fetched through one notice later. */
-      const loaded = await navigate(f[2], e.docUrl, `navigable.swap ${f[1]}`, f[4], f[5], f[6], e.docReach);
+      const loaded = await navigate(f[P.address], e.docUrl, `navigable.swap ${f[P.document]}`, f[P.provenance],
+                                    f[P.driven], f[P.pinned], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE NAMED IT" IS THE WRONG READING. §7.1.3.2 step
          10's note says the old browsing context "will not be used by the new Document that we are about to
@@ -1322,7 +1321,7 @@ async function main() {
          page that navigated still holds its handle, and that handle answers about the document it had, not
          about this one. Nothing anywhere holds a proxy for the swapped-TO document, so keeping its timelines
          open would park its last flow for a question no instance can ask. */
-      await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
+      await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
                         /* AND UNDER BOTH GRADES, WHICH IS WHAT `safeFetchReachJoin` IS FOR: this
                            document exists because the creating one did, so it is reached under the weaker of
@@ -1330,8 +1329,9 @@ async function main() {
                            notice's word alone would let a child of a document this zone chose to open read
                            as one the person navigated to, and every request that child makes would then be
                            relayed by the default arm the grade exists to hold. */
-                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[4]),
-                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[4]), f[5], f[6]),
+                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]),
+                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]), f[P.driven],
+                                             f[P.pinned]),
                         group: newGroup(), referenced: 0 });
       return;
     }
@@ -1342,19 +1342,21 @@ async function main() {
        this address, loaded by this zone under the navigation's word — and the difference is `referenced`: the
        emitting instance's proxy names this document, so its timelines may not run out under a read. */
     if (f[0] === 'navigable.navigate') {
-      if (f.length < 7 || !f[1] || !f[2] || !f[4] || !f[5] || !f[6])
+      if (f.length < P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
+          !f[P.pinned])
         throw new Error(`a navigable.navigate notice was short of its fields: ${record} — the engine writes the ` +
                         'new document\'s name, the address, the origin it computed, the navigation\'s ' +
                         'provenance, its drive mark and its witness mark (core/frame/navigable.c), and the ' +
                         'load below is decided from the last three');
-      if (holderOf(f[1])) return;
-      const loaded = await navigate(f[2], e.docUrl, `navigable.navigate ${f[1]}`, f[4], f[5], f[6],
-                                    e.docReach);
+      if (holderOf(f[P.document])) return;
+      const loaded = await navigate(f[P.address], e.docUrl, `navigable.navigate ${f[P.document]}`,
+                                    f[P.provenance], f[P.driven], f[P.pinned], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
-      await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
+      await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
-                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[4]),
-                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[4]), f[5], f[6]),
+                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]),
+                        arrival: arrivalWord(ZONE.safeFetchReachJoin(e.docReach, f[P.provenance]), f[P.driven],
+                                             f[P.pinned]),
                         group: e.group, referenced: 1 });
       return;
     }
@@ -1367,7 +1369,7 @@ async function main() {
        IT IS UNDER THE SAME WIDENING AS EVERY OTHER NAVIGATION, AND THE SENTENCE HERE USED TO SAY OTHERWISE.
        It read "it is the ONE record that states its own provenance … the create says nothing about who named
        the address", which was true when this arm was written and is contradicted by this file's own header and
-       by the call three blocks up: `navigable.create` states it at field 15, `navigable.swap` at field 4, and
+       by the call three blocks up: `navigable.create` and `navigable.swap` each state it in a field, and
        all three go through the one `navigate`, where a `forced` address waits on `--explore <origin>` and a
        `derived` one is loaded. A record's provenance is a fact about the ACT, so no record is privileged by
        carrying one — and a comment claiming a privilege the code does not grant is worse than one claiming a

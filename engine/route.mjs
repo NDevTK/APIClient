@@ -84,6 +84,7 @@
    many, so the load, the walk and the built glue's own declared arity live in engine/renderer_abi.mjs and both
    drivers read them from there. */
 import { GLUE_PATH, abiOperands } from './renderer_abi.mjs';
+import { NAVIGABLE_NOTICE } from './noticegen.mjs';
 
 const factory = await import(GLUE_PATH);
 const boot = factory.default ?? factory;
@@ -666,59 +667,36 @@ async function drainNotices(e) {
        and two object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent
        and which nothing downstream could tell from the routing. */
     if (f[0] === 'navigable.create') {
-      /* SEVENTEEN FIELDS, COUNTED BEFORE ANY OF THEM IS READ — and this arm was the one reader of this record
-         that did not count. The `navigable.swap` arm below counts its five, `trusted.mjs` counts seventeen,
-         `bridge.js` DCHECKs seventeen and wpt_runner.c routes on `nf == 17`; this one indexed straight to
-         `f[6]`..`f[14]` and `f.slice(16)`, so a record one field short reached makeEngine with `undefined`
-         where a policy goes and `''` where the CSP goes — which is not a crash but a peer instance provisioned
-         under a policy container nobody stated. That is §A-FIELD-A-CONSUMER-DEFAULTS exactly: `slice(16)` on a
-         sixteen-field record is `[]` and joins to the empty string, which is indistinguishable from a document
-         that really sent no policy. The count is what tells those apart, and it is the only thing that can. */
-      if (f.length < 21)
-        fail(`a navigable.create notice was short of its fields (${f.length} of twenty-one): ${n} — ` +
-             'navigable.c writes the child, the creator, the address, the origin, §8.1.3.1\'s top-level ' +
-             'creation URL, CSP §2.2\'s self-origin, the four items of §7.1.4\'s embedder policy, §7.3.1.3\'s ' +
-             'parent navigable and its container\'s Permissions Policy §9.5 answer, HTML §3.1.3\'s ancestor ' +
-             'origins, HTML §7.1.5\'s creation sandboxing flag set, what the NAVIGATION is evidence of, its ' +
-             'group, its drive mark, its witness mark, §7.2.2.4\'s opener, and the policy');
-      if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
-      /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list, FIELDS 7-10 ARE §7.1.4's EMBEDDER POLICY —
-         its value, its reporting endpoint, its report-only value and its report-only endpoint — FIELD 11 IS
-         HTML §7.3.1.3's PARENT NAVIGABLE, FIELD 12 IS THAT SECTION'S OTHER LINK (what the navigable's
-         CONTAINER answered, which is Permissions Policy §9.5's result and which only the creating instance
-         could compute, since §9.5's two arguments are that element and the child's origin), FIELD 13 IS HTML
-         §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the child's Document (a THIRD
-         answer over a THIRD algorithm, whose inputs include the parent Document's ORIGIN RECORD — which is
-         what a serialization drops, since §7.1.1 decides an opaque origin by IDENTITY), FIELD 14 IS HTML
-         §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that same navigable (a FOURTH answer, and not
-         an item of the §7.1.7 container beside it — that container is five policies and a flag set is none of
-         them; §7.1.5 reads the embedder ELEMENT's iframe sandboxing flag set and that element's node
-         document's active set, neither of which crosses an instance, so the creating engine runs it and the
-         result travels), FIELD 15 IS WHAT THE NAVIGATION IS EVIDENCE OF (CLAUDE.md
-         §A-REQUEST-CARRIES-THE-PROVENANCE's `observed`/`derived`/`forced`, which this driver reads nowhere for
-         the `document.fetch` branch's reason exactly — it serves a literal and spends no network — but which
-         it must COUNT, because the policy behind it is the remainder and an uncounted field moves it), FIELD
-         16 IS ITS GROUP, FIELDS 17-18 ITS DRIVE AND WITNESS MARKS (all counted), FIELD 19 §7.2.2.4's OPENER,
-         and FIELD 20 IS THE LIST. The policy is the record's REMAINDER (a raw CSP header may contain HTAB),
-         which is why everything that is not the policy sits before it: an
-         origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
-         one-letter tag and '.'-terminated base64, RFC 8941 §3.3.3 "Strings" excludes one from a
-         `report-to` endpoint, and §3.1.3's list is origin serializations joined by SPACE, which URL §3.2
-         "Host miscellaneous" makes a forbidden host code point exactly as it does TAB.
-         THE PARENT IS NOT PART OF THE CONTAINER BESIDE IT and is passed on its own: this fixture's `a` opens a
-         CROSS-ORIGIN WINDOW, which §7.3.1.7 step 8 makes an AUXILIARY navigable — a full policy container, NO
-         parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
-         either of them into the container beside them could not tell that from a frame.
+      const C = NAVIGABLE_NOTICE.create;
+      /* Counted before any field is read: a record one field short would otherwise reach makeEngine with
+         `undefined` where a policy goes, and `f.slice(C.policy)` on it would join to the empty string, which is
+         indistinguishable from a creator that sent no policy. The count and every index are
+         navigable_notice.h's, through noticegen.mjs. */
+      if (f.length < C.parts)
+        fail(`a navigable.create notice was short of its fields (${f.length} of ${C.parts}): ${n} — ` +
+             'navigable.c composes it from navigable_notice.h, so this driver and that engine disagree');
+      if (holderOf(f[C.child]))
+        console.log(`  [${e.tag}] create for ${f[C.child]}, already held — routing to the live instance`);
+      /* The provenance is counted and read nowhere else here, for the `document.fetch` branch's reason: this
+         driver serves a literal and spends no network.
+         The parent is not part of the container beside it and is passed on its own: this fixture's `a` opens a
+         cross-origin window, which §7.3.1.7 step 8 makes an auxiliary navigable (a full policy container, no
+         parent and no container element), so the record carries `u` and `null` there, and a driver that folded
+         either into the container could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, `${f[15]},${f[17]},${f[18]}`,
-                                         f.slice(20).join('\t'),
-                                         f[6], f[7], f[8], f[9], f[10], f[11], f[19], f[12], f[13], f[14]));
+      else engines.push(await makeEngine(HTML_B, f[C.address], f[C.child], '', f[C.topLevelUrl], undefined,
+                                         `${f[C.provenance]},${f[C.driven]},${f[C.pinned]}`,
+                                         f.slice(C.policy).join('\t'),
+                                         f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint], f[C.coepReportOnly],
+                                         f[C.coepReportOnlyEndpoint], f[C.parent], f[C.opener],
+                                         f[C.containerPolicy], f[C.ancestorOrigins], f[C.sandboxFlags]));
     }
-    /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin> <provenance> <driven> <pinned>`. The same act as
-       a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a
-       NULL CREATOR, so there is no policy container to clone and no top-level creation URL only the creator
-       could state (a top-level traversable's is its own address). The instance is NEW rather than joined
-       because a swap changes the group, which is half of SECURITY.md's `(browsing context group, origin)` key.
+    /* HTML §7.1.3.2's browsing context group swap — `navigable.swap`, navigable_notice.h's provision record.
+       The same act as a create and a different record: §7.3.2.3 makes the new browsing context "with null,
+       null, and group", a null creator, so there is no policy container to clone and no top-level creation URL
+       only the creator could state (a top-level traversable's is its own address). The instance is NEW rather
+       than joined because a swap changes the group, which is half of SECURITY.md's `(browsing context group,
+       origin)` key.
        NOT REACHED BY THIS FIXTURE, and that is stated rather than left to be discovered: `a` opens a
        CROSS-ORIGIN window, which navigable.c hands to the create notice without ever fetching, so no load job
        of `a`'s obtains an opener policy at all. What would drive it is a SAME-ORIGIN `window.open` — the
@@ -726,11 +704,14 @@ async function drainNotices(e) {
        branch above with a `cross-origin-opener-policy: same-origin` field line, which `a`'s own `unsafe-none`
        does not match. That is one line in HTML_A and one URL-keyed header in the reply this driver serves. */
     else if (f[0] === 'navigable.swap') {
-      /* SEVEN FIELDS, the last three being the provenance and two marks of the navigation that caused the
-         swap. The provenance is the new instance's arrival; both marks are counted and read nowhere. */
-      if (f.length < 7 || !f[1] || !f[2] || !f[4] || !f[5] || !f[6])
+      const P = NAVIGABLE_NOTICE.provision;
+      /* The provenance and the two marks of the navigation that caused the swap are the new instance's
+         arrival. */
+      if (f.length < P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
+          !f[P.pinned])
         fail(`a navigable.swap notice was short of its fields: ${n}`);
-      if (holderOf(f[1])) fail(`§7.1.3.2's swap named a document an instance already holds: ${f[1]}`);
+      if (holderOf(f[P.document]))
+        fail(`§7.1.3.2's swap named a document an instance already holds: ${f[P.document]}`);
       /* NO CREATOR (§7.3.2.3 makes the new browsing context "with null, null, and group"), so no container to
          clone and no self-origin to state. */
       /* §7.3.1.3's PARENT DEFAULTS TO `u` HERE AND THAT IS THE SPEC: §7.1.3.2 step 2 returns before the
@@ -739,7 +720,8 @@ async function drainNotices(e) {
          AND §3.1.3's LIST DEFAULTS TO `none` BY THAT SAME SENTENCE READ ONE ALGORITHM ALONG: its steps 2-3
          return an empty output for a Document with no CONTAINER DOCUMENT, and a navigable with no parent has
          none. Both are defaults because both are what the section says, not because nothing was known. */
-      engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2], undefined, `${f[4]},${f[5]},${f[6]}`, '', ''));
+      engines.push(await makeEngine(HTML_B, f[P.address], f[P.document], '', f[P.address], undefined,
+                                    `${f[P.provenance]},${f[P.driven]},${f[P.pinned]}`, '', ''));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
