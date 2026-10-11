@@ -1873,9 +1873,12 @@ function navigationCarriesSession(absUrl, principalOrigin) {
 /* The facts a credentialed document load of `absUrl` speaks with as `speaker`: HTML §7.4.5's request, credentials
    mode `include` and mode `navigate`, with the speaker's client as the request's, so its Cookie, Referer and
    Sec-Fetch-Site are that client's. The document that reads the reply is the caller's principal, a second fact.
-   Named residual. Not covered: a child navigable's destination, which webNavigation states only as
-   `sub_frame`; the load states `document`. The next diff carries the container's element kind on the load.
-   Its absence shows as Sec-Fetch-Dest `document` where the browser's own load of that frame sent `iframe`. */
+   Named residual. Not covered: a child navigable's destination, one of Fetch §2.2.5's navigation request
+   destinations `iframe`, `frame`, `object` and `embed`; the load states `document`. No chrome.* fact names
+   the container's element kind: webNavigation states `frameType: "sub_frame"` and `transitionType:
+   "auto_subframe"` whatever the element, so a seed keeps `document`. The next diff has the engine state its
+   container element's kind on the `document.fetch` record of a navigable it created. Its absence shows as
+   Sec-Fetch-Dest `document` where the browser's own load of that frame sent the container's kind. */
 function navigationIdentity(speaker, absUrl) {
   DCHECK(!!speaker && !!speaker.identity && typeof speaker.identity.origin === "string" &&
          !!speaker.identity.partitionKey && (speaker.referrer === "client" || speaker.referrer === "none"),
