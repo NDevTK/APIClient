@@ -758,7 +758,7 @@
            a declared parameter this record has no entry for, BY NAME. */
         var v = await r.renderer.init({
           document: new TextEncoder().encode(p.doc), url: p.addr, docId: "probe", headers: "",
-          topLevelUrl: p.addr, inheritedCsp: "", inheritedCspSelfOrigin: "",
+          topLevelUrl: p.addr, inheritedCsp: "", inheritedCspReportOnly: "", inheritedCspSelfOrigin: "",
           inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
           inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
           inheritedReferrerPolicy: "strict-origin-when-cross-origin",

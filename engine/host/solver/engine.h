@@ -528,9 +528,8 @@ const char *engine_host_notices(void);
    format string beside a hand-computed slack constant, which drift apart and let snprintf truncate silently.
    `nfields` is the caller's `sizeof a / sizeof a[0]`, never a NULL terminator, so a field added to the array
    is counted by the same edit (a variadic list missing its terminator is undefined behaviour the optimiser
-   exploits). The last field is the remainder and the only one that may hold HTAB, since a raw CSP header may
-   (RFC 9110 §5.5 "Field Values"); a tab in an earlier field would shift every later field past a reader's
-   count, so that is asserted here, as is a newline in any field. */
+   exploits). No field may hold a TAB or a newline, since either would shift every later field past a reader's
+   count; both are asserted here. A value that may hold one crosses encoded (navigable_notice.h's BASE64). */
 char       *engine_notice_build(const char *op, const char *const *fields, size_t nfields);
 
 /* Announce the death of worlds: one `world.gone<TAB><world name>` notice per name, the one writer of that

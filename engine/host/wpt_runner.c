@@ -1416,6 +1416,7 @@ static ChildDoc *wpt_child_for(const char *name)
    core/frame/sandboxing.h's flag names; the swap's set comes from a popup sandboxing flag set nothing filled and
    states the empty set's word. None of these is an item of §7.1.7's container, which is five policies. */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
+                            const char *csp_report_only,
                             const char *csp_self_origin, const char *top_level_url,
                             const char *coep, const char *coep_endpoint,
                             const char *coep_report_only, const char *coep_report_only_endpoint,
@@ -1427,6 +1428,9 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
     int down[2], up[2];
     pid_t pid;
 
+    DCHECK(csp != NULL && csp_report_only != NULL,
+           "a child document was about to be provisioned with no CSP list text — every caller states both "
+           "halves of the container's list, \"\" for a half with no policies");
     /* §7.1.4's four items are stated by every caller, never defaulted here. The two callers are the two
        operations: a `navigable.create` carries the creator's, and §7.1.3.2's swap has no creator and states
        §7.1.4's "a new embedder policy". A `?:` here would make those one answer. */
@@ -1476,10 +1480,11 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         close(down[0]); close(down[1]); close(up[0]); close(up[1]);
         /* New arguments are appended, never interleaved, so every position already read keeps its meaning and
            the child's argv indexing has one rule. */
-        execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
+        execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp,
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
               coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
-              ancestor_origins, creation_sandbox_flags, opener, arrival, referrer_policy, (char *)NULL);
+              ancestor_origins, creation_sandbox_flags, opener, arrival, referrer_policy, csp_report_only,
+              (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1665,6 +1670,26 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
     engine_route(ctx, record, from_origin);
 }
 
+/* A BASE64 field of a split create record (navigable_notice.h), decoded with the engine's codec. The field is
+   a C string's bytes, so a decoded NUL is the composer writing something else. The caller frees. */
+static char *wpt_create_text(char *const *f, int field)
+{
+    const char *b64 = f[1 + field];
+    size_t len = strlen(b64), cap = JS_Base64DecodedMax(len) + 1, n;
+    int err = 0;
+    char *out = malloc(cap);
+
+    DCHECK(navigable_create_encoding(field) == NAVIGABLE_NOTICE_BASE64,
+           "wpt: a create field was read as BASE64 text and navigable_notice.h declares it a TOKEN");
+    CHECK(out != NULL, "wpt: OOM decoding a create notice field");
+    n = JS_Base64Decode((uint8_t *)out, cap, b64, len, &err);
+    CHECK(err == 0 && n < cap, "wpt: a create notice's BASE64 field is not base64 — the engine composed it with "
+                               "JS_Base64Encode, so the record was damaged between the two processes");
+    out[n] = 0;
+    DCHECK(strlen(out) == n, "wpt: a create notice's decoded CSP text carries a NUL, which no C string held");
+    return out;
+}
+
 /* Field `id` of a split create or provision record (navigable_notice.h): the operation name is f[0]. */
 #define WPT_CREATE(id) f[1 + NAVIGABLE_CREATE_##id]
 #define WPT_PROVISION(id) f[1 + NAVIGABLE_PROVISION_##id]
@@ -1679,10 +1704,15 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     char *whole = strdup(line);
 
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
-    /* The split stops at the last field and keeps the remainder verbatim, because the last field of a
-       navigable.create is a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 1 + NAVIGABLE_CREATE_N; q++)
-        if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
+    /* No field of a notice holds a TAB (engine_notice_build asserts it), so the split is exact and a record
+       longer than the longest this router reads is refused rather than glued. */
+    for (q = line, f[nf++] = q; *q; q++)
+        if (*q == '\t') {
+            CHECK(nf < 1 + NAVIGABLE_CREATE_N, "wpt: a host notice has more fields than any record this router "
+                                               "reads — the engine and this runner were built from different tables");
+            *q = 0;
+            f[nf++] = q + 1;
+        }
     if (nf == 1 + NAVIGABLE_CREATE_N && !strcmp(f[0], "navigable.create")) {
         /* The fields are navigable_notice.h's create table. The provenance and the two marks are the child's
            arrival (solver/engine.h's engine_set_arrival); this runner decides no fetch from them, since it
@@ -1705,12 +1735,17 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", WPT_CREATE(PROVENANCE), WPT_CREATE(DRIVEN),
                        WPT_CREATE(PINNED)) < (int)sizeof arrival,
               "wpt: a create notice's three marks did not fit an arrival word — each is one of engine.h's words");
-        wpt_spawn_child(WPT_CREATE(CHILD), WPT_CREATE(ADDRESS), WPT_CREATE(ORIGIN), WPT_CREATE(POLICY),
+        char *policy = wpt_create_text(f, NAVIGABLE_CREATE_POLICY);
+        char *policy_report_only = wpt_create_text(f, NAVIGABLE_CREATE_POLICY_REPORT_ONLY);
+
+        wpt_spawn_child(WPT_CREATE(CHILD), WPT_CREATE(ADDRESS), WPT_CREATE(ORIGIN), policy, policy_report_only,
                         WPT_CREATE(CSP_SELF_ORIGIN), WPT_CREATE(TOP_LEVEL_URL), WPT_CREATE(COEP),
                         WPT_CREATE(COEP_ENDPOINT), WPT_CREATE(COEP_REPORT_ONLY),
                         WPT_CREATE(COEP_REPORT_ONLY_ENDPOINT), WPT_CREATE(REFERRER_POLICY), WPT_CREATE(PARENT),
                         WPT_CREATE(CONTAINER_POLICY), WPT_CREATE(ANCESTOR_ORIGINS), WPT_CREATE(SANDBOX_FLAGS),
                         WPT_CREATE(OPENER), arrival);
+        free(policy);
+        free(policy_report_only);
         free(whole);
         return;
     }
@@ -1737,7 +1772,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         /* §7.1.5's set is empty, in that section's own word: a top-level browsing context's creation sandboxing
            flags are its popup sandboxing flag set, which §7.1.5 makes empty at creation and only §7.3.1.7's rules
            for choosing a navigable populate, and no `window.open` reaches a swapped-to context. */
-        wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "",
+        wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "", "",
                         WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "",
                         FETCH_DEFAULT_REFERRER_POLICY, "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
@@ -1756,7 +1791,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         CHECK(snprintf(arrival, sizeof arrival, "%s,%s,%s", WPT_PROVISION(PROVENANCE), WPT_PROVISION(DRIVEN),
                        WPT_PROVISION(PINNED)) < (int)sizeof arrival,
               "wpt: a provisioning record's three marks did not fit an arrival word");
-        wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "",
+        wpt_spawn_child(WPT_PROVISION(DOCUMENT), WPT_PROVISION(ADDRESS), WPT_PROVISION(ORIGIN), "", "", "",
                         WPT_PROVISION(ADDRESS), "unsafe-none", "", "unsafe-none", "",
                         FETCH_DEFAULT_REFERRER_POLICY, "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
@@ -2486,7 +2521,8 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
    CSP-derived flags. The top-level document passes each grammar's word for "none". */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n, const HeaderList *html_headers,
-                                     const char *inherited_csp, const char *inherited_csp_self_origin,
+                                     const char *inherited_csp, const char *inherited_csp_report_only,
+                                     const char *inherited_csp_self_origin,
                                      const char *inherited_coep, const char *inherited_coep_endpoint,
                                      const char *inherited_coep_report_only,
                                      const char *inherited_coep_report_only_endpoint,
@@ -2662,10 +2698,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                "a document was built with an §7.1.4 EMBEDDER POLICY VALUE naming none of the three strings the "
                "section defines — this runner writes these tokens onto a child's command line itself, so a "
                "token outside them is this program's two ends disagreeing about their own record");
-        /* The report-only half of the CSP list is not on this runner's argv relay; main.c's
-           qjs_inherited_container states the residual this shares. */
         inherited = serialized_policy_container_or_none(
-            inherited_csp, NULL, inherited_csp_self_origin,
+            inherited_csp, inherited_csp_report_only, inherited_csp_self_origin,
             serialized_embedder_policy(_coep, inherited_coep_endpoint, _coep_ro,
                                        inherited_coep_report_only_endpoint),
             /* Named residual. Not covered: §7.1.7's integrity policy item on this runner's command-line relay of
@@ -2873,6 +2907,8 @@ static int wpt_child_main(int argc, char **argv)
     const char *arrival = argc > 17 ? argv[17] : NULL;
     /* §7.1.7's referrer policy item of the inherited container, appended last. Not defaulted: "" is a value. */
     const char *referrer_policy = argc > 18 ? argv[18] : NULL;
+    /* The report policies of that container's CSP list (CSP §2.2), appended last; "" is a list with none. */
+    const char *csp_report_only = argc > 19 ? argv[19] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -2937,6 +2973,10 @@ static int wpt_child_main(int argc, char **argv)
           "wpt: a child document was started with no Referrer Policy §3 value for its §7.1.7 container's "
           "referrer policy — the parent writes the creator's item, or the initial default where there is no "
           "creator, so a child without it would send referrers its creator's policy strips");
+    CHECK(csp_report_only != NULL,
+          "wpt: a child document was started with no report-only half of its §7.1.7 container's CSP list — the "
+          "parent writes the creator's report policies or \"\", so a child without it would fire none of the "
+          "reports its creator's policy asks for");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
     /* `about:blank` has no bytes to fetch: its Document is the empty one §7.4 creates, which makes it synchronous
        in a browser and an <iframe> with no src scriptable immediately. */
@@ -2951,7 +2991,7 @@ static int wpt_child_main(int argc, char **argv)
     /* The top-level creation URL came from the parent with the rest of the environment, because this document may
        be nested in a document of another instance and only the creating zone knows which. */
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
-                             csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
+                             csp, csp_report_only, csp_self_origin, coep, coep_endpoint, coep_report_only,
                              coep_report_only_endpoint, referrer_policy, parent_navigable, container_policy,
                              ancestor_origins, creation_sandbox_flags, opener_navigable);
     free(html);
@@ -3096,7 +3136,7 @@ int main(int argc, char **argv)
        (no container document, step 3), and §7.1.5's set is empty (a top-level traversable's popup sandboxing
        flag set, which only §7.3.1.7's rules for choosing a navigable fill), and §7.2.2.4's opener is `N`, each in
        its grammar's own word so an empty field cannot be mistaken for a host that stopped stating it. */
-    ctx = wpt_build_document("wpt", g_top_origin, g_base_url, NULL, 0, NULL, "", "",
+    ctx = wpt_build_document("wpt", g_top_origin, g_base_url, NULL, 0, NULL, "", "", "",
                              "unsafe-none", "", "unsafe-none", "", FETCH_DEFAULT_REFERRER_POLICY, "u",
                              PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                              DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,

@@ -27715,11 +27715,13 @@ static int abi_pay(void)
                until the teardown; every other field is copied inside the entry. */
             const char *jurl = abi_take(&p, "address");
             const char *jdoc = abi_take(&p, "document name");
-            size_t jh_n = 0, jb_n = 0, jc_n = 0;
+            size_t jh_n = 0, jb_n = 0, jc_n = 0, jcr_n = 0;
             char *jheaders = abi_bytes(abi_take(&p, "response header block"), &jh_n, "response header block");
             char *jhtml = abi_bytes(abi_take(&p, "document bytes"), &jb_n, "document bytes");
             const char *jtlu = abi_take(&p, "top-level creation URL");
             char *jcsp = abi_bytes(abi_take(&p, "inherited CSP list"), &jc_n, "inherited CSP list");
+            char *jcsp_ro = abi_bytes(abi_take(&p, "inherited CSP report-only list"), &jcr_n,
+                                      "inherited CSP report-only list");
             const char *jcsp_self = abi_take(&p, "inherited CSP self-origin");
             const char *jcoep = abi_take(&p, "inherited embedder policy");
             const char *jcoep_ep = abi_take(&p, "inherited embedder policy reporting endpoint");
@@ -27740,7 +27742,7 @@ static int abi_pay(void)
             CHECKF(fetch_is_referrer_policy(jreferrer_policy),
                    "a join record carries the inherited referrer policy `%s`, which is no Referrer Policy §3 "
                    "value — a field read at the wrong tab", jreferrer_policy);
-            DCHECK(jh_n == strlen(jheaders) && jc_n == strlen(jcsp),
+            DCHECK(jh_n == strlen(jheaders) && jc_n == strlen(jcsp) && jcr_n == strlen(jcsp_ro),
                    "a joined document's header block or inherited CSP list carries a NUL — both reach the ABI "
                    "as C strings, so every field past that byte is one this engine would never be shown");
             DCHECK(jb_n <= (size_t)UINT_MAX,
@@ -27749,12 +27751,13 @@ static int abi_pay(void)
             DCHECK(qjs_referenced(),
                    "a document was joined into an instance no peer references — the zone joins a create "
                    "notice's child, which a peer holds a WindowProxy for, so this frontier may not drain");
-            jr = qjs_join(jhtml, (unsigned)jb_n, jurl, jdoc, jheaders, jtlu, jcsp, jcsp_self, jcoep, jcoep_ep,
-                          jcoep_ro, jcoep_ro_ep, jreferrer_policy, jparent, jopener, jcontainer, jancestors,
-                          jsandbox, jarrival);
+            jr = qjs_join(jhtml, (unsigned)jb_n, jurl, jdoc, jheaders, jtlu, jcsp, jcsp_ro, jcsp_self, jcoep,
+                          jcoep_ep, jcoep_ro, jcoep_ro_ep, jreferrer_policy, jparent, jopener, jcontainer,
+                          jancestors, jsandbox, jarrival);
             DCHECK(jr == 0, "qjs_join refused the document this zone routed here");
             free(jheaders);
             free(jcsp);
+            free(jcsp_ro);
             grown = realloc(g_abi_joined, (size_t)(g_abi_joined_n + 1) * sizeof *grown);
             CHECK(grown != NULL, "OOM keeping a joined document's bytes for the agent's life");
             g_abi_joined = grown;
@@ -28500,8 +28503,8 @@ static int abi_main(int argc, char **argv)
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
     const char *coep_ro, *coep_ro_ep, *referrer_policy, *parent, *opener, *container_policy, *ancestor_origins;
     const char *creation_sandbox_flags, *referenced_f, *arrival_f;
-    char *headers, *html, *csp;
-    size_t headers_n = 0, html_n = 0, csp_n = 0;
+    char *headers, *html, *csp, *csp_ro;
+    size_t headers_n = 0, html_n = 0, csp_n = 0, csp_ro_n = 0;
     int r, referenced;
 
     rec = abi_line();
@@ -28564,7 +28567,10 @@ static int abi_main(int argc, char **argv)
        header field value may contain HTAB (RFC 9110 §5.5 "Field Values") and this channel splits on one —
        every other field below is a token, an origin serialization or a grammar that asserts it has no tab. */
     csp = abi_bytes(abi_take(&p, "inherited CSP list"), &csp_n, "inherited CSP list");
-    DCHECK(csp_n == strlen(csp),
+    /* …and that list's report policies, carried the same way for the same reason. */
+    csp_ro = abi_bytes(abi_take(&p, "inherited CSP report-only list"), &csp_ro_n,
+                       "inherited CSP report-only list");
+    DCHECK(csp_n == strlen(csp) && csp_ro_n == strlen(csp_ro),
            "the inherited CSP list carries a NUL — it reaches the ABI as a C string, so every policy past that "
            "byte is one the creator's container held and this document would be judged without");
     csp_self = abi_take(&p, "inherited CSP self-origin");
@@ -28671,11 +28677,12 @@ static int abi_main(int argc, char **argv)
        arrival carries — every one of them now stated by the party that HAS it. This document's OWN policy is
        not on that list at all: it arrives in the header block above, where a server put it. */
     r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, top_level_url,
-                 csp, csp_self, coep, coep_ep, coep_ro, coep_ro_ep, referrer_policy,
+                 csp, csp_ro, csp_self, coep, coep_ep, coep_ro, coep_ro_ep, referrer_policy,
                  parent, opener, container_policy, ancestor_origins, creation_sandbox_flags);
     DCHECK(r == 0, "qjs_init refused the document this process was handed");
     /* THE POLICY BYTES ARE PARSED AND COPIED INSIDE THE ENTRY, exactly as the header block below is. */
     free(csp);
+    free(csp_ro);
     /* THE BLOCK IS PARSED AND COPIED (core/fetch/headers.c allocates its own name and value per field line),
        and the list it was parsed into is released inside the entry above, so these bytes are done. The
        DOCUMENT's are not — see the free at the bottom. */

@@ -190,6 +190,10 @@
     why: "the serialized CSP list of HTML §7.1.7's CLONE of the creator's policy container, for a document " +
          "another instance's `navigable.create` announced. The empty string is a list with no policies, which " +
          "is NOT the same statement as 'no creator' — that one is made by the self-origin beside it" };
+  var INHERITED_CSP_REPORT_ONLY = { name: "inheritedCspReportOnly", type: "string", retained: false,
+    why: "the report policies of that same inherited CSP list (CSP §2.2's disposition \"report\", from " +
+         "`Content-Security-Policy-Report-Only`), which the clone moves with the enforce ones. The empty " +
+         "string is a list with no report policies" };
   var INHERITED_CSP_SELF_ORIGIN = { name: "inheritedCspSelfOrigin", type: "string", retained: false,
     why: "CSP §2.2's SELF-ORIGIN of that inherited list — the CREATOR's origin, serialized, which §6.7.2.8 " +
          "\"Does url match expression in origin with redirect count?\" is what reads. It cannot be recovered " +
@@ -393,7 +397,8 @@
     methods: [
       { ordinal: 0, name: "Init",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
-                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
+                 INHERITED_CSP, INHERITED_CSP_REPORT_ONLY, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP,
+                 INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, INHERITED_REFERRER_POLICY,
                  PARENT_NAVIGABLE, OPENER_NAVIGABLE,
                  CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS],
@@ -406,7 +411,8 @@
 
       { ordinal: 1, name: "Join",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
-                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
+                 INHERITED_CSP, INHERITED_CSP_REPORT_ONLY, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP,
+                 INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, INHERITED_REFERRER_POLICY,
                  PARENT_NAVIGABLE, OPENER_NAVIGABLE,
                  CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS, ARRIVAL],

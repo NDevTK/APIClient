@@ -4,18 +4,19 @@
  * A notice is the operation name and then one TAB before each field (solver/engine.h's engine_notice_build).
  * The enumerators below are a field's position among the fields, which is the composer's array index; a reader
  * that splits the whole record on TAB finds field `i` at `1 + i`, after the operation name.
- * Each entry states its encoding. A TOKEN is written raw and its grammar holds no TAB. A REMAINDER is written
- * raw and may hold TABs, so it can only be the last field and a reader keeps everything after its index
- * (engine_notice_build asserts that only the last field holds a TAB; the checks below keep it last).
+ * Each entry states its encoding. A TOKEN is written raw and its grammar holds no TAB. A BASE64 field is a
+ * byte string written as RFC 4648 §4 base64 by the engine's codec (JS_Base64Encode), whose alphabet holds no
+ * TAB, and a reader decodes it. So no field holds a TAB and every record has exactly its table's count.
  * The trusted zone's readers take their indices from extension/lib/navigable-notice.js, which
  * engine/noticegen.mjs writes from this file; the build refuses a copy that this file does not re-render. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGABLE_NOTICE_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGABLE_NOTICE_H
 
 /* `navigable.create`: a navigable whose document another agent hosts (core/frame/navigable.c). Items of HTML
-   §7.1.7's clone of the creator's container cross because the hosting instance cannot derive them, and the
-   policy text is the remainder because a raw CSP header may contain a TAB. Each field's grammar is stated at the
-   composer. */
+   §7.1.7's clone of the creator's container cross because the hosting instance cannot derive them. The two CSP
+   texts are BASE64 because CSP's grammar admits a TAB (optional-ascii-whitespace includes %x09) and a
+   violation report's original-policy is the policy as delivered, so the text is carried rather than
+   re-serialized. Each field's grammar is stated at the composer. */
 #define NAVIGABLE_CREATE_FIELDS(X)                                                                         \
     X(CHILD, child, TOKEN)                     /* the new document's world name */                               \
     X(CREATOR, creator, TOKEN)                 /* the creating document's world name */                          \
@@ -37,7 +38,8 @@
     X(DRIVEN, driven, TOKEN)                   /* the drive mark (PENDING_DRIVEN_*) */                           \
     X(PINNED, pinned, TOKEN)                   /* the witness mark (PENDING_PINNED_*) */                         \
     X(OPENER, opener, TOKEN)                   /* HTML §7.2.2.4's opener (remote_object.h), or `N` */            \
-    X(POLICY, policy, REMAINDER)                   /* the creator's CSP list, raw; the remainder */
+    X(POLICY, policy, BASE64)                  /* the creator's CSP list's enforce policies (CSP §2.2) */        \
+    X(POLICY_REPORT_ONLY, policyReportOnly, BASE64) /* …and its report policies */
 
 /* `navigable.swap` (HTML §7.1.3.2's browsing context group swap, core/frame/browsing_context_group.c) and
    `navigable.navigate` (a top-level traversable navigated into a peer, core/frame/navigable.c): one record,
@@ -50,7 +52,7 @@
     X(DRIVEN, driven, TOKEN)                   /* the drive mark (PENDING_DRIVEN_*) */                           \
     X(PINNED, pinned, TOKEN)                   /* the witness mark (PENDING_PINNED_*) */
 
-enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_REMAINDER };
+enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_BASE64 };
 
 /* `navigable.request`: the HTML §7.4.5 request facts of a child navigable `creator` created at `address`
    (core/frame/navigable.c's nav_announce_child_request), for the zone's own load of the same frame. */
@@ -71,35 +73,17 @@ enum { NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_ENUM_REQUEST) NAVIGABLE_REQUEST
 #undef NAVIGABLE_NOTICE_ENUM_PROVISION
 #undef NAVIGABLE_NOTICE_ENUM_REQUEST
 
-/* A record has at most one REMAINDER and it is the last field: the count of remainders, and the sum of their
-   positions, are compile-time sums over the table. */
-#define NAVIGABLE_NOTICE_IS_REMAINDER(enc) (NAVIGABLE_NOTICE_##enc == NAVIGABLE_NOTICE_REMAINDER)
-#define NAVIGABLE_NOTICE_COUNT_CREATE(id, js, enc) + NAVIGABLE_NOTICE_IS_REMAINDER(enc)
-#define NAVIGABLE_NOTICE_AT_CREATE(id, js, enc) + (NAVIGABLE_NOTICE_IS_REMAINDER(enc) ? NAVIGABLE_CREATE_##id : 0)
-#define NAVIGABLE_NOTICE_COUNT_PROVISION(id, js, enc) + NAVIGABLE_NOTICE_IS_REMAINDER(enc)
-#define NAVIGABLE_NOTICE_AT_PROVISION(id, js, enc) \
-    + (NAVIGABLE_NOTICE_IS_REMAINDER(enc) ? NAVIGABLE_PROVISION_##id : 0)
-#define NAVIGABLE_NOTICE_COUNT_REQUEST(id, js, enc) + NAVIGABLE_NOTICE_IS_REMAINDER(enc)
-#define NAVIGABLE_NOTICE_AT_REQUEST(id, js, enc) \
-    + (NAVIGABLE_NOTICE_IS_REMAINDER(enc) ? NAVIGABLE_REQUEST_##id : 0)
-_Static_assert((0 NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_COUNT_CREATE)) == 0 ||
-               ((0 NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_COUNT_CREATE)) == 1 &&
-                (0 NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_AT_CREATE)) == NAVIGABLE_CREATE_N - 1),
-               "the create notice has a REMAINDER that is not its one last field, and only the last may hold a TAB");
-_Static_assert((0 NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_COUNT_PROVISION)) == 0 ||
-               ((0 NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_COUNT_PROVISION)) == 1 &&
-                (0 NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_AT_PROVISION)) == NAVIGABLE_PROVISION_N - 1),
-               "the provision notice has a REMAINDER that is not its one last field");
-_Static_assert((0 NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_COUNT_REQUEST)) == 0 ||
-               ((0 NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_COUNT_REQUEST)) == 1 &&
-                (0 NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_AT_REQUEST)) == NAVIGABLE_REQUEST_N - 1),
-               "the request notice has a REMAINDER that is not its one last field");
-#undef NAVIGABLE_NOTICE_COUNT_CREATE
-#undef NAVIGABLE_NOTICE_AT_CREATE
-#undef NAVIGABLE_NOTICE_COUNT_PROVISION
-#undef NAVIGABLE_NOTICE_AT_PROVISION
-#undef NAVIGABLE_NOTICE_COUNT_REQUEST
-#undef NAVIGABLE_NOTICE_AT_REQUEST
-#undef NAVIGABLE_NOTICE_IS_REMAINDER
+/* A create field's encoding, NAVIGABLE_NOTICE_TOKEN or NAVIGABLE_NOTICE_BASE64; -1 for a position the table
+   does not declare, which a caller asserts against. */
+#define NAVIGABLE_NOTICE_ENCODING_CASE(id, js, enc) case NAVIGABLE_CREATE_##id: return NAVIGABLE_NOTICE_##enc;
+static inline int navigable_create_encoding(int field)
+{
+    switch (field) {
+        NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_ENCODING_CASE)
+    default:
+        return -1;
+    }
+}
+#undef NAVIGABLE_NOTICE_ENCODING_CASE
 
 #endif

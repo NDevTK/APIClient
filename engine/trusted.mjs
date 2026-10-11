@@ -141,7 +141,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
-import { NAVIGABLE_NOTICE } from './noticegen.mjs';
+import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = join(ENGINE, '..', 'extension');
@@ -597,22 +597,23 @@ async function main() {
      sentence, why every answer is POSITIVE rather than a blank, and — which no consumer could — why the
      ORDER is walked off `content.mojom.Renderer.Init` rather than written down. */
 
-  /* …AND THE SAME TWELVE FOR A PEER, TAKEN OFF THE CREATE NOTICE VERBATIM. Not one of them is derivable in the
+  /* …AND THE SAME FACTS FOR A PEER, TAKEN OFF THE CREATE NOTICE. Not one of them is derivable in the
      instance that will host the child — they are items of the CREATOR's §7.1.7 container plus three separate
      statements about the navigable's place in the creator's frame tree — which is the whole reason the notice
-     carries them. The POLICY is the record's REMAINDER because a raw CSP header field value may contain HTAB
-     (RFC 9110 §5.5 "Field Values"), and it crosses this channel base64'd for exactly that reason; every other
+     carries them. The two POLICY texts are BASE64 fields because a raw CSP header field value may contain HTAB
+     (RFC 9110 §5.5 "Field Values"), and they cross this channel base64'd for the same reason; every other
      field is an origin serialization, a §7.1.4 token, remote_object.c's tag-and-base64 identity, §4.1's
      feature tokens or a SPACE-joined origin list, none of which can contain a tab and each of which the
      engine asserts as much at the writer. §7.1.5's flag set is the one whose members are joined by COMMA
      rather than by SPACE, because that section's flag names CONTAIN spaces.
-     Every index is navigable_notice.h's, through noticegen.mjs, so the policy's slice moves with the record:
-     a slice one short would join the field before the policy onto its front. The referrer policy and the
+     Every index is navigable_notice.h's, through noticegen.mjs, and the two CSP texts are its BASE64 fields,
+     read through its reader and re-encoded for this channel's own base64. The referrer policy and the
      opener are in this list in qjs_init's order. The provenance, the group and the two marks are not: they
      decide the load and which instance hosts it. */
   const C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
   const createFacts = (f) =>
-    [f[C.topLevelUrl], b64(f.slice(C.policy).join('\t')), f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint],
+    [f[C.topLevelUrl], b64(navigableNoticeField(C, f, 'policy')),
+     b64(navigableNoticeField(C, f, 'policyReportOnly')), f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint],
      f[C.coepReportOnly], f[C.coepReportOnlyEndpoint], f[C.referrerPolicy], f[C.parent], f[C.opener],
      f[C.containerPolicy], f[C.ancestorOrigins], f[C.sandboxFlags]];
 
@@ -1218,7 +1219,7 @@ async function main() {
 
     if (f[0] === 'navigable.create') {
       /* The count is the table's (noticegen.mjs reads navigable_notice.h), so it moves with the record. */
-      if (f.length < C.parts || (f[C.group] !== 'creator' && f[C.group] !== 'new') ||
+      if (f.length !== C.parts || (f[C.group] !== 'creator' && f[C.group] !== 'new') ||
           (f[C.driven] !== 'driven' && f[C.driven] !== 'undriven') ||
           (f[C.pinned] !== 'pinned' && f[C.pinned] !== 'unpinned'))
         throw new Error(`a navigable.create notice was short of its fields: ${record} — navigable.c writes the ` +
@@ -1305,7 +1306,7 @@ async function main() {
        URL. A new GROUP is a new instance for the same reason a cross-origin child is: SECURITY.md keys one on
        `(browsing context group, origin)` and a swap changes the first half. */
     if (f[0] === 'navigable.swap') {
-      if (f.length < P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
+      if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
           !f[P.pinned])
         throw new Error(`a navigable.swap notice was short of its fields: ${record} — the provenance is what the ` +
                         'navigation that caused the swap is EVIDENCE OF, taken off that navigation\'s own ' +
@@ -1343,7 +1344,7 @@ async function main() {
        this address, loaded by this zone under the navigation's word — and the difference is `referenced`: the
        emitting instance's proxy names this document, so its timelines may not run out under a read. */
     if (f[0] === 'navigable.navigate') {
-      if (f.length < P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
+      if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
           !f[P.pinned])
         throw new Error(`a navigable.navigate notice was short of its fields: ${record} — the engine writes the ` +
                         'new document\'s name, the address, the origin it computed, the navigation\'s ' +

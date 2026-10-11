@@ -2,12 +2,12 @@
  *
  * core/frame/navigable_notice.h declares, as X-macros, the fields of `navigable.create` and of the provision
  * record `navigable.swap` and `navigable.navigate` share. This module parses those lists and answers each field's
- * index in the record split on TAB (the operation name is index 0), `parts`, the split length a complete
- * record reaches, and `encoding`, each field's encoding as the header states it (`token`, or `remainder` for
- * the last field, which may itself hold TABs).
+ * index in the record split on TAB (the operation name is index 0), `parts`, the split length of every
+ * record, and `encoding`, each field's encoding as the header states it (`token` or `base64`). It also
+ * renders `navigableNoticeField`, the one reader that turns a field into its value by that encoding.
  *
- * Two consumers. A node reader (trusted.mjs, route.mjs, renderer_host_gate.mjs) imports NAVIGABLE_NOTICE from
- * here, and importing asserts that extension/lib/navigable-notice.js is exactly what the header renders, so a
+ * Two consumers. A node reader (trusted.mjs, route.mjs, renderer_host_gate.mjs) imports NAVIGABLE_NOTICE and
+ * navigableNoticeField from here, and importing asserts that extension/lib/navigable-notice.js is exactly what the header renders, so a
  * stale extension copy stops every node-driven run. The extension (bridge.js) loads that copy as a classic
  * script. `node engine/noticegen.mjs` writes it; `--check` exits 1 when it is stale. */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -26,13 +26,13 @@ function parseList(h, name) {
     lines.push(line.replace(/\/\*.*?\*\//g, ""));
     if (!line.trimEnd().endsWith("\\")) break;
   }
-  const entry = /\bX\(\s*([A-Z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*(TOKEN|REMAINDER)\s*\)/g;
+  const entry = /\bX\(\s*([A-Z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*,\s*(TOKEN|BASE64)\s*\)/g;
   const ids = [...lines.join("\n").matchAll(entry)];
   if (ids.length === 0) throw new Error(`[noticegen] ${name} lists no X(ID, name, ENCODING) entry`);
   /* An entry this pattern does not match would be skipped and every later index would shift, so every `X(` in
      the list must be one it matched. */
   if ((lines.join("\n").match(/\bX\(/g) || []).length !== ids.length)
-    throw new Error(`[noticegen] ${name} has an X(...) entry that is not X(ID, name, TOKEN|REMAINDER)`);
+    throw new Error(`[noticegen] ${name} has an X(...) entry that is not X(ID, name, TOKEN|BASE64)`);
   const table = {}, encoding = {};
   ids.forEach((m, i) => {
     if (m[2] in table || m[2] === "parts" || m[2] === "encoding")
@@ -40,9 +40,6 @@ function parseList(h, name) {
     table[m[2]] = 1 + i;
     encoding[m[2]] = m[3].toLowerCase();
   });
-  const rem = ids.findIndex((m) => m[3] === "REMAINDER");
-  if (rem >= 0 && rem !== ids.length - 1)
-    throw new Error(`[noticegen] ${name}'s REMAINDER is not its last field`);
   table.parts = 1 + ids.length;
   table.encoding = encoding;
   return table;
@@ -52,6 +49,27 @@ function headerTable() {
   const h = readFileSync(HEADER, "utf8");
   return { create: parseList(h, "NAVIGABLE_CREATE_FIELDS"), provision: parseList(h, "NAVIGABLE_PROVISION_FIELDS"),
            request: parseList(h, "NAVIGABLE_REQUEST_FIELDS") };
+}
+
+/* A field's value: a `token` as written, a `base64` field's bytes (RFC 4648 §4, the engine's JS_Base64Encode)
+   decoded as UTF-8, the encoding the notice channel carries its text in. `table` is NAVIGABLE_NOTICE.create,
+   .provision or .request and `f` a record split on TAB. Its source is rendered into extension/lib/navigable-notice.js, so the
+   extension and the node readers run the same reader.
+   Named residual. Not covered: a CSP byte outside UTF-8 decodes to U+FFFD, where CSP's parse isomorphic-decodes
+   header bytes. Next diff builds: the inherited CSP texts as `array<uint8>` parameters of Init and Join, relayed
+   undecoded. Absence shows as: a report's original-policy differing from the delivered header's bytes. */
+function navigableNoticeField(table, f, name) {
+  const at = table[name], encoding = table.encoding[name];
+  if (typeof at !== "number" || typeof encoding !== "string")
+    throw new Error(`[navigable-notice] the table declares no field \`${name}\``);
+  if (f.length !== table.parts || typeof f[at] !== "string")
+    throw new Error(`[navigable-notice] a record of ${f.length} part(s) was read where the table has ` +
+                    `${table.parts} — the engine and this reader were built from different tables`);
+  if (encoding === "token") return f[at];
+  if (encoding !== "base64") throw new Error(`[navigable-notice] \`${name}\` has the encoding \`${encoding}\``);
+  const bin = atob(f[at]), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
 }
 
 function jsText(t) {
@@ -64,12 +82,14 @@ function jsText(t) {
     "// Each field's index in a provisioning notice split on TAB (index 0 is the operation name), `parts`,\n" +
     "// the split length of a complete record, and `encoding`, each field's encoding. `create` is\n" +
     "// navigable.create; `provision` is navigable.swap and navigable.navigate; `request` is\n" +
-    "// navigable.request. A `var`, so a vm context's global object carries it.\n" +
+    "// navigable.request. A `var`, so a vm context's global object carries it. navigableNoticeField reads a\n" +
+    "// field by that encoding.\n" +
     "var NAVIGABLE_NOTICE = Object.freeze({\n" +
     `  create: ${obj(t.create)},\n` +
     `  provision: ${obj(t.provision)},\n` +
     `  request: ${obj(t.request)},\n` +
-    "});\n";
+    "});\n" +
+    `var navigableNoticeField = ${navigableNoticeField.toString()};\n`;
 }
 
 const TABLE = headerTable();
@@ -101,3 +121,4 @@ if (import.meta.main) {
 }
 
 export const NAVIGABLE_NOTICE = TABLE;
+export { navigableNoticeField };

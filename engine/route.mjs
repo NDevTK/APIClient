@@ -84,7 +84,7 @@
    many, so the load, the walk and the built glue's own declared arity live in engine/renderer_abi.mjs and both
    drivers read them from there. */
 import { GLUE_PATH, abiOperands } from './renderer_abi.mjs';
-import { NAVIGABLE_NOTICE } from './noticegen.mjs';
+import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
 
 const factory = await import(GLUE_PATH);
 const boot = factory.default ?? factory;
@@ -176,7 +176,8 @@ let instanceSerial = 0;
    documents state — nothing embeds them — and is the same fact `u` and `null` state one link along. Without
    it the engine installs the EMPTY list, which is the positive claim that the Document is at the top of its
    own tree. */
-async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arrival, inheritedCsp, inheritedCspSelf,
+async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arrival, inheritedCsp,
+                          inheritedCspReportOnly, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
                           inheritedReferrerPolicy = 'strict-origin-when-cross-origin',
@@ -236,7 +237,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
        passed as the pair, because only this side knows what it wrote into linear memory. */
     const operands = abiOperands('Init', 'qjs_init', {
       document: [hp, hn], url, docId, headers: headers || '', topLevelUrl,
-      inheritedCsp: inheritedCsp || '', inheritedCspSelfOrigin: inheritedCspSelf || '',
+      inheritedCsp: inheritedCsp || '', inheritedCspReportOnly, inheritedCspSelfOrigin: inheritedCspSelf || '',
       inheritedCoep, inheritedCoepEndpoint,
       inheritedCoepReportOnly, inheritedCoepReportOnlyEndpoint, inheritedReferrerPolicy,
       parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
@@ -658,9 +659,8 @@ async function drainNotices(e) {
     console.log(`  [${e.docId}] notice: ${f[0]} ${f.slice(1, 3).join(' ')}`);
     /* FIELD 5 IS THE CHILD'S TOP-LEVEL CREATION URL, decided by the creator's §7.4 and carried on the
        notice for the same reason fields 6 and 7 — the two halves of §7.1.7's policy container clone — are:
-       the new instance cannot derive any of them. The policy is LAST because it is the record's remainder — a
-       raw CSP header may contain HTAB — and CSP §2.2's self-origin sits before it because an origin's
-       serialization cannot. */
+       the new instance cannot derive any of them. The policy texts are BASE64 fields because a raw CSP header
+       may contain HTAB; CSP §2.2's self-origin is a TOKEN because an origin's serialization cannot. */
     /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
        against a duplicate notice — it is what a resumed document does. `a`'s replay re-runs its scripts, so it
        re-creates the child navigable and re-announces it under the same name, while the instance that holds
@@ -670,10 +670,9 @@ async function drainNotices(e) {
     if (f[0] === 'navigable.create') {
       const C = NAVIGABLE_NOTICE.create;
       /* Counted before any field is read: a record one field short would otherwise reach makeEngine with
-         `undefined` where a policy goes, and `f.slice(C.policy)` on it would join to the empty string, which is
-         indistinguishable from a creator that sent no policy. The count and every index are
+         `undefined` where a policy goes, which is indistinguishable from a creator that sent no policy. The count and every index are
          navigable_notice.h's, through noticegen.mjs. */
-      if (f.length < C.parts)
+      if (f.length !== C.parts)
         fail(`a navigable.create notice was short of its fields (${f.length} of ${C.parts}): ${n} — ` +
              'navigable.c composes it from navigable_notice.h, so this driver and that engine disagree');
       if (holderOf(f[C.child]))
@@ -687,7 +686,8 @@ async function drainNotices(e) {
          The child has no response headers of its own in this fixture, so that slot is empty. */
       else engines.push(await makeEngine(HTML_B, f[C.address], f[C.child], '', f[C.topLevelUrl], undefined,
                                          `${f[C.provenance]},${f[C.driven]},${f[C.pinned]}`,
-                                         f.slice(C.policy).join('\t'),
+                                         navigableNoticeField(C, f, 'policy'),
+                                         navigableNoticeField(C, f, 'policyReportOnly'),
                                          f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint], f[C.coepReportOnly],
                                          f[C.coepReportOnlyEndpoint], f[C.referrerPolicy], f[C.parent],
                                          f[C.opener], f[C.containerPolicy], f[C.ancestorOrigins],
@@ -709,7 +709,7 @@ async function drainNotices(e) {
       const P = NAVIGABLE_NOTICE.provision;
       /* The provenance and the two marks of the navigation that caused the swap are the new instance's
          arrival. */
-      if (f.length < P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
+      if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
           !f[P.pinned])
         fail(`a navigable.swap notice was short of its fields: ${n}`);
       if (holderOf(f[P.document]))
@@ -723,7 +723,7 @@ async function drainNotices(e) {
          return an empty output for a Document with no CONTAINER DOCUMENT, and a navigable with no parent has
          none. Both are defaults because both are what the section says, not because nothing was known. */
       engines.push(await makeEngine(HTML_B, f[P.address], f[P.document], '', f[P.address], undefined,
-                                    `${f[P.provenance]},${f[P.driven]},${f[P.pinned]}`, '', ''));
+                                    `${f[P.provenance]},${f[P.driven]},${f[P.pinned]}`, '', '', ''));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
@@ -838,7 +838,7 @@ async function drainNotices(e) {
 
 /* THE ROOT DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so its environment's top-level creation URL is its
    own address. */
-engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', undefined, 'observed,undriven,unpinned', '', ''));
+engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', undefined, 'observed,undriven,unpinned', '', '', ''));
 
 /* PHASE 1 — run `a` out, collecting its posts. Nothing is routed yet, so `b` holds no record and each one below
    can be delivered on its own; two records on one flow is a merge of possibly-contradictory senders, which the
@@ -981,7 +981,7 @@ parked.M.ccall('qjs_teardown', 'void', [], []);
    a register or an instance for it to land in. */
 const orphanCompletions = [...answers.keys()];
 withholdReads = false;
-engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, 'observed,undriven,unpinned', '', '');
+engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, 'observed,undriven,unpinned', '', '', '');
 const resumedTag = engines[0].tag;
 console.log(`phase 4: resumed as [${resumedTag}] from the residue; [${engines[1].tag}] never left memory`);
 /* THE RESUMED SESSION, PUMPED WITH ITS OWN ROUTING INTERLEAVED — which is why this is not a `pumpUntil`: the

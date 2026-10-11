@@ -2352,7 +2352,8 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
      no creator (a reported root, a rehydrated recipe, a group swap). Stated by every call site and never
      defaulted: a create notice always carries one, so `null` and "the caller forgot" must stay distinct. */
   DCHECK(inherited === null ||
-         (!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
+         (!!inherited && typeof inherited.csp === "string" && typeof inherited.cspReportOnly === "string" &&
+          typeof inherited.selfOrigin === "string" &&
           inherited.selfOrigin !== "" && embedderPolicyWhole(inherited.embedder) &&
           _REFERRER_POLICIES.includes(inherited.referrerPolicy)),
          "an instance was started with an inherited policy container that is neither `null` nor a WHOLE one — " +
@@ -2650,6 +2651,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   const _init = await rend.renderer.init({
     document: _doc, url: msg.sourceUrl, docId: eng.docId, headers: _headers, topLevelUrl: _tlu,
     inheritedCsp: inherited ? inherited.csp : "",
+    inheritedCspReportOnly: inherited ? inherited.cspReportOnly : "",
     inheritedCspSelfOrigin: inherited ? inherited.selfOrigin : "",
     inheritedCoep: _initEp.value, inheritedCoepEndpoint: _initEp.endpoint,
     inheritedCoepReportOnly: _initEp.reportOnlyValue,
@@ -3244,8 +3246,10 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
      where there is no creator: a cross-document navigation of a top-level traversable (HTML §7.4.6.1
      Updating the traversable) joins a Document whose container comes from its own response. There is no
      `null` arm: engineRoot takes one for a rehydrated recipe with no message, and every caller here has one. */
-  DCHECK(!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
-         (inherited.selfOrigin !== "" || inherited.csp === "") && embedderPolicyWhole(inherited.embedder) &&
+  DCHECK(!!inherited && typeof inherited.csp === "string" && typeof inherited.cspReportOnly === "string" &&
+         typeof inherited.selfOrigin === "string" &&
+         (inherited.selfOrigin !== "" || (inherited.csp === "" && inherited.cspReportOnly === "")) &&
+         embedderPolicyWhole(inherited.embedder) &&
          _REFERRER_POLICIES.includes(inherited.referrerPolicy),
          "a document was joined with a CSP list and no SELF-ORIGIN for it — CSP §2.2 \"Policies\" makes a list " +
          "a struct of policies AND the origin `'self'` resolves against, so a policy with no self-origin is " +
@@ -3260,7 +3264,8 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   const _join = await eng.r.renderer.join({
     document: _doc, url: msg.sourceUrl, docId: docName,
     headers: responseFieldLines(msg.responseHeaders), topLevelUrl,
-    inheritedCsp: inherited.csp, inheritedCspSelfOrigin: inherited.selfOrigin,
+    inheritedCsp: inherited.csp, inheritedCspReportOnly: inherited.cspReportOnly,
+    inheritedCspSelfOrigin: inherited.selfOrigin,
     inheritedCoep: inherited.embedder.value, inheritedCoepEndpoint: inherited.embedder.endpoint,
     inheritedCoepReportOnly: inherited.embedder.reportOnlyValue,
     inheritedCoepReportOnlyEndpoint: inherited.embedder.reportOnlyEndpoint,
@@ -3782,7 +3787,7 @@ async function hostNotice(eng, line) {
   if (f[0] === "navigable.create") {
     /* The count is the table's, so it moves with the record; the three token checks catch a record and a
        table that have parted. */
-    DCHECK(f.length >= C.parts && (f[C.group] === "creator" || f[C.group] === "new") &&
+    DCHECK(f.length === C.parts && (f[C.group] === "creator" || f[C.group] === "new") &&
            (f[C.driven] === DRIVEN_YES || f[C.driven] === DRIVEN_NO) &&
            (f[C.pinned] === "pinned" || f[C.pinned] === "unpinned"),
            "a navigable.create notice does not match lib/navigable-notice.js's table — navigable.c composes it "
@@ -3849,16 +3854,17 @@ async function hostNotice(eng, line) {
        url match expression in origin with redirect count? reads. Mixing them answers `'self'` backwards. Both
        halves cross separately and the engine decides which container the Document gets (main.c's
        document_csp_list); this zone relays and computes only the child's principal.
-       The policy is the record's remainder: a raw CSP header may contain HTAB, so it is last and every other
-       field precedes it. The C router splits the same way, keeping the remainder verbatim. */
-    /* The embedder policy's four items sit between the self-origin and the policy and are safe in split
-       fields: their values are fixed tokens, and `report-to` is a structured-field string (RFC 8941 §3.3.3
-       Strings: printable ASCII %x20-%x7E, no tabs). Relayed verbatim; only the receiving engine maps the tokens,
+       The two policy texts are BASE64 fields because a raw CSP header may contain HTAB, so no field holds a
+       tab and the record splits exactly. */
+    /* The embedder policy's four items are TOKEN fields: their values are fixed tokens, and `report-to` is a
+       structured-field string (RFC 8941 §3.3.3 Strings: printable ASCII %x20-%x7E, no tabs). Relayed verbatim; only the receiving engine maps the tokens,
        and it crashes on an unknown one (see NEW_EMBEDDER_POLICY). */
-    /* The policy is the remainder from the table's last field; navigable_notice.h asserts it is last.
-       §7.1.7's referrer policy item is relayed verbatim beside the embedder policy: a Referrer Policy §3
-       token or "", none of which holds a tab. */
-    const inherited = { csp: f.slice(C.policy).join("\t"), selfOrigin: f[C.cspSelfOrigin],
+    /* CSP §2.2's list crosses as its enforce and its report policies, BASE64 fields read through the table's
+       reader. §7.1.7's referrer policy item is relayed verbatim beside the embedder policy: a Referrer Policy
+       §3 token or "", none of which holds a tab. */
+    const inherited = { csp: navigableNoticeField(C, f, "policy"),
+                        cspReportOnly: navigableNoticeField(C, f, "policyReportOnly"),
+                        selfOrigin: f[C.cspSelfOrigin],
                         embedder: { value: f[C.coep], endpoint: f[C.coepEndpoint],
                                     reportOnlyValue: f[C.coepReportOnly],
                                     reportOnlyEndpoint: f[C.coepReportOnlyEndpoint] },
@@ -4094,7 +4100,7 @@ async function hostNotice(eng, line) {
       /* No creator: the join's grammar for that is the empty CSP pair and the new embedder policy, as for a
          tab's top-level navigation joining its cluster. */
       await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[P.document], navd.url,
-                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
+                       { csp: "", cspReportOnly: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
                          referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none", "none");
       return;
     }
@@ -5382,7 +5388,7 @@ const _hostOps = {
       /* The bytes are on the job, not its message (the job table's only writer puts them there, and the message's
          entry asserts it carries no document), as for the admission arm's engineCreate. */
       await engineJoin(swap.cluster, swap.job.html, swap.job.msg, swap.docId, _tlu,
-                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
+                       { csp: "", cspReportOnly: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
                          referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none",
                        "none");
       await engineUnload(swap.cluster, swap.outgoing, swap.docId);

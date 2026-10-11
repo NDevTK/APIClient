@@ -286,7 +286,7 @@ unsigned long csp_violation_reports(void) { return g_csp_violation_reports; }
    operand and `sample`/`sample_len` are §2.4's sample, already cut. The disposition is §2.4's "the
    disposition of the policy that has been violated", read off the policy.
    A report-only policy reaches the list from §2.2.2's `Content-Security-Policy-Report-Only` extraction and
-   from every in-instance clone; its cross-instance carriage is main.c qjs_inherited_container's residual. */
+   from every clone, a peer instance's included (navigable_notice.h's POLICY_REPORT_ONLY). */
 static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const char *effective_directive,
                                CspResourceKind kind, const char *resource_url,
                                const char *sample, size_t sample_len, const lxb_dom_element_t *element)

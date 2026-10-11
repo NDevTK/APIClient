@@ -2,7 +2,8 @@
 // Each field's index in a provisioning notice split on TAB (index 0 is the operation name), `parts`,
 // the split length of a complete record, and `encoding`, each field's encoding. `create` is
 // navigable.create; `provision` is navigable.swap and navigable.navigate; `request` is
-// navigable.request. A `var`, so a vm context's global object carries it.
+// navigable.request. A `var`, so a vm context's global object carries it. navigableNoticeField reads a
+// field by that encoding.
 var NAVIGABLE_NOTICE = Object.freeze({
   create: Object.freeze({
     child: 1,
@@ -26,7 +27,8 @@ var NAVIGABLE_NOTICE = Object.freeze({
     pinned: 19,
     opener: 20,
     policy: 21,
-    parts: 22,
+    policyReportOnly: 22,
+    parts: 23,
     encoding: Object.freeze({
       child: "token",
       creator: "token",
@@ -48,7 +50,8 @@ var NAVIGABLE_NOTICE = Object.freeze({
       driven: "token",
       pinned: "token",
       opener: "token",
-      policy: "remainder",
+      policy: "base64",
+      policyReportOnly: "base64",
     }),
   }),
   provision: Object.freeze({
@@ -84,3 +87,16 @@ var NAVIGABLE_NOTICE = Object.freeze({
     }),
   }),
 });
+var navigableNoticeField = function navigableNoticeField(table, f, name) {
+  const at = table[name], encoding = table.encoding[name];
+  if (typeof at !== "number" || typeof encoding !== "string")
+    throw new Error(`[navigable-notice] the table declares no field \`${name}\``);
+  if (f.length !== table.parts || typeof f[at] !== "string")
+    throw new Error(`[navigable-notice] a record of ${f.length} part(s) was read where the table has ` +
+                    `${table.parts} — the engine and this reader were built from different tables`);
+  if (encoding === "token") return f[at];
+  if (encoding !== "base64") throw new Error(`[navigable-notice] \`${name}\` has the encoding \`${encoding}\``);
+  const bin = atob(f[at]), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+};

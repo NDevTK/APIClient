@@ -104,7 +104,7 @@ async function drive(gluePath, html, steps) {
   };
   const operands = abiOperands('Init', 'qjs_init', {
     document: bs(html), url: DOC_URL, docId: 'rd', headers: '', topLevelUrl: DOC_URL,
-    inheritedCsp: '', inheritedCspSelfOrigin: '',
+    inheritedCsp: '', inheritedCspReportOnly: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
     inheritedReferrerPolicy: 'strict-origin-when-cross-origin',

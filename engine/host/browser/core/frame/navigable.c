@@ -3761,6 +3761,23 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
     return JS_UNDEFINED;
 }
 
+/* RFC 4648 §4's alphabet, padding included: what JS_Base64Encode writes. */
+#define NAV_NOTICE_BASE64_ALPHABET "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+
+/* A navigable_notice.h BASE64 field: `text`'s bytes (NULL is the empty text) as RFC 4648 §4 base64, through
+   the engine's codec. The caller frees the result. */
+static char *nav_notice_base64(const char *text)
+{
+    size_t len = text ? strlen(text) : 0, cap = JS_Base64EncodedSize(len) + 1, n;
+    char *out = malloc(cap);
+
+    CHECK(out != NULL, "navigable: OOM encoding a create notice field for a peer instance");
+    n = JS_Base64Encode(out, cap, (const uint8_t *)(text ? text : ""), len);
+    CHECK(n < cap && (n > 0 || len == 0), "navigable: a create notice field's base64 buffer was sized wrong");
+    out[n] = 0;
+    return out;
+}
+
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
                          const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
                          JSValueConst container, const char *document_resource, const char *referrer_policy)
@@ -4149,9 +4166,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            WHAT THIS RECORD CARRIES: the top-level creation URL beside them is §8.1.3.1's, which for a nested
            frame is the TOP document's and never this one's, and the creator's ADDRESS is not its BASE URL the
            moment it carries `<base href>`, which is what the same-origin arm above passes document_base_url
-           for. Both go BEFORE the policy, which is the record's remainder; the resource is a DOCUMENT rather
-           than a URL, so it crosses in the escape the fields split on (base64 over the engine's own codec, as
-           core/frame/remote_object.c's identity fields do) rather than as a raw field.
+           for. Both are entries of navigable_notice.h's create table; the resource is a DOCUMENT rather than a
+           URL, so it is a BASE64 entry, as the creator's CSP texts are.
            HOW ITS ABSENCE SHOWS: `<iframe sandbox srcdoc="<script>…">` presents a frame whose document is
            EMPTY and whose scripts never ran, while the identical markup without `sandbox` runs — and nothing in
            the run names the sandbox attribute, because the two frames differ only in which arm of this
@@ -4164,8 +4180,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                   "INSTANCE. The notice below carries this navigable's address, origin, parent, container "
                   "policy, ancestor origins, sandboxing flags and its creator's whole policy container, and it "
                   "does NOT carry the document's own BYTES, nor §7.4's ABOUT BASE URL — TWO facts a srcdoc "
-                  "peer cannot derive and not one. Add §7.4.5's resource AND that base URL, before the policy, "
-                  "which is the record's remainder. THE TWO HALVES COST DIFFERENT AMOUNTS AND THE COMMENT "
+                  "peer cannot derive and not one. Add §7.4.5's resource AND that base URL to "
+                  "navigable_notice.h's create table. THE TWO HALVES COST DIFFERENT AMOUNTS AND THE COMMENT "
                   "ABOVE HOLDS THE LEDGER: the RESOURCE reaches a peer's qjs_init as the provisioning record's "
                   "own bytes and needs nothing but this field, while the ABOUT BASE URL reaches nothing — "
                   "qjs_init takes no about base URL at all, and main.c's root install states NULL for the one "
@@ -4198,11 +4214,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* AND §8.1.3.1's TOP-LEVEL CREATION URL, which crosses for exactly the reason the policy container
            does: the child's ENVIRONMENT is decided by the operation that created it, the instance that will
            host the child cannot derive it, and a peer that answered from the child's own address would report
-           an https document nested in an http page as a secure context. IT GOES BEFORE THE POLICY, because
-           the policy is the RECORD'S REMAINDER: a raw CSP header may contain HTAB (this engine's own parser
-           treats tab as source-list whitespace), so every reader of this record stops splitting at the policy
-           and keeps the rest verbatim. A field after it would be swallowed by it. A URL cannot contain a tab —
-           url_serialize percent-encodes one — so it is safe in a split field. */
+           an https document nested in an http page as a secure context. A URL cannot contain a tab —
+           url_serialize percent-encodes one — so it is a TOKEN field. */
         /* THE ORIGIN CROSSES AS ITS SERIALIZATION, and that is not a lapse — a record crosses an instance no
            more than a JSValue does, and what the peer needs is its own principal, which its host will state
            back. A peer's opaque origin is same origin with nothing here, which is exactly right: two Documents
@@ -4219,9 +4232,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            comparing the request's URL against THAT origin, so a creator's `script-src 'self'` read against the
            child's address permits the child's origin and refuses the creator's — a sink this engine would
            report as CSP-blocked when it fires, or as live when it does not.
-           IT SITS BEFORE THE POLICY for the reason §8.1.3.1's URL does: the policy is the record's REMAINDER.
            An origin's serialization cannot contain a tab (it is scheme, "://", host and an optional port, and
-           the opaque one is the three bytes `null`), so it is safe in a split field.
+           the opaque one is the three bytes `null`), so it is a TOKEN field.
            IT IS ALWAYS PRESENT, EVEN WHEN THE POLICY IS EMPTY, AND THAT IS WHAT SAYS THERE IS A CONTAINER AT
            ALL. §2.2 gives every CSP list a self-origin whether or not it holds policies, so a creator that
            sends no CSP still states one here — and the receiving side reads the PRESENCE of this field, not of
@@ -4269,8 +4281,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* NO TAB ASSERT BESIDE THE OTHERS, AND THAT IS NOT AN OMISSION: sandbox_flags_serialize asserts the
            absence of a tab (and of its own separator) per FLAG NAME, at the one place that can see the
            vocabulary, so a check here would be that invariant restated one caller along. */
-        /* §7.1.4'S ITEM CROSSES THE NOTICE TOO, AND ITS FOUR FIELDS SIT WITH THE SELF-ORIGIN FOR THE SAME
-           REASON: the policy is the record's REMAINDER, so everything that is not the policy comes before it.
+        /* §7.1.4'S ITEM CROSSES THE NOTICE TOO, as four TOKEN fields beside the self-origin.
            A `report-to` ENDPOINT IS SAFE IN A SPLIT FIELD and that is the standard's own guarantee rather than
            an assumption about what servers send: §7.1.4.1 makes the parameter a structured-field STRING, and
            RFC 8941 §3.3.3 "Strings" defines one as "zero or more printable ASCII characters (i.e., the range
@@ -4385,12 +4396,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         opener_id = remote_object_encode(ctx, (is_child || (feat && feat->noopener)) ? JS_NULL
                                                                                      : document_window_proxy(ctx));
         CHECK(opener_id != NULL, "navigable: OOM naming this navigable's §7.2.2.4 opener for a peer instance");
-        /* The record's fields, in navigable_notice.h's order. No field but the last may contain a TAB, which
-           engine_notice_build asserts for all of them, and each grammar here guarantees it: an origin
-           serialization (URL §3.2 "Host miscellaneous" forbids TAB in a host), HTML §7.1.4's tokens, RFC 8941
-           §3.3.3 strings, Referrer Policy §3's tokens, remote_object.c's identities, Permissions Policy §4.1's tokens, HTML §3.1.3's
-           SPACE-joined list, §7.1.5's COMMA-joined flag names and solver/engine.h's lowercase marks. The
-           creator's raw CSP header may hold one, so it is the remainder.
+        /* The record's fields, in navigable_notice.h's order. No field contains a TAB, which
+           engine_notice_build asserts, and each TOKEN's grammar guarantees it: an origin serialization (URL
+           §3.2 "Host miscellaneous" forbids TAB in a host), HTML §7.1.4's tokens, RFC 8941 §3.3.3 strings,
+           Referrer Policy §3's tokens, remote_object.c's identities, Permissions Policy §4.1's tokens, HTML
+           §3.1.3's SPACE-joined list, §7.1.5's COMMA-joined flag names and solver/engine.h's lowercase marks.
+           The creator's two CSP texts may hold one, so they are BASE64.
            The provenance is what the zone decides whether to spend the network on: a navigation's safety is
            its choice of address, so the zone needs to know whose path chose it. It is the same word the
            same-origin arm puts on its load job, taken from the same local. */
@@ -4400,6 +4411,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            same fact decides whether the peer holds a WindowProxy for this document (below), and it crosses on
            the notice because the zone keys an instance on (group, origin). */
         const bool peer_in_creator_group = is_child || !(feat && feat->noopener);
+        /* CSP §2.2's list, its enforce and its report policies as the creator's container holds them. */
+        char *policy_b64 = nav_notice_base64(creator_policy.csp);
+        char *policy_report_only_b64 = nav_notice_base64(creator_policy.csp_report_only);
         /* Placed by navigable_notice.h's table, so no index here is written by hand; a field the table
            declares and this list omits is NULL, which engine_notice_build refuses. */
         const char *const fields[NAVIGABLE_CREATE_N] = {
@@ -4424,12 +4438,21 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             [NAVIGABLE_CREATE_DRIVEN] = driven,   /* read by the zone's `actor` row */
             [NAVIGABLE_CREATE_PINNED] = pinned,   /* read by the zone's `witness` row */
             [NAVIGABLE_CREATE_OPENER] = opener_id,
-            [NAVIGABLE_CREATE_POLICY] = creator_policy.csp ? creator_policy.csp : "",
+            [NAVIGABLE_CREATE_POLICY] = policy_b64,
+            [NAVIGABLE_CREATE_POLICY_REPORT_ONLY] = policy_report_only_b64,
         };
 
+        for (int i = 0; i < NAVIGABLE_CREATE_N; i++)
+            DCHECK(navigable_create_encoding(i) == NAVIGABLE_NOTICE_TOKEN ||
+                   (navigable_create_encoding(i) == NAVIGABLE_NOTICE_BASE64 &&
+                    strspn(fields[i], NAV_NOTICE_BASE64_ALPHABET) == strlen(fields[i])),
+                   "a create notice field the table declares BASE64 was composed as something other than RFC "
+                   "4648 §4 base64 — the composer wrote the raw value where the table says readers decode it");
         op = engine_notice_build("navigable.create", fields, NAVIGABLE_CREATE_N);
         engine_host_notify(ctx, op);
         free(op);
+        free(policy_b64);
+        free(policy_report_only_b64);
         free(parent_id);
         free(opener_id);
         free(container_policy);

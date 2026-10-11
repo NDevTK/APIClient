@@ -380,7 +380,7 @@ async function drive(opts) {
   };
   const operands = abiOperands('Init', 'qjs_init', {
     document: bs(opts.html), url: opts.url, docId: opts.docId, headers: '', topLevelUrl: opts.url,
-    inheritedCsp: '', inheritedCspSelfOrigin: '',
+    inheritedCsp: '', inheritedCspReportOnly: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
     inheritedReferrerPolicy: 'strict-origin-when-cross-origin',

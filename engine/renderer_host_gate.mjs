@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { runInThisContext } from 'node:vm';
-import { NAVIGABLE_NOTICE } from './noticegen.mjs';
+import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT = join(ENGINE, '..', 'extension');
@@ -672,7 +672,7 @@ try {
      read as "nothing about this document is sandboxed", which is a claim rather than a silence. */
   const initReply = await opener.renderer.init({
     document: new TextEncoder().encode(OPENER_DOC), url: OPENER_ADDR, docId: 'opener', headers: '',
-    topLevelUrl: OPENER_ADDR, inheritedCsp: '', inheritedCspSelfOrigin: '',
+    topLevelUrl: OPENER_ADDR, inheritedCsp: '', inheritedCspReportOnly: '', inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
     inheritedReferrerPolicy: 'strict-origin-when-cross-origin',
@@ -741,9 +741,9 @@ try {
          'boundary or a notice that did not survive the typed wire, and until this phase existed neither ' +
          `would have been visible to anything (drained=${drained})`);
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — navigable_notice.h's create table, built by
-     core/frame/navigable.c and indexed here through noticegen.mjs. The policy is LAST
-     because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
-     field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
+     core/frame/navigable.c and indexed here through noticegen.mjs. The two CSP texts are BASE64 because a
+     raw CSP header may itself contain HTAB; every other field is a TOKEN — an origin's serialization cannot
+     contain a tab,
      HTML §7.1.4's three values are fixed tokens, RFC 8941 §3.3.3 "Strings" excludes a tab from the `report-to`
      endpoint those two fields carry, a navigable identity is a one-letter tag over '.'-terminated base64,
      Permissions Policy §4.1's feature tokens and §4.2's `Enabled`/`Disabled` hold none either, and HTML
@@ -754,7 +754,7 @@ try {
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
   const C = NAVIGABLE_NOTICE.create;
-  if (create.length < C.parts)
+  if (create.length !== C.parts)
     fail(`the create notice carries ${create.length} part(s) where the table has ${C.parts} — ` +
          `\`${create.join(' | ')}\``);
   if (create[C.address] !== CHILD_ADDR)
@@ -912,8 +912,9 @@ try {
   if (!create[C.opener] || create[C.opener][0] !== 'W')
     fail(`the create notice's §7.2.2.4 opener is \`${create[C.opener]}\` and this document opened the popup without ` +
          '`noopener` — the opener is this document\'s navigable identity, a `W` record');
-  if (create.slice(C.policy).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(C.policy).join('\t')}\`) and this ` +
+  if (navigableNoticeField(C, create, 'policy') !== '' || navigableNoticeField(C, create, 'policyReportOnly') !== '')
+    fail(`the create notice carries an inherited policy (\`${navigableNoticeField(C, create, 'policy')}\`/` +
+         `\`${navigableNoticeField(C, create, 'policyReportOnly')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[C.child]}\` ` +

@@ -344,7 +344,8 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
  * verbatim by the zone from the emitting engine's `navigable.create` notice; a token naming none of the three
  * strings is a relay that stopped writing the field (not §7.1.4.1's fail-open, which is about a server header),
  * and it crashes at that boundary. */
-static SerializedPolicyContainer qjs_inherited_container(const char *csp, const char *self_origin,
+static SerializedPolicyContainer qjs_inherited_container(const char *csp, const char *csp_report_only,
+                                                         const char *self_origin,
                                                          const char *coep, const char *coep_endpoint,
                                                          const char *coep_report_only,
                                                          const char *coep_report_only_endpoint,
@@ -374,12 +375,10 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
            "value — the emitting engine writes its container's item onto the `navigable.create` notice and the "
            "zone relays it verbatim, so this is a relay that stopped writing the field. Read as the default it "
            "would send referrers from a child whose creator's policy strips them");
-    /* Named residual: the report-only half of the inherited CSP list is not on this ABI entry. Not covered: a
-       child whose creator lives in another instance does not inherit its creator's
-       `Content-Security-Policy-Report-Only` policies. Next diff builds: the field on the `navigable.create`
-       notice, qjs_init/qjs_join and mojom, read here. How its absence shows: such a child fires no report-only
-       securitypolicyviolation event where a same-instance sibling fires one. */
-    return serialized_policy_container_or_none(csp, NULL, self_origin,
+    DCHECK(csp != NULL && csp_report_only != NULL,
+           "a §7.1.7 policy container arrived over this ABI with no CSP list text — the zone relays both halves "
+           "of the creator's list, its enforce and its report policies, and \"\" is a half with no policies");
+    return serialized_policy_container_or_none(csp, csp_report_only, self_origin,
                                                serialized_embedder_policy(v, coep_endpoint, ro,
                                                                           coep_report_only_endpoint),
                                                /* Named residual: §7.1.7's integrity policy item is not on this
@@ -409,7 +408,8 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * at that width (`qjs_provide`'s `body_len`) and the wire declares an i32. renderer.html writes a guard NUL after
  * the document; it is asserted, not used as the length, so a placement or length disagreement crashes here rather
  * than inside lexbor. */
-/* `inherited_csp` and `inherited_csp_self_origin` are the creator's policy container, beside `headers` because
+/* `inherited_csp`, `inherited_csp_report_only` and `inherited_csp_self_origin` are the creator's CSP list (its
+ * enforce policies, its report policies and its self-origin), beside `headers` because
  * they are not part of it: a document this instance did not root (a cross-origin child navigable announced by a
  * `navigable.create` notice) is created with HTML §7.1.7 "Policy containers"' clone of its creator's container
  * (§7.3.2.1 "Creating browsing contexts": "Set document's policy container to a clone of creator's policy
@@ -447,7 +447,8 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * so the sandboxed case is the ordinary one on this route. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
-                        const char *inherited_csp, const char *inherited_csp_self_origin,
+                        const char *inherited_csp, const char *inherited_csp_report_only,
+                        const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
@@ -590,7 +591,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            inherited container makes disagree. It is computed before the mint because §7.1.4.2's step 2 reads its
            embedder policy, and a check after the Document exists could not block it. */
         SerializedPolicyContainer inherited =
-            qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
+            qjs_inherited_container(inherited_csp, inherited_csp_report_only, inherited_csp_self_origin,
+                                    inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
                                     inherited_coep_report_only_endpoint, inherited_referrer_policy);
         /* §7.5.1's opener policy row for the root Document: §7.1.3's policy obtained from this instance's
@@ -664,7 +666,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
  * whose parent, container and ancestors live in a peer, which is why those arguments are carried here too. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
-                        const char *inherited_csp, const char *inherited_csp_self_origin,
+                        const char *inherited_csp, const char *inherited_csp_report_only,
+                        const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
@@ -782,7 +785,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            instance announced, so an inherited container is the ordinary case. It is computed before the mint, for
            qjs_init's reason (§7.1.4.2 step 2 reads its embedder policy). */
         SerializedPolicyContainer inherited =
-            qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
+            qjs_inherited_container(inherited_csp, inherited_csp_report_only, inherited_csp_self_origin,
+                                    inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
                                     inherited_coep_report_only_endpoint, inherited_referrer_policy);
         /* §7.5.1's opener policy row for the joined Document, from its own response's header list, and §7.3.1.3's

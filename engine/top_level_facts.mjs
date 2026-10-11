@@ -1,8 +1,8 @@
-/* HTML §7.5.1 "Shared document creation infrastructure"'s TWELVE REMAINING FACTS, FOR A DOCUMENT THAT IS ITS
+/* HTML §7.5.1 "Shared document creation infrastructure"'s REMAINING FACTS, FOR A DOCUMENT THAT IS ITS
  * OWN TOP-LEVEL TRAVERSABLE — stated ONCE, for every host this engine is driven through.
  *
- * WHY IT EXISTS. `qjs_init` takes sixteen facts and four of them are per-run (the bytes, the address, the
- * document's name, the response's header block). The other TWELVE are the same answers for every document
+ * WHY IT EXISTS. Four of `qjs_init`'s facts are per-run (the bytes, the address, the
+ * document's name, the response's header block). The others are the same answers for every document
  * nothing embeds, and they were written out at every site that seats one — the LIST rather than a count of
  * it, because the list is what a reader can act on and the count is what they would quote onward:
  * `engine/trusted.mjs`'s `topLevelFacts`, `engine/one_document.mjs`'s `facts` and `engine/layout_cost.mjs`'s
@@ -24,7 +24,7 @@
  * entry, ordered for the native channel — from one statement, which is what makes the two renderings unable to
  * disagree.
  *
- * WHAT EACH OF THE TWELVE IS, AND WHY EVERY ONE IS A POSITIVE STATEMENT RATHER THAN A BLANK. This paragraph is
+ * WHAT EACH OF THEM IS, AND WHY EVERY ONE IS A POSITIVE STATEMENT RATHER THAN A BLANK. This paragraph is
  * `engine/trusted.mjs`'s, moved rather than copied: it was the fullest statement of the set in the tree and
  * leaving it where ONE of its consumers could read it is the same defect as leaving the values there.
  *   · §8.1.3.1 "Environments"' TOP-LEVEL CREATION URL is this document's own address. §8.1.3.5 reads it to
@@ -64,7 +64,7 @@
  * later value read one slot early in silence. The native channel has exactly that hazard with none of that
  * repair: its record is a TAB-joined array in declaration order, `abi_take` refuses an absent field but
  * nothing refuses a SHORT one written by a driver older than the interface, and a value in the wrong slot
- * parses. So the twelve names come from `Init`'s own parameters from `topLevelUrl` onward, and a parameter
+ * parses. So their names come from `Init`'s own parameters from `topLevelUrl` onward, and a parameter
  * inserted among them moves both renderings together or refuses both.
  *
  * IMPORTING `renderer_abi.mjs` COSTS A NATIVE DRIVER NOTHING, WHICH IS THE ONE THING THAT MAKES THIS MODULE
@@ -73,10 +73,10 @@
  * never opens the artifact — which is what `one_document.mjs`'s own residual requires of its replacement
  * ("pure data and need none of the zone's fetching").
  *
- * NAMED RESIDUAL — `engine/route.mjs`. NOT COVERED: that driver states the same twelve as PARAMETER DEFAULTS
+ * NAMED RESIDUAL — `engine/route.mjs`. NOT COVERED: that driver states the same facts as PARAMETER DEFAULTS
  * on `makeEngine`, because it provisions CHILD documents and must be able to pass a creator's real values, so
  * its copy is a default rather than a constant and converting it changes a signature. WHAT THE NEXT DIFF
- * BUILDS: `makeEngine` takes the twelve as one RECORD rather than as twelve trailing parameters, defaulted
+ * BUILDS: `makeEngine` takes them as one RECORD rather than as trailing parameters, defaulted
  * from `topLevelFacts(url)` as a whole, so a peer's values and a top-level document's come from one shape.
  * HOW ITS ABSENCE WOULD SHOW: a value changed here and not there seats a document driven through
  * `route.mjs` under a different §7.1.4 embedder policy or §7.1.5 flag set from the same document driven
@@ -84,13 +84,13 @@
  * difference. */
 import { RENDERER } from './renderer_abi.mjs';
 
-/* THE PARAMETER THE TWELVE BEGIN AT. Stated as a NAME rather than as an index, because an index is an ordinal
+/* THE PARAMETER THE FACTS BEGIN AT. Stated as a NAME rather than as an index, because an index is an ordinal
    over a set that grows and this module exists because that set grew three times. */
 const FIRST = 'topLevelUrl';
 
 const INIT = RENDERER.methods.find((m) => m.name === 'Init');
 if (INIT === undefined)
-  throw new Error('top_level_facts.mjs: `content.mojom.Renderer` declares no `Init` method — the twelve facts ' +
+  throw new Error('top_level_facts.mjs: `content.mojom.Renderer` declares no `Init` method — the facts ' +
                   'below are that method\'s trailing parameters and there is nothing to walk them off, so ' +
                   'every host driven from here would seat a document on values nothing had ordered.');
 
@@ -99,7 +99,7 @@ export const TOP_LEVEL_FACT_NAMES = (() => {
   const i = INIT.params.findIndex((p) => p.name === FIRST);
   if (i < 0)
     throw new Error(`top_level_facts.mjs: \`content.mojom.Renderer.Init\` declares no \`${FIRST}\` parameter — ` +
-                    'the twelve facts are the tail of that declaration beginning at it, so a renamed or ' +
+                    'the facts are the tail of that declaration beginning at it, so a renamed or ' +
                     'removed parameter is an interface this module can no longer find its own subject in.');
   return Object.freeze(INIT.params.slice(i).map((p) => p.name));
 })();
@@ -110,6 +110,7 @@ function statement(url) {
   return {
     topLevelUrl: url,
     inheritedCsp: '',
+    inheritedCspReportOnly: '',
     inheritedCspSelfOrigin: '',
     inheritedCoep: 'unsafe-none',
     inheritedCoepEndpoint: '',
@@ -148,13 +149,13 @@ function checked(url) {
   for (const name of have)
     if (!TOP_LEVEL_FACT_NAMES.includes(name))
       throw new Error(`top_level_facts.mjs states \`${name}\`, which \`content.mojom.Renderer.Init\` declares ` +
-                      'no parameter of among its trailing twelve — this module is NEWER than the interface, ' +
+                      'no parameter of among its trailing facts — this module is NEWER than the interface, ' +
                       'or the name is misspelled, and either way the value crosses to a reader that never ' +
                       'looks at it while the parameter it was meant for goes unstated.');
   for (const name of have)
     if (typeof v[name] !== 'string')
       throw new Error(`top_level_facts.mjs states \`${name}\` as a ${typeof v[name]} — every one of these ` +
-                      'twelve reaches the ABI as a C string, so a non-string is a value that would arrive ' +
+                      'facts reaches the ABI as a C string, so a non-string is a value that would arrive ' +
                       'having been stringified by whichever host happened to compose it.');
   return v;
 }
@@ -163,20 +164,20 @@ function checked(url) {
    `abiOperands("Init", "qjs_init", …)` record beside the four per-run facts that host states itself. */
 export function topLevelFacts(url) { return checked(url); }
 
-/* THE NATIVE `--abi` CHANNEL'S SHAPE — the same twelve, in the declaration's order, with that channel's own
+/* THE NATIVE `--abi` CHANNEL'S SHAPE — the same facts, in the declaration's order, with that channel's own
    encoding applied.
  *
  * THE ENCODING IS A FACT OF THE CHANNEL AND NOT OF THE INTERFACE, WHICH IS WHY IT IS STATED HERE AND NOT
- * DERIVED. `test_forced.c`'s `abi_main` takes exactly one of the twelve through `abi_bytes` — the inherited
- * CSP list — and its own comment says why: "a raw CSP header field value may contain HTAB (RFC 9110 §5.5
+ * DERIVED. `test_forced.c`'s `abi_main` takes exactly two of them through `abi_bytes` — the inherited
+ * CSP list's enforce and report policies — and its own comment says why: "a raw CSP header field value may contain HTAB (RFC 9110 §5.5
  * "Field Values") and this channel splits on one — every other field below is a token, an origin
- * serialization or a grammar that asserts it has no tab". The interface declares all twelve `string`, so
+ * serialization or a grammar that asserts it has no tab". The interface declares all of them `string`, so
  * nothing in the declaration distinguishes them and a walk over it could not find this. It is one sentence
  * with one reader, which is the whole point of the module.
  *
  * AND THE ASSERT IS THE CHEAP HALF: a value that is not base64 reaches the child's `abi_bytes` as a `DCHECKF`
  * naming a grammar the two ends do not share, one process away from the composer that wrote it. */
-const NATIVE_BASE64 = new Set(['inheritedCsp']);
+const NATIVE_BASE64 = new Set(['inheritedCsp', 'inheritedCspReportOnly']);
 
 export function topLevelFactFields(url) {
   const v = checked(url);
@@ -185,8 +186,8 @@ export function topLevelFactFields(url) {
   /* NO FIELD MAY CONTAIN THE SEPARATOR, asserted where the record is composed rather than discovered where it
      is split. `abi_take` finds the NEXT tab, so a value carrying one becomes two fields and every field after
      it is read one slot early — the identical skew the two checks above refuse for the arity, arriving through
-     a VALUE instead of through a count. The one field that could legitimately carry one is the CSP list, and
-     it is the one this channel base64s. */
+     a VALUE instead of through a count. The fields that could legitimately carry one are the CSP list's two
+     halves, and they are the ones this channel base64s. */
   for (let i = 0; i < fields.length; i++)
     if (fields[i].includes('\t') || fields[i].includes('\n'))
       throw new Error(`top_level_facts.mjs: the value for \`${TOP_LEVEL_FACT_NAMES[i]}\` carries a TAB or a ` +

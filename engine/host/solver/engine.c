@@ -1519,9 +1519,9 @@ char *engine_notice_build(const char *op, const char *const *fields, size_t nfie
                "a host notice field is NULL — every field of a record is present or it is a different record, "
                "and a value that is absent is stated in that field's own vocabulary (`u`, `null`, `none`) "
                "rather than left out, because an empty field is a hole a reader can default");
-        DCHECK(i + 1 == nfields || strchr(fields[i], '\t') == NULL,
-               "a host notice's non-final field contains a tab, the record's field delimiter — only the last field "
-               "may hold one, which is why the raw policy is last on every record that carries it");
+        DCHECK(strchr(fields[i], '\t') == NULL,
+               "a host notice field contains a tab, the record's field delimiter — a value that may hold one "
+               "crosses encoded, as navigable_notice.h's BASE64 fields do");
         DCHECK(strchr(fields[i], '\n') == NULL,
                "a host notice field contains a newline, the record separator");
         len += 1 + strlen(fields[i]);   /* the TAB that precedes this field, then the field itself */
