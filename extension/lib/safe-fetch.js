@@ -275,17 +275,6 @@ function _isDocumentSubresource(d) {
     d === "json" || d === "manifest" || d === "paintworklet" || d === "script" ||
     d === "style" || d === "text" || d === "track" || d === "video" || d === "xslt";
 }
-// Fetch §2.2.5 "Requests"' navigation request: "A navigation request is a request whose destination is
-// `document`, `embed`, `frame`, `iframe`, or `object`", as the positive list. It gives a navigation its own
-// value instead of `value`, so whether a page-named child navigable fires is one arm of `_DEFAULT_ARMS`
-// (destination, actor and provenance) rather than a side effect of whether the witness mark travels: no arm
-// a navigation can take reads `witness`, so landing that plumbing changes no firing outcome. The observed arm
-// reads no destination, so the ambient seed still fires through it. The navigation set is disjoint from the
-// script-like and subresource sets, so its place in the cascade changes no answer; `_signalRegistryCheck`
-// asserts that.
-function _isNavigation(d) {
-  return d === "document" || d === "embed" || d === "frame" || d === "iframe" || d === "object";
-}
 // Fetch §2.2.5 "Requests"' destination type, enumerated: "A destination type is one of: the empty string,
 // `audio`, `audioworklet`, `document`, `embed`, `font`, `frame`, `iframe`, `image`, `json`, `manifest`,
 // `object`, `paintworklet`, `report`, `script`, `serviceworker`, `sharedworker`, `style`, `text`, `track`,
@@ -644,18 +633,18 @@ var _SIGNALS = [
   /* Fetch §2.2.5 "Requests"' destination, read as the distinctions the policy turns on, each by its own
      predicate over the one string: `_isScriptLike` answers CORB's "is this code", and the others answer whose
      act the request is. A program load and a subresource load are the page loading itself (the app's own
-     bytes, served identically to every visitor); a navigation is a document; a value request is this tool
-     spending somebody else's server.
+     bytes, served identically to every visitor). Every other request is `value`, a navigation included: by
+     the project owner's decision a new navigable, like a postMessage, is judged by the same rows as a
+     `fetch()`, since each reaches another document's state.
      The cascade order is load-bearing because §2.2.5's sets overlap: `script`, `audioworklet` and
      `paintworklet` are script-like and subresources, while `serviceworker`, `sharedworker` and `worker` are
      script-like only. Asking the CORB set first keeps all six reading `program`; the other order would leave
-     the last three in no arm. `_signalRegistryCheck` asserts the navigation set is disjoint from both. */
+     the last three in no arm. */
   { name: "destination", gates: true, certainty: "stated",
-    values: ["program", "subresource", "navigation", "value"],
+    values: ["program", "subresource", "value"],
     of: function (f) {
       if (_isScriptLike(f.destination)) return "program";
-      if (_isDocumentSubresource(f.destination)) return "subresource";
-      return _isNavigation(f.destination) ? "navigation" : "value";
+      return _isDocumentSubresource(f.destination) ? "subresource" : "value";
     } },
   /* Whose act this request is (see `_actorOf`). Second, so after "this origin does not permit data requests"
      a person reads "and this is a request this tool composed rather than one your page made". `certain`, the
@@ -757,18 +746,6 @@ function _signalRegistryCheck() {
           "(`method` is a literal, `invalidity` cannot be stated through a closed option set) and stops " +
           "being true the moment that structure changes. Make it gate");
   }
-  /* The destination cascade's one structural assumption: §2.2.5's navigation set is disjoint from the
-     script-like and subresource sets, so the question order cannot change an answer. A later edition could
-     move a destination into two sets and silently change which row a person reads; this aborts at startup
-     instead. Every operand is this file's own literal, so a DCHECK. */
-  for (i = 0; i < _DESTINATION_TYPES.length; i++)
-    DCHECK(!_isNavigation(_DESTINATION_TYPES[i]) ||
-           (!_isScriptLike(_DESTINATION_TYPES[i]) && !_isDocumentSubresource(_DESTINATION_TYPES[i])),
-           "the destination " + JSON.stringify(_DESTINATION_TYPES[i]) + " answers BOTH §2.2.5's " +
-           "navigation question and one of the two above it, so which value the cascade computes is decided " +
-           "by the order the questions are asked in — and `_isNavigation`'s banner says that order cannot " +
-           "matter. One of the two is now wrong, and the arm a person permitted is about a population they " +
-           "did not see");
   /* The default arms against the same registry. An arm naming an undeclared signal or value compares against
      `undefined` and is false for ever, silently revoking what it permitted (for the page's own `fetch()`,
      every waiting flow stays parked with no crash). A CHECK, because release cannot proceed correctly through
@@ -892,44 +869,26 @@ var _DEFAULT_ARMS = [
   { when: [{ signal: "provenance", value: "observed" }, { signal: "doc-reach", value: "observed" }],
     why: "the page made exactly this request, in a document this browser actually navigated to — so " +
          "relaying it is this browser being a browser" },
-  /* The analysed page's own data requests, by the project owner's decision: a data fetch whose address
-     carries no value this path pinned fires at every origin, while anything a fork pinned, and every probe,
-     is refused. Each conjunct carries one clause: `witness: unpinned` refuses an address a fork pinned and
-     `actor: page` refuses the probe; removing either admits a population the other names. It is keyed on
-     `pinned`, not `forced`: a forced-but-unpinned path determined no value, so its address holds no witness
-     the engine chose, and keying on `forced` would refuse the boot of any SPA whose boot flow forks.
-     Reach: the empty-string destination with `actor: page` and `witness: unpinned`, which is the page's own
-     `fetch()` (off the pending line) and its own XHR (off the `xhr.send` record); navigations read
-     `navigation` and never reach this row. What fires is uncredentialed (the relay states
-     `credentialed: false`), so it is the logged-out reply. Never write `destination=value` alone: it passes
-     every assert in this file and permits every data request at every origin. */
+  /* The analysed page's own requests, by the project owner's decision: a `fetch()`, an XHR or a navigation
+     whose address carries no value this path pinned fires at every origin, while anything a fork pinned, and
+     every probe, is refused. A navigation is not special-cased: a new navigable, like a postMessage, reaches
+     another document's state exactly as a data request reaches a server's. Each conjunct carries one clause:
+     `witness: unpinned` refuses an address a fork pinned and `actor: page` refuses the probe; removing either
+     admits a population the other names. It is keyed on `pinned`, not `forced`: a forced-but-unpinned path
+     determined no value, so its address holds no witness the engine chose, and keying on `forced` would
+     refuse the boot of any SPA whose boot flow forks.
+     Reach: the empty-string destination (the page's own `fetch()` off the pending line and its XHR off the
+     `xhr.send` record) and §2.2.5's navigation destinations, of which the engine states only `document`
+     (HTML §7.4.5 "Populating a session history entry"). A data request is uncredentialed; a navigation
+     carries the session only same-origin (`navigationCarriesSession`), and the deny list applies to it.
+     Never write `destination=value` alone: it passes every assert in this file and permits every such
+     request at every origin. */
   { when: [{ signal: "destination", value: "value" },
            { signal: "witness", value: "unpinned" },
            { signal: "actor", value: "page" }],
-    why: "the analysed page's own code made this request and composed its address out of nothing this " +
-         "engine pinned — so what fires is the app asking for its own state, not a probe this tool built" },
-  /* A child navigable the page's markup named or its code computed, by the project owner's decision: a nested
-     document the page's own `<iframe src>` names is the page loading itself one level up, since the person's
-     browser loaded it when they visited. Unlike the program and subresource arms it is not destination-keyed
-     alone: a program's bytes are the same for every visitor, while a document reached only past a forced gate
-     is one only this engine asked for, so `provenance: derived` keeps the forced path refused.
-     No `observed` twin: `engine_prov_of_running_path` answers only `forced` or `derived`, and the one act
-     stating `observed` for a navigation is the ambient seed, which states `actor: tool` and fires through the
-     observed arm. `witness: unpinned`, as for the data arm: a `derived` path may still have pinned a witness
-     the fork chose, and an address composed after it is not the page's own. No `doc-reach` conjunct: frames
-     must nest (a grandchild reads `derived`), and a forced-reach parent exists only where a person widened.
-     No same-origin conjunct, and not because the SOP check covers it (that runs only when credentialed): the
-     caller's `navigationCarriesSession` asks for cookies only same-origin, so a cross-origin child loads as an
-     uncredentialed GET, narrower than a browser, through every other gate. The deny list does apply to a
-     credentialed same-origin `derived` child. Reach: §2.2.5's five navigation destinations, of which the
-     engine states only `document` (HTML §7.4.5 "Populating a session history entry"). */
-  { when: [{ signal: "destination", value: "navigation" },
-           { signal: "actor", value: "page" },
-           { signal: "provenance", value: "derived" },
-           { signal: "witness", value: "unpinned" }],
-    why: "the analysed page's own markup named this nested document or its own code computed the address — " +
-         "so the person's own browser loaded it when they visited the page, and what fires is the page " +
-         "loading itself one level down rather than a route only this engine ever asked for" }
+    why: "the analysed page's own code made this request or navigation and composed its address out of " +
+         "nothing this engine pinned — so what fires is the app asking for its own state, not a probe this " +
+         "tool built" }
 ];
 var _EXPLORED = Object.create(null);
 /* `_EXPLORED` is the per-origin egress table, origin → signal → value → true. Whether a host has stated it

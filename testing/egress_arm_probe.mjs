@@ -22,7 +22,7 @@
 // stage whose hint says "Nothing here stores an expected arm list: a widened policy passes, and this red
 // means the PROBE lost its grip on the walk". That was exactly true while every row merely DESCRIBED the
 // table. It is not true of the four rows scoring the project owner's navigation decision: two of them
-// (`provenance=forced` and `actor=tool` must REFUSE) are the BOUND of that decision, so a future owner
+// (`witness=pinned` and `actor=tool` must REFUSE) are the BOUND of that decision, so a future owner
 // decision to widen either one turns this stage red and the stage's own hint then gives the WRONG
 // instruction — fix the probe, where the right one is update the row.
 // THE DISTINCTION IS IN THIS FILE'S EXIT CODE AND NOT YET IN THE STAGE: a control that lost its grip exits
@@ -82,8 +82,8 @@ function zone() {
 const SITES = [
   /* THE OWNER'S NAVIGATION DECISION, AND THESE FOUR ROWS ARE WHAT SCORE IT. A `want` is spent only where the
      expectation is an invariant of the decision rather than a snapshot of the arm list. Each row is one
-     conjunct of the sentence: the page's own child navigable fires when its path is `derived` and chose no
-     witness, and is refused on a forced path, on a path that pinned a witness, or as this tool's act. The
+     conjunct of the sentence: the page's own child navigable is judged like its `fetch()`, so it fires on any
+     path that chose no witness, forced included, and is refused on a path that pinned one or as this tool's act. The
      witness mark is the engine's, relayed off the create notice, the load job and the route declaration. */
   { label: 'bridge.js navigationLoad (a child navigable)',
     want: 'FIRES',
@@ -95,8 +95,8 @@ const SITES = [
     grep: 'solver/engine.c engine_navigation_pinned_token — the mark rides the navigation records',
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'pinned',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
-  { label: '…the same, on a FORCED path (must still REFUSE — the bound)',
-    want: 'REFUSED',
+  { label: '…the same, on a FORCED path that pinned nothing (FIRES — judged like a fetch, whose bound is the witness)',
+    want: 'FIRES',
     grep: 'as above; the provenance word is engine_provenance_of_running_path\'s',
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unpinned',
              provenance: 'forced', docReach: 'observed', credentialed: true, headers: null } },

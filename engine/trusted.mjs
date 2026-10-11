@@ -775,8 +775,8 @@ async function main() {
      THE DECISION IS READ OFF THE RECORD. Every record that reaches this function states what the navigation
      is evidence of, whose act it is and whether its path chose a witness — the create notice, §7.1.3.2's
      swap, the load job's own `document.fetch` and a route declaration — and the chokepoint answers each
-     grade for itself: its navigation default fires the page's own `derived`, `unpinned` navigation, and
-     every other grade waits on the per-origin widening.
+     grade for itself: its default fires the page's own `unpinned` navigation by the rule it applies to the
+     page's `fetch()`, and every other grade waits on the per-origin widening.
      A LOAD THAT DID NOT LOAD IS A DOCUMENT TOO. `replyRecord` answers null for the chokepoint's status 0 — a
      blocked scheme, a private target, a refused read — and HTML still gives that navigable a Document: the
      empty byte sequence is the `about:blank`-shaped one the engine's own child_document builds. The ADDRESS
@@ -1233,8 +1233,9 @@ async function main() {
          declined at every unwidened origin, which is every origin by default. The create notice now carries
          the word, so a child a page's own code named on a path that stood on no contradicted arm is `derived`,
          which is the capability §What-the-tool-produces exists for.
-         Field 17 is whose act it is and field 18 whether its path chose a witness; the navigation default
-         fires only the page's own `derived`, `unpinned` child, and every other grade waits on `--explore`. */
+         Field 17 is whose act it is and field 18 whether its path chose a witness; the default fires the
+         page's own `unpinned` child, as it fires the page's `fetch()`, and every other grade waits on
+         `--explore`. */
       const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, f[15], f[17], f[18],
                                     e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }

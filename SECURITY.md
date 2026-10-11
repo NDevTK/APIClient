@@ -363,13 +363,13 @@ cannot determine is shown as `unknown` rather than left out, because an absent r
 answered. `_signalRegistryCheck` refuses a duplicate signal, an unknown reliability grade, a non-gating signal
 with more than one value, and a default arm naming a value the registry does not have.
 
-The five default arms (`_DEFAULT_ARMS`, shown to the person by `safeFetchDefaultArms`) are the page loading
+The four default arms (`_DEFAULT_ARMS`, shown to the person by `safeFetchDefaultArms`) are the page loading
 itself as a browser would: a program load; any other subresource; a request with `provenance` and `doc-reach`
-both `observed` (this is also what fires the seeded document load); the analysed page's own data request whose
-address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`); and a child navigable the page
-named (`destination=navigation`, `actor=page`, `provenance=derived`). Probes, discovery and tool-composed data
-requests fire only at an origin a person widened. The witness mark is independent of the provenance: a
-`derived` path may have pinned a value the fork chose, so the navigation arm requires `witness=unpinned` too.
+both `observed` (this is also what fires the seeded document load); and the analysed page's own request whose
+address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`). A navigation reads
+`destination=value`: a new navigable, like a postMessage, is judged by the same rows as a `fetch()`. Probes,
+discovery and tool-composed requests fire only at an origin a person widened. The witness mark is independent
+of the provenance: a forced path that pinned nothing fires, and a `derived` path that pinned a value does not.
 
 Beside the provenance, every engine record of a request states a drive mark, `driven` or `undriven`
 (`PENDING_DRIVEN_*`, read off `flow_path_driven` and asserted at `endpoint_record`): `driven` means the request
@@ -377,8 +377,8 @@ was minted inside a flow driven by this tool: a drive of a function the page nev
 that re-executes the page with a payload the engine chose (an @S breakout, or a witness value under
 verification). It is a separate fact from the provenance, because a drive that forced no branch computes its
 values from real inputs and stays `derived`; a candidate's path is marked forced and pinned at the substitution. The
-`actor` row reads it alone: a `page` request that is `driven` reads `tool`, so neither the data-request arm nor
-the navigation arm admits it, while a program or subresource load a drive reaches still fires by its destination
+`actor` row reads it alone: a `page` request that is `driven` reads `tool`, so the page-request arm does not
+admit it, while a program or subresource load a drive reaches still fires by its destination
 arm. The mark can only narrow `actor`, never widen it, and a `page` caller must relay it (`_drivenOf`).
 
 - A person widens an origin through the popup's `EGRESS_POLICY` command (`renderEgressPolicy` in `popup.js`,
