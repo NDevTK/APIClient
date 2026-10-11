@@ -2,8 +2,8 @@
  "spec": "CSS Box Sizing Module Level 3",
  "key": "csssizing3",
  "base": "https://drafts.csswg.org/css-sizing-3/",
- "specUpdated": "1 September 2026",
- "fetched": "2026-09-03",
+ "specUpdated": "8 October 2026",
+ "fetched": "2026-10-11",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -61,22 +61,22 @@
    "id": "sizing-properties"
   },
   "3.1.1": {
-   "title": "Preferred Size Properties: the width and height properties",
+   "title": "Preferred Size Properties: the width , height , inline-size , and block-size properties",
    "page": "",
    "id": "preferred-size-properties"
   },
   "3.1.2": {
-   "title": "Minimum Size Properties: the min-width and min-height properties",
+   "title": "Minimum Size Properties: the min-width , min-height , min-inline-size , and min-block-size properties",
    "page": "",
    "id": "min-size-properties"
   },
   "3.1.3": {
-   "title": "Maximum Size Properties: the max-width and max-height properties",
+   "title": "Maximum Size Properties: the max-width , max-height , max-inline-size , and max-block-size properties",
    "page": "",
    "id": "max-size-properties"
   },
   "3.2": {
-   "title": "Sizing Values: the <length-percentage [0,∞]> , auto | none , stretch , min-content , max-content , and fit-content values",
+   "title": "Sizing Values: the <length-percentage> , auto | none , stretch , min-content , max-content , and fit-content values",
    "page": "",
    "id": "sizing-values"
   },
@@ -162,16 +162,13 @@
   "behaving as auto": [
    "3.2.1"
   ],
-  "border box": [
-   "3.3"
+  "block size": [
+   "3.1.1"
   ],
-  "box sizing": [
-   "3.3"
-  ],
-  "calc size()": [
+  "box size": [
    "3.2"
   ],
-  "content box": [
+  "box sizing": [
    "3.3"
   ],
   "cyclic percentage size": [
@@ -186,10 +183,6 @@
   "fallback size": [
    "2"
   ],
-  "fit content": [
-   "3.2",
-   "3.4"
-  ],
   "fit content block size": [
    "2.1"
   ],
@@ -201,6 +194,9 @@
   ],
   "indefinite size": [
    "2"
+  ],
+  "inline size": [
+   "3.1.1"
   ],
   "inner block size": [
    "2"
@@ -226,10 +222,11 @@
   "intrinsic sizing": [
    "5"
   ],
+  "max block size": [
+   "3.1.3"
+  ],
   "max content": [
-   "2.1",
-   "3.2",
-   "3.4"
+   "2.1"
   ],
   "max content block size": [
    "2.1"
@@ -255,13 +252,22 @@
   "max height": [
    "3.1.3"
   ],
+  "max inline size": [
+   "3.1.3"
+  ],
   "max size": [
    "3.1.3"
   ],
   "max width": [
    "3.1.3"
   ],
+  "maximum block size": [
+   "3.1.3"
+  ],
   "maximum height": [
+   "3.1.3"
+  ],
+  "maximum inline size": [
    "3.1.3"
   ],
   "maximum size": [
@@ -270,10 +276,11 @@
   "maximum width": [
    "3.1.3"
   ],
+  "min block size": [
+   "3.1.2"
+  ],
   "min content": [
-   "2.1",
-   "3.2",
-   "3.4"
+   "2.1"
   ],
   "min content block size": [
    "2.1"
@@ -299,13 +306,22 @@
   "min height": [
    "3.1.2"
   ],
+  "min inline size": [
+   "3.1.2"
+  ],
   "min size": [
    "3.1.2"
   ],
   "min width": [
    "3.1.2"
   ],
+  "minimum block size": [
+   "3.1.2"
+  ],
   "minimum height": [
+   "3.1.2"
+  ],
+  "minimum inline size": [
    "3.1.2"
   ],
   "minimum size": [
@@ -332,7 +348,13 @@
   "preferred aspect ratio": [
    "2.3"
   ],
+  "preferred block size": [
+   "3.1.1"
+  ],
   "preferred height": [
+   "3.1.1"
+  ],
+  "preferred inline size": [
    "3.1.1"
   ],
   "preferred size": [
@@ -377,11 +399,17 @@
    "5.2.1": 4,
    "5.2.2": 3
   },
+  "block size": {
+   "2": 2,
+   "3.2": 3,
+   "5.2.1": 2,
+   "5.2.2": 4
+  },
+  "box size": {
+   "5.2.2": 2
+  },
   "box sizing": {
    "5.2.2": 5
-  },
-  "calc size()": {
-   "5.2.2": 3
   },
   "cyclic percentage size": {
    "5.2.2": 3
@@ -395,15 +423,17 @@
   "fallback size": {
    "5.2.2": 2
   },
-  "fit content": {
-   "5.2.2": 5
-  },
   "fit content size": {
    "5.2.2": 2
   },
   "indefinite size": {
    "2.1": 2,
    "5.2.2": 3
+  },
+  "inline size": {
+   "2": 2,
+   "2.1": 2,
+   "5.2.2": 4
   },
   "inner size": {
    "3.3": 5,
@@ -417,8 +447,8 @@
   "intrinsic size contribution": {
    "5.2.1": 3
   },
-  "max content": {
-   "5.2.2": 4
+  "max block size": {
+   "5.2.2": 2
   },
   "max content contribution": {
    "5.2.1": 3,
@@ -435,11 +465,20 @@
    "5.2.1": 2,
    "5.2.2": 4
   },
+  "max inline size": {
+   "5.2.2": 2
+  },
   "max width": {
    "5.2.1": 2,
    "5.2.2": 3
   },
+  "maximum block size": {
+   "5.2.2": 2
+  },
   "maximum height": {
+   "5.2.2": 2
+  },
+  "maximum inline size": {
    "5.2.2": 2
   },
   "maximum width": {
@@ -447,8 +486,8 @@
    "5.1": 2,
    "5.2.2": 4
   },
-  "min content": {
-   "5.2.2": 4
+  "min block size": {
+   "5.2.2": 2
   },
   "min content constraint": {
    "2.1": 2,
@@ -470,11 +509,20 @@
    "5.2.1": 3,
    "5.2.2": 5
   },
+  "min inline size": {
+   "5.2.2": 2
+  },
   "min width": {
    "5.1": 2,
    "5.2.2": 4
   },
+  "minimum block size": {
+   "5.2.2": 2
+  },
   "minimum height": {
+   "5.2.2": 2
+  },
+  "minimum inline size": {
    "5.2.2": 2
   },
   "minimum width": {
@@ -489,7 +537,7 @@
   },
   "preferred aspect ratio": {
    "5.1": 3,
-   "5.2.2": 2
+   "5.2.2": 3
   },
   "preferred height": {
    "2": 2,
