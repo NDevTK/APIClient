@@ -51,9 +51,11 @@ CssPx css_px_fact(CssEnvFact fact, JSContext *realm, double value)
     CssPx out = css_px_env(fact, realm, value);
 
     DCHECK(isfinite(value), "an environment fact's own value is not finite — every fact is a picked size or "
-                            "ratio of the modelled device, and a NaN or an infinity has no affine form");
-    out.form.affine = true;
-    out.form.k[fact] = 1.0;
+                            "ratio of the modelled device, and a NaN or an infinity has no polynomial form");
+    out.form.known = true;
+    out.form.n = 1;
+    out.form.m[0].e[fact] = 1;
+    out.form.m[0].k = 1.0;
     out.form.val[fact] = value;
     return out;
 }
@@ -69,7 +71,7 @@ CssPx css_px_opaque(CssPx of, double px)
 }
 
 /* THE UNION, WHICH IS THE WHOLE OF THE PROPAGATION — a length is a joint function of every fact either operand
-   was a function of. The result's form is opaque; the affine operations below restore it where they can.
+   was a function of. The result's form is opaque; the operations below restore it where they can.
    THE REALM IS ONE, and it is asserted rather than merged: §10.1's containing-block chain and §6's snap are
    stated over one document, so two realms meeting in one length would mean a layout spanning documents — at
    which point the SET would have to carry a realm per fact, since `{viewport#3}` and `{viewport#7}` are two
@@ -93,11 +95,11 @@ static CssPx css_px_combine(CssPx a, CssPx b, double px)
     return out;
 }
 
-/* ---- the affine form (css_length.h's CssPxForm) ----------------------------------------------------------- */
+/* ---- the polynomial form (css_length.h's CssPxForm) ------------------------------------------------------- */
 
-static bool css_px_is_affine(CssPx a)
+static bool css_px_is_known(CssPx a)
 {
-    return a.env == CSS_ENV_NONE || a.form.affine;
+    return a.env == CSS_ENV_NONE || a.form.known;
 }
 
 /* `a`'s constant term: a determined length is its own constant. */
@@ -106,32 +108,113 @@ static double css_px_form_c(CssPx a)
     return a.env == CSS_ENV_NONE ? a.px : a.form.c;
 }
 
-/* `out`'s form becomes `ka·a + kb·b`, over operands that are both affine. A fact both carry has one value,
-   because a fact is one number per realm. */
-static void css_px_form_lin(CssPx *out, CssPx a, double ka, CssPx b, double kb)
+/* A form being composed, before it is sorted, merged and checked against CSS_PX_FORM_MAX. */
+typedef struct {
+    double        c;
+    int           n;
+    CssPxMonomial m[CSS_PX_FORM_MAX * CSS_PX_FORM_MAX + 2 * CSS_PX_FORM_MAX];
+} CssPxPoly;
+
+static void css_px_poly_add(CssPxPoly *p, const unsigned char *e, double k)
 {
-    int f;
+    DCHECK(p->n < (int)(sizeof p->m / sizeof p->m[0]), "a composed form outgrew its scratch space");
+    memcpy(p->m[p->n].e, e, CSS_ENV_FACT_COUNT);
+    p->m[p->n++].k = k;
+}
 
-    DCHECK(css_px_is_affine(a) && css_px_is_affine(b), "a linear combination was formed over an opaque length");
-    out->form.affine = out->env != CSS_ENV_NONE;
-    out->form.c = ka * css_px_form_c(a) + kb * css_px_form_c(b);
+/* `p += k·a`, `a` known. */
+static void css_px_poly_axpy(CssPxPoly *p, double k, CssPx a)
+{
+    int i;
+
+    p->c += k * css_px_form_c(a);
+    if (a.env == CSS_ENV_NONE) return;
+    for (i = 0; i < a.form.n; i++) css_px_poly_add(p, a.form.m[i].e, k * a.form.m[i].k);
+}
+
+static int css_px_mono_cmp(const void *x, const void *y)
+{
+    return memcmp(((const CssPxMonomial *)x)->e, ((const CssPxMonomial *)y)->e, CSS_ENV_FACT_COUNT);
+}
+
+/* Whether known `a` has a monomial over fact `f`, which is when its `val[f]` is written. */
+static bool css_px_uses(CssPx a, int f)
+{
+    int i;
+
+    if (a.env == CSS_ENV_NONE || !a.form.known) return false;
+    for (i = 0; i < a.form.n; i++) if (a.form.m[i].e[f]) return true;
+    return false;
+}
+
+/* `out`'s form becomes `p` in normal form, with each fact's value read off whichever operand used it — a fact
+   is one number per realm, so two operands that both used it agree. Too wide a form is opaque. */
+static void css_px_form_set(CssPx *out, CssPxPoly *p, CssPx a, CssPx b)
+{
+    int i = 0, n = 0, f;
+
+    qsort(p->m, (size_t)p->n, sizeof p->m[0], css_px_mono_cmp);
+    while (i < p->n) {
+        CssPxMonomial t = p->m[i++];
+
+        while (i < p->n && css_px_mono_cmp(&t, &p->m[i]) == 0) t.k += p->m[i++].k;
+        if (t.k != 0.0) p->m[n++] = t;
+    }
+    if (out->env == CSS_ENV_NONE) {
+        DCHECK(n == 0, "a length derived from no fact composed a form with a monomial over one");
+        return;
+    }
+    out->form.known = n <= CSS_PX_FORM_MAX;
+    if (!out->form.known) return;
+    out->form.n = n;
+    out->form.c = p->c;
+    memcpy(out->form.m, p->m, (size_t)n * sizeof p->m[0]);
     for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
-        double fa = a.env != CSS_ENV_NONE ? a.form.k[f] : 0.0, fb = b.env != CSS_ENV_NONE ? b.form.k[f] : 0.0;
+        bool ua = css_px_uses(a, f), ub = css_px_uses(b, f);
 
-        DCHECKF(fa == 0.0 || fb == 0.0 || a.form.val[f] == b.form.val[f],
+        DCHECKF(!ua || !ub || a.form.val[f] == b.form.val[f],
                 "fact %d entered two lengths of one realm with two values, %g and %g — a fact is one number "
                 "per realm, so one of the two was minted from something other than the fact", f,
                 a.form.val[f], b.form.val[f]);
-        out->form.k[f] = ka * fa + kb * fb;
-        out->form.val[f] = fa != 0.0 ? a.form.val[f] : fb != 0.0 ? b.form.val[f] : 0.0;
+        out->form.val[f] = ua ? a.form.val[f] : ub ? b.form.val[f] : 0.0;
     }
+}
+
+/* `out`'s form becomes `ka·a + kb·b`, over two known operands. */
+static void css_px_form_lin(CssPx *out, CssPx a, double ka, CssPx b, double kb)
+{
+    CssPxPoly p;
+
+    DCHECK(css_px_is_known(a) && css_px_is_known(b), "a linear combination was formed over an opaque length");
+    p.c = 0.0;
+    p.n = 0;
+    css_px_poly_axpy(&p, ka, a);
+    css_px_poly_axpy(&p, kb, b);
+    css_px_form_set(out, &p, a, b);
+}
+
+double css_px_form_eval(CssPx a)
+{
+    double v;
+    int i, f;
+
+    DCHECK(css_px_is_known(a), "an opaque length's form was evaluated");
+    v = css_px_form_c(a);
+    if (a.env == CSS_ENV_NONE) return v;
+    for (i = 0; i < a.form.n; i++) {
+        double t = a.form.m[i].k;
+
+        for (f = 0; f < CSS_ENV_FACT_COUNT; f++) t *= pow(a.form.val[f], a.form.m[i].e[f]);
+        v += t;
+    }
+    return v;
 }
 
 CssPx css_px_add(CssPx a, CssPx b)
 {
     CssPx out = css_px_combine(a, b, a.px + b.px);
 
-    if (css_px_is_affine(a) && css_px_is_affine(b)) css_px_form_lin(&out, a, 1.0, b, 1.0);
+    if (css_px_is_known(a) && css_px_is_known(b)) css_px_form_lin(&out, a, 1.0, b, 1.0);
     return out;
 }
 
@@ -139,7 +222,7 @@ CssPx css_px_sub(CssPx a, CssPx b)
 {
     CssPx out = css_px_combine(a, b, a.px - b.px);
 
-    if (css_px_is_affine(a) && css_px_is_affine(b)) css_px_form_lin(&out, a, 1.0, b, -1.0);
+    if (css_px_is_known(a) && css_px_is_known(b)) css_px_form_lin(&out, a, 1.0, b, -1.0);
     return out;
 }
 
@@ -149,12 +232,13 @@ CssPx css_px_scale(CssPx a, double k)
     CssPx out = a;
 
     out.px = a.px * k;
-    if (a.env != CSS_ENV_NONE && a.form.affine) css_px_form_lin(&out, a, k, css_px(0.0), 0.0);
+    if (a.env != CSS_ENV_NONE && a.form.known) css_px_form_lin(&out, a, k, css_px(0.0), 0.0);
     return out;
 }
 
 /* The range each fact takes over every world this user agent can be in, which is what decides an extreme for
-   every world at once. A fact whose standard states no range is unbounded. Indexed by the fact. */
+   every world at once. Every lower bound is zero or more, so a monomial is monotone in each of its facts and
+   its range is the product of its facts' ranges. Indexed by the fact. */
 static const struct { double lo, hi; } CSS_ENV_RANGE[CSS_ENV_FACT_COUNT] = {
     /* CSS 2.2 §10.1 Definition of "containing block": the initial containing block "has the dimensions of the
        viewport", and css-values-4 §6.1.2.1's small and dynamic sizes are that viewport sized twice more. */
@@ -176,20 +260,27 @@ static const struct { double lo, hi; } CSS_ENV_RANGE[CSS_ENV_FACT_COUNT] = {
     [CSS_ENV_FONT_DESCENT]            = { 0.0, INFINITY },
 };
 
-/* The bounds of `a - b` over every world, both operands affine. */
+/* The bounds of `a - b` over every world, both operands known. */
 static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
 {
     CssPx d = css_px_sub(a, b);
-    int f;
+    int i, f;
 
     *lo = *hi = css_px_form_c(d);
     if (d.env == CSS_ENV_NONE) return;
-    for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
-        double k = d.form.k[f];
+    DCHECK(d.form.known, "the difference of two known lengths has an opaque form");
+    for (i = 0; i < d.form.n; i++) {
+        double k = d.form.m[i].k, mlo = 1.0, mhi = 1.0;
 
-        if (k == 0.0) continue;
-        *lo += k > 0.0 ? k * CSS_ENV_RANGE[f].lo : k * CSS_ENV_RANGE[f].hi;
-        *hi += k > 0.0 ? k * CSS_ENV_RANGE[f].hi : k * CSS_ENV_RANGE[f].lo;
+        for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
+            if (!d.form.m[i].e[f]) continue;
+            DCHECK(CSS_ENV_RANGE[f].lo >= 0.0, "a fact's range reaches below zero, so its monomials are not "
+                                               "monotone and their ranges are not their facts' products");
+            mlo *= pow(CSS_ENV_RANGE[f].lo, d.form.m[i].e[f]);
+            mhi *= pow(CSS_ENV_RANGE[f].hi, d.form.m[i].e[f]);
+        }
+        *lo += k > 0.0 ? k * mlo : k * mhi;
+        *hi += k > 0.0 ? k * mhi : k * mlo;
     }
 }
 
@@ -207,7 +298,7 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     const CssPx *win = NULL;
     double lo, hi, tol;
 
-    if (!css_px_is_affine(a) || !css_px_is_affine(b)) return out;
+    if (!css_px_is_known(a) || !css_px_is_known(b)) return out;
     css_px_diff_range(a, b, &lo, &hi);
     if (lo >= 0.0) win = want_hi ? &a : &b;
     else if (hi <= 0.0) win = want_hi ? &b : &a;
@@ -215,8 +306,8 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     tol = 1e-9 * fmax(1.0, fmax(fabs(a.px), fabs(b.px)));
     DCHECKF(fabs(out.px - win->px) <= tol,
             "an extreme over %g and %g was decided for every world by the facts' ranges (a - b in [%g, %g]) "
-            "and the examples disagree with that decision — one operand's affine form is not the function "
-            "its example was computed by", a.px, b.px, lo, hi);
+            "and the examples disagree with that decision — one operand's form is not the function its "
+            "example was computed by", a.px, b.px, lo, hi);
     out.px = win->px;
     css_px_form_lin(&out, *win, 1.0, css_px(0.0), 0.0);
     return out;
@@ -232,19 +323,36 @@ CssPx css_px_min(CssPx a, CssPx b)
     return css_px_extreme(a, b, false);
 }
 
-/* A product or a quotient by a DETERMINED operand is a scaling and keeps the form; one between two derived
-   lengths is opaque. */
+/* A product keeps the form: the product of two polynomials is one. */
 CssPx css_px_mul(CssPx a, CssPx b)
 {
     CssPx out = css_px_combine(a, b, a.px * b.px);
+    CssPxPoly p;
+    int i, j, f;
 
-    if (b.env == CSS_ENV_NONE && a.env != CSS_ENV_NONE && a.form.affine)
-        css_px_form_lin(&out, a, b.px, css_px(0.0), 0.0);
-    else if (a.env == CSS_ENV_NONE && b.env != CSS_ENV_NONE && b.form.affine)
-        css_px_form_lin(&out, b, a.px, css_px(0.0), 0.0);
+    if (!css_px_is_known(a) || !css_px_is_known(b)) return out;
+    p.c = css_px_form_c(a) * css_px_form_c(b);
+    p.n = 0;
+    if (b.env != CSS_ENV_NONE)
+        for (j = 0; j < b.form.n; j++) css_px_poly_add(&p, b.form.m[j].e, css_px_form_c(a) * b.form.m[j].k);
+    if (a.env != CSS_ENV_NONE)
+        for (i = 0; i < a.form.n; i++) css_px_poly_add(&p, a.form.m[i].e, css_px_form_c(b) * a.form.m[i].k);
+    if (a.env != CSS_ENV_NONE && b.env != CSS_ENV_NONE)
+        for (i = 0; i < a.form.n; i++)
+            for (j = 0; j < b.form.n; j++) {
+                unsigned char e[CSS_ENV_FACT_COUNT];
+
+                for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
+                    DCHECK(a.form.m[i].e[f] + b.form.m[j].e[f] <= 255, "a monomial's exponent overflowed");
+                    e[f] = (unsigned char)(a.form.m[i].e[f] + b.form.m[j].e[f]);
+                }
+                css_px_poly_add(&p, e, a.form.m[i].k * b.form.m[j].k);
+            }
+    css_px_form_set(&out, &p, a, b);
     return out;
 }
 
+/* A quotient by a DETERMINED operand is a scaling and keeps the form; one by a derived length is opaque. */
 CssPx css_px_div(CssPx a, CssPx b)
 {
     CssPx out;
@@ -255,7 +363,7 @@ CssPx css_px_div(CssPx a, CssPx b)
            "non-zero' and answers 1 or 0 otherwise — so a zero arriving means the caller skipped its own "
            "branch rather than that this operation needs one");
     out = css_px_combine(a, b, a.px / b.px);
-    if (b.env == CSS_ENV_NONE && a.env != CSS_ENV_NONE && a.form.affine)
+    if (b.env == CSS_ENV_NONE && a.env != CSS_ENV_NONE && a.form.known)
         css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
     return out;
 }

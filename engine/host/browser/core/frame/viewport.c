@@ -307,46 +307,57 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
     return concolic_source_wrap_joint(len.realm, m.shapes, m.srcs, n, computed);
 }
 
-/* See viewport.h. The term is named by its linear part over the facts' per-realm keys, in the table's order,
-   and by the fractional constant: `round(L + r)` is one function of the facts for one (L, r). */
+/* See viewport.h. The term is named by the form's monomials over the facts' per-realm keys and by the
+   fractional constant: `round(P + r)` is one function of the facts for one (P, r). */
 JSValue viewport_env_derived_long(CssPx len, JSValue computed)
 {
+    enum { MONO_MAX = CSS_ENV_FACT_COUNT * (VIEWPORT_SRC_MAX + 8) };
     ViewportEnvMembers m;
-    const char *fields[2 * CSS_ENV_FACT_COUNT + 1];
-    char spelled[CSS_ENV_FACT_COUNT + 1][32];
-    double at = 0.0, n_int, r, ex = 0.0;
-    int n, i, nf = 0;
+    const char *fields[2 * CSS_PX_FORM_MAX + 1];
+    char coeff[CSS_PX_FORM_MAX + 1][32];
+    char mono[CSS_PX_FORM_MAX][MONO_MAX];
+    double at, n_int, r, ex = 0.0;
+    int n, i, j, nf = 0;
     char *term;
     JSValue out;
 
-    if (len.env == CSS_ENV_NONE || !len.form.affine) return viewport_env_derived(len, computed);
+    if (len.env == CSS_ENV_NONE || !len.form.known) return viewport_env_derived(len, computed);
     n = viewport_env_members(len, &m);
     /* The form evaluated at this realm's facts is the example the layout computed: a writer that replaced the
        number and kept the form would fail here (css_px_opaque is the route that drops it). */
-    at = len.form.c;
-    for (i = 0; i < n; i++) at += len.form.k[m.fact[i]] * len.form.val[m.fact[i]];
+    at = css_px_form_eval(len);
     DCHECKF(fabs(at - len.px) <= 1e-9 * fmax(1.0, fabs(len.px)),
-            "a length of %.17g CSS px carries an affine form that evaluates to %.17g at its own facts — its "
-            "number was replaced past css_px_opaque, or its form was composed from a different operation than "
-            "its example", len.px, at);
+            "a length of %.17g CSS px carries a form that evaluates to %.17g at its own facts — its number "
+            "was replaced past css_px_opaque, or its form was composed from a different operation than its "
+            "example", len.px, at);
     JS_ToFloat64(len.realm, &ex, computed);
-    n_int = floor(len.form.c);
-    r = len.form.c - n_int;
-    snprintf(spelled[0], sizeof spelled[0], "%.17g", r);
-    fields[nf++] = spelled[0];
-    for (i = 0; i < n; i++) {
-        double k = len.form.k[m.fact[i]];
-
-        if (k == 0.0) continue;
-        snprintf(spelled[i + 1], sizeof spelled[i + 1], "%.17g", k);
-        fields[nf++] = m.srcs[i];
-        fields[nf++] = spelled[i + 1];
-    }
     /* No fact moves the length: it is `round(c)` in every world, which is the example. */
-    if (nf == 1) {
+    if (len.form.n == 0) {
         DCHECKF(ex == floor(len.form.c + 0.5),
                 "a length whose form is the constant %.17g crossed as the `long` %.17g", len.form.c, ex);
         return computed;
+    }
+    n_int = floor(len.form.c);
+    r = len.form.c - n_int;
+    snprintf(coeff[CSS_PX_FORM_MAX], sizeof coeff[CSS_PX_FORM_MAX], "%.17g", r);
+    fields[nf++] = coeff[CSS_PX_FORM_MAX];
+    for (j = 0; j < len.form.n; j++) {
+        size_t at_b = 0;
+
+        mono[j][0] = '\0';
+        for (i = 0; i < n; i++) {
+            unsigned e = len.form.m[j].e[m.fact[i]];
+            int w;
+
+            if (!e) continue;
+            w = snprintf(mono[j] + at_b, sizeof mono[j] - at_b, "%s%s^%u", at_b ? "*" : "", m.srcs[i], e);
+            DCHECK(w > 0 && (size_t)w < sizeof mono[j] - at_b, "a monomial's spelling outgrew its buffer");
+            at_b += (size_t)w;
+        }
+        DCHECK(at_b > 0, "a monomial of a length's form names no fact in the length's set");
+        snprintf(coeff[j], sizeof coeff[j], "%.17g", len.form.m[j].k);
+        fields[nf++] = mono[j];
+        fields[nf++] = coeff[j];
     }
     term = concolic_ident_compose("cssom-long-round", fields, nf);
     out = concolic_source_wrap_joint_affine(len.realm, m.shapes, m.srcs, n, term, n_int, computed);
