@@ -2207,22 +2207,27 @@ function routedPostJoin(instances) {
     if (!d) continue;
     const text = JSON.stringify([d.fetchCallSites, d.securitySinks]);
     for (const m of text.matchAll(ref)) {
-      const key = `${i.tag} ${m[1]} ${m[2]}`;
+      /* A derivation over a member renders as a call segment after it (`.encodeURIComponent()`, solver/
+         concolic.c's "%s.%s()" shape), so the member path is the segments before the first call. */
+      const call = m[2].search(/\.[^.]*\(/);
+      const path = call < 0 ? m[2] : m[2].slice(0, call);
+      const key = `${i.tag} ${m[1]} ${path}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const s = posts.get(m[1]);
       if (!s) {
-        console.error(`[trusted] @JOIN ${JSON.stringify({ receiver: i.tag, id: m[1], path: m[2], sender: null })}`);
+        console.error(`[trusted] @JOIN ${JSON.stringify({ receiver: i.tag, id: m[1], path, sender: null })}`);
         continue;
       }
-      const sym = s.post.symbols.filter((x) => typeof x.path === 'string' && m[2].startsWith(x.path))
+      /* Segment by segment: ".qq" is not below ".q". */
+      const under = (p, q) => p === q || p.startsWith(q + '.');
+      const sym = s.post.symbols.filter((x) => typeof x.path === 'string' && under(path, x.path))
                                 .sort((a, b) => b.path.length - a.path.length)[0] ?? null;
       /* With no symbol at or above the path, the value the receiver used holds the sender's unknowns below it. */
-      const contains = sym ? [] : s.post.symbols.filter((x) => typeof x.path === 'string' &&
-                                                                x.path.startsWith(m[2]))
+      const contains = sym ? [] : s.post.symbols.filter((x) => typeof x.path === 'string' && under(x.path, path))
                                                  .map((x) => ({ path: x.path, source: x.source }));
       console.error(`[trusted] @JOIN ${JSON.stringify({
-        receiver: i.tag, id: m[1], path: m[2], sender: s.sender, senderOrigin: s.senderOrigin,
+        receiver: i.tag, id: m[1], path, sender: s.sender, senderOrigin: s.senderOrigin,
         relation: s.post.relation, targetOrigin: s.post.targetOrigin,
         source: sym ? sym.source : null, shape: sym ? sym.shape : null, contains })}`);
     }

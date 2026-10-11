@@ -503,13 +503,35 @@ function endpointAddressRootHistogram(rows) {
    its own source at each member path under that id. Every arriving document's posts are kept here under their
    id with the sender origin this zone stamps from its own record of the instance (the engine may not state its
    own), and each document's findings over `message.data:<id>[.path]` are joined on the run row. A receiver path
-   is covered by the sender symbol at its longest prefix, or holds the symbols below it (`contains`); an id no
-   sender has indexed yet (a message holding no unknown is never indexed) reads `sender: null`. The map is this
-   zone's in-memory record of what instances emitted, as `_remoteOps` is. */
+   is covered by the sender symbol at its longest prefix, or holds the symbols below it (`contains`). An id no
+   sender has indexed yet reads `sender: null`: a message holding no unknown is never indexed, and a sender's
+   posts arrive with its next result document, which may come after the receiver's row. So taking a post
+   completes every logged `sender: null` record under its id; whichever half arrives second makes the join. The
+   map is this zone's in-memory record of what instances emitted, as `_remoteOps` is. */
 const _routedPosts = new Map();
 function routedPostsTake(eng, msg, result) {
   for (const p of result.routedPosts)
     _routedPosts.set(p.id, { sender: msg.sourceUrl, senderOrigin: stampOrigin(eng.origin), post: p });
+  if (!result.routedPosts.length) return;
+  for (const row of self._engineLog) {
+    if (!Array.isArray(row.routedJoins)) continue;
+    row.routedJoins = row.routedJoins.map((j) => j.sender === null && _routedPosts.has(j.id)
+                                                   ? routedJoinOf(j.receiver, j.id, j.path) : j);
+  }
+}
+/* Whether member path `p` is `q` or lies below it, segment by segment (".qq" is not below ".q"). */
+function routedPathUnder(p, q) { return p === q || p.startsWith(q + "."); }
+/* One join record. */
+function routedJoinOf(receiver, id, path) {
+  const s = _routedPosts.get(id);
+  if (!s) return { receiver, id, path, sender: null };
+  const sym = s.post.symbols.filter((x) => routedPathUnder(path, x.path))
+                            .sort((a, b) => b.path.length - a.path.length)[0] || null;
+  const contains = sym ? [] : s.post.symbols.filter((x) => routedPathUnder(x.path, path))
+                                             .map((x) => ({ path: x.path, source: x.source }));
+  return { receiver, id, path, sender: s.sender, senderOrigin: s.senderOrigin, relation: s.post.relation,
+           targetOrigin: s.post.targetOrigin, source: sym ? sym.source : null, shape: sym ? sym.shape : null,
+           contains };
 }
 function routedPostJoins(msg, result) {
   const ref = /message\.data:([0-9a-f]{16})\}?((?:\.[^\s"{}\[\].]+)*)/g;
@@ -517,18 +539,14 @@ function routedPostJoins(msg, result) {
   const seen = new Set();
   const out = [];
   for (const m of text.matchAll(ref)) {
-    const key = m[1] + " " + m[2];
+    /* A derivation over a member renders as a call segment after it (`.encodeURIComponent()`, solver/
+       concolic.c's "%s.%s()" shape), so the member path is the segments before the first call. */
+    const call = m[2].search(/\.[^.]*\(/);
+    const path = call < 0 ? m[2] : m[2].slice(0, call);
+    const key = m[1] + " " + path;
     if (seen.has(key)) continue;
     seen.add(key);
-    const s = _routedPosts.get(m[1]);
-    if (!s) { out.push({ receiver: msg.sourceUrl, id: m[1], path: m[2], sender: null }); continue; }
-    const sym = s.post.symbols.filter((x) => m[2].startsWith(x.path))
-                              .sort((a, b) => b.path.length - a.path.length)[0] || null;
-    const contains = sym ? [] : s.post.symbols.filter((x) => x.path.startsWith(m[2]))
-                                               .map((x) => ({ path: x.path, source: x.source }));
-    out.push({ receiver: msg.sourceUrl, id: m[1], path: m[2], sender: s.sender, senderOrigin: s.senderOrigin,
-               relation: s.post.relation, targetOrigin: s.post.targetOrigin,
-               source: sym ? sym.source : null, shape: sym ? sym.shape : null, contains });
+    out.push(routedJoinOf(msg.sourceUrl, m[1], path));
   }
   return out;
 }
