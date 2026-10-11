@@ -1481,14 +1481,15 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
            "value), and one that is must stand on exactly one, or a pin and the exclusion that contradicts it "
            "are recorded off the same run of the same gate");
     if (src && tok && eq_holds) {
-        pinned = concolic_pin(src, concolic_root_c(cond), tok_kind, tok, concolic_cmp_algo(cond));
+        /* concolic_pin pins `src` only where the compared value is that source; a derivation of it pins nothing. */
+        pinned = concolic_pin(cond);
         /* The path records that it has chosen a witness on an arm this run's own example contradicts. From here
            concolic_new's pin arm answers every read of `src` with `tok`, so addresses composed from that source
            carry bytes this engine picked, which the trusted zone's firing decision must tell apart from observed
            ones. It is recorded at the choice because the composed URL is a bare string by then (`pin_mint`
            answers with a primitive and `concolic_add_hook` derives nothing from two); solver/flow.h's field has
-           the full reading. Not gated on the algorithm: reaching here means `concolic_pin` determined a value. */
-        if (forced_arm) flow_mark_pinned_value();
+           the full reading. Gated on `pinned`: a loose equality or a derived subject determined no value. */
+        if (pinned && forced_arm) flow_mark_pinned_value();
     }
     /* The other arm, which is an observation, not an absence: forced execution runs both arms of every
        `x === "admin"`, and the sibling has proved the value is not the token. Without this it would emit its

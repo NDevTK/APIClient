@@ -904,7 +904,7 @@ JSValue     concolic_new_derived(JSContext *ctx, const char *op, const JSValueCo
    token, an id. An unknown denotes its SHAPE (a real string, stable per source, the key_name rule); anything
    else converts normally. OWNED either way: free with JS_FreeCString. */
 const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
-/* EQ true-arm: `src` now reads `val` (a real @H value) FOR THIS FLOW.
+/* EQ true-arm: `src` now reads `val` (a real @H value) FOR THIS FLOW; concolic_pin's store (NULL `src`: demand).
    `root` IS RECORDED BESIDE IT AND IS A DIFFERENT FACT — where the pinned bytes ENTERED the program, which a
    derivation never changes (solver/concolic.h's `concolic_root_c`). The pin itself is keyed by the value's own
    identity, because that is what a later read of THAT value concretizes through; the root is written as a
@@ -959,8 +959,16 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    which is a value-dependent behaviour split rather than a narrower mechanism. How its absence would show: two
    sibling flows for every repeated `===` against one BigInt-valued source, where a string-valued source
    produces one; the fork census names the predicate. */
-int         concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val,
-                         JSConcolicEqOp algo);   /* 1 when the value was written, 0 when refused */
+int         concolic_pin_store(const char *src, const char *root, ConcolicLit kind, const char *val,
+                               JSConcolicEqOp algo);   /* 1 when the value was written, 0 when refused */
+/* THE PIN A HOLDING EQUALITY MAKES, asked of the comparison result `cmp` on the arm where it holds (decide.c).
+   It names the value the page compared and nothing that value was derived from: a subject that owns its `src`
+   (a source read, a member read, a call result) is pinned under `src` through concolic_pin_store above, while
+   a derivation (`'x-' + t === 'x-dark'`, `x * 2 === 10`) pins nothing, so no read of `t` or `x` answers the
+   derivation's token. The demand on the root is made in both cases. Asserts the comparison stated which of the
+   two its subject is. Answers concolic_pin_store's 1 where a value was written, 0 otherwise. Only this and the
+   store's own selftests call concolic_pin_store, because only they know `src` names the compared value. */
+int         concolic_pin(JSValueConst cmp);
 /* One pin of the running flow, as concolic_pins_each hands it over: `src` is the source path the pin is keyed
    under (what a later read concretizes through), `val` the §7.1.19 ToString ( argument ) spelling of the
    operand the page's equality wrote, and `kind` what that spelling denotes. All three are borrowed from the

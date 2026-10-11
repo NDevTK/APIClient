@@ -57,6 +57,11 @@ typedef struct {
        two mints that establish it and carried by nothing: a negation copies the predicate observations
        (pred_carry_through_not) but not this, so a value that got here by any other route reads 0. */
     signed char src_self;
+    /* Whether `src` is this value's own injection identity rather than one inherited from an operand: a source
+       read and a member read (both `src_self`) and a call result, whose `src` is its own shape. An arithmetic,
+       concatenation, coercion or builtin derivation carries its first unknown operand's `src` and reads 0. An
+       equality's determination is filed under `src` only for a subject that owns it (concolic_pin). */
+    signed char src_own;
     char *root;         /* delivery provenance: where the bytes entered. A derivation unions its operands'
                            (one member = unchanged); a set, walked by root_member. NULL exactly when `src` is */
     /* Whose unknown each member of `root` is: a mask over ConcolicRootWhose, because `root` is a set and one
@@ -109,6 +114,10 @@ typedef struct {
        of them is wrong but never which, so naming either would invent a fact. The pin and the exclusion refuse
        that case for the same reason. */
     char *cmp_subj_ident;
+    /* For an equality, its subject's `src_own`, stated at the mint: 1 the subject is the value `src` names, 0 it
+       is derived from it, -1 unstated (concolic_alloc's value, which concolic_pin refuses). Carried through a
+       negation with the rest of the observation. */
+    signed char cmp_src_own;
     /* The ordering's own fields, kept apart from the equality's: an equality determines a value on one arm, an
        ordering a bound on both. `rel_op` is normalised subject-on-the-left (`5 < x` arrives as `x > 5`), so
        decide.c reads a relation without knowing which operand the page wrote first. */
@@ -969,7 +978,8 @@ static int root_member(const char *root, int i, const char **p, size_t *n);
    downstream can recover the mark: by the time a value reaches a sink the pinned identity is gone and only the
    root survives the derivations. The root is marked even when it equals the identity (`event.origin === X`,
    the spelling bundles write); the second write is then a no-op through `cons_entry`. */
-int concolic_pin(const char *src, const char *root, ConcolicLit kind, const char *val, JSConcolicEqOp algo) {
+int concolic_pin_store(const char *src, const char *root, ConcolicLit kind, const char *val,
+                       JSConcolicEqOp algo) {
     Cons *c;
     int wrote = 0;
     /* The two writes are one act and two decisions, separated by the algorithm (concolic.h reads §7.2.13
@@ -1010,7 +1020,7 @@ int concolic_pin(const char *src, const char *root, ConcolicLit kind, const char
     DCHECK(root != NULL, "an equality pinned an attacker value that carries no delivery ROOT — the root is "
                          "what says WHOSE bytes were demanded, and §Attacker-sources' unforgeable-origin rule "
                          "is decided by exactly that");
-    if (algo == JS_CONCOLIC_EQ_STRICT) {
+    if (algo == JS_CONCOLIC_EQ_STRICT && src) {   /* NULL: the demand alone */
         c = cons_entry(src);
         free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
         c->valkind = (signed char)kind;
@@ -1675,6 +1685,45 @@ static void pin_src_names_self(JSValueConst v) {
        so the flag stays 0. */
     if (!c->src) return;
     c->src_self = 1;
+    c->src_own = 1;
+}
+
+/* Mark that `v`'s `src` is its own injection identity without naming it for a pin read (`src_own` without
+   `src_self`): a call result, whose `src` is its own shape. */
+static void src_own_stamp(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    if (!c || !c->src) return;   /* a candidate re-fire delivered a plain value, or no provenance */
+    c->src_own = 1;
+}
+
+/* An equality's statement of whether its subject owns `src`, written once at the two equality mints. */
+static void pred_set_src_own(JSValueConst pred, int own) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(pred, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL && c->cmp_op != OPCMP_NONE && c->cmp_src_own == -1 && (own == 0 || own == 1),
+           "a subject's ownership of `src` was stated on something that is not a fresh equality result, or "
+           "stated twice, or stated as neither");
+    c->cmp_src_own = (signed char)own;
+}
+
+/* See concolic.h. Concretize-on-pin names the value the equality compared and nothing it was derived from:
+   `'x-' + t === 'x-dark'` determines the concatenation, and writing `x-dark` under `t`'s `src` would make every
+   later read of `t` answer bytes `t` never held. So only a subject that owns `src` is pinned there. A derived
+   subject's equality pins nothing (its arm is the branch decision decide.c records, and an assumption the
+   witness states); the demand on the root is made either way. */
+int concolic_pin(JSValueConst cmp) {
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cmp, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL && c->cmp_op != OPCMP_NONE && c->cmp_tok != NULL && c->src != NULL,
+           "an equality's holding arm was pinned off a value that records no equality with a token and a "
+           "provenance — decide.c pins only where concolic_cmp answered all three");
+    DCHECK(c->cmp_src_own == 0 || c->cmp_src_own == 1,
+           "an equality reached the pin without stating whether its subject is the value its `src` names — the "
+           "two equality mints state it, so this result came through a third, and its pin would be filed "
+           "under a source the subject may only have been derived from");
+    return concolic_pin_store(c->cmp_src_own ? c->src : NULL, c->root, (ConcolicLit)c->cmp_kind, c->cmp_tok,
+                              (JSConcolicEqOp)c->cmp_algo);
 }
 
 /* The bytes this flow has proved this value holds (concolic.h says who may read it and why it answers bytes
@@ -2903,6 +2952,7 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     d->cmp_op = s->cmp_op;
     if (s->cmp_tok)        { d->cmp_tok        = strdup(s->cmp_tok);        CHECK(d->cmp_tok,        "concolic: OOM carrying an equality's token through a negation"); }
     d->cmp_kind = s->cmp_kind;   /* the token's other half, carried with it */
+    d->cmp_src_own = s->cmp_src_own;   /* …and where its determination may be filed */
     d->cmp_algo = s->cmp_algo;   /* …and what the arm may conclude: `!(x == L)` is `x == L` read the other way
                                     round, so dropping it would make a `==` look like a predicate with no
                                     algorithm. */
@@ -2934,6 +2984,7 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
    relies on this). */
 JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit kind, const char *tok) {
     const char *sf[1], *kf[2];
+    JSValue r;
     char *shape, *ts;
 
     DCHECK(op == OPCMP_EQ || op == OPCMP_NE,
@@ -2960,10 +3011,13 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
        Whose unknown it is is stated here rather than asked of callers, because this entry's contract fixes it:
        a browser component's own declared member, which a person, a server or the environment drives. A door
        whose callers are not all one kind takes the word as a parameter; this one does not. */
-    return pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
-                    src ? (1u << CONCOLIC_WHOSE_WORLD) : 0u,
-                    concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
-                    op, JS_CONCOLIC_EQ_STRICT, kind, tok, src, shape);
+    r = pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
+                 src ? (1u << CONCOLIC_WHOSE_WORLD) : 0u,
+                 concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
+                 op, JS_CONCOLIC_EQ_STRICT, kind, tok, src, shape);
+    /* The member compares its own source, so its subject is the value `src` names. */
+    pred_set_src_own(r, 1);
+    return r;
 }
 /* …and the twin for a relation over two live values, for a component whose own algorithm compares two
  * operands either of which may be unknown (HTML §8.7 Timers orders one expiry against another).
@@ -3340,6 +3394,9 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        gets none; the predicate still forks, pins and excludes, and only the per-flow degrade has nowhere to be
        filed, as decide.c answers for a condition with no identity. */
     if (subj && concolic_ident_c(opq)) pred_set_subject_ident(res, concolic_ident_c(opq));
+    /* …and whether the operand is the value its `src` names, or a derivation that carries its operand's: the
+       pin is filed under `src` only in the first case (concolic_pin). */
+    if (tok) pred_set_src_own(res, ((const Concolic *)JS_GetOpaque(opq, g_concolic_class))->src_own == 1);
     /* …and the result's own example, run rather than derived, attached after the mint (as page_visibility.c
        does) because pred_new's parameters are the predicate and the example is what this run computed it to
        be. */
@@ -3403,6 +3460,7 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
        so a candidate substitutes at the call), and not new bytes: whatever carried the callee's bytes in
        carried these. */
     r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, JS_UNDEFINED);
+    src_own_stamp(r);
     /* …and the predicate the page just wrote, if this result can name one. `if (path.startsWith("/api"))`
        gates `path` as `path === "/api"` does, but determines no value, so it pins nothing and carries no bound.
        (A `!`-spelled gate reaches no branch here; concolic.h's residual beside concolic_strpred names why.)
@@ -4861,6 +4919,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     /* The algorithm is the one field here reclaim_calloc cannot set: "not an equality" is CMP_ALGO_NONE, and
        its zero would be JS_CONCOLIC_EQ_LOOSE, claiming the page wrote `==` over a non-predicate. */
     c->cmp_algo = CMP_ALGO_NONE;
+    c->cmp_src_own = -1;   /* unstated until an equality mint states it */
     /* Nobody has asked for this value's prototype yet, a state rather than a zero (see the field), written at
        the one mint every concolic goes through. */
     c->proto = JS_UNINITIALIZED;

@@ -7503,7 +7503,7 @@ static void idb_extract_selftest(JSContext *ctx)
     /* THE ROOT IS THE SECOND ARGUMENT AND IT IS `{reply}`, NOT the field path: a derivation mints a new
        injection identity and never a new delivery root, so the bytes this pin is about entered through the
        reply that carried the object. */
-    concolic_pin("{reply}.id", "{reply}", CONCOLIC_LIT_STRING, "u-7", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{reply}.id", "{reply}", CONCOLIC_LIT_STRING, "u-7", JS_CONCOLIC_EQ_STRICT);
     idb_extract_string(ctx, idb_extract_value(ctx, concolic_new(ctx, "{reply}", "{reply}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED),
                                               JS_NewString(ctx, "id"),
                                               "§7.1 answered `failure` for an unknown VALUE — that forces a "
@@ -26519,13 +26519,13 @@ static void message_source_selftest(void)
     /* A PIN ON A SOURCE THE ATTACKER WRITES IS NOT A DEMAND ON A PRINCIPAL. This is the direction that must
        never move: `location.hash === "admin"` is the ordinary solved case, and a rule that caught it would
        silently delete the findings this half of the tool exists for. */
-    concolic_pin("{location.hash}", "location.hash", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{location.hash}", "location.hash", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
     CHECK(!concolic_principal_pinned(),
           "the principal rule read an ordinary equality pin as a demand on an attacker's own principal — a "
           "value the attacker WRITES is solved, and suppressing it drops a real PoC");
     /* …AND A PIN ROOTED AT THE PRINCIPAL IS ONE, in the spelling every bundle writes. */
-    concolic_pin(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
-                 JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
+                       JS_CONCOLIC_EQ_STRICT);
     CHECK(concolic_principal_pinned(),
           "an exact equality against `event.origin` did not register as a demand on the attacker's principal "
           "— §Attacker-sources makes that check unsatisfiable cross-origin, so a PoC taken off this flow is "
@@ -26541,8 +26541,8 @@ static void message_source_selftest(void)
        check is exactly as unforgeable cross-origin as `===`. concolic_pin refuses the loose VALUE and must
        not refuse this MARK; a diff that split them the other way would un-suppress every loose origin check
        in every bundle at once, and §Attacker-sources forbids that direction by name. */
-    concolic_pin(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
-                 JS_CONCOLIC_EQ_LOOSE);
+    concolic_pin_store(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
+                       JS_CONCOLIC_EQ_LOOSE);
     CHECK(concolic_principal_pinned(),
           "a LOOSE equality against `event.origin` did not register as a demand on the attacker's principal — "
           "§7.2.13 step 1 sends two Strings to §7.2.14, so the check is unsatisfiable cross-origin and every "
@@ -26551,12 +26551,88 @@ static void message_source_selftest(void)
     /* THE DERIVED SPELLING IS THE SAME DEMAND. `String(e.origin) === X` pins the derived identity and not the
        source, and a rule keyed by the pinned value's own name would answer `unpinned` for it — which is a
        false PoC for one of the two most common ways a real handler writes this check. */
-    concolic_pin("String(" MESSAGE_ORIGIN_SHAPE ")", MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING,
-                 "https://trusted.test", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("String(" MESSAGE_ORIGIN_SHAPE ")", MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING,
+                       "https://trusted.test", JS_CONCOLIC_EQ_STRICT);
     CHECK(concolic_principal_pinned(),
           "an equality against a DERIVATION of `event.origin` did not register as a demand on the principal — "
           "the demand is about whose bytes these are, which no derivation changes, and that is why the pin "
           "records its ROOT beside its identity");
+    concolic_clear_pins();
+}
+
+/* A pin names the value the page compared, and never a source that value was derived from. Driven through the
+ * interpreter's own hooks (`+`, `*`, `===`) and decide.c's entry, concolic_pin, so what this asserts is the
+ * production path: `t === 'dark'` pins `t` (the positive control), while `'x-' + t === 'x-dark'` and
+ * `x * 2 === 10` pin nothing and leave `t` and `x` reading their own examples. */
+static JSValue pin_subject_eq(JSContext *ctx, JSValue subject, JSValue tok)
+{
+    JSValue sp[2];
+
+    sp[0] = subject;
+    sp[1] = tok;
+    CHECK(concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT) == 1,
+          "the equality hook declined a comparison over an unknown");
+    return sp[0];
+}
+
+static void pin_subject_example_is(JSContext *ctx, JSValueConst v, const char *want, const char *what)
+{
+    JSValue ex = concolic_example(ctx, v);
+    const char *s = JS_ToCString(ctx, ex);
+
+    CHECK(s && !strcmp(s, want), what);
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, ex);
+}
+
+static void pin_subject_selftest(JSContext *ctx)
+{
+    JSValue t, d, cmp, v, sp[2];
+
+    /* POSITIVE: the subject IS the source, so the source is pinned and its next read is the token. */
+    t = concolic_new(ctx, "{pinsubj.t}", "pinsubj.t", CONCOLIC_WHOSE_WORLD, JS_NewString(ctx, "light"));
+    cmp = pin_subject_eq(ctx, t, JS_NewString(ctx, "dark"));
+    CHECK(concolic_pin(cmp) == 1, "`t === 'dark'` holding determined nothing about `t`");
+    JS_FreeValue(ctx, cmp);
+    v = concolic_new(ctx, "{pinsubj.t}", "pinsubj.t", CONCOLIC_WHOSE_WORLD, JS_NewString(ctx, "light"));
+    {
+        const char *s = JS_ToCString(ctx, v);
+
+        CHECK(!concolic_is(v) && s && !strcmp(s, "dark"),
+              "a source this flow pinned by `t === 'dark'` did not read back as the token");
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, v);
+    concolic_clear_pins();
+
+    /* NEGATIVE: a concatenation is compared, so nothing about `t` itself was determined. */
+    t = concolic_new(ctx, "{pinsubj.t}", "pinsubj.t", CONCOLIC_WHOSE_WORLD, JS_NewString(ctx, "light"));
+    sp[0] = JS_NewString(ctx, "x-");
+    sp[1] = t;
+    CHECK(concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_PLUS) == 1, "`+` declined an unknown operand");
+    d = sp[0];
+    cmp = pin_subject_eq(ctx, JS_DupValue(ctx, d), JS_NewString(ctx, "x-dark"));
+    CHECK(concolic_pin(cmp) == 0, "`'x-' + t === 'x-dark'` wrote a pin, and the only key it has is `t`'s");
+    JS_FreeValue(ctx, cmp);
+    JS_FreeValue(ctx, d);
+    v = concolic_new(ctx, "{pinsubj.t}", "pinsubj.t", CONCOLIC_WHOSE_WORLD, JS_NewString(ctx, "light"));
+    CHECK(concolic_is(v), "`'x-' + t === 'x-dark'` pinned `t` itself — the token is the concatenation's");
+    pin_subject_example_is(ctx, v, "light", "`t` lost its own example to a pin about `'x-' + t`");
+    JS_FreeValue(ctx, v);
+    concolic_clear_pins();
+
+    /* NEGATIVE, ARITHMETIC: `x * 2 === 10` leaves `x` its example. */
+    t = concolic_new(ctx, "{pinsubj.x}", "pinsubj.x", CONCOLIC_WHOSE_WORLD, JS_NewInt32(ctx, 5));
+    sp[0] = t;
+    sp[1] = JS_NewInt32(ctx, 2);
+    CHECK(concolic_arith_hook(ctx, sp + 2, JS_CARITH_MUL, 2) == 1, "`*` declined an unknown operand");
+    cmp = pin_subject_eq(ctx, sp[0], JS_NewInt32(ctx, 10));
+    CHECK(concolic_pin(cmp) == 0, "`x * 2 === 10` wrote a pin, and the only key it has is `x`'s");
+    JS_FreeValue(ctx, cmp);
+    v = concolic_new(ctx, "{pinsubj.x}", "pinsubj.x", CONCOLIC_WHOSE_WORLD, JS_NewInt32(ctx, 5));
+    CHECK(concolic_is(v), "`x * 2 === 10` pinned `x` itself — the token is the product's");
+    pin_subject_example_is(ctx, v, "5", "`x` lost its own example to a pin about `x * 2`");
+    JS_FreeValue(ctx, v);
     concolic_clear_pins();
 }
 
@@ -26583,7 +26659,7 @@ static void pin_kind_selftest(JSContext *ctx)
     /* THE UNDEFINED PIN. `x === undefined` on its true arm determines the value: §7.2.14 IsStrictlyEqual
        ( x, y ) step 1 returns false unless SameType, and its last step returns SameValueNonNumber, so the arm
        is reachable only where the operand IS undefined. A pin, not an invention. */
-    concolic_pin("{pinkind.u}", "{pinkind.u}", CONCOLIC_LIT_UNDEFINED, "undefined", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinkind.u}", "{pinkind.u}", CONCOLIC_LIT_UNDEFINED, "undefined", JS_CONCOLIC_EQ_STRICT);
     v = concolic_new(ctx, "{pinkind.u}", "{pinkind.u}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     CHECK(JS_IsUndefined(v),
           "a source pinned to `undefined` read back as something else — the pin store spells its value with "
@@ -26598,7 +26674,7 @@ static void pin_kind_selftest(JSContext *ctx)
     /* THE NUMERIC PIN, whose read-back is §7.1.4 ToNumber over the spelling — the engine's own inverse of the
        §7.1.19 ToString that produced it, rather than a parser this file rolled. `0` is the number a bundle
        actually gates on, and it is the one whose spelling is truthy. */
-    concolic_pin("{pinkind.n}", "{pinkind.n}", CONCOLIC_LIT_NUMBER, "0", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinkind.n}", "{pinkind.n}", CONCOLIC_LIT_NUMBER, "0", JS_CONCOLIC_EQ_STRICT);
     v = concolic_new(ctx, "{pinkind.n}", "{pinkind.n}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     CHECK(JS_IsNumber(v) && !JS_ToBool(ctx, v),
           "a source pinned to the number 0 read back as the one-character STRING \"0\" — `typeof` answers "
@@ -26609,7 +26685,7 @@ static void pin_kind_selftest(JSContext *ctx)
 
     /* AND THE STRING PIN IS UNCHANGED, asserted in the same breath because a fix that had broken it would
        have deleted the ordinary case this mechanism exists for. */
-    concolic_pin("{pinkind.s}", "{pinkind.s}", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinkind.s}", "{pinkind.s}", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
     v = concolic_new(ctx, "{pinkind.s}", "{pinkind.s}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     {
         const char *s = JS_ToCString(ctx, v);
@@ -26625,7 +26701,7 @@ static void pin_kind_selftest(JSContext *ctx)
     /* A KIND THE STORE MAY NOT HOLD RECORDS NOTHING, WHICH IS SOUND AND IS NOT A SILENT DEFAULT — see
        concolic.h's named residual. A refused pin leaves the source unpinned, so its next gate FORKS and both
        worlds are explored; what must never happen is an entry whose read-back cannot state a value. */
-    concolic_pin("{pinkind.g}", "{pinkind.g}", CONCOLIC_LIT_BIGINT, "5", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinkind.g}", "{pinkind.g}", CONCOLIC_LIT_BIGINT, "5", JS_CONCOLIC_EQ_STRICT);
     v = concolic_new(ctx, "{pinkind.g}", "{pinkind.g}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     CHECK(concolic_is(v),
           "a BigInt pin was recorded after all — the store accepts only what its read-back can mint back as a "
@@ -26655,11 +26731,11 @@ static void pins_each_selftest(void)
     void *frozen;
 
     concolic_clear_pins();
-    concolic_pin("{pinseach.a}", "{pinseach.a}", CONCOLIC_LIT_STRING, "one", JS_CONCOLIC_EQ_STRICT);
-    concolic_pin("{pinseach.b}", "{pinseach.b}", CONCOLIC_LIT_STRING, "two", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinseach.a}", "{pinseach.a}", CONCOLIC_LIT_STRING, "one", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinseach.b}", "{pinseach.b}", CONCOLIC_LIT_STRING, "two", JS_CONCOLIC_EQ_STRICT);
     frozen = concolic_pins_suspend();   /* the head becomes a frozen segment the flow keeps standing on */
-    concolic_pin("{pinseach.a}", "{pinseach.a}", CONCOLIC_LIT_STRING, "uno", JS_CONCOLIC_EQ_STRICT);
-    concolic_pin("{pinseach.c}", "{pinseach.c}", CONCOLIC_LIT_STRING, "three", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinseach.a}", "{pinseach.a}", CONCOLIC_LIT_STRING, "uno", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinseach.c}", "{pinseach.c}", CONCOLIC_LIT_STRING, "three", JS_CONCOLIC_EQ_STRICT);
     concolic_pins_each(pins_each_count, &t);
     CHECK(t.n == 3 && t.a_seen == 1 && t.b_seen == 1 && t.c_seen == 1,
           "the pin enumeration did not visit each pinned source exactly once across a frozen segment — a "
@@ -26699,7 +26775,7 @@ static void pin_algo_selftest(JSContext *ctx)
 
     /* THE LOOSE ARM DETERMINES NOTHING. `x == undefined` on its true arm leaves the operand in
        {undefined, null} by §7.2.13 steps 2 and 3 alone, before step 12's objects are counted. */
-    concolic_pin("{pinalgo.u}", "{pinalgo.u}", CONCOLIC_LIT_UNDEFINED, "undefined", JS_CONCOLIC_EQ_LOOSE);
+    concolic_pin_store("{pinalgo.u}", "{pinalgo.u}", CONCOLIC_LIT_UNDEFINED, "undefined", JS_CONCOLIC_EQ_LOOSE);
     v = concolic_new(ctx, "{pinalgo.u}", "{pinalgo.u}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     CHECK(concolic_is(v),
           "the true arm of `x == undefined` concretized the source — §7.2.13 step 3 makes that arm reachable "
@@ -26711,7 +26787,7 @@ static void pin_algo_selftest(JSContext *ctx)
     /* …AND A NUMERIC TOKEN IS THE SAME, which is worth its own case because it is the one whose set is
        INFINITE rather than two-membered: §7.2.13 step 6 sends a String operand through ToNumber, so
        `x == 0` holds for "0", "0.0", "0x0", " 0 " and the empty string, and step 9 adds `false`. */
-    concolic_pin("{pinalgo.n}", "{pinalgo.n}", CONCOLIC_LIT_NUMBER, "0", JS_CONCOLIC_EQ_LOOSE);
+    concolic_pin_store("{pinalgo.n}", "{pinalgo.n}", CONCOLIC_LIT_NUMBER, "0", JS_CONCOLIC_EQ_LOOSE);
     v = concolic_new(ctx, "{pinalgo.n}", "{pinalgo.n}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     CHECK(concolic_is(v),
           "the true arm of `x == 0` concretized the source to the number 0 — §7.2.13 step 6 makes that arm "
@@ -26724,7 +26800,7 @@ static void pin_algo_selftest(JSContext *ctx)
        against is not only the loose pin — it is also the over-correction that refuses `==` and `===` alike.
        §7.2.14 step 1 makes the strict arm a real determination and §Solver-half's CONCRETIZE-ON-PIN is built
        on it, so a diff that bought soundness by deleting it would have traded one defect for a larger one. */
-    concolic_pin("{pinalgo.s}", "{pinalgo.s}", CONCOLIC_LIT_UNDEFINED, "undefined", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("{pinalgo.s}", "{pinalgo.s}", CONCOLIC_LIT_UNDEFINED, "undefined", JS_CONCOLIC_EQ_STRICT);
     v = concolic_new(ctx, "{pinalgo.s}", "{pinalgo.s}", CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     CHECK(JS_IsUndefined(v),
           "the true arm of `x === undefined` stopped concretizing the source — §7.2.14 step 1 returns false "
@@ -26830,7 +26906,7 @@ static void looseeq_selftest(void)
        is where §7.2.14's determination goes, and a domain row beside it would state the weaker claim next
        to the stronger one. The pin is asserted through the store it writes, which is `pinned_root`'s twin
        one key over — the value itself is pin_kind_selftest's subject and is not re-asserted here. */
-    concolic_pin("leq.s", "leq.s", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
+    concolic_pin_store("leq.s", "leq.s", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
     n = -1;
     rows = concolic_looseeq_read("leq.s", &n);
     CHECK(rows == NULL && n == 0,
@@ -29184,6 +29260,7 @@ int main(int argc, char **argv) {
     pin_kind_selftest(ctx);      /* a pin is a VALUE and not its §7.1.19 spelling */
     pins_each_selftest();        /* …and the store enumerates each pinned source once, at its nearest copy */
     pin_algo_selftest(ctx);     /* …and only §7.2.14's arm determines one; §7.2.13's leaves a SET */
+    pin_subject_selftest(ctx);  /* …and it names the value compared, never a source it was derived from */
     looseeq_selftest();          /* …and that SET is a real narrowing, filed as the predicate that held */
     tree_construction_write_selftest();   /* §13.2.6's DOM writes, and the character merge's bytes */
 
