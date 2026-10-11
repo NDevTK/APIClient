@@ -1473,6 +1473,52 @@ static CssPx bf_static_margin_edge(CssPx pos, BfRun run, CssPx margin, bool esca
     return css_px_sub(border, margin);
 }
 
+/* CSS 2.1 §17.4 "Tables in the visual formatting model"'s table wrapper box's children, the list §9.4.1's
+   stack walks for it: "the table wrapper box … contains the table box itself and any caption boxes (in document
+   order)", with §17.4.1 "Caption position and alignment"'s `caption-side` putting a caption "above the table
+   box" (`top`) or "below the table box" (`bottom`). The table box is the NULL entry. The caller frees. */
+static size_t bf_wrapper_boxes(lxb_dom_element_t *table, lxb_dom_element_t ***out)
+{
+    lxb_dom_element_t **caps = NULL, **v;
+    size_t n = table_box_captions(table, &caps), i, k = 0;
+    char nbuf[160], vbuf[64];
+
+    v = malloc((n + 1) * sizeof *v);
+    CHECK(v != NULL, "out of memory listing one table wrapper box's children");
+    for (i = 0; i < n; i++) {
+        DCHECKF(bf_computed_is(caps[i], "caption-side", "top") || bf_computed_is(caps[i], "caption-side", "bottom"),
+                "%s, computed `caption-side` `%s`: CSS 2.1 §17.4.1's `Value:` line is `top | bottom`",
+                box_subject(caps[i], nbuf, sizeof nbuf),
+                box_subject_computed(caps[i], "caption-side", vbuf, sizeof vbuf));
+        if (bf_computed_is(caps[i], "caption-side", "top")) v[k++] = caps[i];
+    }
+    v[k++] = NULL;
+    for (i = 0; i < n; i++)
+        if (bf_computed_is(caps[i], "caption-side", "bottom")) v[k++] = caps[i];
+    free(caps);
+    *out = v;
+    return k;
+}
+
+/* The table box's contribution to its wrapper's stack: §17.4 gives it the initial `margin-*` ("the computed
+   values of properties … 'margin-*' … on the table element are used on the table wrapper box and not the table
+   box"), so its runs are zero margins that still collapse with an adjoining caption's, and its height is its
+   border edge (CSS 2.1 §17.5.3 "Table height algorithms" through core/layout/used_value.h). */
+static BfBox bf_table_box(lxb_dom_element_t *table)
+{
+    BfBox b;
+
+    b.top = bf_run_of(css_px(0.0));
+    b.bottom = bf_run_of(css_px(0.0));
+    b.collapse_through = false;
+    b.content_h = used_value_border_edge_px(table, true);
+    b.border_h = b.content_h;
+    b.baseline = css_px(0.0);
+    b.has_line_box = false;
+    b.is_table_wrapper = false;
+    return b;
+}
+
 /* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container. It answers this
    box's own contribution, and on the way it hands the caller the offset of `want`'s top border edge from this
    box's top CONTENT edge — the same running position read out at the child that asked for it, which is why
@@ -1517,6 +1563,10 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
     BfRun run = bf_run_empty();
     BfRun esc_run = bf_run_empty();
     bool escaping = esc_top, placed = false;
+    /* CSS 2.1 §17.4's wrapper box walks its own children, not the table element's (`bf_wrapper_boxes`). */
+    bool wrapper;
+    lxb_dom_element_t **wl = NULL;
+    size_t wn = 0, wi = 0;
     BfBox out;
     char nbuf[160];
 
@@ -1532,7 +1582,19 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
     /* This is the box the WALK is reducing, never a child of it — the flag is a fact `bf_box` decides about a
        child from its own `display`, and `bf_layout`'s subject reaches it through that function. */
     out.is_table_wrapper = false;
-    if (bf_content_kind(el) == BF_CONTENT_INLINE) {
+    {
+        char *d = bf_computed(el, "display");
+
+        wrapper = table_wrapper_generates(d);
+        free(d);
+    }
+    if (wrapper) {
+        DCHECK(anon == NULL && st == NULL,
+               "a table wrapper box's stack was asked for anonymous block boxes or a static position; its "
+               "children are the table box and its captions, which hold neither");
+        wn = bf_wrapper_boxes(el, &wl);
+    }
+    if (!wrapper && bf_content_kind(el) == BF_CONTENT_INLINE) {
         /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
            margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
            same block formatting context", and there is no such box here — an inline box's vertical margins are
@@ -1626,12 +1688,14 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
        no box for is skipped rather than placed, which is that section's sentence and not an optimisation — an
        empty anonymous box would take a height off the stack and be reported to every consumer of the
        enumeration. */
-    bf_require_want_on_the_stack(el, want);
+    if (!wrapper) bf_require_want_on_the_stack(el, want);
     /* `auto_h` IS PASSED RATHER THAN RE-READ, because §10.6.7 is stated for an 'Auto' height and this frame has
        already asked css-sizing-3 §3.2.1's behaves-as-auto for §8.3.1's third and fourth adjoining pairs above. A
        second read would be a second answer to one question, free to disagree about a percentage height. */
-    bf_require_float_does_not_reach_this_stack(el, auto_h);
-    brk = block_flow_next_block_box(el, NULL);
+    /* A wrapper's members are the table box and captions, each a formatting context root, so no float is on
+       its stack. */
+    if (!wrapper) bf_require_float_does_not_reach_this_stack(el, auto_h);
+    brk = wrapper ? NULL : block_flow_next_block_box(el, NULL);
     for (;;) {
         lxb_dom_element_t *ce = NULL;
         BlockFlowRun anon_run;
@@ -1639,7 +1703,16 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
 
         anon_run.after = prev;
         anon_run.end = brk;
-        if (at_run) {
+        if (wrapper) {
+            if (wi == wn) break;
+            ce = wl[wi++];
+            if (ce == NULL) {
+                b = bf_table_box(el);
+            } else if (!bf_box(ce, pass, &b)) {
+                free(wl);
+                return false;   /* "not yet": a question beneath was deferred */
+            }
+        } else if (at_run) {
             at_run = false;
             /* §10.3.7's and §10.6.4's STATIC POSITION, READ AT THE RUN THE HYPOTHETICAL BOX FALLS IN and
                before anything is done with that run — §9.2.1.1's runs partition this container's content and
@@ -1815,6 +1888,7 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
         run = b.bottom;
         placed = true;
     }
+    free(wl);
 
     if (placed) {
         if (esc_top) out.top = bf_run_merge(out.top, esc_run);
@@ -1925,100 +1999,22 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
     b.baseline = css_px(0.0);
     b.has_line_box = false;
     b.is_table_wrapper = wrapper;
-    /* CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX, which is what §9.4.1's stack
-       placed and which is NOT the table box. Its two margins are already read above and that is §17.4's rule
-       running rather than an accident: "The computed values of properties 'position', 'float', 'margin-*',
-       'top', 'right', 'bottom', and 'left' on the table element are used on the table wrapper box and not the
-       table box" — core/layout/table_wrapper.h is that split, asked once. What the same sentence takes AWAY is
-       every other non-inherited value: `border-*`, `padding-*` and `height` are used on the TABLE BOX, and the
-       wrapper gets the initial value instead — "(Where the table element's values are not used on the table
-       and table wrapper boxes, the initial values are used instead.)" So the wrapper has NO border and NO
-       padding, and ITS BORDER BOX IS ITS CONTENT BOX.
-       THAT CONTENT HEIGHT IS §10.6.3's OVER ITS OWN IN-FLOW CHILDREN, and §17.4 says what they are: the
-       wrapper "contains the table box itself and any caption boxes (in document order)". WITH NO CAPTION THE
-       WALK IS ONE BOX LONG AND HAS A CLOSED FORM, which is why this arm is arithmetic rather than a recursion:
-       §10.6.3's distance runs "to the bottom edge of the bottom (possibly collapsed) margin of its last in-flow
-       child", the only child is the table box, and §17.4 has just given that box the INITIAL `margin-*` — so
-       there is no margin to collapse and the distance IS the table box's border-box height. The wrapper adds
-       nothing to it on either side.
-       SO THE NUMBER IS `used_value_border_edge_px` ON THE TABLE ELEMENT, AND THE CRASH THAT STOOD HERE SAID
-       THAT WOULD BE "A MEASUREMENT OF THE WRONG BOX". That was right about the general case and wrong about
-       this one, and the difference is worth stating because the two boxes are genuinely different: §17.4 puts
-       `border-*`, `padding-*` and `height` on the TABLE BOX, so that call measures the TABLE BOX's border edge
-       — which is exactly what this arm wants, because the wrapper's own edge coincides with it whenever the
-       wrapper has no other child. It stops coinciding the moment a CAPTION exists, and that case crashes
-       below rather than borrowing this identity.
-       WHAT MAKES IT ANSWERABLE AT ALL IS §17.5.3, WHICH IS NOW BUILT: `used_value_border_edge_px` on a table
-       box reaches CSS 2.1 §17.5.3 Table height algorithms through core/layout/table_height.h — the sum of the
-       row heights plus the vertical cell spacing — over §17.5.2's used column widths. The crash here was
-       waiting on that section and on nothing else in the no-caption case. */
+    /* CSS 2.1 §17.4 "Tables in the visual formatting model"'s table wrapper box, which §9.4.1's stack placed and
+       which is not the table box. §17.4 uses the table element's `margin-*` on the wrapper (read above) and its
+       border, padding and `height` on the table box, so the wrapper's border box is its content box, whose
+       height is §10.6.3's over its own children: the captions and the table box (`bf_wrapper_boxes`). It reports
+       no line box: §10.8.1's "last line box in the normal flow" does not reach into the captions' or the cells'
+       own formatting contexts, and `is_table_wrapper` lets CSS 2.1 §17.5.3's cell-baseline reader name what it
+       needs instead. */
     if (wrapper) {
-        lxb_dom_element_t **captions = NULL;
-        size_t ncaptions = table_box_captions(el, &captions);
+        CssPx unused = css_px(0.0);
+        bool found = false;
+        BfBox w;
 
-        free(captions);
-        /* IT IS A `CHECK` AND NOT A `DCHECK`, WHICH IS A DECISION AND NOT A DEFAULT — CLAUDE.md's own rule is
-           that when unsure it is a DCHECK, so the reason has to be positive. A `DFAILF` here is compiled out
-           in release and execution FALLS THROUGH to the arm below, which returns the TABLE BOX's border edge
-           — and with a caption in the wrapper that is the wrapper's height MINUS every caption's margin box,
-           which is a real number for a real box and is not this one. What makes that production-fatal rather
-           than merely wrong is WHERE IT GOES. This height becomes `block_flow_child_top_ask`'s running offset,
-           which becomes core/layout/flow_position.c's coordinates, which become CSSOM VIEW's
-           `getBoundingClientRect`, the scrolling area, and core/intersection_observer/intersection_observer.c's
-           chain — and this engine's OUTPUT is findings derived from what it observed. A fabricated rectangle
-           there is a plausible datum indistinguishable from a measurement, which is the defect this project
-           names at the field level and refuses; it is the DATA INTEGRITY case CLAUDE.md's CHECK list carries,
-           so it must not PROCEED in release either.
-           THE COST IS STATED BECAUSE IT IS VISIBLE: engine/wpt.mjs reads the marker, so this site reports in
-           the `fatal` column and not in `gap`, which that gate calls THE WORK QUEUE. It is still the work
-           queue — the wrapper's own CHILD BOX LIST is what to build — and the column says only that shipping
-           past it is not an option. THE ARM BELOW HAS THE SAME SHAPE FOR A FLEX OR GRID CONTAINER and is NOT promoted
-           here: that is another lane's box type, its wrong number is the same element's own border edge rather
-           than a different box's, and moving its aborts between columns without a measurement to attribute
-           them to would be this diff spending someone else's signal. It is named, not changed. */
-        if (ncaptions != 0)
-            CHECK_FAILF("%s: CSS 2.1 §17.4 Tables in the visual formatting model's TABLE WRAPPER BOX has %zu "
-                   "CAPTION BOX(ES) in it beside the table box — \"the table generates a principal block box "
-                   "called the table wrapper box that contains the table box itself and any caption boxes (in "
-                   "document order)\" — so §10.6.3's walk over its in-flow children has more than one child "
-                   "and the table box's own border edge is no longer the whole of the wrapper's height. "
-                   "THE CAPTION'S OWN NUMBERS ARE NO LONGER WHAT IS MISSING, AND THE CRASH THAT STOOD HERE "
-                   "SAID THEY WERE: it named the caption's used WIDTH and the table wrapper box as \"an "
-                   "anonymous box no element in this tree names\". core/layout/used_value.c answers both now — "
-                   "§10.1's walk reports the wrapper as a box (§17.2.1 Anonymous table objects decides a "
-                   "caption's box parent, and §17.4 gives the wrapper's width outright as \"the border-edge "
-                   "width of the table box inside it, as described by section 17.5.2\"), so "
-                   "`used_value_px(caption, \"width\")` is §10.3.3's constraint equation and "
-                   "`used_value_px(caption, \"height\")` is §10.6.3's ordinary content-based height. "
-                   "WHAT IS MISSING IS THE WRAPPER'S OWN CHILD BOX LIST, WHICH IS NOT AN ELEMENT'S CHILD "
-                   "LIST — and that is why this walk cannot simply be run. §17.4's wrapper contains \"the "
-                   "table box itself and any caption boxes\": the captions are children of the table ELEMENT, "
-                   "the table box is that SAME element wearing its other box, and the rows are not in the "
-                   "wrapper at all — so `bf_element_child` over `el`'s children reaches neither the right set "
-                   "nor the right boxes, and `bf_layout` has no list to stack. BUILD THAT LIST as the thing "
-                   "§9.4.1's stack iterates. It is the SAME box-tree step CSS 2.2 §9.2.1.1 Anonymous block "
-                   "boxes' runs already took, AND THAT ONE IS BUILT — `block_flow_next_block_box` enumerates "
-                   "that container's boxes in content order and `bf_layout` stacks what it yields, so the "
-                   "worked precedent for THIS list is one function away rather than a thing to design. What "
-                   "is still owed beside it is css-display-3 §2.5 Box Generation: the none and contents "
-                   "keywords' `contents` splice, which `bf_element_child` names by hand — so it is one "
-                   "construction with three rules and not three constructions, and one of the three has run "
-                   "since this crash was written. Once the walk iterates these boxes too, this arm is "
-                   "§8.3.1's ordinary collapsing stack over the captions and "
-                   "the table box, with `caption-side` (§17.4.1 Caption position and alignment) deciding only "
-                   "their ORDER, which a SUM does not ask, and §17.4's own initial-value sentence guaranteeing "
-                   "the table box brings no margin to collapse with theirs. DO NOT SUM THE HEIGHTS HERE "
-                   "MEANWHILE: a second copy of §8.3.1's run algebra beside `bf_layout`'s is two "
-                   "implementations of one section, free to disagree about a collapsed margin on exactly the "
-                   "documents where the difference shows",
-                   box_subject(el, nbuf, sizeof nbuf), ncaptions);
-        /* §10.8.1's BASELINE IS NOT THIS ARM'S AND MUST NOT BE SKIPPED INTO. A wrapper reports NO line box —
-           §10.8.1's "last line box in the normal flow" does not reach into the cells' own formatting contexts
-           — and `is_table_wrapper` above is what lets the ONE reader that needs the other answer (CSS 2.1
-           §17.5.3 Table height algorithms' cell baseline, whose second arm is "the first in-flow table-row in
-           the cell") crash in `bf_layout` naming it, at the point where it knows whether a line box came
-           first. Nothing is decided here, which is why there is no `pass` test in this arm. */
-        b.border_h = used_value_border_edge_px(el, true);
+        if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE, &w)) return false;
+        DCHECK(!found, "a table wrapper's stack reported placing a box it was not asked about");
+        b.content_h = w.content_h;
+        b.border_h = w.content_h;
         *result = b;
         return true;
     }
