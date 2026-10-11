@@ -37,8 +37,9 @@ function _stripForReferrer(u, originOnly) {
    document the referrer was observed in. Returns "client" or the absolute URL. */
 function referrerForIdentity(referrer, identityOrigin) {
   DCHECK(typeof referrer === "string" && referrer !== "" && URL.canParse(referrer),
-         "referrerForIdentity was given " + JSON.stringify(referrer) + " — intercept.js records an absolute " +
-         "URL or about:client, and \"\" (no-referrer) is handled before a referrer is computed");
+         "referrerForIdentity was given " + JSON.stringify(referrer) + " — intercept.js records, and the " +
+         "engine's request record states, an absolute URL or about:client, and \"\" (no-referrer) is handled " +
+         "before a referrer is computed");
   const parsed = new URL(referrer);
   if (parsed.href === "about:client" || parsed.origin === "null" || parsed.origin !== identityOrigin)
     return "client";

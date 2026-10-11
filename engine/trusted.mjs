@@ -923,7 +923,8 @@ async function main() {
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined,
                                             identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
-                                                                               q.credentials, q.mode) });
+                                                                               q.credentials, q.mode,
+                                                                               q.referrerPolicy, q.referrer) });
     if (raw.refusal && raw.refusal.kind === 'decline') {
       e.ready.push(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
       return;
@@ -1043,7 +1044,8 @@ async function main() {
                                             actor: 'page',
                                             docReach: e.docReach, credentialed: false,
                                             identity: ZONE.pageRequestIdentity(e.origin, e.docUrl, abs,
-                                                                               credentials, mode) });
+                                                                               credentials, mode,
+                                                                               referrerPolicy, referrer) });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
        the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
        its failure path having been told the server could not be reached, which for a request nobody sent is a

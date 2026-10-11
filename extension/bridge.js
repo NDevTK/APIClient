@@ -2419,7 +2419,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      error of XHR §3 "Interface XMLHttpRequest", and a decline as `{declined}`, which goes to `hostDecline`. */
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
-  const fetched = async (method, u, destination, provenance, pinned, credentials, mode) => {
+  const fetched = async (method, u, destination, provenance, pinned, credentials, mode, referrerPolicy, referrer) => {
     DCHECK(pinned === "pinned" || pinned === "unpinned",
            "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
            "`pinned` or `unpinned` on every line of the pending join, and the chokepoint reads it WITH the " +
@@ -2500,7 +2500,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      credentials, actor: "page", useCorsPreflight: false,
                      docReach: msg.provenance, credentialed: false,
-                     identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs, credentials, mode) };
+                     identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs, credentials, mode,
+                                                   referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
          every path, blocked ones included, so a malformed answer is asserted rather than turned into a network
@@ -2720,7 +2721,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers,
                                             identity: pageRequestIdentity(eng.origin, msg.sourceUrl, abs,
-                                                                          q.credentials, q.mode) });
+                                                                          q.credentials, q.mode,
+                                                                          q.referrerPolicy, q.referrer) });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
@@ -3255,7 +3257,8 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
        re-listed request is counted once and the containment with the declined histogram holds. */
     issued += engineIssue(eng, key,
       () => { eng._egress.asked++;
-              return eng.fetched(method, url, destination, provenance, pinned, credentials, mode); },
+              return eng.fetched(method, url, destination, provenance, pinned, credentials, mode, referrerPolicy,
+                                 referrer); },
       (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
   }
   return issued;

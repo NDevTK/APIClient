@@ -292,8 +292,9 @@ Residuals, each a difference from the document's own request:
   third-party-cookie setting is not read.
 - A redirect leaves the rule behind. The rule matches the first URL only, so a redirected request goes out
   as this extension.
-- The engine states no referrer and no document referrer policy on its pending line, and an operator's frame
-  policy is not observable from this zone. Both use the default policy, strict-origin-when-cross-origin.
+- An operator's frame policy is not observable from this zone, so an operator send that states none uses the
+  default policy, strict-origin-when-cross-origin. An engine page request carries the referrer and policy the
+  engine states on its request record, and a referrer not of the identity's origin is "client" (Fetch §5.4).
 - An iframe srcdoc document's referrer source, its container's URL, is not held.
 - The document's service worker does not see the send.
 - The document's CSP binds an engine page request inside the engine, not here. `fetch_main_blocked`

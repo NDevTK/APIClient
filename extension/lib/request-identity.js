@@ -74,14 +74,18 @@ function identityFor(identity, request, documentPolicy) {
 
 /* The identity an engine's page request speaks as on the wire, for both hosts (bridge.js, engine/trusted.mjs):
    the cluster origin the zone assigned the instance and the document URL it loaded, never a word the engine
-   states.
-   Not covered: the pending line states no referrer and no document referrer policy, so the referrer is
-   "client" and the policy is Referrer Policy §3's default, strict-origin-when-cross-origin. The next diff
-   reads both off the pending line once the engine states them there. Its absence shows as a Referer that
-   differs from the page's own, for a page that states a referrer or sets a referrer policy. */
-function pageRequestIdentity(origin, docUrl, url, credentials, mode) {
+   states. The referrer and its policy are the engine's, off the request record: `referrerPolicy` after Fetch
+   §4.1 "Main fetch" gave an empty one the policy container's, and `referrer` either "no-referrer" or the URL
+   the engine resolved "client" to. They are input from the untrusted half, so identityFor still makes a
+   referrer that is not the identity's origin "client" (Fetch §5.4). An empty policy left after §4.1 is
+   Referrer Policy §3's default. */
+function pageRequestIdentity(origin, docUrl, url, credentials, mode, referrerPolicy, referrer) {
+  CHECK(typeof referrerPolicy === "string" && (referrer === "no-referrer" || URL.canParse(referrer)),
+        "a page request reached its identity with no referrer policy, or a referrer that is neither " +
+        "\"no-referrer\" nor a URL — both hosts CHECK the engine's record before this");
   return identityFor(engineIdentity(origin, docUrl),
-                     { url, requestInit: { credentials, mode, referrer: null, referrerPolicy: null } },
+                     { url, requestInit: { credentials, mode, referrer: referrer === "no-referrer" ? "" : referrer,
+                                           referrerPolicy } },
                      "strict-origin-when-cross-origin");
 }
 
