@@ -685,8 +685,8 @@ async function drainNotices(e) {
     if (f[0] === 'navigable.create') {
       const C = NAVIGABLE_NOTICE.create;
       /* Counted before any field is read: a record one field short would otherwise reach makeEngine with
-         `undefined` where a policy goes, which is indistinguishable from a creator that sent no policy. The count and every index are
-         navigable_notice.h's, through noticegen.mjs. */
+         `undefined` where a policy goes, which is indistinguishable from a creator that sent no policy. The count
+         and every index are navigable_notice.h's, through noticegen.mjs. */
       if (f.length !== C.parts)
         fail(`a navigable.create notice was short of its fields (${f.length} of ${C.parts}): ${n} — ` +
              'navigable.c composes it from navigable_notice.h, so this driver and that engine disagree');
