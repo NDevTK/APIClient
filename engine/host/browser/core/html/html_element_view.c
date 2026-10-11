@@ -403,6 +403,16 @@ static JSValue hev_offset_position(JSContext *ctx, const HevTarget *t, bool vert
     op = hev_offset_parent(t);
     o = flow_border_box_origin(el);
     if (op == NULL) return element_view_length_long(ctx, vertical ? o.y : o.x);
+    /* Known interop divergence from step 3, taken deliberately: with the body element as offsetParent and not
+       positioned, Gecko (`Element::GetOffsetRect`, which adds the body's own position) and Blink
+       (`LayoutBoxModelObject::AdjustedPositionRelativeTo`, which adds a non-positioned body's location) measure
+       from the body's container, not its padding edge, so a page's top-level element has `offsetTop` 8 under
+       the default body margin where step 3 gives 0. No css/cssom-view WPT test pins it. This answers as step 2
+       does, relative to the initial containing block, which is Blink's number; Gecko's also subtracts a body
+       border. */
+    if (document_body_of(lxb_dom_interface_node(t->node->owner_document)) == lxb_dom_interface_node(op) &&
+        !hev_establishes_abspos_containing_block(op))
+        return element_view_length_long(ctx, vertical ? o.y : o.x);
     /* step 3. Both edges contain the offset parent's border width, an atom named by its definition, so it
        cancels however many derivations the two edges took. */
     return element_view_length_long(ctx, css_px_sub(vertical ? o.y : o.x,
