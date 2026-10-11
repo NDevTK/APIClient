@@ -607,18 +607,16 @@ static void frontier_rank_changed(void) {
     JS_RequestFlowYield();
 }
 
-/* THE FRONTIER'S MEMBERS, in registry order. A walk, not a rank: the pending-fetch register lives on the flows,
-   so whoever asks what the host owes has to visit all of them. flow_best answers a different question. */
+/* The frontier's members, in registry order. A walk, not a rank: the pending-fetch register lives on the flows, so
+   whoever asks what the host owes visits all of them. flow_best answers a different question. */
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
 void flow_registry_init(const char *doc_name) {
-    /* THE FRONTIER THIS REPLACES HAS TO HAVE GONE, AND THE ARRIVAL PAIR IS WHAT SAYS SO. The assignment below
-       drops `g_flows` on the floor, so a registry raised over a LIVE frontier leaks every flow standing in it
-       — its COW delta, its DOM head, its suspended frame and its queued jobs — and nothing else in this file
-       fires on it, because every other invariant here is about a member and there would be no member left to
-       ask. `g_arrivals - g_departures` is the count of members this instance still holds, and it is checked
-       against `g_flows_n` rather than against zero so the identity being asserted is the SAME one the census
-       publishes rather than a second claim that happens to agree with it here. */
+    /* The frontier this replaces must have gone. The assignment below drops `g_flows`, so a registry raised over a
+       live frontier leaks every standing flow (its COW delta, DOM head, suspended frame and queued jobs), and no
+       per-member invariant can see it because no member is left to ask. `g_arrivals - g_departures` counts the
+       members this instance still holds; it is checked against `g_flows_n` rather than zero so this is the
+       identity the census publishes, not a second claim. */
     DCHECK(g_arrivals - g_departures == (int64_t)g_flows_n,
            "the flow registry is coming up over a frontier that never departed — every member still standing "
            "is about to become unreachable with its delta, its DOM head and its suspended frame, and the "
@@ -626,177 +624,134 @@ void flow_registry_init(const char *doc_name) {
            "ask. flow_registry_free drains through flow_release, so this is a host that raised a second "
            "registry without taking the first one down");
     g_flows = NULL; g_flows_n = 0; g_flows_cap = 0; g_gen = 0; g_running = NULL;
-    /* THE QUEUE'S CLOCK COMES UP WITH THE QUEUE, at SFQ's v(0) = 0. Left standing from a previous registry it
-       would place this frontier's first from-baseline flows at the coordinate a DIFFERENT document's leader
-       had reached — a lifetime quantity read as an instant, which is the collapse `g_rank_changes` beside
-       `g_gen` already records one instance of. */
+    /* The queue's clock comes up with the queue, at SFQ's v(0) = 0. Left standing, it would place this frontier's
+       first from-baseline flows at the coordinate another document's leader reached: a lifetime quantity read as
+       an instant. */
     g_vt = 0.0;
-    /* THE WORLD NAMESPACE COMES UP WITH THE FRONTIER, not beside it: every flow added below is minted a world
-       named by this document, and a frontier whose worlds were unnamed could not be reached from another
-       instance at all. */
+    /* The world namespace comes up with the frontier: every flow added below is minted a world named by this
+       document, and an unnamed world could not be reached from another instance. */
     world_registry_init(doc_name);
 }
 
 unsigned flow_frontier_gen(void) { return g_gen; }
 
-/* HOW MANY TIMES THE ORDER CHANGED, for the life of this instance — the denominator the preempt hook's
-   rescan count has and `scanNextRuns` is not. See solver/flow.h. */
+/* How many times the order changed, for the life of this instance: the denominator the preempt hook's rescan
+   count has and `scanNextRuns` is not. See solver/flow.h. */
 long flow_rank_changes(void) { return g_rank_changes; }
 
-/* HOW MANY MEMBERS THIS INSTANCE HAS ADMITTED, AND HOW MANY IT HAS LET GO — the pair that says whether the
-   frontier is being DRAINED at all, which is the precondition for the order deciding anything. Read as
-   `arrivals / picksLifetime`: members minted per dispatch. See the banner at `g_arrivals`. */
+/* How many members this instance has admitted and how many it has let go: whether the frontier is drained at all,
+   the precondition for the order deciding anything. `arrivals / picksLifetime` is members minted per dispatch; see
+   the banner at `g_arrivals`. */
 int64_t flow_arrivals(void) { return g_arrivals; }
 int64_t flow_departures(void) { return g_departures; }
 
-/* …AND HOW MANY OF THOSE DEPARTURES WERE THE INSTANCE GOING DOWN UNDER THEM — the third arm of the departure
-   total, exported so the three can be ASSERTED to sum at the one place all of them are in one hand
-   (engine.c's engine_frontier_census, which holds the other two). See the banner at g_departures_teardown. */
+/* And how many of those departures were the instance going down under them: the third arm of the departure total,
+   exported so engine.c's engine_frontier_census, which holds the other two, asserts that the three sum. See the
+   banner at g_departures_teardown. */
 int64_t flow_departures_teardown(void) { return g_departures_teardown; }
 
-/* HOW MANY TIMES THE SCHEDULER'S OWN PICK RETURNED AN ALREADY-DISPATCHED MEMBER WHILE A NEVER-DISPATCHED ONE
-   STOOD AT EXACTLY THE SAME WEIGHT — §scheduler's razor's STARVES, counted at the ONE line that decides which
-   flow runs, and the reading that three census GAUGES could not make between them. See solver/flow.h. */
+/* How many times the scheduler's pick returned an already-dispatched member while a never-dispatched one stood at
+   exactly the same weight: starvation, counted at the one line that decides which flow runs, which no census gauge
+   can read. See solver/flow.h. */
 static long g_starved_picks = 0;
 long flow_starved_picks(void) { return g_starved_picks; }
 
-/* THE WHOLE REBUILD AN EPOCH-KEYED INDEX WOULD PAY, SUMMED OVER A RUN — a LIFETIME counter and the one
-   reading that decides whether a sub-linear order over flow_index_key is buildable. At every emission the
-   members standing away from their family's base are exactly the ones such an index must move, so this adds
-   `away_n` at each bump and is therefore the total index-maintenance work the epoch costs.
-   IT IS A LIFETIME SUM AND NOT A GAUGE, DELIBERATELY, AND THE GAUGE IS THE WRONG INSTRUMENT. A census lands
-   at an arbitrary point between two emissions, so a gauge of the away population reads near zero just after
-   one and at its peak just before: a single sample is a lottery rather than a measurement, and the quantity
-   that decides the design is the rebuild SUMMED over the run. The gauge is published too, because the
-   identity needs it, and it is read as a shape and never as the cost.
-   THE DENOMINATOR IT IS READ AGAINST ALREADY SHIPS AND IS NAMED HERE SO NOBODY PUBLISHES A FRACTION WITH
-   ONLY ONE HALF OF IT: `scanNextWeights` is the lifetime sum over scans of the members each one weighed,
-   which is exactly the walk an index would REPLACE. Below it by a wide margin the epoch is a cost and the
-   index narrows; at or above it the rebuild is the walk moved rather than removed and the index buys
-   nothing. `epochResetsLifetime` beside it is the number of bumps, so the quotient is the average rebuild
-   per emission and a reader can tell a large total over many cheap emissions from a small one over few
-   expensive ones.
-   RELEASE-LIVE, unlike the key and index stamps, because the maintenance is four O(1) statements rather than
-   a per-member evaluation per scan — so this row can be read off a release artifact, which is where the
-   product actually runs. */
+/* The whole rebuild an epoch-keyed index would pay, summed over a run: the reading that decides whether a
+ * sub-linear order over flow_index_key is buildable. At every emission the members standing away from their
+ * family's base are the ones such an index must move, so this adds `away_n` at each bump.
+ *
+ * A lifetime sum, not a gauge: a census lands at an arbitrary point between two emissions, so a gauge of the away
+ * population reads near zero just after one and at its peak just before. The gauge is also published, for the
+ * identity, and is read as a shape, never as the cost.
+ *
+ * Its denominator is `scanNextWeights`, the lifetime sum over scans of the members each one weighed, which is the
+ * walk an index would replace: well below it the index pays; at or above it the rebuild is the walk moved rather
+ * than removed. `epochResetsLifetime` is the number of bumps, so the quotient is the mean rebuild per emission.
+ *
+ * Release-live, unlike the key and index stamps: the maintenance is four O(1) statements, so the row can be read
+ * off the release artifact, which is where the product runs. */
 static long g_epoch_rebuild = 0;
 long flow_epoch_rebuild(void) { return g_epoch_rebuild; }
 
-/* …AND HOW MANY TIMES THE EPOCH MOVED, WHICH IS THE COUNTER ABOVE'S OWN DENOMINATOR. A LIFETIME count of
-   emissions that reset a family's base. Raised on the same statement group as the sum and nowhere else, so
-   the two cannot describe two different populations, and a sum with no count beside it cannot be read as an
-   average by anybody. */
+/* And how many times the epoch moved: the counter above's denominator, a lifetime count of emissions that reset a
+   family's base. Raised in the same statement group as the sum and nowhere else, so the two describe one
+   population. */
 static long g_epoch_resets = 0;
 long flow_epoch_resets(void) { return g_epoch_resets; }
 
-/* …AND THE SUBSET OF THOSE IN WHICH THE RE-DISPATCHED MEMBER HAD NOTHING TO CONTINUE, which is the whole of
-   what the row above could not say and was claimed to. Three sites that DECLARE that counter described it as
-   counting only the defect; a CONSUMER of it said the opposite, and the consumer was right — a member re-picked
-   while INSIDE a unit of work is being handed the thread to FINISH a program, which is necessary work and is
-   not what §scheduler's razor calls STARVES. Both populations were being summed into one figure, and the
-   opposite repairs a reader is supposed to choose between are exactly the two that figure adds together. See
-   solver/flow.h for the reading and flow_between_units for the boundary. */
+/* And the subset of those picks in which the re-dispatched member had nothing to continue. A member re-picked
+   while inside a unit of work is being handed the thread to finish a program, which is necessary work and not
+   starvation, so `g_starved_picks` sums two populations that call for opposite repairs, and this row separates
+   them. See solver/flow.h for the reading and flow_between_units for the boundary. */
 static long g_starved_picks_idle = 0;
 long flow_starved_picks_idle(void) { return g_starved_picks_idle; }
 
-/* HOW DEEP THE PLATEAU IS — THE COMPLEMENT OF `g_starved_picks`, AT THE SAME LINE, AND THE READING THAT SEPARATES
-   §Attention'S VALUE YIELD FROM §scheduler'S NEVER-STARVED GUARANTEE. `g_starved_picks` counts the pick that
-   DISPLACES the incumbent while a never-dispatched member stands level; these count the pick that KEEPS it in
-   the same state. flow_pick's banner named that question and said, until the diff that added these rows, that
-   it was "no longer counted anywhere" — that clause is rewritten at its own site rather than deleted, and it
-   is the one quantity that tells the two specifications apart, because they resolve OPPOSITELY on exactly this
-   population: §Attention blesses it ("a top-ranked flow runs on at ~zero switch cost") and §scheduler's
-   optimism bonus is supposed to make it end.
-   THEY ARE NOT A SECOND OPINION ON A STARVATION COUNT AND MUST NOT BE READ AS ONE. A single retention is
-   §Attention working as specified; what the specification claims is a BOUND on how long it lasts — flow.h's
-   aging term states it in its own words, "a flow tied with an unrun sibling on reward and bonus hands over
-   after ONE quantum, which is the queue rotating". That is a claim about the DEPTH of a stretch and not about
-   whether stretches occur, so a count of retentions can neither confirm nor refute it and the run count below
-   is what makes the quotient a depth.
-   WHY THE DEMOTION THAT ENDS A STRETCH IS NOT IN DOUBT AND THE DEPTH STILL IS: flow_age_running is called
-   unconditionally by the dispatch loop and its charges TELESCOPE across the quantum (engine.c carries the
-   previous turn's reading into the next turn's `t0`), so the incumbent's own silence accumulates the whole
-   slice exactly and its notch outruns a level waiter's by about two notches per quantum — engine.c asserts
-   that observability at the charge. What NOTHING states is how many SCANS fit inside the quantum that
-   demotion takes, and that number is the plateau's depth. A frontier standing at one weight makes it the
-   dominant event rather than a corner, so it is the difference between a queue that rotates and one that does
-   not, and it was being inferred from a specification instead of read.
-   RELEASE-LIVE, for `g_epoch_rebuild`'s reason and not by inheritance from `g_starved_picks`: these are four O(1)
-   statements over quantities this scan has already computed — no member is re-weighed and no walk is added —
-   and the artifact that drives a real page is the release one, so a dev-only spelling would put the reading in
-   the one build the product does not run in.
-   A LIFETIME COUNTER EACH, off the flows entirely for `g_picks_total`'s reason and reset by nothing for
-   `g_rank_changes`', so all four may be differenced across two samples of one instance.
-   See solver/flow.h for the reading, the two quotients and why the dilemma these rows are about dissolves;
-   flow_between_units for the boundary the idle subset is an upper bound on. */
+/* How deep the plateau is: the complement of `g_starved_picks` at the same line. `g_starved_picks` counts the pick
+ * that displaces the incumbent while a never-dispatched member stands level; these count the pick that keeps it.
+ * The value yield blesses that population ("a top-ranked flow runs on at ~zero switch cost") while the optimism
+ * bonus must end it, so these rows tell the two requirements apart.
+ *
+ * They are not a starvation count. A single retention is the value yield working; the claim is a bound on how long
+ * it lasts (flow.h's aging term: "a flow tied with an unrun sibling on reward and bonus hands over after ONE
+ * quantum"), a claim about the depth of a stretch, which is why the run count below turns the count into a depth.
+ * The demotion that ends a stretch is certain: flow_age_running is called unconditionally by the dispatch loop and
+ * its charges telescope across the quantum (engine.c carries the previous turn's reading into the next `t0`, and
+ * asserts that observability at the charge), so an incumbent's notch outruns a level waiter's by about two per
+ * quantum. What nothing states is how many scans fit inside that quantum, and that is the plateau's depth.
+ *
+ * Release-live, for `g_epoch_rebuild`'s reason: four O(1) statements over quantities the scan already computed.
+ * Lifetime counters off the flows, for `g_picks_total`'s reason, and reset by nothing, for `g_rank_changes`', so
+ * they difference across two samples of one instance. See solver/flow.h for the two quotients; flow_between_units
+ * for the boundary the idle subset is an upper bound on. */
 static long g_plateau_asked = 0;
 long flow_plateau_asked(void) { return g_plateau_asked; }
 
-/* …AND THE SUBSET OF `g_plateau_asked` IN WHICH THE INCUMBENT ACTUALLY KEPT IT. Contained in it by construction, being
-   raised inside its own `if`, and the pair is the share of makeable comparisons the tie-break decided in the
-   incumbent's favour. */
+/* And the subset of `g_plateau_asked` in which the incumbent kept the thread: contained in it by construction,
+   being raised inside its `if`, so the pair is the share of makeable comparisons the tie-break gave the incumbent. */
 static long g_plateau_held = 0;
 long flow_plateau_held(void) { return g_plateau_held; }
 
-/* …AND HOW MANY MAXIMAL STRETCHES THOSE RETENTIONS FORMED, WHICH IS THE DENOMINATOR THAT TURNS THE COUNT INTO
-   A DEPTH. `held / runs` is the MEAN number of consecutive scans an incumbent kept the thread while somebody
-   untouched stood level with it, and it is the reading all three rows exist for:
-     runs == 0 with a non-zero ask   the tie-break never favoured the incumbent while a never-run member was
-                                     level — §scheduler's guarantee is not under test on this run.
-     held / runs BOUNDED             the queue ROTATES: every stretch ends, which is the aging term doing what
-                                     flow.h prices it for, and the depth is what one quantum costs in scans.
-     runs == 1 with a large held     ONE unbroken hold for the whole run. That is the guarantee being FALSE
-                                     rather than the yield being cheap, and it is the only reading here that
-                                     asks for a diff.
-   IT IS A LIFETIME COUNT AND NOT A HIGH-WATER MARK, DELIBERATELY. A maximum stretch would answer the same
-   question and CLAUDE.md records what it costs: a max saturates, so its plateau is indistinguishable from a
-   ceiling and a short run reads the same low number at every revision. A run count and a hit count are both
-   sums over the same walk, so their quotient is a mean that may be differenced into a RATE over a window
-   rather than an average over a session.
-   THE STRETCH IS CLOSED BY ANY DISPATCH SCAN THAT DID NOT HOLD, including one that was not ASKED — a scan at
-   which nobody untouched stands level is a scan at which the incumbent is passing over nobody, so the stretch
-   is over whether or not the comparison was makeable. `g_plateau_open` below is that boundary and it is the
-   one piece of state here: it DECIDES NOTHING, bounds nothing, and no term of flow_weight and no pick reads
-   it. It is reset by nothing else, for the reason the counters are. */
+/* And how many maximal stretches those retentions formed: the denominator that turns the count into a depth.
+   `held / runs` is the mean number of consecutive scans an incumbent kept the thread while an untouched member stood
+   level with it:
+     runs == 0, ask > 0              the tie-break never favoured the incumbent while a never-run member was level;
+                                     the guarantee is not under test on this run.
+     held / runs bounded             the queue rotates: every stretch ends, and the depth is what one quantum
+                                     costs in scans.
+     runs == 1, held large           one unbroken hold for the whole run: the guarantee is false, and this is the
+                                     one reading here that asks for a diff.
+   A lifetime count, not a high-water mark: a maximum saturates and its plateau looks like a ceiling, while two sums
+   over one walk give a mean that differences into a rate over a window. A stretch is closed by any dispatch scan
+   that did not hold, including one that was not asked (nobody untouched is level, so nobody is passed over).
+   `g_plateau_open` is that boundary and the one piece of state here; it decides nothing and no term or pick reads
+   it. Reset by nothing, as the counters. */
 static long g_plateau_runs = 0;
 long flow_plateau_runs(void) { return g_plateau_runs; }
 static int g_plateau_open = 0;
 
-/* …AND THE SUBSET OF RETENTIONS IN WHICH THE INCUMBENT HAD NOTHING TO CONTINUE, which is the half of `held`
-   that §Attention's value yield does NOT bless: a member standing at the unit boundary has finished its trial,
-   so keeping the thread there is not necessary work.
-   NAMED RESIDUAL. NOT COVERED: TWO of the three clauses of engine.c's unit boundary, for two different
-   reasons, so this is an UPPER BOUND on "the incumbent had nothing to continue" rather than a measurement of
-   it. The PARK clause is unaskable from here at any price: a parked continuation is a per-member fact for
-   every member EXCEPT the one holding the thread, whose queue lives in the RUNTIME for the duration of its
-   turn — flow_holds_park asserts that it is not asked about it, and the member this row is about IS the
-   running one, the exact mirror of the population `g_starved_picks_idle` can reach. The MICROTASK clause is
-   askable and is not asked, deliberately, because flow_job_microtask walks the job queue taking and freeing a
-   JSValue per entry and this row fires on nearly every scan of a tied frontier — a per-scan walk in a release
-   build is the instrument that changes the run it measures, which is a worse defect than a bound that says it
-   is one. WHAT THE NEXT DIFF BUILDS: the runtime handle at the pick, which flow_holds_park's own assert
-   already names as the capability to build — engine.c asks JS_HasParkedFlow of the runtime and this file holds
-   no handle to it — together with an O(1) microtask predicate, a count carried on the flow rather than a walk
-   over its queue, which is what makes the second clause affordable at this frequency. Both close in the same
-   diff and both are needed: either alone leaves the bound. HOW ITS ABSENCE SHOWS: this row standing at or near
-   `plateauHeld` on a document whose `jobsQueued` is large, where the honest reading is that the incumbents
-   were holding queued continuations rather than idling — the two are indistinguishable from this row alone,
-   and `jobsQueued`/`jobsRun` beside it is the only thing that separates them today. */
+/* And the subset of retentions in which the incumbent had nothing to continue: the half of `held` the value yield
+   does not bless, since a member at the unit boundary has finished its trial.
+   Named residual. Not covered: two of the three clauses of engine.c's unit boundary, so this is an upper bound on
+   "the incumbent had nothing to continue". The park clause is unaskable here: a parked continuation is a
+   per-member fact for every member except the one holding the thread, whose queue lives in the runtime for its turn
+   (flow_holds_park asserts it is not asked), and this row is about the running member. The microtask clause is
+   askable but not asked, since flow_job_microtask walks the job queue taking and freeing a JSValue per entry and
+   this row fires on nearly every scan of a tied frontier. Next diff builds: the runtime handle at the pick (engine.c
+   asks JS_HasParkedFlow; this file holds no handle), with an O(1) microtask predicate, a count carried on the flow;
+   either alone leaves the bound. Absence shows as: this row at or near `plateauHeld` on a document with a large
+   `jobsQueued`, where only `jobsQueued`/`jobsRun` beside it separates holding queued continuations from idling. */
 static long g_plateau_held_idle = 0;
 long flow_plateau_held_idle(void) { return g_plateau_held_idle; }
 
-/* A FLOW TAKES OR RELEASES THE THREAD — and a dispatch is where an account's coordinate STOPS being a reading
-   of the frontier's clock and becomes a tag of its own. The two statements are ONE operation and in this order,
-   because between them the clock would be defined by an account that is defined by the clock.
-   THE STAMP IS VALUE-PRESERVING BY CONSTRUCTION AND IS ASSERTED AS SUCH. An unplaced account's reward IS
-   frontier_vt(), so freezing that same reading into `base` cannot move the flow's queue coordinate by so much
-   as an ulp — a dispatch is not a re-ranking. What the assertion catches is a stamp that writes some OTHER
-   quantity (the flow's own weight, the incumbent's reward, a sum that has picked up a per-member reading), any
-   of which would move a member at the instant it is picked and make the pick that led there a decision about a
-   weight the member no longer has.
-   RELEASING THE THREAD LEAVES THE CLOCK WHERE IT IS, which is the idle case and is deliberate: v(t) holds
-   between busy periods, so a newcomer created while the host is between two slices enters at the coordinate
-   the frontier last stood at rather than at zero. */
+/* A flow takes or releases the thread, and a dispatch is where an account's coordinate stops being a reading of
+   the frontier's clock and becomes a tag. The two statements are one operation and in this order, because between
+   them the clock would be defined by an account defined by the clock.
+   The stamp is value-preserving by construction, and asserted: an unplaced account's reward is frontier_vt(), so
+   freezing that reading into `base` cannot move the flow's coordinate by an ulp. The assert catches a stamp that
+   writes some other quantity (the flow's own weight, the incumbent's reward, a per-member sum), which would move a
+   member at the instant it is picked.
+   Releasing the thread leaves the clock where it is: v(t) holds between busy periods, so a newcomer created between
+   two slices enters where the frontier last stood rather than at zero. */
 void  flow_set_running(Flow *f) {
     if (f && f->family && !f->family->placed) {
         double w = flow_queue_weight(f);
@@ -813,92 +768,59 @@ void  flow_set_running(Flow *f) {
                "flow no longer carries");
     }
     g_running = f;
-    /* AND THE CLOCK IS **NOT** MOVED HERE, WHICH IS THE ONE SUBSTANTIVE THING THIS FUNCTION NO LONGER DOES.
-       It used to serve the clock at this line — "the clock now reads the item in service" — and that made a
-       DISPATCH re-rank every account still reading the clock, AFTER the pick had compared them and BEFORE
-       engine.c records what the winner was ranked on. The arithmetic is exact and is why this is a removal
-       rather than a tuning: serving here sets the clock to the winner's own queue coordinate, so an unplaced
-       never-run account R immediately stands at `g_vt + 1.0 + distance(R)` while the flow just dispatched
-       stands at `g_vt + 1/(1+visits) + distance` — R outranks it STRICTLY the moment it has completed one
-       unit of work, for every dispatch, by construction, with no term of the winner having moved at all. The
-       pick's own choice promoted the tail above it, and the value-yield assertion in engine.c fired on a
-       state whose five clauses are all terms of the winner and therefore cannot see it.
-       AND THE TREE'S ARGUMENT FOR FOLLOWING THE ITEM IN SERVICE IS ABOUT THE EMISSION, NOT ABOUT THIS. See
-       frontier_vt_serve's remaining caller: "without it, every account that has never been served would stand
-       at the coordinate the leader held when it was last picked, and would be passed by exactly the findings
-       the leader makes during the slice it is holding". That sentence is about FINDINGS, and it is answered
-       in full by the emission caller alone. FlowAcct's `placed` rejects a coordinate "taken ONCE, at
-       creation" for the same reason and is likewise silent about dispatches. Nothing in this file ever argued
-       that a newcomer's coordinate should follow WHICH FLOW HOLDS THE THREAD.
-       WHAT THIS LINE'S REMOVAL BUYS IS THE PROPERTY THE HOOK NEEDS: every writer of the clock now raises the
-       frontier generation (frontier_vt_serve), so the pick and the preempt hook read one clock and a rival
-       cached at a generation is a rival the pick was shown. A yield after an emission is then a legitimate
-       rank change through clause one, which is what engine.c's assertion has been asking for.
-       PLACEMENT ABOVE IS STILL RANK-NEUTRAL AND RAISES NOTHING: freezing `base` stops this account reading
-       the clock and starts it standing on the identical value, which the DCHECK above asserts exactly. */
+    /* The clock is not moved here. Serving the clock at a dispatch sets it to the winner's own queue coordinate,
+       so an unplaced never-run account R stands at `g_vt + 1.0 + distance(R)` while the flow just dispatched stands
+       at `g_vt + 1/(1+visits) + distance`: R outranks it strictly once it has completed one unit, with no term of
+       the winner having moved. The pick's own choice would promote the tail above it, after the pick compared them
+       and before engine.c records what the winner was ranked on. The argument for following the item in service
+       is about findings, and the emission caller of frontier_vt_serve answers it. Because every writer of the
+       clock raises the frontier generation, the pick and the preempt hook read one clock, and a rival cached at a
+       generation is one the pick was shown. Placement above is rank-neutral and raises nothing: freezing `base`
+       makes the account stand on the identical value, which the DCHECK asserts. */
 }
 Flow *flow_running(void) { return g_running; }
 
-/* HOW MANY TIMES A FINDING WAS OFFERED TO THE ORDER, AND HOW MANY OF THOSE THE ORDER COULD NOT BE GIVEN —
-   the partition `valTop`, `topForgiven` and `selfEmit` each presuppose and none of them can make. All three
-   read ZERO for two states that take OPPOSITE work: no detector ever fired, which is a REACH question and
-   sends a reader to build the surface; and detectors fired where there was no flow to pay, which is a question
-   about WHICH SIDE OF THE HOST/FLOW BOUNDARY the detection happened on and sends them nowhere near the order.
-   Nothing this engine publishes separates them, and the flattering reading — that a ledger was SPENT — is the
-   one a reader reaches for, because a spent ledger explains the zero while an unopened one looks like a defect
-   somewhere else entirely.
-   THE DROP IS CORRECT, WHICH IS PRECISELY WHY IT NEEDS A COUNTER RATHER THAN A FIX. This function is reached
-   on HOST TIME: core/loader/document_load.c states it in its own words — "the production ABI's `qjs_init`,
-   which parses before the first flow is seeded" — so every subresource the root document's markup names is
-   minted by endpoint_record with `g_running` NULL, and there is no account to credit because no flow
-   discovered anything. The `<head>` is what a plain parse gives, and paying an arm for it would pay it for
-   work it did not do. What is wrong is not the discard; it is that the discard is SILENT.
-   IT HAS BITTEN ONCE ALREADY AND THIS TREE RECORDS IT. solve.c's sink_search credit used to sit on the search
-   CREATE, which cold_resume reaches at engine init with no running flow, and that site's own comment says the
-   credit was "dropped on the floor" while "the exploration flow that later did the real detecting was paid
-   nothing for it". That one WAS a defect and was repaired by moving the credit — and nothing distinguished the
-   two cases from outside the process then either, which is the whole argument for these rows.
-   THREE AND NOT TWO, for `g_prog_starts`'s reason exactly: the total is raised at the ONE entry and each arm
-   on the line that decides it, so the identity holds by inspection and what it catches is a THIRD exit added
-   later that moves the total without saying which population it moved. flow_wfq_census reads all three
-   together and is where it fires.
-   LIFETIME COUNTERS — the kind is stated in flow.h's rows, and it decides the arithmetic: none of the three
-   ever falls, nothing resets them, so all three may be DIFFERENCED across two censuses, which is what turns
-   them into a rate over a window rather than an average over a session.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): no term of flow_weight reads one, no pick branches on one, nothing
-   is capped, shed or deduplicated by any of them.
-   RETIREMENT: this record goes when a credit made outside a slice has an account to land on, because the
-   dropped arm is then unreachable and the partition it exists to publish has one state left. */
+/* How many times a finding was offered to the order, and how many of those the order could not be given: the
+ * partition `valTop`, `topForgiven` and `selfEmit` presuppose. All three read zero both when no detector fired (a
+ * reach question: build the surface) and when detectors fired with no flow to pay (a question about which side of
+ * the host/flow boundary the detection happened on), and only these rows separate the two.
+ *
+ * The drop is correct, which is why it is counted rather than fixed. This function is reached on host time:
+ * core/loader/document_load.c's "the production ABI's `qjs_init`, which parses before the first flow is seeded",
+ * so every subresource the root document's markup names is minted by endpoint_record with `g_running` NULL. No
+ * flow discovered it, so there is no account to credit; a plain parse gives the `<head>`, and paying an arm for it
+ * would pay for work it did not do. A credit made at the wrong site looks identical from outside the process,
+ * which is the argument for the rows.
+ *
+ * Three counters rather than two, for `g_prog_starts`' reason: the total is raised at the one entry and each arm on
+ * the line that decides it, so a third exit added later breaks the identity flow_wfq_census reads. Lifetime
+ * counters (flow.h states the kind): none falls and nothing resets them, so they difference across two censuses.
+ * A report, never a bound: no term, pick, cap or shed reads them. The record retires when a credit made outside a
+ * slice has an account to land on, since the dropped arm is then unreachable. */
 static int64_t g_credit_calls = 0, g_credit_paid = 0, g_credit_dropped = 0;
 
-/* Credit the running flow with newly EMITTED value (a new @H endpoint / @S PoC): its WFQ reward rises and its
-   CPU-since-emit aging resets, so a productive flow outranks fresh + starved flows. Called by the detectors
-   (endpoint.c / solve.c) when they record something NEW — this is what makes the WFQ value-of-information
-   ordered rather than merely breadth-first by visit count. The frontier gen bumps so the value-yield re-ranks. */
+/* Credit the running flow with newly emitted value (a new @H endpoint or @S PoC): its family's reward rises and its
+   aging window resets, so a productive flow outranks fresh and starved flows. Called by the detectors (endpoint.c,
+   solve.c) when they record something new; this is what orders the WFQ by value of information rather than
+   breadth-first by visit count. The rank change is raised through frontier_vt_serve. */
 void flow_credit_emit(double v) {
     int64_t own_us;   /* the emitter's own burn over the window this emission closes — see the bump below */
-    /* ONE EMISSION IS ONE POINT, and the aging term's exchange rate is stated against exactly that. A credit of
-       zero or less would leave a flow's rank unchanged while resetting its aging, which is the one way a
-       monopolizer could refresh its lead without producing anything — so the reward's sign is asserted where it
-       enters rather than assumed by the comparator that subtracts against it. */
+    /* One emission is one point, the unit the aging term's exchange rate is stated in. A credit of zero or less
+       would reset a flow's aging without changing its rank, the one way a monopolizer could refresh its lead
+       without producing anything, so the sign is asserted where the reward enters. */
     DCHECK(v > 0.0, "a flow was credited a non-positive emission — the WFQ's reward term counts NEW @H/@S "
                     "findings at one point each, and a zero credit resets the aging that outranks a monopolizer "
                     "while adding nothing to weigh it against");
-    /* THE OFFER, COUNTED BEFORE THE ONE TEST THAT CAN REFUSE IT, so the total is over every ask this function
-       is made and the two arms below partition exactly it. */
+    /* The offer, counted before the one test that can refuse it, so the two arms below partition the total. */
     g_credit_calls++;
-    /* …AND THE ARM WHERE THERE IS NOBODY TO PAY. It is not an error and gets no assert: a detector reached on
-       the host's own time — the root document's markup, inventoried by `qjs_init`'s parse before `qjs_begin`
-       seeds the frontier — has no running flow because no flow discovered it. Counted rather than silent, for
-       the reason the banner above gives. */
+    /* And the arm with nobody to pay. Not an error, so no assert: a detector reached on host time (the root
+       document's markup, inventoried by `qjs_init`'s parse before `qjs_begin` seeds the frontier) has no running
+       flow because no flow discovered it. Counted, for the banner's reason. */
     if (!g_running) { g_credit_dropped++; return; }
-    /* THE ORDER'S REWARD IS THE FAMILY'S, so the credit lands on the family — see FlowAcct's `val`. This is the
-       whole of the difference between a credit that can be paid off and one that cannot: raise the family once
-       and the silence charged to that same family cancels exactly it; raise every ARM instead and one emission
-       is presented as many times as the page's bundle happens to branch, against a debit charged once.
-       IT MAY NOT BE ROUTED THROUGH A DEPARTED NODE. A running flow is a member of the frontier and a member
-       owns its account, so a NULL family here is a flow that was credited after it left — the emission would
-       be recorded nowhere and the finding would rank nothing. */
+    /* The order's reward is the family's, so the credit lands on the family (FlowAcct's `val`): raised once, the
+       silence charged to that family cancels exactly it, while raising every arm would present one emission as
+       many times as the bundle branches against a debit charged once. A running flow is a member and owns its
+       account, so a NULL family here is a flow credited after it left. */
     DCHECK(g_running->family != NULL,
            "the flow holding the thread belongs to no fork family, so there is nothing for this emission to be "
            "credited to — a departed flow was left running, and the reward this finding is worth is about to "
@@ -909,157 +831,82 @@ void flow_credit_emit(double v) {
            "fact have come apart and this account's reward is about to be a ledger stacked on a clock reading "
            "that is still moving underneath it");
     g_running->family->earned += v;
-    g_credit_paid++;   /* …and the arm that reached an account — the ledger write and its count are one event */
-    /* …AND THE FRONTIER'S CLOCK, BECAUSE THE ITEM IN SERVICE IS WHAT THE CLOCK IS A READING OF AND ITS TAG HAS
-       JUST MOVED. This is frontier_vt_serve's ONLY event now, and it is the one that makes v(t) a CONTINUING
-       relation rather than a coordinate copied once: without it, every account that has never been served
-       would stand at the coordinate the leader held when it was last picked, and would be passed by exactly
-       the findings the leader makes during the slice it is holding — which is the arrival copy going stale
-       again, one slice at a time instead of once. The clause that used to say "second of two" named a DISPATCH
-       as the other, and that write is gone; this sentence is the whole of the argument for the one that
-       remains, which is why it is stated in terms of FINDINGS and not of who holds the thread. */
+    g_credit_paid++;   /* and the arm that reached an account: the ledger write and its count are one event */
+    /* And the frontier's clock, because the item in service is what the clock reads and its tag has just moved.
+       This is frontier_vt_serve's one event, and it makes v(t) a continuing relation: without it every account
+       never served would stand at the leader's coordinate when last picked, and be passed by the findings the
+       leader makes during the slice it holds. */
     frontier_vt_serve(g_running);
-    /* …AND THIS ONE MEMBER'S OWN LEDGER, WHICH RANKS NOTHING AND IS NOT A SECOND COPY OF THE LINE ABOVE. The
-       family total says what an ACCOUNT has emitted and is the order; this says what THIS FLOW emitted, which
-       is the one question the total structurally cannot answer and the one the census exists to ask — a
-       frontier retiring members steadily while every one of them reads zero here is a frontier coasting on an
-       ancestor's findings. It is never copied, never inherited and never read by flow_weight, which is what
-       keeps it a measurement rather than a rank. */
+    /* And this member's own ledger, which ranks nothing. The family total is what an account has emitted and is
+       the order; this is what this flow emitted, which the census asks (a frontier retiring members while every
+       one reads zero here is coasting on an ancestor's findings). Never copied, inherited or read by flow_weight. */
     g_running->val += v;
-    /* …AND **NOT** THE OPTIMISM TERM'S QUANTITY, WHICH THIS USED TO ZERO ON THE EMITTER. `g_running->visits = 0`
-       stood here, and the line above it is what retires the argument that justified it: that argument said a
-       flow which has just produced something "then leads by its REWARD", and the reward is the FAMILY's, so
-       within a family it is a common offset that leads NOBODY — the emitter and every arm of it read the same
-       `val` through the same pointer. Its second clause ("the only thing keeping it in front is `val`") is the
-       same sentence and is stale for the same reason, and its third described the ordinary rotation as a
-       failure: an arm inherits the emitter's count at the branch, so the emitter falls behind it by exactly ONE
-       completed unit, which is fair queueing rather than a flow being buried.
-       IT WAS RESIDUE OF THE TERM THE COUNT REPLACED. While the optimism term read `cpu / FLOW_SERVICE_US`,
-       forgiving the silence and forgetting the trials were ONE statement in ONE field, and zeroing on an
-       emission was coherent. When the quantity became a COUNT OF COMPLETED UNITS those stopped being one
-       statement; only the silence half was re-derived (FlowAcct's `emit_gen`, below), and the count's zero was
-       carried across the re-keying verbatim.
-       WHY IT WAS WRONG AND NOT MERELY STALE — in this file's own words at FlowAcct's `val`, about this exact
-       pair: two arms of one parent, forked at two instants, "differ by exactly what the parent emitted in
-       between — which neither of them did". A zero written here is COPIED by every fork the emitter takes
-       afterwards, so an arm born after an emission carried a full 1.0 while its sibling born before it carried
-       `1/(1+V)` — the optimism term's whole range apart, on an event BOTH of them are already credited for
-       once through the account they share. One credit minted once was presented twice: to the family through
-       `val`, and again to whichever member happened to be holding the thread.
-       AND THE FIELD THAT WOULD HOLD SUCH A PREFERENCE ALREADY EXISTS AND IS DELIBERATELY UNRANKED. `Flow.val`
-       one line up is what THIS member emitted, and it is never read by flow_weight — which is what keeps it a
-       measurement rather than a rank. A within-family preference for the productive member is therefore a
-       thing this accounting has already refused, in the field built to hold it, and the zero was that refusal
-       being overturned through the optimism term instead.
-       WHAT ORDERS A FAMILY'S MEMBERS INSTEAD is what §scheduler asks of it: fewest completed units first and
-       least own silence first — fair queueing over the arms, with the value-of-information ordering carried
-       BETWEEN families by the reward. A flow that emits keeps the thread until it finishes the unit it is
-       inside (flow_pick's comparison is STRICT and its arms tie with it), its count then advances, and it
-       hands over on its own visit.
-       SO AN EMISSION DOES NOT MOVE THIS TERM AT ALL, and `visits` is now one quantity with one meaning: the
-       units of work completed on this flow's own prefix, raised only by flow_credit_visit and carried by a
-       fork. The rank still changes on an emission — through the reward, both silence halves and the generation
-       bump below — so nothing that watches for one loses its signal. */
-    /* …AND THE AGING, BOTH HALVES OF IT, IN ONE STATEMENT ABOUT THE ACCOUNT. This used to be two: `fam_us = 0`
-       here and `g_running->cpu = 0` above it, and the pair was described as "deliberately no ordering between
-       the resets — a sibling's emission forgives the family while this flow's own `cpu` stands, and that is the
-       policy rather than a drift". THAT ARGUMENT IS RETIRED, and FlowAcct's `emit_gen` carries the refutation:
-       the two halves are SUMMED into one notch and weighed against ONE reward, and that reward is the FAMILY's,
-       so a debt measured over a window the family's income does not cover is a unit error rather than a policy.
-       Its consequence was a population, not a rounding difference: `Flow.cpu` is written only for the flow
-       holding the thread, so a member the scheduler has never dispatched could never reach either reset, and it
-       carried its parent's fork-instant burn as a permanent deficit against every arm that did emit.
-       ONE EMISSION, ONE ACCOUNT, ONE FORGIVENESS. The generation bump is what makes the own half readable as
-       zero for every member of this family at once, in O(1) and with no walk of a frontier that reaches
-       thousands; `fam_us` is the family half of the same window and is zeroed beside it. Neither is a second
-       policy — they are the two scopes flow_silence_notch already sums, now sharing the epoch it always claimed
-       they shared.
-       WHAT IT DOES NOT DO IS FLATTEN THE ORDER. Every member reads zero own-silence only until the thread is
-       handed to one of them: the flow that then holds it is charged (flow_age_running) while its siblings are
-       not, so it sinks at FLOW_AGE_QUANTUM per quantum against every arm of its own family — which is exactly
-       the within-family comparison the own half exists to make, and now it is a comparison the losing side can
-       win back by waiting rather than a debt only a dispatch could clear. */
-    /* WHAT THE EMITTER ITSELF HAS BURNED OVER THE WINDOW THAT IS ABOUT TO CLOSE — read THROUGH
-       flow_own_silence and BEFORE the bump, because the raw `Flow.cpu` is that quantity only while its mark is
-       current: a flow that emits twice with no charge in between holds a previous window's arithmetic in the
-       field, and every reader is already answering ZERO for it. Reading the field would resurrect it. */
+    /* An emission does not touch the optimism term's `visits`. The reward is the family's, so within a family it
+       is a common offset, and a zero written here would be copied by every later fork: an arm born after an
+       emission would carry a full 1.0 while its sibling born before carried `1/(1+V)`, presenting one credit
+       twice (to the family through `val`, and to the member holding the thread). A within-family preference for
+       the productive member is what `Flow.val` would express, and it is deliberately unranked. A family's members
+       are ordered by fewest completed units and least own silence; a flow that emits keeps the thread until it
+       finishes its unit (flow_pick's comparison is strict), its count advances, and it hands over on its own
+       visit. `visits` has one meaning: units completed on this flow's prefix, raised only by flow_credit_visit and
+       carried by a fork. The rank still changes on an emission through the reward, both silence halves and the
+       generation bump. */
+    /* And the aging, both halves, in one statement about the account. The two halves are summed into one notch and
+       weighed against one reward, the family's, so a debt measured over a window the family's income does not
+       cover is a unit error. `Flow.cpu` is written only for the flow holding the thread, so a separate per-flow
+       reset would leave a never-dispatched member carrying its parent's fork-instant burn for ever. The generation
+       bump makes the own half read zero for every member of the family at once, in O(1); `fam_us` is the family
+       half of the same window. It does not flatten the order: once the thread is handed to one member, that member
+       is charged (flow_age_running) and sinks at FLOW_AGE_QUANTUM per quantum against its siblings, a comparison
+       the waiting side wins by waiting.
+       The emitter's own burn over the closing window is read through flow_own_silence before the bump: the raw
+       field is that quantity only while its mark is current, and a flow that emits twice with no charge between
+       holds a previous window's arithmetic in it. */
     own_us = flow_own_silence(g_running);
-    /* THE REBUILD THIS BUMP COSTS AN INDEX, TAKEN BEFORE IT HAPPENS AND SUMMED — see `g_epoch_rebuild`. The
-       members standing away from this family's base are exactly the ones an epoch-keyed index must move back,
-       and after the next statement there is nothing left to count: the bump takes the whole family to base by
-       moving a generation, which is the property that makes the reset O(1) and the reason the number has to
-       be read HERE or not at all. Raised together with its own denominator so no reader can average one
-       without the other. */
+    /* The rebuild this bump costs an index, taken before it happens (see `g_epoch_rebuild`): after the bump moves
+       the generation there is nothing left to count. Raised with its own denominator. */
     g_epoch_rebuild += g_running->family->away_n;
     g_epoch_resets++;
     g_running->family->emit_gen++;
-    /* …AND THE GAUGE GOES WITH THE WINDOW IT COUNTED. Every member of this family now reads zero own silence
-       from the generation comparison alone, so the away population is empty for an instant — the emitter is
-       put back below, which is the one member this forgiveness deliberately does not reach. */
+    /* And the gauge goes with the window it counted: every member now reads zero own silence, so the away
+       population is empty for an instant; the emitter is put back below. */
     g_running->family->away_n = 0;
-    /* …AND THE EMITTER CARRIES ITS OWN BURN ACROSS THE BUMP, WHICH IS THE ONE THING THIS FORGIVENESS MAY NOT
-       DO FOR THE MEMBER THAT EARNED IT. The bump forgives the own half for every arm of the family at once,
-       and that is right for every arm EXCEPT the one holding the thread: CLAUDE.md's rule is that the credit
-       and the debit live at the same accounting unit or neither term means anything, and here the credit is
-       the FAMILY's (`earned`, read by every arm through one pointer) while the debit erased is the MEMBER's
-       (`cpu`, charged to one flow). One credit, two beneficiaries — the family through the ledger, and again,
-       privately, whichever member happened to be holding the thread.
-       THIS FUNCTION ALREADY MADE THAT EXACT ARGUMENT ONE TERM OVER AND DID NOT CARRY IT HERE. `g_running->
-       visits = 0` stood a few lines above and was deleted for it, in these words: "One credit minted once was
-       presented twice: to the family through `val`, and again to whichever member happened to be holding the
-       thread." The optimism term's zero went; the silence term's did not, and the silence term is the ONLY
-       within-family ordering signal left once the reward and the family half have cancelled as the common
-       offsets they are.
-       WHAT IT COST, DERIVED RATHER THAN GUESSED. flow.h's `never_picked` block names the two writers that end
-       an incumbent's hold: flow_credit_visit, which asserts `frame == NULL` and so cannot fire for a member
-       inside a program (a fork copies `visits`, so a chain of framed arms reads one bonus for all of them),
-       and this charge. With both inoperative, every member of a one-family frontier reads ONE weight, the
-       pick's STRICT comparison leaves the thread where it is, and the never-dispatched tail stands at exactly
-       the front for ever. MEASURED, at two revisions and on seven runs: `neverPickedAtTop == neverPicked`
-       EXACTLY at every zero-gap sample, at 46, 259, 269, 285 and 570 members.
-       SO THE WINDOW CLOSES FOR THE FAMILY AND NOT FOR THE ARM THAT SPENT IT. `fam_us` becomes what its members
-       still owe, which after the bump is the emitter's burn and nothing else, so the relation the aging's two
-       halves owe each other holds with EQUALITY at this transition rather than at zero.
-       NAMED RESIDUAL. Not covered: an arm that burned the thread earlier in this window and did NOT emit still
-       has its own half forgiven here, because the bump reaches it and nothing holds it in hand. That is
-       narrower than fair queueing over the arms, which would remember every arm's service and not just the
-       emitter's; it is CORRECT for what it does — the emitter is by construction the arm that must hand over
-       next, so this is the one retention that changes which flow runs — and it is a one-emission memory rather
-       than a ledger. What the next diff builds, if the sweep still stalls: the own half kept per arm across
-       the bump, which needs a per-member window mark that a bump cannot reach in O(1) and is therefore a
-       change to how `emit_gen` forgives, not another line here. How its absence shows: `picksMax` staying at
-       the mean sweep depth between two emissions (flow.h's `top_forgiven` reading) while `neverPicked` climbs
-       with `members` — a sweep that restarts rather than one that stalls.
-       AND IT NARROWS flow_pick's `unrun` POPULATION, WHICH A GUARD THAT FIRES LESS MUST SAY AS PLAINLY AS ONE
-       THAT FIRES MORE. That set needs every non-reward term at zero, and `fam_us` is now non-zero immediately
-       after an emission rather than zero — so within one quantum of a finding the two ordering guards there
-       short-circuit where they used to be live, but ONLY when the emitter burned a whole cooperative quantum
-       between two findings, since a `fam_us` below FLOW_SERVICE_US still floors to a notch of zero. */
+    /* And the emitter carries its own burn across the bump. The bump forgives the own half for every arm, which is
+       right for every arm except the one holding the thread: the credit is the family's (`earned`, read by every
+       arm) while the debit erased would be the member's (`cpu`), one credit with two beneficiaries, the argument
+       that keeps `visits` untouched above. Once the reward and the family half cancel as common offsets, the own
+       half is the only within-family ordering signal. Without it, with flow_credit_visit unable to fire inside a
+       program (it asserts `frame == NULL`, and a fork copies `visits`), every member of a one-family frontier
+       reads one weight, the strict pick keeps the thread where it is, and the never-dispatched tail stands at the
+       front for ever. So `fam_us` becomes the emitter's burn and nothing else, and the aging relation holds with
+       equality at this transition.
+       Named residual. Not covered: an arm that burned the thread earlier in this window and did not emit still has
+       its own half forgiven here. Fair queueing over the arms would remember every arm's service; this is a
+       one-emission memory, correct for the emitter, which must hand over next. Next diff builds: the own half kept
+       per arm across the bump, a per-member window mark the O(1) bump cannot reach, so a change to how `emit_gen`
+       forgives. Absence shows as: `picksMax` staying at the mean sweep depth between two emissions (flow.h's
+       `top_forgiven` reading) while `neverPicked` climbs with `members`, a sweep that restarts.
+       It narrows flow_pick's `unrun` population, which needs every non-reward term at zero: `fam_us` is non-zero
+       right after an emission, so the two ordering guards there short-circuit within one quantum of a finding, but
+       only when the emitter burned a whole cooperative quantum between two findings (below FLOW_SERVICE_US the
+       notch floors to zero). */
     g_running->cpu             = own_us;
     g_running->cpu_gen         = g_running->family->emit_gen;
-    /* …AND THE EMITTER IS THE WHOLE AWAY POPULATION AGAIN, WHICH IS THE TRANSITION THE ZERO ABOVE WOULD
-       OTHERWISE HAVE LOST. The two statements above re-stamp this member into the NEW window carrying
-       `own_us`, so if it burned anything at all it is standing away from a base every one of its siblings is
-       at — and an index would have exactly this one member to hold. Written as a test on `own_us` rather
-       than on the field, because `own_us` is what was just stored and reading flow_own_silence back would be
-       a second spelling of the same store. */
+    /* And the emitter is the whole away population again: it is re-stamped into the new window carrying `own_us`,
+       so if it burned anything it stands away from a base every sibling is at. Tested on `own_us`, the value just
+       stored, rather than by reading flow_own_silence back. */
     if (own_us > 0) g_running->family->away_n = 1;
     g_running->family->fam_us  = own_us;
-    /* THE TWO HALVES ARE EQUAL FOR THE EMITTER AND ZERO FOR EVERY OTHER ARM, which is the relation stated at
-       its strongest: the family's burn over the new window IS the emitter's, because the emitter is the only
-       arm whose burn survived the bump. The transition the old code broke was the mirror of this one — the
-       family half zeroed while a sibling's own half held a previous window's burn — and it is still caught,
-       because the macro is expanded at every transition that can move either half. */
+    /* The two halves are equal for the emitter and zero for every other arm: the family's burn over the new window
+       is the emitter's, the only burn that survived the bump. The mirror transition (the family half zeroed while
+       a sibling's own half holds a previous window's burn) is caught because the macro is expanded at every
+       transition that can move either half. */
     DCHECK_AGING_ONE_WINDOW(g_running, "an emission forgave this family's window");
-    /* THE RANK CHANGE IS RAISED BY frontier_vt_serve ABOVE AND NOT A SECOND TIME HERE, which is a correction
-       and not a saving. An emission is ONE event and `g_rank_changes` is a LIFETIME COUNTER of how many times
-       the order changed, so two raises for one emission would make every rate a reader builds from it — the
-       preempt hook's rescan cadence against it, above all — a ratio over a quantity that counts some events
-       twice. The raise moved to the clock's writer because the clock is a term of every unplaced account's
-       weight and a write to it must not be able to happen without one; an emission reaches that writer
-       unconditionally past the early return, so nothing is lost by not repeating it. The yield request the
-       raise carries is a REQUEST bit polled at the next opcode, so raising it before this function finishes
-       updating `emit_gen` and `fam_us` is observationally identical: the C statements complete first. */
+    /* The rank change is raised by frontier_vt_serve above and not again here: an emission is one event and
+       `g_rank_changes` is a lifetime count of order changes, so a second raise would double-count every rate built
+       on it, the preempt hook's rescan cadence first. An emission reaches the clock's writer unconditionally past
+       the early return. The yield request is a bit polled at the next opcode, so raising it before `emit_gen` and
+       `fam_us` are updated is observationally identical. */
 }
 
 /* THE OTHER KIND OF QUANTITY IN THE WEIGHT, and the whole of why it is a separate function from the one above.
