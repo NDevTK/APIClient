@@ -35,6 +35,18 @@ function _stripForReferrer(u, originOnly) {
 /* Fetch §5.4 "Request class", init["referrer"]: a URL that is `about:client` or not same origin with the
    identity's origin becomes "client". The zone applies it for the identity it chose, which need not be the
    document the referrer was observed in. Returns "client" or the absolute URL. */
+/* Referrer Policy §8.1 "Parse a referrer policy from a Referrer-Policy header" over the header's combined value
+   (`value`, undefined where absent): the last token that is a referrer policy, or "" for none. */
+function referrerPolicyFromHeader(value) {
+  let policy = "";
+  if (value === undefined) return policy;
+  for (const token of String(value).split(",")) {
+    const t = token.replace(/^[\t ]+|[\t ]+$/g, "");
+    if (t !== "" && REFERRER_POLICIES.indexOf(t) >= 0) policy = t;
+  }
+  return policy;
+}
+
 function referrerForIdentity(referrer, identityOrigin) {
   DCHECK(typeof referrer === "string" && referrer !== "" && URL.canParse(referrer),
          "referrerForIdentity was given " + JSON.stringify(referrer) + " — intercept.js records, and the " +

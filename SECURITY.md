@@ -18,7 +18,7 @@ either the mechanism or its absence, and an absence is a finding about this file
 | Engine frame (`renderer.html`: QuickJS/WASM with Lexbor) | untrusted | executes the bundle; a sandboxed frame at an opaque origin that reaches the trusted zone only through `content.mojom.Renderer` |
 | Attacker tab (`ATTACKER_PAGE_URL` in `background.js`, used by live verify) | untrusted | a third-party document |
 | Offscreen document (`ast-worker.html`: `offscreen-brain.js`, `bridge.js`, `lib/*`) | trusted | the only zone that holds state, principals and network policy |
-| Service worker (`background.js`) | trusted, stateless | owns the offscreen's lifecycle, forwards `TAB_REMOVED` and the webRequest events of documents' fetch() and XHR traffic, and performs privileged `chrome.*` calls for the offscreen only |
+| Service worker (`background.js`) | trusted, stateless | owns the offscreen's lifecycle, forwards `TAB_REMOVED` and the webRequest events of documents' fetch() and XHR traffic, performs privileged `chrome.*` calls for the offscreen only, and holds the one fetch the zone's sends leave through (`wire.js`) |
 | Popup (`popup.html`, `popup.js`, `lib/popup-*.js`) | trusted | an extension page that renders untrusted data |
 
 The offscreen concentrates everything that needs trust: the one `chrome.runtime.onMessage` router of that
@@ -132,8 +132,34 @@ Which extension context can open a connection at all is enforced by CSP in all b
   each renderer. That holds against the scripts loaded after it. The ones `ast-worker.html` loads before it
   hold no network constructor in code, which is a reading of their source, not an enforcement.
 - The service worker (the manifest's `connect-src 'self' https: http: data:`) can reach any http(s) host and
-  loads no seal. That it sends nothing is code discipline: `background.js` and `speak-as-rule.js` call no
-  `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
+  loads no seal. It holds the zone's one network fetch (`wire.js`): `safeFetch` and `safeFetchOperator` decide
+  every request in the offscreen document and hand the worker only the call that reaches the network, over
+  one `wire` port per send, which it serves only to `ast-worker.html`. Beyond that fetch, that it sends
+  nothing is code discipline: `background.js`, `speak-as-rule.js` and `wire.js` call no other `fetch`,
+  `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
+- The wire leaves from the worker because webRequest observes it there. The extension's pages are cross-origin
+  isolated (COEP `require-corp` with COOP `same-origin`, for `SharedArrayBuffer`), and under that Chrome 148
+  reports none of the offscreen document's requests to webRequest, and it reports the worker's own
+  (measured). The offscreen document has no `chrome.webRequest` at all (it holds `chrome.runtime` alone).
+- The zone follows every redirect itself (Fetch §4.5 "HTTP-redirect fetch"), so each hop is judged by every
+  gate before it is sent and goes out as its own request, under its own speak-as rule. The worker's fetch is
+  asked for `redirect: "manual"`, which never sends the hop and answers an opaque-redirect without
+  `Location`; the worker answers the zone the 3xx `webRequest.onBeforeRedirect` reported of its own fetch. A
+  webRequest event is linked to its send in two steps. Which context: every other extension context is sealed
+  or has `connect-src 'none'`, so a request initiated by the extension origin in no tab and no document is the
+  worker's own (a page's service worker is also in no tab and no document, and its initiator is the page's
+  origin); the worker CHECKs all three. Which request: each send carries a 128-bit nonce header that
+  `onBeforeSendHeaders` (with `extraHeaders`) reads, binding the browser's `requestId`, which holds across the
+  request's life, to the send; a session rule removes the header from every request of the worker, and
+  `onBeforeSendHeaders` reports headers before declarativeNetRequest modifies them and `onSendHeaders` after
+  (measured in Chrome 148: the server never saw the nonce). A process host (`engine/trusted.mjs`) reads the 3xx
+  off its own fetch.
+- Runtime messages carry JSON only (a `Uint8Array` arrives as an object of indices, an `ArrayBuffer` as `{}`;
+  one message is refused past 64 MiB, measured in Chrome 148), so a body crosses as base64 chunks, one per
+  read of the worker's fetch. A worker with no message for 30 s is ended even with its fetch pending (measured:
+  headers withheld 60 s), so the zone pings each send every 10 s and acknowledges each chunk (measured: a
+  60 s wait and a 90 s streamed body completed). A port that disconnects before the answer is complete is
+  Fetch §5.6's network error, a `TypeError` naming the worker and the bytes received.
 
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
@@ -143,14 +169,14 @@ Which extension context can open a connection at all is enforced by CSP in all b
 | GET only: `init.method` is the literal `"GET"` | `safeFetch`; callers ask `safeFetchMethodRefusal` first | `blocked-method:<M>` |
 | http(s) only | `safeFetch` | `blocked-scheme:<scheme>` |
 | no userinfo in the URL | `safeFetch` | `blocked-url-credentials` |
-| a reply whose final URL does not parse (URL Standard §6.1 "URL class" throws) is not read | `safeFetch` | `blocked-final-url-unparseable`, graded `network` |
-| origin-relative SSRF on the requested and the landed host: a target whose Local Network Access §2.1 "IP Address Space" is less public than the page's | `_ipAddressSpace`, `_lessPublicThan` against the asking document's record's space (`docRecordAddressSpace`) | `blocked-local-network:<target>-from-<page>`, `blocked-local-network-redirect:<target>-from-<page>` |
-| per-origin egress policy, before the wire and on the landed URL | `_firingRefusal` | `blocked-signal:<signal>=<value>`, `blocked-signal-redirect:` |
-| destructive-path deny list where the session pays and the request is not `observed`, before the wire and after a redirect | `_destructiveToken` | `blocked-destructive:<token>`, `blocked-destructive-redirect:` |
+| Fetch §4.5 "HTTP-redirect fetch"'s network errors: a `Location` that does not parse, a non-HTTP(S) location, a 21st redirect, credentials in a location a `cors` request may not follow | `_followRedirect` | `redirect-location-failure`, `blocked-scheme:<scheme>`, `redirect-count:20`, `blocked-url-credentials`, graded `network` |
+| origin-relative SSRF on the requested URL and on each redirect hop before it is sent: a target whose Local Network Access §2.1 "IP Address Space" is less public than the page's | `_ipAddressSpace`, `_lessPublicThan` against the asking document's record's space (`docRecordAddressSpace`) | `blocked-local-network:<target>-from-<page>`, `blocked-local-network-redirect:<target>-from-<page>` |
+| per-origin egress policy, before the request and before each redirect hop is sent | `_firingRefusal` | `blocked-signal:<signal>=<value>`, `blocked-signal-redirect:` |
+| destructive-path deny list where the session pays and the request is not `observed`, before the request and before each redirect hop is sent | `_destructiveToken` | `blocked-destructive:<token>`, `blocked-destructive-redirect:` |
 | own SOP/CORS on a credentialed reply, over the landed origin | `_resourceSameOrigin`, then exact-origin `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true` | `blocked-cors-credentialed:<landed origin>` |
-| a page's `same-origin`-mode request to another origin, before the wire and on the landed URL | `safeFetch` | `blocked-mode-same-origin:<origin>` |
-| a page's `cors`-mode reply from another origin passes Fetch §4.10 "CORS check" before its body is read, credentialed or not, and is CORS-filtered | `_corsCheck`, `_corsFilteredHeaders` | `blocked-cors:<failed step>:<landed origin>` |
-| a page's cross-origin `cors` request whose use-CORS-preflight flag is set, or whose header list has a CORS-unsafe name, is preceded by Fetch §4.8 "CORS-preflight fetch" (uncredentialed `OPTIONS`, no redirect, no preflight cache) and is not sent unless the preflight passes; the preflight is CORS-checked against `opts.identity.origin`, which must equal the page origin | `_corsPreflight`, `_corsUnsafeRequestHeaderNames` | `blocked-cors-preflight:<failed step>:<origin>` |
+| a page's `same-origin`-mode request to another origin, before the request and before each redirect hop | `safeFetch` | `blocked-mode-same-origin:<origin>` |
+| a page's `cors`-tainted request passes Fetch §4.10 "CORS check" on every response, each redirect's 3xx included (Fetch §4.4 "HTTP fetch"), before its body is read, credentialed or not, and its final reply is CORS-filtered | `_corsCheck`, `_corsFilteredHeaders` | `blocked-cors:<failed step>:<origin of that response>` |
+| a page's cross-origin `cors` request whose use-CORS-preflight flag is set, or whose header list has a CORS-unsafe name, is preceded, at the request and at each hop, by Fetch §4.8 "CORS-preflight fetch" (uncredentialed `OPTIONS` with the request's URL list, no redirect, no preflight cache) and is not sent unless the preflight passes; the preflight is CORS-checked against the serialized request origin, which is the page origin, or `null` once a redirect tainted the URL list | `_corsPreflight`, `_corsUnsafeRequestHeaderNames` | `blocked-cors-preflight:<failed step>:<origin>` |
 | a page's `no-cors`-mode reply from another origin is opaque; a `fetch()` (destination "") gets no bytes at all | `safeFetch`, the record's `type: "opaque"` | (resolves, as in a browser) |
 | CORB for a script-like destination (Fetch §2.2.5 "Requests"), whatever the status | `_isScriptLike`, `_corbDeniesScript` | `blocked-corb:<rule>:<type>` |
 | a script-like body is never streamed, so CORB always reads the whole body | `_bodyGated` | `blocked-stream-body-gated:` |
@@ -167,9 +193,10 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
   origin this zone assigned the instance, from `_browserFacts.origin` or from the URL this zone loaded for a
   child) and `e.origin` in `engine/trusted.mjs`. The engine states no origin; nothing on the pending line could
   name one.
-- `basic` only where the requested and the landed URL are both same-origin with the page. Otherwise a `cors`
-  reply passes §4.10 "CORS check" (`*` passes unless the credentials mode is `include`; the origin is serialized
-  as `null` where a redirect left an origin the request was not made from) and becomes a CORS filtered response,
+- Fetch §4.1 "Main fetch" decides the tainting at the request and at each hop: `basic` while every URL so far
+  is the page's origin, then `cors` or `opaque` for good. A `cors` request's every response, each 3xx included,
+  passes §4.10 "CORS check" (`*` passes unless the credentials mode is `include`; the origin is serialized as
+  `null` once the URL list's redirect-taint, Fetch §2.2.5, is not `same-origin`), and its final reply becomes a CORS filtered response,
   whose headers `_corsFilteredHeaders` narrows to the safelist and `Access-Control-Expose-Headers` before the
   engine sees them. A cross-origin `no-cors` reply is opaque: for a `fetch()` the body is not read and the engine
   builds Fetch §2.2.6's opaque filtered response (`response_new_opaque`, `fetch_reply_type`); for an element (a
@@ -212,8 +239,8 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
 ## Operator sends
 
 A request a person composes in the popup (the Send panel, and the Discovery panel's probe, service-info and
-fetch-discovery buttons) leaves from the offscreen document through `safeFetchOperator` in
-`lib/safe-fetch.js`. It speaks as the frame the request was observed in. The identity is that frame's, from
+fetch-discovery buttons) is decided in the offscreen document by `safeFetchOperator` in `lib/safe-fetch.js`
+and leaves through the service worker's wire, as every send does. It speaks as the frame the request was observed in. The identity is that frame's, from
 browser-stamped facts only (`frameIdentity`, `lib/request-identity.js`), and the request carries its headers
 through a speak-as rule (below, "Sends that speak as a document"). There is no relay through the page's
 renderer, so a compromised renderer can neither read nor forge an operator's reply.
@@ -328,6 +355,13 @@ Residuals, each a difference from the document's own request:
   1000". Past either, `updateSessionRules` refuses the install ("Session rule count exceeded.", measured in
   Chrome 148) and the send fails. The reference states no rate limit on `updateSessionRules`, and 3000
   install-and-release pairs in a row were all accepted (6.0 s, measured).
+- A speak-as rule names its send by initiator, `tabIds: [-1]`, method and exact URL, since a rule condition
+  cannot match a request header (Chrome's RuleCondition lists `responseHeaders` and `excludedResponseHeaders`
+  and no request-header condition; `requestHeaders` in a condition is refused as "Unexpected property",
+  measured). So `safeFetch` sends one request per URL at a time (`_sendSerialized`), hops included, and a second
+  send to a URL waits for the first; same-URL sends are not concurrent. Measured in Chrome 148: an
+  uncredentialed request whose hop landed on a URL a credentialed send had in flight waited for it and went
+  out without its Cookie.
 - The header names a rule adds arrive lower-case and after the browser's own headers.
 - The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
   `chrome.cookies` states no creation time.
@@ -336,8 +370,6 @@ Residuals, each a difference from the document's own request:
   never lands in a jar, the document's included ("Known residuals").
 - The partition bit is computed as the request's own cross-site status, with the frame's
   `hasCrossSiteAncestor`. The person's third-party-cookie setting is not read.
-- A redirect leaves the rule behind. The rule matches the first URL only, so a redirected request goes out
-  as this extension.
 - An operator's frame policy is not observable from this zone, so an operator send that states none uses the
   default policy, strict-origin-when-cross-origin. An engine page request carries the referrer and policy the
   engine states on its request record, and a referrer not of the identity's origin is "client" (Fetch §5.4).
@@ -491,10 +523,11 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   that speak as a document"). It is the variant that acts only where host permission exists, and that adds
   no install-time warning. `speak-as-rule.js` is its only caller, and every rule it installs passes the
   identity CHECKs there.
-- `webRequest` exists so a captured fetch() or XHR is described by the browser rather than the page. The
-  service worker listens to `xmlhttprequest`-type requests of documents (a tab and a `documentId`; never the
-  offscreen's own) with `requestBody` and `extraHeaders`, blocks and modifies nothing, and relays each event
-  to `lib/web-request.js`. Its records carry the person's Cookie and Set-Cookie: the log keeps neither value
+- `webRequest` exists so a captured fetch() or XHR is described by the browser rather than the page, and so
+  the zone can follow its own sends' redirects. The service worker listens to `xmlhttprequest`-type requests
+  of documents (a tab and a `documentId`; never the offscreen's own) with `requestBody` and `extraHeaders`,
+  blocks and modifies nothing, and relays each event to `lib/web-request.js`; and, in `wire.js`, to the 3xx of
+  its own fetch (no tab, no document), which it answers to the send that made it. Its records carry the person's Cookie and Set-Cookie: the log keeps neither value
   (Cookie only as the fact that one was sent, Set-Cookie not at all), and key extraction runs over the
   page-settable headers alone.
 - `manifest.json` requests `offscreen`, `cookies`, `declarativeNetRequestWithHostAccess`, `webNavigation`,
@@ -618,14 +651,11 @@ Each residual states what is not covered, what would close it, and how its absen
 
 | Residual | Not covered | What closes it | How its absence shows |
 |----------|-------------|----------------|-----------------------|
-| A credentialed send's reply cookies | A send that speaks as a document carries the identity's cookies, with the zone's fetch omitting credentials, so the reply's `Set-Cookie` is stored nowhere, where the identity's own request would store it in its jar. The extension's `webRequest` listeners take documents' fetch() and XHR traffic only (`lib/web-request.js`), and `webRequest` reports none of the offscreen document's replies (see "A speak-as send's redirect hops"), so it cannot read them; letting the browser store them applies the extension's own storage rules and writes the real jar first | a send made from a context whose replies `webRequest` reports (`onHeadersReceived` with `extraHeaders`; `Set-Cookie` there is not measured), then RFC 6265bis §5.7's storage model run on the identity's site for cookies | a server that rotates a token on a tool-sent credentialed request leaving the person's next own request presenting the retired value |
-| A speak-as send's redirect hops | A send that speaks as a document goes out under a declarativeNetRequest rule naming its URL, so each redirect hop goes out as this extension: uncredentialed, with the zone fetch's own `Sec-Fetch-*` and no Referer. The offscreen document cannot read a redirect's `Location` or headers (`redirect: "manual"` answers an opaque-redirect with none, measured in Chrome 148). The extension's pages are cross-origin isolated (the manifest's COEP `require-corp` with COOP `same-origin`, which `SharedArrayBuffer` needs), and under that Chrome 148 reports none of the offscreen document's requests to `webRequest`, permission or not. Measured with a scratch extension: with both headers only the document's own load is reported; with either alone every fetch is, including a 3xx's `Location`; the service worker's own fetches are reported under both. Re-sending a hop the platform already followed is declined: it is a second request on someone else's server | each hop followed by the zone itself (`redirect: "manual"`, the `Location` read from `webRequest`, every gate run on it, the hop sent as its own request under its own speak-as rule), with the sends made from a context `webRequest` observes: the service worker's own fetch, or the `debugger` permission. Either moves where a request leaves from, which is the owner's decision | a redirected document loaded logged out, its hop reaching the server with `Sec-Fetch-Mode: cors` and no Referer |
+| A credentialed send's reply cookies | A send that speaks as a document carries the identity's cookies, with the zone's fetch omitting credentials, so the reply's `Set-Cookie` is stored nowhere, where the identity's own request would store it in its jar. The wire's `webRequest` listener reads redirects only (`wire.js`), and the documents' listeners take documents' traffic only (`lib/web-request.js`); `Set-Cookie` under `onHeadersReceived` with `extraHeaders` on the worker's fetch is not measured. Letting the browser store them applies the extension's own storage rules and writes the real jar first | `onHeadersReceived` with `extraHeaders` on the worker's own fetch, then RFC 6265bis §5.7's storage model run on the identity's site for cookies | a server that rotates a token on a tool-sent credentialed request leaving the person's next own request presenting the retired value |
 | Private network by name (write side unmitigated) | `_ipAddressSpace` classifies IP literals by Local Network Access's "Non-public IP address blocks" table and the names `localhost`, `*.localhost` and `*.local`; any other name is `public`. A name that resolves to a local or loopback address (an intranet name, `.internal`, `.lan`, a single-label host, `127.0.0.1.nip.io`) is therefore sent from a public page, including by the default arm for the page's own unpinned `fetch()`. The reply is unreadable unless that host answers `Access-Control-Allow-Origin` for the page or `*` (`_corsCheck`). No stable MV3 surface resolves a name before the connection: `chrome.dns` is Chrome Dev only, `webRequest` reports the address only on events after the request was sent, and blocking `webRequest` is policy-installed only. Whether Chrome's own Local Network Access check applies to this extension's offscreen fetches is unmeasured | Chrome's local-network gate shown, in real Chrome, to apply to this extension's fetches, or a resolver this zone can ask before connecting | a page analysed from a public origin causing a request to a host on the person's network |
-| Redirect hops between the first and last URL | `safeFetch` sees only the requested and the landed URL, so a redirect chain that leaves the origin and returns is tainted `basic` where Fetch would taint it, and an intermediate redirect response's own CORS check is not run | each hop recorded per request. `fetch`'s `redirect: "manual"` cannot supply it: it answers Fetch §2.2.6 "Responses"' opaque-redirect filtered response (status 0, empty header list, null body), so the `Location` is not readable there, and `webRequest` reports none of the offscreen document's requests (see "A speak-as send's redirect hops") | a `cors` reply delivered `basic` after a chain that crossed origins |
 | The request carries no page `Origin` header | `Origin` is a forbidden request header, so the zone's request carries this extension's origin or none, and a server that reflects the request's `Origin` answers an `Access-Control-Allow-Origin` that is not the page's. The page then gets a network error where a browser's request would pass: a narrowing | a transport that can state the page's origin | a cross-origin API that works in a browser failing `blocked-cors:allow-origin-mismatch` here |
 | No ORB for a no-cors element's bytes | CORB applies to script-like destinations only, so a cross-origin `no-cors` image, style or font body of any type is delivered to the engine; page script cannot read it, but a compromised engine could | Chromium's ORB rules for the other no-cors destinations | a JSON or HTML body delivered for an `image` destination |
 | A browser-reported local-scheme frame's address space | A local-scheme document the zone provisions takes its initiator's address space from the initiator's record. A local-scheme frame the person's browser loaded (`content.js` runs in a `data:`, `blob:` or `about:` frame under `match_origin_as_fallback`) reaches the zone as an ambient seed with no record of its initiator, so it gets a new container's space, public, where HTML §7.1.7 "Policy containers" and Local Network Access §3.5 give it a clone of its initiator's. Its requests to that initiator's private network are refused: a narrowing. No browser-stated fact names the initiator. `runtime.MessageSender` states the frame's own `url`, `origin`, `frameId` and `documentId`, and `webNavigation.getFrame`/`getAllFrames` add `parentFrameId` and `parentDocumentId`, read from Chromium's API schemas and not measured for such a frame. The parent is not the initiator when a sibling or an opener navigates the frame. The frame's origin does not fix the initiator's container either: FileAPI §8.3.2 "Access restrictions on blob URLs" exempts top-level navigations, so a public page can load a loopback origin's `blob:` URL and its `about:` children then carry that origin under the public page's container. Either fact would widen | a browser source that names a navigation's initiating document; the DevTools Protocol under the `debugger` permission is the unmeasured candidate, which this extension does not take | `blocked-local-network:<space>-from-public` on a request from a local-scheme frame of a loopback or local page |
-| Redirect to a less public host | `safeFetch` re-judges the landed host and refuses to ingest, but the hop that reached it was already sent | a walk judging each `Location` before it is followed, the hop-by-hop follow "A speak-as send's redirect hops" names | a public host's 3xx onto an intranet address appearing in that host's logs |
 | Credential lineage | the chokepoint sees the credential state of the request in front of it and nothing about where the address came from | a `credentialed` bit on the response the engine ingests, carried into the concolic value's source identity and composed at the park beside the provenance word | every request at an origin reading `lineage=unknown`, including addresses the bundle built from a logged-in reply |
 | Authority in a path segment | `url-authority` matches capability-URL parameter names and the JWS prefix only; an opaque token in a path reads `unknown` | read the signal off the engine, whose park knows which source each segment came from | `url-authority=unknown` doing all the work at a widened origin whose addresses carry capability tokens |
 | Engine-stated signals | `destination`, `provenance` and `witness` are the engine's words, so an engine that states `observed` or `unpinned` falsely for a request made on its own path reaches the default arms. A document's own drive and witness marks are not this case: the zone's record floors them. What fires is still an uncredentialed GET under every other gate | none in this design; `actor` and the document record are the parts that do not rest on the engine | requests firing by default at an unwidened origin whose provenance the run's own log contradicts |
@@ -664,7 +694,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | A localhost page's analysis lends its origin to a public page's fetch | mitigated: the principal is per call, never a global |
 | A page sandboxes its own iframe to read the embedder's credentialed API | mitigated: the credentialed-read principal is the requesting frame's `MessageSender.origin`, opaque-unique, and an opaque origin is same-origin with nothing |
 | A seeded page's server redirects the cookie-bearing document load to another origin | mitigated: the credentialed SOP reads the landed origin (`blocked-cors-credentialed:`), and `bridge.js` refuses to seat a cross-origin response (`cross-origin-redirect:`) |
-| The analyzer's own credentialed GET ends the person's session or destroys a resource | mitigated as a floor: GET only, and `_destructiveToken` refuses a listed path token before the wire and after a redirect for any credentialed request that is not `observed`; an unmatched path is not thereby safe |
+| The analyzer's own credentialed GET ends the person's session or destroys a resource | mitigated as a floor: GET only, and `_destructiveToken` refuses a listed path token before the request and before each redirect hop is sent, for any credentialed request that is not `observed`; an unmatched path is not thereby safe |
 | A compromised renderer forges an operator's reply | not a threat: an operator send is the offscreen document's own fetch and never passes through the renderer |
 | A compromised extension page sends as an observed frame | residual: the operator tier trusts every extension document, which can also state any `Origin` and `Referer`; the pages' Trusted Types policy and CSP bound it |
 | A compromised renderer drives the socket, port or window send relays | not a threat: it cannot reach them, and the channel is the page's own |

@@ -19,12 +19,33 @@ function speakAsOrigin(origin, method, mode, url, policy) {
   return origin;
 }
 
-/* Fetch Metadata §2.3 "The Sec-Fetch-Site HTTP Request Header" over a one-URL url list: same-origin, else
-   same-site, else cross-site, against the identity's origin. */
-function speakAsFetchSite(origin, url) {
+/* Fetch Metadata §2.3 "The Sec-Fetch-Site HTTP Request Header"'s set-site over a request's url list, against
+   its origin: same-origin while every URL is, same-site while every URL is at least that, else cross-site. */
+function speakAsFetchSite(origin, urlList) {
   if (origin === "null") return "cross-site";   // an opaque origin is same site with no URL's origin
-  if (new URL(url).origin === origin) return "same-origin";
-  return sameSite(origin + "/", url) ? "same-site" : "cross-site";
+  let value = "same-origin";
+  for (const url of urlList) {
+    if (new URL(url).origin === origin) continue;
+    if (!sameSite(origin + "/", url)) return "cross-site";
+    value = "same-site";
+  }
+  return value;
+}
+
+/* Fetch §2.2.5 "Requests"' redirect-taint of a request with origin `origin` and URL list `urlList`:
+   "same-origin", "same-site" or "cross-site". Serializing the request origin answers "null" for any taint but
+   "same-origin", which is the Origin a redirected request carries and the one its replies are CORS-checked
+   against. */
+function requestRedirectTaint(origin, urlList) {
+  let lastURL = null, taint = "same-origin";
+  for (const url of urlList) {
+    if (lastURL === null) { lastURL = url; continue; }
+    const last = new URL(lastURL).origin;
+    if (!sameSite(url, lastURL) && !(origin !== "null" && sameSite(origin + "/", lastURL))) return "cross-site";
+    if (new URL(url).origin !== last && origin !== last) taint = "same-site";
+    lastURL = url;
+  }
+  return taint;
 }
 
 /* The request headers a send speaking as `facts` (identityFor's answer) sets, as {header name: value, or null
@@ -36,12 +57,14 @@ function speakAsFetchSite(origin, url) {
    Not covered: the storage access status is taken as "active" for every credentialed cross-site send, which
    is what Chrome answers while third-party cookies are allowed. The next diff reads the person's setting.
    Its absence shows as `active` where Chrome sends `none` or `inactive`. */
-function speakAsHeaders(facts, method, mode, destination, url, cookie) {
-  const h = { "Origin": speakAsOrigin(facts.origin, method, mode, url, facts.referrerPolicy),
+function speakAsHeaders(facts, method, mode, destination, urlList, cookie) {
+  const url = urlList[urlList.length - 1];
+  const serialized = requestRedirectTaint(facts.origin, urlList) === "same-origin" ? facts.origin : "null";
+  const h = { "Origin": speakAsOrigin(serialized, method, mode, url, facts.referrerPolicy),
               "Referer": facts.referrer };
   if (cookie.cookie !== null) h["Cookie"] = cookie.cookie;
   const trustworthy = urlPotentiallyTrustworthy(new URL(url));
-  h["Sec-Fetch-Site"] = trustworthy ? speakAsFetchSite(facts.origin, url) : null;
+  h["Sec-Fetch-Site"] = trustworthy ? speakAsFetchSite(facts.origin, urlList) : null;
   h["Sec-Fetch-Mode"] = trustworthy ? mode : null;
   h["Sec-Fetch-Dest"] = trustworthy ? (destination === "" ? "empty" : destination) : null;
   h["Sec-Fetch-Storage-Access"] = trustworthy && facts.credentials === "include" && !facts.sameSite ? "active" : null;
@@ -49,13 +72,14 @@ function speakAsHeaders(facts, method, mode, destination, url, cookie) {
 }
 
 /* Fetch §4.8 "CORS-preflight fetch": the OPTIONS request carries the request's origin, referrer and referrer
-   policy, mode "cors" and no credentials, plus `Access-Control-Request-Method` and, when the request has
-   CORS-unsafe header names, `Access-Control-Request-Headers`. Both are forbidden request-headers, so the
-   rule sets them rather than the zone's fetch. `unsafeNames` is that list, already sorted and lowercased. */
-function speakAsPreflightHeaders(facts, method, destination, url, unsafeNames) {
-  const h = speakAsHeaders(Object.assign({}, facts, { credentials: "omit" }), "OPTIONS", "cors", destination, url,
-                           { cookie: null });
-  h["Origin"] = facts.origin;
+   policy, mode "cors", the request's URL list and no credentials, plus `Access-Control-Request-Method` and,
+   when the request has CORS-unsafe header names, `Access-Control-Request-Headers`. Both are forbidden
+   request-headers, so the rule sets them rather than the zone's fetch. `unsafeNames` is that list, already
+   sorted and lowercased. */
+function speakAsPreflightHeaders(facts, method, destination, urlList, unsafeNames) {
+  const h = speakAsHeaders(Object.assign({}, facts, { credentials: "omit" }), "OPTIONS", "cors", destination,
+                           urlList, { cookie: null });
+  h["Origin"] = requestRedirectTaint(facts.origin, urlList) === "same-origin" ? facts.origin : "null";
   h["Access-Control-Request-Method"] = method;
   h["Access-Control-Request-Headers"] = unsafeNames.length ? unsafeNames.join(",") : null;
   // Chrome sends no User-Agent client hints on its own preflight; the zone's fetch would.
@@ -65,10 +89,9 @@ function speakAsPreflightHeaders(facts, method, destination, url, unsafeNames) {
   return h;
 }
 
-/* One send at a time per URL: a send's rules (its own method, and OPTIONS when it is preflighted) are
-   installed and released as one unit, and the next send of the URL waits, so no other identity's rule can
-   land between a preflight and its request. Ids come from this counter inside the worker's family. */
-const _speakAsTails = new Map();
+/* A send's rules (its own method, and OPTIONS when it is preflighted) are installed and released as one unit;
+   lib/safe-fetch.js sends one request per URL at a time (`_sendSerialized`), so no other send's rule can land
+   between a preflight and its request. Ids come from this counter inside the worker's family. */
 let _speakAsNextId = SPEAK_AS_RULE_MIN;
 let _speakAsCleared = null;
 
@@ -88,12 +111,6 @@ async function withSpeakAsRules(origin, url, rules, stated, send) {
   const u = new URL(url);
   u.hash = "";
   const key = u.href;
-  const prev = _speakAsTails.has(key) ? _speakAsTails.get(key) : Promise.resolve();
-  let done;
-  const mine = new Promise((r) => { done = r; });
-  const tail = prev.then(() => mine);
-  _speakAsTails.set(key, tail);
-  await prev;
   const minted = rules.map((r) => ({ ruleId: _speakAsMintId(), method: r.method, headers: r.headers }));
   const ids = minted.map((r) => r.ruleId);
   try {
@@ -104,7 +121,5 @@ async function withSpeakAsRules(origin, url, rules, stated, send) {
     return await send();
   } finally {
     await swRpc("speakAs.release", ids);
-    done();
-    if (_speakAsTails.get(key) === tail) _speakAsTails.delete(key);
   }
 }

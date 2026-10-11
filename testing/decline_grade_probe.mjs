@@ -136,59 +136,105 @@ const ROWS = [
             identity: undefined, onChunk: () => {} } },
 ];
 
-/* THE REDIRECT FIXTURE, the two producers that judge the landed URL. Fetch follows a 3xx before the zone sees
-   the reply, so these rows need a server: a `/hop/<n>` path answers 302 to its entry in `HOPS`, which the
-   requested address does not spell (the deny list reads the query too), and anything else 200. It listens on
-   loopback, and the rows' principal is a loopback page, so Local Network Access admits the request. The realm
-   reaches it through the host's fetch, and its relay holds an empty jar and installs the speak-as rules it is
-   asked for without applying them, which no gate reads. Origin A is widened, as `--explore` widens one, and B
-   (the same server under `localhost`) is not: a pinned seed fires at A and lands on B. */
+/* THE REDIRECT FIXTURE: the hops the zone follows itself (Fetch §4.5 "HTTP-redirect fetch"), each judged by
+   every gate before it is sent. A `/hop/<n>` path answers 302 to its entry in `ROUTES`, which the requested
+   address does not spell (the deny list reads the query too), with that entry's headers; anything else 200. It
+   listens on loopback, and the rows' principal is a loopback page, so Local Network Access admits the request.
+   The realm reaches it through the host's fetch with redirect "manual", which a process answers with the 3xx
+   itself. Its relay holds a one-cookie jar and keeps the speak-as rules a send installs, applied by exact URL
+   and method as declarativeNetRequest applies them, so the server's log is what each hop carried. Origin A is
+   widened, as `--explore` widens one, and B (the same server under `localhost`) is not. */
 const hits = [];
-const HOPS = new Map();
+const ROUTES = new Map();
 const server = createServer((req, res) => {
-  hits.push(req.url);
-  const u = new URL(req.url, 'http://fixture');
-  if (HOPS.has(u.pathname)) { res.writeHead(302, { Location: HOPS.get(u.pathname) }); res.end(); return; }
+  hits.push({ path: new URL(req.url, 'http://fixture').pathname, cookie: req.headers.cookie || null,
+              referer: req.headers.referer || null });
+  const route = ROUTES.get(new URL(req.url, 'http://fixture').pathname);
+  if (route) { res.writeHead(route.status, route.headers); res.end(); return; }
   res.writeHead(200, { 'Content-Type': 'text/html' });
   res.end('<p>fixture');
 });
 await new Promise((resolve) => server.listen(0, resolve));
 const PORT = server.address().port;
 const A = `http://127.0.0.1:${PORT}`, B = `http://localhost:${PORT}`;
+const hop = (to, headers) => ({ status: 302, headers: Object.assign({ Location: to }, headers || {}) });
+ROUTES.set('/hop/1', hop('/home')).set('/hop/1b', hop('/home2')).set('/hop/2', hop('/logout'))
+  .set('/hop/3', hop(`${B}/landing`)).set('/hop/4', hop(`${B}/hop/5`)).set('/hop/5', hop(`${A}/home5`))
+  .set('/hop/7', hop('/logout7')).set('/hop/8', hop(`${B}/hop/9`))
+  .set('/hop/9', hop(`${A}/end9`, { 'Access-Control-Allow-Origin': '*' }))
+  .set('/end9', { status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/plain' } });
+const speakAsRules = new Map();   // ruleId -> { method, url, requestHeaders }
+let zf = null;
 const FIXTURE_EDGE = {
   fetch: (u, init) => {
     const s = String(u);
-    if (s.startsWith('data:') || s.startsWith(A + '/') || s.startsWith(B + '/')) return fetch(u, init);
-    throw new Error(REACHED);
+    if (s.startsWith('data:')) return fetch(u, init);
+    if (!s.startsWith(A + '/') && !s.startsWith(B + '/')) throw new Error(REACHED);
+    const headers = new Headers(init && init.headers ? init.headers : undefined);
+    const method = zf.speakAsDnrMethod(init && init.method ? init.method : 'GET');
+    for (const r of speakAsRules.values()) {
+      if (r.url !== s || zf.speakAsDnrMethod(r.method) !== method) continue;
+      for (const h of r.requestHeaders)
+        if (h.operation === 'remove') headers.delete(h.header); else headers.set(h.header, h.value);
+    }
+    return fetch(s, Object.assign({}, init, { headers }));
   },
   swRpc: async (api, args) => {
-    if (api === 'cookies.getAll') return [];
-    if (api === 'speakAs.clearFamily' || api === 'speakAs.release') return undefined;
-    if (api === 'speakAs.install') return args.rules.map((r) => r.ruleId);
+    if (api === 'cookies.getAll')
+      return args.partitionKey ? [] : [{ name: 'sid', value: 'probe', path: '/', sameSite: 'lax' }];
+    if (api === 'speakAs.clearFamily') { speakAsRules.clear(); return 0; }
+    if (api === 'speakAs.install') {
+      for (const r of zf.speakAsCheckedRules(args))
+        speakAsRules.set(r.ruleId, { method: r.method, url: args.url, requestHeaders: r.requestHeaders });
+      return args.rules.map((r) => r.ruleId);
+    }
+    if (api === 'speakAs.release') { for (const id of args) speakAsRules.delete(id); return undefined; }
     throw new Error(`the fixture relay was asked \`${api}\`, which no send on this probe makes`);
   },
 };
-HOPS.set('/hop/1', '/home').set('/hop/2', '/logout').set('/hop/3', `${B}/landing`);
+/* A navigation whose speaker sends a Referer (a sub-frame's, `referrer: "client"`), and the page's own
+   `fetch()` (bridge.js's `fetched`: uncredentialed, `cors`, the engine's referrer). */
+const REFERRING = (Z) => ({ identity: Z.identityFor(Z.engineIdentity(A, `${A}/page`),
+                                                     { url: `${A}/hop/1b`, requestInit: { credentials: 'include',
+                                                       mode: 'navigate', referrer: null, referrerPolicy: null } },
+                                                     'strict-origin-when-cross-origin') });
+const PAGE_FETCH = (Z, url) => ({ destination: '', mode: 'cors', credentials: 'same-origin', credentialed: false,
+                                  useCorsPreflight: false,
+                                  identity: Z.pageRequestIdentity(A, `${A}/page`, url, 'same-origin', 'cors',
+                                                                  'strict-origin-when-cross-origin', `${A}/page`) });
 const FIXTURE_ROWS = [
   { label: 'REDIRECT, harmless: /hop/1 -> /home (CONTROL: must be answered)',
-    url: `${A}/hop/1`, want: 'ANSWERED', list: [`${A}/hop/1`, `${A}/home`] },
-  { label: 'REDIRECT onto a destructive path: /hop/2 -> /logout',
+    url: `${A}/hop/1`, want: 'ANSWERED', list: [`${A}/hop/1`, `${A}/home`], sent: ['/home'] },
+  { label: 'REDIRECT, a speak-as hop carries the identity\'s Cookie and Referer: /hop/1b -> /home2',
+    url: `${A}/hop/1b`, want: 'ANSWERED', over: REFERRING, list: [`${A}/hop/1b`, `${A}/home2`],
+    carried: { path: '/home2', cookie: 'sid=probe', referer: `${A}/page` } },
+  { label: 'REDIRECT onto a destructive path, credentialed: /hop/2 -> /logout (declined before it is sent)',
     url: `${A}/hop/2`, want: 'DECLINE', reason: 'blocked-destructive-redirect:', list: [`${A}/hop/2`, `${A}/logout`],
-    sent: '/logout' },
-  { label: 'REDIRECT across a signal: a pinned seed fires at widened A, /hop/3 lands on unwidened B',
-    url: `${A}/hop/3`, want: 'DECLINE', reason: 'blocked-signal-redirect:', over: PINNED,
-    list: [`${A}/hop/3`, `${B}/landing`], sent: '/landing' },
+    notSent: '/logout' },
+  { label: 'REDIRECT onto a destructive path, uncredentialed: /hop/7 -> /logout7 (CONTROL: the list\'s scope, sent)',
+    url: `${A}/hop/7`, want: 'ANSWERED', over: () => ({ credentialed: false, identity: undefined }),
+    list: [`${A}/hop/7`, `${A}/logout7`], sent: ['/logout7'] },
+  { label: 'REDIRECT across a signal: a pinned seed fires at widened A, /hop/3 -> unwidened B (not sent)',
+    url: `${A}/hop/3`, want: 'DECLINE', reason: 'blocked-signal-redirect:', over: () => PINNED,
+    list: [`${A}/hop/3`, `${B}/landing`], notSent: '/landing' },
+  { label: 'REDIRECT, an intermediate cross-origin 3xx with no Access-Control-Allow-Origin: A -> B -> A',
+    url: `${A}/hop/4`, want: 'REFUSE:network', reason: `blocked-cors:no-allow-origin:${B}`,
+    over: (Z) => PAGE_FETCH(Z, `${A}/hop/4`), notSent: '/home5' },
+  { label: 'REDIRECT, an intermediate cross-origin 3xx that allows it: A -> B -> A (CONTROL: answered, cors)',
+    url: `${A}/hop/8`, want: 'ANSWERED', type: 'cors', over: (Z) => PAGE_FETCH(Z, `${A}/hop/8`),
+    list: [`${A}/hop/8`, `${A}/end9`], sent: ['/hop/9', '/end9'] },
 ];
 
 const z = zone(NO_EDGE);
-const zf = zone(FIXTURE_EDGE);
+zf = zone(FIXTURE_EDGE);
 zf.safeFetchWiden(A);
 let bad = 0, wire = 0, decl = 0;
 const census = new Map();
 async function run(Z, principal, row) {
   let got, detail, r = null;
   try {
-    r = row.ask ? await row.ask(Z, row) : await Z.safeFetch(row.url, navOpts(Z, principal, row.url, row.over));
+    const over = typeof row.over === 'function' ? row.over(Z) : row.over;
+    r = row.ask ? await row.ask(Z, row) : await Z.safeFetch(row.url, navOpts(Z, principal, row.url, over));
     if (r && r.refusal) { got = r.refusal.kind === 'decline' ? 'DECLINE' : 'REFUSE:' + r.refusal.kind;
                           detail = r.refusal.reason; }
     else { got = 'ANSWERED'; detail = 'status ' + (r && r.status); }
@@ -211,11 +257,26 @@ async function run(Z, principal, row) {
     notes.push('urlList ' + JSON.stringify(list));
     if (JSON.stringify(list) !== JSON.stringify(row.list)) ok = false;
   }
-  /* A landed-URL decline refuses to ingest: the hop was sent, and the server's own log says so. */
-  if (row.sent) {
-    const was = hits.some((h) => new URL(h, 'http://fixture').pathname === row.sent);
-    notes.push(`${row.sent} ${was ? 'reached' : 'did not reach'} the server`);
+  /* The server's own log says which hops were sent: a hop the zone declined or refused never was. */
+  for (const path of row.sent || []) {
+    const was = hits.some((h) => h.path === path);
+    notes.push(`${path} ${was ? 'reached' : 'did not reach'} the server`);
     if (!was) ok = false;
+  }
+  if (row.notSent) {
+    const was = hits.some((h) => h.path === row.notSent);
+    notes.push(`${row.notSent} ${was ? 'reached' : 'did not reach'} the server`);
+    if (was) ok = false;
+  }
+  if (row.carried) {
+    const h = hits.find((x) => x.path === row.carried.path);
+    notes.push(`${row.carried.path} carried Cookie ${JSON.stringify(h && h.cookie)} and Referer ` +
+               JSON.stringify(h && h.referer));
+    if (!h || h.cookie !== row.carried.cookie || h.referer !== row.carried.referer) ok = false;
+  }
+  if (row.type) {
+    notes.push(`type ${JSON.stringify(r && r.type)}`);
+    if (!r || r.type !== row.type) ok = false;
   }
   if (!ok) bad++;
   console.log(`  ${ok ? 'ok  ' : 'BAD '} ${row.label}\n       ${got}  ${detail}` +

@@ -76,7 +76,22 @@ function identityFor(identity, request, documentPolicy) {
   }
   const status = cookieSiteStatus(identity, request.url);
   return { origin: identity.origin, referrer, referrerPolicy: policy, credentials, sameSite: status === "same-site",
-           partitionKey: { topLevelSite: identity.partitionKey.topLevelSite, hasCrossSiteAncestor: status === "cross-site" } };
+           partitionKey: { topLevelSite: identity.partitionKey.topLevelSite, hasCrossSiteAncestor: status === "cross-site" },
+           client: identity };
+}
+
+/* The facts the next request of a redirect chain speaks with, from the facts `facts` the last one spoke with
+   (Fetch §4.5 "HTTP-redirect fetch"): the same client and credentials mode, the referrer policy `policy` (the
+   one Referrer Policy §8.2 left), the referrer §8.3 determines again from the request's referrer for `url`,
+   and the cookie site status of `url`. */
+function identityForRedirect(facts, url, policy) {
+  CHECK(!!facts.client && typeof facts.client.origin === "string",
+        "a redirect hop was asked to speak as facts identityFor did not mint — the hop re-derives its referrer " +
+        "and cookie site from the client those facts were computed for");
+  return identityFor(facts.client, { url, requestInit: { credentials: facts.credentials,
+                                                         referrer: facts.referrer === null ? "" : facts.referrer,
+                                                         referrerPolicy: policy } },
+                     policy);
 }
 
 /* The identity an engine's page request speaks as on the wire, for both hosts (bridge.js, engine/trusted.mjs):
@@ -184,7 +199,7 @@ function identityProducibleBy(identity, frameKey, facts, speaking, sent, method,
   if (sent.origin !== own)
     reasons.push("a document of " + speaking + " sends " + (own === null ? "no Origin" : "Origin " + own) +
                  " on this request (Fetch §3.2 Origin header)");
-  const frameSite = speakAsFetchSite(identity.origin, url), speakingFetchSite = speakAsFetchSite(speaking, url);
+  const frameSite = speakAsFetchSite(identity.origin, [url]), speakingFetchSite = speakAsFetchSite(speaking, [url]);
   if (urlPotentiallyTrustworthy(new URL(url)) && frameSite !== speakingFetchSite)
     reasons.push("Sec-Fetch-Site stays the frame's " + frameSite + ", and a document of " + speaking + " sends " +
                  speakingFetchSite);

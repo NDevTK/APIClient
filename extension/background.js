@@ -7,11 +7,12 @@
 //   2. forward browser events the offscreen can't observe (tab removal, and the webRequest events of a
 //      document's fetch() and XMLHttpRequest traffic) to the brain,
 //   3. perform privileged chrome.tabs.* calls the offscreen can't, as RPC, and own the live-verify attacker
-//      tab: it opens ATTACKER_PAGE_URL itself and keeps, in memory only, which tabs it opened for it.
+//      tab: it opens ATTACKER_PAGE_URL itself and keeps, in memory only, which tabs it opened for it,
+//   4. hold the zone's one network fetch, which lib/safe-fetch.js decides in the offscreen document (wire.js).
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
 // broadcast reaches the offscreen); the SW stays out of those messages.
 
-importScripts("check.js", "speak-as-rule.js");
+importScripts("check.js", "speak-as-rule.js", "wire.js");
 
 const EXT_ORIGIN = "chrome-extension://" + chrome.runtime.id;
 const OFFSCREEN_URL = "ast-worker.html";

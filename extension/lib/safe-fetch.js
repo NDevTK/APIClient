@@ -20,7 +20,7 @@
    must receive what the server sent. No security decision reads a decoded body; CORB's sniff decodes only for
    its own comparison.
    `urlList` is Fetch §2.2.6's response URL list, which only this zone can report because the redirect chain
-   exists only here; it is [requested] or [requested, landed] (see `_urlList`).
+   exists only here; it is [requested] or [requested, landed] (see `_exposedUrlList`).
    Type sniffing lives here and nowhere else in the extension. What a flow needs mid-execution belongs in the
    engine; this is a decision the trusted zone makes once about a reply it fetched, and `computedType` states
    it to the renderer, so no zone downstream sniffs or re-parses a raw header for a type of its own. */
@@ -28,7 +28,8 @@
    in place of every other network constructor the realm has, a function that crashes, so a request from any
    other script in the zone fails at its call rather than skipping the checks above. The one read let through
    is of this extension's own package (renderer-host.js builds each renderer from package files), which
-   reaches no other party. A realm given no `fetch` holds nothing, and `_wire` asserts before spending on it. */
+   reaches no other party. In an extension document every send leaves through the service worker's fetch
+   (`_wireRelay`); a realm given no `fetch` holds nothing, and `_wire` asserts before spending on it. */
 var _wire = (function () {
   var platformFetch = globalThis.fetch;
   var packageOrigin = typeof globalThis.location === "object" && globalThis.location !== null
@@ -53,13 +54,96 @@ var _wire = (function () {
     Object.defineProperty(globalThis.navigator, "sendBeacon", { writable: false, configurable: false,
       value: function () { CHECK_FAIL("a script in the trusted zone called sendBeacon — the only network in " +
                                       "this realm is safeFetch's"); } });
+  /* In an extension document the wire is the service worker's fetch (wire.js), the one fetch the extension
+     spends on the network; a process host (engine/trusted.mjs) hands this realm its own. */
+  var relay = typeof chrome === "object" && chrome !== null && !!chrome.runtime &&
+              typeof chrome.runtime.connect === "function";
   return function _wire(href, init) {
+    if (relay) return _wireRelay(href, init);
     CHECK(typeof platformFetch === "function",
           "safeFetch spent a request in a realm that was given no fetch — a policy-only host loads this file " +
           "to read its decisions, and reaching the wire there means a decision it asked about fired");
     return platformFetch.call(globalThis, href, init);
   };
 })();
+
+/* Fetch §2.2.3 "Statuses"' null body statuses, whose Response has no body. */
+var _NULL_BODY_STATUSES = [101, 103, 204, 205, 304];
+function _b64OfBytes(u8) {
+  var bin = "";
+  for (var i = 0; i < u8.length; i += 8192) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+  return btoa(bin);
+}
+function _bytesOfB64(b64) {
+  var bin = atob(b64), u = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+/* One send over the service worker's wire (wire.js), answered as the Response the worker's fetch answered: a
+   port per send, the body in base64 chunks, since runtime messages carry JSON only. The zone pings the worker
+   every 10 s and acknowledges each chunk, which keeps it alive while the network is slow (it is ended after
+   30 s with no message, measured in Chrome 148). A port that disconnects first is Fetch §5.6's network error,
+   a TypeError naming the worker; an abort disconnects it. */
+function _wireRelay(href, init) {
+  CHECK(typeof init.method === "string" && init.credentials === "omit" && init.redirect === "manual" &&
+        (init.headers === undefined || Array.isArray(init.headers)),
+        "a send reached the wire without a method, credentials \"omit\", redirect \"manual\" and a header list of " +
+        "pairs — cookies are the speak-as rule's, every hop is this zone's to follow, and a message carries JSON");
+  var body = init.body === undefined ? null
+    : typeof init.body === "string" ? { text: init.body } : { b64: _b64OfBytes(init.body) };
+  return new Promise(function (resolve, reject) {
+    var port = chrome.runtime.connect({ name: "wire" });
+    var stream = null, headSeen = false, settled = false, received = 0;
+    var ping = setInterval(function () { port.postMessage({ ping: true }); }, 10000);
+    function fail(why) {
+      if (settled) return;
+      settled = true;
+      clearInterval(ping);
+      var e = new TypeError("wire: " + why);
+      if (!headSeen) reject(e); else if (stream) stream.error(e);
+    }
+    port.onDisconnect.addListener(function () {
+      fail("the service worker ended the send of " + href + " after " + received + " body bytes, before its " +
+           "answer was complete");
+    });
+    if (init.signal) init.signal.addEventListener("abort", function () {
+      fail("the send of " + href + " was aborted");
+      port.disconnect();
+    });
+    port.onMessage.addListener(function (m) {
+      if (settled) return;
+      if (m.head) {
+        headSeen = true;
+        var nullBody = _NULL_BODY_STATUSES.indexOf(m.head.status) >= 0;
+        var rs = nullBody ? null : new ReadableStream({
+          start: function (c) { stream = c; },
+          cancel: function () { settled = true; clearInterval(ping); port.disconnect(); }
+        });
+        resolve(new Response(rs, { status: m.head.status, statusText: m.head.statusText, headers: m.head.headers }));
+        return;
+      }
+      if (m.chunk !== undefined) {
+        var u = _bytesOfB64(m.chunk);
+        received += u.length;
+        if (stream) stream.enqueue(u);
+        port.postMessage({ ack: true });
+        return;
+      }
+      if (m.end) {
+        settled = true;
+        clearInterval(ping);
+        if (stream) stream.close();
+        port.disconnect();
+        return;
+      }
+      DCHECK(typeof m.error === "string", "the wire answered " + JSON.stringify(m) + ", none of its four messages");
+      fail(m.error);
+      port.disconnect();
+    });
+    port.postMessage({ href: href, init: { method: init.method, headers: init.headers === undefined ? null : init.headers,
+                                           body: body } });
+  });
+}
 
 /* A tuple origin (scheme://host[:port]) is usable for same-origin and CORS. An opaque origin reports "null",
    or this zone's minted "null:<uuid>" token, and is unique, so it is same-origin with nothing, not even
@@ -1330,7 +1414,7 @@ function _extractTokenList(headers, name) {
   return out;
 }
 /* Fetch §4.8 "CORS-preflight fetch" for a request (`method`, `href`, `headerList`, credentials mode, use-CORS-
-   preflight flag), CORS-checked against `origin`, the Origin the request carries. Answers null on success or
+   preflight flag), CORS-checked against `origin`, the serialized request origin. Answers null on success or
    the name of the step that failed, which is a network error. The preflight is uncredentialed and does not
    follow a redirect: a 3xx is not an ok status. This zone provides no CORS-preflight cache, so the step "If
    the user agent does not provide for a cache, then return response" ends it and `Access-Control-Max-Age` is
@@ -1342,14 +1426,15 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
   var init = { method: "OPTIONS", headers: [["Accept", "*/*"]], credentials: "omit", redirect: "manual" };
   if (signal) init.signal = signal;
   var resp = await _wire(href, init);
-  var headers = {};
+  /* A 3xx is not an ok status and is not followed. */
+  var headers = {}, status = resp.status;
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
   if (resp.body) {
     try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
   }
   var cors = _corsCheck(headers, origin, credentialsMode);
   if (cors) return "cors-check:" + cors;
-  if (!(resp.status >= 200 && resp.status <= 299)) return "status:" + resp.status;
+  if (!(status >= 200 && status <= 299)) return "status:" + status;
   var methods = _extractTokenList(headers, "access-control-allow-methods");
   var headerNames = _extractTokenList(headers, "access-control-allow-headers");
   if (methods === null) return "allow-methods-unparseable";
@@ -1369,29 +1454,28 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
   return null;
 }
 /* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send` under
-   lib/speak-as.js's rules: one for its own method and, when `preflightNames` is a list, one for its OPTIONS
-   request. Its cookies are the identity's (cookieHeaderFor's Cookie) only where this zone is willing
+   lib/speak-as.js's rules for the last URL of `urlList` (Fetch §2.2.5's URL list, which a redirect grows): one
+   for its own method and, when `preflightNames` is a list, one for its OPTIONS request. Its cookies are the identity's (cookieHeaderFor's Cookie) only where this zone is willing
    (`credentialed`); otherwise it carries none. The zone's own fetch omits credentials, so this extension's
    jar adds nothing and a reply's Set-Cookie is not stored. `stated` is null, or the operator tier's
    Send-panel record (safeFetchStatedShape), whose Origin and Referer replace the identity's on every rule of
    the send. A request with no identity runs `send` as this extension, uncredentialed.
    Named residual. Not covered: a credentialed send's reply Set-Cookie, which the identity's own request would
-   store in its jar and this send stores nowhere. Next diff stores it there from a send made in a context
-   whose replies webRequest reports, which this cross-origin isolated document is not (SECURITY.md). Its
-   absence
-   shows as a server that rotates a token on a tool-sent credentialed request leaving the person's next own
-   request presenting the retired value. */
-async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
+   store in its jar and this send stores nowhere. Next diff reads it from webRequest's onHeadersReceived on
+   the worker's fetch (wire.js) and stores it there. Its absence shows as a server that rotates a token on a
+   tool-sent credentialed request leaving the person's next own request presenting the retired value. */
+async function _speakAs(identity, urlList, method, mode, destination, credentialed, preflightNames, stated, init, send) {
   if (!identity) return send();
+  var href = urlList[urlList.length - 1];
   CHECK(typeof withSpeakAsRules === "function",
         "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
         "be dropped and the request would go out as this extension");
   var facts = credentialed ? identity : Object.assign({}, identity, { credentials: "omit" });
   var cookie = await cookieHeaderFor(facts, href);
   init.credentials = "omit";
-  var rules = [{ method: method, headers: speakAsHeaders(facts, method, mode, destination, href, cookie) }];
+  var rules = [{ method: method, headers: speakAsHeaders(facts, method, mode, destination, urlList, cookie) }];
   if (preflightNames !== null)
-    rules.push({ method: "OPTIONS", headers: speakAsPreflightHeaders(facts, method, destination, href, preflightNames) });
+    rules.push({ method: "OPTIONS", headers: speakAsPreflightHeaders(facts, method, destination, urlList, preflightNames) });
   if (stated !== null)
     rules.forEach(function (r) {
       if (stated.origin !== null) r.headers["Origin"] = stated.origin.header;
@@ -1582,20 +1666,92 @@ function _destructiveToken(u) {
   }
 }
 
-/* Fetch §2.2.6 "Responses"' URL list, as far as script may see it: Fetch §5.5 "Response class" exposes only
-   the first and last URL, so the list is [requested] or [requested, landed]. It is built from the landed
-   href the caller already computed, so the address `bridge.js` keys a document's agent cluster on is the
-   string every gate here judged. `resp.redirected` decides the length rather than `finalHref !== requested`,
-   because a 3xx that lands back on its own address still grew the list. */
-function _urlList(requested, finalHref, redirected) {
-  return redirected ? [requested, finalHref] : [requested];
+/* Fetch §2.2.3 "Statuses"' redirect statuses. */
+var _REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+/* The URL a send goes on the wire as, which carries no fragment: the key a send is serialized by and its 3xx is
+   claimed under. */
+function _wireKey(href) {
+  var u = new URL(href);
+  u.hash = "";
+  return u.href;
+}
+/* One send at a time per URL, whatever its method or identity. A send's speak-as rules (lib/speak-as.js) match
+   by URL, so a second send to that URL while they are installed would carry the first one's headers, and the
+   3xx a send claims (`_redirectOf`) is told apart by URL. A send is its preflight and its request. */
+var _sendTails = new Map();
+async function _sendSerialized(href, send) {
+  var key = _wireKey(href);
+  var prev = _sendTails.has(key) ? _sendTails.get(key) : Promise.resolve();
+  var done;
+  var mine = new Promise(function (resolve) { done = resolve; });
+  var tail = prev.then(function () { return mine; });
+  _sendTails.set(key, tail);
+  await prev;
+  try { return await send(); }
+  finally {
+    done();
+    if (_sendTails.get(key) === tail) _sendTails.delete(key);
+  }
+}
+/* The redirect a response is, as {status, headers}, or null for a response that is not one (a 3xx with no
+   `Location` is Fetch §4.5 "HTTP-redirect fetch"'s "If locationURL is null, then return response"). Every send
+   asks the wire for redirect "manual", so nothing follows a redirect but this zone, and the wire answers the
+   3xx itself: the service worker's record of it (wire.js), or a process's own fetch (engine/trusted.mjs). */
+async function _redirectOf(resp) {
+  DCHECK(resp.type !== "opaqueredirect",
+         "the wire answered an opaque-redirect — wire.js answers a 3xx with the record webRequest reported, and a " +
+         "process's fetch answers the 3xx itself");
+  if (_REDIRECT_STATUSES.indexOf(resp.status) < 0 || !resp.headers.has("location")) return null;
+  var own = {};
+  resp.headers.forEach(function (v, k) { own[String(k).toLowerCase()] = v; });
+  if (resp.body) {
+    try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
+  }
+  return { status: resp.status, headers: own };
+}
+/* Fetch §4.5 "HTTP-redirect fetch" for `request` ({url, urlList, method, body, headerList, mode, tainting,
+   origin}) and the 3xx `redirect`: answers {refusal} for its network errors, or the next request's
+   {url, method, body, headerList, referrerPolicy}, where `referrerPolicy` is Referrer Policy §8.2's, from the
+   3xx's `Referrer-Policy`, or "" for none. The location URL is §2.2.6's over the one `Location` value, whose
+   fragment, where it states none, is the current URL's. */
+var _REQUEST_BODY_HEADER_NAMES = ["content-encoding", "content-language", "content-location", "content-type"];
+function _followRedirect(redirect, request) {
+  var value = redirect.headers.location, loc;
+  try { loc = new URL(value, request.url.href); }
+  catch (e) { RETHROW_FATAL(e); return { refusal: _refused("network", "redirect-location-failure", [request.urlList[0]], {}) }; }
+  if (value.indexOf("#") < 0) loc.hash = request.url.hash;
+  if (loc.protocol !== "https:" && loc.protocol !== "http:")
+    return { refusal: _refused("network", "blocked-scheme:" + loc.protocol, [request.urlList[0]], {}) };
+  if (request.urlList.length - 1 === 20)
+    return { refusal: _refused("network", "redirect-count:20", [request.urlList[0]], {}) };
+  var credentialsInUrl = loc.username !== "" || loc.password !== "";
+  if (credentialsInUrl && ((request.mode === "cors" && request.origin !== loc.origin) || request.tainting === "cors"))
+    return { refusal: _refused("network", "blocked-url-credentials", [request.urlList[0]], {}) };
+  var method = request.method, body = request.body, headerList = request.headerList;
+  if (((redirect.status === 301 || redirect.status === 302) && method === "POST") ||
+      (redirect.status === 303 && method !== "GET" && method !== "HEAD")) {
+    method = "GET";
+    body = null;
+    if (headerList) headerList = headerList.filter(function (h) {
+      return _REQUEST_BODY_HEADER_NAMES.indexOf(h[0].toLowerCase()) < 0;
+    });
+  }
+  /* "the moment another origin is seen after the initial request, the `Authorization` header is removed" */
+  if (headerList && request.url.origin !== loc.origin)
+    headerList = headerList.filter(function (h) { return h[0].toLowerCase() !== "authorization"; });
+  return { url: loc, method: method, body: body, headerList: headerList,
+           referrerPolicy: referrerPolicyFromHeader(redirect.headers["referrer-policy"]) };
+}
+/* The first and last URL of a request's URL list, the part Fetch §2.2.6 lets script see. */
+function _exposedUrlList(urlList) {
+  return urlList.length > 1 ? [urlList[0], urlList[urlList.length - 1]] : [urlList[0]];
 }
 
 /* Fetch §5.3 "Body mixin"'s body, read chunk by chunk. With no sink this is consume body run to completion
    and the assembled bytes are identical; with `opts.onChunk` each chunk is also released as it arrives.
    Where this runs relative to the gates decides what a released chunk has passed. Before it: the scheme
-   allowlist, the userinfo refusal, both private-host checks, both destructive-path checks, both firing
-   refusals and the credentialed SOP/CORS check. After it: CORB, the one gate that reads the body.
+   allowlist, the userinfo refusal, every hop's private-host, destructive-path and firing checks, and the
+   credentialed SOP/CORS check. After it: CORB, the one gate that reads the body.
    A script-like destination is therefore not streamable: `_sniff` classifies most JSON only from the whole
    body (a prefix of a document longer than 4096 bytes does not parse), so a first-chunk answer would be
    CORB's allow arm. The entry refuses `blocked-stream-body-gated:` instead. `computedType` is derived from
@@ -1658,16 +1814,16 @@ async function _readBody(resp, sink, gated) {
    reply passes SOP/CORS (same-origin with `opts.pageOrigin`, else exact-origin ACAO and ACAC `true`); the
    origin-relative SSRF rule; the destructive-path deny list on credentialed non-`observed` requests; the
    egress policy's firing walk; CORB for script-like destinations; for a page's request, Fetch §4.1 "Main
-   fetch"' response tainting from its mode (`cors` passes §4.10 "CORS check" and is CORS-filtered,
-   cross-origin `no-cors` is opaque, cross-origin `same-origin` is a network error), stated as the record's
-   `type`. Every post-fetch gate judges the landed URL.
+   fetch"' response tainting (`cors` passes §4.10 "CORS check" and is CORS-filtered, cross-origin `no-cors` is
+   opaque, cross-origin `same-origin` is a network error), stated as the record's `type`. Every gate before
+   the wire judges each URL of a redirect chain before it is sent; every gate on the reply, the landed URL.
    Principals, per call: the asking document's record (`opts.doc`) carries the IP address space the SSRF
    target is classified against; `opts.pageOrigin` (`MessageSender.origin` or the host-assigned cluster
    origin, never parsed from a URL or taken from the engine) is the SOP principal and every page request's
-   origin. An opaque principal is same-origin with nothing. Credentialed callers are `bridge.js`'s `navigationLoad` and `frontierRederive`, only where
-   `navigationCarriesSession` holds; the page's own requests (`fetched`, `fetchedXhr`) are uncredentialed.
-   Every caller states `destination`, `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed`
-   and `credentials`, asserted at the entry. */
+   origin; an opaque one is same-origin with nothing. Credentialed callers are `bridge.js`'s `navigationLoad`
+   and `frontierRederive`, where `navigationCarriesSession` holds; `fetched` and `fetchedXhr` are not.
+   Every caller states `destination`, `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed` and
+   `credentials`, asserted at the entry. */
 async function safeFetch(url, opts) {
   opts = opts || {};
   /* The option set this file reads is closed, so a caller's statement it will not read is refused at the
@@ -1740,12 +1896,6 @@ async function safeFetch(url, opts) {
      already holds. */
   if (parsed.username !== "" || parsed.password !== "")
     return _refused("network", "blocked-url-credentials", [parsed.href], {});
-  /* Network: Fetch §4.1 "Main fetch"' switch — "request's mode is "same-origin": Return a network error" —
-     for a request that did not match the arm before it ("request's current URL's origin is same origin with
-     request's origin"). Asked before the wire and again on the landed URL. */
-  if (actor === "page" && mode === "same-origin" &&
-      !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin))
-    return _refused("network", "blocked-mode-same-origin:" + parsed.origin, [parsed.href], {});
   /* Decline: a script-like destination cannot be streamed (see `_bodyGated`), and no browser refuses a
      streamed script, so only this tool declines. Serving it whole to a caller that asked for chunks would
      leave that caller believing it streamed past the one gate that needs the whole body. */
@@ -1758,54 +1908,13 @@ async function safeFetch(url, opts) {
      a clone (Local Network Access §3.5 "Integration with HTML"). It is per call, because the trusted zone
      interleaves many renderers, and never parsed from an address the request states: a cross-origin script
      acts in the document it is loaded into, and a `data:` child of a loopback page reaches loopback. */
-  var _pageSpace = docRecordAddressSpace(_docOf(opts));
-  /* Network: host permissions bypass the browser's own answer, and this reinstates it for the addresses this
-     zone can classify. Local Network Access §2.2 "Local Network Request" is the request a browser gates. */
-  var _targetSpace = _ipAddressSpace(parsed.hostname);
-  if (_lessPublicThan(_targetSpace, _pageSpace))
-    return _refused("network", "blocked-local-network:" + _targetSpace + "-from-" + _pageSpace, [parsed.href], {});
+  var _pageSpace = docRecordAddressSpace(doc);
   /* The person's stated table is awaited, not assumed (see `_EXPLORED_STATING`); waiting at the chokepoint
-     covers every door this zone has. It comes after the gates that refuse a request on facts about itself,
-     which owe the policy nothing. Once the table is stated the test is false and costs no microtask, and
+     covers every door this zone has. Once the table is stated the test is false and costs no microtask, and
      `_EXPLORED_STATED` never returns to false. */
   if (!_EXPLORED_STATED && _EXPLORED_STATING !== null) await _EXPLORED_STATING;
-  /* The firing decision, before the request exists (see `_firingRefusal`). Decline: no browser refuses this;
-     this tool declines to spend the act. The flow parks rather than running its failure path, so it fires
-     the day the origin is widened, and the address is still reported. The reason names the signal and value
-     that refused. */
-  var _ptok = _firingRefusal({ url: parsed, destination: destination, provenance: provenance,
-                               pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
-                               credentialed: credentialed, headers: opts.headers });
-  if (_ptok)
-    return _refused("decline", "blocked-signal:" + _ptok, [parsed.href], {});
-  /* The destructive-path deny list, before the request exists (see `_destructiveToken`). It is scoped to
-     credentialed requests, because without cookies a logout path ends no session, and to provenance other
-     than `observed`. An `observed` credentialed request is the ambient seed: the person's own browser just
-     made this exact request in this profile, so refusing to repeat it prevents nothing. A credentialed
-     `derived` or `forced` request is refused on a destructive path here and again after a redirect.
-     Decline, and permanent: no widening reopens this list. A browser would send this request; this tool will
-     not send it with the person's session. */
-  if (credentialed && provenance !== "observed") {
-    var _dtok = _destructiveToken(parsed);
-    if (_dtok)
-      return _refused("decline", "blocked-destructive:" + _dtok, [parsed.href], {});
-  }
   /* The one verb this transport sends; the preflight below and the request are built from it. */
   var _method = "GET";
-  /* Fetch §4.1 "Main fetch": a `cors` request that is not same-origin with its origin, whose use-CORS-preflight
-     flag is set, or whose method is not CORS-safelisted, or whose header list has CORS-unsafe names, runs §4.4
-     "HTTP fetch" with makeCORSPreflight, and with no CORS-preflight cache §4.4 always runs §4.8 "CORS-preflight
-     fetch" first. Its failure is a network error, and the request itself is never sent. The request's origin
-     is `identity.origin`, the trusted zone's identity for this request, which must agree with `pageOrigin`. */
-  // A page's `cors` request carries a header list of pairs (asserted at the entry); no other request is preflighted.
-  var _unsafeNames = actor === "page" && mode === "cors" ? _corsUnsafeRequestHeaderNames(opts.headers || []) : [];
-  var _preflight = actor === "page" && mode === "cors" &&
-                   !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin) &&
-                   (opts.useCorsPreflight || !_corsSafelistedMethod(_method) || _unsafeNames.length > 0);
-  CHECK(!_preflight || (opts.identity && typeof opts.identity === "object" && typeof opts.identity.origin === "string"),
-        "safeFetch must CORS-preflight this request and was handed no request identity — Fetch §4.8's " +
-        "preflight carries the request's origin and is CORS-checked against it, and that origin is the " +
-        "trusted zone's `identityFor(request)`, which the caller passes as `opts.identity`");
   /* Two records: `opts.identity` is who the request speaks as (its client, Fetch §2.2.5 "Requests"), and
      `pageOrigin` the document that reads the reply. They are one document for every request but a
      navigation's, whose client is the document that started it while its reader is the one it creates. */
@@ -1814,66 +1923,123 @@ async function safeFetch(url, opts) {
         "a " + mode + " request speaks as " + (opts.identity && opts.identity.origin) + " while its reply is read " +
         "by " + _pageOrigin + " — only a navigation's client differs from its reader, and the preflight and " +
         "the reply would be CORS-checked as two different requesters");
-  /* Named residual, a platform limit. Not covered: a redirect hop of a send that speaks as an identity, which
-     Fetch §4.5 "HTTP-redirect fetch" and HTML §7.4.5 send with the request's destination, mode and referrer
-     policy, and a Referer and Cookie recomputed for the new URL. This document cannot read a redirect's
-     Location or headers (`redirect: "manual"` answers an opaqueredirect with none), so a speak-as rule cannot
-     name the hop and it goes out as this extension, uncredentialed. Next diff follows each hop in the zone
-     (redirect "manual" and the 3xx's Location from webRequest), which needs the sends made from a context
-     webRequest observes: it reports none of this cross-origin isolated document's (SECURITY.md). Its absence
-     shows as a redirected document loaded logged out, its hop sent `Sec-Fetch-Mode: cors` with no Referer. */
-  var init = { method: _method, credentials: "omit", redirect: "follow" };
-  /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
-     for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
-     and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds auth headers; cookies,
-     in credentialed mode, are the identity's (`_speakAs`) and are gated by the SOP/CORS check below. */
-  if (opts.headers) init.headers = opts.headers;
-  if (opts.signal) init.signal = opts.signal;
-  /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one unit. A request with an
-     identity speaks as it (`_speakAs`); its failure is a network error and the request is never sent. */
-  var _sent = await _speakAs(opts.identity, parsed.href, _method, mode, destination, credentialed,
-                             _preflight ? _unsafeNames : null, null, init, async function () {
-    if (_preflight) {
-      var _pf = await _corsPreflight(parsed.href, _method, opts.headers || [], opts.credentials,
-                                     opts.useCorsPreflight, opts.identity.origin, opts.signal);
-      if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + parsed.origin,
-                                          [parsed.href], {}) };
+  /* The analysed page's own read, whose response tainting Fetch §4.1 "Main fetch" decides; a navigation is
+     judged by the instance that becomes its reader, and a request this tool composed is read by this
+     extension, whose `<all_urls>` host permission is the browser's answer to the CORS question. */
+  var _pageRead = actor === "page" && mode !== "navigate";
+  /* Fetch §2.2.5 "Requests"' URL list, current URL, response tainting, header list and speaking identity, as
+     §4.5 "HTTP-redirect fetch" changes them. Each pass is one §4.1 "Main fetch": every gate runs on the URL
+     before it is sent, a redirect is followed by this zone and never by the platform (`_redirectOf`), and a
+     hop is sent as its own request, speaking as the identity under its own rule. */
+  var _urlList = [parsed.href], _current = parsed, _tainting = "basic", _headerList = opts.headers;
+  var _identity = opts.identity, resp;
+  for (;;) {
+    var _hop = _urlList.length > 1;
+    /* Fetch §4.1 "Main fetch"' switch: `basic` while the current URL is the page's origin and nothing has
+       tainted the request; then a network error in `same-origin` mode, `opaque` in `no-cors`, `cors`
+       otherwise. Tainting never returns to `basic`. */
+    if (_pageRead && !(_tainting === "basic" && _isRealOrigin(_pageOrigin) && _current.origin === _pageOrigin)) {
+      if (mode === "same-origin")
+        return _refused("network", "blocked-mode-same-origin:" + _current.origin, [parsed.href], {});
+      _tainting = mode === "no-cors" ? "opaque" : "cors";
     }
-    return { resp: await _wire(parsed.href, init) };
-  });
-  if (_sent.refusal) return _sent.refusal;
-  var resp = _sent.resp;
-  /* The URL the bytes came from, parsed once above every gate that judges it. Fetch §2.2.5 "Requests": "A
-     request has an associated current URL. It is a pointer to the last URL in request's URL list", and §4.1
-     "Main fetch" bases readability on that URL's origin, not on the address requested. With `redirect:
-     "follow"` the chain is already walked, so every post-fetch gate reads `_finalUrl`.
-     An empty `resp.url` is §5.5 "Response class"' "the empty string if this's response's URL is null", so the
-     landed URL is the requested one, already judged; `parsed` is that answer, not a default.
-     A landed URL this zone cannot parse is refused rather than skipped, so no gate is silently disabled. It
-     is a refusal and not an assert because the server's redirect chain determines it, and an assert on a
-     value the other side picks would hand a server an abort of the trusted zone. */
-  var _finalUrl = parsed;
-  if (resp.url) {
-    var _fu = null;
-    /* URL Standard §6.1 "URL class": "If parsedURL is failure, then throw a TypeError", so this catch has a
-       job; it rethrows an invariant abort first. */
-    try { _fu = new URL(resp.url); }
-    catch (e) { RETHROW_FATAL(e); _fu = null; }
-    /* Network: the reply arrived and cannot be read; no policy of ours declined anything. */
-    if (!_fu)
-      return _refused("network", "blocked-final-url-unparseable", [parsed.href], {});
-    _finalUrl = _fu;
+    /* Network: host permissions bypass the browser's own answer, and this reinstates it for the addresses
+       this zone can classify, before the request or the hop is sent. A refusal carries the requested URL
+       alone: Fetch §2.2.6 gives a network error the empty URL list, its consumers read the request's URL off
+       this one, and a private address a redirect named, which a network error never exposes, stays out. */
+    var _targetSpace = _ipAddressSpace(_current.hostname);
+    if (_lessPublicThan(_targetSpace, _pageSpace))
+      return _refused("network", "blocked-local-network" + (_hop ? "-redirect:" : ":") + _targetSpace + "-from-" +
+                      _pageSpace, [parsed.href], {});
+    /* The firing decision, before this URL is requested (see `_firingRefusal`). Decline: no browser refuses
+       this; this tool declines to spend the act. The flow parks rather than running its failure path, so it
+       fires the day the origin is widened, and the address is still reported. A widening is a statement
+       about one host, so a hop to another is asked again, and `url-authority` reads the hop's own address. */
+    var _ptok = _firingRefusal({ url: _current, destination: destination, provenance: provenance,
+                                 pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
+                                 credentialed: credentialed, headers: _headerList });
+    if (_ptok)
+      return _refused("decline", "blocked-signal" + (_hop ? "-redirect:" : ":") + _ptok,
+                      _exposedUrlList(_urlList), {});
+    /* The destructive-path deny list, before this URL is requested (see `_destructiveToken`). It is scoped to
+       credentialed requests, because without cookies a logout path ends no session, and to provenance other
+       than `observed`. An `observed` credentialed request is the ambient seed: the person's own browser just
+       made this exact request in this profile, so refusing to repeat it prevents nothing. Decline, and
+       permanent: no widening reopens this list. A browser would send this request; this tool will not send
+       it with the person's session, and a hop is sent with it, so a hop is asked too. */
+    if (credentialed && provenance !== "observed") {
+      var _dtok = _destructiveToken(_current);
+      if (_dtok)
+        return _refused("decline", "blocked-destructive" + (_hop ? "-redirect:" : ":") + _dtok,
+                        _exposedUrlList(_urlList), {});
+    }
+    /* Fetch §4.1 "Main fetch": a `cors`-tainted request whose use-CORS-preflight flag is set, or whose method
+       is not CORS-safelisted, or whose header list has CORS-unsafe names, runs §4.4 "HTTP fetch" with
+       makeCORSPreflight, and with no CORS-preflight cache §4.4 always runs §4.8 "CORS-preflight fetch" first.
+       Its failure is a network error, and the request itself is never sent. Its origin, and the origin the
+       replies are CORS-checked against, is Fetch §2.2.5's serialized request origin: "null" once the URL
+       list's redirect-taint is not `same-origin`. */
+    var _unsafeNames = _tainting === "cors" ? _corsUnsafeRequestHeaderNames(_headerList || []) : [];
+    var _preflight = _tainting === "cors" &&
+                     (opts.useCorsPreflight || !_corsSafelistedMethod(_method) || _unsafeNames.length > 0);
+    var _serializedOrigin = _isRealOrigin(_pageOrigin) && requestRedirectTaint(_pageOrigin, _urlList) === "same-origin"
+      ? _pageOrigin : "null";
+    CHECK(!_preflight || (_identity && typeof _identity === "object" && typeof _identity.origin === "string"),
+          "safeFetch must CORS-preflight this request and was handed no request identity — Fetch §4.8's " +
+          "preflight carries the request's origin and is CORS-checked against it, and that origin is the " +
+          "trusted zone's `identityFor(request)`, which the caller passes as `opts.identity`");
+    var init = { method: _method, credentials: "omit", redirect: "manual" };
+    /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the
+       model for the request this file issues (an uncredentialed GET whose forbidden header names the browser
+       strips) and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds auth headers;
+       cookies, in credentialed mode, are the identity's (`_speakAs`) and are gated by the SOP/CORS check. */
+    if (_headerList) init.headers = _headerList;
+    if (opts.signal) init.signal = opts.signal;
+    /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one send. A request with an
+       identity speaks as it (`_speakAs`); a preflight failure is a network error and the request is never
+       sent. Credentials ride where Fetch §4.4 includes them: mode `include`, or `same-origin` while the
+       tainting is `basic`. */
+    var _cookies = credentialed && (!_identity || _identity.credentials === "include" || _tainting === "basic");
+    var _sent = await _sendSerialized(_current.href, function () {
+      return _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _preflight ? _unsafeNames : null,
+                      null, init, async function () {
+        if (_preflight) {
+          var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
+                                         opts.useCorsPreflight, _serializedOrigin, opts.signal);
+          if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
+                                              [parsed.href], {}) };
+        }
+        return { resp: await _wire(_current.href, init) };
+      });
+    });
+    if (_sent.refusal) return _sent.refusal;
+    resp = _sent.resp;
+    var _redirect = await _redirectOf(resp);
+    if (_redirect === null) break;
+    /* Fetch §4.4 "HTTP fetch": a `cors`-tainted request's every response, a 3xx included, passes §4.10 "CORS
+       check" or is a network error. */
+    if (_pageRead && _tainting === "cors") {
+      var _rcors = _corsCheck(_redirect.headers, _serializedOrigin, opts.credentials);
+      if (_rcors)
+        return _refused("network", "blocked-cors:" + _rcors + ":" + _current.origin, [parsed.href], {});
+    }
+    var _next = _followRedirect(_redirect, { url: _current, urlList: _urlList, method: _method, body: null,
+                                             headerList: _headerList, mode: mode, tainting: _tainting,
+                                             origin: _pageOrigin });
+    if (_next.refusal) return _next.refusal;
+    DCHECK(_next.method === "GET" && _next.body === null,
+           "a GET was rewritten to " + _next.method + " by a redirect — Fetch §4.5 rewrites only POST and non-GET");
+    _urlList.push(_next.url.href);
+    _current = _next.url;
+    _headerList = _next.headerList;
+    if (_identity)
+      _identity = identityForRedirect(_identity, _current.href,
+                                      _next.referrerPolicy === "" ? _identity.referrerPolicy : _next.referrerPolicy);
   }
-  /* The scheme allowlist reads only the requested URL, and that is complete after a redirect: Fetch §4.5
-     "HTTP-redirect fetch" step 6, "If locationURL's scheme is not an HTTP(S) scheme, then return a network
-     error", has run at every hop. A DCHECK because the browser, not the server, decides the landed scheme; a
-     firing means that guarantee no longer holds and the allowlist owes a post-redirect arm. */
-  DCHECK(_finalUrl.protocol === "https:" || _finalUrl.protocol === "http:",
-         "the landed URL names a scheme the entry allowlist refuses, which " +
-         "Fetch §4.5 \"HTTP-redirect fetch\" step 6 makes unreachable as a redirect target — that gate " +
-         "runs on the initial URL " +
-         "ONLY because the browser refuses a non-HTTP(S) locationURL, so a firing here means that is no " +
-         "longer true and the allowlist owes a post-redirect arm: " + _finalUrl.protocol);
+  /* The URL the bytes came from: Fetch §2.2.5 "Requests": "A request has an associated current URL. It is a
+     pointer to the last URL in request's URL list", and §4.1 "Main fetch" bases readability on its origin, not
+     on the address requested. */
+  var _finalUrl = _current;
   /* An `https` request landing on `http` is mixed content, which is not this zone's question. The engine asks
      Mixed Content §4.4 "Should fetching request be blocked as mixed content?" before the wire; the
      response-side §4.5 "Should response to request be blocked as mixed content?" is a named residual at
@@ -1882,11 +2048,8 @@ async function safeFetch(url, opts) {
      does not hold; Secure Contexts §3.1 "Is origin potentially trustworthy?" treats loopback as trustworthy;
      and a top-level navigation is exempt. What this zone owes that residual is `urlList`, whose last item is
      the response URL §4.5 judges. */
-  /* The href that leaves this function comes off the same record, so the URL list's last item (which
-     `bridge.js` decides an agent cluster from) is the string the gates judged. Fetch §5.5 "Response class"
-     serializes the URL with fragments excluded, so re-serializing it is the identity. */
-  var _finalHref = _finalUrl.href;
   var _finalOrigin = _finalUrl.origin;
+  var _exposed = _exposedUrlList(_urlList);
   /* Is the landed resource same-origin with the page principal: one answer, read by both CORB's exemption and
      the credentialed SOP, so the two cannot disagree. `pageOrigin` is the browser-stated
      `MessageSender.origin` and is never parsed from a URL: a sandboxed frame has an ordinary address and an
@@ -1895,44 +2058,6 @@ async function safeFetch(url, opts) {
      credentialed read that needs CORS, which it can never be granted (ACAO cannot equal it). */
   var _resourceSameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(_finalOrigin) &&
                             _finalOrigin === _pageOrigin;
-  /* Network: SSRF via redirect. The initial check cannot see a 3xx into the intranet, so the landed host is
-     re-judged before the body is read, and a request that landed on a host less public than its page never
-     feeds internal data into the analysis. Local Network Access and CORS both refuse this in a browser. Without
-     a redirect `_finalUrl` is `parsed` and this re-asks the same question. The record keeps the requested URL
-     alone: Fetch §2.2.6 gives a network error the empty URL list, its consumers read the request's URL off
-     this one, and the landed private address, which a network error never exposes, stays out of it. */
-  var _landedSpace = _ipAddressSpace(_finalUrl.hostname);
-  if (_lessPublicThan(_landedSpace, _pageSpace))
-    return _refused("network", "blocked-local-network-redirect:" + _landedSpace + "-from-" + _pageSpace,
-                    [parsed.href], {});
-  /* The deny list again, on the landed URL. The redirect has already been followed, so this refuses to
-     ingest. The floor held before the hop: a credentialed send's Cookie is set by a speak-as rule naming its
-     exact URL and this fetch omits credentials, so the hop went out without the session, which the list
-     permits before the wire too.
-     Named residual: a hop onto a URL another in-flight speak-as send names carries that send's Cookie. Next
-     diff follows each hop in the zone (see the speak-as hop residual above), so every gate runs before the hop
-     is sent. Its absence shows as a hop arriving with an identity's Cookie at a URL no request of that
-     identity named. */
-  if (credentialed && provenance !== "observed") {
-    /* Decline even though the request went out: the server answered, and a network error would say it did
-       not. Refusing to ingest is a decline on either side of the wire. */
-    var _rtok = _destructiveToken(_finalUrl);
-    if (_rtok)
-      return _refused("decline", "blocked-destructive-redirect:" + _rtok,
-                      _urlList(parsed.href, _finalHref, resp.redirected), {});
-  }
-  /* The firing decision again, on the landed URL, with the same limit: it refuses to ingest. A widening is a
-     statement about one host, and a reply from another host is about a server nobody permitted. The landed
-     URL is also what `url-authority` must read: a 3xx onto a presigned or token-bearing address is the case
-     that row exists for. Decline, so a person who widens the landed origin makes this load fire. The facts
-     travel as one object, so a new signal is a key a caller omits and a CHECK names, never a shifted
-     positional argument. */
-  var _rptok = _firingRefusal({ url: _finalUrl, destination: destination, provenance: provenance,
-                                pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
-                                credentialed: credentialed, headers: opts.headers });
-  if (_rptok)
-    return _refused("decline", "blocked-signal-redirect:" + _rptok,
-                    _urlList(parsed.href, _finalHref, resp.redirected), {});
   /* The headers, unwrapped. Fetch §5.5 "Response class"' headers getter returns this's headers, whose
      iteration throws only what the callback throws; an invented empty map would have CORB judge an unlabelled
      body and the SOP read an absent `Access-Control-Allow-Origin`. */
@@ -1959,52 +2084,30 @@ async function safeFetch(url, opts) {
         /* Network: Fetch §4.10 "CORS check" failing makes §4.4 "HTTP fetch" "return a network error". The
            reason names the landed origin that failed. Headers are `{}` here, unlike CORB's refusal: this
            refuses a cross-origin read the server never granted, and its headers are part of that read. */
-        return _refused("network", "blocked-cors-credentialed:" + _finalOrigin,
-                        _urlList(parsed.href, _finalHref, resp.redirected), {});
+        return _refused("network", "blocked-cors-credentialed:" + _finalOrigin, _exposed, {});
     }
   }
-  /* Fetch §4.1 "Main fetch"' response tainting, for a request the analysed page made. It is `basic` only where
-     the requested and the landed URL are both same-origin with the page; a redirect hop between them that left
-     the origin is not visible here (only the first and last URL are), which is a named residual in
-     SECURITY.md. Otherwise:
-       `same-origin` mode — a network error, the main-fetch switch's arm for that mode.
-       `cors` mode — §4.10 "CORS check" on the reply, before its body is read, with the request's origin
-         serialized as "null" where a redirect left an origin the request was not made from (§2.2.5's redirect
-         taint); a failure is a network error, and a pass is §2.2.6's CORS filtered response.
-       `no-cors` mode — §2.2.6's opaque filtered response. A `fetch()` (destination "") is the one consumer that
-         reads that response itself, so its body is not read and no bytes reach the engine; an element (a classic
-         script, an image, a stylesheet) consumes the internal response, so its bytes are delivered beside the
-         `opaque` type and the engine keeps them from page script.
-     A navigation is `navigate` and is judged by the instance that becomes its reader. */
-  var _type = "basic";
-  if (actor === "page" && mode !== "navigate" &&
-      !(_isRealOrigin(_pageOrigin) && parsed.origin === _pageOrigin && _resourceSameOrigin)) {
-    if (mode === "same-origin")
-      return _refused("network", "blocked-mode-same-origin:" + _finalOrigin,
-                      _urlList(parsed.href, _finalHref, resp.redirected), {});
-    if (mode === "cors") {
-      var _tainted = resp.redirected && parsed.origin !== _finalOrigin && parsed.origin !== _pageOrigin;
-      var _cors = _corsCheck(headers, _tainted || !_isRealOrigin(_pageOrigin) ? "null" : _pageOrigin,
-                             opts.credentials);
-      if (_cors)
-        return _refused("network", "blocked-cors:" + _cors + ":" + _finalOrigin,
-                        _urlList(parsed.href, _finalHref, resp.redirected), {});
-      headers = _corsFilteredHeaders(headers, opts.credentials);
-      _type = "cors";
-    } else {
-      _type = "opaque";
-      if (destination === "") {
-        /* The body is given back unread: nothing may read an opaque response's body. */
-        if (resp.body) {
-          try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
-        }
-        return { ok: resp.ok, status: resp.status, statusText: "", headers: {}, body: _NO_BYTES(),
-                 urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: "",
-                 refusal: null, type: _type };
-      }
+  /* Fetch §4.1 "Main fetch"' response tainting, for a request the analysed page made, as the walk above left
+     it: `basic`; `cors`, whose final reply passes §4.10 "CORS check" against the serialized request origin
+     and is §2.2.6's CORS filtered response; or `opaque`. A `fetch()` (destination "") is the one consumer that
+     reads an opaque response itself, so its body is not read and no bytes reach the engine; an element (a
+     classic script, an image, a stylesheet) consumes the internal response, so its bytes are delivered beside
+     the `opaque` type and the engine keeps them from page script. */
+  var _type = _tainting;
+  if (_tainting === "cors") {
+    var _cors = _corsCheck(headers, _serializedOrigin, opts.credentials);
+    if (_cors)
+      return _refused("network", "blocked-cors:" + _cors + ":" + _finalOrigin, _exposed, {});
+    headers = _corsFilteredHeaders(headers, opts.credentials);
+  } else if (_tainting === "opaque" && destination === "") {
+    /* The body is given back unread: nothing may read an opaque response's body. */
+    if (resp.body) {
+      try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
     }
+    return { ok: resp.ok, status: resp.status, statusText: "", headers: {}, body: _NO_BYTES(),
+             urlList: _exposed, computedType: "", refusal: null, type: _type };
   }
-  /* The body, as bytes, after both SSRF checks, so nothing internal is ingested before the target is judged.
+  /* The body, as bytes, after every hop's SSRF check, so nothing internal is ingested before the target is judged.
      There is no decode: the engine decodes with the response's charset and BOM (see the header), so it
      receives exactly what the server sent. It is read after the credentialed SOP/CORS check above, which needs
      only headers (Fetch §4.4 "HTTP fetch" runs the CORS check on the response before its body is delivered),
@@ -2040,7 +2143,7 @@ async function safeFetch(url, opts) {
        event where Chrome reports a SyntaxError. */
     if (_deny)
       return _refused("network", "blocked-corb:" + _deny + ":" + _computed,
-                      _urlList(parsed.href, _finalHref, resp.redirected), headers);
+                      _exposed, headers);
   }
   /* The type this zone computed travels with the bytes, so the renderer is handed an answer rather than
      evidence (`core/fetch/fetch.c` asserts its presence on the reply record). `refusal: null` is the positive
@@ -2052,7 +2155,7 @@ async function safeFetch(url, opts) {
          "refusal in this file answers with — `mode` is unset so Fetch's default `cors` applies and an " +
          "opaque filtered response cannot arise, so a 0 here is a reply and a refusal wearing one number");
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
-           urlList: _urlList(parsed.href, _finalHref, resp.redirected), computedType: _computed,
+           urlList: _exposed, computedType: _computed,
            refusal: null, type: _type };
 }
 
@@ -2078,7 +2181,7 @@ function safeFetchDocumentAddressSpace(url, creator) {
    otherwise a response whose status message is `OK`, whose header list is the struct's serialized MIME type as
    `Content-Type`, and whose body is the struct's body. It is not safeFetch: a data: URL's bytes are in the URL
    and the load reaches no other party, so none of safeFetch's signals has a value to compute. The processor is
-   the realm's own, through `_wire`: the platform's fetch runs §4.3 for a data: URL without a network. The
+   the wire's platform fetch (`_wire`), which runs §4.3 for a data: URL without a network. The
    record is safeFetch's shape, and its type is computed by the same sniff. */
 async function safeFetchSchemeData(url) {
   var parsed = new URL(String(url));
@@ -2086,7 +2189,7 @@ async function safeFetchSchemeData(url) {
   CHECK(parsed.protocol === "data:",
         "safeFetchSchemeData was asked to load " + JSON.stringify(parsed.href) + " — only §4.3's \"data\" arm " +
         "reaches no other party, so every other scheme goes through safeFetch");
-  try { resp = await _wire(parsed.href, {}); }
+  try { resp = await _wire(parsed.href, { method: "GET", credentials: "omit", redirect: "manual" }); }
   catch (e) {
     /* Network: §4.3 answers a data: URL the processor refuses with a network error, which the platform's
        fetch reports as a TypeError. */
@@ -2196,39 +2299,65 @@ async function safeFetchOperator(url, opts) {
   var forbidden = fetchForbiddenRequestHeader(opts.headers);
   if (forbidden !== null)
     return _refused("network", "forbidden-request-header:" + forbidden, [parsed.href], {});
-  var sameOrigin = parsed.origin === opts.identity.origin;
-  if (opts.mode === "same-origin" && !sameOrigin)
-    return _refused("network", "blocked-mode-same-origin:" + parsed.origin, [parsed.href], {});
-  var unsafe = _corsUnsafeRequestHeaderNames(opts.headers);
-  var preflight = opts.mode === "cors" && !sameOrigin && (!_corsSafelistedMethod(opts.method) || unsafe.length > 0);
-  var init = { method: opts.method, headers: opts.headers, redirect: "follow" };
-  if (opts.body !== null) init.body = opts.body;
-  var sent = await _speakAs(opts.identity, parsed.href, opts.method, opts.mode, "", true, preflight ? unsafe : null,
-                            stated, init, async function () {
-    /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant abort
-       travels on. */
-    try {
-      if (preflight) {
-        var pf = await _corsPreflight(parsed.href, opts.method, opts.headers, opts.identity.credentials, false,
-                                      stated.origin !== null && stated.origin.header !== null
-                                        ? stated.origin.header : opts.identity.origin, undefined);
-        if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + parsed.origin,
-                                           [parsed.href], {}) };
-      }
-      return { resp: await _wire(parsed.href, init) };
-    } catch (e) {
-      RETHROW_FATAL(e);
-      return { refusal: _refused("network", "network-error:" + ((e && e.message) || String(e)), [parsed.href], {}) };
+  /* The send and each hop of it, as safeFetch walks them (Fetch §4.5 "HTTP-redirect fetch"), with the
+     operator tier's gates: what a browser refuses, and no policy of this tool's. A hop speaks as the same
+     identity, under its own rule, with the Origin and Referer the person stated. */
+  var urlList = [parsed.href], current = parsed, tainting = "basic", method = opts.method, body = opts.body;
+  var headerList = opts.headers, identity = opts.identity, resp;
+  for (;;) {
+    var sameOrigin = current.origin === identity.origin;
+    if (!(tainting === "basic" && sameOrigin)) {
+      if (opts.mode === "same-origin")
+        return _refused("network", "blocked-mode-same-origin:" + current.origin, [parsed.href], {});
+      tainting = opts.mode === "no-cors" ? "opaque" : "cors";
     }
-  });
-  if (sent.refusal) return sent.refusal;
-  var resp = sent.resp;
+    var unsafe = _corsUnsafeRequestHeaderNames(headerList);
+    var preflight = tainting === "cors" && (!_corsSafelistedMethod(method) || unsafe.length > 0);
+    var init = { method: method, headers: headerList, redirect: "manual" };
+    if (body !== null) init.body = body;
+    var checkedOrigin = stated.origin !== null && stated.origin.header !== null ? stated.origin.header
+      : requestRedirectTaint(identity.origin, urlList) === "same-origin" ? identity.origin : "null";
+    var sent = await _sendSerialized(current.href, function () {
+      return _speakAs(identity, urlList, method, opts.mode, "", true, preflight ? unsafe : null, stated, init,
+                      async function () {
+        /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant
+           abort travels on. */
+        try {
+          if (preflight) {
+            var pf = await _corsPreflight(current.href, method, headerList, identity.credentials, false,
+                                          checkedOrigin, undefined);
+            if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + current.origin,
+                                               [parsed.href], {}) };
+          }
+          return { resp: await _wire(current.href, init) };
+        } catch (e) {
+          RETHROW_FATAL(e);
+          return { refusal: _refused("network", "network-error:" + ((e && e.message) || String(e)),
+                                     [parsed.href], {}) };
+        }
+      });
+    });
+    if (sent.refusal) return sent.refusal;
+    resp = sent.resp;
+    var redirect = await _redirectOf(resp);
+    if (redirect === null) break;
+    var next = _followRedirect(redirect, { url: current, urlList: urlList, method: method, body: body,
+                                           headerList: headerList, mode: opts.mode, tainting: tainting,
+                                           origin: identity.origin });
+    if (next.refusal) return next.refusal;
+    urlList.push(next.url.href);
+    current = next.url;
+    method = next.method;
+    body = next.body;
+    headerList = next.headerList;
+    identity = identityForRedirect(identity, current.href,
+                                   next.referrerPolicy === "" ? identity.referrerPolicy : next.referrerPolicy);
+  }
   var headers = {};
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
-  var body = new Uint8Array(await resp.arrayBuffer());
-  return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
-           urlList: _urlList(parsed.href, resp.url || parsed.href, resp.redirected), computedType: "",
-           refusal: null };
+  var bytes = new Uint8Array(await resp.arrayBuffer());
+  return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: bytes,
+           urlList: _exposedUrlList(urlList), computedType: "", refusal: null };
 }
 /* The chokepoint and the policy that decides whether it fires, installed together so no host holds half the
    contract. `engine/trusted.mjs` runs this file in a vm context and reads them off it; `ast-worker.html`
