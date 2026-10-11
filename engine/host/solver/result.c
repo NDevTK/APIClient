@@ -1374,6 +1374,7 @@ char *result_cold_json(void) {
     METRIC_SET(perform_exhausted, e.perform_exhausted);
     METRIC_SET(host_exhausted, e.host_exhausted);
     METRIC_SET(host_answers_late, e.host_answers_late);
+    METRIC_SET(host_answers_refused, e.host_answers_refused);
     METRIC_SET(host_terminated, e.host_terminated);
     METRIC_SET(reply_asked, pending_index_asked_total());
     METRIC_SET(reply_answered, pending_index_answered_total());

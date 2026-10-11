@@ -568,9 +568,12 @@ async function service(e) {
          (engine_host_answer), and it CRASHES on a repeat of one world, so relaying all of them is what the seam
          was built for rather than something this zone is getting away with. */
       const all = answers.get(key);
+      /* WHETHER A FLOW TOOK EACH ONE, as the entry reports it: a holder's commitment record may refuse the
+         answering timeline, which is the observation the resumed standby's check below reads. */
+      const taken = [];
       for (const a of all) {
-        e.M.ccall('qjs_host_answer_remote', 'void', ['number','number','number','number'],
-                  [id, e.cs(a.world), e.cs(a.marks), e.cs(a.completion)]);
+        taken.push(e.M.ccall('qjs_host_answer_remote', 'number', ['number','number','number','number'],
+                             [id, e.cs(a.world), e.cs(a.marks), e.cs(a.completion)]));
         paid++;
       }
       answers.delete(key);
@@ -581,7 +584,9 @@ async function service(e) {
       }
       reads.get(key).answered = true;
       reads.get(key).by = all.map((a) => a.world);
-      console.log(`  [${e.tag}] answered by ${all.length} peer timeline(s): ${all.map((a) => a.world).join(' ')}`);
+      reads.get(key).taken = taken;
+      console.log(`  [${e.tag}] answered by ${all.length} peer timeline(s), ${taken.filter((t) => t === 0).length} ` +
+                  `refused: ${all.map((a) => a.world).join(' ')}`);
       continue;
     }
     console.log(`  [${e.docId}] request: ${op.slice(0, 90)}`);
@@ -1111,6 +1116,27 @@ const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].ta
 const reusedWorlds = [...new Set([...resumedReads.map((r) => r.world),
                                   ...posts.slice(postsAtPark).map((p) => p.world)]
                                  .map((v) => v.split(',')[0]))].filter((h) => preParkWorlds.has(h));
+/* WHAT THE PARKED FAMILIES HAD TAKEN, AND WHETHER A RESUMED STANDBY STILL REFUSES IT. A foreclosed row
+   (`r<hex vector>,0,3`, flow.h's FLOW_COMMIT_ARM_ANSWER_TAKEN) names a peer timeline a family member took
+   before the park; the rows cross the tier, and `b` never left its session, so its timelines still relate to
+   them. The witness is one resumed request whose answers include a timeline at or under such a row that no
+   flow took and a timeline under none that a flow did take. A descendant names its ancestors only as far as
+   they sent (world.h), so `takenBefore` can miss a descendant; the witness is existential and survives that. */
+const foreclosedHeads = residue.split(';').filter((r) => /^r[0-9a-f]+,0,3$/.test(r))
+  .map((r) => Buffer.from(r.slice(1, r.indexOf(',')), 'hex').toString().split(',')[0]);
+const takenBefore = (vec) => vec.split(',').some((w) => foreclosedHeads.includes(w));
+const standbyWitness = resumedReads.filter((r) => r.answered &&
+  r.by.some((w, i) => takenBefore(w) && r.taken[i] === 0) && r.by.some((w, i) => !takenBefore(w) && r.taken[i] === 1));
+console.log(`\nresumed standbys: the residue foreclosed ${foreclosedHeads.length} taken timeline(s); ` +
+            `${standbyWitness.length} resumed request(s) refused one and took one no family member had taken`);
+if (!foreclosedHeads.length)
+  fail('the park wrote no foreclosed ANSWER_TAKEN row, so no family that split over a peer read before the park ' +
+       'carried what it took across it — phase 1\'s reads are answered by several of `b`\'s timelines, so ' +
+       'flow_answer_fork and flow_answer_standby wrote rows that the park did not');
+if (!standbyWitness.length)
+  fail('no resumed request refused a peer timeline its parked family had taken while taking one it had not — a ' +
+       'resumed standby re-asks `b`, which never left its session, so either the foreclosed rows did not come ' +
+       'back with it (cold_resume\'s \'r\' arm) or engine_host_answer did not admit by them');
 
 console.log(`\nposts routed: ${posts.length}   messages the receiving page saw: ${got.length}` +
             `   routing rounds that ended without a new one: ${noNewGot}`);

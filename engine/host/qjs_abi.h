@@ -113,7 +113,7 @@ QJS_EXPORT int qjs_referenced(void);
 QJS_EXPORT void qjs_route(const char *record, const char *sender_origin);
 QJS_EXPORT void qjs_world_gone(const char *world);
 QJS_EXPORT void qjs_perform(const char *token, const char *record);
-QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const char *marks, const char *completion);
+QJS_EXPORT int qjs_host_answer_remote(unsigned req, const char *world, const char *marks, const char *completion);
 QJS_EXPORT void qjs_host_answers_exhausted(unsigned req);
 
 /* LEVEL-1's two dials, RAM pressure, and the streamed partial. */

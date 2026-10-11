@@ -662,7 +662,13 @@
             why: "the peer's completion record, RELAYED WHOLE and unread for Perform's reason. An empty one is " +
                  "not `undefined`, it is a relay that lost the peer's answer, and the engine's own decoder " +
                  "says so at the other end" }],
-        reply: [WORKING_SET] },
+        reply: [
+          { name: "taken", type: "int32",
+            why: "1 if a flow took the completion, as its first answer, a standby's, or another timeline to fork " +
+                 "an arm over; 0 if none did. A zero has three readings, as `HostAnswer`'s miss has one: the " +
+                 "asking flow is gone, its session closed, or every flow holding the request refused the " +
+                 "answering timeline by its commitment record (a standby forecloses the timelines its family took)" },
+          WORKING_SET] },
 
       { ordinal: 28, name: "HostAnswersExhausted",
         params: [

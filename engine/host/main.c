@@ -1698,10 +1698,11 @@ QJS_EXPORT void qjs_perform(const char *token, const char *record)
  * as a name into the peer's namespace. The decode happens here, inside the asking instance; the zone routes the
  * text unread. `req` is this instance's request id, recovered by the zone from its token. `world` is which of the
  * answering document's timelines produced this completion, relayed off the `remoteop.answer` notice, so this entry
- * can tell a second timeline (a fork the asking flow owes) from one timeline's answer delivered twice. */
-QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const char *marks, const char *completion)
+ * can tell a second timeline (a fork the asking flow owes) from one timeline's answer delivered twice. Returns 1
+ * when a flow took the answer and 0 when none did (engine_host_answer). */
+QJS_EXPORT int qjs_host_answer_remote(unsigned req, const char *world, const char *marks, const char *completion)
 {
-    int type = ENGINE_COMPLETION_NORMAL;
+    int type = ENGINE_COMPLETION_NORMAL, taken;
     JSValue v;
 
     DCHECK(g_begun, "a peer's completion was delivered to an engine that never ran");
@@ -1718,8 +1719,9 @@ QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const ch
     v = remote_completion_decode(g_ctx, completion, &type);
     /* Routed to one call site by id, as qjs_host_answer's is: the operation ran under the asking flow's world. A
        zero return means that flow is gone. */
-    engine_host_answer(g_ctx, (uint32_t)req, world, marks, v, type, ENGINE_ANSWER_PEER);
+    taken = engine_host_answer(g_ctx, (uint32_t)req, world, marks, v, type, ENGINE_ANSWER_PEER);
     JS_FreeValue(g_ctx, v);
+    return taken;
 }
 
 /* The peer's word that no timeline holding the asking flow's rendezvous will answer again, relayed off the

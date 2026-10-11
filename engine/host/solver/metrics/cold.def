@@ -153,6 +153,9 @@ METRIC(host_asked, "hostAsked", LIFETIME, "rendezvous", PROCESS, "solver/engine.
 METRIC(host_answered, "hostAnswered", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
 METRIC(host_answers_extra, "hostAnswersExtra", LIFETIME, "answer", PROCESS, "solver/engine.c", INT)
 METRIC(host_answers_late, "hostAnswersLate", LIFETIME, "answer", PROCESS, "solver/engine.c", INT)
+/* A peer answer every entry holding its request refused (engine_host_answer's state 0): each holder is
+   committed to a contradicting peer timeline or forecloses this one because a family member took it. */
+METRIC(host_answers_refused, "hostAnswersRefused", LIFETIME, "answer", PROCESS, "solver/engine.c", INT)
 /* A standby is left before a peer answer is taken and waits for a later peer timeline's answer; the
    retired count is the flows the peer's exhaustion ended. Left minus retired is the standbys still waiting. */
 METRIC(answer_standbys, "answerStandbys", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)

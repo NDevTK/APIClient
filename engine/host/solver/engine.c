@@ -930,6 +930,9 @@ static long g_perform_exhausted, g_host_exhausted;
  * and gets today's value, so a late answer is refused (engine_host_answer) and counted here: `hostAnswersLate`
  * climbing while `hostAnswered` does not is a host paying an instance that stopped listening. */
 static long g_host_answers_late;
+/* Peer answers no holder admitted: every entry naming the request belongs to a flow whose commitment record
+ * refuses the answering timeline (engine_host_answer's state 0). */
+static long g_host_answers_refused;
 /* Requests this engine withdrew before anybody answered them (Fetch §2 Infrastructure's terminate a fetch
  * controller; see engine_host_terminate). A withdrawn id is neither a payment nor an unpaid ask, so it has its
  * own count rather than being folded into either side of the rate. Not reset at a session boundary. */
@@ -1432,8 +1435,10 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
     /* (0) Every entry able to take it refused it: each asking timeline holding the request is committed to a
        contradicting peer timeline or forecloses this one, so the answer is another family member's (under that
        member's own request when a park re-issued them apart). */
-    if (refused)
+    if (refused) {
+        g_host_answers_refused++;
         return 0;
+    }
 
     /* (1) Every entry naming the request has its answer or has left a standby, and no standby waits: a family
        keeps one standby until the peer says it is exhausted (engine_host_exhausted), so this is a standby lost. */
@@ -10042,7 +10047,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "host that was shown the requests, so carry it rather than reset it");
     /* Not reset, because they are the instance's totals rather than a session's, and a rate that restarted would
        be a level again (see g_host_asked): g_host_asked/g_host_answered/g_host_answers_extra/g_host_answers_late/
-       g_host_terminated; g_reclaim_asks/g_reclaim_unarmed/g_reclaim_floor, which partition against g_flows_sold
+       g_host_answers_refused/g_host_terminated; g_reclaim_asks/g_reclaim_unarmed/g_reclaim_floor, which partition against g_flows_sold
        (carried by the assert above); g_prog_starts/g_prog_starts_cand/g_prog_starts_other, which partition
        against each other, and g_prog_queued_cand, the ask the candidate arm is read against; and the five
        g_net_prog_* counters, three of which stand in two relations asserted at engine_frontier_census and whose
@@ -11340,6 +11345,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->perform_exhausted = g_perform_exhausted;
     out->host_exhausted = g_host_exhausted;
     out->host_answers_late  = g_host_answers_late;
+    out->host_answers_refused = g_host_answers_refused;
     out->host_terminated    = g_host_terminated;
     out->paged_reqs         = g_paged_reqs;
     out->paged_asks         = g_reclaim_asks;
