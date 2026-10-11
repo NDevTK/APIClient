@@ -837,6 +837,43 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
     p->ever_navigated = 1;
 }
 
+void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t doc, const char *url,
+                                   const Origin *origin)
+{
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+
+    DCHECK(p != NULL, "something that is not a WindowProxy was navigated to a peer's document");
+    DCHECK(!world_doc_hosted(doc),
+           "a navigable was navigated to a PEER's document that this agent holds — the incoming Document's "
+           "origin is not this agent's, so its name must be one this instance minted and never adopted");
+    DCHECK(JS_IsUndefined(p->parent),
+           "a nested navigable's active document was moved to a peer — the record a peer needs to attach a "
+           "Document to a navigable whose parent and container are here is not built");
+    DCHECK(!p->destroyed && !p->bc_discarded,
+           "a navigable §7.5.10 destroyed or §7.1.3.2 swapped past was navigated to a peer's document");
+    DCHECK(quantum_slice_open(),
+           "a navigable was NAVIGATED at host time — the binding is per flow, so it moves inside a slice");
+    DCHECK(flow_programs_unstarted_for_document(flow_running(), p->doc) == 0,
+           "a navigable was navigated to a peer while this timeline still held UNSTARTED PROGRAM ROWS for the "
+           "document it is leaving — HTML §7.4.4 aborts a navigated-away Document's fetches, so these rows are "
+           "§7.5.10 step 5's to remove before the navigable stops presenting their document");
+    /* THE BINDING THIS AGENT HELD IS RELEASED, NOT TORN DOWN: the outgoing Window's reference is this slot's and
+       goes, while the outgoing realm stays the agent's (navigable.c) because a flow parked in it resumes there.
+       A remote proxy holds neither, which window_proxy_is_remote asserts on every ask. */
+    p->realm = NULL;
+    wp_set(ctx, p, &p->window, JS_UNDEFINED);
+    p->doc = doc;
+    p->url = proxy_strdup(url);       /* the old strings stay: a parked flow's saved bytes still name them */
+    DCHECK(origin != NULL, "a navigable was navigated to a peer's document with no origin — the load computed one");
+    p->origin = origin;               /* BORROWED and REPLACED rather than mutated — see the field */
+    /* A TOP-LEVEL traversable's environment moves with its document (HTML §8.1.3.1): its address and origin. */
+    p->top_level_url = proxy_strdup(url);
+    p->top_level_origin = origin;
+    p->ever_navigated = 1;
+    DCHECK(window_proxy_is_remote(proxy),
+           "a navigable navigated to a peer's document still answers as one this agent hosts");
+}
+
 /* §7.5.1's OPENER POLICY ROW, READ FROM THE NAVIGABLE'S SIDE — see the field. THROUGH proxy_of like every
    other read of this record, so the answer is the running flow's: an arm that navigated this navigable to a
    `same-origin` document and a sibling that did not are two worlds with two answers. */

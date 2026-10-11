@@ -453,6 +453,40 @@ static bool child_in_this_agent(const Origin *child_origin)
     return origin_same(origin_agent(), child_origin);
 }
 
+/* A TOP-LEVEL traversable's navigation whose response origin is another agent's, with §7.1.3.2 having kept the
+   browsing context: the incoming Document is created in a peer instance of this browsing context group, and the
+   navigable here becomes a remote one presenting it. The record is `navigable.navigate <new document> <url>
+   <origin> <provenance>` — the address and what the load is evidence of, never the bytes: the trusted zone
+   loads the address and derives the principal from its own load (SECURITY.md). A top-level traversable has no
+   parent, container or ancestor list, and its environments' top-level creation URL is its own address, so the
+   zone derives those rather than being sent them. */
+static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
+                                 SandboxFlags final_sandbox_flags, const char *provenance)
+{
+    uint32_t incoming;
+    char *op;
+
+    DCHECK(url != NULL && *url && origin != NULL && !child_in_this_agent(origin),
+           "a navigation was sent to a peer with no address, no origin, or an origin this agent hosts");
+    DCHECK(provenance != NULL && *provenance,
+           "a navigation was sent to a peer with no provenance — the zone decides whether to load it from that");
+    DCHECK(final_sandbox_flags == 0,
+           "a top-level navigation into a peer carries a non-empty final sandboxing flag set, and the "
+           "`navigable.navigate` record carries no flag set — add the set to the record and hand it to the peer's "
+           "document_install, as §7.1.3.2's swap record owes the same field");
+    /* The incoming Document's NAME is minted here, from the document it supersedes, and deliberately not
+       adopted: this agent does not host it (solver/world.h). */
+    incoming = world_mint_doc(window_proxy_doc(proxy));
+    {
+        const char *const fields[] = { world_doc_name(incoming), url, origin_serialized(origin), provenance };
+
+        op = engine_notice_build("navigable.navigate", fields, sizeof fields / sizeof fields[0]);
+    }
+    engine_host_notify(ctx, op);
+    free(op);
+    window_proxy_navigate_to_peer(ctx, proxy, incoming, url, origin);
+}
+
 /* THE CHILD'S DOCUMENT — the parse of what the address served, or §7.4's initial about:blank when it served
    nothing. A REAL LEXBOR PARSE either way, because tree construction always produces <html><head><body> and a
    child whose body is missing is not a document a page can append to.
@@ -1482,6 +1516,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        second copy of the predicate's answer: a load that swapped has no Document to create in this heap and no
        binding to move, and one flag is what keeps those two facts from being asked twice. */
     bool swapped = false;
+    /* whether §7.4.5's response origin is this agent's — false sends the Document to a peer (the peer arm) */
+    bool in_agent;
     size_t body_len = 0;
     SandboxFlags final_flags, csp_flags;
     uint32_t doc, oid = 0;
@@ -1937,69 +1973,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        enqueue is performed here by the same algorithm with the same source. */
     origin = origin_determine(&dest, (final_flags & SANDBOX_ORIGIN) != 0, initiator);
     /* AND WHICH INSTANCE THE INCOMING DOCUMENT BELONGS TO IS ASKED OF THAT ANSWER — the first point in this
-       navigation at which the question has one. An instance is an ORIGIN-KEYED AGENT CLUSTER, so a Document
-       whose §7.3.2.1 origin is not this agent's is a PEER's, and this side may not build its realm.
-       WHAT IS MISSING IS NOT THE CREATE NOTICE, AND ROUTING THIS THROUGH ONE WOULD BE WRONG. §7.4's create
-       provisions a NEW navigable and its peer FETCHES the address for itself; this navigable ALREADY EXISTS in
-       this instance, in the same browsing context group, presented by an element of this document, and its
-       WindowProxy is an object the page is holding across the navigation (§7.2.3 — that is what a WindowProxy
-       is for). Three things have to be built and none of them is a field on an existing record:
-         (1) A RECORD THAT NAMES A PEER A DOCUMENT FOR A NAVIGABLE IT DOES NOT OWN — the ADDRESS, this origin,
-             §7.1.7's `policy` container the Document is created WITH, §8.1.3.1's `tlu` and top-level origin,
-             §7.3.1.3's parent navigable, Permissions Policy §9.5's answer for the container element, and
-             `final_flags`. IT DOES NOT CARRY THE BYTES, AND THAT IS SECURITY.md's RULE RATHER THAN A
-             SIMPLIFICATION — this line used to say the opposite and it was a spec-wrong instruction to the
-             next reader. SECURITY.md's §The principal is MINTED in one place states it in general ("a message
-             from an untrusted zone carries MATERIAL … and never identity") and bridge.js's own §7.1.3.2 swap
-             arm states the combined form this record would break: an untrusted engine that could supply BYTES
-             and an ADDRESS the zone then derives a principal from could name any origin's document into
-             existence — attacker bytes at a victim origin, in a heap the zone believes is the victim's. So the
-             engine names the address and the TRUSTED ZONE loads it, exactly as it already does for §7.4's
-             create notice, and the principal comes from the load that zone performed.
-             THE SECOND REQUEST THAT LEAVES IS A REAL RESIDUAL AND IT IS THE ZONE'S TO CLOSE, not this record's:
-             §7.4.5 runs the fetch once, so a peer re-fetching is a request the server may answer differently.
-             bridge.js already names the closure for the identical residual on the swap arm — the zone remembers
-             its OWN reply to the `document.fetch` this navigation already made, keyed by (instance, address) —
-             and that memo is what makes a redirected load correct rather than merely cheap, since the reply it
-             replays carries the RESPONSE's URL this frame determined the origin over.
-         (2) A LOCAL-TO-REMOTE TRANSITION FOR AN EXISTING WindowProxy. window_proxy_navigate takes a REALM, and
-             window_proxy_is_remote asserts a remote proxy holds neither realm nor Window — so the transition
-             has to RELEASE both, which is §7.4.6.1 "Updating the traversable"'s deactivate-a-document-for-a-
-             cross-document-navigation and not a free: a flow parked in the outgoing Document resumes there.
-             WHERE THE UNLOAD IS QUEUED IS NO LONGER A SUBPROBLEM OF IT: engine_unload_document takes the
-             OUTGOING document alone, and document_lifecycle_unload_replaced derives the navigable from that
-             document's own realm, which is §7.5.9 "Unloading documents" step 6's answer ("queue a global task
-             … given document's relevant global object") and is local for every navigation. So this transition
-             may call it for a navigation whose incoming Document is a peer's, and what is left to build here
-             is the transition itself — release the realm and the Window through §7.4.6.1's deactivate rather
-             than through a free, since a flow parked in the outgoing Document resumes there.
-         (3) A HOST THAT ROUTES IT. Both hosts provision a peer for `navigable.create` and `navigable.swap`
-             (wpt_runner.c spawns a child process; bridge.js roots a cluster), and neither can carry this one:
-             both of those CREATE a navigable in the peer, and this one must attach a Document to a navigable
-             whose identity, parent and container already exist over here.
-       THE SAME QUESTION IS ASKED ONE ALGORITHM EARLIER BY §7.4's CREATE, OFF THE REQUEST URL, AND THIS CHECK
-       CLOSES EXACTLY THE HALF OF IT THAT REACHES A FETCH THIS INSTANCE PERFORMS. §7.4 creates the navigable
-       with the initial about:blank and NAVIGATES it at step 14, so a create whose address is same-origin takes
-       the local arm, enqueues that navigation, and its response arrives HERE — a redirect off-origin then
-       fires this line rather than silently loading a peer's document into this heap.
-       THE OTHER ARM IS THE HOST'S AND IS ANSWERED WHERE THE HOST STATES THE PRINCIPAL. A create whose REQUEST
-       url is already cross-origin emits the notice, and the peer's root Document is handed to it as BYTES the
-       host fetched rather than through this job — so the address that instance is rooted at, and therefore the
-       principal `origin_agent_adopt` takes, is the host's to state, and it must be the URL the response came
-       from. That is a claim about other files and it is where the answer lives: read them rather than build
-       from this line (each host's provisioning of a peer, and core/platform.c's adopt). */
-    DCHECK(child_in_this_agent(origin),
-           "§7.4.5 determined this navigation's RESPONSE ORIGIN and it is not this agent's, so the incoming "
-           "Document belongs to a PEER instance — an instance is an origin-keyed agent cluster and the "
-           "navigable stays here while its ACTIVE DOCUMENT moves. This is not §7.4's create notice: that one "
-           "provisions a NEW navigable whose peer fetches for itself, and this navigable already exists in "
-           "this group, presented by an element of this document, behind a WindowProxy the page holds across "
-           "the navigation. Build the three named above this line — a record that names a peer this ADDRESS "
-           "together with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's parent and §9.5's container answer, "
-           "and NOT the bytes (SECURITY.md: an untrusted engine that supplies bytes for an address the zone "
-           "derives a principal from can name any origin's document into existence); a local-to-remote "
-           "transition for this proxy that runs §7.4.6.1's deactivate-a-document-for-a-cross-document-"
-           "navigation rather than freeing a realm a parked flow resumes into; and the host route for it");
+       navigation at which the question has one. An instance is an ORIGIN-KEYED AGENT CLUSTER, so a Document whose
+       §7.3.2.1 origin is not this agent's is a PEER's and this side may not build its realm. The answer is the
+       server's to choose (a redirect picks it), so it is a branch and not an assert: the peer arm is taken below,
+       after §7.1.3.2's group-switch decision, because a switch moves the Document to a NEW group and that wins. */
+    in_agent = child_in_this_agent(origin);
     /* AND §8.1.3.1's TOP-LEVEL ORIGIN, asked of the same fact about the navigable that `tlu` is: §7.11 gives a
        TOP-LEVEL traversable's new environment the origin of the document it is loading — this document IS the
        top-level environment, and §7.3.2.1's answer for the response is the one just computed — while a NESTED
@@ -2071,12 +2049,32 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             }
         }
     }
+    /* THE PEER ARM: §7.1.3.2 kept the browsing context and §7.4.5's response origin is another agent's, so the
+       incoming Document is built in a peer instance. For a TOP-LEVEL traversable that is nav_navigate_to_peer.
+       A nested navigable's Document moving to a peer is not built: its peer needs a record naming the address
+       with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's parent and Permissions Policy §9.5's container
+       answer (never the bytes — SECURITY.md), and the host route that attaches a Document to a navigable whose
+       parent and container stay here. */
+    if (!swapped && !in_agent) {
+        const char *peer_prov;
+
+        DCHECK(window_proxy_is_top_level(proxy),
+               "§7.4.5 determined a NESTED navigable's response origin and it is not this agent's, so its "
+               "incoming Document belongs to a peer while the navigable, its parent and its container stay "
+               "here. Build the record that names a peer this ADDRESS with §7.1.7's container, §8.1.3.1's pair, "
+               "§7.3.1.3's parent and §9.5's container answer (not the bytes), the nested form of "
+               "window_proxy_navigate_to_peer, and the host route for it");
+        peer_prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
+        CHECK(peer_prov != NULL, "navigable: OOM taking the provenance off a load whose Document is a peer's");
+        nav_navigate_to_peer(ctx, proxy, dest_url, origin, final_flags, peer_prov);
+        JS_FreeCString(ctx, peer_prov);
+    }
     /* THE RESPONSE'S HEADER LIST OUTLIVES THIS POINT NOW, and it has to: HTML §13.2.3.2 "Determining the
        character encoding" reads the `Content-Type` header in a form of its own (Fetch §2.2.2 "Headers"' get,
        joined) and that read belongs INSIDE the component that runs the algorithm, not to this frame. The list
        is therefore released beside the other bytes this frame owns, after the creation below has taken what
        it needs — see the free at the end of this function. */
-    if (!swapped) {
+    if (!swapped && in_agent) {
         /* HTML §7.4.5 "Populating a session history entry", from the list of conditions that block a navigation
            before its Document is created: "navigationParams's RESERVED ENVIRONMENT is non-null and the result
            of checking a navigation response's adherence to its embedder policy given navigationParams's

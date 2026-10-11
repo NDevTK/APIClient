@@ -3253,6 +3253,7 @@ const PINNED_NO = "unpinned";
    WindowProxy for it; this provisions (or joins) an instance under that name, loading the child's document
    through the safeFetch chokepoint.
    `navigable.swap <new document> <url> <origin> <provenance>` — see that arm.
+   `navigable.navigate <new document> <url> <origin> <provenance>` — see that arm.
    `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed verbatim to the instance holding
    <target>, with this engine's origin stamped on it: the untrusted engine may not state its own origin, since
    a forgeable event.origin defeats every origin check in every bundle. */
@@ -3500,6 +3501,54 @@ async function hostNotice(eng, line) {
        document it had (its `closed` is true) and nothing holds a proxy for this one. */
     await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, true, null, "u", "null",
                        "none", "none", 0)._readyP;
+    return;
+  }
+  /* `navigable.navigate <new document> <url> <origin> <provenance>` — a TOP-LEVEL traversable navigated to a
+     response whose origin is another agent's, with HTML §7.1.3.2 keeping the browsing context: the emitting
+     engine's navigable becomes a remote one over this document (core/frame/navigable.c's nav_navigate_to_peer).
+     The browsing context group is kept too, so the document joins the instance of its (group, origin) cluster
+     when one runs and is provisioned one otherwise, as a cross-origin child is. It is a top-level document, so
+     it has no creator container (the empty CSP pair and HTML §7.1.4's new embedder policy), no parent, no
+     container and no ancestor list, and its own address is its top-level creation URL. Referenced, since the
+     emitting engine's proxy names it. This zone loads the bytes, for the swap arm's reason. */
+  if (f[0] === "navigable.navigate") {
+    DCHECK(f.length >= 5 && !!f[1] && !!f[2] && !!f[4],
+           "a navigable.navigate notice was short of its fields — the engine writes the new document's name, " +
+           "the address, the origin it computed and the navigation's provenance, and the load below is decided " +
+           "from the last");
+    DCHECK(!hostHolderOf(f[1]),
+           "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
+           "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
+    const navd = await eng.fetchedDocument(f[2], f[4], /*refusalArm*/"none");
+    DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
+           navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
+           "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
+           "the instance is provisioned from all three");
+    const navMsg = { type: "AST_ANALYZE", pageHtml: navd.bytes === null ? new Uint8Array(0) : navd.bytes,
+                     sourceUrl: navd.url, origin: originOf(navd.url), groupId: eng.groupId,
+                     provenance: self.safeFetchReachJoin(eng.msg.provenance, f[4]),
+                     responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
+    for (const _n of Object.keys(navd.headers)) navMsg.responseHeaders[_n] = navd.headers[_n];
+    const _nkey = clusterKeyOf(navMsg);
+    DCHECK(_nkey !== eng.cluster,
+           "the engine sent a top-level navigation to a peer for a response in its OWN agent cluster — the " +
+           "engine's child_in_this_agent and this zone's cluster key answered one origin question two ways");
+    const navHolder = hostClusterOf(_nkey);
+    if (navHolder) {
+      if (navHolder.state === "booting") await navHolder._readyP;
+      DCHECK(navHolder.referenced === 1,
+             "a top-level navigation into a peer joined an instance that never declared a peer reference — the " +
+             "navigating engine's proxy names this document, so that instance may not let its timelines run " +
+             "out, and the flag can only be stated before its frontier is seeded");
+      /* No creator: the join's grammar for that is the empty CSP pair and the new embedder policy, as for a
+         tab's top-level navigation joining its cluster. */
+      await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[1], navd.url,
+                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY }, "u", "null", "none", "none");
+      return;
+    }
+    /* No creator: engineCreate's grammar for that is `null`, as for the swap arm. */
+    await engineCreate("", navMsg.pageHtml, navMsg, false, f[1], navd.url, true, null, "u", "null",
+                       "none", "none", 1)._readyP;
     return;
   }
   /* `document.seed <address> <provenance>` — an address the application declared is a page of itself, reached

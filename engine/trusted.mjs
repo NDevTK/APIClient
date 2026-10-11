@@ -1190,6 +1190,26 @@ async function main() {
                         referenced: 0 });
       return;
     }
+    /* `navigable.navigate <new document> <url> <origin> <provenance>` — a TOP-LEVEL traversable navigated to a
+       response whose origin is another agent's, with HTML §7.1.3.2 keeping the browsing context: the incoming
+       Document is built in a peer instance and the emitting instance's navigable becomes a remote one over it
+       (core/frame/navigable.c's nav_navigate_to_peer). The provisioning is the swap's — a top-level document at
+       this address, loaded by this zone under the navigation's word — and the difference is `referenced`: the
+       emitting instance's proxy names this document, so its timelines may not run out under a read. */
+    if (f[0] === 'navigable.navigate') {
+      if (f.length < 5 || !f[1] || !f[2] || !f[4])
+        throw new Error(`a navigable.navigate notice was short of its fields: ${record} — the engine writes the ` +
+                        'new document\'s name, the address, the origin it computed and the navigation\'s ' +
+                        'provenance (core/frame/navigable.c), and the load below is decided from the last');
+      if (holderOf(f[1])) return;
+      const loaded = await navigate(f[2], e.docUrl, `navigable.navigate ${f[1]}`, f[4], e.docReach);
+      if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      await provision({ docId: f[1], url: loaded.url, origin: new URL(loaded.url).origin,
+                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
+                        docReach: ZONE.safeFetchReachJoin(e.docReach, f[4]),
+                        referenced: 1 });
+      return;
+    }
     /* `document.seed <address> <provenance>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
        HTML §7.4.4 "Non-fragment synchronous \"navigations\""' URL and history update steps (which is where
        every client-side router's `history.pushState` ends up). It is the one document this zone provisions

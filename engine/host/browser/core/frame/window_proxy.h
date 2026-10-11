@@ -855,6 +855,14 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
                            const char *url, const char *top_level_url, const Origin *top_level_origin,
                            const Origin *origin, OpenerPolicyValue opener_policy);
 
+/* The same replacement for a TOP-LEVEL traversable whose incoming Document is in another agent (HTML §7.4.5
+   determined a response origin that is not this agent's, and §7.1.3.2 kept the browsing context): the proxy
+   becomes remote over `doc`, a name this agent minted and does not host, at `url` and `origin`, and gives up the
+   Window it held. PER FLOW, like the local form. The outgoing realm is not torn down, for the local form's
+   reason. A nested navigable is refused: its peer needs the parent and container this agent holds. */
+void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t doc, const char *url,
+                                   const Origin *origin);
+
 /* HTML §7.5.1's OPENER POLICY ROW of this navigable's ACTIVE DOCUMENT — the value §7.1.3.2's group-switch
    check and §7.3.2.1's creation inheritance both read, and the reason the row is held on the navigable rather
    than on a Document object is in window_proxy.c beside the field: both readers walk from a browsing context

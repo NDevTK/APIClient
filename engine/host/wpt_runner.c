@@ -1957,6 +1957,20 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
+    /* `navigable.navigate <new doc> <url> <origin> <provenance>` — a TOP-LEVEL traversable whose navigation
+       response's origin is another agent's, with §7.1.3.2 keeping the browsing context (core/frame/navigable.c's
+       nav_navigate_to_peer). The child this provisions is the swap's in every field: a top-level document with
+       no creator-side container, no parent, no element presenting it and its own address as its environments'
+       top-level creation URL — the browsing context is kept, but nothing a creator would clone exists for a
+       top-level navigation. The provenance is counted and not read, for the create arm's reason. */
+    if (nf == 5 && !strcmp(f[0], "navigable.navigate")) {
+        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
+                        PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
+                        DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
+                        SANDBOX_FLAGS_SERIALIZED_NONE);
+        free(whole);
+        return;
+    }
     /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances. THE ORIGIN
        IS STAMPED HERE, by the zone that knows who sent it: the engine may not name its own sender
        (SECURITY.md), so the notice carries none and this adds the one it knows. */
