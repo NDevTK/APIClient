@@ -5463,8 +5463,11 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            placement, §14.4's XML fragment parse) answers why it cannot be forked yet, and this fork waits for a
            later pick. No page code runs inside such an operation, and this request's outcome reaches the page
            only through a job or a parked call site that resumes after it, so forking at the operation's end
-           is the same pair of arms. The answer fork cannot wait: its arm resumes the call site this one leaves. */
-        if ((in_program && JS_FlowUnforkable(ctx, (JSValue *)f->frame)) ||
+           is the same pair of arms. A parse parked mid-row (`f->compile`) is the same case: a parse runs no page
+           code, and the parked parse is a third home of the suspension no arm could clone. The answer fork
+           cannot wait: its arm resumes the call site this one leaves. */
+        if (f->compile != NULL ||
+            (in_program && JS_FlowUnforkable(ctx, (JSValue *)f->frame)) ||
             (in_job && JS_ParkedFlowsUnforkable(ctx))) {
             JS_FreeValue(ctx, reason);
             JS_FreeValue(ctx, e);
