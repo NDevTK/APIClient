@@ -842,9 +842,9 @@ parked.gone = true;
 /* THE ORPHANS: completions held for a read the parked instance asked. They name a token of an instance that is
    gone, so there is no flow, register or instance for them to land in. */
 const orphanCompletions = [...reads.entries()].filter(([k, r]) => r.engine === parked && heldOf(k)).map(([k]) => k);
-/* Still set for the resumed session. A foreclosed row written in this session (a standby left at a first take,
-   or an arm's own world) can only refuse a later answer to the same request, so with every later answer held a
-   foreclosed refusal phase 5 counts is one against a row the residue carried. */
+/* Still set for the resumed session's first half. A foreclosed row written in this session (a standby left at a
+   first take, or an arm's own world) can only refuse a later answer to the same request, so with every later
+   answer held a foreclosed refusal phase 5 counts is one against a row the residue carried. */
 engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, 'observed,undriven,unpinned', '', '', '');
 const resumedTag = engines[0].tag;
 console.log(`phase 4: resumed as [${resumedTag}] from the residue; [${engines[1].tag}] never left memory`);
@@ -868,13 +868,23 @@ const foreclosedRefusals = () => {
 };
 const resumedTook = () => [...reads.values()].filter((r) => r.asker === resumedTag && r.taken.includes(1));
 
-/* PHASE 5 — THE RESUMED SESSION, until it has emitted the outputs this drive is about: a resumed holder that
-   refused an answer under its family's foreclosed row, a resumed request that took one, and a `w.closed` read
-   back true. The census is read last, because composing the result document is the costly conjunct. */
-await runUntil(() => closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')) &&
-                     resumedTook().length > 0 && foreclosedRefusals() > 0);
-console.log(`\nphase 5: the residue carried ${foreclosedRows} foreclosed row(s); ${foreclosedRefusals()} resumed ` +
+/* PHASE 5 — THE RESUMED SESSION, in two halves. Held: until a resumed holder refused an answer under its
+   family's foreclosed row and a resumed request took one. The count is taken there, before anything this session
+   writes can raise it. Released: every held answer and exhaustion is relayed, until a `w.closed` reads back true,
+   which may live only on a timeline whose answer was held. The census is read last: composing it is costly. */
+await runUntil(() => resumedTook().length > 0 && foreclosedRefusals() > 0);
+const foreclosedMet = foreclosedRefusals();
+console.log(`\nphase 5: the residue carried ${foreclosedRows} foreclosed row(s); ${foreclosedMet} resumed ` +
             `holder(s) refused an answer under one, and ${resumedTook().length} resumed request(s) took an answer`);
+holdAfterFirst = false;
+for (const [token, r] of reads)
+  if (r.asker === resumedTag && r.holdAfterFirst) {
+    r.holdAfterFirst = false;
+    for (const a of answersFor(token)) if (!a.relayed) relayAnswer(token, a);
+    if (exhaustedTokens.has(token)) relayExhausted(token);
+  }
+await runUntil(() => closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')));
+console.log('phase 5: held answers released; a resumed `w.closed` read back true');
 
 const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].tag);
 /* EVERY WORLD NAME THE RESUMED SESSION PUT ON THE WIRE, against every name the session that ended had already
@@ -1004,7 +1014,7 @@ if (!worldDeaths.length)
 console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.join(' ')}`);
 console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
             `(${refused} declined by a receiving timeline), ancestry-forked segments: ${forked}, cross-agent ` +
-            `reads asked: ${reads.size}, ${foreclosedRefusals()} resumed holder(s) refused an answer under a ` +
+            `reads asked: ${reads.size}, ${foreclosedMet} resumed holder(s) refused an answer under a ` +
             `foreclosed row, w.closed read back true after the park, parked and resumed across ` +
             `${residue.length} bytes of residue`);
 
