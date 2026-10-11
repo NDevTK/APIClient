@@ -1436,7 +1436,8 @@ async function frontierRederive(e) {
                                                   /* A parked document is one only this zone holds. */
                                                   identity: navigationCarriesSession(e.sourceUrl, e.origin)
                                                     ? navigationIdentity({ identity: engineIdentity(e.origin, e.sourceUrl),
-                                                                           referrer: "none", policy: null },
+                                                                           referrer: "none", policy: null,
+                                                                           request: null },
                                                                          e.sourceUrl, DOCUMENT_REQUEST_UNSTATED)
                                                     : null }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
@@ -1784,11 +1785,12 @@ function responseFieldLines(h) {
    them. Next diff builds a document load type in safe-fetch.js whose read principal is the response's own
    origin (the bytes go to a different instance, not the initiator). Absence shows as cross-origin child
    documents loading in their logged-out form. */
-/* A speaker is who a document load's request speaks as, {identity, referrer, policy}: `identity` is the
-   request's client (lib/request-identity.js), `referrer` is "client" when the request's referrer is that
-   client's URL and "none" when no referrer is known, and `policy` is the client's policy container's referrer
-   policy as seedReferrerPolicy states it, or null where this zone holds none. Each `speakerOf` below resolves
-   one, or null when the browser's document it names has gone.
+/* A speaker is who a document load's request speaks as, {identity, referrer, policy, request}: `identity` is
+   the request's client (lib/request-identity.js), `referrer` is "client" when the request's referrer is that
+   client's URL and "none" when no referrer is known, `policy` is the client's policy container's referrer
+   policy as seedReferrerPolicy states it, or null where this zone holds none, and `request` is the request's
+   own facts as the client composed them ({destination, referrerPolicy}), or null where none are known. Each
+   `speakerOf` below resolves one, or null when the browser's document it names has gone.
    documentSpeaker: a load the document `msg` describes makes for a child navigable, whose client is that
    document: the browser's frame (frameIdentity, by its id and its tab, which is its group) when the browser
    holds it, and engineIdentity for one only this zone holds (a peer-announced child, a rehydrated recipe). */
@@ -1797,7 +1799,8 @@ function documentSpeaker(msg) {
     const live = typeof msg.documentId === "string" && typeof msg.groupId === "number";
     const identity = live ? await frameIdentity(msg.groupId, msg.documentId) : engineIdentity(msg.origin, msg.sourceUrl);
     if (identity === null) return null;
-    return { identity, referrer: "client", policy: live ? await seedReferrerPolicy(msg.documentId) : null };
+    return { identity, referrer: "client", policy: live ? await seedReferrerPolicy(msg.documentId) : null,
+             request: null };
   };
 }
 
@@ -1839,16 +1842,17 @@ async function seedReferrerPolicy(documentId) {
 
 /* seedSpeaker: the seed of the live document `msg`, re-loading what the browser's navigation loaded. A
    sub-frame's navigation had its parent document as client, so the load speaks as that parent, found by the
-   browser's own `parentDocumentId`, under the parent's policy container's referrer policy (HTML §4.8.5's
-   "navigate an iframe or frame" navigates using the element's node document, whose policy container Fetch
-   §4.1 Main fetch reads for a request stating ""). A top-level navigation's initiator is not recorded, so the
-   document speaks as itself with no referrer.
-   Named residual. Not covered: a top-level document's initiator; the container's `referrerpolicy`; the
-   parent's policy as it stood when the container was inserted rather than after its whole parse; and a parent
-   whose seed no instance installed (itself a sub-frame). The next diff keys the parent instance's own
-   `document.fetch` request facts by address, and a sub-frame seed of that address speaks with them. Their
-   absence shows as a seed load's Referer and Sec-Fetch-Site differing from the browser's navigation of that
-   document. */
+   browser's own `parentDocumentId`. Its request is the one the parent's instance created that child with
+   (seedChildRequest): HTML §7.4.5's destination and the request referrer policy after Fetch §4.1 Main fetch,
+   which reads the container's `referrerpolicy` and the parent's container at the create. Where that instance
+   created no child at this address, the load states DOCUMENT_REQUEST_UNSTATED under the parent's container
+   policy (HTML §4.8.5's "navigate an iframe or frame" navigates using the element's node document). A
+   top-level navigation's initiator is not recorded, so the document speaks as itself with no referrer.
+   Named residual. Not covered: a top-level document's initiator; a child the parent's instance had not created
+   when the seed loads (a frame its scripts insert later, or one whose browser load redirected); and a parent
+   whose seed no instance installed (itself a sub-frame). The next diff waits on the parent instance's create
+   notice for the seed's address. Their absence shows as a seed load's Referer, Sec-Fetch-Site and
+   Sec-Fetch-Dest differing from the browser's navigation of that document. */
 function seedSpeaker(msg) {
   return async () => {
     const frames = await swRpc("webNavigation.getAllFrames", { tabId: msg.groupId });
@@ -1857,14 +1861,33 @@ function seedSpeaker(msg) {
     if (f === undefined) return null;
     if (f.parentFrameId === -1) {
       const own = await frameIdentityOf(f);
-      return own === null ? null : { identity: own, referrer: "none", policy: null };
+      return own === null ? null : { identity: own, referrer: "none", policy: null, request: null };
     }
     DCHECK(typeof f.parentDocumentId === "string" && f.parentDocumentId !== "",
            "webNavigation reported a sub-frame with no parentDocumentId — the seed load cannot name its client");
     const parent = await frameIdentity(msg.groupId, f.parentDocumentId);
     if (parent === null) return null;
-    return { identity: parent, referrer: "client", policy: await seedReferrerPolicy(f.parentDocumentId) };
+    const policy = await seedReferrerPolicy(f.parentDocumentId);
+    return { identity: parent, referrer: "client", policy,
+             request: policy === null ? null : await seedChildRequest(f.parentDocumentId, msg.seedUrl) };
   };
+}
+
+/* The request facts {destination, referrerPolicy} the instance holding `parentDocumentId` created its child at
+   `url` with (`GetChildRequest`), or null when no instance holds it now or it created no child there. Asked
+   after the parent's install settled, so the parent's initial markup has created its frames. */
+async function seedChildRequest(parentDocumentId, url) {
+  const holder = hostHolderOf(parentDocumentId);
+  if (holder === null || holder.r === null) return null;
+  const r = (await holder.r.renderer.getChildRequest({ docId: parentDocumentId, url: new URL(url).href })).request;
+  if (r === "") return null;
+  const tab = r.indexOf("\t");
+  DCHECK(tab > 0 && NAVIGATION_DESTINATIONS.indexOf(r.slice(0, tab)) >= 0 &&
+         (r.slice(tab + 1) === "" || REFERRER_POLICIES.indexOf(r.slice(tab + 1)) >= 0),
+         "GetChildRequest answered " + JSON.stringify(r) + ", which is not `<destination><TAB><referrer " +
+         "policy>` — main.c's qjs_child_request writes a Fetch §2.2.5 navigation destination and a Referrer " +
+         "Policy §3 policy");
+  return { destination: r.slice(0, tab), referrerPolicy: r.slice(tab + 1) };
 }
 
 /* Why a seed's load `loaded` is not this document, in the page-source vocabulary, or null when it is;
@@ -1905,6 +1928,8 @@ function navigationIdentity(speaker, absUrl, request) {
   DCHECK(!!speaker && !!speaker.identity && typeof speaker.identity.origin === "string" &&
          !!speaker.identity.partitionKey && (speaker.referrer === "client" || speaker.referrer === "none"),
          "a credentialed document load was handed no {identity, referrer} to speak as");
+  DCHECK(speaker.request === null || typeof speaker.request === "object",
+         "a document load's speaker states no `request` — every speaker states its client's request facts or null");
   DCHECK(speaker.policy === null || speaker.policy === "" || REFERRER_POLICIES.indexOf(speaker.policy) >= 0,
          "a document load's speaker states the client policy " + JSON.stringify(speaker.policy) +
          ", which is neither null (none held) nor a Referrer Policy §3 policy");
@@ -1918,12 +1943,12 @@ function navigationIdentity(speaker, absUrl, request) {
 }
 
 /* A document load's own request facts, {destination, referrerPolicy}, for a composer that states neither: Fetch
-   §2.2.5's `document`, and no referrer policy, so the speaker's client policy applies.
-   Named residual. Not covered: a seed's and a peer-provisioning notice's destination and request referrer policy.
-   No chrome.* fact names a seed's container: webNavigation states `frameType: "sub_frame"` and `transitionType:
-   "auto_subframe"` whatever the element. The `navigable.create` and `navigable.swap` notices do not carry the
+   §2.2.5's `document`, and no referrer policy, so the speaker's client policy applies. A speaker whose client
+   knows the request (seedSpeaker's `request`) states it in place of this.
+   Named residual. Not covered: a peer-provisioning notice's destination and request referrer policy, and a
+   seed's where seedSpeaker states none. The `navigable.create` and `navigable.swap` notices do not carry the
    facts the `document.fetch` record does. The next diff writes the two fields onto those notices from the same
-   load job. Their absence shows as Sec-Fetch-Dest `document` where the browser's own load of that frame sent the
+   create. Their absence shows as Sec-Fetch-Dest `document` where the browser's own load of that frame sent the
    container's kind. */
 const DOCUMENT_REQUEST_UNSTATED = Object.freeze({ destination: "document", referrerPolicy: null });
 
@@ -2031,6 +2056,13 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      refusal comes back as the chokepoint's `blocked-signal:` reply record. */
   const speaker = navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
   const credentialed = speaker !== null;
+  /* The request as the speaker's client composed it, where the speaker knows it (a sub-frame seed). */
+  DCHECK(speaker === null || speaker.request === null ||
+         (NAVIGATION_DESTINATIONS.indexOf(speaker.request.destination) >= 0 &&
+          typeof speaker.request.referrerPolicy === "string"),
+         "a document load's speaker states request facts " + JSON.stringify(speaker && speaker.request) +
+         " that are neither null nor a navigation destination and a referrer policy");
+  if (speaker !== null && speaker.request !== null) request = speaker.request;
   const identity = credentialed ? navigationIdentity(speaker, abs, request) : null;
   try {
     // Never `as: "script"`: these bytes are parsed as a document, not run as code.
@@ -5210,7 +5242,7 @@ const _hostOps = {
                                            /*actor*/"page", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
                                            async () => ({ identity: engineIdentity(seed.principalOrigin, seed.principalUrl),
-                                                          referrer: "none", policy: null })));
+                                                          referrer: "none", policy: null, request: null })));
         return pick.census;
       }
       if (cand.kind === "doc") {

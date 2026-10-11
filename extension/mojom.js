@@ -804,6 +804,19 @@
           { name: "referrerPolicy", type: "string",
             why: "a Referrer Policy §3 policy, or the empty string for a container that states none" },
           WORKING_SET] },
+
+      /* HTML §7.4.5's request facts of a child navigable a document this instance holds created at an address
+         (main.c's qjs_child_request), for the zone's own load of the sub-frame the browser reports there. */
+      { ordinal: 28, name: "GetChildRequest",
+        params: [
+          DOCUMENT_ID,
+          { name: "url", type: "string", retained: false,
+            why: "the sub-frame's address as the zone's URL parser serialized it" }],
+        reply: [
+          { name: "request", type: "string",
+            why: "`<destination><TAB><referrer policy>`, the policy after Fetch §4.1 Main fetch and possibly " +
+                 "empty, or the empty string when the document created no child at that address" },
+          WORKING_SET] },
     ],
   });
 

@@ -930,6 +930,28 @@ QJS_EXPORT const char *qjs_referrer_policy(const char *doc_id)
     return policy_container_referrer_policy(engine_document_policy(world_doc_intern(doc_id)));
 }
 
+/* HTML §7.4.5's request facts of the child navigable that document `doc_id` created at `url` (a URL this
+ * engine's parser serializes to itself), as `<destination><TAB><referrer policy>` with the policy after Fetch
+ * §4.1 Main fetch, possibly empty; or "" when the document created no child at that address. The trusted zone
+ * asks for its own load of a sub-frame the browser reports, so the load carries what the browser's did. The
+ * string is this entry's and stays valid until its next call. */
+QJS_EXPORT const char *qjs_child_request(const char *doc_id, const char *url)
+{
+    static char *answer;
+    const char *dest, *policy;
+
+    DCHECK(g_begun, "a child navigable's request was asked of an engine whose frontier was never seeded");
+    DCHECK(doc_id != NULL && *doc_id && url != NULL && *url, "a child navigable's request was asked with no "
+                                                             "document or no address");
+    free(answer);
+    answer = NULL;
+    if (!navigable_child_request(world_doc_intern(doc_id), url, &dest, &policy)) return "";
+    answer = malloc(strlen(dest) + strlen(policy) + 2);
+    CHECK(answer != NULL, "OOM composing a child navigable's request facts");
+    sprintf(answer, "%s\t%s", dest, policy);
+    return answer;
+}
+
 /* The frontier key's document half. Pure scan, so the host may ask the instant qjs_init returns. */
 QJS_EXPORT unsigned qjs_bundle_id(void)
 {

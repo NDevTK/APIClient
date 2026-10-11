@@ -1356,11 +1356,10 @@ enum {
 };
 
 /* HTML §7.4.5 "Populating a session history entry"'s create navigation params by fetching: the request's
- * destination is "document", set to "navigable's container's local name" when the navigable has a container,
- * read at the fetch because §7.3.1.3's container relation is per flow. Owned. */
-static char *nav_request_destination(JSContext *ctx, JSValueConst proxy)
+ * destination is "document", set to "navigable's container's local name" when `container` (an element's wrapper,
+ * or JS_NULL) is one. Owned. */
+static char *nav_container_destination(JSValueConst container)
 {
-    JSValue container = window_proxy_container(ctx, proxy);
     char *dest;
 
     if (JS_IsNull(container)) {
@@ -1376,7 +1375,6 @@ static char *nav_request_destination(JSContext *ctx, JSValueConst proxy)
         name = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
         dest = strndup((const char *)name, len);
     }
-    JS_FreeValue(ctx, container);
     CHECK(dest != NULL, "navigable: OOM spelling §7.4.5's request destination");
     DCHECK(fetch_is_destination_type(dest),
            "§7.4.5 set a navigation request's destination to a container local name that Fetch §2.2.5 does not "
@@ -1384,11 +1382,32 @@ static char *nav_request_destination(JSContext *ctx, JSValueConst proxy)
     return dest;
 }
 
-/* The same request's referrer policy as Fetch §4.1 "Main fetch" leaves it: the entry's document state's request
- * referrer policy (§7.4.2.2's referrerPolicy, on the job), replaced when it is "" by the request's policy
- * container's, which §7.4.5 makes sourceSnapshotParams's source policy container: the initiator's clone this job
- * carries. That container's item is null when it was created from no response, which §7.1.7 gives the default
- * referrer policy. The result may be "", a container stating none. Owned. */
+/* That destination for the navigable `proxy` is loading, read at the fetch because §7.3.1.3's container relation
+   is per flow. Owned. */
+static char *nav_request_destination(JSContext *ctx, JSValueConst proxy)
+{
+    JSValue container = window_proxy_container(ctx, proxy);
+    char *dest = nav_container_destination(container);
+
+    JS_FreeValue(ctx, container);
+    return dest;
+}
+
+/* The same request's referrer policy as Fetch §4.1 "Main fetch" leaves it: `request`, the entry's document state's
+ * request referrer policy (§7.4.2.2's referrerPolicy), replaced when it is "" by `item`, the request's policy
+ * container's, which §7.4.5 makes sourceSnapshotParams's source policy container: the initiator's clone. `item` is
+ * NULL for a container created from no response, which §7.1.7 gives the default referrer policy. The result may
+ * be "", a container stating none. Owned. */
+static char *nav_main_fetch_referrer_policy(const char *request, const char *item)
+{
+    char *out = strdup(*request ? request : item ? item : "strict-origin-when-cross-origin");
+
+    CHECK(out != NULL, "navigable: OOM spelling §7.4.5's request referrer policy");
+    DCHECK(fetch_is_referrer_policy(out), "§7.4.5's request referrer policy is not a Referrer Policy §3 policy");
+    return out;
+}
+
+/* nav_main_fetch_referrer_policy over the load job's two slots. Owned. */
 static char *nav_request_referrer_policy(JSContext *ctx, const NavLoadState *s)
 {
     JSValueConst req = step_arg(&s->hdr, NAV_LOAD_ARG_REQUEST_REFERRER_POLICY);
@@ -1400,13 +1419,65 @@ static char *nav_request_referrer_policy(JSContext *ctx, const NavLoadState *s)
                              "puts §7.4.2.2's referrerPolicy on every job");
     r = JS_ToCString(ctx, req);
     CHECK(r != NULL, "navigable: OOM taking §7.4.2.2's referrer policy off the load job");
-    if (*r == '\0' && JS_IsString(item)) c = JS_ToCString(ctx, item);
-    out = strdup(*r ? r : c ? c : "strict-origin-when-cross-origin");
-    CHECK(out != NULL, "navigable: OOM spelling §7.4.5's request referrer policy");
+    if (JS_IsString(item)) {
+        c = JS_ToCString(ctx, item);
+        CHECK(c != NULL, "navigable: OOM taking the initiator's referrer policy off the load job");
+    }
+    out = nav_main_fetch_referrer_policy(r, c);
     if (c) JS_FreeCString(ctx, c);
     JS_FreeCString(ctx, r);
-    DCHECK(fetch_is_referrer_policy(out), "§7.4.5's request referrer policy is not a Referrer Policy §3 policy");
     return out;
+}
+
+/* The §7.4.5 request facts of each child navigable this agent created, by creating document and address, for
+   the trusted zone's own load of the same frame (main.c's qjs_child_request). A host record and not page state:
+   no flow reads it, so it does not time-travel. It is append-only and the first record of a (document, address)
+   pair stands, so a frame of the initial markup answers with the facts its install created it with. */
+typedef struct {
+    uint32_t creator;
+    char *addr, *destination, *referrer_policy;
+} ChildRequest;
+static ChildRequest *g_child_requests;
+static size_t g_child_requests_n, g_child_requests_cap;
+
+static void nav_record_child_request(uint32_t creator, const char *addr, JSValueConst container,
+                                     const char *request_policy, const char *item)
+{
+    ChildRequest *r;
+    size_t i;
+
+    for (i = 0; i < g_child_requests_n; i++)
+        if (g_child_requests[i].creator == creator && !strcmp(g_child_requests[i].addr, addr)) return;
+    if (g_child_requests_n == g_child_requests_cap) {
+        size_t cap = g_child_requests_cap ? g_child_requests_cap * 2 : 8;
+        ChildRequest *grown = realloc(g_child_requests, cap * sizeof *grown);
+
+        CHECK(grown != NULL, "navigable: OOM growing the child request record");
+        g_child_requests = grown;
+        g_child_requests_cap = cap;
+    }
+    r = &g_child_requests[g_child_requests_n++];
+    r->creator = creator;
+    r->addr = strdup(addr);
+    CHECK(r->addr != NULL, "navigable: OOM recording a child navigable's address");
+    r->destination = nav_container_destination(container);
+    r->referrer_policy = nav_main_fetch_referrer_policy(request_policy, item);
+}
+
+bool navigable_child_request(uint32_t creator, const char *addr, const char **destination,
+                             const char **referrer_policy)
+{
+    size_t i;
+
+    DCHECK(addr != NULL && destination != NULL && referrer_policy != NULL,
+           "a child navigable's request facts were asked with no address or nowhere to answer");
+    for (i = 0; i < g_child_requests_n; i++) {
+        if (g_child_requests[i].creator != creator || strcmp(g_child_requests[i].addr, addr)) continue;
+        *destination = g_child_requests[i].destination;
+        *referrer_policy = g_child_requests[i].referrer_policy;
+        return true;
+    }
+    return false;
 }
 
 /* HTML §7.1.4.2 "Embedder policy checks"' STEPS 1 AND 2 — the half of check-a-navigation-response's-adherence-
@@ -3822,6 +3893,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        §7.2.2.1's step 15 and §4.6.5's follow-the-hyperlink step 11 the navigate they each already own
        (navigable.h states the asymmetry this leaves in the meantime), and this arm then reaches
        navigable_navigate below like every other destination. */
+    /* The child's §7.4.5 request facts, for the zone's own load of the same frame. */
+    if (is_child)
+        nav_record_child_request(document_doc(ctx), addr, container, referrer_policy,
+                                 creator_policy.referrer_policy);
     DCHECK(!destination_is_javascript,
            "§7.4's create was asked to make a navigable whose ADDRESS is a `javascript:` URL — §7.3.1.7 step 8 "
            "creates a navigable with no url at all and §7.2.2.1 step 15 navigates it, which is the algorithm "
@@ -5041,4 +5116,17 @@ void navigable_free(JSContext *ctx)
        call — test_forced.c's probes run above it for exactly that reason. */
     g_realms_made = g_realms_peak = 0;
     g_realm_builder = NULL;
+    /* The child request record is this agent's, for the census's reason. */
+    {
+        size_t i;
+
+        for (i = 0; i < g_child_requests_n; i++) {
+            free(g_child_requests[i].addr);
+            free(g_child_requests[i].destination);
+            free(g_child_requests[i].referrer_policy);
+        }
+        free(g_child_requests);
+        g_child_requests = NULL;
+        g_child_requests_n = g_child_requests_cap = 0;
+    }
 }
