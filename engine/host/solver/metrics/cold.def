@@ -157,6 +157,10 @@ METRIC(host_answers_late, "hostAnswersLate", LIFETIME, "answer", PROCESS, "solve
    retired count is the flows the peer's exhaustion ended. Left minus retired is the standbys still waiting. */
 METRIC(answer_standbys, "answerStandbys", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)
 METRIC(answer_standbys_retired, "answerStandbysRetired", LIFETIME, "flow", PROCESS, "solver/engine.c", INT)
+/* The exhaustion's two ends: sent by the answering instance when its last holder lets a rendezvous go, and
+   delivered to the asking one. A standby left and never retired beside a zero here is an exhaustion not sent. */
+METRIC(perform_exhausted, "performExhausted", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
+METRIC(host_exhausted, "hostExhausted", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
 METRIC(host_terminated, "hostTerminated", LIFETIME, "rendezvous", PROCESS, "solver/engine.c", INT)
 /* The four ends of the reply door, together because the asked/answered gap means nothing without
    the other two: a gap may be refusals of the page's own requests, where the door owes nothing.

@@ -922,6 +922,8 @@ static long g_host_answered;
 static long g_host_answers_extra;
 /* Standbys left before a peer answer was taken, and those the peer's exhaustion retired. */
 static long g_answer_standbys, g_answer_standbys_retired;
+/* Exhaustions this instance sent as the answering side, and those it was delivered as the asking side. */
+static long g_perform_exhausted, g_host_exhausted;
 /* Answers that arrived when nothing was left to consume them. A peer answers by running a program on its own
  * timeline, relayed by a zone that cannot know what became of the asker, and Level-1 eviction makes a peer
  * outliving the asker's park the ordinary case. The asking flow is a recipe whose replay re-issues the request
@@ -1434,6 +1436,7 @@ int engine_host_exhausted(JSContext *ctx, uint32_t req) {
     int n = 0;
 
     DCHECK(ctx != NULL && req != 0, "a peer's exhaustion was delivered with no context or no request id");
+    g_host_exhausted++;
     if (!g_sess_live) {
         g_host_answers_late++;
         return 0;
@@ -1733,6 +1736,7 @@ static void perform_token_spent(JSContext *ctx, const char *token)
     snprintf(rec, cap, "remoteop.exhausted\t%s", token);
     engine_host_notify(ctx, rec);
     free(rec);
+    g_perform_exhausted++;
 }
 
 /* The distinct questions a hand-back has taken off its flows, collected during the strip so notices are decided
@@ -11463,6 +11467,8 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_answers_extra = g_host_answers_extra;
     out->answer_standbys    = g_answer_standbys;
     out->answer_standbys_retired = g_answer_standbys_retired;
+    out->perform_exhausted = g_perform_exhausted;
+    out->host_exhausted = g_host_exhausted;
     out->host_answers_late  = g_host_answers_late;
     out->host_terminated    = g_host_terminated;
     out->paged_reqs         = g_paged_reqs;
@@ -11494,16 +11500,19 @@ void engine_frontier_census(EngineFrontierCensus *out)
        count and this file's retirement totals are three numbers in two censuses with no identity between them, and
        "this engine retires nothing" is a subtraction across them. Exact by construction: solver/flow.c's
        `flow_remove` is the one line a member leaves the frontier on, `flow_release` its one caller, and that has
-       three callers on a live instance: flow_finish (raising `g_finished`), engine_reclaim_tail (raising
-       `g_flows_sold`) and flow_registry_free's drain (raising the third arm). None is reset by a session boundary
+       four callers on a live instance: flow_finish (raising `g_finished`), engine_reclaim_tail (raising
+       `g_flows_sold`), the FLOW_STEP_RETIRED arm (raising `g_answer_standbys_retired`) and flow_registry_free's
+       drain (raising the fourth arm). None is reset by a session boundary
        (the sale totals carry at engine_sched_begin, and flow_registry_init does not reset arrivals and
        departures). The third term reads 0 at every census hosts take today, since the drain runs after the report,
        but keeps the identity true at every instant. It catches a departure path added later without an arm, which
        any reclamation gated on something other than completion would be. */
-    DCHECKF(out->finished + out->sold + (long)flow_departures_teardown() == (long)flow_departures(),
-            "the frontier's departure causes do not partition its departures (%ld finished + %ld sold + %lld with "
-            "the registry against %lld) — flow_release is flow_remove's one caller, so a fourth exit moved the total",
-            out->finished, out->sold,
+    DCHECKF(out->finished + out->sold + out->answer_standbys_retired + (long)flow_departures_teardown() ==
+            (long)flow_departures(),
+            "the frontier's departure causes do not partition its departures (%ld finished + %ld sold + %ld retired "
+            "+ %lld with the registry against %lld) — flow_release is flow_remove's one caller, so a fifth exit moved "
+            "the total",
+            out->finished, out->sold, out->answer_standbys_retired,
             (long long)flow_departures_teardown(), (long long)flow_departures());
     /* And the seed table's partition, about a table built once per session: `held` is a row whose source text this
        instance has, `awaited` one whose bytes the reply door still owes, `refused` one whose `src` did not
