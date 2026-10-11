@@ -27474,6 +27474,10 @@ static int abi_pay(void)
                               "is over, so a value beside it crossed to a reader that never looks at it. "
                               "trailing=[%s]", p ? p : "");
             free(rec);
+            /* A round that paid something makes the last announced bill stale: an answered pair can be parked
+               on again by a flow the payment let run, and that FRESH park spells a bill byte-equal to the one
+               the zone already paid, which abi_announce's change test would then never send. */
+            if (paid > 0) { free(g_abi_announced); g_abi_announced = NULL; }
             return paid;
         }
         if (!strcmp(verb, "provide")) {
