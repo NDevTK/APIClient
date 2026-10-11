@@ -1290,7 +1290,9 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
  *
  * A peer answer is admitted by the asking flow's commitment record (deliver_admits), the one rule a routed message
  * meets: a flow that took a contradicting timeline's answer or message, or that forecloses this world because a
- * family member took it (flow_answer_fork, flow_answer_standby), is not this timeline's taker.
+ * family member took it (flow_answer_fork, flow_answer_standby), is not this timeline's taker. The request's
+ * addressee (engine_flow_addressee) already narrows the answering timelines to the received rows on the peer's
+ * side; a foreclosed row cannot be addressed, so a standby's refusal is made only here.
  *
  * Returns 1 when the answer was written onto an entry of a flow that can still consume it, 0 when it was not
  * delivered. After a park the flows are still allocated (cold_park writes recipes; teardown frees them), so the
