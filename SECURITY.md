@@ -118,14 +118,16 @@ Which extension context can open a connection at all is enforced by CSP in all b
   refuses a `fetch`, XHR, WebSocket, EventSource or beacon from either. The popup reaches the network only by
   messaging the offscreen.
 - `renderer.html`'s own policy is `default-src 'none'`, which refuses every connection from the engine frame.
-- The offscreen document (`ast-worker.html`: `connect-src 'self' https: http: data:`) and the service worker
-  (the manifest's `connect-src 'self' https: http: data:`) can reach any http(s) host. That their traffic
-  goes through `safeFetch` is code discipline, not enforcement: `fetch(` is called only in
-  `lib/safe-fetch.js` and in `renderer-host.js`'s fixed program list, and `background.js` and
-  `speak-as-rule.js` open no connection. The check is
-  `grep -rn 'fetch(\|XMLHttpRequest\|WebSocket(\|EventSource(\|sendBeacon'` over `extension/` with comments
-  excluded; its other hits are `intercept.js`'s wrappers of the page's own constructors and words inside
-  assert messages.
+- The offscreen document (`ast-worker.html`: `connect-src 'self' https: http: data:`) can reach any http(s)
+  host, so its CSP does not keep it on `safeFetch`. The realm does instead: `lib/safe-fetch.js` takes the
+  platform's `fetch` at load and replaces `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`,
+  `WebTransport` and `navigator.sendBeacon` with non-writable, non-configurable functions that `CHECK`-fail.
+  The one exception is a `fetch` of this extension's own package, which `renderer-host.js` reads to build
+  each renderer. That holds against the scripts loaded after it. The ones `ast-worker.html` loads before it
+  hold no network constructor in code, which is a reading of their source, not an enforcement.
+- The service worker (the manifest's `connect-src 'self' https: http: data:`) can reach any http(s) host and
+  loads no seal. That it sends nothing is code discipline: `background.js` and `speak-as-rule.js` call no
+  `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
 
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
