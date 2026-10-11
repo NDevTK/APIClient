@@ -50,7 +50,8 @@ void browsing_context_group_release(void)
 }
 
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
-                                 SandboxFlags final_sandbox_flags, const char *provenance, const char *driven)
+                                 SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
+                                 const char *pinned)
 {
     uint32_t swapped;
     char *op;
@@ -123,6 +124,7 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
         origin_serialized(origin),
         provenance,
         driven,
+        pinned,
     };
 
     op = engine_notice_build("navigable.swap", fields, sizeof fields / sizeof fields[0]);

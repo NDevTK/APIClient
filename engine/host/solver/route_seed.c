@@ -13,7 +13,7 @@
 void route_seed_declare(JSContext *ctx, const char *previous, const char *address)
 {
     Flow *f;
-    const char *prov, *drv;
+    const char *prov, *drv, *pin;
     char *op;
     size_t n;
 
@@ -57,6 +57,8 @@ void route_seed_declare(JSContext *ctx, const char *previous, const char *addres
     prov = engine_provenance_of_running_path();
     /* …and whose act the declaration is: a drive of uncalled code declares routes the page may never reach. */
     drv = engine_driven_token(engine_driven_of_running_path());
+    /* …and whether its path chose a witness before it composed the address. */
+    pin = engine_navigation_pinned_token();
 
     /* THE RECORD SPLITS ON TAB, so a tab in either field shifts the other one — and the field that would be
        read in the wrong place is the PROVENANCE, which is the zone's whole firing decision. URL §3.2 "Host
@@ -68,10 +70,10 @@ void route_seed_declare(JSContext *ctx, const char *previous, const char *addres
            "percent-encodes one everywhere it can appear, so a byte that reached here is a serializer that "
            "stopped doing so, and the trusted zone would read the tail of this address as the provenance token "
            "its firing decision is made on");
-    n = strlen(ROUTE_SEED_NOTICE) + strlen(address) + strlen(prov) + strlen(drv) + 4;
+    n = strlen(ROUTE_SEED_NOTICE) + strlen(address) + strlen(prov) + strlen(drv) + strlen(pin) + 5;
     op = malloc(n);
     CHECK(op != NULL, "route seed: OOM building the notice that declares a page of this application");
-    snprintf(op, n, "%s\t%s\t%s\t%s", ROUTE_SEED_NOTICE, address, prov, drv);
+    snprintf(op, n, "%s\t%s\t%s\t%s\t%s", ROUTE_SEED_NOTICE, address, prov, drv, pin);
     engine_host_notify(ctx, op);
     free(op);
 }

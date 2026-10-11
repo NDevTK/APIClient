@@ -3070,6 +3070,14 @@ int engine_pinned_of_running_path(void)
 }
 
 /* See engine.h. */
+const char *engine_navigation_pinned_token(void)
+{
+    const Flow *f = flow_running();
+
+    return engine_pinned_token(f != NULL && flow_path_pinned(f));
+}
+
+/* See engine.h. */
 int engine_driven_of_running_path(void)
 {
     const Flow *f = flow_running();

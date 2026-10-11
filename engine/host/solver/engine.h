@@ -703,6 +703,12 @@ const char *engine_provenance_token(int prov);
  * composes for a record with no mark; this never spells it. */
 int engine_pinned_of_running_path(void);
 
+/* The witness mark's word for a navigation (`navigable.c`'s load job and create notice, solver/route_seed.c's
+ * declaration), read off the running flow. Unlike a page request a navigation may have no flow: a document
+ * install creates the markup's child navigables before any flow runs, and an act no code produced chose no
+ * witness, so that arm answers `unpinned`, as engine_provenance_of_running_path answers `derived` there. */
+const char *engine_navigation_pinned_token(void);
+
 /* The witness mark's wire spelling, shared by every writer of the field so the two words are one vocabulary
  * for the firing decision that reads them. An unknown value is fatal (CHECK), as for engine_provenance_token. */
 const char *engine_pinned_token(int pinned);

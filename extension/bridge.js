@@ -1878,7 +1878,7 @@ const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
    credential carries, or null when it has none, which loads without the session. */
 async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
-                              actor, driven, speakerOf) {
+                              actor, driven, pinned, speakerOf) {
   /* `refusalArm` is required; an unstated word takes the refusing arm, exactly as `none` does. */
   DCHECK(DOC_REFUSAL_ARMS.indexOf(refusalArm) >= 0,
          "a §7.4 navigation was loaded stating the refusal arm " + JSON.stringify(refusalArm) + ", which " +
@@ -1900,7 +1900,11 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
          "navigable (the page), a route an application declared of itself (the page), and an ambient seed " +
          "this tool composed from an address the person's browser navigated to (the tool)");
   /* `driven` is the engine's drive mark for a `page` navigation (`driven`/`undriven`, off the notice beside the
-     provenance), and `unstated` for a `tool` one; safe-fetch.js's `_drivenOf` CHECKs the pairing. */
+     provenance), and `unstated` for a `tool` one; safe-fetch.js's `_drivenOf` CHECKs the pairing. `pinned` is
+     the engine's witness mark off the same record (`pinned`/`unpinned`), `unstated` for a `tool` one. */
+  DCHECK(actor === "page" ? (pinned === "pinned" || pinned === "unpinned") : pinned === "unstated",
+         "a \u00a77.4 navigation was loaded with the witness mark " + JSON.stringify(pinned) + " for actor `" +
+         actor + "` — a page navigation relays the engine's mark off its record and a tool one composed none");
   /* The requested address, resolved once because every arm owes a URL: a navigable whose load did not load
      still gets a Document, at the URL that was requested. An unparseable address is a caller's serializer
      disagreeing with the URL parser, a broken contract, so it throws (a DFAIL would leave arms reading
@@ -1960,12 +1964,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", mode: "navigate", provenance: provenance,
                                           docReach: fromReach, actor: actor, driven: driven,
-                                          /* `unstated`: a navigation's provenance arrives by notice, not by
-                                             park, so no witness mark was composed (see safe-fetch.js's
-                                             `_pinnedOf`). Navigations fire through their own arm
-                                             (`destination=navigation`, `actor=page`, `provenance=derived`),
-                                             so the witness mark carries no decision here. */
-                                          pinned: "unstated",
+                                          pinned: pinned,
                                           credentials: "include", credentialed, identity });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
@@ -2659,7 +2658,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
      be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
      gains such an arm widens this list deliberately. */
-  const fetchedDocument = async (u, provenance, driven, refusalArm) => {
+  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm) => {
     DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
            "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
            ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
@@ -2668,7 +2667,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
     const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance,
-                                   refusalArm, /*actor*/"page", driven, documentSpeaker(msg));
+                                   refusalArm, /*actor*/"page", driven, pinned, documentSpeaker(msg));
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
     DCHECK(refusalArm === "rendezvous" || r.declined === null,
@@ -3462,11 +3461,11 @@ const PINNED_NO = "unpinned";
    offscreen alone knows which instance holds which document); ops not listed here are described at their arms.
    `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <cspSelfOrigin> <coep> <coepEndpoint>
    <coepReportOnly> <coepReportOnlyEndpoint> <parentNavigable> <containerPolicy> <ancestorOrigins>
-   <creationSandboxFlags> <provenance> <csp>` — the engine has named the document and handed the page a
+   <creationSandboxFlags> <provenance> <group> <driven> <pinned> <csp>` — the engine has named the document and handed the page a
    WindowProxy for it; this provisions (or joins) an instance under that name, loading the child's document
    through the safeFetch chokepoint.
-   `navigable.swap <new document> <url> <origin> <provenance> <driven>` — see that arm.
-   `navigable.navigate <new document> <url> <origin> <provenance> <driven>` — see that arm.
+   `navigable.swap <new document> <url> <origin> <provenance> <driven> <pinned>` — see that arm.
+   `navigable.navigate <new document> <url> <origin> <provenance> <driven> <pinned>` — see that arm.
    `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed verbatim to the instance holding
    <target>, with this engine's origin stamped on it: the untrusted engine may not state its own origin, since
    a forgeable event.origin defeats every origin check in every bundle. */
@@ -3475,7 +3474,7 @@ async function hostNotice(eng, line) {
   if (f[0] === "navigable.create") {
     /* The count covers every field the reader below indexes and moves when the record grows, because the
        field added last is the one a stale count would let arrive as `undefined`. */
-    DCHECK(f.length >= 19 && (f[16] === "creator" || f[16] === "new") && (f[17] === DRIVEN_YES || f[17] === DRIVEN_NO), "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, which browsing context group the navigable is in (`creator` or `new`), its drive mark, and the policy");
+    DCHECK(f.length >= 20 && (f[16] === "creator" || f[16] === "new") && (f[17] === DRIVEN_YES || f[17] === DRIVEN_NO) && (f[18] === "pinned" || f[18] === "unpinned"), "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, HTML §7.1.5's creation sandboxing flag set, CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation, which browsing context group the navigable is in (`creator` or `new`), its drive mark, its witness mark, and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     /* Field 16: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing context
        group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's group, where the
@@ -3484,11 +3483,11 @@ async function hostNotice(eng, line) {
        re-rooted and by the join arms below. */
     const _inCreatorGroup = f[16] === "creator";
     if (_inCreatorGroup) eng.referenced = 1;
-    /* Field 15 is the engine's word for what this navigation is evidence of and field 17 its drive mark;
-       navigationLoad and the chokepoint decide on them, and this arm passes them through without testing. */
+    /* Field 15 is the engine's word for what this navigation is evidence of, field 17 its drive mark and field
+       18 its witness mark; navigationLoad and the chokepoint decide on them, and this arm passes them through. */
     /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
-    const loaded = await eng.fetchedDocument(f[3], f[15], f[17], /*refusalArm*/"none");
+    const loaded = await eng.fetchedDocument(f[3], f[15], f[17], f[18], /*refusalArm*/"none");
     /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
        this zone followed), not the notice's f[4]: SECURITY.md makes routing and the origin stamped on a
        delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
@@ -3541,7 +3540,7 @@ async function hostNotice(eng, line) {
     /* The policy is the remainder from field 18; every field added to the record is added in front of it, so
        this index and the count above move together. A wrong index would join a neighbouring field onto the
        creator's CSP, which CSP's parser drops as an unreadable directive without a crash. */
-    const inherited = { csp: f.slice(18).join("\t"), selfOrigin: f[6],
+    const inherited = { csp: f.slice(19).join("\t"), selfOrigin: f[6],
                         embedder: { value: f[7], endpoint: f[8],
                                     reportOnlyValue: f[9], reportOnlyEndpoint: f[10] } };
     /* HTML §7.3.1.3 Child navigables' parent navigable at field 11, separate from the container policy: an
@@ -3668,7 +3667,7 @@ async function hostNotice(eng, line) {
      Absence shows as a swapped-to document whose content or headers differ from the response that decided
      the swap when the server answers the two requests differently. */
   if (f[0] === "navigable.swap") {
-    DCHECK(f.length >= 6 && !!f[1] && !!f[2] && !!f[4] && !!f[5],
+    DCHECK(f.length >= 7 && !!f[1] && !!f[2] && !!f[4] && !!f[5] && !!f[6],
            "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
            "address it is loading, the origin it computed and what the navigation that caused the swap is " +
            "EVIDENCE OF; a record missing either of the first two names a Document this zone cannot provision " +
@@ -3683,7 +3682,7 @@ async function hostNotice(eng, line) {
        an address this zone declined at `document.fetch`. */
     /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
        an empty Uint8Array. */
-    const swapped = await eng.fetchedDocument(f[2], f[4], f[5], /*refusalArm*/"none");
+    const swapped = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none");
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -3732,14 +3731,14 @@ async function hostNotice(eng, line) {
      container and no ancestor list, and its own address is its top-level creation URL. Referenced, since the
      emitting engine's proxy names it. This zone loads the bytes, for the swap arm's reason. */
   if (f[0] === "navigable.navigate") {
-    DCHECK(f.length >= 6 && !!f[1] && !!f[2] && !!f[4] && !!f[5],
+    DCHECK(f.length >= 7 && !!f[1] && !!f[2] && !!f[4] && !!f[5] && !!f[6],
            "a navigable.navigate notice was short of its fields — the engine writes the new document's name, " +
-           "the address, the origin it computed, the navigation's provenance and its drive mark, and the load " +
-           "below is decided from the last two");
+           "the address, the origin it computed, the navigation's provenance, its drive mark and its witness " +
+           "mark, and the load below is decided from the last three");
     DCHECK(!hostHolderOf(f[1]),
            "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
-    const navd = await eng.fetchedDocument(f[2], f[4], f[5], /*refusalArm*/"none");
+    const navd = await eng.fetchedDocument(f[2], f[4], f[5], f[6], /*refusalArm*/"none");
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
@@ -3771,14 +3770,15 @@ async function hostNotice(eng, line) {
                        "none", "none", 1)._readyP;
     return;
   }
-  /* `document.seed <address> <provenance> <driven>` — an address the application declared is a page of itself, reached
+  /* `document.seed <address> <provenance> <driven> <pinned>` — an address the application declared is a page of itself, reached
      when forced execution ran the bundle's own `history.pushState`/`replaceState` (solver/route_seed.h says what
      a declaration is). This branch spends no network: a declared route is a work item whose fetch is a cost the
      Level-1 order carries, so it records and `admit` loads (see `_seeds`). */
   if (f[0] === ROUTE_SEED_NOTICE) {
-    DCHECK(f.length >= 4 && !!f[1] && !!f[2] && (f[3] === DRIVEN_YES || f[3] === DRIVEN_NO),
-           "a route declaration was short of its fields — the engine writes the ADDRESS, the PROVENANCE and " +
-           "the DRIVE MARK, " +
+    DCHECK(f.length >= 5 && !!f[1] && !!f[2] && (f[3] === DRIVEN_YES || f[3] === DRIVEN_NO) &&
+           (f[4] === "pinned" || f[4] === "unpinned"),
+           "a route declaration was short of its fields — the engine writes the ADDRESS, the PROVENANCE, " +
+           "the DRIVE MARK and the WITNESS MARK, " +
            "and a record missing either is a writer this zone no longer shares a grammar with: an absent " +
            "address is a page nothing can load, and an absent provenance is the one field the decision to " +
            "load it at all is made from");
@@ -3803,8 +3803,8 @@ async function hostNotice(eng, line) {
        spend an admission slot every round. It answers the refusing grade, which the warning names. For a
        navigation the address is the whole of the safety, and a navigation carries the person's session. A
        derived but unfired address is still reported. */
-    /* `document` and `unstated`, as navigationLoad states them: a declaration is a notice, so no witness mark was
-       composed, and a document load is never script-like. */
+    /* `document` and the record's witness mark, as navigationLoad states them; a document load is never
+       script-like. */
     /* The facts arrive as one object so the growing signal set cannot shift positional operands. `credentialed`
        is the answer this seed's load would get, asked with the same predicate; `headers` is absent on a
        navigation and stated as such. The principal is `eng.origin` (MessageSender.origin, the same value the
@@ -3814,7 +3814,7 @@ async function hostNotice(eng, line) {
        that document. */
     /* `actor: "page"`: the route was declared by this document's own code, as the load will state. */
     const _seedRefusal = self.safeFetchFiringRefusal({
-      url: f[1], destination: "document", provenance: f[2], pinned: "unstated",
+      url: f[1], destination: "document", provenance: f[2], pinned: f[4],
       docReach: eng.msg.provenance, actor: "page", driven: f[3],
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
@@ -3832,7 +3832,7 @@ async function hostNotice(eng, line) {
     if (!_seeds.has(f[1]))
       /* The declaring document's reach grade travels with the item for the same reason. */
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
-                         provenance: f[2], driven: f[3], reach: eng.msg.provenance });
+                         provenance: f[2], driven: f[3], pinned: f[4], reach: eng.msg.provenance });
     /* Nothing is kicked: this router runs inside serviceFetch within the one scheduling loop, so `_hostDriving`
        is true and a `_hostKick()` would return on its first line. `admit` ranks this entry next round. */
     return;
@@ -4036,25 +4036,28 @@ async function engineServiceHostRequests(eng) {
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
-    /* `document.fetch<TAB><provenance><TAB><driven><TAB><url>`, split at the first two tabs after the verb so
-       the address is the remainder. A URL cannot contain a tab (URL Standard §4.4 URL parsing strips them), and
-       the two tokens are lowercase words. Indexed rather than split on every tab, which would silently take the
-       tail of a malformed record. */
+    /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>`, split at the first three tabs
+       after the verb so the address is the remainder. A URL cannot contain a tab (URL Standard §4.4 URL parsing
+       strips them), and the three tokens are lowercase words. Indexed rather than split on every tab, which
+       would silently take the tail of a malformed record. */
     const fetchArgs = op.slice("document.fetch\t".length);
     const fetchTab = fetchArgs.indexOf("\t");
     const drivenTab = fetchTab > 0 ? fetchArgs.indexOf("\t", fetchTab + 1) : -1;
-    DCHECK(fetchTab > 0 && drivenTab > fetchTab + 1 && drivenTab < fetchArgs.length - 1,
-           "a document.fetch request is not `document.fetch<TAB><provenance><TAB><driven><TAB><url>`: `" + op +
-           "` — core/frame/navigable.c writes all three fields non-empty on every path, so this zone and that " +
-           "job no longer share a grammar, and the address read out of it would be a token");
+    const pinnedTab = drivenTab > 0 ? fetchArgs.indexOf("\t", drivenTab + 1) : -1;
+    DCHECK(fetchTab > 0 && drivenTab > fetchTab + 1 && pinnedTab > drivenTab + 1 &&
+           pinnedTab < fetchArgs.length - 1,
+           "a document.fetch request is not `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB>" +
+           "<url>`: `" + op + "` — core/frame/navigable.c writes all four fields non-empty on every path, so " +
+           "this zone and that job no longer share a grammar, and the address read out of it would be a token");
     /* Issued, not awaited, for the XHR seam's reason (a page states a document load with `location.href` or an
        `iframe src`, and its body may never end), keyed on the request id. The asking navigable stays parked on
        its load; every other flow keeps running. */
     did += engineIssue(eng, "doc\n" + id,
       /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
          parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
-      () => eng.fetchedDocument(fetchArgs.slice(drivenTab + 1), fetchArgs.slice(0, fetchTab),
-                                fetchArgs.slice(fetchTab + 1, drivenTab), /*refusalArm*/"rendezvous"),
+      () => eng.fetchedDocument(fetchArgs.slice(pinnedTab + 1), fetchArgs.slice(0, fetchTab),
+                                fetchArgs.slice(fetchTab + 1, drivenTab),
+                                fetchArgs.slice(drivenTab + 1, pinnedTab), /*refusalArm*/"rendezvous"),
       (r) => engineDeliverDocument(eng, id, r));
     continue;
   }
@@ -5077,7 +5080,7 @@ const _hostOps = {
                                            /* `page`: HTML §7.4.4's steps ran in the analysed document, so
                                               its own code composed the address; the declaration's drive
                                               mark says whether a drive of uncalled code ran them. */
-                                           /*actor*/"page", seed.driven,
+                                           /*actor*/"page", seed.driven, seed.pinned,
                                            /* A declared route is a document only this zone holds. */
                                            async () => ({ identity: engineIdentity(seed.principalOrigin, seed.principalUrl),
                                                           referrer: "none" })));
@@ -5630,7 +5633,8 @@ self.astDispatch = async function astDispatch(msg) {
                                            scoped to `provenance !== "observed"` and the observed/observed
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
-                                        /*actor*/"tool", /*driven*/"unstated", seedSpeaker(msg));
+                                        /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
+                                        seedSpeaker(msg));
     /* The seed's own rule on top of the loader's: an OK empty body is an ordinary empty Document (HTML §7.4.5),
        but a seeded document with no bytes cannot be the program this run explores, and analysing it would read
        as a clean page. */

@@ -80,50 +80,30 @@ function zone() {
    trusted-zone source at the site named, which is why a transcription is the honest form: there is no
    derivation to read it off, and a reader checks it with one grep rather than trusting this file. */
 const SITES = [
-  /* THE OWNER'S NAVIGATION DECISION, AND THESE FOUR ROWS ARE WHAT SCORE IT. A `want` is the difference
-     between a row that DESCRIBES the table and a row that would FAIL if the table drifted, and it is spent
-     only where the expectation is an INVARIANT OF THE DECISION rather than a snapshot of the arm list —
-     a `want` on every row would be the change detector CLAUDE.md §Testing forbids, which is why most of
-     the rows below carry none. Each of these four is one half of the owner's sentence: a child navigable the
-     page's own markup named or its own code computed FIRES, and a navigation on a FORCED path does not. */
+  /* THE OWNER'S NAVIGATION DECISION, AND THESE FOUR ROWS ARE WHAT SCORE IT. A `want` is spent only where the
+     expectation is an invariant of the decision rather than a snapshot of the arm list. Each row is one
+     conjunct of the sentence: the page's own child navigable fires when its path is `derived` and chose no
+     witness, and is refused on a forced path, on a path that pinned a witness, or as this tool's act. The
+     witness mark is the engine's, relayed off the create notice, the load job and the route declaration. */
   { label: 'bridge.js navigationLoad (a child navigable)',
     want: 'FIRES',
     grep: "git grep -n 'destination: \"document\"' extension/bridge.js",
-    facts: { destination: 'document', actor: 'page', pinned: 'unstated',
+    facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unpinned',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
-  /* THE SAME CALL SITE WITH THE WITNESS MARK STATED, AND THE WHOLE VALUE OF THIS ROW IS STILL THAT IT AGREES
-     WITH THE ONE ABOVE — THE AGREEMENT NOW MEANS THE OPPOSITE THING AND IS WORTH MORE. It is not a
-     transcription: the mark does not travel for a navigation, so this is the HYPOTHETICAL the plumbing
-     CLAUDE.md §A-REAL-NAVIGABLE calls owed would create. It used to read REFUSED together with the row
-     above, which is what proved no plumbing diff could flip a navigation on. It now reads FIRES together
-     with the row above, which proves the same property from the other side: the arm that admits a child
-     navigable names `destination`, `actor` and `provenance` and NO witness row, so landing the mark changes
-     no firing outcome at any setting. A day on which these two DISAGREE is a day some arm started reading
-     the witness for a navigation, and the decision stopped being immune to an unrelated field. */
-  { label: '…the same, if it STATED its witness mark (must AGREE with the row above)',
-    want: 'FIRES',
-    grep: 'solver/engine.c engine_pinned_of_running_path — the fact exists and does not travel',
-    facts: { destination: 'document', actor: 'page', pinned: 'unpinned',
+  { label: '…the same, on a path that PINNED a witness (must REFUSE — the witness conjunct)',
+    want: 'REFUSED',
+    grep: 'solver/engine.c engine_navigation_pinned_token — the mark rides the navigation records',
+    facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'pinned',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
-  /* AND THE BOUND OF THE DECISION, WHICH IS THE ONE ROW THAT MUST NOT MOVE. A route that exists only past a
-     forced gate is a document ONLY THIS ENGINE EVER ASKED FOR, so it is the deliberate per-origin widening
-     and not the default — the asymmetry with the two destination-keyed arms is argued at the arm itself.
-     The witness is stated here too, so this row also shows that the refusal is the PROVENANCE and not the
-     mark: both navigation rows above fire with the mark stated and this one refuses with it stated. */
   { label: '…the same, on a FORCED path (must still REFUSE — the bound)',
     want: 'REFUSED',
     grep: 'as above; the provenance word is engine_provenance_of_running_path\'s',
-    facts: { destination: 'document', actor: 'page', pinned: 'unpinned',
+    facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unpinned',
              provenance: 'forced', docReach: 'observed', credentialed: true, headers: null } },
-  /* AND THE `actor` CONJUNCT'S OWN WORK, WHICH NO OTHER ROW HERE DEMONSTRATES. A derived navigation THIS
-     TOOL composed — a discovery sweep following a route it computed itself — is identical to the
-     child navigable above on destination, provenance, doc-reach and witness, and differs only in whose act
-     it is. If this ever reads FIRES, the arm has stopped asking the question the owner's discriminator is
-     made of and the default has quietly widened to every address this tool can build. */
   { label: '…the same at actor=tool (must REFUSE — the `actor` conjunct)',
     want: 'REFUSED',
     grep: 'no caller states this pair today; it is the arm\'s own discriminator, exercised',
-    facts: { destination: 'document', actor: 'tool', pinned: 'unstated',
+    facts: { destination: 'document', actor: 'tool', driven: 'unstated', pinned: 'unpinned',
              provenance: 'derived', docReach: 'observed', credentialed: true, headers: null } },
   /* THE AMBIENT SEED AT BOTH ACTOR WORDS, WHICH IS THE PAIR THAT MAKES ONE REPAIR AUDITABLE. The loader used
      to answer `page` for all three of its callers out of one literal, and the seed is the one that is this
@@ -133,23 +113,23 @@ const SITES = [
      two disagree is a day the repair stopped being free, and nothing else in this tree would say so. */
   { label: 'bridge.js AMBIENT SEED, actor=tool (what it states)',
     grep: "git grep -n 'PROVENANCE_OBSERVED, PROVENANCE_OBSERVED' extension/bridge.js",
-    facts: { destination: 'document', actor: 'tool', pinned: 'unstated',
+    facts: { destination: 'document', actor: 'tool', driven: 'unstated', pinned: 'unstated',
              provenance: 'observed', docReach: 'observed', credentialed: true, headers: null } },
   { label: '…the same at actor=page (the retired literal)',
     grep: 'must agree with the row above, or the repair is no longer outcome-free',
-    facts: { destination: 'document', actor: 'page', pinned: 'unstated',
+    facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unstated',
              provenance: 'observed', docReach: 'observed', credentialed: true, headers: null } },
   { label: "bridge.js page fetch() relay, unpinned address",
     grep: "git grep -n 'docReach: msg.provenance, credentialed: false' extension/bridge.js",
-    facts: { destination: '', actor: 'page', pinned: 'unpinned',
+    facts: { destination: '', actor: 'page', driven: 'undriven', pinned: 'unpinned',
              provenance: 'derived', docReach: 'observed', credentialed: false, headers: null } },
   { label: "bridge.js page fetch() relay, PINNED address",
     grep: 'as above; the mark comes off the engine pending line',
-    facts: { destination: '', actor: 'page', pinned: 'pinned',
+    facts: { destination: '', actor: 'page', driven: 'undriven', pinned: 'pinned',
              provenance: 'forced', docReach: 'observed', credentialed: false, headers: null } },
   { label: 'a program load (a lazy chunk)',
     grep: 'Fetch §2.2.5 destination `script` — _isScriptLike',
-    facts: { destination: 'script', actor: 'page', pinned: 'unstated',
+    facts: { destination: 'script', actor: 'page', driven: 'undriven', pinned: 'unstated',
              provenance: 'forced', docReach: 'observed', credentialed: true, headers: null } },
 ];
 
@@ -159,11 +139,11 @@ const SITES = [
 const CONTROLS = [
   { label: 'CONTROL must REFUSE: this tool composing a data request',
     want: 'REFUSED',
-    facts: { destination: '', actor: 'tool', pinned: 'unpinned',
+    facts: { destination: '', actor: 'tool', driven: 'unstated', pinned: 'unpinned',
              provenance: 'derived', docReach: 'observed', credentialed: false, headers: null } },
   { label: 'CONTROL must FIRE: the page loading its own code',
     want: 'FIRES',
-    facts: { destination: 'script', actor: 'page', pinned: 'unstated',
+    facts: { destination: 'script', actor: 'page', driven: 'undriven', pinned: 'unstated',
              provenance: 'forced', docReach: 'observed', credentialed: true, headers: null } },
 ];
 

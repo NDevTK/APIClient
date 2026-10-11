@@ -152,7 +152,7 @@ void browsing_context_group_release(void);
  * other end: on a swap "the created Window, Document, and agent will not end up being used; because the created
  * Document's origin is opaque, we will end up creating a new agent and Window later in this algorithm" — a NEW
  * AGENT, which in this engine is a new instance. So the new top-level browsing context is announced to the host
- * as `navigable.swap<TAB><new document name><TAB><url><TAB><origin>` and provisioned there, the way
+ * as `navigable.swap` (its fields are listed at the writer) and provisioned there, the way
  * core/frame/navigable.c already announces a cross-origin child.
  *
  * AND THE HOST FETCHES THE RESPONSE AGAIN, WHICH IS THE PRICE OF THE TRUST BOUNDARY AND NOT AN OVERSIGHT. This
@@ -191,8 +191,10 @@ void browsing_context_group_release(void);
  * reason the address beside it is one: this is reached from inside a queued task, by whichever flow adopted
  * it, long after the operation that decided what this navigation is evidence of. */
 /* `driven` (solver/engine.h's PENDING_DRIVEN_*) rides beside `provenance` for the same reason: it is whose act
- * the navigation is, and the zone's `actor` row reads it. */
+ * the navigation is, and the zone's `actor` row reads it. `pinned` (PENDING_PINNED_*) too: whether the path
+ * chose a witness, which the zone's navigation default reads. */
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
-                                 SandboxFlags final_sandbox_flags, const char *provenance, const char *driven);
+                                 SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
+                                 const char *pinned);
 
 #endif

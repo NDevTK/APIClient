@@ -1652,7 +1652,7 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
         DFAIL("a form submits to a `data:` action — §4.10.22.3 step 26 plans to navigate to it (the GET cell "
               "having mutated its query first), and navigating to a data: URL builds a Document out of the "
               "URL's OWN bytes with no network involved. §7.4's document-load job can only load an address the "
-              "HOST fetches (navigable.c's js_nav_load_step asks `document.fetch\\t<prov>\\t<url>`, which for a "
+              "HOST fetches (navigable.c's js_nav_load_step asks `document.fetch`, which for a "
               "data: URL is a GET of the literal text), and its `fetches` predicate names exactly one "
               "non-fetching scheme, `about:`, with its own comment saying that is not the only one. What must "
               "exist afterward: a navigation whose response can be produced IN THE ENGINE — data_url_process "

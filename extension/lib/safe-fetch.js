@@ -409,12 +409,8 @@ function safeFetchReachJoin(outer, own) {
    composed, or from its record's mark; any other act states `unstated`. The mark is independent of the
    provenance, so a `derived` act may rest on a witness. An absent mark still aborts, so `unstated` is always
    typed by a caller that means it, and `unstated` and `unpinned` are separate rows a person permits separately.
-   Named residual. Not covered: the navigation notices (core/frame/navigable.c) and the route declaration
-   (solver/route_seed.c) reach here with no mark, so the navigation default arm reads no `witness` and admits
-   a `derived` navigation whose path pinned a witness. Next diff: write the mark into those notices, relay it
-   through `bridge.js`'s navigation and route-declaration relays, and add `witness=unpinned` to that arm. Its
-   absence shows as a document row firing at the default whose path pinned a witness, and as `witness=unstated`
-   on the document rows of a run whose `fetch()` and XHR rows at the same host carry a mark. */
+   The navigation records (core/frame/navigable.c's load job and create notice, solver/route_seed.c's
+   declaration) carry the engine's mark like the pending line does. */
 var _PINNED_MARKS = ["pinned", "unpinned", "unstated"];
 function _pinnedOf(opts) {
   CHECK(_PINNED_MARKS.indexOf(opts.pinned) >= 0,
@@ -919,9 +915,9 @@ var _DEFAULT_ARMS = [
      is one only this engine asked for, so `provenance: derived` keeps the forced path refused.
      No `observed` twin: `engine_prov_of_running_path` answers only `forced` or `derived`, and the one act
      stating `observed` for a navigation is the ambient seed, which states `actor: tool` and fires through the
-     observed arm. No `witness` conjunct: navigation notices state `unstated` today (`_pinnedOf`'s residual).
-     No `doc-reach` conjunct: frames must nest (a grandchild reads `derived`), and a forced-reach parent exists
-     only where a person widened.
+     observed arm. `witness: unpinned`, as for the data arm: a `derived` path may still have pinned a witness
+     the fork chose, and an address composed after it is not the page's own. No `doc-reach` conjunct: frames
+     must nest (a grandchild reads `derived`), and a forced-reach parent exists only where a person widened.
      No same-origin conjunct, and not because the SOP check covers it (that runs only when credentialed): the
      caller's `navigationCarriesSession` asks for cookies only same-origin, so a cross-origin child loads as an
      uncredentialed GET, narrower than a browser, through every other gate. The deny list does apply to a
@@ -929,7 +925,8 @@ var _DEFAULT_ARMS = [
      engine states only `document` (HTML §7.4.5 "Populating a session history entry"). */
   { when: [{ signal: "destination", value: "navigation" },
            { signal: "actor", value: "page" },
-           { signal: "provenance", value: "derived" }],
+           { signal: "provenance", value: "derived" },
+           { signal: "witness", value: "unpinned" }],
     why: "the analysed page's own markup named this nested document or its own code computed the address — " +
          "so the person's own browser loaded it when they visited the page, and what fires is the page " +
          "loading itself one level down rather than a route only this engine ever asked for" }

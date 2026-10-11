@@ -886,8 +886,11 @@ try {
   if (create[17] !== 'undriven')
     fail(`the create notice states the drive mark \`${create[17]}\` and this document created the child from ` +
          'its own top-level script, which no drive of uncalled code ran');
-  if (create.slice(18).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(18).join('\t')}\`) and this ` +
+  if (create[18] !== 'unpinned')
+    fail(`the create notice states the witness mark \`${create[18]}\` and this document's \`window.open\` ` +
+         'address is a literal its own script spelled, which no equality pinned');
+  if (create.slice(19).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(19).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

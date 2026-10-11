@@ -368,7 +368,8 @@ itself as a browser would: a program load; any other subresource; a request with
 both `observed` (this is also what fires the seeded document load); the analysed page's own data request whose
 address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`); and a child navigable the page
 named (`destination=navigation`, `actor=page`, `provenance=derived`). Probes, discovery and tool-composed data
-requests fire only at an origin a person widened.
+requests fire only at an origin a person widened. The witness mark is independent of the provenance: a
+`derived` path may have pinned a value the fork chose, so the navigation arm requires `witness=unpinned` too.
 
 Beside the provenance, every engine record of a request states a drive mark, `driven` or `undriven`
 (`PENDING_DRIVEN_*`, read off `flow_path_driven` and asserted at `endpoint_record`): `driven` means the request

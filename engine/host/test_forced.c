@@ -5240,10 +5240,11 @@ static int hostreq_answer_all(JSContext *ctx)
             !memcmp(nz, ROUTE_SEED_NOTICE "\t", sizeof(ROUTE_SEED_NOTICE))) {
             const char *addr = nz + sizeof(ROUTE_SEED_NOTICE);
             const char *tab = memchr(addr, '\t', len - sizeof(ROUTE_SEED_NOTICE));
-            const char *dtab;
+            const char *dtab, *wtab;
             size_t alen;
             size_t plen;
             size_t dlen;
+            size_t wlen;
 
             DCHECK(tab != NULL,
                    "a route declaration carried no PROVENANCE after its address — solver/route_seed.c writes "
@@ -5251,17 +5252,23 @@ static int hostreq_answer_all(JSContext *ctx)
                    "having parted, and the field this host would read as an address is the whole record");
             if (!tab) { nz = end ? end + 1 : nz + len; continue; }
             alen = (size_t)(tab - addr);
-            /* …and the drive mark after the provenance, the record's last field. */
+            /* …and the drive mark after the provenance, and the witness mark last. */
             dtab = memchr(tab + 1, '\t', len - (size_t)(tab + 1 - nz));
-            DCHECK(dtab != NULL,
-                   "a route declaration carried no DRIVE MARK after its provenance — solver/route_seed.c writes "
-                   "`document.seed<TAB><address><TAB><provenance><TAB><driven>` with one snprintf");
-            if (!dtab) { nz = end ? end + 1 : nz + len; continue; }
+            wtab = dtab ? memchr(dtab + 1, '\t', len - (size_t)(dtab + 1 - nz)) : NULL;
+            DCHECK(dtab != NULL && wtab != NULL,
+                   "a route declaration carried no DRIVE MARK or WITNESS MARK after its provenance — "
+                   "solver/route_seed.c writes `document.seed<TAB><address><TAB><provenance><TAB><driven><TAB>"
+                   "<pinned>` with one snprintf");
+            if (!dtab || !wtab) { nz = end ? end + 1 : nz + len; continue; }
             plen = (size_t)(dtab - (tab + 1));
-            dlen = len - (size_t)(dtab + 1 - nz);
+            dlen = (size_t)(wtab - (dtab + 1));
+            wlen = len - (size_t)(wtab + 1 - nz);
             DCHECK((dlen == strlen(PENDING_DRIVEN_YES) && !memcmp(dtab + 1, PENDING_DRIVEN_YES, dlen)) ||
                    (dlen == strlen(PENDING_DRIVEN_NO) && !memcmp(dtab + 1, PENDING_DRIVEN_NO, dlen)),
                    "a route declaration stated a drive mark that is neither token engine.h declares");
+            DCHECK((wlen == strlen(PENDING_PINNED_YES) && !memcmp(wtab + 1, PENDING_PINNED_YES, wlen)) ||
+                   (wlen == strlen(PENDING_PINNED_NO) && !memcmp(wtab + 1, PENDING_PINNED_NO, wlen)),
+                   "a route declaration stated a witness mark that is neither token engine.h declares");
             DCHECK(alen > 0, "a route declaration named no address — the emitter refuses an empty one, so an "
                              "empty field here is a record split at the wrong tab");
             /* TWO RUNGS, because they are two different failures. The first is the one this record can be
@@ -5344,14 +5351,16 @@ static int hostreq_answer_all(JSContext *ctx)
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
-                /* `document.fetch<TAB><provenance><TAB><driven><TAB><url>` — the ADDRESS IS THE REMAINDER,
-                   past the THIRD tab. This fixture reads the provenance and drive mark nowhere: it stands in
-                   for a trusted zone's network and has no session to spend. Skipping both is not optional —
+                /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` — the ADDRESS IS THE
+                   REMAINDER, past the FOURTH tab. This fixture reads the three marks nowhere: it stands in
+                   for a trusted zone's network and has no session to spend. Skipping them is not optional —
                    the response-URL write below would make a glued token part of that Document's ORIGIN. */
                 const char *prov_end = memchr(tab + 1 + 15, '\t', (size_t)(end - (tab + 1 + 15)));
                 const char *drv_end = prov_end ? memchr(prov_end + 1, '\t', (size_t)(end - (prov_end + 1)))
                                                : NULL;
-                const char *asked = drv_end ? drv_end + 1 : end;
+                const char *pin_end = drv_end ? memchr(drv_end + 1, '\t', (size_t)(end - (drv_end + 1)))
+                                              : NULL;
+                const char *asked = pin_end ? pin_end + 1 : end;
 
                 v = JS_NewObject(ctx);
                 /* FETCH §2.2.6 "Responses"' RESPONSE URL, WHICH THIS FIXTURE SERVES OUT OF A LITERAL AND
@@ -5360,9 +5369,9 @@ static int hostreq_answer_all(JSContext *ctx)
                    satisfy a reader. HTML §7.4.5 determines the loaded Document's ORIGIN over this string, so a
                    host that DID redirect would put a different one here and the Document would belong to
                    another agent cluster. */
-                DCHECK(drv_end != NULL && asked < end,
-                       "a document.fetch request carried no address after its provenance and drive mark — the "
-                       "load job writes `document.fetch<TAB><provenance><TAB><driven><TAB><url>` "
+                DCHECK(pin_end != NULL && asked < end,
+                       "a document.fetch request carried no address after its provenance and two marks — the "
+                       "load job writes `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` "
                        "(core/frame/navigable.c), so a missing tab or an empty tail is that record's two ends "
                        "disagreeing rather than a page navigating to nothing");
                 if ((size_t)(end - asked) >= sizeof FIXTURE_CROSS_SITE - 1 &&
