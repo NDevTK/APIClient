@@ -502,6 +502,17 @@ static const char HTML_PLATFORM[] =
        WHICH of 300 and 0 the fold produced. */
     "fetch('/api/sainlinedelta?i=' + (saWide.scrollWidth - saNarrow.scrollWidth) +"
     " '&b=' + (saTaller.scrollHeight - saTall.scrollHeight));"
+    /* CSSOM VIEW §7 "Extensions to the HTMLElement Interface": offsetLeft step 3 subtracts the offset parent's
+       left padding edge from the element's left border edge, and both contain the parent's snapped border
+       width (css-values-4 §6), a function of the device pixel ratio. It cancels, so the answer is the child's
+       10px margin in every world; `w` is the control, an offsetWidth that keeps the child's own border. */
+    "var soP = document.createElement('p'); soP.style.setProperty('position', 'relative');"
+    "soP.style.setProperty('border-left', '1px solid');"
+    "var soC = document.createElement('p'); soC.style.setProperty('margin-left', '10px');"
+    "soC.style.setProperty('border-left', '1px solid');"
+    "soP.appendChild(soC); document.body.appendChild(soP);"
+    "fetch('/api/snapoffset?v=' + (soC.offsetLeft === 10 ? 'is10' : 'wrong'));"
+    "fetch('/api/snapdelta?l=' + soC.offsetLeft + '&w=' + soC.offsetWidth);"
     /* §4.8.3's `[CEReactions, ReflectSetter] attribute unsigned long width`: the setter is HTML §2.6.1's
        reflection and the getter is determine-the-dimensions, two different questions this pair holds apart.
        core/css/css_presentational_hints.c carries HTML §15.4.3 "Attributes for embedded content and images",
