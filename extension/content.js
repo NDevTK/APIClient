@@ -368,7 +368,9 @@
      accepts is its attack surface: it never reads storage and handles no data-returning message type (see
      SECURITY.md). The set is RESHIP, WS_SEND_MSG, PM_SEND_MSG and MC_SEND_MSG; each has a sender in this
      tree. It sends no request for the trusted zone: every external request leaves from the offscreen
-     document (lib/safe-fetch.js). */
+     document (lib/safe-fetch.js). The three *_SEND_MSG write the person's payload into a socket, port or
+     window the page holds, so the reply runs the page's own receiving code; that is why they are relayed
+     here and not sent by safeFetch. */
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     /* Every arm is an order from the trusted zone, so the browser-stamped sender must be this extension's
        own origin and no tab: a message from a content script carries `sender.tab`. */

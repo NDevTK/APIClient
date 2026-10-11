@@ -3,6 +3,7 @@
 // isolated-world content script via CustomEvent on the shared document.
 //
 // Single capture point — replaces chrome.webRequest for all request data.
+// Its one write is the person's WebSocket console frame, sent on a socket the page opened (below).
 
 (function () {
   "use strict";
@@ -99,9 +100,11 @@
   });
 
   // ─── WebSocket send command listener ──────────────────────────────────────
-  // Receives commands from content.js to send messages through live WebSocket
-  // connections.  Security note: a compromised renderer already has direct
-  // access to WebSocket objects, so this relay grants no new capability.
+  // Sends the person's typed frame (relayed by content.js) on a live socket the
+  // page opened. It is not a safeFetch send because the frame must travel on the
+  // page's own connection: the server's reply then runs the page's own message
+  // handlers, which a socket the extension opened would never feed. It confers
+  // nothing: the page's code can already write to its own sockets.
 
   document.addEventListener("__uasr_ws_send", function (e) {
     if (!e.detail) return;

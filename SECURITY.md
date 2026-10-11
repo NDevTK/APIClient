@@ -334,6 +334,11 @@ surface that shows them the bytes, and what it owes is a destination this zone c
 | Live-verify attacker tab (`tabs.create` of `ATTACKER_PAGE_URL`) | a constant | the person's profile | one GET of a fixed documentation page |
 | Live-verify navigation (`window.open` of the delivery address) | the page the sink was observed on, plus a fragment or query the engine declared | the person's profile | the address (see Live verify); the person's click |
 
+The operator's channel writes are the one send outside `safeFetch`, and the reason is the reply's path: a
+frame, port message or postMessage written into a channel the page holds is answered into the page's own
+receiving code, which a channel the extension opened would never reach. They name no new destination (the
+page chose it) and carry the page's own credentials, so they change no signal the chokepoint computes.
+
 Not egress, though each greps like one: `renderer.html`'s `import()` of a `blob:` URL built from bytes the
 offscreen already fetched; every `indexedDB.open`; the popup's request formatters, which build a `fetch(…)`
 string for a person to copy; and `content.js`'s `submit` listener, which observes a submission the page made.
