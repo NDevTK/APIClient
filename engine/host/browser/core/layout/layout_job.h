@@ -7,9 +7,9 @@
 /* The stack replaces C frames. A question is pushed when asked. Its body either completes (the entry is
  * popped and, for LAYOUT_Q_BF_BOX, memoized) or asks a question the job defers: that question is pushed
  * suspended and the asking bodies return "not yet" up to the nearest drive, each leaving its entry on the
- * stack as suspended. The drive computes the stack from the top down on a fresh C stack, then re-runs its
- * own walk, which finds every completed answer in the memo. A body that returned "not yet" is re-run from
- * its start; it keeps nothing but the memoized answers of the questions it asked.
+ * stack as suspended with its stack walk staged (LayoutBfCursor). The drive computes the stack from the top
+ * down on a fresh C stack, each body continuing at the step it stopped at, then re-runs its own walk, which
+ * finds every completed answer in the memo.
  *
  * The interruption is a typed return, not a non-local exit: frames between an ask and its drive hold heap
  * temporaries and process-wide brackets across their calls (table grids, line fragments, measurement
@@ -35,9 +35,9 @@
  * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,
  * its anonymous-box enumeration and its origin; core/layout/flow_position.h's and line_box.h's asks)
  * propagates "not yet" to the walk step, the questions it deferred stay suspended on the job across the rest,
- * and the next activation computes them before it retries the node. A resting drive also defers once it has
- * opened rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies in one activation, so a node whose derivation is wide
- * rests mid-node rather than only a deep one. */
+ * and the next activation computes them before it retries the node. A resting drive also stops once it has
+ * laid out rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes in one activation, so a node whose derivation is wide
+ * rests mid-node, and a body whose child list is long rests mid-walk, rather than only a deep one. */
 /* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's auto-height entry
  * is still driven where core/layout/used_value.c sizes a box for a caller inside the walk outside a line (an
  * absolutely positioned box whose positioned ancestor is a table or a flex or grid item, an `inline-block`
@@ -53,10 +53,14 @@
  * How its absence shows: a deep document's C stack grows with its depth along a frame cycle that names no
  * `bf_box`, `uv_sized` or `used_value_px`. */
 
-/* NAMED RESIDUAL, replay. Not covered: a body that returned "not yet" re-runs from its start, recomputing
- * everything it does between asks (its own cascade reads and its anonymous block boxes' line layout). Next:
- * the stack walk's loop state staged in the entry, so a resumed body continues at the child it stopped at.
- * How its absence shows: `_layoutBfReplays` beside `_layoutBfDeferred`, one replay per deferring body. */
+/* NAMED RESIDUAL, replay. Not covered: a stack walk with no body of its own (core/layout/block_flow.c's
+ * entries that place one child, find a static position, read a baseline or enumerate anonymous boxes, run on
+ * a drive's frame) has no entry to stage in, so its retry starts at the first child again and re-lays out the
+ * anonymous block boxes before the step it stopped at; and a body in §9.4.2's inline formatting context
+ * re-runs from its start. Next: those entries ask their container's walk as a question whose body records
+ * what they read, as flow_placement.h already records every position a walk passes. How its absence shows:
+ * `_layoutBfReplays` counts the inline-context bodies; the walks show as a REST_UNIT_LAYOUT_DESCENDANTS unit
+ * whose CPU grows with the child count of its node's container. */
 
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_LAYOUT_JOB_H
@@ -82,6 +86,16 @@ typedef struct {
     CssPx baseline;
     bool  collapse_through, is_table_wrapper, has_line_box;
 } LayoutBfAnswer;
+
+/* What a LAYOUT_Q_BF_BOX body stages before it returns "not yet": its §9.4.1 stack walk's loop state at the
+   step it retries (core/layout/block_flow.c's BfWalk, with §8.3.1's runs as their extrema). The two nodes
+   are the walk's enumeration cursor and stay valid across a rest by the memo validity argument above. */
+typedef struct {
+    lxb_dom_node_t *prev, *brk;
+    size_t wi;
+    bool   at_run, escaping, placed, has_line_box;
+    CssPx  pos, run_pos, run_neg, esc_pos, esc_neg, baseline;
+} LayoutBfCursor;
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
@@ -144,7 +158,7 @@ void layout_job_drive_end(LayoutJobDrive *d);
 
 /* A drive whose driver rests (a step machine's, on its entered job). `begin_resting` asserts it is the job's
    outermost drive and takes every suspended entry the last activation left as its own; `spent` answers whether
-   this activation has opened its rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies; `end` on a resting drive
+   this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes; `end` on a resting drive
    leaves suspended entries in place for the next activation and asserts none is computing. */
 void layout_job_drive_begin_resting(LayoutJobDrive *d);
 bool layout_job_drive_spent(const LayoutJobDrive *d);
@@ -159,14 +173,27 @@ typedef enum {
 
 /* Ask a BF_BOX question. Asserts a drive is open: every ask has one beneath it on the C stack. The question
    is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing bodies, or
-   when a resting drive is innermost and has spent its bodies. */
+   when a resting drive is innermost and has spent its boxes. An open takes one box. */
 LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at);
 
 /* The computing body at `at` completed: asserts it is the top, pops and memoizes it. */
 void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer);
 
-/* The computing body at `at` returned "not yet": asserts every entry above it is suspended and suspends it. */
+/* The computing body at `at` returned "not yet": asserts every entry above it is suspended and suspends it.
+   A body suspends with a deferred question above it, or with a staged walk and nothing above it when its
+   walk stopped at a spent quota (`layout_job_bf_step`). */
 void layout_job_suspend(size_t at);
+
+/* The computing body at `at`, whose question is about `el`, stages its walk before returning "not yet", and
+   on its next run takes the staged walk back: `resume` answers whether one was staged, copies it out and
+   clears it, so the walk continues at the step it stopped at instead of at its first child. */
+void layout_job_bf_stage(size_t at, const lxb_dom_element_t *el, const LayoutBfCursor *c);
+bool layout_job_bf_resume(size_t at, const lxb_dom_element_t *el, LayoutBfCursor *c);
+
+/* The body at `at`'s walk is about to lay out a box with no question of its own (CSS 2.2 §9.2.1.1's anonymous
+   block box). It answers false when a resting drive is innermost and has spent its items, and the body then
+   stages and suspends; otherwise it takes one item when a resting drive is innermost. */
+bool layout_job_bf_step(size_t at);
 
 /* ---- the open chain, for the kinds that are not stacked in release ------------------------------------- */
 

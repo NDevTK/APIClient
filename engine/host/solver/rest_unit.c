@@ -25,15 +25,15 @@
    removing a child removes a subtree the document chose. */
 #define REST_UNIT_SUBTREE_REMOVALS_N   1u
 
-/* Layout question bodies above one drive before an ask is deferred. The floor is replay: deferring bodies
-   re-run from their start, so a unit of one replays a parent once per child. The ceiling is the C stack one
-   activation spends. 32 replays a body once per 32 levels and keeps an activation to 32 bodies. */
+/* Layout question bodies above one drive before an ask is deferred. The floor is the deferral: a deferring
+   body stages its walk and is resumed, so a unit of one does that once per child. The ceiling is the C stack
+   one activation spends. 32 defers once per 32 levels and keeps an activation to 32 bodies. */
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
-/* Layout question bodies a resting drive opens per rest point, 8. The floor is replay: each body that
-   deferred re-runs from its start in the next activation. The ceiling is bound (2), measured by the
-   scrolling-area bracket the drive runs inside; a cold node's bodies run to a few hundred microseconds each. */
-#define REST_UNIT_LAYOUT_BODIES_N   8u
+/* Boxes a resting drive lays out per rest point, 8. The floor is the cost of resting, which a body pays as one
+   staged walk. The ceiling is bound (2), measured by the scrolling-area bracket the drive runs inside; a cold
+   node's boxes run to a few hundred microseconds each. */
+#define REST_UNIT_LAYOUT_BOXES_N   8u
 
 /* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
    node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A node whose
@@ -49,7 +49,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
     case REST_UNIT_LAYOUT_QUESTIONS: n = REST_UNIT_LAYOUT_QUESTIONS_N; break;
-    case REST_UNIT_LAYOUT_BODIES:    n = REST_UNIT_LAYOUT_BODIES_N;    break;
+    case REST_UNIT_LAYOUT_BOXES:     n = REST_UNIT_LAYOUT_BOXES_N;     break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a

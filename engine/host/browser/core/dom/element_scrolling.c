@@ -380,7 +380,7 @@ static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el
 
 /* One rest unit of the open box's area walks, or, once both are complete, the visit. The boxes the walk folds
    are the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures them against the slice; the
-   unit also ends when the drive spends its bodies (REST_UNIT_LAYOUT_BODIES). */
+   unit also ends when the drive spends its boxes (REST_UNIT_LAYOUT_BOXES). */
 static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavior)
 {
     if (!scrolling_area_walk_done(&w->area)) {
@@ -388,7 +388,7 @@ static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavi
         LayoutJobDrive d;
 
         /* The step is the walk's drive: a node whose origin answers "not yet" leaves its questions suspended,
-           and each activation computes them first, up to the drive's bodies, then retries the node. */
+           and each activation computes them first, up to the drive's boxes, then retries the node. */
         rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
         layout_job_drive_begin_resting(&d);
         while (k < n && !scrolling_area_walk_done(&w->area) && block_flow_drive_deferred(&d)) {

@@ -17,9 +17,13 @@
 
 typedef enum { LJ_COMPUTING = 1, LJ_SUSPENDED } LjState;
 
+/* `opened` is whether the body has run: an entry pushed deferred has not, and the drive's first run of it
+   lays out its box. `staged` is whether `cur` holds the walk the body stopped at. */
 typedef struct {
     LayoutQuestion q;
     LjState        state;
+    bool           opened, staged;
+    LayoutBfCursor cur;
 } LjEntry;
 
 /* One memo slot, live when `gen` equals its job's. `rest` is the job's rest count when the answer was
@@ -38,7 +42,7 @@ struct LayoutJob {
     size_t    base;      /* the innermost open drive's mark; entries below it belong to drives further out */
     unsigned  nest;      /* computing LAYOUT_Q_BF_BOX entries above `base` */
     unsigned  drives;    /* drives open on this job */
-    size_t    quota;     /* bodies a resting drive may still open in this activation */
+    size_t    quota;     /* boxes a resting drive may still lay out in this activation */
     bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
     size_t    memo_cap;  /* a power of two, or zero before the first answer */
@@ -121,6 +125,8 @@ static size_t lj_push(LayoutJob *job, LayoutQuestion q, LjState state)
     }
     job->stack[job->n].q = q;
     job->stack[job->n].state = state;
+    job->stack[job->n].opened = state == LJ_COMPUTING;
+    job->stack[job->n].staged = false;
     return job->n++;
 }
 
@@ -283,7 +289,7 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
     job->base = 0;
     job->nest = 0;
     job->drives++;
-    job->quota = rest_unit_items(REST_UNIT_LAYOUT_BODIES);
+    job->quota = rest_unit_items(REST_UNIT_LAYOUT_BOXES);
     job->resting = true;
 }
 
@@ -293,9 +299,9 @@ bool layout_job_drive_spent(const LayoutJobDrive *d)
     return d->rests && d->job->quota == 0;
 }
 
-/* Whether an open is deferred because a resting drive spent its bodies. Only while the resting drive is the
+/* Whether a box is deferred because a resting drive spent its items. Only while the resting drive is the
    innermost: a drive nested inside a body computes what it defers before returning, so deferring there buys
-   a replay and no rest. */
+   no rest. */
 static bool lj_quota_spent(const LayoutJob *job)
 {
     return job->resting && job->drives == 1 && job->quota == 0;
@@ -322,7 +328,9 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
            "a resting drive was continued after it spent its bodies; its driver rests instead");
     e->state = LJ_COMPUTING;
     job->nest++;
-    lj_quota_take(job);
+    /* A resumed body continues a box already counted; a deferred one lays out its box now. */
+    if (!e->opened) lj_quota_take(job);
+    e->opened = true;
     *q = e->q;
     *at = job->n - 1;
     return true;
@@ -390,6 +398,9 @@ void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer)
     DCHECK(e->state == LJ_COMPUTING && e->q.kind == LAYOUT_Q_BF_BOX,
            "a CSS 2.1 §9.4.1 contribution answered an entry that is not a computing contribution");
     DCHECK(job->nest > 0, "a contribution body answered with no body computing above its drive");
+    DCHECK(!e->staged,
+           "a contribution body answered with a staged walk it never resumed; the body's run took a path to "
+           "its answer that does not pass through the walk it stopped in");
     if (job->memo_used * 2 >= job->memo_cap) lj_memo_grow(job);
     s = lj_probe(job->memo, job->memo_cap, job->gen, e->q.element, e->q.code);
     DCHECK(s->gen != job->gen,
@@ -418,10 +429,57 @@ void layout_job_suspend(size_t at)
         DCHECK(job->stack[i].state == LJ_SUSPENDED,
                "a body returned \"not yet\" while a question above it is still computing — \"not yet\" "
                "propagates from the deferred ask down, so every entry above a suspending body is suspended");
-    DCHECK(at + 1 < job->n, "a body returned \"not yet\" with no deferred question above it");
+    DCHECK(at + 1 < job->n || job->stack[at].staged,
+           "a body returned \"not yet\" with no deferred question above it and no walk staged; only a walk "
+           "stopped by a spent quota suspends with nothing above it, and it stages first");
     job->stack[at].state = LJ_SUSPENDED;
     job->nest--;
-    METRIC_ADD(bf_replays, 1);
+    /* A body with no staged walk re-runs from its start. */
+    if (!job->stack[at].staged) METRIC_ADD(bf_replays, 1);
+}
+
+static LjEntry *lj_body(LayoutJob *job, size_t at, const lxb_dom_element_t *el)
+{
+    LjEntry *e;
+
+    DCHECKF(at < job->n && at >= job->base, "a body named entry %zu outside its drive's range [%zu, %zu)",
+            at, job->base, job->n);
+    e = &job->stack[at];
+    DCHECK(e->state == LJ_COMPUTING && e->q.kind == LAYOUT_Q_BF_BOX && e->q.element == el,
+           "a stack walk named an entry that is not the computing CSS 2.1 §9.4.1 contribution of the "
+           "element it walks; a body passes its own entry to its own walk");
+    return e;
+}
+
+void layout_job_bf_stage(size_t at, const lxb_dom_element_t *el, const LayoutBfCursor *c)
+{
+    LjEntry *e = lj_body(lj_current(), at, el);
+
+    DCHECK(!e->staged, "a body staged its walk twice in one run; it stages once, as it returns \"not yet\"");
+    e->cur = *c;
+    e->staged = true;
+}
+
+bool layout_job_bf_resume(size_t at, const lxb_dom_element_t *el, LayoutBfCursor *c)
+{
+    LjEntry *e = lj_body(lj_current(), at, el);
+
+    if (!e->staged) return false;
+    *c = e->cur;
+    e->staged = false;
+    return true;
+}
+
+bool layout_job_bf_step(size_t at)
+{
+    LayoutJob *job = lj_current();
+
+    DCHECKF(at + 1 == job->n && job->stack[at].state == LJ_COMPUTING,
+            "a stack walk counted a box for entry %zu of a stack of %zu; only the computing body on top "
+            "walks", at, job->n);
+    if (lj_quota_spent(job)) return false;
+    lj_quota_take(job);
+    return true;
 }
 
 /* ---- the open chain ------------------------------------------------------------------------------------- */

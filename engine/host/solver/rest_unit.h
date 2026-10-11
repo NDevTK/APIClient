@@ -55,8 +55,8 @@ typedef enum {
     REST_UNIT_SUBTREE_REMOVALS,
     /* One layout question body open on the C stack above its job's drive (core/layout/layout_job.h). An ask
        made while the drive already hosts this many bodies is deferred and computed on a fresh C stack. Cost:
-       one body, whose walk the document sizes. This number decides C stack per activation and replay cost;
-       the rest point a resting drive offers is counted by REST_UNIT_LAYOUT_BODIES. */
+       one body, whose walk the document sizes. This number decides C stack per activation and how often a
+       body stages its walk; the rest point a resting drive offers is counted by REST_UNIT_LAYOUT_BOXES. */
     REST_UNIT_LAYOUT_QUESTIONS,
     /* One box folded into a scrolling area, CSSOM View §2 "Terminology"'s extreme over "all of the element's
        descendants' boxes", walked by core/layout/scrolling_area.h's cursor: a descendant's margin edge, one
@@ -64,11 +64,12 @@ typedef enum {
        yields to the scheduler after each unit. Cost: one box's derivation, which lays out what it asks, so the
        document sizes it; bound (2) is asserted around each unit. */
     REST_UNIT_LAYOUT_DESCENDANTS,
-    /* One layout question body opened by a resting drive in one activation (core/layout/layout_job.h). Past
-       this many an ask is deferred, and the step machine that owns the drive rests before computing it.
-       Cost: one body's own work between its asks, whose walk the document sizes; bound (2) is asserted by
-       the REST_UNIT_LAYOUT_DESCENDANTS bracket the drive runs inside. */
-    REST_UNIT_LAYOUT_BODIES
+    /* One box laid out under a resting drive in one activation (core/layout/layout_job.h): a question body
+       opened, or an anonymous block box a body's stack walk lays out. Past this many an ask is deferred or the
+       walk stages and suspends, and the step machine that owns the drive rests. Cost: one box's own work
+       between its asks; bound (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket the drive runs
+       inside. */
+    REST_UNIT_LAYOUT_BOXES
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is
