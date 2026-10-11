@@ -3979,26 +3979,18 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        beside `val` and `fam_us`, written once per family per emission and read by every arm. Absence shows as: a
        frontier whose census reports members at `turns:0` while `wTop` climbs, with every ordering assertion silent
        and nothing distinguishing it from a frontier served correctly. */
-    /* Starvation, counted at the line that decides. The census's gauges (`never_picked`, `never_picked_gap`,
-       `never_picked_at_top`) say a tied tail exists at some instant; none can say whether a pick passed over it.
-       This counts the scheduler's own dispatch pick returning a member dispatched before while a never-dispatched
-       member stood at the same weight, and only where the pick displaces the incumbent (`best != seed`): engine.c
-       credits a dispatch inside `if (best != cur)`, so a scan returning the incumbent advances none, and counting
-       retentions (nearly every scan of a frontier at one weight) would count the design as the defect. With the
-       clause, this and `picksLifetime` count the same event and `starvedPicks <= picksLifetime` holds (result.c
-       asserts it). Counted rather than asserted: one such pick is legitimate (the tie goes to the incumbent, and
-       relaxing the strict comparison would hand the thread away at every opcode), and starvation is a rate.
-       This row does not separate re-dispatches that continue a program (a framed flow finishing while an arm it
-       forked, born at its weight, stands tied) from passes over a member with nothing in front of it.
-       `g_starved_picks_idle` does: the subset whose member was between units (no live frame, no checkpoint owed,
-       flow_between_units, and no parked continuation). The raise requires `best != seed`, so every member counted
-       is one whose park queue is on `Flow::parked`, where flow_holds_park reads it exactly. Read the subset against
-       `picksLifetime` and the remainder as what a forking frontier costs. The complement, the incumbent keeping the
-       thread while a never-run member stands level, is the plateau rows below, raised under a separate condition;
-       the rival scan, the host's best-weight read, the pager's tail and the census ask other questions.
-       Exact `==`, no epsilon: two members at one weight read one value twice. Lifetime counters, off the flows for
-       `g_picks_total`'s reason and reset by nothing, so they difference. Both raised under one condition, so
-       `idle <= starved` holds by construction. */
+    /* Starvation, counted at the line that decides; the census's gauges say a tied tail exists, not that a pick
+       passed over it. It counts the dispatch pick returning a member dispatched before while a never-dispatched one
+       stood at the same weight, only where the pick displaces the incumbent (`best != seed`): engine.c credits a
+       dispatch inside `if (best != cur)`, so this and `picksLifetime` count one event and `starvedPicks <=
+       picksLifetime` holds (result.c asserts it). Counted, not asserted: one such pick is legitimate (ties go to the
+       incumbent), and starvation is a rate. It does not separate a framed flow finishing its program while an arm
+       born at its weight stands tied from a pass over a member with nothing in front of it; `g_starved_picks_idle`,
+       the subset whose member was between units (flow_between_units) with no parked continuation, does. Since
+       `best != seed`, every member counted has its park queue on `Flow::parked`, which flow_holds_park reads
+       exactly. The complement, the incumbent keeping the thread level with a never-run member, is the plateau rows
+       below. Exact `==`: two members at one weight read one value twice. Lifetime counters off the flows, reset by
+       nothing; both raised under one condition, so `idle <= starved` by construction. */
     if (why == FLOW_SCAN_NEXT && best && best != seed && best->picks > 0 && never && never_w == bw) {
         g_starved_picks++;
         if (flow_between_units(best) && !flow_holds_park(best)) g_starved_picks_idle++;
@@ -4948,36 +4940,20 @@ void flow_wfq_census(WfqCensus *out) {
            "frame — the ready arm is reached only through flow_stack_empty, whose first line refuses a live "
            "frame, so every member it admits is inside `mem_unframed` by construction and the two cannot "
            "disagree unless `mem_unframed` has been re-spelled");
-    /* AND THE TWO IDENTITIES THAT DEFINE THE BRANCH ROWS, ASSERTED WHERE BOTH HALVES OF EACH ARE IN ONE HAND.
-       They are the only property of a per-bucket number a reader can check without re-deriving the mechanism
-       that produced it, and both are exact rather than one-sided because each event has exactly one writer.
-       MEMBERSHIP: every live member belongs to exactly ONE bucket (`branch` is set once at flow_new and moved
-       once, at the fork, as a matched departure and arrival), and the walk above opens each distinct bucket
-       exactly once, so the live counts PARTITION the frontier. A break is a bucket a member no longer names —
-       a fork that did not move its membership, a departure that did not surrender it, or a `branch` pointer
-       re-written by something that is not flow_fork_inherit — and every branch reading is then about a
-       population that is not this frontier. It is one-sided in NEITHER direction on purpose: a sum BELOW
-       `members` is a member counted nowhere, and a sum ABOVE it is a member counted twice, and those are two
-       different defects that must not share an answer.
-       BURN: every microsecond charged in flow_age_running lands on exactly one bucket's `sub_us`, and a bucket
-       is freed only once nothing in its subtree is live, at which point acct_unref folds its total into the
-       retired term. So the whole of the thread this instance has spent is attributed at every instant. A break
-       is a charge that reached one half of flow_age_running and not the other, or a bucket freed without its
-       fold — and either leaves `brUsLifeMax / chargedUsLife`, which is the concentration reading these rows
-       exist for, as a fraction of the wrong denominator. ALL THREE TERMS ARE PUBLISHED, so this is also
-       checkable from outside the process on the emitted document, exactly as the arrival pair above is. */
-    /* THE AWAY POPULATION COUNTED TWO WAYS — the identity that makes `away_n` worth maintaining at all, and
-       the reason this row is not a counter with nothing under it. The left side is four incremental
-       statements at four sites summed over the frontier's distinct families; the right side is this walk
-       asking flow_own_silence of every member. They are two maintainers over one instant, so a difference is
-       a TRANSITION SITE THE INCREMENTAL SIDE DOES NOT HAVE — a fifth writer of `cpu`, `cpu_gen` or `family`
-       that moves a member across its family's base without telling the count — and never a disagreement
-       about what the population is.
-       IT IS THE ONE CHECK THAT CAN CATCH AN OMISSION RATHER THAN A MISCOUNT, which is why it is asserted and
-       not merely published: the four sites were enumerated by reading every writer of those three fields,
-       and an enumeration is exactly the artifact this project rates as unable to state its own completeness.
-       BOTH SIDES ARE PUBLISHED, so this is also checkable from outside the process on the emitted document,
-       exactly as the branch partition below it is. */
+    /* And the two identities that define the branch rows, exact because each event has one writer. Membership:
+       every live member belongs to exactly one bucket (`branch` is set at flow_new and moved once, at the fork, as a
+       matched departure and arrival), and the walk opens each bucket once, so the live counts partition the frontier;
+       a sum below `members` is a member counted nowhere and one above it a member counted twice. Burn: every
+       microsecond charged in flow_age_running lands on one bucket's `sub_us`, and a bucket is freed only once nothing
+       in its subtree is live, when acct_unref folds its total into the retired term, so the thread this instance
+       spent
+ is attributed at every instant (`brUsLifeMax / chargedUsLife` is the concentration reading). All terms
+       are published, so both are checkable on the emitted document. */
+    /* The away population counted two ways: four incremental statements at four sites summed over the distinct
+       families, against this walk asking flow_own_silence of every member. A difference is a transition site the
+       incremental side does not have, a fifth writer of `cpu`, `cpu_gen` or `family`. Asserted, not only published,
+       because the four sites were enumerated by reading writers, and an enumeration cannot state its own
+       completeness. Both sides are published. */
     DCHECK(out->epoch_away_live == out->epoch_away_walk,
            "the frontier's maintained away-from-base count disagrees with a direct reading of it — `away_n` "
            "is raised at a charge that takes the running member off its family's base, at a fork whose "
@@ -4993,82 +4969,51 @@ void flow_wfq_census(WfqCensus *out) {
            "bucket and each bucket is opened once per census, so a sum below `members` is a member counted in "
            "no bucket and a sum above it is one counted in two. Every per-branch row is about to be published "
            "as a share of a frontier it is not a partition of");
-    /* AND A FRONTIER WITH MEMBERS STANDING HAS A THINNEST BUCKET SOMEBODY IS STANDING IN — the invariant that
-       makes wfq_accounted_spread's branch guard dead code for a live frontier rather than the silent
-       term-deleter it was. Every live member's own bucket is taken by the member door with a live count of at
-       least one (the member was minted into it and has not departed), so a census reporting members cannot
-       leave the live minimum at zero. It is NOT the partition identity above restated: that one is satisfied
-       by any set of buckets whose live counts sum correctly, EMPTY ONES INCLUDED, which is exactly how the
-       defect this replaces stayed invisible through 56 censuses of an assert that held every time. */
+    /* And a frontier with members standing has a thinnest bucket somebody stands in: every live member's bucket is
+       taken by the member door with a live count of at least one, so this keeps wfq_accounted_spread's branch guard
+       from deleting the branch term on a live frontier. The partition identity above cannot say it, since it is
+       satisfied by any set of buckets whose live counts sum correctly, empty ones included. */
     DCHECK(out->members == 0 || out->br_live_min > 0,
            "the census reports members standing and no branch bucket holding one — every live member is "
            "minted into a bucket and reaches it through `branch`, so a zero here is the live extrema ranging "
            "over a bucket NOBODY stands in, and wfq_accounted_spread is about to score the branch term's "
            "whole range as 0.0 while the order spans it");
-    /* AND THE MINT PAIR AGAINST THE LIVE PAIR IT IS FOLDED BESIDE — the relation that says the two are over
-       ONE population, which is the only thing that makes `1/br_born_min - 1/br_born_max` a RANGE rather than
-       two numbers subtracted. `sub_born = live + sub_gone` with `sub_gone >= 0`, so on any single bucket the
-       mint count dominates the live count; take both extrema over the SAME set of buckets and each end of the
-       mint pair dominates its opposite number.
-       IT IS NOT VACUOUS AND IT IS NOT THE PARTITION IDENTITY RESTATED. The two pairs are written by two
-       statements inside branch_take, and nothing but a shared guard keeps their populations equal — fold the
-       minimum over every taken bucket instead and a departed root's single-member bucket drags `br_born_min`
-       to 1 beneath a `br_live_min` of 2, which fires here and is exactly the defect `br_live_min` already
-       cost this file 48 censuses to find. The partition identity above is satisfied by any set of buckets
-       whose live counts sum correctly and says nothing whatever about which buckets an extremum ranged over. */
+    /* And the mint pair against the live pair it is folded beside, which makes `1/br_born_min - 1/br_born_max` a
+       range over one population: `sub_born = live + sub_gone` with `sub_gone >= 0`, so over one set of buckets each
+       end of the mint pair dominates its opposite number. The two pairs are written by two statements in
+       branch_take, kept to one population only by a shared guard: a minimum over every taken bucket would let a
+       departed root's single-member bucket drag `br_born_min` to 1 beneath a `br_live_min` of 2, which fires here. */
     DCHECK(out->br_born_min >= out->br_live_min && out->br_born_max >= out->br_live_max,
            "a branch bucket's lifetime mint count is below its own live membership — `sub_born` is `live` "
            "plus everything that has ever departed the bucket, so this is the mint extrema and the live "
            "extrema ranging over two different sets of buckets, and the branch term's range is about to be "
            "published as a difference between two numbers that are not two ends of one reading");
-    /* AND THE CROWD TRIPLE AGAINST THE ROW IT IS SELECTED BY — the identity that says these three describe
-       ONE bucket rather than three. The two sides are written by two writers at two instants: the left is a
-       dereference of the node branch_take retained, performed after the walk ended, and the right is a
-       running maximum folded over every live bucket during it. They agree only while the fold that moves the
-       maximum is the same statement that moves the pointer, which is exactly the property a reader cannot
-       check on the emitted document any other way and exactly the one an edit would break silently.
-       IT IS NOT VACUOUS: writing the three rows at the maximum's own assignment would make this a comparison
-       of one statement with itself, and this file refuses that form everywhere else. */
+    /* And the crowd triple against the row it is selected by, which says the three describe one bucket: the left is
+       a dereference of the retained node after the walk, the right a running maximum folded during it, and they agree
+       only while one statement moves both. Writing the rows at the maximum's assignment would compare a statement
+       with itself. */
     DCHECK(out->br_crowd_live == out->br_live_max,
            "the branch bucket the census retained as the frontier's fattest does not hold the live maximum "
            "the same walk folded — the pointer and the maximum are moved by one statement, so a disagreement "
            "means one of them is now moved by another, and the crowd's mint count and receipt are about to be "
            "published as the fattest arm's when they are some other bucket's");
-    /* AND THAT BUCKET INSIDE THE POPULATION THE OTHER TWO EXTREMA RANGED OVER, which is a different statement
-       from the one above and catches a different break: the identity above says the retained node owns the
-       live maximum, and these say it went through the SAME folds the mint and burn extrema were taken from.
-       A bucket reached by one door and not the others — a guard that came apart, a door added without its
-       folds — leaves a crowd whose own numbers sit outside the range the rows beside them publish, and every
-       coincidence reading (`is the crowd also the hungriest arm', `is it also the one that has taken most
-       arms') would then be comparing two populations. Both are one-sided because a maximum is an upper bound
-       and the crowd is one member of the set it is taken over. */
-    /* AND THE MINTER TRIPLE AGAINST THE ROW IT IS SELECTED BY — the same form as the crowd's identity above
-       and a statement about a different pointer, so neither catches the other's break. The two sides are
-       written by two writers at two instants: the left is one dereference of the node branch_take retained,
-       performed after the walk ended, and the right is a running maximum folded over every live bucket during
-       it. They agree only while the fold that moves the maximum is the same statement that moves the pointer.
-       IT IS WRITTEN AS A SUM AND NOT AS A SECOND `born` FIELD, which is what keeps it from being vacuous: the
-       two terms are the node's live count and its shed count, read as `sub_born - sub_gone` and `sub_gone`,
-       so their sum reaches `sub_born` by a path the fold never took. A fourth published row holding that
-       bucket's own `sub_born` would have made this a comparison of one load with another of the same field,
-       and `br_born_max` is already that number for the bucket this names.
-       AND IT IS THE ONE CHECK ON `br_minter_gone`, which nothing else in this struct can bound: the shed
-       count has no extremum beside it, so without this identity it would be a number with a paragraph
-       attached rather than a counter with a definition. */
+    /* And that bucket inside the population the other extrema ranged over, a different break: the crowd going
+       through the same folds as the mint and burn extrema. A bucket reached by one door and not the others would
+       make every coincidence reading ("is the crowd also the hungriest arm, the one that took most arms") compare
+       two populations. One-sided, because a maximum bounds the set the crowd belongs to. (Asserted after the
+       minter pair below.)
+       And the minter triple against its selector, the same form for the other pointer. Written as a sum, not a
+       second `born` field: live (`sub_born - sub_gone`) plus shed (`sub_gone`) reaches `sub_born` by a path the
+       fold never took, and it is the one check on `br_minter_gone`, which no extremum bounds. */
     DCHECK(out->br_minter_live + out->br_minter_gone == out->br_born_max,
            "the branch bucket the census retained as the frontier's biggest MINTER does not hold the mint "
            "maximum the same walk folded — its live count plus what it has shed IS its lifetime mint count, "
            "so a disagreement means the pointer and the maximum are no longer moved by one statement, and the "
            "shed count and receipt of the arm that has taken most arms are about to be published as some "
            "other bucket's");
-    /* AND THAT BUCKET INSIDE THE POPULATIONS THE OTHER ROWS RANGED OVER, which is a different statement from
-       the one above and catches a different break, exactly as the crowd's pair does: the identity above says
-       the retained node owns the mint maximum, and these say it went through the SAME folds the live extremum
-       and the held-burn accumulator were taken from. A bucket reached by one door and not the others leaves a
-       minter whose own numbers sit outside the totals the rows beside them publish, and `br_minter_us /
-       br_held_us` — the reading the whole triple exists for — would then be a fraction of a denominator its
-       numerator is not drawn from. Both are one-sided because a maximum and a sum are upper bounds over sets
-       the minter belongs to. */
+    /* And that bucket inside the populations the other rows ranged over, as the crowd's pair: the live extremum and
+       the held-burn accumulator, so `br_minter_us / br_held_us`, the reading the triple exists for, is a fraction
+       of a denominator its numerator is drawn from. One-sided: a maximum and a sum bound sets the minter is in. */
     DCHECK(out->br_minter_live <= out->br_live_max && out->br_minter_us <= out->br_held_us,
            "the biggest-minting live branch bucket holds more members than the live maximum, or more thread "
            "time than the live buckets hold between them — an extremum and a sum are upper bounds over a set "
@@ -5080,13 +5025,10 @@ void flow_wfq_census(WfqCensus *out) {
            "across the buckets it reached — an extremum is an upper bound over a set the crowd belongs to, so "
            "this is the crowd being reached through a door the extrema are not folded under, and the "
            "coincidence readings the crowd rows exist for are about to compare two different populations");
-    /* AND THE BURN SPLIT, WHICH IS THE DENOMINATOR HALF. Two accumulators in the two arms of branch_take's
-       one condition, so this fails if either arm stops firing or if the live guard comes apart from the one
-       the live extrema are folded under. Chained with the identity directly below it, every microsecond the
-       scheduler has charged lands in exactly one of three published places — a bucket somebody stands in, a
-       bucket still taken and standing empty, or a bucket whose subtree has wholly departed — and that total
-       cannot move without one of its three parts moving. All four terms are published, so the chain is
-       checkable from outside the process on a release document where this is compiled out. */
+    /* And the burn split, the denominator half: two accumulators in the two arms of branch_take's one condition, so
+       this fails if an arm stops firing or the live guard comes apart from the live extrema's. With the identity
+       below, every charged microsecond lands in one of three published places (a bucket somebody stands in, a taken
+       empty bucket, a bucket whose subtree departed), checkable on a release document. */
     DCHECK(out->br_held_us + out->br_empty_us == out->br_us_sum,
            "the thread time held by live branch buckets and by empty ones does not add up to the thread time "
            "attributed to buckets at all — the two are raised in the two arms of one condition in "
@@ -5099,29 +5041,21 @@ void flow_wfq_census(WfqCensus *out) {
            "retired term when it is freed, so a break is a charge that reached the aging and not the bucket, "
            "or a bucket freed without its fold, and `brUsLifeMax / chargedUsLife` is about to be published as "
            "a fraction of a denominator the numerator is not drawn from");
-    /* AND THE FAN AGAINST THE BUCKET THAT HOLDS IT — the relation that makes `br_fan_max / br_fan_sum` a
-       reading INSIDE the buckets above rather than a second population beside them. Every member the fan
-       counts sits under a NON-ROOT parent, and a fork off a non-root joins its parent's bucket, so all of one
-       fan's members are live members of ONE bucket and the widest fan cannot exceed the fattest bucket.
-       IT IS NOT THE PARTITION IDENTITY RESTATED AND IT IS NOT VACUOUS, which is the test this file applies to
-       every assertion it adds. The two sides come from different writers: the fan is counted by the member
-       walk above, and `br_live_max` is `sub_born - sub_gone` maintained at flow_fork_inherit and acct_depart.
-       A departure that missed its `sub_gone`, or a `branch` re-pointed by anything but the fork, separates
-       them. A `br_fan_sum + <members with a root parent> == members` identity was deliberately NOT written
-       instead: both terms would be raised once per trip of this scan's own loop, so it is a loop counter
-       compared with itself — a non-check wearing the syntax of one, which is worse than no check at all. */
+    /* And the fan against the bucket holding it, which makes `br_fan_max / br_fan_sum` a reading inside the buckets:
+       every member the fan counts sits under a non-root parent, a fork off a non-root joins its parent's bucket, so
+       one fan's members are live members of one bucket. The two sides have different writers (the member walk; the
+       `sub_born - sub_gone` maintained at flow_fork_inherit and acct_depart), so a missed `sub_gone` or a `branch`
+       re-pointed by anything but the fork separates them. An identity `br_fan_sum + <root-parented> == members` is
+       not written: both terms would be raised once per trip of this loop, a loop counter compared with itself. */
     DCHECK(out->br_fan_max <= out->br_live_max,
            "a fork's live children outnumber the whole branch bucket they were forked into — a fork off a "
            "non-root joins its parent's bucket, so every member counted in a fan is a live member of one "
            "bucket and this says the two are counting different frontiers: either a departure left a bucket's "
            "`sub_gone` unraised, or a member's `branch` was moved by something that is not the fork");
-    /* AND THE DEPTH AGAINST THE FAN IT BELONGS TO, because a `br_fan_depth` of 0 is how a reader is told
-       there is NO fan and a real fan can never stand at one: its node has a parent (the door tests `up->up`),
-       and a node with a parent went through flow_fork_inherit, which wrote `depth = parent->depth + 1`. The
-       two fields are written by two statements and the compression moves `up` while explicitly leaving
-       `depth` alone, so they can disagree — which is the whole reason this is asked rather than assumed. It
-       is NOT the pair above restated: that one relates the fan to the BUCKET, this one relates the published
-       depth to the fan's own existence, and a reader who took a 0 for "no deep fork" would be wrong. */
+    /* And the depth against the fan it belongs to: `br_fan_depth` 0 is how a reader is told there is no fan, and a
+       real fan never stands at 0, since its node has a parent (the door tests `up->up`) and flow_fork_inherit wrote
+       `depth = parent->depth + 1`. The two fields have two writers, and the compression moves `up` while leaving
+       `depth`, so they can disagree. */
     DCHECK(out->br_fan_max == 0 || out->br_fan_depth > 0,
            "the census reports a fork below the top level standing at fork-tree depth 0 — depth 0 is a family "
            "ROOT and a root is excluded from the fan by the same predicate that decides a branch bucket, so "
@@ -5132,22 +5066,18 @@ void flow_wfq_census(WfqCensus *out) {
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
 Flow *flow_best(void) { return flow_pick(NULL, NULL, 0, 0, FLOW_SCAN_OTHER); }
 
-/* WHICH FLOW SHOULD HOLD THE THREAD — the dispatch loop's pick, defending the incumbent on a tie. */
+/* Which flow should hold the thread: the dispatch loop's pick, defending the incumbent on a tie. */
 Flow *flow_next_to_run(const Flow *incumbent, FlowScan why) { return flow_pick(incumbent, NULL, 1, 0, why); }
 
-/* WHO THE INCUMBENT IS DEFENDING AGAINST — the same scan with the incumbent taken OUT rather than seeded in,
-   because the hook applies the strict comparison itself. Asking it with the seed would answer `cur` and the
-   value yield would compare a flow against itself. */
+/* Who the incumbent defends against: the same scan with the incumbent taken out rather than seeded in, since the
+   hook applies the strict comparison itself; seeded, it would answer `cur` and compare a flow with itself. */
 Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, 1, 0, FLOW_SCAN_RIVAL); }
 
-/* IS `tail` THE LOWEST-WEIGHT CANDIDATE? — the assert's own scan below, deliberately NOT flow_pick's, and a
-   FUNCTION rather than a loop at the call site for two reasons that are the same reason. A DCHECK condition
-   must be side-effect-free, and this reads weights and returns a bool and does nothing else — no out-param, no
-   accumulator the caller has to hold. And because it is evaluated only inside the condition, a release build
-   never runs the scan at all: the cost is a dev-build scan on the reclaim path, which is reached only at the
-   RAM floor. The ORDER function stays single (this calls flow_weight and nothing else); only the SCAN is
-   independent, which is the whole point of a re-derivation. Ties pass — the question is whether anything is
-   STRICTLY below the tail, since flow_pick is free to return either of two equal minima. */
+/* Is `tail` the lowest-weight candidate? The assert's own scan, independent of flow_pick, and a function because a
+   DCHECK condition must be side-effect-free and is evaluated only inside the condition, so release never runs it
+   (in dev it is a scan on the reclaim path, reached at the RAM floor). It calls flow_weight and nothing else, so
+   the order stays single while the scan is a re-derivation. Ties pass: flow_pick may return either of two equal
+   minima. */
 static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
     double tw = flow_weight(tail);
     int i;
@@ -5160,28 +5090,15 @@ static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
 
 Flow *flow_worst(const Flow *exclude) {
     Flow *tail = flow_pick(NULL, exclude, 0, 1, FLOW_SCAN_OTHER);
-    /* EVERY MEMBER, RUNNABLE OR NOT — and that is not an oversight in the filter, it is what eviction is about.
-       A flow waiting on the host cannot use the thread, which is why the PICK skips it; it is still a snapshot
-       occupying RAM, and it is the CHEAPEST thing in the frontier to page, because its recipe re-issues the
-       request it is waiting on and gets today's answer instead. Filtering the tail by runnability would leave
-       exactly the flows that cannot run holding the memory the flows that can need.
-       THE ONE INVERSION THIS ALLOWS IS `exclude` ITSELF and it is unavoidable rather than tolerated: the flow
-       the scheduler is switched into cannot be written out (its decision state is live in decide.c, its delta
-       applied to the heap), so if IT is the lowest-weight member the tail taken is one that outranks it. It
-       corrects itself at the next context switch, when that flow is parked like any other.
-
-       ONE ORDERING, ASSERTED — AND THE FORM THAT STOOD HERE ASSERTED NOTHING. It read
-       `flow_weight(tail) <= flow_weight(flow_best())`: the MINIMUM over this scan's candidates against the
-       MAXIMUM over every member, and a minimum of a subset is never above a maximum of its superset. The
-       condition therefore held for every frontier that can exist, in every build, and the sentence above it
-       was checked by nothing at all — the stale-DFAIL shape exactly, authoritative to read and silent in
-       fact. Comparing the tail against a head over the SAME set is no better: min <= max is the same
-       arithmetic, so there is no version of "the tail may never outrank the head" that can fail.
-       WHAT IS ACTUALLY AT RISK IS THE PAGER ACQUIRING A RANKING OF ITS OWN — a size estimate, an age, a
-       cheapest-to-rebuild score — and that IS falsifiable: the tail must be the lowest-weight candidate, and
-       the moment the eviction path stops answering with that minimum this re-derived scan disagrees with it.
-       It is also what catches a flow_weight that is not a pure function of the flow, which the seeded scan
-       above could never notice because it only ever asks each weight once. */
+    /* Every member, runnable or not, which is what eviction is about: a flow waiting on the host cannot use the
+       thread, so the pick skips it, but it still occupies RAM and is the cheapest member to page, since its recipe
+       re-issues the request it waits on. The one inversion is `exclude`: the flow switched in cannot be written out
+       (its decision state is live in decide.c, its delta applied), so if it is the lowest the tail outranks it; this
+       corrects itself at the next context switch.
+       The ordering is asserted against a re-derived scan: the tail must be the lowest-weight candidate. A comparison
+       against a head (min against max) cannot fail; what is at risk is the pager acquiring a ranking of its own (a
+       size estimate, an age, a cheapest-to-rebuild score), and a flow_weight that is not a pure function of the
+       flow, which the scan above, asking each weight once, could never notice. */
     DCHECK(!tail || flow_is_min_weight(tail, exclude),
            "the flow the pager chose to page out is not the lowest-weight member of the frontier — the tail and "
            "the head are two readings of ONE comparator, so a tail that is not the minimum means a second "
@@ -5190,17 +5107,11 @@ Flow *flow_worst(const Flow *exclude) {
 }
 
 void flow_remove(JSContext *ctx, Flow *f) {
-    /* WHAT THIS FUNCTION DOES NOT FREE, ASSERTED RATHER THAN ASSUMED. A Flow owns fourteen things and this
-       releases five; the other nine belong to flow_release above, which is the ONE caller and the one place
-       that knows a flow has to be switched OUT before its COW delta and DOM head can be given back. That split
-       is correct and it is also invisible: nothing said so, so a second caller — an eviction, a cancelled
-       candidate, a frontier trim — would compile, run, and leak the flow's entire delta, its DOM head, its
-       queued jobs and its suspended frame with no counter naming the owner. That is precisely the shape the
-       delta leak took (a per-flow allocation nobody freed, holding no live JSValue by then, so the runtime's own
-       leak walk could not see it either).
-       Asserted at the ROOT of the contract instead: a field added to Flow gets a line in flow_release and a line
-       here, and a caller that skipped the release crashes at the removal instead of two hundred megabytes
-       later. */
+    /* What this function does not free, asserted. flow_release, the one caller, releases the fields that need the
+       flow switched out first (its COW delta and DOM head) and everything else a Flow owns; this releases the rest.
+       A second caller (an eviction, a cancelled candidate, a frontier trim) that skipped the release would leak the
+       flow's delta, DOM head, queued jobs and suspended frame with nothing naming the owner, so a field added to Flow
+       gets a line in flow_release and a line here, and the skipped release crashes at the removal. */
     DCHECK(f->delta == NULL && f->dom == NULL && f->dom_base == NULL,
            "a flow was removed with its COW state still attached — the heap delta and the DOM head must be "
            "UNAPPLIED from the live heap and document before they can be freed, which is why flow_finish owns "
@@ -5213,11 +5124,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
            "a flow was removed still holding queued jobs, pending host replies, unstarted cross-agent "
            "operations or routed cross-document messages — each is a work item on the one frontier, and the "
            "WFQ may never drop one");
-    /* …AND THE ONE FIELD BESIDE THEM THAT IS NOT WORK, asserted separately BECAUSE it is not work: merging it
-       into the line above would put a message on it that is false about this field ("the WFQ may never drop
-       one" — a commitment is nobody's work item). What is true of it is the structural half both lines share:
-       a JSValue field added to Flow gets a line in flow_release and a line here, so a caller that skipped the
-       release crashes at the removal instead of holding an Array and its every string for the process. */
+    /* And the one field beside them that is not work, asserted separately so its message is true (a commitment is
+       nobody's work item), with the same structural half: a JSValue field added to Flow gets a line here. */
     DCHECK(JS_IsUndefined(f->deliver_world_q),
            "a flow was removed still holding the record of which sending timelines it was in — flow_release "
            "frees that Array and every [vector, taken, arm] row it names, so a flow reaching here with one was "
@@ -5227,32 +5135,13 @@ void flow_remove(JSContext *ctx, Flow *f) {
            f->dyn_token == NULL && f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
            "attached — the flow's own allocations, freed by nothing else");
-    /* THE SLOT IS READ OFF THE MEMBER AND THE WALK THAT USED TO FIND IT IS GONE (flow.h's `reg_i`). A
-       departure was one scan of every member standing, on a frontier that reaches thousands and whose
-       departures are as many as its forks — so removing was quadratic in the frontier over a run, for a
-       question that is not about any other member. This changes NOTHING about the order: the frontier's array
-       is arrival order, the queue is weight order, and no comparison anywhere reads a slot.
-       THE GUARD IS A `CHECK` AND NOT A `DCHECK`, AND THIS DIFF IS WHAT PROMOTED IT. The scan it replaces was
-       an address comparison, so in RELEASE a stale or double-removed pointer simply found nothing and this
-       function returned having done nothing; the handle makes `f->reg_i` decide which slot gets overwritten,
-       which is a WRITE into the registry in every build. §Offensive programming's rule is that a diff making
-       a checked value load-bearing in release carries the promotion with it, and the invariant here is data
-       integrity — a swap-remove at a slot that does not hold this flow drops whichever member does hold it,
-       and §scheduler's razor makes a dropped flow a cap. Both sides are read from live storage and neither
-       can be optimised away, so this cannot be the assert whose two sides agree by construction.
-       IT SUPERSEDES THE `DFAIL` THAT STOOD BELOW THE WALK rather than standing beside it: that abort said
-       "double remove or a dangling Flow*" and fired only in dev, and this says the same thing at the same
-       states in every build. Keeping both would be the weaker copy running in the build that ships.
-       AND IT READS ONE INT THROUGH `f` WHERE THE WALK READ NONE, WHICH IS A REAL TRADE AND IS STATED RATHER
-       THAN GLOSSED. The scan compared addresses, so on a dangling pointer it dereferenced nothing — and what
-       it then DID was return having done nothing at all: no departure counted, the `arrivals - departures ==
-       members` identity silently false, and the caller believing a flow left the frontier that is still in
-       it. This reads `f->reg_i` first, so a genuinely freed pointer is a read of freed memory; every outcome
-       of that read but one aborts here by name, and the one that would not — the array still holding this
-       exact pointer at that slot — cannot arise, because the removal that freed it overwrote its slot. A
-       loud abort on a state that was silently corrupting the registry is the trade §Offensive programming
-       asks for, and under the Asan §Architecture prescribes for memory crashes the read itself is the
-       report. */
+    /* The slot is read off the member (flow.h's `reg_i`), so a departure costs no scan of the frontier; the array is
+       arrival order, the queue weight order, and no comparison reads a slot. The guard is a CHECK: `f->reg_i` decides
+       which slot gets overwritten, a write into the registry in every build, and a swap-remove at a slot that does
+       not hold this flow drops whichever member does, so the guard is data integrity in release. It reads one int
+       through `f`: on a freed pointer that read is of freed memory, and every outcome but one aborts here by name;
+       the one that would not (the array still holding this exact pointer at that slot) cannot arise, because the
+       removal that freed it overwrote its slot. Under ASan the read is itself the report. */
     {
         int slot = f->reg_i;
         CHECK(slot >= 0 && slot < g_flows_n && g_flows[slot] == f,
@@ -5261,37 +5150,28 @@ void flow_remove(JSContext *ctx, Flow *f) {
               "that moved it. Proceeding would swap-remove whichever member IS at that slot, dropping a work "
               "item the WFQ may never drop");
         JS_FreeValue(ctx, f->fn);
-        /* THE ROUTED RECORD AND ITS ORIGIN STAMP USED TO BE FREED HERE, and that free is gone rather than
-           converted: it ran on a work item the frontier was dropping and made the drop invisible, which is
-           the one thing this file's asserts exist to stop. The queue is released in flow_release beside
-           the operation queue, and its emptiness is asserted just above. */
-        /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
-           that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
-           flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */
+        /* A routed record's queue is released in flow_release beside the operation queue, and its emptiness is
+           asserted above: freeing it here would make a dropped work item invisible. */
+        /* The candidate it was verifying: both strings are this flow's copies, freed nowhere else for a removed flow
+           (the teardown walks the flows still there). `cand_sink` is static text. */
         free(f->cand_src); free(f->cand_payload);
-        /* AND ITS PLACE IN THE FORK TREE. THE THREAD TIME IT BURNED IS ALREADY WHERE IT BELONGS — every
-           microsecond went onto the family's account as it was consumed (flow_age_running), so a departing
-           arm has nothing left to hand anybody and the hand-up that used to stand here would bill the
-           family twice for work it has already been charged for. What is left is the node's LIFETIME: the
-           owner mark comes down so a compression can walk past it, and the reference goes. This is the ONE
-           exit a Flow has, which is what makes it the one place that can be said. */
-        /* AND THE DISPATCHES IT HOLDS, MOVED OUT OF THE GAUGE AND INTO THE COUNTER ON THE ONE LINE THAT CAN
-           STILL READ THEM. `f->picks` stops being reachable two statements below, so this may not stand beside
-           the `g_departures++` that counts the same event — see the banner at `g_picks_departed` for why that
-           is the identity's own tell rather than an untidiness, and for what the identity is. */
+        /* And its place in the fork tree. Its thread time is already on the family's account (flow_age_running
+           charges as it is consumed), so there is nothing to hand up; what is left is the node's lifetime, the owner
+           mark coming down so a compression can walk past it, and the reference going. This is a Flow's one exit.
+           The dispatches it holds move from the gauge into the counter on the one line that can still read them:
+           `f->picks` is unreachable two statements below, so this cannot stand beside `g_departures++` (see the
+           banner at `g_picks_departed`). */
         g_picks_departed += f->picks;
         acct_depart(f);
         free(f);
         g_flows[slot] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
-        /* …AND THE ONE MEMBER THE SWAP MOVED, RE-KEYED ON THE LINE THAT MOVED IT. A departure renumbers
-           EXACTLY ONE other member and this is it; the guard is `slot < g_flows_n` and not a comparison of
-           pointers because the decrement above has already run, so removing the LAST member self-assigns and
-           there is nobody to re-key — writing `g_flows[slot]->reg_i` unguarded would then dereference the
-           slot one past the end, which the flow just freed used to occupy. */
+        /* And the one member the swap moved, re-keyed on the line that moved it. A departure renumbers exactly one
+           other member; the guard is `slot < g_flows_n` because the decrement has run, so removing the last member
+           self-assigns and an unguarded write would dereference the slot the freed flow occupied. */
         if (slot < g_flows_n) g_flows[slot]->reg_i = slot;
-        /* …AND THE DEPARTURE COUNTED AS ONE, on the line that performs it. This decrement and the
-           registry coming up are the only two ways `g_flows_n` falls, and the second is asserted to
-           happen only on an already-drained frontier, so the pair's conservation identity is exact. */
+        /* And the departure counted, on the line that performs it. This decrement and the registry coming up are
+           the only ways `g_flows_n` falls, and the second is asserted to happen only on a drained frontier, so the
+           conservation identity is exact. */
         g_departures++;
         frontier_rank_changed();   /* frontier changed */
     }
@@ -5299,38 +5179,16 @@ void flow_remove(JSContext *ctx, Flow *f) {
 
 int flow_count(void) { return g_flows_n; }
 
-/* IS THIS POINTER ONE OF THE FLOWS STANDING? — AND IT MAY NOT ANSWER THROUGH flow.h's `reg_i`, WHICH IS THE
-   WHOLE REASON THIS WALK SURVIVES A DIFF THAT DELETED ITS TWIN AT flow_remove.
-   THE TWO CALLERS ASK DIFFERENT QUESTIONS OF ONE PREDICATE AND THE STRICTER ONE DECIDES IT. flow_pick asks
-   "is my seed still a member", of a pointer it believes is live; engine.c's hook and this file's two guards
-   ask "is this pointer DANGLING" — `g_rival` is cached across opcodes and its own comment says the cached
-   rival goes stale, and flow_remove FREES the flow, so the pointer under those asserts may name memory that
-   is gone. An address comparison never dereferences `f` and so answers correctly for both; the handle would
-   have to LOAD `f->reg_i` to answer either, which reads freed memory in exactly the state the strict question
-   exists to catch. So the guard would be destroyed by making it cheap, and that is a §A-PREDICATE-THAT-ANSWERS
-   -TWO-QUESTIONS split to make with a second entry when a caller is known live — never a conversion of this
-   one.
-   AND THE WALK PAYS FOR ITSELF BY CHECKING THE HANDLE. It has the linear answer in hand at no extra cost, so
-   it re-derives `reg_i` over the whole frontier at every call. It is two-sided (the field against the array,
-   both read from live storage) and it is placed AFTER the address match, so it dereferences `f` only once the
-   walk has PROVEN the pointer live — the assert is exactly as dangling-safe as the function holding it.
-   THE RESIDUAL THAT STOOD HERE IS RETIRED, AND ITS REMEDY CLAUSE WAS WRONG, WHICH IS THE HALF WORTH KEEPING.
-   It said flow_pick's seed test "IS STILL A FULL WALK, in every build, once per dispatch", which was true and
-   is no longer: the pick decides membership inside the scan it was already performing (flow_pick's own
-   `seed_live`), so the second walk is gone rather than made cheap. What it named as the next diff — "making
-   the pick's own membership question O(1)" — and what it named as the precondition — "a statement that
-   flow_pick's `seed` is LIVE" — were BOTH unnecessary, and both for one reason: the clause pictured this
-   function's HANDLE being read at the pick, which really would need the pointer live, instead of the answer
-   already passing through the pick's own loop. The clause was checkable against the tree the day it was
-   written and nobody checked it, because a remedy clause is read once, by somebody who has already decided to
-   do the work. ITS OTHER TWO CLAUSES HELD EXACTLY: the walk was unpriced (`g_scan_weights` counts weight
-   EVALUATIONS and this one evaluates none), so the frontier-weighing rows did understate the dispatch pick by
-   one whole walk, and a reader differencing `scanNextWeights` across that change is comparing a cost that
-   halved against a counter that did not move.
-   THE CROSS-CHECK IT PAID FOR DID NOT GO WITH IT, AND IT GOT WIDER. flow.h's `reg_i` rests on this relation
-   being re-derived over the frontier at every pick, which this function supplied for exactly ONE member per
-   pick — whichever one matched the seed. flow_pick now asserts it for EVERY member of EVERY scan, so the
-   claim flow.h makes is stronger than it was and is made where the walk actually happens. */
+/* Is this pointer one of the flows standing? Answered by an address walk and never through flow.h's `reg_i`,
+   because the callers ask two questions of one predicate and the stricter decides: flow_pick asks whether a
+   pointer it believes live is still a member, while engine.c's hook and this file's guards ask whether a pointer
+   is dangling (`g_rival` is cached across opcodes and goes stale, and flow_remove frees the flow). An address
+   comparison never dereferences `f`, so it answers both; the handle would have to load `f->reg_i`, reading freed
+   memory in the state the strict question exists to catch. A caller known live would get a second entry, never a
+   conversion of this one. The walk checks the handle as it goes, two-sided (the field against the array) and
+   after the address match, so it dereferences `f` only once the pointer is proven live. flow_pick decides its
+   seed's membership inside its own scan and asserts `reg_i` for every member, so this walk is not on the
+   dispatch path. */
 int flow_is_member(const Flow *f) {
     for (int i = 0; i < g_flows_n; i++) if (g_flows[i] == f) {
         DCHECK(f->reg_i == i,
@@ -5343,54 +5201,45 @@ int flow_is_member(const Flow *f) {
     return 0;
 }
 
-/* See flow.h. THE WHOLE COLUMN AND NOT THE TAIL: `script_i` is where the flow HAS GOT TO, and a row behind the
-   cursor is one it has already compiled — but a row it has compiled is a program of that document whose frames
-   it may still be suspended inside, which is a fact about the same realm. The question this answers is "does
-   any member of the frontier still name this document at all", so it counts every row, and a caller that wants
-   "still to run" would be asking a different question with a different assert behind it. */
+/* See flow.h. The whole column, not the tail: `script_i` is where the flow has got to, and a row behind the cursor
+   is a program of that document whose frames the flow may still be suspended inside. The question is whether any
+   member still names this document at all, so every row counts. */
 int flow_programs_for_document(uint32_t doc) {
     int n = 0;
 
     for (int i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
-        /* A FLOW WITH NO QUEUE HAS NO COLUMN — the parallel arrays are allocated together at the first row, so
-           `dyn_n` is what says whether `dyn_doc` is a buffer at all. */
+        /* A flow with no queue has no column: the parallel arrays are allocated together at the first row, so
+           `dyn_n` says whether `dyn_doc` is a buffer at all. */
         for (int k = 0; k < f->dyn_n; k++)
             if (f->dyn_doc[k] == doc) n++;
     }
     return n;
 }
 
-/* WHICH ROW OF `f`'s SEQUENCE IS CALLED `id` — see flow.h's declaration for why it asserts nothing.
-   A LINEAR WALK IS THE RIGHT SHAPE HERE AND NOT A CONCESSION. It is asked once per external script REPLY and
-   once per entry of a destroy walk, against a column whose length is the number of programs one document
-   shipped; an index beside it would be a second structure holding row identity, which is the thing that had to
-   be got right in ONE place for the register to stop holding positions at all.
-   ZERO IS NO ROW, never row zero: `dyn_id` is minted from a counter that starts at 1, so the register's own
-   default (solver/pending.h) is a name that cannot resolve, and an entry nobody wrote a row onto answers -1
-   here instead of silently naming the sequence's first program. */
+/* Which row of `f`'s sequence is called `id` (flow.h's declaration says why it asserts nothing). A linear walk:
+   it is asked once per external script reply and once per entry of a destroy walk, over a column as long as one
+   document's program count, and an index beside it would be a second structure holding row identity. Zero is no
+   row: `dyn_id` is minted from a counter starting at 1, so the register's default (solver/pending.h) cannot
+   resolve, and an entry nobody wrote a row onto answers -1 rather than naming the first program. */
 int flow_dyn_row_by_id(const Flow *f, uint64_t id) {
     DCHECK(f != NULL, "a flow's script sequence was searched for a row name with no flow to search");
     for (int k = 0; k < f->dyn_n; k++) if (f->dyn_id[k] == id) return k;
     return -1;
 }
 
-/* IS ROW `k` ONE HTML §7.5.10 "Destroying documents"' STEP 5 TAKES — the criterion, in ONE place, because the
-   count below and the removal below THAT are one question asked twice. A second copy of it is the shape where
-   the assert that FIRES and the mechanism that ANSWERS it disagree about which rows they are about, and that
-   disagreement is silent in the direction that matters: the count would report a document clean while the
-   removal had left a row behind, or the removal would take a row the count never promised. Every clause is
-   argued at flow.h's declaration of the count; nothing here decides anything that declaration does not.
-   IT READS THREE FIELDS AND WRITES NONE, which is what lets the removal call it DURING its own compaction: the
-   compaction writes slot `w <= k` while this is asked about `k`, so a row's answer cannot change under it. */
+/* Is row `k` one HTML §7.5.10 "Destroying documents" step 5 takes: the criterion in one place, because the count
+   and the removal below ask the same question, and two copies would let the count report a document clean while
+   the removal left a row (or took one the count never promised). Every clause is argued at flow.h's declaration
+   of the count. It reads three fields and writes none, so the removal can call it during its compaction, which
+   writes slot `w <= k` while this is asked about `k`. */
 static int prog_row_removed_by_destroy(const Flow *f, int k, uint32_t doc) {
     return f->dyn_doc[k] == doc && k > f->last_compiled && k >= f->script_i;
 }
 
-/* HOW MANY OF THOSE ROWS LIE STRICTLY BELOW `slot` — what an index recorded BEFORE the compaction has to come
-   down by to name the same row after it. Asked of `imm_at`/`imm_next`, which may legitimately sit one past the
-   last row (engine.c's interposition computes a base of `script_i + 1` and CHECKs it against `dyn_n`), so the
-   walk is bounded by BOTH the slot and the column rather than by the slot alone. */
+/* How many of those rows lie strictly below `slot`: what an index recorded before the compaction comes down by. It
+   is asked of `imm_at`/`imm_next`, which may sit one past the last row (engine.c's interposition computes a base
+   of `script_i + 1` and CHECKs it against `dyn_n`), so the walk is bounded by both the slot and the column. */
 static int prog_removed_below(const Flow *f, int slot, uint32_t doc) {
     int n = 0;
 
@@ -5399,11 +5248,11 @@ static int prog_removed_below(const Flow *f, int slot, uint32_t doc) {
     return n;
 }
 
-/* See flow.h. THE CURSOR AND `last_compiled` ARE BOTH READ, and they are not the same fact: `script_i` is the
-   row the flow is AT and `last_compiled` is the highest row it has ever STARTED, so between two programs the
-   cursor stands one past the last started row and during one it stands ON it. A row is unstarted exactly when
-   it is past BOTH — past `last_compiled` because a started row is a program this flow may be suspended inside,
-   and at or past `script_i` because the cursor is where the sequence resumes. */
+/* See flow.h. The cursor and `last_compiled` are both read: `script_i` is the row the flow is at and
+   `last_compiled` the highest row it has started, so between programs the cursor stands one past the last started
+   row and during one it stands on it. A row is unstarted exactly when it is past both: past `last_compiled`
+   because a started row is a program the flow may be suspended inside, at or past `script_i` because the cursor is
+   where the sequence resumes. */
 int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
     int n = 0;
 
@@ -5419,35 +5268,30 @@ int flow_programs_unstarted_for_document(const Flow *f, uint32_t doc) {
     return n;
 }
 
-/* See flow.h. HTML §7.5.10 STEP 5 PERFORMED ON THE ONE TASK QUEUE `JS_DropJobsForContext` CANNOT REACH — this
-   flow's own program sequence. The rows go, the nine columns shrink together, and every index anything still
-   holds into the sequence is brought down with them.
+/* See flow.h. HTML §7.5.10 step 5 on the one task queue `JS_DropJobsForContext` cannot reach, this flow's program
+ * sequence: the rows go, the ten columns shrink together, and every index into the sequence comes down with them.
  *
- * THE ORDER IS FORCED AND IT IS NOT THE OBVIOUS ONE: the register is walked BEFORE the columns move, because
- * every question asked of it is which row a given entry names, and after the compaction the answer is a row
- * that has already changed identity. A removal that compacted first and fixed indices afterwards would be
- * deriving the old positions from the new ones, which is the information the compaction destroys.
+ * The register is walked before the columns move, because each question asked of it is which row an entry
+ * names, and after the compaction that row has changed identity.
  *
- * WHAT A REMOVED ROW OWNS IS GIVEN BACK EXACTLY AS flow_free GIVES IT BACK, and the two sites are written to be
- * read together: the body column hands a REFERENCE back (a program's text is shared by every timeline holding
- * it, solver/dyn_body.h), the address and token columns are this flow's own strings and are freed, and the
- * element column frees nothing because a row's `script` element is a borrowed node of a tree that outlives it.
- * A column added to the sequence is an obligation at BOTH.
+ * A removed row's ownership is given back as flow_release gives it back, and the two sites are read together:
+ * the body column hands a reference back (a program's text is shared by every timeline holding it,
+ * solver/dyn_body.h), the address and token columns are this flow's strings and are freed, and the element column
+ * frees nothing because a row's `script` element is a borrowed node. A column added to the sequence is an
+ * obligation at both.
  *
- * IT IS THIS FLOW'S SEQUENCE AND NOBODY ELSE'S, which is what makes the register half sound. §7.5.10 runs per
- * timeline, so a sibling arm that has not destroyed this document keeps its rows and its own naming of every
- * shared record — and the one thing this may therefore never do is WRITE a field of a record a sibling shares.
- * Dropping this register's naming of a record is a per-flow act (pending_remove gives the naming back through
- * pending_index_unref and the record survives for whoever else names it); editing the record is not. That
- * asymmetry is the whole reason the surviving-entry case below is an abort and not an arithmetic fix. */
+ * It is this flow's sequence and nobody else's. §7.5.10 runs per timeline, so a sibling arm that has not
+ * destroyed this document keeps its rows and its own naming of every shared record, and this may never write a
+ * field of a shared record. Dropping this register's naming of a record is a per-flow act (pending_remove gives
+ * the naming back through pending_index_unref and the record survives for whoever else names it). */
 int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
     int removed, lowest = -1, w = 0;
 
     DCHECK(f != NULL, "§7.5.10 step 5's program removal was asked of no flow");
     DCHECK(doc != 0, "§7.5.10 step 5's program removal was asked about the NONE document — a handle is this "
                      "instance's index into its own name table and zero names nothing");
-    /* THROUGH THE COUNT, so the removal cannot run over a cursor pair the count would have refused: that
-       function asserts `script_i >= last_compiled`, which every index below is derived from. */
+    /* Through the count, so the removal cannot run over a cursor pair the count would refuse: it asserts
+       `script_i >= last_compiled`, from which every index below is derived. */
     removed = flow_programs_unstarted_for_document(f, doc);
     if (removed == 0) return 0;
     for (int k = 0; k < f->dyn_n; k++)
@@ -5456,14 +5300,11 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
            "§7.5.10 step 5's removal counted rows to take and then could not find one — the count and this "
            "walk ask prog_row_removed_by_destroy over the same column with the same document, so they cannot "
            "disagree unless something wrote the sequence between them");
-    /* THE WHOLE OF WHY THE CURSOR PAIR SURVIVES THIS UNTOUCHED, ASSERTED RATHER THAN ARGUED — `lowest` is the
-       SMALLEST index going, so this one comparison establishes that NO removed row lies below `script_i` or at
-       or below `last_compiled`, and therefore that neither of them can name a different row afterwards. It is
-       an assert and not a comment because it is the claim a later reader is most likely to break: widen the
-       criterion by one clause — take a started row, take a row at the cursor — and every index in this file
-       silently renames its referent while staying perfectly in range, which is §AN-INDEX-NAMES-A-THING-ONLY-
-       WHILE-THE-SET-IS-FIXED with nothing to say it happened. The criterion is what holds this, so this fires
-       the moment the criterion stops holding it. */
+    /* Why the cursor pair survives untouched, asserted: `lowest` is the smallest index going, so this one comparison
+       establishes that no removed row lies below `script_i` or at or below `last_compiled`, and neither can name a
+       different row afterwards. Widening the criterion by one clause (taking a started row, or the row at the
+       cursor) would rename every index's referent while staying in range, so this fires the moment the criterion
+       stops holding it. */
     DCHECK(lowest > f->last_compiled && lowest >= f->script_i,
            "§7.5.10 step 5's removal is about to take a row at or below this flow's cursor — `script_i` and "
            "`last_compiled` are ABSOLUTE positions this walk deliberately does not repair, and they are only "
@@ -5472,27 +5313,19 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
            "anywhere to say so. If the criterion is meant to reach these rows, the cursor pair has to be "
            "brought down with them here, exactly as `imm_at`/`imm_next` are below");
 
-    /* THE ENTRIES THAT NAME A ROW, FIRST. engine_pending_docscript records the row's NAME on the register
-       (PEND_SCRIPT_ROW) and flow_deliver_one_reply finds the row by it, so the register is the one structure
-       outside this column that names a row at all.
-       AN ENTRY WHOSE ROW IS GOING LEAVES WITH IT, and that is what §7.5.10 step 2's "Abort document." reaches
-       — HTML §7.5.11 "Aborting a document load", whose own step 2 is "Cancel any instances of the fetch
-       algorithm in the context of document, discarding any tasks queued for them, and discarding any further
-       data received from the network for them". The reply has nowhere to land once the row is gone, and a
-       reply that DID land would be a program of a destroyed Document compiled into a realm whose browsing
-       context is null, which is the exact thing step 5 exists to prevent. Walked BACKWARDS because
-       pending_remove is a swap-remove: it moves the LAST entry into the hole, and descending means that entry
-       has already been visited.
-       AN ENTRY WHOSE ROW SURVIVES BUT SHIFTS NEEDS NOTHING DOING TO IT, AND AN ABORT USED TO STAND HERE
-       BECAUSE IT DID. While the entry held the row's absolute POSITION, a removal below it renamed its
-       referent, and the position could not be corrected: bringing it down is a WRITE to a record a forked
-       sibling shares (pending.h: a fork shares records, and solver/pending_index.h states it outright — one
-       record is one member however many flows name it), and that sibling has not destroyed this document and
-       has not moved a row, so the one field would have had to hold two different positions at once.
-       `pending_unshare` was no way out either: its contract admits a copy only when no reply is coming for the
-       original, and an outstanding document script is precisely a record a reply IS coming for. The entry names
-       the row by `dyn_id` now — the same name in every arm, unchanged by any shift — so the compaction below
-       carries it and there is nothing left to correct or to refuse. */
+    /* The entries that name a row, first: engine_pending_docscript records the row's name on the register
+       (PEND_SCRIPT_ROW) and flow_deliver_one_reply finds the row by it, the one structure outside this column that
+       names a row. An entry whose row is going leaves with it, which §7.5.10 step 2's "Abort document." reaches:
+       HTML §7.5.11 "Aborting a document load" step 2, "Cancel any instances of the fetch algorithm in the context
+       of document, discarding any tasks queued for them, and discarding any further data received from the network
+       for them". A reply that did land would be a destroyed Document's program compiled into a realm whose browsing
+       context is null. Walked backwards because pending_remove is a swap-remove that moves the last entry into the
+       hole, already visited.
+       An entry whose row survives but shifts needs nothing: it names the row by `dyn_id`, the same name in every
+       arm and unchanged by any shift, so the compaction carries it. A position would have needed correcting, a
+       write to a record a forked sibling shares (solver/pending_index.h: one record is one member however many
+       flows name it), and `pending_unshare` admits a copy only when no reply is coming, which an outstanding
+       document script is not. */
     for (int k = pending_count(f->pending) - 1; k >= 0; k--) {
         JSValue e = pending_entry(f->pending, k);
         int docscript = (int)pending_get_int(e, PEND_KIND) == FLOW_PENDING_DOCSCRIPT;
@@ -5510,14 +5343,12 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
         if (prog_row_removed_by_destroy(f, slot, doc)) { pending_remove(&f->pending, k); continue; }
     }
 
-    /* THE INTERPOSITION WITNESS IS THIS FLOW'S OWN AND IS SHARED WITH NOBODY, so it is ARITHMETIC where the
-       register above is an abort. `imm_at` is the base slot a run of §4.12.1.1 "Processing model"'s immediate
-       programs was computed against and `imm_next` is the slot the next one takes; both are absolute, both sit
-       at or above the cursor, and every removed row is at or above the cursor too — so both can move.
-       A RUN WHOSE BASE SLOT IS ITSELF REMOVED HAS NO RUN LEFT: the witness is what tells a SECOND interposition
-       that it belongs behind the first, and with the program that opened the run gone there is no first. It
-       goes back to the "no run is open" pair rather than to a corrected number, because a corrected number
-       would claim a run that nothing is standing in. */
+    /* The interposition witness is this flow's own, shared with nobody, so it is corrected arithmetically. `imm_at`
+       is the base slot a run of §4.12.1.1 "Processing model"'s immediate programs was computed against and
+       `imm_next` the slot the next one takes; both are absolute and at or above the cursor, as every removed row
+       is. A run whose base slot is itself removed has no run left (the witness tells a second interposition it
+       belongs behind the first, and the first is gone), so it returns to the "no run is open" pair rather than a
+       corrected number that would claim a run nothing stands in. */
     if (f->imm_at >= 0) {
         if (f->imm_at < f->dyn_n && prog_row_removed_by_destroy(f, f->imm_at, doc)) {
             f->imm_at = f->imm_next = -1;
@@ -5527,16 +5358,14 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
         }
     }
 
-    /* AND THE COLUMNS, COMPACTED IN PLACE. `w` never runs ahead of `k`, so the predicate above is always asked
-       about a slot no write has reached yet — which is why the criterion may be re-asked here instead of
-       recorded into a side table this would then have to allocate and could then fail to. */
+    /* And the columns, compacted in place. `w` never runs ahead of `k`, so the predicate is always asked about a
+       slot no write has reached, and the criterion is re-asked rather than recorded into a side table. */
     for (int k = 0; k < f->dyn_n; k++) {
         if (prog_row_removed_by_destroy(f, k, doc)) {
-            /* A ROW THAT OWES AN ANSWER MAY NOT SIMPLY VANISH. A non-NULL token is a peer instance suspended on
-               this row's completion (flow.h says what a CROSS_AGENT_OP row without one is: "a peer suspended
-               forever"), and dropping the row reaches that same state by the other door — the peer waits for
-               the rest of the session and nothing anywhere names what it is waiting for. The token is still
-               freed below, because in release there is nothing better to do with it than not leak it. */
+            /* A row that owes an answer may not vanish: a non-NULL token is a peer instance suspended on this row's
+               completion (flow.h: a CROSS_AGENT_OP row without one is "a peer suspended forever"), and dropping the
+               row leaves the peer waiting for the session. The token is still freed below, since in release the
+               only alternative is a leak. */
             DCHECK(f->dyn_token[k] == NULL,
                    "§7.5.10 step 5 removed a destroyed Document's program that still OWED A CROSS-AGENT "
                    "ANSWER — a peer instance is parked on this row's rendezvous token and the destruction "
@@ -5554,13 +5383,12 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
             f->dyn_url[w]   = f->dyn_url[k];
             f->dyn_el[w]    = f->dyn_el[k];
             f->dyn_doc[w]   = f->dyn_doc[k];
-            /* THE NAME TRAVELS WITH THE ROW, which is the whole of why this walk no longer aborts: the row
-               moves, its `dyn_id` does not change, and every register entry naming it is still naming it. */
+            /* The name travels with the row: its `dyn_id` does not change, so every register entry naming it still
+               does. */
             f->dyn_id[w]    = f->dyn_id[k];
-            /* AND SO DOES THE ARRIVAL STAMP, by a sentence the name's does not make: a compaction moves a row
-               within one flow's sequence and changes nothing about WHEN it became runnable, so a row that is
-               older than a queued callback before §7.5.10 step 5 is older than it afterwards. Re-minting here
-               would let a destroy reorder a surviving row against this flow's own queue. */
+            /* And so does the arrival stamp: a compaction changes nothing about when a row became runnable, so a
+               row older than a queued callback before §7.5.10 step 5 is older afterwards, and re-minting would let a
+               destroy reorder a surviving row against this flow's own queue. */
             f->dyn_run[w]   = f->dyn_run[k];
             f->dyn_token[w] = f->dyn_token[k];
             f->dyn_pos[w]   = f->dyn_pos[k];
@@ -5572,8 +5400,8 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
            "the count and the walk ask one predicate over one column, so a disagreement means the sequence "
            "was written between them and the ten columns no longer describe one queue");
     f->dyn_n = w;
-    /* `script_i` AND `last_compiled` ARE DELIBERATELY UNTOUCHED — the proof is the `lowest` assert above, which
-       is where it is checkable: there the columns still hold the positions the claim is about. */
+    /* `script_i` and `last_compiled` are untouched; the proof is the `lowest` assert above, where the columns still
+       hold the positions the claim is about. */
     DCHECK(flow_programs_unstarted_for_document(f, doc) == 0,
            "§7.5.10 step 5 removed a destroyed Document's queued programs and the document still has some — "
            "the compaction is over the same predicate the count is, so a survivor means a row moved ACROSS the "
