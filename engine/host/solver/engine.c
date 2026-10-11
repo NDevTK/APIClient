@@ -113,9 +113,8 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
        core/html/nonce_attribute.c's slot read. That read's own assert names the bad operand; this one says the
        seam handed over something that is not an element at all, which is a repair in a different file. */
     DCHECK(el == NULL || lxb_dom_interface_node(el)->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "§4.12.1.1's script metadata was composed for a node that is not an ELEMENT — every park that "
-           "reaches this line holds an element of a live tree, so another node type means the pointer this "
-           "seam carried names freed or foreign memory and the nonce read below walks it");
+           "§4.12.1.1's script metadata was composed for a node that is not an element — every park reaching this "
+           "line holds an element of a live tree, so the pointer names freed or foreign memory");
     if (el) {
         h.nonce_slot = nonce_attribute_current(ctx, el);
         /* An unknown nonce is an undecided predicate: §2.5.6's slot holds a JS value so that
@@ -123,11 +122,10 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
            identical to a policy's base64-value, which an unconstrained domain answers neither way. The arm must
            fork; a coerced example would report one world's verdict as both (core/html/html_link.c, same read). */
         DCHECK(!concolic_is(h.nonce_slot),
-               "a `script` element's [[CryptographicNonce]] is an unknown external value, and CSP §6.7.2.3 "
-               "step 3.1 compares it against this policy's nonce-source expressions for identity — which an "
-               "unconstrained domain does not answer. Fork the request here into the matching and "
-               "non-matching arms and let each carry the narrowed domain, the way an opaque operand forks "
-               "every other predicate; a coerced example reports ONE arm's verdict as though it were both");
+               "a `script` element's [[CryptographicNonce]] is an unknown external value, and CSP §6.7.2.3 step 3.1 "
+               "compares it for identity, which an unconstrained domain cannot answer. Fork the request here into "
+               "the matching and non-matching arms, each carrying the narrowed domain, as an opaque operand forks "
+               "every other predicate");
         /* The slot read can refuse, and a refusal is not OOM. engine/qjs/quickjs.c's string constructor bounds
            the length it is handed and throws a RangeError for an oversized one; that arrives here as an
            exception in the slot, and `JS_ToCString` of an exception is NULL, the same NULL an allocation failure
@@ -136,10 +134,9 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
             /* Fatal by design: a dev build has already aborted inside the string constructor with the caller's
                stack above it, and in release no narrower record exists, since §4.12.1.1's metadata grades the
                request and a nonce nobody could read would report a load a browser refuses. */
-            CHECK_FAIL("§4.12.1.1: a `script` element's [[CryptographicNonce]] could not be READ — §2.5.6's "
-                       "slot held bytes whose length the engine's own string constructor refused, which is a "
-                       "corrupt or stale attribute length rather than an allocation failure. The dev build "
-                       "aborts inside that constructor and its stack names the seam that carried the element");
+            CHECK_FAIL("§4.12.1.1: a `script` element's [[CryptographicNonce]] could not be read — the slot held "
+                       "bytes whose length the engine's string constructor refused, a corrupt or stale attribute "
+                       "length rather than an allocation failure");
         }
         h.nonce = JS_ToCString(ctx, h.nonce_slot);
         CHECK(h.nonce != NULL, "§4.12.1.1: OOM reading a script element's cryptographic nonce metadata");
@@ -251,11 +248,9 @@ static int program_load_door(int kind, int parser_inserted)
     case FLOW_PENDING_SCRIPT:    return parser_inserted ? EPD_DOCUMENT_SCRIPT : EPD_INJECTED_SCRIPT;
     case FLOW_PENDING_MODULE:    return EPD_MODULE_IMPORT;
     }
-    DCHECKF(0, "a park whose reply becomes a PROGRAM states the kind %d, which `pending_kind_is_program` "
-               "admitted and this mapping has no door for — the two read the same enumeration one line "
-               "apart, so this is a program kind added to that predicate's true arm without saying which "
-               "mechanism composes its address, and the @H row for every such load would name a mechanism "
-               "nothing ran", kind);
+    DCHECKF(0, "a park whose reply becomes a program states the kind %d, which `pending_kind_is_program` admits and "
+               "this mapping has no door for — a program kind added to that predicate must say which mechanism "
+               "composes its address", kind);
     /* The release arm returns the refused value rather than a plausible door: `endpoint_door_token`'s CHECK is
        fatal in every build, so a release engine aborts at the emit naming the door instead of publishing
        whichever door a fallback picked. The two components' release arms are designed together. */
@@ -469,10 +464,8 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
        data queues a microtask before it fetches, and a queued job is a flow.) The fix belongs at the baseline
        entry: the walk may record an address but not issue a request; the boot flow issues it.
        core/html/html_link.c asserts that at its own baseline entry. */
-    DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow — see the comment "
-                      "above this line: the callers that HAVE a flow are script and enqueued jobs, and the "
-                      "caller that does not is the pre-boot baseline tree walk performing a step HTML defines "
-                      "over tree construction. Issue it from the boot flow, not from the walk");
+    DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow — the flowless caller is "
+                      "the pre-boot baseline tree walk; issue the fetch from the boot flow, not from the walk");
     e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f), flow_path_pinned(f),
                      /*parser_inserted*/0, flow_work_seq_next());   /* a `fetch()` or an XHR — page code composed it */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
@@ -531,9 +524,8 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        calls "promiseCapability.[[Reject]]" with it. Without this the delivery could only settle `resolve` with
        empty source text, evaluating an empty module, so `import(u).catch(h)` would never run `h`. */
     DCHECK(JS_IsFunction(ctx, reject),
-           "a dynamic import parked with no REJECT capability — JS_NewPromiseCapability mints both halves and "
-           "this park is what the failure arm reaches the second one through, so a record without it could "
-           "answer a network error only by settling the SUCCESS half with bytes that never arrived");
+           "a dynamic import parked with no reject capability — JS_NewPromiseCapability mints both halves, and the "
+           "failure arm settles the import through this one");
     pending_set(e, PEND_REJECT, JS_DupValue(ctx, reject));
     /* And which document asked, as every other fetch park records it: the importing realm is the asking
        document's, and HTML §7.5.11 step 2 cancels this load with that document's other fetches. */
@@ -566,10 +558,9 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
        request" with no task or microtask, so parsed link elements are served inside a flow rather than from
        the baseline tree walk. The image half queues §4.8.4.3.5's own microtask first, and every job is a flow.
        Both ends assert, because only one of them can name the entry that arrived without one. */
-    DCHECK(f != NULL, "a browser algorithm's subresource fetch was issued outside a running flow — it ends in "
-                      "a fetch and a fetch parks on the FLOW's own register, so a caller with none has "
-                      "nowhere to be owed a reply. core/html/html_link.c's trigger names the four entries "
-                      "HTML §4.2.4.3 reaches it from");
+    DCHECK(f != NULL, "a browser algorithm's subresource fetch was issued outside a running flow — a fetch parks on "
+                      "the flow's own register (core/html/html_link.c's trigger names the four entries HTML §4.2.4.3 "
+                      "reaches it from)");
     DCHECK(JS_IsFunction(ctx, deliver),
            "a browser algorithm's subresource fetch parked with no completion steps — HTML §4.2.4.3's types "
            "and HTML §4.8.4.3.5 each state theirs as a fetch's processResponse (HTML §4.6.8.12's step 14, "
@@ -581,9 +572,9 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
        is a potential destination (Fetch §2.2.7 Miscellaneous), which HTML §4.6.8.20 step 3 translates to the
        empty string. */
     DCHECK(fetch_is_destination_type(req->destination),
-           "a browser algorithm's subresource fetch stated a DESTINATION that is not one Fetch §2.2.5 "
-           "\"Requests\" enumerates — run Fetch §2.2.7 \"Miscellaneous\"' translate a potential destination "
-           "over the `as` keyword before stating it, as HTML §4.6.8.20's step 3 does");
+           "a browser algorithm's subresource fetch stated a destination Fetch §2.2.5 \"Requests\" does not "
+           "enumerate — run Fetch §2.2.7's translate a potential destination over the `as` keyword first, as HTML "
+           "§4.6.8.20 step 3 does");
     /* A browser algorithm's subresource: no `script` element, so no §4.12.1.1 `parser document`. */
     e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f),
                      /*parser_inserted*/0, flow_work_seq_next());
@@ -622,9 +613,8 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     DCHECK(f != NULL, "a <script src> was parked on outside a running flow");
     DCHECK(url != NULL && *url, "a <script src> was parked on with no URL");
     DCHECK(script_type_executes(stype),
-           "a <script src> was parked on for an element whose type executes nothing — §4.12.1.1 fires an error "
-           "event at an `importmap` or `speculationrules` element with a `src` and returns without fetching, "
-           "so no such element ever reaches a park");
+           "a <script src> was parked on for an element whose type executes nothing — §4.12.1.1 fires error at an "
+           "`importmap` or `speculationrules` element with a `src` and returns without fetching");
     meta = script_csp_meta(ctx, el);
     req.metadata = meta.m;
     /* The credentials mode, off the same element by §4.12.1.1's own step (see `script_credentials_mode`), so
@@ -641,9 +631,9 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     /* Whose element it is. Every caller reaches this from §4.12.1.1's steps over an element, so NULL is
        asserted rather than defaulted past. */
-    DCHECK(el != NULL, "a <script src> was parked on with no element — §4.12.1.1 reaches this destination only "
-                       "from `prepare the script element`, whose whole subject is EL, and a row without one "
-                       "would run the fetched program with this document's currentScript left null");
+    DCHECK(el != NULL, "a <script src> was parked on with no element — §4.12.1.1 reaches this destination only from "
+                       "prepare the script element, and a row without one would run the program with currentScript "
+                       "null");
     pending_set(e, PEND_SCRIPT_EL, node_wrap(ctx, lxb_dom_interface_node(el)));
     /* The address last, through the one door that asks §4.3 Scheme fetch: every field above belongs to the
        element, so an injected `<script src="data:…">` answered on this line lands in a record that already knows
@@ -673,9 +663,8 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx))
        document_agent_free gives it back. A second claim on a one-entry slot would silently stop the first from
        running. */
     DCHECK(fn == NULL || g_docdone_hook == NULL,
-           "a second component claimed §13.2.7's document-load lifecycle step — one call of it answers for "
-           "EVERY document of this agent (it walks navigable_tree_order), so the claim is one per agent and was "
-           "being re-made once per DOCUMENT until core/dom/document.c moved the line into its declaration");
+           "a second component claimed §13.2.7's document-load lifecycle step — one call answers for every document "
+           "of this agent (it walks navigable_tree_order), so there is one claim per agent");
     g_docdone_hook = fn;
 }
 
@@ -685,8 +674,8 @@ static int (*g_timer_hook)(JSContext *ctx);
 void engine_set_timer_hook(int (*fn)(JSContext *ctx))
 {
     DCHECK(fn == NULL || g_timer_hook == NULL,
-           "a second component claimed §8.1.7's timer step — there is ONE event loop per agent, and this was "
-           "being re-claimed once per REALM until core/timing/timer.c moved the line into its declaration");
+           "a second component claimed §8.1.7's timer step — there is one event loop per agent, so there is one "
+           "claim");
     g_timer_hook = fn;
 }
 
@@ -698,8 +687,8 @@ static int (*g_rendering_hook)(JSContext *ctx);
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx))
 {
     DCHECK(fn == NULL || g_rendering_hook == NULL,
-           "a second component claimed §8.1.7.3's in-parallel half — there is one rendering task source per "
-           "event loop, and the second claim silently decides every frame the first was queueing");
+           "a second component claimed §8.1.7.3's in-parallel half — there is one rendering task source per event "
+           "loop, and a second claim would silently replace the first");
     g_rendering_hook = fn;
 }
 
@@ -711,9 +700,8 @@ static int (*g_idle_hook)(JSContext *ctx);
 void engine_set_idle_hook(int (*fn)(JSContext *ctx))
 {
     DCHECK(fn == NULL || g_idle_hook == NULL,
-           "a second component claimed the event loop's idle rung — there is ONE event loop per agent and its "
-           "idle period is one per Window, so the second claim silently stops the first ever being asked and "
-           "every registered idle callback goes uninvoked with nothing to say so");
+           "a second component claimed the event loop's idle rung — there is one event loop per agent, and a second "
+           "claim would stop the first from ever being asked");
     g_idle_hook = fn;
 }
 
@@ -750,9 +738,8 @@ static int (*g_link_connected_hook)(JSContext *ctx);
 void engine_set_link_connected_hook(int (*fn)(JSContext *ctx))
 {
     DCHECK(fn == NULL || g_link_connected_hook == NULL,
-           "a second component claimed §4.6.8.20's connected time for parsed link elements — the inventory it "
-           "drains is one list per AGENT, so the second claim silently stops the first draining and every "
-           "document's own preloads go unrequested with nothing to say so");
+           "a second component claimed §4.6.8.20's connected time for parsed link elements — the inventory it drains "
+           "is one list per agent, and a second claim would stop the first from draining");
     g_link_connected_hook = fn;
 }
 
@@ -762,8 +749,8 @@ static void (*g_checkpoint_hook)(JSContext *ctx);
 void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx))
 {
     DCHECK(fn == NULL || g_checkpoint_hook == NULL,
-           "a second component claimed the end-of-microtask-checkpoint step — HTML invokes ONE list there and "
-           "this slot holds one entry, so the second claim silently stops the first from running");
+           "a second component claimed the end-of-microtask-checkpoint step — the slot holds one entry, and a second "
+           "claim would stop the first from running");
     g_checkpoint_hook = fn;
 }
 
@@ -936,9 +923,8 @@ int engine_take_paged_owed(void) {
        only spender, so below zero means a second spender or one reply spending two credits; after that the
        number no longer means "replies owed for flows this instance sold". */
     DCHECK(g_paged_owed >= 0,
-           "the paged-reply debt went NEGATIVE — it is a count of unanswered entries that left with sold "
-           "flows and this is its only spender, so more replies have been excused as sales than were ever "
-           "sold, and qjs_provide's pairing assert is now excusing the host's real mispairings");
+           "the paged-reply debt went negative — it counts unanswered entries that left with sold flows and this is "
+           "its only spender, so more replies were excused as sales than were sold");
     /* Zero is an answer, not a broken invariant: qjs_provide asks this to tell a sale from the host's pairing
        being off, and "no sale explains this reply" is the case its DFAIL exists for. Aborting here would report
        the host's mispairing under the pager's message. */
@@ -983,9 +969,9 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
                 (uint32_t)pending_get_int(a, PEND_REQ) == id) dups++;
             JS_FreeValue(ctx, a);
         }
-        DCHECKF(dups == 1, "minting host request %u left %d entr(y/ies) on this flow's register under that "
-                           "MACHINE name — engine_host_answered returns the first match, so a second would "
-                           "hand one step machine another's answer with nothing to say so", id, dups);
+        DCHECKF(dups == 1, "minting host request %u left %d entr(y/ies) on this flow's register under that machine "
+                           "name — engine_host_answered returns the first match, so the name must be "
+                           "unique", id, dups);
     }
 #endif
     /* The request is what makes the flow blocked. Every caller returns JS_STEP_YIELD, which the driver re-enters
@@ -994,9 +980,9 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
        agreement would turn every cross-instance read into a flow that burns the thread until the host answers,
        and the host is asked only between steps, so the answer could never arrive. Asserted here, where the
        blocking is claimed. */
-    DCHECK(flow_blocked(f), "a synchronous host request left its flow RUNNABLE — the caller is about to return "
-                            "JS_STEP_YIELD, which re-enters immediately, so the flow would spin on a question "
-                            "that is only answered between steps");
+    DCHECK(flow_blocked(f), "a synchronous host request left its flow runnable — the caller returns JS_STEP_YIELD "
+                            "and re-enters at once, so an unblocked flow would spin on a question answered only "
+                            "between steps");
     return id;
 }
 
@@ -1043,15 +1029,10 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
             shown++;
         }
         if (!off) snprintf(reg, sizeof reg, "(nothing)");
-        DFAILF("a machine asked about host request %u and it is not on its flow's register — it either never "
-               "issued that request or it inherited the id across a fork, which re-issues under the sibling's "
-               "own world. THE REGISTER HOLDS %d entr(y/ies), %d of them listed as MACHINE~HOST/kKIND with +v "
-               "where the host has already answered: %s. A machine name EQUAL to the asked one with a "
-               "different host name beside it is the split working; the two DIFFERING is this flow never "
-               "having issued that question. The KIND integers are the FLOW_PENDING_* defines in "
-               "solver/pending.h and are printed as numbers deliberately — a name table for them here would "
-               "be a second copy of that header's list and would drift from it. A HOSTREQ (k3) at a DIFFERENT "
-               "id is the FORK reading; no HOSTREQ at all, or an empty register, is the MACHINE reading.",
+        DFAILF("a machine asked about host request %u, which is not on its flow's register — it never issued that "
+               "request, or it inherited the id across a fork (which re-issues under the sibling's own world). The "
+               "register holds %d entr(y/ies), %d listed as MACHINE~HOST/kKIND (+v answered, KIND a solver/pending.h "
+               "FLOW_PENDING_* value): %s; a HOSTREQ (k3) at another id is the fork reading",
                req, n, shown, reg);
     }
 #else
@@ -1086,9 +1067,8 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
     JSValue v;
     DCHECK(f != NULL, "a host answer was taken outside a flow");
     DCHECK(pcompletion != NULL,
-           "a host answer was taken without reading the COMPLETION TYPE it carries — an answer is a completion "
-           "record and a taker that reads only its value delivers a peer's THROW as `undefined` to the call "
-           "site that parked on it");
+           "a host answer was taken without reading its completion type — an answer is a completion record, and "
+           "reading only its value would deliver a peer's throw as `undefined`");
     for (int i = 0, n = pending_count(f->pending); i < n; i++) {
         JSValue e = pending_entry(f->pending, i);
         if ((uint32_t)pending_get_int(e, PEND_REQ) == req) {
@@ -1128,9 +1108,9 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
                 if (JS_IsString(wv)) {
                     const char *w = JS_ToCString(ctx, wv);
 
-                    CHECK(w != NULL, "engine: OOM reading which peer TIMELINE answered a cross-instance "
-                                     "request — a commitment that cannot be written is a receiving timeline "
-                                     "that will go on to accept a message from a peer arm it never took");
+                    CHECK(w != NULL, "engine: OOM recording which peer timeline answered a cross-instance request — "
+                                     "without the commitment this timeline would accept a message from a peer arm it "
+                                     "never took");
                     answer_commit_taken(ctx, f, w);
                     JS_FreeCString(ctx, w);
                 }
@@ -1160,8 +1140,8 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
         return JS_STEP_ABRUPT;
     }
     DCHECK(completion == ENGINE_COMPLETION_NORMAL,
-           "a host answer arrived under a completion type ECMA-262 6.2.4 does not have — a cross-instance "
-           "operation completes normally or throws, and `return`/`break`/`continue` do not cross a call site");
+           "a host answer arrived under a completion type other than normal or throw — ECMA-262 6.2.4's `return`, "
+           "`break` and `continue` do not cross a call site");
     *presult = v;
     return JS_STEP_DONE;
 }
@@ -1184,8 +1164,7 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
     int held = 0;
 
     DCHECK(ctx != NULL, "a host request was withdrawn with no context to free its register entry through");
-    DCHECK(req != 0, "a host request with no id was withdrawn — the id is the only thing that names which "
-                     "rendezvous is being given back, so a 0 withdraws nothing and leaves its flow blocked");
+    DCHECK(req != 0, "a host request with no id was withdrawn — the id names which rendezvous is given back");
     if (!g_sess_live) {
         g_host_terminated++;
         return;
@@ -1202,9 +1181,8 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
                state of the frame it cloned) with its answer fixed, so withdrawing the first hit could unblock an
                arm and leave the issuer parked, silently at both ends. */
             DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
-                   "a rendezvous was withdrawn through the register of an ARM rather than the ISSUER — the arm "
-                   "carries the issuer's id with its answer already FIXED, so this would unblock a flow that "
-                   "was never waiting and leave the one that is");
+                   "a rendezvous was withdrawn through an arm's register rather than the issuer's — an arm carries "
+                   "the issuer's id with its answer already fixed");
             JS_FreeValue(ctx, p);
             pending_remove(&f->pending, i);
             /* The flow is askable again: a withdrawal is the host event flow_set_host_owed's mark waits for.
@@ -1262,9 +1240,8 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
     /* The two sources differ exactly in whether a timeline produced the answer, so the name is required of one
        and forbidden of the other. An anonymous peer answer could not be told from a duplicate. */
     DCHECK((source == ENGINE_ANSWER_PEER) == (world != NULL && *world),
-           "a cross-instance answer disagreed with its own source about whether a peer TIMELINE computed it — "
-           "a peer answers BY RUNNING A PROGRAM on one of its flows and must name that flow's world, and a "
-           "value the trusted zone computed itself has no flow to name");
+           "a cross-instance answer disagrees with its source about whether a peer timeline computed it — a peer's "
+           "answer names the world of the flow that ran it, and a trusted-zone answer names none");
     /* Parsed only where the assert is compiled: world_parse interns the document names it reads, a side effect
        that may not sit in a DCHECK's condition, and release has no reader for the result. */
 #if APICLIENT_DEV
@@ -1276,9 +1253,8 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
            that would deliver this instance's own state to a call site that asked another agent, and fork over a
            peer timeline that does not exist. Mirror of engine_perform's assert on the asking world. */
         DCHECK(!world_doc_hosted(w.doc),
-               "a cross-instance answer was computed in a world of a document THIS agent holds — the operation "
-               "was routed back to the instance whose flow asked it, so the value came from this heap and the "
-               "arm forked over it would be a timeline of the asking agent wearing the peer's name");
+               "a cross-instance answer was computed in a world of a document this agent holds — the operation was "
+               "routed back to the asking instance, so the value came from this heap");
     }
 #endif
     /* The session is over, so nothing can consume an answer: a handled state, unlike the aborts at the bottom.
@@ -1298,9 +1274,8 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
                 (uint32_t)pending_get_int(p, PEND_REQ_HOST) != req) { JS_FreeValue(ctx, p); continue; }
             if (!pending_get_int(p, PEND_HAVE_VALUE)) {
                 DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
-                       "a request whose answer was FIXED by an answer fork is UNANSWERED — the arm is built from "
-                       "the answer it took, so the two are written together and one without the other is an arm "
-                       "that would wait for a question nobody was asked");
+                       "a request whose answer was fixed by an answer fork is unanswered — the arm is built from the "
+                       "answer it took, so the two are written together");
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
                 /* The timeline is written with the value, so a flow that took an answer can address its next
@@ -1327,9 +1302,8 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
                answer reaching it would be recorded as an unnamed peer timeline and fork an arm into a timeline
                that does not exist. Not proceeding is required in release too. */
             CHECK(source == ENGINE_ANSWER_PEER,
-                  "the trusted zone answered one request TWICE. A value this zone computed — §7.4 step 14's "
-                  "load, XHR §3.5.6's fetch — has exactly one answer, so the second is a delivery this zone "
-                  "made after it had already made one, and the flow has by now run on the first");
+                  "the trusted zone answered one request twice — a value this zone computes (§7.4 step 14's load, "
+                  "XHR §3.5.6's fetch) has exactly one answer");
             /* An arm's own answer is fixed. The arm holds the same request id (in the step state of the frame it
                cloned), so without this skip a third answer would fork from the arm as well as the issuer, giving
                a timeline that answered B and then C at one call site. */
@@ -1339,10 +1313,8 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
                second completion under one name is a relay that duplicated. Forking over it would grow a twin of
                an existing arm. It is asserted, never dropped, because dropping hides the relay defect. */
             DCHECK(!pending_answer_world_seen(p, world),
-                   "one peer TIMELINE answered one cross-instance request TWICE. Its flow spends the rendezvous "
-                   "token off its row as it answers, so this instance was handed the same completion twice by "
-                   "the zone that routes them — and the arm this would fork is a second flow exploring a "
-                   "timeline of the answering document that another arm already holds");
+                   "one peer timeline answered one cross-instance request twice — the answering flow spends the "
+                   "rendezvous token as it answers, so the routing zone delivered one completion twice");
             /* An answer beyond the first does not stop at the first flow, and is not written onto a shared
                record: the asker and each branch sibling still holding the request must fork over it, each by
                draining its own list, so the record is unshared here per flow, as a branch fork does. */
@@ -1365,16 +1337,10 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
        an answered entry aborts one loop above. What to build is engine_host_take's residual: the entry alone is
        not enough, because flow_answer_fork clones `f->frame`, which by the take is past the read. */
     if (fixed)
-        DFAIL("a PEER's answer arrived for a request whose only live entries are ARMS — each of those was "
-              "forked over an earlier answer and its answer is FIXED, so the entry that could still take one is "
-              "the ISSUER's, and that one left the register when the issuing flow took its first answer. This "
-              "peer timeline has nowhere to land and the arm it would have forked is silently missing. Build "
-              "the two things engine_host_take's residual names: the issuer's entry AND a clone of its "
-              "suspension, taken at the take while the machine is still at the read (the frame is what the arm "
-              "is a clone of, and after the take it is past the call site), released on a `remoteop.exhausted` "
-              "record this protocol does not yet carry — the answering instance stating that the LAST timeline "
-              "holding the token has answered, which is perform_token_held's question and the one "
-              "engine_retract_span already asks to decide a hand-back");
+        DFAIL("a peer's answer arrived for a request whose only live entries are arms with fixed answers, so this "
+              "timeline has nowhere to land. Build what engine_host_take's residual names: keep the issuer's entry "
+              "and a clone of its suspension at the take, released on a `remoteop.exhausted` record the protocol "
+              "does not yet carry");
 
     /* (2) Nothing names it, which for a value this zone computed is innocent: the asker is gone. */
     if (source == ENGINE_ANSWER_HOST)
@@ -1388,16 +1354,10 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
        how many timelines the peer has), the asker resumed and its entry taken, then answer 1 lands here. A driver
        batching a token's answers hides it, but the protocol permits relay on arrival. Doors 2 and 3 need no
        fix (a resumed recipe re-issues the request); door 1 is engine_host_take's residual. */
-    DFAILF("a PEER's answer arrived for a request NO register holds — the asking flow left and took the "
-           "entry with it (it took its first answer, it finished, or it was paged out), so this timeline "
-           "of the answering document has nowhere to land and the arm it would have forked is silently "
-           "missing. If the flow is still live it TOOK its first answer, and what to build is named at "
-           "engine_host_take: hold the entry AND a clone of the suspension the machine is standing in, and "
-           "release both on a `remoteop.exhausted` record — the answering instance saying the last timeline "
-           "holding the token has answered — which this protocol does not carry, so there is no criterion "
-           "for how long to hold them and holding for ever or for a bound are the only readings left. This "
-           "session sold %ld flow(s) owing %ld synchronous request(s), which is the only one of the three "
-           "doors this engine can still see from here", g_flows_sold, g_paged_reqs);
+    DFAILF("a peer's answer arrived for a request no register holds, so this timeline has nowhere to land. If the "
+           "asking flow is live it took its first answer: build engine_host_take's residual (keep the entry and a "
+           "suspension clone until a `remoteop.exhausted` record); this session sold %ld flow(s) owing %ld "
+           "synchronous request(s)", g_flows_sold, g_paged_reqs);
     return 0;
 }
 
@@ -1494,13 +1454,11 @@ char *engine_notice_build(const char *op, const char *const *fields, size_t nfie
     size_t len, at, i, l;
     char *rec;
 
-    DCHECK(op != NULL && *op, "a host notice was built under no operation name — the operation is what the "
-                              "host routes on, so a record without one is a payload addressed to nobody");
+    DCHECK(op != NULL && *op, "a host notice was built under no operation name — the host routes on the operation");
     DCHECK(nfields == 0 || fields != NULL,
            "a host notice was built from a field count with no fields behind it");
     DCHECK(strchr(op, '\t') == NULL && strchr(op, '\n') == NULL,
-           "a host notice's operation name contains one of the record's own delimiters, so the name the host "
-           "routes on is not the name this record was built under");
+           "a host notice's operation name contains one of the record's delimiters (tab or newline)");
     len = strlen(op);
     for (i = 0; i < nfields; i++) {
         DCHECK(fields[i] != NULL,
@@ -1508,13 +1466,10 @@ char *engine_notice_build(const char *op, const char *const *fields, size_t nfie
                "and a value that is absent is stated in that field's own vocabulary (`u`, `null`, `none`) "
                "rather than left out, because an empty field is a hole a reader can default");
         DCHECK(i + 1 == nfields || strchr(fields[i], '\t') == NULL,
-               "a host notice's NON-FINAL field contains a TAB and the record is tab-delimited — the reader "
-               "counts one field too many and reads every field after it at the wrong offset, which is the "
-               "one corruption a field COUNT still passes. Only the LAST field is the remainder that may "
-               "hold a tab, which is why the raw policy is last on every record that carries one");
+               "a host notice's non-final field contains a tab, the record's field delimiter — only the last field "
+               "may hold one, which is why the raw policy is last on every record that carries it");
         DCHECK(strchr(fields[i], '\n') == NULL,
-               "a host notice field contains a NEWLINE, which is the record separator — the host would read "
-               "one notice as two and route the tail as an operation");
+               "a host notice field contains a newline, the record separator");
         len += 1 + strlen(fields[i]);   /* the TAB that precedes this field, then the field itself */
     }
     rec = malloc(len + 1);
@@ -1529,9 +1484,8 @@ char *engine_notice_build(const char *op, const char *const *fields, size_t nfie
         at += l;
     }
     rec[at] = 0;
-    DCHECK(at == len, "a host notice was assembled to a length its own sizing walk did not predict — the two "
-                      "walks read different bytes, so a field changed between them and the record is either "
-                      "truncated or holds the tail of a buffer nobody owns");
+    DCHECK(at == len, "a host notice was assembled to a length its sizing walk did not predict — the two walks read "
+                      "different bytes");
     return rec;
 }
 
@@ -1690,9 +1644,8 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
            walks, the pager by construction); asserted because a switched-in flow could still run its program to
            completion against a row whose token was just returned to the zone. */
         DCHECK(f != flow_running(),
-               "a cross-agent operation was handed back on the flow the scheduler is switched into — that flow "
-               "can still run its program to completion, and the completion would find a row whose token this "
-               "call has already given back");
+               "a cross-agent operation was handed back on the flow the scheduler is switched into — that flow can "
+               "still complete its program and would find a row whose token was given back");
         n = flow_perform_pending(f);
         for (k = 0; k < n; k++) {
             JSValue e = JS_GetPropertyUint32(ctx, f->perform_q, (uint32_t)k);
@@ -1732,9 +1685,8 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
         /* The postcondition, asserted where it is produced as well as where cold.c reads it: both disjuncts of
            flow_owes_answer are addressed above, so a flow still owing one holds a token in a third place. */
         DCHECK(!flow_owes_answer(f),
-               "a flow still owed a peer an answer after every question it held was handed back — a rendezvous "
-               "token survives somewhere that is neither the arrival slot nor a program's row, so this flow "
-               "parks with a debt the zone has been told is returned");
+               "a flow still owes a peer an answer after every question it held was handed back — a rendezvous token "
+               "survives outside the arrival slot and the program rows");
     }
     for (k = 0; k < seen_n; k++) {
         /* The last holder, asked after the strip: every flow this call was given now holds nothing, so a hit
@@ -1787,9 +1739,8 @@ void engine_world_gone(JSContext *ctx, const char *world)
        the segments a running sibling arm's next arrival forks from, and the peer would silently materialize an
        empty one. */
     DCHECK(n_anc == 0,
-           "a world-gone notice carried an ANCESTRY — a death names ONE world, and its ancestors are alive "
-           "exactly while any descendant is; releasing them here drops the segments a live sibling arm's next "
-           "arrival is told to fork from");
+           "a world-gone notice carried an ancestry — a death names one world, and its ancestors live while any "
+           "descendant does");
     DCHECK(!world_doc_hosted(w.doc),
            "a world-gone notice came back to the instance that minted the world — a local flow's world is the "
            "flow's own and this instance has never held a foreign segment for it, so the zone broadcast a "
@@ -1853,17 +1804,13 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
         CHECK(c != NULL, "engine: OOM reading which sending timeline a receiving flow is in — a commitment "
                          "that cannot be read is a timeline about to accept the arm it did not take");
         DCHECK(JS_VALUE_GET_TAG(tv) == JS_TAG_INT,
-               "a delivery-world commitment carried no small-integer RECEIVED/FORECLOSED flag — the two kinds "
-               "refuse different things, so a missing one would be read as whichever the first test asked");
+               "a delivery-world commitment carried no small-integer received/foreclosed flag");
         /* The minting mechanism is asked of every row, not only the one the refusal reads: a row without one
            would read JS_UNDEFINED as 0, FLOW_COMMIT_ARM_NONE, and fire the refusal's assert naming the delivery
            seam for a defect that is the pusher's. */
         DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
-               "a delivery-world commitment carried no small-integer minting mechanism — every row states "
-               "which mechanism minted the flow on the other side of its branch (flow.h's FlowCommitArm), and "
-               "a row without one is a producer that never stated it. Read as an integer it would come back "
-               "FLOW_COMMIT_ARM_NONE and abort the refusal below, reporting a delivery-seam defect for what "
-               "is a missing field at whichever flow_world_commit_push wrote this row");
+               "a delivery-world commitment carried no small-integer minting mechanism (flow.h's FlowCommitArm) — "
+               "the flow_world_commit_push that wrote this row omitted it");
         arm = (FlowCommitArm)JS_VALUE_GET_INT(av);
         rel = world_vec_relate(vec, c);
         if (JS_VALUE_GET_INT(tv)) {
@@ -1896,19 +1843,12 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                 if (arm == FLOW_COMMIT_ARM_ANSWER_OWED) verdict = STEP_UNIT_ROUTED_ARM_OWED;
                 else {
                     DCHECK(arm != FLOW_COMMIT_ARM_NONE,
-                           "a routed delivery CONTRADICTS a world this timeline already received, and the row for "
-                           "that world states that NO mechanism minted a flow on the other side of its branch — "
-                           "so the arm that should receive this record does not exist and no timeline of this "
-                           "document will receive it. The row is the producer's own statement about its own run "
-                           "(flow.h's FlowCommitArm), so this is the mechanism's answer and not a reading of the "
-                           "vector: a vector edited to look forked does not move it. Today the only producer that "
-                           "writes NONE is the delivery-time fork declining a ROOT sending world, which means the "
-                           "two sending worlds are ROOTS of one (document, generation) and roots name each other "
-                           "nowhere. A root is minted by every flow_add(..., WORLD_NONE) — the sending agent's "
-                           "boot flow, a JOINED document's boot flow, an @S candidate session, and each member a "
-                           "cold resume rebuilds — so read WHICH of those minted the pair in front of you; the "
-                           "block above says why 'rebuild the parked flow as a child of its parked world' is not "
-                           "the repair");
+                           "a routed delivery contradicts a world this timeline already received, and that world's "
+                           "row states no mechanism minted a flow on the other side of its branch, so no timeline of "
+                           "this document will receive the record. The only producer of such a row is the "
+                           "delivery-time fork declining a root sending world; find which root mint (a boot flow, a "
+                           "joined document's boot flow, an @S candidate session, a cold-resume rebuild) made the "
+                           "pair");
                     verdict = STEP_UNIT_ROUTED_NOT_MINE;
                 }
             }
@@ -1968,9 +1908,8 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
         CHECK(c != NULL, "engine: OOM reading a receiving timeline's commitment while deciding whether a "
                          "routed delivery is the first this timeline has had from that sending world");
         DCHECK(JS_VALUE_GET_TAG(tv) == JS_TAG_INT,
-               "a delivery-world commitment carried no small-integer RECEIVED/FORECLOSED flag — a FORECLOSED "
-               "row read as RECEIVED here would suppress the arm for a world this timeline has never heard "
-               "from, which is the message that then reaches no timeline at all");
+               "a delivery-world commitment carried no small-integer received/foreclosed flag — a foreclosed row "
+               "read as received would suppress the arm for a world this timeline never heard from");
         rel = world_vec_relate(vec, c);
         if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) {
             /* The covering arm is read only for a caller that asked, and that scope is what makes the assert
@@ -1983,21 +1922,14 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
                 FlowCommitArm row_arm;
 
                 DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
-                       "a delivery-world commitment that COVERS an arriving world carried no small-integer "
-                       "minting mechanism — the covering row is what says whether an arm for this world "
-                       "already exists, so a missing field would be read as FLOW_COMMIT_ARM_NONE and report "
-                       "that no timeline can take the record this row is about to suppress the arm for");
+                       "a delivery-world commitment covering an arriving world carried no small-integer minting "
+                       "mechanism — the covering row says whether an arm for this world already exists");
                 row_arm = (FlowCommitArm)JS_VALUE_GET_INT(av);
                 JS_FreeValue(ctx, av);
                 DCHECK(row_arm != FLOW_COMMIT_ARM_NONE,
-                       "a RECEIVED commitment COVERS an arriving sending world for a caller that is about to "
-                       "suppress the arm it would otherwise mint, and that row states that NO flow is on the "
-                       "other side of its own branch. A row with no arm is the delivery-time fork declining a "
-                       "ROOT world, and the only caller that reads this answer has already returned for a "
-                       "root before asking — so the arriving world names a fork point while the row covering "
-                       "it names none, and suppressing here would leave the sibling subtree with no timeline "
-                       "at all. Read which producer wrote the covering row: a NONE it did not take from "
-                       "world_vec_fork_point is a mechanism naming a branch that was never there");
+                       "a received commitment covering an arriving sending world states no flow on the other side of "
+                       "its branch, while the arriving world names a fork point — a NONE row must come from "
+                       "world_vec_fork_point declining a root, and the caller has already returned for a root");
                 if (row_arm == FLOW_COMMIT_ARM_ANSWER_OWED) arm = FLOW_COMMIT_ARM_ANSWER_OWED;
             }
             implied = 1;
@@ -2046,21 +1978,16 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
        message, so it must park as what it is or be refused while a park is in flight (cold.c's per-flow park
        asserts the same pair for a delivery a flow holds). */
     DCHECK(g_sess_live || !engine_frontier_paged(),
-           "a record was routed into an instance whose frontier was PARKED — the session is closed and its "
-           "flows are recipes, so there is nothing to seed the delivery on and no replay that re-derives it: a "
-           "message is not re-sent by the document that receives it. Build the inbound half of the cross-"
-           "instance park — the record and the sender origin the trusted zone stamped are both TEXT and cross "
-           "as text — or have the trusted zone hold the record until the instance it names is resumed");
+           "a record was routed into an instance whose frontier is parked — its flows are recipes and a message is "
+           "not re-sent on replay. Build the inbound half of the cross-instance park (the record and the stamped "
+           "sender origin cross as text), or have the trusted zone hold the record until the instance resumes");
     /* Drained: every timeline finished, so the document can no longer receive. engine_set_referenced exists to
        prevent that (a document a peer holds a WindowProxy for keeps its last timeline waiting), so reaching here
        means nothing told this instance it was still referenced. */
     DCHECK(g_sess_live,
-           "a record was routed into an instance whose frontier had DRAINED — every timeline of the document "
-           "finished, so there is no flow to seed the delivery on and no scheduler to run it. A document a peer "
-           "can still post to is a REFERENCED document and engine_set_referenced holds its last timeline open "
-           "for exactly this, so reaching this line means the zone that PROVISIONED this instance did not say "
-           "that a peer holds a WindowProxy for its document — which is the one fact this engine cannot see for "
-           "itself and the one the routing table has by construction");
+           "a record was routed into an instance whose frontier has drained — engine_set_referenced holds a "
+           "referenced document's last timeline open, so the provisioning zone did not report that a peer holds a "
+           "WindowProxy for this document");
 
     /* Every routed record's first two fields are the transport's: the target document (which instance) and the
        sending flow's world (whose timeline). The rest belongs to the component the op names, so a second op is
@@ -2084,16 +2011,16 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
        delivery runs (flow_deliver), since a hosted navigable's realm is materialized by whichever flow first
        reads through it (navigable.h). */
     DCHECK(world_doc_hosted(world_doc_intern(doc)),
-           "a record was routed to an instance that does not hold the document it names — the offscreen is the "
-           "only zone that knows which instance holds which document, and it sent this one to the wrong place");
+           "a record was routed to an instance that does not hold the document it names — the offscreen, which alone "
+           "knows the placement, routed it wrongly");
     {
         WorldId w;
         const WorldId *anc;
         int n_anc = world_parse(worlds, &w, &anc);
         /* Against every document this agent holds, not its root: a message from a same-origin child is
            delivered in this heap and never reaches a transport. */
-        DCHECK(!world_doc_hosted(w.doc), "a record was routed back to the instance whose flow sent it — a "
-                                         "message to one's own document is delivered locally and never leaves");
+        DCHECK(!world_doc_hosted(w.doc), "a record was routed back to the instance whose flow sent it — a message to "
+                                         "one's own document is delivered locally");
         /* Receiver flow world ∧ sender vector, as two real objects: the delta of the flow that will make the
            delivery, and this instance's segment for the sender's world. Both are chains rooted at this baseline
            and neither is an ancestor of the other, so their conjunction is a join, which a CowDelta (a linear
@@ -2104,14 +2031,10 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
         CowDelta *seg = world_segment(ctx, w, anc, n_anc);
         (void)seg;
         DCHECK(cow_delta_empty(seg),
-               "the sending world has WRITTEN in this instance, so the delivery's world is the receiving flow's "
-               "timeline conjoined with those writes — a JOIN of two deltas both rooted at this baseline, "
-               "neither an ancestor of the other, which the linear delta chain cannot express: stacking the "
-               "segment over the flow would overwrite the flow's own value in any slot both touched, and the "
-               "unapply restores the BASELINE rather than the flow's value, destroying what the flow recorded "
-               "with nothing to say so. BUILD THE JOIN — a merge of the two entry lists where they touch "
-               "disjoint slots, and a CONTRADICTION where they touch the same one (two timelines that disagree "
-               "about a slot conjoin to no timeline, so there is no delivery to make in that world)");
+               "the sending world has written in this instance, so the delivery's world is a join of two deltas over "
+               "one baseline, which the linear delta chain cannot express. Build the join: merge the two entry lists "
+               "where they touch disjoint slots, and treat a slot both touch as a contradiction with no delivery in "
+               "that world");
     }
     free(dup);
 
@@ -2123,9 +2046,8 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
        timeline admitted. */
     routed_rec_arrived(record);
     n = flow_count();
-    DCHECK(n > 0, "a message was routed to a document whose every timeline had already finished — a document "
-                  "that can still receive is not done, so the receiving flows must stay live while a peer holds "
-                  "a WindowProxy for them: build that before this can be delivered");
+    DCHECK(n > 0, "a message was routed to a document whose every timeline has finished — keep the receiving flows "
+                  "live while a peer holds a WindowProxy for them");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
         /* Appended, because two messages from one world are sequential: HTML §9.3.3 Posting messages ends the
@@ -2147,12 +2069,11 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
    engine_route's, for engine_route's reason. */
 void engine_routed_rebuilt(JSContext *ctx, struct Flow *f, const char *record, const char *sender_origin)
 {
-    DCHECK(f != NULL, "a parked routed delivery was rebuilt onto no flow — an 'm' record belongs to the flow "
-                      "written immediately before it, so one with no flow names nothing to deliver to");
+    DCHECK(f != NULL, "a parked routed delivery was rebuilt onto no flow — an 'm' record belongs to the flow written "
+                      "immediately before it");
     DCHECK(record != NULL && *record && sender_origin != NULL && *sender_origin,
-           "a parked routed delivery was rebuilt missing its record or the sender ORIGIN the trusted zone "
-           "stamped — both cross the tier as TEXT, so an absent one is a residue this reader may not complete "
-           "by inventing the field every `event.origin` check in every bundle is written against");
+           "a parked routed delivery was rebuilt missing its record or its stamped sender origin — both cross the "
+           "tier as text, and the reader may not invent either");
     routed_rec_arrived(record);
     flow_deliver_push(ctx, (Flow *)f, record, sender_origin);
 }
@@ -2176,9 +2097,8 @@ static JSContext *doc_realm_at(uint32_t doc, const char *file, int line)
        hand-written call that bypasses the macro. It sits outside the dev partition because in release a DCHECK
        is `(void)sizeof(cond)`, which still references `file` and `line` and keeps -Wextra quiet about them. */
     DCHECK(file != NULL && line > 0,
-           "doc_realm_at was reached with no caller site — the `doc_realm` macro spells __FILE__ and __LINE__ "
-           "at the call, so a null file is a hand-written call that bypassed it, and an abort below would then "
-           "name THIS function for a sixteen-caller lookup, which is the defect this entry exists to end");
+           "doc_realm_at was reached with no caller site — the `doc_realm` macro passes __FILE__ and __LINE__, so "
+           "this is a hand-written call that bypassed it");
     realm = window_proxy_realm_of_document(doc);
 
     /* The answer is this timeline's: window_proxy_realm_of_document reads the flow's own navigables. It never
@@ -2214,54 +2134,30 @@ static JSContext *doc_realm_at(uint32_t doc, const char *file, int line)
                destroyed document is answered at flow_deliver's §7.5.10 arm
                (`routed-delivery-the-target-document-was-destroyed`); both callers run from flow_step, so read
                the printed asking site, not the frame list. */
-            DFAILF("a cross-agent operation or a queued program named a document whose active Document THIS "
-                   "TIMELINE DESTROYED, asked at %s:%d — §7.5.10 \"Destroying documents\"' "
-                   "set-the-Document's-browsing-context-to-null step nulled it "
-                   "and window_proxy_set_destroyed nulled the navigable's realm with it, so there is no realm "
-                   "now and there will not be one: proxy_realm refuses to materialize a destroyed navigable by "
-                   "name. A sibling arm that did not close still answers, which is why this is one timeline's "
-                   "state and not the document's. THE RECORD-ONLY ROUTE EXISTS AND THIS OPERATION IS NOT ONE "
-                   "IT ANSWERS: flow_perform routes a `windowproxy.get` for `length` or `closed` through "
-                   "window_proxy_record_member_of_document ahead of this lookup, so reaching here means either "
-                   "a §7.2.1 member whose answer is an OBJECT of the realm that is gone, or an `object.*` verb "
-                   "on an object lent out of it — two different answers, split by WHOSE REALM THE OPERATION "
-                   "NEEDS: §7.2.1.3.4 runs a member's getter ON the target's own Window, and an `object.*` verb "
-                   "runs on an object the export table still holds and takes no realm of the target at all. "
-                   "READ THE ASKING SITE ABOVE BEFORE BUILDING EITHER: a ROUTED DELIVERY reaches this lookup "
-                   "from flow_deliver and is answered there under §7.5.10 step 5, so a frame list with "
-                   "flow_step on it does not say which of the three callers this is. The residual above this "
-                   "line records what each population needs AND which half of its own remedy clause was "
-                   "refuted — do not build a THROW for the object verbs on its say-so. Do not ask for an "
-                   "ACTIVE DOCUMENT, because this navigable has none", file, line);
+            DFAILF("a cross-agent operation or queued program named a document whose active Document this timeline "
+                   "destroyed, asked at %s:%d — §7.5.10 nulled the realm and proxy_realm does not rebuild a "
+                   "destroyed navigable. A §7.2.1 member returning an object of that realm and an `object.*` verb on "
+                   "a lent object need different answers; read the asking site and the residual above before "
+                   "building either", file, line);
             break;
         case WP_DOC_INITIAL:
-            DFAILF("a navigable this agent holds was asked for the realm of its active document and THIS "
-                   "TIMELINE has never materialized one, asked at %s:%d — §7.4 created it with the initial "
-                   "about:blank Document, and only a read THROUGH that navigable's own WindowProxy builds the "
-                   "realm, per flow (core/frame/navigable.h). A sibling arm having built one says nothing "
-                   "about this one. A caller that must materialize holds the NAVIGABLE and calls "
-                   "window_proxy_realm, and this lookup takes a NAME: resolve it with "
-                   "window_proxy_of_document first", file, line);
+            DFAILF("a navigable this agent holds was asked for its active document's realm, which this timeline has "
+                   "never materialized, asked at %s:%d — only a read through the navigable's own WindowProxy builds "
+                   "it; a caller that must materialize resolves the name with window_proxy_of_document and calls "
+                   "window_proxy_realm", file, line);
             break;
         case WP_DOC_REMOTE:
-            DFAILF("the realm of a document a PEER INSTANCE holds was asked for at %s:%d — no realm of this "
-                   "heap is it, now or ever, and `world_doc_hosted` is the gate every caller of this lookup "
-                   "is supposed to have passed before reaching it", file, line);
+            DFAILF("the realm of a document a peer instance holds was asked for at %s:%d — callers must pass "
+                   "`world_doc_hosted` first", file, line);
             break;
         case WP_DOC_NO_NAVIGABLE:
-            DFAILF("a document name resolved to no navigable of THIS TIMELINE at all, asked at %s:%d — it "
-                   "names a document no timeline of this instance has opened, or one THIS timeline has "
-                   "navigated away from (a navigation moves the navigable's `doc` from the instant "
-                   "window_proxy_navigate runs, so the outgoing name answers nothing in the timeline that "
-                   "navigated, and the programs still queued for it are the residue "
-                   "core/frame/navigable.c's teardown assert names), or the caller is standing at HOST TIME "
-                   "with no owner named (engine_unload_document's residual says what that costs and what "
-                   "closes it)", file, line);
+            DFAILF("a document name resolved to no navigable of this timeline, asked at %s:%d — no timeline here "
+                   "opened it, this timeline navigated away from it, or the caller is at host time with no owner "
+                   "named (engine_unload_document's residual)", file, line);
             break;
         case WP_DOC_ACTIVE:
-            DFAILF("the realm lookup answered NULL for a navigable whose own record says its active document "
-                   "IS materialized, asked at %s:%d — the two reads walk one table in one applied delta, so "
-                   "they cannot disagree unless something between them moved the delta", file, line);
+            DFAILF("the realm lookup answered NULL for a navigable whose record says its active document is "
+                   "materialized, asked at %s:%d — the two reads walk one table in one applied delta", file, line);
             break;
         }
     }
@@ -2312,20 +2208,14 @@ void engine_unload_document(uint32_t doc)
     int n, i;
 
     DCHECK(g_sess_live,
-           "a Document was reported REPLACED to an instance with no live session — the unload is a task of "
-           "every timeline of that document and there is no scheduler to run one, so the destruction would be "
-           "queued onto nothing and the replaced document would go on answering for this instance");
+           "a Document was reported replaced to an instance with no live session — its unload is a task of every "
+           "timeline of that document, and there is no scheduler to run one");
     DCHECK(world_doc_hosted(doc),
-           "a Document this agent does not hold was reported replaced — the trusted zone is the only zone that "
-           "knows which instance holds which document, and it named this one to the wrong instance; unloading "
-           "here would destroy a document the browser did not navigate away from");
+           "a Document this agent does not hold was reported replaced — the trusted zone named the wrong instance");
     n = flow_count();
     DCHECK(n > 0,
-           "a Document was replaced while every timeline of this instance had already finished — there is no "
-           "flow to run its unload in, so its `pagehide` and `unload` listeners fire in no timeline at all and "
-           "§7.5.10's destruction happens nowhere. A document a navigation can still replace is a document "
-           "whose flows are still live, which is the same statement engine_set_referenced makes for a document "
-           "a peer still holds a reference into");
+           "a Document was replaced while every timeline of this instance had finished — its unload would run in no "
+           "timeline; keep a replaceable document's flows live, as engine_set_referenced does for a referenced one");
     for (i = 0; i < n; i++) {
         Flow *f = flow_at(i);
 
@@ -2396,12 +2286,11 @@ static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
        cross-instance answer also pushes received rows (answer_commit_taken), and its arm is owed, not minted. */
     if (deliver_commit_implied(ctx, f, vec, &covering)) return covering;
     DCHECK(f->frame == NULL,
-           "a delivery-time fork was taken by a flow INSIDE a program — a delivery is made between programs "
-           "(flow_step reaches it only with no frame), so a parent holding one means this ran somewhere else "
-           "and the arm would be marked hot with nothing to resume");
+           "a delivery-time fork was taken by a flow inside a program — flow_step makes deliveries only with no "
+           "frame");
     DCHECK(!JS_HasActivation(JS_GetRuntime(ctx)),
-           "a delivery-time fork was taken with page code on the stack — the arm re-enters its scheduler step "
-           "and re-reaches this delivery, which is only true of a fork asked between tasks");
+           "a delivery-time fork was taken with page code on the stack — the arm re-enters its scheduler step, which "
+           "is sound only between tasks");
     sib = engine_sibling_assemble(ctx, f, NULL,
                                   decide_fork_same_path("(a cross-document message arrived from one arm of a "
                                                         "sender's branch — no predicate was asked)"),
@@ -2444,9 +2333,8 @@ static void deliver_commit_taken(JSContext *ctx, Flow *f, const char *vec, FlowC
 static void answer_commit_taken(JSContext *ctx, Flow *f, const char *world)
 {
     DCHECK(world != NULL && *world,
-           "a cross-instance answer was recorded as a commitment with no answering TIMELINE — a peer answers "
-           "by running a program on one of its flows, and an answer that names none cannot say which of that "
-           "document's timelines this one is now in");
+           "a cross-instance answer was recorded as a commitment with no answering timeline — a peer's answer names "
+           "the world of the flow that ran it");
     if (!deliver_commit_implied(ctx, f, world, NULL))
         flow_world_commit_push(ctx, f, world, 1, FLOW_COMMIT_ARM_ANSWER_OWED);
 }
@@ -2512,14 +2400,10 @@ static void routed_rec_admitted(const char *record) {
     RoutedRec *r = routed_rec_find(record);
 
     DCHECK(r != NULL,
-           "a routed record was DELIVERED that this instance has no arrival for, so the ledger beside it "
-           "under-reports every loss by exactly the population this fired on. Three causes and they are "
-           "different repairs: the delivery queue was rebuilt from the COLD TIER without replaying the "
-           "arrival (build the inbound half of the cross-instance park, which engine_route names by DCHECK); "
-           "something pushes onto a delivery queue OUTSIDE engine_route, which is a second inbound path; or "
-           "the record did not survive its round trip through the queue's JS string, in which case this key "
-           "is the wrong key and the per-attachment ticket the ledger names as its residual is the repair "
-           "rather than a different comparison");
+           "a routed record was delivered with no arrival on this instance's ledger. Either the delivery queue was "
+           "rebuilt from the cold tier without the arrival (build the inbound half of the cross-instance park), "
+           "something outside engine_route pushes deliveries, or the record did not survive its round trip through "
+           "JS (key the ledger by a per-attachment ticket)");
     if (r != NULL) r->admitted++;
 }
 
@@ -2527,11 +2411,7 @@ void engine_routed_census(long *delivered, long *refused, long *zero_delivery) {
     int i;
 
     DCHECK(delivered != NULL && refused != NULL && zero_delivery != NULL,
-           "the routed-delivery census was asked for some of its three numbers — a delivery count with no "
-           "refusal count beside it cannot say whether the rest of the frontier declined the record or never "
-           "saw it, and neither of them can say whether any ONE record reached a timeline, which is the only "
-           "form of the question a lost message has an answer to. ALL THREE OR NONE, for the reason "
-           "engine_routed_task_census gives for its four");
+           "the routed-delivery census was asked for fewer than its three numbers — they are returned together");
     *delivered = g_routed_delivered; *refused = g_routed_refused;
     *zero_delivery = 0;
     for (i = 0; i < g_routed_recs_n; i++)
@@ -2554,9 +2434,7 @@ void engine_routed_task_census(long *ends) {
     int i;
 
     DCHECK(ends != NULL,
-           "the routed-task census was asked for nothing to write into — all four ends or none, because a "
-           "fired count with no declined count beside it cannot tell a delivery the spec refused from one the "
-           "scheduler lost");
+           "the routed-task census was asked for nothing to write into — its four ends are returned together");
     for (i = 0; i < ROUTED_TASK_END_N; i++) ends[i] = g_routed_task_end[i];
 }
 
@@ -2640,11 +2518,9 @@ static void flow_deliver(JSContext *ctx, Flow *f)
        its arrival); doc_realm's DFAIL would instead name a navigable without a realm. */
     doc_id = world_doc_intern(doc);
     DCHECK(world_doc_hosted(doc_id),
-           "a routed delivery names a document this session does not hold — the record survived the cold tier "
-           "but the DOCUMENT it names has not been re-created yet, because a resumed flow replays from its "
-           "first script and this delivery is taken off the queue before any of it runs. Make a parked "
-           "delivery at the position in the replay where its message arrived, rather than ahead of the "
-           "programs that build the navigable it names");
+           "a routed delivery names a document this session does not hold — a resumed flow replays from its first "
+           "script and this delivery is taken before the navigable is rebuilt; make a parked delivery at the replay "
+           "position where its message arrived");
     /* HTML §7.5.10 Destroying documents step 5, performed while the record is still a record: "Remove any tasks
        whose document is document from any task queue (without running those tasks)". §9.3.3's window post
        message steps step 8 queues a global task given targetWindow, so the delivery is that task, and §8.1.7.1
@@ -2663,11 +2539,8 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            direction. Both are this codebase's own values off one record in one applied delta, and neither read
            takes a ctx or captures anything. A failure would discard a message that had a Document to fire at. */
         DCHECK(window_proxy_realm_of_document(doc_id) == NULL,
-               "a navigable whose own record says THIS TIMELINE destroyed its active Document still answered "
-               "with a realm — the state partition and the realm read walk ONE table in ONE applied delta, so "
-               "they cannot disagree unless something between them moved the delta, and this delivery is about "
-               "to be discarded under §7.5.10 \"Destroying documents\" step 5 for a Document that is still "
-               "there to fire at");
+               "a navigable whose record says this timeline destroyed its active Document still answered with a "
+               "realm — the two reads walk one table in one applied delta");
         g_routed_refused++;
         g_step_unit = STEP_UNIT_ROUTED_TARGET_DESTROYED;
         /* The record is not marked admitted: no timeline heard it, and `_routedZeroDelivery` says so. */
@@ -2714,11 +2587,8 @@ static void flow_deliver(JSContext *ctx, Flow *f)
                   "receiving half is the unbuilt one; build it rather than dropping the delivery");
         flow_job_external_end();
         DCHECK(flow_job_pending(f) == jobs0 + 1,
-               "a routed delivery did not become exactly ONE task on the receiving timeline's queue — HTML "
-               "§9.3.3 Posting messages step 8 queues one global task on the posted message task source, so "
-               "zero is a peer's message this document never receives (and cannot know it did not) and two is "
-               "one message the page's handler runs for twice, which no count outside this line can tell from "
-               "two messages");
+               "a routed delivery did not become exactly one task on the receiving timeline's queue — HTML §9.3.3 "
+               "\"Posting messages\" step 8 queues one global task on the posted message task source");
         (void)jobs0;
         /* The delivery is counted where it happened, one per task queued, which is one per handler invocation
            (engine.h). */
@@ -2822,12 +2692,10 @@ char *engine_flow_addressee(JSContext *ctx, Flow *f, const char *doc_name)
     int n, i, ambiguous = 0;
     char *best = NULL;
 
-    DCHECK(f != NULL, "the addressee of a cross-instance operation was asked of no flow — a commitment is a "
-                      "fact about ONE receiving timeline and there is no such thing as a flowless one");
+    DCHECK(f != NULL, "the addressee of a cross-instance operation was asked of no flow");
     DCHECK(doc_name != NULL && *doc_name,
-           "the addressee of a cross-instance operation was asked without naming the document it addresses — "
-           "a flow may be committed to timelines of several peers at once, and an unkeyed answer would "
-           "address one peer's operation to another peer's world");
+           "the addressee of a cross-instance operation was asked without naming the document it addresses — a flow "
+           "may be committed to timelines of several peers at once");
     n = flow_world_commits(f);
     for (i = 0; i < n; i++) {
         JSValue e = flow_world_commit_at(f, i);
@@ -2856,10 +2724,9 @@ char *engine_flow_addressee(JSContext *ctx, Flow *f, const char *doc_name)
                     WorldRel rel = world_vec_relate(c, best);
 
                     DCHECK(rel != WORLD_REL_CONTRADICT,
-                           "two RECEIVED commitments to one sending document CONTRADICT on a flow that is "
-                           "addressing its next operation — flow_world_commit_push aborts on exactly that "
-                           "pair at the append, so a pair reaching this walk means a row got onto the list "
-                           "without going through it (the cold tier's replay is the producer that can)");
+                           "two received commitments to one sending document contradict on a flow addressing its "
+                           "next operation — flow_world_commit_push refuses that pair at the append, so a row "
+                           "reached the list another way (the cold tier's replay can)");
                     /* Deepest wins: world_vec_relate(a, b) answers DESCENDANT when `b` is an ancestor of `a`, so
                        the candidate speaks for a strictly narrower subtree. SAME and ANCESTOR keep the
                        incumbent. */
@@ -2927,8 +2794,7 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
        flows have had their turn to materialize a navigable this one may reach through. */
     DCHECK(world_doc_hosted(world_doc_intern(remote_op_doc(op))),
            "a cross-agent operation was routed to an instance that does not hold the document it names — the "
-           "offscreen is the only zone that knows which instance holds which document, and it sent this one to "
-           "the wrong place");
+           "offscreen, which alone knows the placement, routed it wrongly");
     {
         WorldId w;
         const WorldId *anc;
@@ -2945,10 +2811,9 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
         CowDelta *seg = world_segment(ctx, w, anc, n_anc);
         (void)seg;
         DCHECK(cow_delta_empty(seg),
-               "the asking world has WRITTEN in this instance, so the operation must be performed in the "
-               "conjunction of the answering flow's timeline with those writes — the same JOIN engine_route "
-               "names, and the same reason: stacking one over the other overwrites whichever slot both touched "
-               "and unapplies to the baseline rather than to the flow's value");
+               "the asking world has written in this instance, so the operation must run in a join of the answering "
+               "flow's timeline with those writes, which the linear delta chain cannot express. Build the join "
+               "engine_route names");
     }
     /* Which of this instance's timelines the asker is in, copied off the record before it is freed (`addr`
        points into the parse's text). ENGINE_ADDRESSEE_NONE is a real answer and the common one (engine.h): a
@@ -2958,24 +2823,20 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
         const char *addr = remote_op_addressee(op);
 
         DCHECK(addr != NULL && *addr,
-               "a cross-agent operation arrived with an EMPTY addressee field — the grammar spells the "
-               "unaddressed case as a token (solver/engine.h's ENGINE_ADDRESSEE_NONE) precisely so that "
-               "\"this flow addresses nobody\" is something a writer SAYS rather than a hole a reader fills, "
-               "and an empty field is the two ends of this wire disagreeing about which of the two it is");
+               "a cross-agent operation arrived with an empty addressee field — the grammar spells the unaddressed "
+               "case as the ENGINE_ADDRESSEE_NONE token (solver/engine.h), so the two ends of the wire disagree");
         if (strcmp(addr, ENGINE_ADDRESSEE_NONE) != 0) {
             addressee = strdup(addr);
-            CHECK(addressee != NULL, "engine: OOM copying the timeline a peer addressed a cross-agent "
-                                     "operation to — without it the operation would be performed by every "
-                                     "timeline this instance has, including the ones that peer has already "
-                                     "refused to hear from");
+            CHECK(addressee != NULL, "engine: OOM copying the timeline a peer addressed a cross-agent operation to — "
+                                     "without it every timeline here would perform the operation, including ones the "
+                                     "peer refuses to hear from");
         }
     }
     remote_op_free(op);
 
     n = flow_count();
-    DCHECK(n > 0, "a cross-agent operation was asked of a document whose every timeline had already finished — "
-                  "a document a peer still holds a reference into can still be asked, so its flows must stay "
-                  "live while that reference exists: build that before this can be answered");
+    DCHECK(n > 0, "a cross-agent operation was asked of a document whose every timeline has finished — keep the "
+                  "flows of a document a peer still references live");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
         /* A timeline the addressee contradicts is not one of them: the mirror of deliver_admits, over live
@@ -3003,10 +2864,9 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
        document answered from alive while a peer holds a reference; never widen the refusal to admit a
        contradicting timeline, which would answer out of a world neither agent was in. */
     DCHECK(attached > 0,
-           "a cross-agent operation named a timeline of this document that every LIVE flow CONTRADICTS — the "
-           "peer addressed the world one of our flows answered its last question from, and every "
-           "continuation of that world has since left the frontier while other timelines of this document "
-           "are still running. The asking flow is now parked on a question no timeline of ours will answer");
+           "a cross-agent operation named a timeline of this document that every live flow contradicts — every "
+           "continuation of the addressed world has left the frontier, so the asking flow is parked on a question no "
+           "timeline here will answer");
     (void)attached;
 }
 
@@ -3146,12 +3006,9 @@ int engine_pinned_of_running_path(void)
     const Flow *f = flow_running();
 
     DCHECK(f != NULL,
-           "a request built by running the page's code asked whether its address may rest on a witness this "
-           "engine chose, with no flow standing — the witness is a fact about ONE path, so there is no path "
-           "here to have chosen one, and every caller of this reaches it while the page's own code is what is "
-           "happening (core/xhr/xml_http_request.c's §3.5.6 send is the first). An arrival here is a route "
-           "that composed a request outside a flow and would be told `unpinned`, which is the word that lets "
-           "a widened origin SPEND the act");
+           "a request built by the page's code asked whether its address rests on a witness this engine chose, with "
+           "no flow standing — the witness is a fact about one path, and an answer of `unpinned` here would let a "
+           "widened origin spend the act");
     return f != NULL && flow_path_pinned(f);
 }
 
@@ -3618,10 +3475,9 @@ int engine_host_owes(void) {
             JS_FreeValue(pending_ctx(), uv);
             JS_FreeValue(pending_ctx(), e);
             DCHECK(tellable,
-                   "a flow is waiting on a register entry the host can never be shown — engine_pending_fetches "
-                   "lists the unanswered entries that carry an ADDRESS and engine_host_requests the unanswered "
-                   "SYNCHRONOUS ones, so an entry that is neither makes this report a stall the host is handed "
-                   "no record for, and the frontier waits on it for the rest of the session");
+                   "a flow is waiting on a register entry the host is never shown — engine_pending_fetches lists "
+                   "unanswered entries with an address and engine_host_requests unanswered synchronous ones, so an "
+                   "entry that is neither stalls the frontier");
         }
 #endif
         return 1;
@@ -3659,14 +3515,13 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
        pair (the JS bridge's `Provide` carries one), and an address in the method's place is that host with its
        operands shifted. Both would match nothing, and the parked flow would silently wait for the session. */
     DCHECK(method != NULL,
-           "a reply was provided with NO METHOD — the reply seam is keyed on `(method, url)`; the host that "
-           "fetched it is the only zone that knows which request it answers, and it is handed both halves by "
-           "engine_pending_fetches. A host still sending an address alone has not been converted");
+           "a reply was provided with no method — the reply seam is keyed on (method, url), and "
+           "engine_pending_fetches hands the host both halves");
     DCHECK(method_is_token(method),
-           "a reply was provided with a METHOD that is not a token — Fetch §2.2.1 Methods, RFC 9110 §5.6.2 "
-           "Tokens. A host sending the URL where the method goes has its operands shifted by one");
+           "a reply was provided with a method that is not a token (Fetch §2.2.1, RFC 9110 §5.6.2) — the host's "
+           "operands are shifted by one");
     /* The mode the line stated, handed back; the mapping is fatal on a word Fetch §2.2.5 does not define. */
-    DCHECK(mode != NULL, "a reply was provided with NO MODE — the reply seam is keyed on (method, mode, url)");
+    DCHECK(mode != NULL, "a reply was provided with no mode — the reply seam is keyed on (method, mode, url)");
     (void)fetch_mode_of_token(mode);
     /* One lookup in the frontier's outstanding set (solver/pending_index.h) rather than a walk of every flow's
        register: the walked set does not shrink (a flow keeps an answered entry until it delivers, and @S
@@ -3689,9 +3544,8 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
            so an answered one here means the index kept a member the `haveValue` write should have removed, and
            this reply would overwrite a body a flow already resumed on. */
         DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
-               "the frontier's outstanding set handed a reply an ALREADY-ANSWERED record — a record leaves that "
-               "set on the write that answers it, so this member outlived its own answer and the body about to "
-               "be written would replace one a flow has already resumed on");
+               "the frontier's outstanding set handed a reply an already-answered record — a record leaves that set "
+               "on the write that answers it");
         /* The producer's half of the contract the drain checks: the delivery asserts a fetch entry carries a
            §2.2.6 URL list when delivered, this asserts it did when written, so whichever fires says whether the
            host built a bad record or a good one was changed after landing (a COW or lifetime bug here). Program
@@ -3704,9 +3558,8 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
             JSValue ul = JS_GetPropertyStr(ctx, value, "urlList");
 
             DCHECKF(JS_IsArray(ul),
-                    "a reply with no `urlList` is being written onto a fetch or subresource entry — the "
-                    "HOST built this record, so the producer is the trusted zone's reply path and not "
-                    "this file's register. request=%s %s", method, url);
+                    "a reply with no `urlList` is being written onto a fetch or subresource entry — the trusted "
+                    "zone's reply path built this record, not this file's register. request=%s %s", method, url);
             JS_FreeValue(ctx, ul);
         }
 #endif
@@ -3762,9 +3615,8 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
        request leaves the join once answered. It catches a host with two overlapping lists, which is why facts
        about a request travel on the request itself. */
     if (matched && !n)
-        DFAILF("a reply was provided for a request every parked entry has ALREADY been answered for — the "
-               "join drops a request as soon as it carries a value, so the host is answering one it was shown "
-               "once, twice. request=%s %s", method, url);
+        DFAILF("a reply was provided for a request whose every parked entry is already answered — the join drops a "
+               "request once it carries a value, so the host answered it twice. request=%s %s", method, url);
     return n;
 }
 
@@ -3786,20 +3638,17 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
     JSValue rv;
 
     DCHECK(method != NULL && mode != NULL && url != NULL,
-           "a refusal was recorded for no request — a decline answers the same (method, mode, url) a reply "
-           "answers, because it is an answer to the same question, and one that names neither half refuses "
-           "nothing and leaves every flow parked");
+           "a refusal was recorded for no request — a decline answers the same (method, mode, url) a reply answers");
     DCHECK(method_is_token(method),
-           "a refusal names a METHOD that is not a token — Fetch §2.2.1 Methods, RFC 9110 §5.6.2 Tokens. A "
-           "host sending the URL where the method goes has its operands shifted by one");
+           "a refusal names a method that is not a token (Fetch §2.2.1, RFC 9110 §5.6.2) — the host's operands are "
+           "shifted by one");
     /* The reason is required and non-empty: it is the only account of a request nobody made, whose flow will
        not drain this session, and it decides what happens next (`blocked-signal` names the signal and value of
        the person's per-origin egress control that holds it, `blocked-destructive` a refusal nothing reopens);
        only the zone that applied the rule knows which. Nothing here matches on the string (trusted.mjs asks the
        policy for the grade, never a `statusText`). */
     DCHECK(reason != NULL && *reason != '\0',
-           "a request was refused with no REASON — the party that refused is the party that knows why, and an "
-           "unnamed refusal leaves a frontier parked with nothing anywhere to say which rule holds it");
+           "a request was refused with no reason — the refusing party states which rule holds the frontier");
     (void)fetch_mode_of_token(mode);
     node = pending_index_find(method, mode, url);
     matched = node ? pending_index_node_count(node) : 0;
@@ -3816,13 +3665,11 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
            the same address (an @S re-fire re-issues its fetches) puts an unrefused record in the node, and no
            waiting arm can have its reason replaced by one written for a different park. */
         DCHECK(!pending_entry_declined(p),
-               "the frontier's outstanding set holds an ALREADY-REFUSED record — a record leaves its pair on "
-               "the write that refuses it, so this member outlived its own refusal, and marking it again would "
-               "replace the reason its waiting arms are going to report with one written for a different park");
+               "the frontier's outstanding set holds an already-refused record — a record leaves its pair on the "
+               "write that refuses it");
         DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
-               "the frontier's outstanding set holds an ANSWERED record — a record leaves that set on the "
-               "write that answers it, so this member outlived its own answer and would be refused after "
-               "the server had already replied to it");
+               "the frontier's outstanding set holds an answered record — a record leaves that set on the write that "
+               "answers it");
         pending_set(p, PEND_DECLINED, JS_DupValue(ctx, rv));
         marked++;
         JS_FreeValue(ctx, p);
@@ -3841,8 +3688,7 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
        mechanism working, and consumes that sale as a reply does. */
     if (matched == 0 && !engine_take_paged_owed())
         DFAILF("a refusal was recorded for a request no flow is parked on and none was paged out — the host's "
-               "pending/decline pairing is off, and refusing nothing leaves the flow that IS parked waiting "
-               "for a reply this zone has already decided not to fetch. request=%s %s reason=%s",
+               "pending/decline pairing is off. request=%s %s reason=%s",
                method, url, reason);
     return marked;
 }
@@ -3853,14 +3699,11 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
    the first match: exactly one register names an unanswered rendezvous, because a fork unshares it and mints a
    fresh id. */
 int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
-    DCHECK(req != 0, "a synchronous request with no id was refused — the id IS the request's identity for this "
-                     "kind, since a host request has no address to be keyed by, so a refusal naming none "
-                     "refuses nothing and leaves the asking machine parked");
+    DCHECK(req != 0, "a synchronous request with no id was refused — the id is this kind's only identity");
     /* The reason is required, for the address-keyed refusal's reason. */
     DCHECK(reason != NULL && *reason != '\0',
-           "a synchronous request was refused with no REASON — the party that refused is the party that knows "
-           "why, and an unnamed refusal leaves a machine parked with nothing anywhere to say which rule holds "
-           "it");
+           "a synchronous request was refused with no reason — the refusing party states which rule holds the "
+           "machine");
     if (!g_sess_live) return 0;
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
@@ -3871,12 +3714,10 @@ int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
             /* A refusal and an answer cannot both be true of one rendezvous: the asking machine would take an
                answer while a sibling arm waited for one. */
             DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
-                   "a synchronous request carries BOTH an answer and a refusal — the trusted zone answered this "
-                   "rendezvous and then refused it, or refused one whose answer had already been written, and "
-                   "the asking machine would consume a value while an arm waited for the real one");
+                   "a synchronous request carries both an answer and a refusal — the trusted zone answers or refuses "
+                   "a rendezvous, not both");
             DCHECK(!pending_entry_declined(p),
-                   "a synchronous request was refused TWICE — the second reason would replace the one the "
-                   "waiting arm is going to report, and that arm was built from the first");
+                   "a synchronous request was refused twice — the waiting arm was built from the first reason");
             {
                 JSValue rv = JS_NewString(ctx, reason);
                 CHECK(!JS_IsException(rv),
@@ -4042,15 +3883,13 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
            flow_answer_fork and flow_finish do. It catches a caller arriving with a continuation outstanding,
            which flow_step's resume arm exists to prevent. */
         DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->parked == NULL,
-               "a reply is about to be delivered while a settle from this flow's register is still PARKED — "
-               "the parked settle has not triggered its promise's reactions yet, so this delivery's reactions "
-               "would be enqueued in front of them and the page would observe an order the forced preempt "
-               "chose. Resume the parked continuations first (flow_step's resume arm)");
+               "a reply is about to be delivered while a settle from this flow's register is still parked — its "
+               "reactions must be enqueued first; resume the parked continuations first (flow_step's resume arm)");
         /* Under this flow's own delta, because the delivery runs the page's code; flow_deliver asserts the same
            for a routed message. */
         DCHECK(flow_running() == f,
-               "a reply was delivered while another flow was switched in — the page's resolving function would "
-               "run against that flow's delta and the reactions it triggers would be queued on that flow");
+               "a reply was delivered while another flow was switched in — the resolving function would run against "
+               "that flow's delta");
         /* Taken off the register before delivery, which is the record's lifetime: the page code the settle runs
            (resolveSteps' `Get(resolution, "then")`) can issue another fetch onto this register, and the JS
            reference held here keeps the record alive across that. The removal is a swap-remove and the call ends
@@ -4081,9 +3920,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
              (kind == FLOW_PENDING_MODULE && !module_reply_is_javascript(ctx, pv)))) {
             DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
                    kind == FLOW_PENDING_MODULE,
-                   "a FAILED answer reached the program kinds' failure arm for a kind that is not one of them "
-                   "— the synchronous kind is skipped above and the fetch kind is excluded by this condition, "
-                   "so a fourth answer means a park of some new kind is being delivered with no arm of its own");
+                   "a failed answer reached the program kinds' failure arm for another kind — a park of a new kind "
+                   "is being delivered with no arm of its own");
             if (kind == FLOW_PENDING_MODULE) {
                 /* The one program kind with no element to fire at, so its failure is a rejection. HTML
                    §8.1.6.7.3 HostLoadImportedModule's onSingleFetchComplete sets "completion to
@@ -4097,9 +3935,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 const char *u;
 
                 DCHECK(JS_IsFunction(ctx, rej),
-                       "a dynamic import's park carries no REJECT capability — engine_pending_module_url "
-                       "asserts both halves at the push, so a record here without one was pushed by something "
-                       "that is not that park, and its network error has no way to reach the page's `catch`");
+                       "a dynamic import's park carries no reject capability — engine_pending_module_url asserts "
+                       "both halves at the push, so another park pushed this record");
                 u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
                 JS_ThrowTypeError(ctx, "Failed to fetch dynamically imported module: %s",
                                   u ? u : "(the park carried no address)");
@@ -4120,17 +3957,15 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                     int di = flow_dyn_row_by_id(f, (uint64_t)pending_get_int(p, PEND_SCRIPT_ROW));
 
                     DCHECK(di >= 0,
-                           "an external document script's failure named a row this flow does not hold — the "
-                           "entry was queued on one flow and is being delivered into another, or its row was "
-                           "taken by a destroy that did not take the entry with it");
+                           "an external document script's failure names a row this flow does not hold — the entry "
+                           "was delivered into another flow, or a destroy took its row and not the entry");
                     DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
                            "an external document script's failure named a row that is not awaiting a program "
                            "— the row already holds one, so this is a second answer to one request");
                     DCHECK(f->dyn_el[di] != NULL,
-                           "an external document script's row carries no element — §4.12.1.1's `execute the "
-                           "script element` is a switch on EL and its step 4 fires `error` AT el, so a row "
-                           "without one was queued by something that is not engine_queue_docscript_url or the "
-                           "seed's address arm, both of which take the element that owns the address");
+                           "an external document script's row carries no element — §4.12.1.1 fires `error` at el, "
+                           "and both seams that queue such rows (engine_queue_docscript_url, the seed's address arm) "
+                           "take the element");
                     f->dyn_cand[di] = DYN_SCRIPT_FAILED;
                     /* The row is runnable from now: §4.12.1.1 step 4 is what this step runs at it, and HTML
                        §13.2.6.4.8 The "text" insertion mode waits until "the script's ready to be
@@ -4149,9 +3984,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                     lxb_dom_element_t *el;
 
                     DCHECK(en != NULL && en->type == LXB_DOM_NODE_TYPE_ELEMENT,
-                           "an injected <script src> failed for a park carrying no element — the park writes "
-                           "the element's wrapper and §4.12.1.1's step 4 fires `error` AT it, so a record "
-                           "without one is a record something that is not that park pushed");
+                           "an injected <script src> failed for a park carrying no element — the park writes the "
+                           "element's wrapper and §4.12.1.1 step 4 fires `error` at it");
                     DCHECK(JS_IsString(uv),
                            "an injected <script src> failed for a park with no address — the park writes the "
                            "resolved URL and the reply is matched on it, so a record without one names no "
@@ -4183,9 +4017,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             size_t src_n = 0;
             char *src;
             DCHECK(di >= 0,
-                   "an external document script replied for a row this flow does not hold — the entry was "
-                   "queued on one flow and the reply is being delivered into another, or its row was taken by "
-                   "a destroy that did not take the entry with it");
+                   "an external document script replied for a row this flow does not hold — the entry was delivered "
+                   "into another flow, or a destroy took its row and not the entry");
             DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
                    "an external document script replied for a sequence position that is not awaiting one — the "
                    "slot holds a program already, so this reply is a second answer to one request and the "
@@ -4194,9 +4027,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                UTF-8 whatever the response says, a classic script's go through the response's charset label. The
                encoding realm is the entry's document's. */
             DCHECK(script_type_executes((ScriptType)f->dyn_type[di]),
-                   "an external document script replied for a row whose type executes nothing — only a "
-                   "`<script>` element of an executing type ever becomes a DYN_SCRIPT_SRC row, so this row's "
-                   "type column was written by something that is not one of the two seams that queue them");
+                   "an external document script replied for a row whose type executes nothing — only an executing "
+                   "`<script>` becomes a DYN_SCRIPT_SRC row");
             src = reply_source_text(ctx, pv, (ScriptType)f->dyn_type[di], doc_realm(f->dyn_doc[di]), &src_n);
             CHECK(src, "engine: OOM storing an external document script");
             /* The address moves out of the body column into the address column, at the one moment it can: the
@@ -4207,9 +4039,9 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                `<script type=module src>` two modules. It is copied because the body text is shared
                (solver/dyn_body.h) by the arms of a fork parked on this row; the source text itself is adopted. */
             DCHECK(f->dyn_url[di] == NULL,
-                   "an external document script's row already held an address before its reply arrived — the "
-                   "row's body is its URL until this delivery takes it, so a second one means the row was queued "
-                   "with an address column it may not have or a reply was delivered into it twice");
+                   "an external document script's row already held an address before its reply arrived — the row's "
+                   "body is its URL until this delivery takes it, so the reply was delivered twice or the row was "
+                   "queued wrongly");
             {
                 /* The row names a live body at every point of the swap: the replacement is built before the old
                    one is released, so nothing walking this flow's rows (a census, a release, a sale) can read a
@@ -4221,10 +4053,9 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    address whose length is not its `strlen` came by some route other than the two that queue
                    one, and every nested `import()` would resolve against a prefix of it. */
                 DCHECK(strlen(dyn_body_text(f->dyn[di])) == dyn_body_len(f->dyn[di]),
-                       "an external document script's row holds an address with a U+0000 in it — the row's "
-                       "body is its URL until this delivery takes it across, and a URL is the one body in this "
-                       "column that is read as a NUL-terminated string, so this row was filled by something "
-                       "that is not engine_queue_docscript_url or the seed");
+                       "an external document script's row holds an address containing U+0000 — the URL body is read "
+                       "as a NUL-terminated string, so the row was filled by something other than "
+                       "engine_queue_docscript_url or the seed");
                 f->dyn_url[di] = strdup(dyn_body_text(f->dyn[di]));
                 CHECK(f->dyn_url[di], "engine: OOM keeping an external script's address as its base URL");
                 dyn_body_unref(f->dyn[di]);
@@ -4249,9 +4080,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             size_t src_n = 0;
             char *src;
             DCHECK(script_type_executes(st),
-                   "an injected <script src> replied for a park carrying a type that executes nothing — the "
-                   "park writes the element's type and §4.12.1.1 fetches for exactly the two that run, so a "
-                   "third answer means this record was pushed by something that is not that park");
+                   "an injected <script src> replied for a park whose type executes nothing — §4.12.1.1 fetches only "
+                   "for the two executing types");
             /* Must be a string, not something that coerces to one: `JS_ToCString` answers "undefined" for an
                absent field, which a URL parser would accept as a base. */
             DCHECK(JS_IsString(uv),
@@ -4479,8 +4309,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
     /* The two questions agree: `pending_ready` told the caller there was something to deliver and the selector
        over the same register found nothing. One changed without the other, and the symptom would be a flow
        reporting progress every step while delivering nothing, a livelock that looks like slowness. */
-    DFAIL("a reply delivery found nothing to deliver — pending_ready answered that this flow had an answered "
-          "non-HOSTREQ entry and the scan over the same register did not find one");
+    DFAIL("a reply delivery found nothing to deliver — pending_ready reported an answered non-HOSTREQ entry that the "
+          "scan of the same register did not find");
 }
 
 /* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision and pins here at a forking branch; the
@@ -4507,14 +4337,10 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
                         const char *site) {
     Flow *f = flow_running();
 
-    DCHECK(f != NULL, "a sibling was prepared with no flow running — the blobs were frozen off whatever "
-                      "decision state the last switched-in flow left behind, so they describe no timeline");
+    DCHECK(f != NULL, "a sibling was prepared with no flow running — the blobs would describe no timeline");
     DCHECK(g_sess_forking,
-           "a fork was prepared inside a NON-FORKING session — §@S's candidate re-fire is ONE concrete path, "
-           "so no member of the frontier may be minted from inside one. The seam now ASKS the session "
-           "(engine_session_forks) and answers a new question with the arm the SITE declared, so reaching this "
-           "line means the answer was declared and the seam forked anyway — decide_arm's non-forking branch is "
-           "the one that must have been taken");
+           "a fork was prepared inside a non-forking session — an @S candidate re-fire is one concrete path, and "
+           "decide_arm's non-forking branch answers with the arm the site declared");
     if (!g_fork_snapshot_owed) {
         /* Nobody will clone a frame, so the sibling's resume point must be the flow's own state, which holds for
            engine code re-reached by re-running the flow's scheduler step: HTML §8.1.7.3 Processing model step
@@ -4523,15 +4349,12 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
            Assembled now, because no later moment has the parent still switched in. */
         if (restartable) {
             DCHECK(f->frame == NULL,
-                   "a restartable fork was asked for by a flow holding a live program frame — the caller "
-                   "promised its computation is re-reached by re-running the flow's step, and a flow inside a "
-                   "program re-enters that frame instead, so the sibling would never re-reach the ask");
+                   "a restartable fork was asked for by a flow holding a live program frame — the sibling would "
+                   "re-enter that frame instead of re-reaching the ask");
             DCHECK(!JS_HasActivation(JS_GetRuntime(ctx)),
-                   "a restartable fork was asked for while page code was on the stack — the caller was "
-                   "reached THROUGH an activation (a queued job's callback, a listener inside a rendering "
-                   "step), which the flow's frame handle cannot show because it is NULL for those too. Its "
-                   "sibling would resume at a scheduler step that re-reaches nothing, and the arm recorded "
-                   "for it would be replayed by whatever question that step asks first");
+                   "a restartable fork was asked for with page code on the stack (a queued job's callback, a "
+                   "listener in a rendering step) — the sibling would resume at a step that does not re-reach the "
+                   "ask");
             engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob);
             return 0;
         }
@@ -4558,21 +4381,18 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
             for (i = 0; i + 1 < sizeof name && asked && asked[i]; i++)
                 name[i] = (asked[i] >= 0x20 && asked[i] < 0x7f) ? asked[i] : '.';
             name[i] = '\0';
-            DFAILF("a C builtin forked over unknown input from inside its own activation, so the sibling has "
-                   "nowhere to resume: nothing will clone a frame for it and re-running the flow's step does "
-                   "not re-reach the ask. Declare that builtin a step machine (JS_CFUNC_STEP_DEF) and move "
-                   "this question into the machine's BRANCH seam, step_tobool_run — not step_fork_run, which "
-                   "keys by (operand, operation, completion) and is for a machine's own completions — so the "
-                   "driver snapshots the machine AT the ask. The ask site was: %s. The question was: %s",
+            DFAILF("a C builtin forked over unknown input from inside its own activation, so the sibling has nowhere "
+                   "to resume. Declare the builtin a step machine (JS_CFUNC_STEP_DEF) and move this question into "
+                   "its branch seam, step_tobool_run, so the driver snapshots the machine at the ask. Ask site: %s. "
+                   "Question: %s",
                    site ? site : "(no ask site)", asked ? name : "(no source identity)");
         }
 #endif
         (void)asked;
     }
     DCHECK(g_fork_dec == NULL && g_fork_pins == NULL,
-           "a sibling's snapshot state was prepared while a PREVIOUS one was still unconsumed — the branch that "
-           "prepared it never reached its fork hook, and this assignment drops that flow's decision and pin "
-           "blobs on the floor with nothing naming them");
+           "a sibling's snapshot state was prepared while a previous one was unconsumed — the branch that prepared "
+           "it never reached its fork hook");
     g_fork_dec = dec_blob; g_fork_pins = pin_blob;
     return 1;
 }
@@ -4609,9 +4429,8 @@ static int engine_reclaim_set(int v);
 static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
                                      void *dec_blob, void *pin_blob) {
     DCHECK(parent != NULL, "a sibling was assembled with no parent flow — every field below is copied from one");
-    DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — it would resume its parent's "
-                             "frame standing on nothing, and every branch its parent had already taken would "
-                             "be re-asked as a new one");
+    DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — every branch its parent took would be "
+                             "re-asked");
     /* A frameless sibling is safe only over a frameless parent. A parent inside a program would give a hot
        sibling (`started` is set below) with nothing to resume, and flow_step would compile the row at
        `script_i` again and replay its side effects. A parent with no frame is between programs, and so is its
@@ -4619,9 +4438,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        (engine_prepare_fork), the cold tier's rebuilds (flow.h), and the orphan drive's fresh call frame over a
        frameless parent all fit. */
     DCHECK(clone != NULL || parent->frame == NULL,
-           "a fork of a flow that is INSIDE a program arrived with no frame snapshot — the sibling would be "
-           "marked hot with nothing to resume, and its first step would compile that program's row again and "
-           "replay every side effect the parent has already performed");
+           "a fork of a flow inside a program arrived with no frame snapshot — the sibling would recompile the row "
+           "and replay the parent's side effects");
     /* Unstarted cross-agent operations and routed deliveries are asserted at the branch hook, not here: an
        answer fork happens at a park, where the zone may have attached one. */
     /* The sibling joins the frontier on flow_add's first line, so nothing may page it out while the dozen
@@ -4665,9 +4483,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* No parse in flight: a branch is taken by running bytecode, and a compiling flow runs none, so a parent
        holding one means a fork from inside the compiler. Asserted rather than zeroed. */
     DCHECK(parent->compile == NULL,
-           "a flow was forked while its program was still being PARSED — a branch is taken by running "
-           "bytecode and a compiling flow is running none, so either the fork came from inside the parser or "
-           "the compile handle outlived the program it belongs to");
+           "a flow was forked while its program was still being parsed — branches are taken by running bytecode, so "
+           "the fork came from inside the parser or the compile handle outlived its program");
     DCHECK(sib->compile == NULL, "a freshly built sibling already held a suspended compile");
     /* Where the program it stands in has already interposed (flow.h): the arm inherits the parent's `dyn` rows
        and so their interpositions; without this pair it would compute its next immediate slot as if none had
@@ -4723,11 +4540,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
            (sib->cand_sink != NULL) == (parent->cand_sink != NULL) &&
            sib->cand_resumed == parent->cand_resumed,
-           "an arm of an @S candidate session left the fork without the substitution that makes it one — it "
-           "would explore the other arm as an ordinary flow inside a heap the payload has already been read "
-           "into, report its requests as observed endpoints, and be unable to record a fire; or it kept the "
-           "substitution and lost the record of WHERE those bytes came from, which makes a resumed candidate's "
-           "own arm indistinguishable from a candidate assembled outside the search's two doors");
+           "an arm of an @S candidate session left the fork without the substitution or its provenance — both are "
+           "copied with the arm, which is the payload's flow continued");
     /* The rank that substitution is the denominator of: flow.h's "every non-candidate stands at exactly 0",
        asserted here, where it is transiently false and made true again. flow_fork_inherit runs first and copies
        the parent's ladder position, so between that line and the copy above the sibling holds a distance and no
@@ -4736,9 +4550,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        flow_distance rather than a list of rungs, so a rung added to the comparator is covered the day it is
        added. */
     DCHECK(sib->cand_payload != NULL || flow_distance(sib) == 0.0,
-           "an arm stands on the @S ladder while carrying no payload to have stood there with — the fitness is "
-           "a reading of bytes THIS flow injected, so an arm that inherited the rank without the substitution "
-           "outranks the whole frontier on a measurement belonging to an identity it does not have");
+           "an arm stands on the @S ladder carrying no payload — the fitness reads bytes this flow injected");
     /* The answer token travels with the queue: the sibling resumes the operation's program and owes the same peer
        an answer of its own (engine_host_answer records the extras). The token and the document asked are on the
        program's row (`dyn_token`, `dyn_doc`, flow.h), so the queue copy below carries them. */
@@ -4887,15 +4699,13 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
                 uint32_t ph = (uint32_t)pending_get_int(pp, PEND_REQ_HOST);
                 uint32_t sh = (uint32_t)pending_get_int(sp, PEND_REQ_HOST);
                 int answered = pending_get_int(sp, PEND_HAVE_VALUE) != 0;
-                DCHECKF(sm == pm, "a fork moved the arm's MACHINE name for host request %u to %u — that name "
-                                  "lives in the asking machine's step state, inside the frame this arm is a "
-                                  "clone of, so nothing out here can rewrite the asker and the arm's next "
-                                  "re-entry would poll a register that no longer holds its question", pm, sm);
+                DCHECKF(sm == pm, "a fork moved the arm's machine name for host request %u to %u — the name lives in "
+                                  "the asking machine's step state inside the cloned frame, so nothing out here may "
+                                  "rewrite it", pm, sm);
                 DCHECKF(answered || sh != ph,
-                        "a fork left an UNANSWERED host request sharing its parent's HOST name %u — the answer "
-                        "is computed under the asking flow's world and the arm's world is not the parent's from "
-                        "this instant, so one answer would be delivered into two call sites in two "
-                        "contradictory worlds", ph);
+                        "a fork left an unanswered host request sharing its parent's host name %u — the arm's world "
+                        "differs from the parent's from this instant, so one answer would land in two contradictory "
+                        "worlds", ph);
             }
             JS_FreeValue(ctx, pp);
             JS_FreeValue(ctx, sp);
@@ -4904,8 +4714,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
 #endif
     engine_reclaim_set(prev_reclaim);   /* the sibling is fully assembled: it may be paged like any other member */
     DCHECK(g_genfork_n == 0,
-           "a fork finished with generator-state swaps still in the stash — the sibling's cloned gen_data was "
-           "never recorded on its delta, so it is owned by nobody and its body frame is unreachable");
+           "a fork finished with generator-state swaps still stashed — the sibling's cloned gen_data was never "
+           "recorded on its delta");
     return sib;
 }
 
@@ -4971,7 +4781,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
 
         if (pending_extra_count(e) == 0) { JS_FreeValue(ctx, e); continue; }
         DCHECK(flow_running() == f, "an answer fork was taken while another flow was switched in — the arm would "
-                                    "clone that flow's delta and DOM head and call the result the asker's");
+                                    "clone that flow's delta and DOM head");
         /* Where this flow's suspension is, asked of both homes. A flow inside a program holds its call site in
            `frame`; a flow inside a job holds no frame (flow_step runs a job only under `!f->frame`) and its call
            site is the parked continuation of the activation the job entered, as for a `.then` handler making a
@@ -4980,20 +4790,17 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         in_program = f->frame != NULL;
         in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
         DCHECK(f->parked == NULL,
-               "a flow holds parked continuations on its own slot while it is SWITCHED IN — the switch hands "
-               "the whole set to the runtime and clears the slot, so a set here belongs to a switch-out that "
-               "did not happen and the arm below would fork the runtime's set instead of this flow's");
+               "a flow holds parked continuations on its own slot while switched in — the switch hands the set to "
+               "the runtime and clears the slot");
         DCHECK(in_program || in_job,
-               "a flow holding a peer's second answer is suspended in NEITHER of the two homes — it has no "
-               "program frame and no parked continuation, so the call site the arm exists to resume is gone "
-               "and the answer belongs to a timeline that cannot be re-entered");
+               "a flow holding a peer's second answer is suspended in neither home (no program frame, no parked "
+               "continuation) — the call site the arm would resume is gone");
         /* And not both: a job runs only while the flow holds no frame, and flow_step's resume arm drains a parked
            continuation before any program is compiled. If both ever hold, the arm needs both cloned, in the order
            flow_step resumes them. */
         DCHECK(!(in_program && in_job),
-               "a flow is suspended in BOTH homes at once — it holds a program frame AND a parked "
-               "continuation, so the arm below would resume one of two live suspensions and silently abandon "
-               "the other. Clone both onto the arm, in the order flow_step resumes them");
+               "a flow is suspended in both homes at once (a program frame and a parked continuation) — clone both "
+               "onto the arm, in the order flow_step resumes them");
         /* A routed delivery is not refused: engine_sibling_assemble forks the delivery queue, so the arm, this
            timeline continued, has its own copy. */
         /* Taken from the parent first, so the parent cannot fork over this answer again; the arm's inherited
@@ -5009,8 +4816,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
               "engine: a flow suspended on a cross-instance read could not be cloned — the peer's other "
               "timeline has an answer and no arm to carry it");
         CHECK(!in_job || parked != NULL,
-              "engine: a flow PARKED on a cross-instance read inside a job could not have its continuation "
-              "cloned — the peer's other timeline has an answer and no activation to resume with it");
+              "engine: a flow parked on a cross-instance read inside a job could not have its continuation cloned");
         sib = engine_sibling_assemble(ctx, f, clone,
                                       decide_fork_same_path("(a peer's answer arrived — no predicate was "
                                                             "asked)"),
@@ -5039,9 +4845,8 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         pending_set(se, PEND_EXTRA, JS_NULL);
         pending_set(se, PEND_ANSWER_FIXED, JS_TRUE);
         DCHECK(pending_get_int(se, PEND_HAVE_VALUE) != 0,
-               "an arm was forked over a peer's answer onto a request that is still UNANSWERED — the assembly "
-               "re-issues an unanswered request under a fresh id, so this arm would be waiting on a question "
-               "nobody has been asked");
+               "an arm was forked over a peer's answer onto a request still unanswered — the assembly re-issues "
+               "unanswered requests under a fresh id");
         JS_FreeValue(ctx, se);
         return 1;
     }
@@ -5079,14 +4884,13 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
             continue;
         }
         DCHECK(flow_running() == f,
-               "a decline fork was taken while another flow was switched in — the arm would clone that flow's "
-               "delta and DOM head and call the result the refused flow's");
+               "a decline fork was taken while another flow was switched in — the arm would clone that flow's delta "
+               "and DOM head");
         /* A refusal and a reply cannot both be true of one request: `haveValue` says the server answered,
            `declined` that nobody asked it. */
         DCHECK(!pending_get_int(e, PEND_HAVE_VALUE),
-               "a request carries BOTH a reply and a refusal — engine_decline writes the refusal only onto "
-               "records the host still owes, so a record holding an answer as well is a decline that raced a "
-               "delivery and the flow would run its failure path over a body it already has");
+               "a request carries both a reply and a refusal — engine_decline refuses only records the host still "
+               "owes");
         kind = (int)pending_get_int(e, PEND_KIND);
         reason = pending_get(e, PEND_DECLINED);
         /* A synchronous request can be here: engine_host_decline reaches it by rendezvous id, since it has no
@@ -5099,11 +4903,8 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            because a fork moves one of them. */
         DCHECK(kind != FLOW_PENDING_HOSTREQ ||
                    (pending_get_int(e, PEND_REQ) != 0 && pending_get_int(e, PEND_REQ_HOST) != 0),
-               "a synchronous host request carries a refusal and NO rendezvous id — the id is the only identity "
-               "this kind has, engine_host_decline found the record BY it, and an arm forked from a record that "
-               "names none could not be matched to the machine that is parked. BOTH names are asserted because "
-               "they are two facts and a fork moves one of them: a zero MACHINE name is a record no asker can "
-               "ever poll, and a zero HOST name is one the zone can never be shown");
+               "a refused synchronous host request carries no machine or host rendezvous id — engine_host_decline "
+               "found the record by those ids, and an arm needs both to be polled and shown");
         /* Both homes of the suspension are asked and neither is required, unlike flow_answer_fork: a flow waiting
            on a reply usually holds neither, since a `fetch()` hands back a pending promise and the program runs
            on, leaving a flow between tasks whose continuation is the reaction the delivery will enqueue.
@@ -5114,21 +4915,18 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
         in_program = f->frame != NULL;
         in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
         DCHECK(f->parked == NULL,
-               "a flow holds parked continuations on its own slot while it is SWITCHED IN — the switch hands "
-               "the whole set to the runtime and clears the slot, so a set here belongs to a switch-out that "
-               "did not happen and the arm below would fork the runtime's set instead of this flow's");
+               "a flow holds parked continuations on its own slot while switched in — the switch hands the set to "
+               "the runtime and clears the slot");
         DCHECK(!(in_program && in_job),
-               "a flow is suspended in BOTH homes at once — it holds a program frame AND a parked "
-               "continuation, so the arm below would carry one of two live suspensions and silently abandon "
-               "the other. Clone both onto the arm, in the order flow_step resumes them");
+               "a flow is suspended in both homes at once (a program frame and a parked continuation) — clone both "
+               "onto the arm, in the order flow_step resumes them");
         clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
         parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
         CHECK(!in_program || clone != NULL,
-              "engine: a flow parked on a DECLINED request could not be cloned — the arm that keeps waiting "
-              "for the real answer is the only thing that makes a per-origin widening mean anything");
+              "engine: a flow parked on a declined request could not be cloned — the waiting arm is what makes a "
+              "per-origin widening possible");
         CHECK(!in_job || parked != NULL,
-              "engine: a flow parked on a DECLINED request inside a job could not have its continuation "
-              "cloned — the waiting arm would have no activation to resume with");
+              "engine: a flow parked on a declined request inside a job could not have its continuation cloned");
         sib = engine_sibling_assemble(ctx, f, clone,
                                       decide_fork_same_path("(the trusted zone declined this request — no "
                                                             "predicate was asked)"),
@@ -5170,10 +4968,8 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            inherits the path from before the refusal. */
         flow_mark_forced_arm();
         DCHECK(flow_path_forced(f),
-               "the failure arm of a decline is standing on an unobserved outcome and its path does not say "
-               "so — every request it goes on to build would declare itself DERIVED, which publishes a value "
-               "reached only because this engine supplied an answer under the claim that the app's own code "
-               "computed it");
+               "the failure arm of a decline stands on an unobserved outcome and its path is not marked forced — its "
+               "requests would be graded derived");
         JS_FreeValue(ctx, reason);
         JS_FreeValue(ctx, e);
         return 1;
@@ -5224,9 +5020,8 @@ static void engine_orphan_record(JSContext *ctx, JSValueConst fn, int arg_count,
        a loop with no suspend point, which the scheduler's seam assertion aborts on. This is the consumer's
        requirement on the walk, stated where a change to the walk would break it. */
     DCHECK(t->n == 0,
-           "the orphan take handed over a SECOND function in one call — each one becomes a flow, so the step "
-           "that seeds them is a loop again with no suspend point on it, which is the stretch the scheduler's "
-           "seam assertion aborts on");
+           "the orphan take handed over a second function in one call — each becomes a flow, so the seeding step "
+           "must yield between them");
     t->fn = JS_DupValue(ctx, fn);
     t->argc = arg_count;
     t->n = 1;
@@ -5249,9 +5044,7 @@ static long g_orphan_asks;
    the bundle (see the residual at the take in engine_orphan_seed, and @COLD's `outOfProgramsAtTheLadder`). */
 void engine_orphan_census(long *driven, long *asked) {
     DCHECK(driven != NULL && asked != NULL,
-           "the orphan census was asked for one of its two numbers — a drive count with no ask count beside it "
-           "cannot say whether the frontier ever reached the question, which is the difference between a page "
-           "that ships no uncalled code and a scheduler that never got to it");
+           "the orphan census was asked for one of its two numbers — the drive and ask counts are returned together");
     *driven = g_orphans_driven; *asked = g_orphan_asks;
 }
 
@@ -5371,9 +5164,8 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
         open++;
         if (fl->orphan_hash != hash) continue;
         DCHECK(fl->orphan,
-               "a flow is waiting for an orphan's body without being marked as a drive — the three fields are "
-               "one identity, written together by the cold tier's rebuild, so this flow was assembled by "
-               "something that set part of it");
+               "a flow waits for an orphan's body without being marked as a drive — the mark, the locator and the "
+               "wait are written together by the cold tier's rebuild");
         /* Only the function crosses here; the claimant builds its call later in its own timeline, because the
            receiver and arguments are concolic objects that, minted under this flow's stamp, would be this flow's
            private state, outside every delta. */
@@ -5402,9 +5194,8 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
     char id[64];
     int k;
 
-    DCHECK(hash != 0, "a driven orphan's call was minted with no locator — every unknown it supplies would be "
-                      "named after a body that does not exist, and two drives of two different functions would "
-                      "then share one identity");
+    DCHECK(hash != 0, "a driven orphan's call was minted with no locator — the unknowns it supplies are named after "
+                      "the function's identity");
     if (argc > 0) {
         args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
         CHECK(args, "engine: OOM minting a driven orphan's arguments");
@@ -5506,9 +5297,8 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
      * and leave core/timing/event_loop.c's order with two feasible arms and no fact to choose between. */
     if (!g_sess_forking) {
         DCHECK(!f->orphan_want,
-               "a flow waiting to adopt an orphan's body is a member of a session that explores nothing — its "
-               "recipe was recorded by a session that forks, and this one can neither drive it nor fork the "
-               "arms its path is made of, so the residue was seeded into a session that cannot serve it");
+               "a flow waiting to adopt an orphan's body is a member of a non-forking session — its recipe needs a "
+               "session that forks");
         return 0;
     }
 
@@ -5519,13 +5309,11 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
      * and decision chain are the drive's. */
     if (f->orphan_want && !JS_IsUndefined(f->fn)) {
         DCHECK(f->orphan && f->orphan_hash != 0,
-               "a flow is waiting to adopt an orphan without being one — `orphan_want` is written only by the "
-               "cold tier's rebuild and only beside the mark and the locator, so this flow was assembled by "
-               "something that set one third of an identity");
+               "a flow waits to adopt an orphan without being one — `orphan_want` is written only by the cold tier's "
+               "rebuild, beside the mark and the locator");
         DCHECK(flow_running() == f,
-               "a resumed orphan drive built its call frame while another flow was switched in — the receiver "
-               "and every argument are objects stamped with the running flow's generation, so they would be a "
-               "stranger's private state for the rest of the session and no delta would capture the writes");
+               "a resumed orphan drive built its call frame while another flow was switched in — the receiver and "
+               "arguments would carry that flow's generation");
         g_orphans_driven++;
         base = engine_orphan_call(ctx, f->fn, f->orphan_argc, f->orphan_hash);
         f->frame = base;
@@ -5597,16 +5385,11 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
            "is already consumed, so it can never be driven again in this session");
 
     DCHECK(flow_running() == f,
-           "orphans were taken while another flow was switched in — the arms below fork THIS flow's delta, DOM "
-           "head and decision state, so they would be assembled out of a stranger's timeline and called the "
-           "discovering flow's");
+           "orphans were taken while another flow was switched in — the arms fork this flow's delta, DOM head and "
+           "decision state");
     DCHECK(f->frame == NULL,
-           "a flow took an orphan with a suspended frame still live — the take happens where the flow has run "
-           "out of the work the page ARRANGED for it, and the arms below fork THIS flow, so a live frame means "
-           "the flow was suspended mid-call and the sibling would be assembled out of a half-finished "
-           "expression. (It is NOT asserted because that is the only point at which 'nothing called this "
-           "function' is a FACT — that argument is retired: it is a fact only when the run is over, a run that "
-           "renders is never over, and waiting for it served the surface never.)");
+           "a flow took an orphan with a suspended frame live — the take happens where the flow has run out of "
+           "arranged work, and a sibling forked mid-call would carry a half-finished expression");
 
     /* What this body is called across sessions, computed once per body (a body is taken once): every drive must
        be parkable and the locator is its recipe; the routing below reads the same number. One pass over the
@@ -5638,9 +5421,8 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     /* The other side of the gate at this function's top, asserted where the member is minted, since a take, a
        hash and a route separate the two. */
     DCHECK(g_sess_forking,
-           "a driven orphan was about to be added to the frontier of a session that explores nothing — the "
-           "gate at the top of this walk returns before the take, so reaching this line means a second entry "
-           "into the drive was built that does not go through it");
+           "a driven orphan was about to join the frontier of a non-forking session — the walk's gate returns before "
+           "the take, so a second entry into the drive bypassed it");
     sib = engine_sibling_assemble(ctx, f, base,
                                   decide_fork_same_path("(a function the page never called was driven — no "
                                                         "predicate was asked)"),
@@ -5661,9 +5443,8 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        term's halves). */
     DCHECK(sib->cpu == f->cpu && sib->cpu_gen == f->cpu_gen &&
            sib->visits == f->visits && sib->family == f->family,
-           "a driven orphan entered the frontier at a virtual time that is not the running flow's — it was "
-           "ranked against a clock nobody chose, and a page with many uncalled functions can then promote the "
-           "work it manufactures above every flow already waiting");
+           "a driven orphan entered the frontier at a virtual time that is not the running flow's — the orphan's arm "
+           "inherits the discovering flow's account");
 
     JS_FreeValue(ctx, t.fn);   /* the take's reference; the sibling holds its own dup */
     return ORPHAN_STEP_SEEDED;
@@ -5676,8 +5457,7 @@ static StepUnit engine_orphan_unit(int r) {
     case ORPHAN_STEP_ROUTED:  return STEP_UNIT_ORPHAN_ROUTE;
     case ORPHAN_STEP_RESUMED: return STEP_UNIT_ORPHAN_RESUME;
     }
-    DFAIL("the orphan step reported an outcome it does not have — the caller returns PROGRESS on anything "
-          "non-zero, so a fourth outcome is a step whose work nothing in the run can name");
+    DFAIL("the orphan step reported an outcome it does not have");
     return STEP_UNIT_NONE;
 }
 
@@ -5709,13 +5489,11 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     /* §6.10.1 step 9, as this timeline already answered it (see the header). */
     if (f->close_req_none) return 0;
     DCHECK(flow_running() == f,
-           "a modelled close request was built while another flow was switched in — the task reads the close "
-           "watcher manager out of the running flow's COW delta, so it would answer for a stranger's timeline "
-           "and close a watcher this flow never established");
+           "a modelled close request was built while another flow was switched in — the task reads the close watcher "
+           "manager from the running flow's delta");
     DCHECK(f->frame == NULL,
-           "a flow modelled a close request with a suspended frame still live — the arrival is modelled where "
-           "the flow has nothing left to run, which is the only point at which 'this document is quiet' is a "
-           "fact about this timeline, and a live frame means it was still going to run something");
+           "a flow modelled a close request with a suspended frame live — the request is modelled only where the "
+           "flow has nothing left to run");
     DCHECK(!f->close_req,
            "a flow is already inside a modelled close request's task and has no frame — the pair is written "
            "together here and cleared together at the task's completion, so one without the other is a "
@@ -5732,9 +5510,8 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     f->close_req = 1;
     flow_mark_forced_arm();
     DCHECK(flow_path_forced(f),
-           "a flow standing inside a modelled close request does not declare its path FORCED — every request "
-           "it goes on to build would say DERIVED, which publishes a value reached only because this engine "
-           "sent a gesture no user sent");
+           "a flow inside a modelled close request is not marked forced — its requests would be graded derived "
+           "although no user sent the gesture");
     return 1;
 }
 
@@ -5792,9 +5569,8 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
 
     DCHECK(url != NULL && *url, "an external document script entry carries no URL");
     DCHECK(strlen(url) == dyn_body_len(f->dyn[at]),
-           "an external document script's row holds an address with a U+0000 in it — the row's body IS its URL "
-           "until the reply takes it across, and this park reads it as a NUL-terminated string, so the request "
-           "the host is shown would be a PREFIX of the address the element names");
+           "an external document script's row holds an address containing U+0000 — this park reads the URL body as a "
+           "NUL-terminated string, so the request shown would be a prefix of the address");
     meta = script_csp_meta(ctx, f->dyn_el[at]);
     req.metadata = meta.m;
     /* The credentials mode, off the same element by the same step as the injected script's (see
@@ -5839,13 +5615,10 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     /* A program queued with no flow would be dropped: there is no global queue, so the caller names the flow whose
        sequence it joins (an injected <script>'s insertion, a document's load job, a fired PoC, a joined
        document's boot), and every caller establishes both preconditions. */
-    DCHECK(f != NULL, "a program was queued naming no flow — a program is a work item of the ONE frontier and "
-                      "there is no member to give it to, so it would be dropped without a trace");
+    DCHECK(f != NULL, "a program was queued naming no flow");
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
-    DCHECK(doc != 0, "a program was queued naming no document — the realm it is compiled in is a fact about "
-                     "the document it belongs to, and a program with none would be compiled in whichever realm "
-                     "the session happens to be rooted at and read that Window's globals as its own");
+    DCHECK(doc != 0, "a program was queued naming no document — the realm it compiles in is its document's");
     /* The kind and the token are one statement, asserted both ways at the one site that creates a row: a
        cross-agent operation's row carries the token of the peer parked on its completion, and no other kind's
        completion is read as an answer. */
@@ -5856,16 +5629,14 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     /* The sequence holds only executable programs: §4.12.1.1's null type, an import map and speculation rules
        run nothing, and document_exec_scripts and html_script_prepare drop them before here. */
     DCHECK(script_type_executes(stype),
-           "a program was queued with a script type that does not execute — §4.12.1.1's null type, an import "
-           "map and a set of speculation rules are registered or ignored rather than evaluated, so none of "
-           "them is a program, and §8.1.4.4 has no entry to run this row with");
+           "a program was queued with a script type that does not execute — §4.12.1.1's null type, import maps and "
+           "speculation rules are not programs");
     /* An address belongs to a row whose bytes came from one (§8.1.4.2 bases the script on the response's URL);
        an inline row has none and §4.12.1.1 answers from the document ("let base URL be el's node document's
        document base URL"). A DYN_SCRIPT_SRC row's address is its own body until the reply arrives. */
     DCHECK(kind != DYN_SCRIPT_SRC || url == NULL,
-           "an entry holding a script's ADDRESS was queued with a second address beside it — the row IS the "
-           "URL until flow_deliver_one_reply replaces it with the source text, and that delivery is what moves "
-           "it into the address column, so a caller writing both is naming one script two ways");
+           "an entry holding a script's address was queued with a second address beside it — the row is the URL "
+           "until flow_deliver_one_reply replaces it with the source");
     /* Which task source, if any, queued this row: HTML §8.1.7.1 Definitions' `source`, asserted at the one site
      * creating rows so an entry added later cannot answer by omission. TASK_SOURCE_UNSTATED is written by no
      * producer. §8.1.7.1 requires "every task source must be associated with a specific task queue", and a flow's
@@ -5878,16 +5649,14 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
      * the networking source's arm, so §8.1.4.2's one fetch-then-run task spans two carriers; whether that is
      * observable is not settled here. */
     DCHECK(src != TASK_SOURCE_UNSTATED,
-           "a program was queued without saying which task source, if any, put it there — HTML §8.1.7.1 gives "
-           "a task a source so that one source is in one queue, and a row that states none cannot be ordered "
-           "against the same source's work on another carrier or shown not to have any");
+           "a program was queued without stating its task source, or that none put it there — HTML §8.1.7.1 orders "
+           "one source's work across carriers");
     /* A task takes the tail of its source's queue (§8.1.7.1). The one position that is not the tail is reached by
        queuing nothing, §4.12.1.1's "immediately execute the script element el, even if other scripts are already
        executing", so an immediate row naming a task source confuses running a program in place with queuing one. */
     DCHECKF(!task_source_is_task(src) || pos == DYN_POS_APPEND,
-            "a queued program named the %s task source AND asked to run IMMEDIATELY — a task is queued and "
-            "takes the tail of its source's queue, and the only position that is not the tail belongs to a "
-            "program the causing algorithm runs in place, which by definition no task source queued",
+            "a queued program named the %s task source and asked to run immediately — a task takes the tail of its "
+            "source's queue, and only a program run in place by its causing algorithm takes another position",
             task_source_name(src));
     /* The two kinds the solver queues are the two that may not name a page source, asserted both ways: an @S
        candidate is a program the solver fired, and a cross-agent operation's row answers a peer's synchronous
@@ -5899,10 +5668,8 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
             "the page's own tasks and an invented one orders it against tasks nobody observed",
             (int)kind, task_source_name(src));
     DCHECKF(kind != DYN_CROSS_AGENT_OP || src == TASK_SOURCE_NOT_A_TASK,
-            "a cross-agent operation's program named the %s task source — the peer is suspended AT the "
-            "operand of a synchronous cross-instance read, so this program is that read's continuation and "
-            "no task queue holds it; giving it a source would order a peer's suspended expression against "
-            "this document's tasks",
+            "a cross-agent operation's program named the %s task source — it is the continuation of a peer's "
+            "synchronous read, which no task queue holds",
             task_source_name(src));
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
@@ -5925,9 +5692,8 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         /* "Immediately" is relative to the running program, so it means nothing for another flow: the slot is the
            one after the cursor of the flow that has the thread. */
         DCHECK(f == flow_running(),
-               "a program was queued to run IMMEDIATELY into a flow that is not the running one — "
-               "`immediately` names the slot after the program that caused it, and the causing program is in "
-               "the running flow, so this row would interpose into a stranger's sequence at its cursor");
+               "a program was queued to run immediately into a flow that is not running — `immediately` names the "
+               "slot after the causing program, which is in the running flow");
         /* The cursor itself when no program is running, the slot after it when one is. A script element inserted
            from a `.then` reaction is at the cursor; one inserted from a running <script> is after it. A live frame
            is not a live program: `frame` holds three kinds of base (JS_FlowIsProgram), and a call (a driven
@@ -5951,9 +5717,8 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         /* The upper bound: the cursor names the row the flow is at, so the slot after it is at most one past the
            last row. A CHECK because a larger index would memmove outside the arrays. */
         CHECK(at <= f->dyn_n,
-              "a program's IMMEDIATE slot is past the end of the flow's own queue — the cursor names the row "
-              "the flow is at, so the slot after it is at most one past the last row, and a larger index "
-              "means the cursor and the queue disagree about how many programs this flow has");
+              "a program's immediate slot is past the end of the flow's queue — the slot after the cursor is at most "
+              "one past the last row");
         /* Rows may shift under an outstanding reply: the register names a row by `dyn_id` (solver/flow.h), which
            survives every shift (§7.5.10's removal walk in flow.c is the twin). */
     }
@@ -5964,12 +5729,9 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        timeline, including flows that may never step again. It is a real check: the immediate arm derives `at`
        from the cursor, while an append takes `dyn_n` and consults the cursor nowhere. */
     DCHECKF(at >= f->script_i,
-            "a program was queued into slot %d of a flow whose cursor already stands at %d — the queue walks "
-            "FORWARD from the cursor, so this row is behind everything this flow will ever look at: it will "
-            "not be compiled, it will not be run, and flow_programs_unstarted_for_document will not count it "
-            "as unstarted either, because that count selects `k >= script_i`. Nothing anywhere will say a "
-            "program was lost. The defect is not here — it is whatever advanced this flow's cursor past "
-            "`dyn_n`, which ENGINE_LEAVE_ROW is the one place that can",
+            "a program was queued into slot %d of a flow whose cursor stands at %d — the queue walks forward from "
+            "the cursor, so this row would never run or be counted; find what advanced the cursor past `dyn_n` "
+            "(ENGINE_LEAVE_ROW is the one place that can)",
             at, f->script_i);
     if (at < f->dyn_n) {
         size_t tail = (size_t)(f->dyn_n - at);
@@ -6013,10 +5775,8 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        the fetch a row owes, and only an address row owes one, so `0` at every other entry is a statement about
        the row; a kind that grows a fetch later crashes here instead of being graded on a flag nobody set. */
     DCHECKF(!parser_inserted || kind == DYN_SCRIPT_SRC,
-            "a row of kind %d states that a parser inserted its element while owing no fetch — HTML "
-            "§4.12.1.1 \"Processing model\"'s `parser document` is "
-            "read only by the ADDRESS park at the foot of this function (solver/pending.h's "
-            "pending_prov_compose), so a caller setting it here has stated a fact nothing will ever read",
+            "a row of kind %d states that a parser inserted its element while owing no fetch — only the address park "
+            "reads HTML §4.12.1.1's `parser document` (solver/pending.h's pending_prov_compose)",
             (int)kind);
     if (kind == DYN_CANDIDATE) g_prog_queued_cand++;
     /* §4.12.1.1 Processing model step 33 is owed here, once per element: an address row is an element whose
@@ -6032,8 +5792,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
                                  TaskSource src, DynPos pos, lxb_dom_element_t *el, int parser_inserted) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
-    DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
-                      "frontier and there is no member to give it to, so it would be dropped without a trace");
+    DCHECK(f != NULL, "a program was queued with no flow running");
     engine_queue_into(f, doc, body, kind, stype, url, NULL, src, pos, el, parser_inserted);
 }
 
@@ -6085,9 +5844,8 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
     DCHECK(n == 0 || rows != NULL,
            "a document was seeded with a script count and no table to read it from");
     DCHECK(f->dyn_n == 0 && f->script_i == 0,
-           "a document's scripts were seeded onto a flow that already holds programs or has moved past its "
-           "first — a flow is seeded once, at creation, so a second seeding would interleave two documents' "
-           "program orders into one sequence and leave the cursor pointing into neither");
+           "a document's scripts were seeded onto a flow that already holds programs or has moved past its first — a "
+           "flow is seeded once, at creation");
     for (i = 0; i < n; i++) {
         DCHECK(script_type_executes(rows[i].type),
                "a script table holds a row whose type executes nothing — §4.12.1.1's null type, an import map "
@@ -6098,8 +5856,8 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                "text as its body, so a row that is nothing would park the flow on nothing for the rest of the "
                "session");
         DCHECK(!rows[i].refused || (rows[i].url == NULL && rows[i].el != NULL),
-               "a refused script row carries an address or no element — §4.12.1.1's \"If url is failure\" "
-               "leaves no URL to carry, and the `error` event it owes is fired AT el");
+               "a refused script row carries an address or no element — §4.12.1.1's \"If url is failure\" leaves no "
+               "URL, and the `error` event is fired at el");
         /* The position a row is queued at is the position it is addressed at: `queued` counts the rows this
            seed has given a slot, in §4.12.1.1's order, and the cursor indexes the same table. Asserted per
            row. */
@@ -6168,8 +5926,8 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
    (solver/flow.h), so the boot flow, every cold-resumed replay and every @S candidate session get one sequence by
    construction. */
 static void engine_seed_root_flow(Flow *f) {
-    DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the "
-                        "table it reads is built when a session opens and given back when one closes");
+    DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the table "
+                        "exists only while a session is open");
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
 }
 
@@ -6266,10 +6024,8 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
     DCHECK(body != NULL, "a fetched program was queued with no source at all — the caller holds the reply's "
                          "bytes and there is no program in a null one");
     DCHECK(url != NULL && *url != '\0',
-           "a program whose bytes came from a RESPONSE was queued with no address — §8.1.4.2 creates the "
-           "script with the response's URL and §8.1.4.1 keeps it as the script's base URL, so a caller here "
-           "with none has the bytes and has thrown away where they came from; nothing downstream can "
-           "re-derive it, and the document's address is another script's answer rather than a weaker one");
+           "a program whose bytes came from a response was queued with no address — §8.1.4.2 creates the script with "
+           "the response's URL and §8.1.4.1 keeps it as the base URL");
     /* The total, raised at the one entry where a program from a response is born. Its row is a DYN_PAGE_SCRIPT like
        the document's own, so the kind cannot carry this as DYN_CANDIDATE carries `g_prog_queued_cand`; a caller is
        counted by calling, and engine_frontier_census compares the door arms against it. */
@@ -6289,9 +6045,8 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
    classic arm brackets the run with §3.1.7 `currentScript`. */
 void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
                                  lxb_dom_element_t *el) {
-    DCHECK(el != NULL, "a `<script>` element's program was queued with no element — this entry is the one an "
-                       "ELEMENT reaches; the element-less entry is engine_queue_fetched_script, so a caller "
-                       "here with nothing to pass is a caller at the wrong entry");
+    DCHECK(el != NULL, "a `<script>` element's program was queued with no element — the element-less entry is "
+                       "engine_queue_fetched_script");
     /* No fetch is owed, so no parser-inserted flag (engine_queue_into asserts only an address row carries one). */
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, TASK_SOURCE_NOT_A_TASK,
                     DYN_POS_APPEND, el, /*parser_inserted*/0);
@@ -6304,9 +6059,8 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
    src attribute, or el's type is `module`" sends every module to one of the lists above, and an inline module has a
    graph to load before its result exists. */
 void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el) {
-    DCHECK(el != NULL, "an inline classic script was queued to run IMMEDIATELY with no element — §4.12.1.1 "
-                       "reaches `immediately execute the script element` from `prepare the script element`, "
-                       "whose whole subject is EL");
+    DCHECK(el != NULL, "an inline classic script was queued to run immediately with no element — §4.12.1.1's prepare "
+                       "the script element is about el");
     /* No fetch is owed (see engine_queue_element_script). */
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, TASK_SOURCE_NOT_A_TASK,
                     DYN_POS_IMMEDIATE, el, /*parser_inserted*/0);
@@ -6321,8 +6075,7 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
     /* The address is the row's body, not its address column: the row is the URL until the reply replaces it, and
        flow_deliver_one_reply moves it into the address column then (engine_queue_into asserts against both). */
     DCHECK(el != NULL, "an external document script took its slot with no element — the row is that element's "
-                       "program from the moment it takes the position, not from the moment its bytes arrive, "
-                       "and §4.12.1.1's `execute the script element` is a switch on EL");
+                       "program from the moment it takes the position");
     /* Its length is its `strlen`: script_src_absolute serialized it (URL §4.5), through percent-encode sets
        containing U+0000 (URL §1.3), and flow_deliver_one_reply asserts the pair again where the body becomes a C
        string. */
@@ -6382,9 +6135,7 @@ void engine_request_dump(const char *program) {
     CHECK(b != NULL, "engine: OOM making the body of a host instrument's program");
     n = flow_count();
     DCHECK(n > 0,
-           "a dump was asked of a document whose every timeline had already finished — there is no flow to "
-           "run the program, so the answer would be an empty register the driver reads as a document that "
-           "produced nothing rather than as a question nobody was left to answer");
+           "a dump was asked of a document whose every timeline has finished — there is no flow to run the program");
     for (i = 0; i < n; i++) {
         Flow *f = flow_at(i);
         engine_queue_into(f, g_sess_doc, b, DYN_VALUE_DUMP, SCRIPT_TYPE_CLASSIC,
@@ -6411,14 +6162,12 @@ void engine_request_dump(const char *program) {
 static void paint_mark_standing_members(void) {
     int n, i;
 
-    DCHECK(g_sess_live, "an image of every world was asked of an instance with no live session — there is no "
-                        "scheduler to hand the thread back with a member standing, so no mark could ever be "
-                        "discharged and the host would wait for pictures nobody is going to take");
+    DCHECK(g_sess_live, "an image of every world was asked of an instance with no live session — no mark could ever "
+                        "be discharged");
     n = flow_count();
     DCHECK(n > 0,
-           "an image of every world was asked of a document whose every timeline had already finished — there "
-           "is no member left to be switched in, so the only world a host can render from here is the "
-           "baseline, which is the very reach main.c's qjs_paint residual says this ask exists to widen");
+           "an image of every world was asked of a document whose every timeline has finished — only the baseline "
+           "remains to render");
     for (i = 0; i < n; i++) {
         Flow *f = flow_at(i);
         if (g_sess_finish_owed && f == g_sess_cur) continue;
@@ -6464,8 +6213,7 @@ static void flow_perform(JSContext *ctx, Flow *f)
     JSValue answer;
 
     DCHECK(flow_running() == f, "a cross-agent operation was performed while another flow was switched in — its "
-                                "operands would be written into that flow's delta and its program would run "
-                                "against that flow's document");
+                                "operands and program would use that flow's delta and document");
     e  = perform_q_take(ctx, f);
     rv = JS_GetPropertyUint32(ctx, e, 0);
     tv = JS_GetPropertyUint32(ctx, e, 1);
@@ -6508,14 +6256,9 @@ static void flow_perform(JSContext *ctx, Flow *f)
     member = remote_op_member(op);
     if (member != NULL && window_proxy_record_member_of_document(ctx, doc, member, &answer)) {
         DCHECK(JS_IsNumber(answer) || JS_IsBool(answer),
-               "a §7.2.1 member was answered from the §7.2.3 record and the value is neither a NUMBER nor a "
-               "BOOLEAN — this route converts it in THIS INSTANCE'S ROOT realm rather than in the named "
-               "DOCUMENT's, which is sound only while the conversion reads no realm. An OBJECT does: "
-               "remote_object_encode resolves a Window global against the realm it was handed and keys a "
-               "generic export's name on world_local_doc(), so this one would be lent under the wrong "
-               "document's name and the asker would hold a reference into a document that never lent it. "
-               "A member whose answer is an object is answered by the PROGRAM route below, in the target's own "
-               "realm — route it there rather than widening this one");
+               "a §7.2.1 member answered from the §7.2.3 record is neither a number nor a boolean — this route "
+               "converts in this instance's root realm, which is sound only for values that read no realm; route an "
+               "object-valued member through the program route below");
         perform_answer_notify(ctx, ctx, f, token, ENGINE_COMPLETION_NORMAL, answer);
         JS_FreeValue(ctx, answer);
     } else {
@@ -6577,9 +6320,7 @@ static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
         char *g;
         while (cap < g_dumps_n + wn + jn + 3) cap *= 2;
         g = realloc(g_dumps, cap);
-        CHECK(g != NULL, "engine: OOM recording a host instrument's dump — the artifact this flow just "
-                         "computed is dropped at the one line that would have handed it over, and the driver "
-                         "reads a timeline that answered nothing from one that was never asked");
+        CHECK(g != NULL, "engine: OOM recording a host instrument's dump");
         g_dumps = g;
         g_dumps_cap = cap;
     }
@@ -6612,7 +6353,7 @@ static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, cons
 
     DCHECK(token != NULL && *token,
            "a cross-agent operation's answer was written under no rendezvous token — the completion names no "
-           "question, so the flow that asked would park on it forever");
+           "question");
     enc = remote_completion_encode(ectx, completion, cv);
     /* world_serialize crashes on truncation rather than sending a prefix, so this notice carries the same name as
        every other record of this world. */
@@ -6643,14 +6384,12 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
     char *token;
 
     DCHECK(row >= 0 && row < f->dyn_n,
-           "a cross-agent operation was answered from a cursor that is not on the queue — the kind that "
-           "selected this call is read from that same row, so the two cursors have come apart");
+           "a cross-agent operation was answered from a cursor that is not on the queue — the kind that selected "
+           "this call was read from the same row");
     token = f->dyn_token[row];
     DCHECK(token != NULL,
-           "a cross-agent operation's program completed with no rendezvous token on its row — the completion "
-           "names no question, so the flow that asked would park on it forever. Two operations differing only "
-           "in the asking WORLD are two rows and nothing else tells them apart, so this cannot be recovered "
-           "from the flow");
+           "a cross-agent operation's program completed with no rendezvous token on its row — the token is the only "
+           "thing naming the asking world's question");
     if (JS_IsException(cv)) {
         thrown = JS_GetException(ctx);
         completion = ENGINE_COMPLETION_THROW;
@@ -6793,9 +6532,8 @@ static int preempt_hook(int kind) {
        (and quantum_expired's own precondition) is reached. A hit is a new host-time entry into the interpreter:
        give it a driver that can act on the answer, or stop it consulting the policy; never widen the slice. */
     DCHECK(quantum_slice_open(),
-           "the scheduler's preempt policy was consulted with NO SLICE OPEN — whoever is running this code is "
-           "not the scheduler, so there is no flow whose rank or budget this answer could be about; some entry "
-           "reached the interpreter on the HOST's own time between two steps");
+           "the preempt policy was consulted with no slice open — something reached the interpreter on the host's "
+           "time between two steps");
     /* This consultation, counted (`preemptAsksLifetime`), before the rescan below so the containment its quotient
        rests on is an order of statements. */
     g_preempt_asked++;
@@ -6847,9 +6585,8 @@ static int preempt_hook(int kind) {
            departure raises the generation. Not at the read, which is per opcode, where an O(flows) membership scan
            would make the dev hot path linear in the frontier. */
         DCHECK(g_rival == NULL || flow_is_member(g_rival),
-               "the value yield cached a rival that is not in the frontier — the pointer is read until the "
-               "generation next moves, so a departure that did not raise the generation leaves this hook "
-               "ranking against freed memory");
+               "the value yield cached a rival that is not in the frontier — a departure must raise the generation "
+               "that invalidates the cache");
         /* The rival's own terms, frozen with the pointer after the membership assert, since they dereference it.
            The own service notch, not the silence notch: the silence adds the family's half, which advances on
            every step of whoever holds the thread, the one movement this interval permits. */
@@ -6883,16 +6620,10 @@ static int preempt_hook(int kind) {
             (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
              flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
              flow_branch_born(g_rival) == g_rival_branch_born),
-            "a term of the cached RIVAL's weight moved while the frontier generation stood still — cached "
-            "against current: own service notch %lld -> %lld, completed units %lld -> %lld, reward %g -> %g, "
-            "fitness distance %g -> %g, branch bucket mint count %ld -> %ld, and the rival is still a member "
-            "of the frontier: %d. A mint count of -1 is this hook declining to ask a departed flow for its "
-            "bucket, and a `still a member` of 0 is a DEPARTURE this cache outlived rather than a writer that "
-            "moved a term — the two take opposite diffs. None of these may change without a rank change being "
-            "raised. Two things are now false at once: this hook is ranking against a rival the scheduler's "
-            "pick would no longer have returned, and the ONE-BIT claim every sub-linear spelling of the order "
-            "rests on — that between two generations nothing per-member moves but the aging's carry — is not "
-            "true of this tree. Raise frontier_rank_changed() at the writer the pair above names",
+            "a term of the cached rival's weight moved while the frontier generation stood still (own notch %lld -> "
+            "%lld, completed units %lld -> %lld, reward %g -> %g, distance %g -> %g, bucket mint count %ld -> %ld, "
+            "still a member: %d; -1 and 0 mean it departed) — raise frontier_rank_changed() at the writer that moved "
+            "it",
             (long long)g_rival_own_notch, (long long)flow_service_notch(g_rival),
             (long long)g_rival_visits, (long long)g_rival->visits,
             g_rival_val, flow_reward(g_rival),
@@ -6903,19 +6634,9 @@ static int preempt_hook(int kind) {
        name for: five matching terms and a weight that rose, which only the omitted family half can do. See the
        declaration for the state and the one-sided bound. */
     DCHECKF(!g_rival || flow_weight(g_rival) <= g_rival_w,
-            "the cached RIVAL's weight ROSE while the frontier generation stood still — cached %.17g against "
-            "current %.17g. Between two generations a non-running member's member half is fixed (the five "
-            "clauses above, and solver/flow.c's walk over every member) and its aging notch is a quotient of "
-            "two operands flow_age_running only ADDS to, so the weight may FALL and may not rise. The five "
-            "clauses above read this member's OWN silence and deliberately not its FAMILY's, so the movement "
-            "they cannot see and this one can is a forgiveness of the family's silence with no rank change "
-            "raised behind it — flow_credit_emit sends both operands to zero for a whole family in one "
-            "statement and is listed at that walk among the writers that bump, so a fire here is that bump "
-            "having been lost or a second forgiver having been added without one. The other two readings are a "
-            "summand added to flow_weight that moves UP while the five named terms stand still, and a notch "
-            "that can decrease. Every cached maximum, heap and index anybody builds over this frontier is "
-            "derived from the direction this line asserts; solver/flow.h's `sil_phases` prices the MAGNITUDE "
-            "and this is the SIGN. Raise frontier_rank_changed() at whichever writer sent the silence back",
+            "the cached rival's weight rose while the frontier generation stood still (cached %.17g, current %.17g) "
+            "— between generations a non-running member's weight may only fall, so a forgiveness of its family's "
+            "silence (flow_credit_emit) or another writer lost its rank-change raise",
             g_rival_w, flow_weight(g_rival));
     if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */
         /* The value yield may fire only on a rank change: a flow picked to run, against which nothing has changed,
@@ -6937,11 +6658,9 @@ static int preempt_hook(int kind) {
                flow_silence_notch(cur) != g_ranked_silence ||
                cur->visits != g_ranked_visits || flow_reward(cur) != g_ranked_val ||
                flow_distance(cur) != g_ranked_dist,
-               "the VALUE YIELD fired on a flow whose rank nothing changed since the scheduler switched it in — "
-               "same frontier generation, same silence notch, same completed-unit count, same reward and same "
-               "fitness distance on both "
-               "sides of the comparison, so the pick and the hook are answering one unchanged state two "
-               "different ways and every swap this buys is a COW delta swap for no ranking decision at all");
+               "the value yield fired on a flow whose rank nothing changed since it was switched in — generation, "
+               "silence notch, completed units, reward and distance are unchanged, so the pick and the hook are "
+               "answering one state two ways");
         return 1;
     }
     /* (2) Cooperative-quantum floor: thread-sharing, not value. The same expiry the scheduler loop returns to the
@@ -7004,8 +6723,8 @@ long engine_units_done(void) { return g_units_done; }
 
 void engine_orphan_claims(long *met, long *unmet) {
     DCHECK(met != NULL && unmet != NULL,
-           "the orphan round trip was asked for one of its two numbers — the pair is the statement, because a "
-           "session that satisfied many waits and lost one has a nonzero count on both");
+           "the orphan round trip was asked for one of its two numbers — the met and unmet counts are returned "
+           "together");
     *met = g_orphan_claims_met;
     *unmet = g_orphan_claims_unmet;
 }
@@ -7040,19 +6759,17 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
            executing while a host-time bracket names an owner, two queuers for one callback, which is the slice
            being open: the predicate preempt_hook asks and qjs_step asserts on every exit. */
         DCHECK(!quantum_slice_open(),
-               "a host-time bracket named the owner of a queued callback while a scheduler SLICE was open — an "
-               "owner is named only between two steps, so an open slice means a flow is EXECUTING and two "
-               "queuers claim one callback: the named one wins and the running flow's own reaction is filed "
-               "under a timeline that never caused it");
+               "a host-time bracket named a queued callback's owner while a slice was open — owners are named only "
+               "between steps, so two queuers claim one callback");
     /* There is no global drain: declining would hand the job to quickjs's global list, which nothing runs, so it
        would be dropped. Every task source comes through here (a window message, a port delivery, a broadcast, a
        timer callback, a custom element reaction), and a dropped one is a handler the page registered and this
        engine never entered. */
-    DCHECK(f != NULL, "a job was enqueued with no flow running — there is no global drain, so it would be "
-                      "dropped: seed it as a flow on the frontier instead of declining it here");
+    DCHECK(f != NULL, "a job was enqueued with no flow running — there is no global drain; seed it as a flow on the "
+                      "frontier");
     if (!f) return 0;
-    DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 5 removes a destroyed document's tasks "
-                        "by comparing this, so a job without one outlives its document");
+    DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 5 removes a destroyed document's tasks by "
+                        "comparing it");
     /* The handle arrives with the job and is recorded, never defaulted: it is the only way the host can find this
        callback again, and without it a tracker could not remove the task (a `toggle` that fires twice). Every
        runtime enqueue path allocates one (js_enqueue asserts it). */
@@ -7068,10 +6785,8 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
        steps of a running algorithm (core/events/event_target.h at `event_target_fire`), and each declares
        TASK_SOURCE_NOT_A_TASK, so that population is greppable at the JS_EnqueueCallTask call sites. */
     DCHECKF(!is_task || task_source_stated(src),
-            "a callback was queued as a TASK without saying which task source, if any, put it there — HTML "
-            "§8.1.7.1 gives a task a source so that one source is in one queue, and a job that states none "
-            "cannot be ordered against the same source's work on this flow's other carrier or shown not to "
-            "have any (is_task=%d)", (int)is_task);
+            "a callback was queued as a task without stating its task source, or that none put it there — HTML "
+            "§8.1.7.1 orders one source's work across carriers (is_task=%d)", (int)is_task);
     flow_job_push(ctx, f, fn, argc, argv, is_task, handle);
     return 1;   /* host owns it */
 }
@@ -7088,9 +6803,7 @@ static int engine_remove_job(JSTaskHandle handle) {
     Flow *f = flow_running();
 
     DCHECK(f != NULL,
-           "a queued task was removed by name with no flow running — a tracker's removal is made by state that "
-           "only ever changes inside a flow, so a caller here is a platform edge reaching for a queue that "
-           "belongs to a timeline it is not in");
+           "a queued task was removed by name with no flow running — tracker state changes only inside a flow");
     if (!f) return 0;   /* release path under the assert: nothing this hook can honestly reach */
     return flow_job_remove(f, handle);
 }
@@ -7457,12 +7170,10 @@ static void engine_no_stray_completion(JSContext *ctx, const char *where, int de
        one that completed: a park standing here says the work is suspended and the completion was never this
        segment's; no park says the segment finished and dropped it. */
     JS_FreeValue(ctx, le);
-    DFAILF("a completion was still live in the runtime at a SCHEDULER BOUNDARY — at `%s`, after the `%s` "
-           "step unit. The exception slot is per-RUNTIME and a completion is per-EVALUATION (§6.2.4), so the "
-           "next flow resumed would receive a throw §5.2.4.3 says belongs to whoever asked for the "
-           "evaluation that produced it. Take it where it is produced: a program's through JS_FlowResume's "
-           "`pres`, a job's at the job, a parked continuation's through JS_ResumeParkedFlow's `pres`, a "
-           "delivery's at JS_CallAsFlow. parked=%d detail=%d. The throw was: %s",
+    DFAILF("a completion was still live in the runtime at a scheduler boundary, at `%s` after the `%s` step unit — "
+           "the exception slot is per runtime and the next flow would receive this throw. Take it where it is "
+           "produced (JS_FlowResume's `pres`, the job, JS_ResumeParkedFlow's `pres`, JS_CallAsFlow). parked=%d "
+           "detail=%d. The throw was: %s",
            where, step_unit_name(g_step_unit), JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, detail,
            *et ? et : "(a throw this engine could not describe)");
 }
@@ -7544,9 +7255,8 @@ int engine_any_program_started(void)
  * `unhandledrejection` handler does not see a rejection HTML has claimed for the error report. */
 static JSValue module_eval_rejected(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
-    DCHECK(argc == 1, "the rejection reaction of a module script's evaluation promise ran without a reason — "
-                      "a promise reaction job calls its handler with exactly the settled value, so an argc "
-                      "other than 1 means this function was reached from something that is not one");
+    DCHECK(argc == 1, "a module script's evaluation-promise rejection reaction ran without exactly one argument — a "
+                      "promise reaction job calls its handler with the settled value");
     result_page_error_value(ctx, argv[0]);
     return JS_UNDEFINED;
 }
@@ -7667,14 +7377,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                consulted only where flow_step returns. Two-sided: `framed_at_entry` is read before the loop and
                `f->frame` is what the loop moves. */
             DCHECKF(!framed_at_entry,
-                    "this call of flow_step began with a LIVE FRAME and has descended the unframed ladder "
-                    "anyway (step_unit=%d, orphan asks so far %ld) — a frame-clearing exit must RETURN, "
-                    "because the resume that cleared it performed HTML §8.1.7.3 \"Processing model\" step "
-                    "2.6's task and every arm below this line is the next iteration of step 2. Whatever "
-                    "added a `continue` at one of those exits has re-created the drive-to-completion this "
-                    "function was rewritten out of, and has taken the scheduler's value yield and its "
-                    "cooperative quantum with it, because both are consulted only where this function "
-                    "returns",
+                    "this call of flow_step began with a live frame and descended the unframed ladder (step_unit=%d, "
+                    "orphan asks %ld) — a frame-clearing exit must return, because the resume performed HTML "
+                    "§8.1.7.3 step 2.6's task and the value yield and quantum are consulted only at returns",
                     (int)g_step_unit, g_orphan_asks);
             /* And its length, which the body already holds (solver/dyn_body.h), rather than a `strlen` over every
                byte of a program each time one starts. */
@@ -7790,10 +7495,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    the checkpoint arm above is guarded by exactly `flow_job_microtask && flow_stack_empty`, asserted.
                    Since the condition excluded an older task, this counts the arm going ahead of a younger one. */
                 DCHECK(!flow_job_microtask(f),
-                       "the reply-delivery arm was reached with an empty execution context stack and a "
-                       "microtask outstanding — the checkpoint arm's guard is exactly those two facts and it "
-                       "stands above this line, so a task source has run in front of the checkpoint HTML "
-                       "§8.1.4.4 \"Calling scripts\"' clean up after running script step 3 owes");
+                       "the reply-delivery arm was reached with an empty execution context stack and a microtask "
+                       "outstanding — the checkpoint arm above owns that state (HTML §8.1.4.4 \"Calling scripts\" "
+                       "step 3 of clean up after running script)");
                 if (flow_job_pending(f) > 0) g_task_held_deliv++;
                 g_step_unit = STEP_UNIT_DELIVER_REPLY;
                 flow_deliver_one_reply(ctx, f);   /* §8.1.7.3 step 2.6 */
@@ -7813,8 +7517,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 kind = flow_dyn_kind(f);
                 /* The sequence holds only executable scripts (engine_queue_into asserts it where rows are made). */
                 DCHECK(script_type_executes(stype),
-                       "a row of this flow's script sequence carries a type that does not execute — every row "
-                       "is CLASSIC or MODULE, so a third answer means the type column was never written");
+                       "a row of this flow's script sequence carries a type that does not execute — every row is "
+                       "classic or module");
                 if (kind == DYN_SCRIPT_SRC) {
                     /* An external script of some document of this agent, at its position. The row holds its address
                        (§4.12.1.1's encoding-parsed url, never the raw attribute, which the host would resolve
@@ -7850,11 +7554,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                             if (parked) break;
                         }
                         DCHECK(parked,
-                               "a flow is standing on an external script row that owes no request — HTML "
-                               "§4.12.1.1 step 33 issues the fetch when the row is created and the entry names "
-                               "the row by `dyn_id`, so a row with no entry left is one whose park was removed "
-                               "without it, and this flow is about to wait for the rest of the session on a "
-                               "reply the host is never asked for");
+                               "a flow stands on an external script row that owes no request — HTML §4.12.1.1 step "
+                               "33 issues the fetch with the row and the entry names it by `dyn_id`, so the park was "
+                               "removed without the row");
                     }
 #endif
                     /* And the flow does not stop here; it spins the event loop. A parser-blocking script blocks the
@@ -7882,10 +7584,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    `<script src>` observing `f` before `onerror`, where a browser runs `onerror` first. */
                 if (kind == DYN_SCRIPT_FAILED) {
                     DCHECK(f->dyn_el[f->script_i] != NULL,
-                           "a failed-load row carries no element — the row is created by the null arm of "
-                           "flow_deliver_one_reply, which asserts the element on both of its two paths, and by "
-                           "engine_seed_scripts for a refused `src`, which asserts it too; §4.12.1.1 fires "
-                           "`error` AT el");
+                           "a failed-load row carries no element — both producers (flow_deliver_one_reply's null "
+                           "arm, engine_seed_scripts for a refused `src`) assert it, and §4.12.1.1 fires `error` at "
+                           "el");
                     /* The element's own document's realm, never the flow's ambient one: the task's callee is a C
                        function running in the realm that defined it, and a child navigable's script element is an
                        ordinary row of this same sequence. */
@@ -7902,9 +7603,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    without it the DCHECK would pass on the row it is written about. */
                 if (!seq_awaits) {
                     DCHECK(body != NULL,
-                           "a row of this flow's sequence reached the compile with no body — a row is created "
-                           "with one (engine_queue_into asserts it) and the two kinds whose body is an ADDRESS "
-                           "rather than a program are both taken by the branches directly above this line");
+                           "a row reached the compile with no body — engine_queue_into asserts one, and the two "
+                           "address-bodied kinds are taken by the branches above");
                     /* The one state that falls through to the compile, recorded as a value the ladder below reads. */
                     seq_compiles = 1;
                 }
@@ -7943,11 +7643,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                cursor (flow.h's `dyn_run`). Zero is no stamp (the clock starts at 1), so a live row with 0 is a column
                grown, forked, shifted or compacted without this one; asserted where a missed site first decides. */
             DCHECK(!seq_compiles || f->dyn_run[f->script_i] != 0,
-                   "the row at this flow's cursor can start and carries NO arrival stamp — `dyn_run` is minted "
-                   "with the row and re-minted where a delivery takes it out of DYN_SCRIPT_SRC, so a zero is a "
-                   "column that was allocated, forked, grown, shifted or compacted without its nine siblings "
-                   "and this step would order a program against this flow's queued callbacks by a number no "
-                   "clock issued");
+                   "the row at this flow's cursor can start and carries no arrival stamp — `dyn_run` is minted with "
+                   "the row and re-minted when a delivery takes it out of DYN_SCRIPT_SRC, so a column was copied "
+                   "without its siblings");
             int job_precedes = seq_compiles && flow_task_precedes(f, f->dyn_run[f->script_i]);
             /* The queue's length, read once for both arms of the choice (`g_task_held_seq`), so a raise and the
                dispatch it is about read one state; nothing between here and the arms touches the queue. */
@@ -7987,8 +7685,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * this arm. */
                 DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
-                       "before every program in the sequence, so reaching a task with one outstanding means a "
-                       "program ran in front of the checkpoint it owed");
+                       "before every program in the sequence");
                 /* Which of the arm's two reasons this step took it for (`g_task_arm_older`): `job_precedes` is the
                    arrival comparison answering yes (the remaining rows are younger than a queued task),
                    `seq_compiles` 0 is a member with no row left. Different populations; their sum is asserted at
@@ -8182,11 +7879,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 {
                     int unnotified = unhandled_rejection_pending(ctx);
                     DCHECK(unnotified == 0,
-                           "a flow finished still holding rejections nobody has been notified about — HTML "
-                           "§8.1.4.7 Unhandled promise rejections' notify runs at the end of every microtask "
-                           "checkpoint, and that seam is reached by every step that ends a unit of work, so a "
-                           "non-empty list at the one exit that declares a timeline OVER means the checkpoint "
-                           "seam and this exit have stopped agreeing about when a flow's turn ends");
+                           "a flow finished holding rejections nobody was notified about — HTML §8.1.4.7's notify "
+                           "runs at every microtask checkpoint, which every unit-ending step reaches");
                 }
 #endif
                 /* No orphan arm here: the seed is its own rung and a seed that returns 0 does not retire, so the
@@ -8200,9 +7894,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                would reach it in silence, reading `body` uninitialised and compiling a stale `kind`. The assert
                compares a local the block above wrote with the control path that got here. */
             DCHECK(seq_compiles,
-                   "control reached the compile without the sequence arm having decided a program starts — "
-                   "every other arm of the task-source ladder returns, so an arm that falls through instead "
-                   "is about to compile whatever `body` and `kind` were left holding");
+                   "control reached the compile without the sequence arm deciding a program starts — every other arm "
+                   "of the task-source ladder returns");
             /* No replay, asserted at the only place a program can start. A flow compiles each row of its sequence
                once and thereafter resumes the suspended frame, so reaching here again for a row it already started
                means the resume path lost the frame and the flow would re-run side effects against a delta that
@@ -8211,12 +7904,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                NULL the moment a program starts, so the first assert keeps its force for every other reading, and
                the second keeps a parked parse from resuming against a row the flow has moved off. */
             DCHECK(f->script_i > f->last_compiled || f->compile != NULL,
-                   "a flow compiled a program it had already started — the suspended frame was lost and the "
-                   "flow is REPLAYING it, re-running side effects against a delta that already holds them");
+                   "a flow compiled a program it had already started — the suspended frame was lost and the flow is "
+                   "replaying its side effects");
             DCHECK(f->compile == NULL || f->script_i == f->last_compiled,
-                   "a flow is holding a parse that was suspended for a DIFFERENT row than the one its cursor "
-                   "now names — the parse would be resumed into a program the flow has already left, so the "
-                   "bytes it is half-way through and the bytes the row holds are two different programs");
+                   "a flow holds a parse suspended for a different row than its cursor names — the parse would "
+                   "resume into a program the flow has left");
             f->last_compiled = f->script_i;
             /* The deepest program this document has reached, recorded where a program starts and by whichever flow
                starts it: a coverage fact about the document, not the flow holding the thread (see g_deepest). A row
@@ -8301,9 +7993,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        picked. The pair of asserts above this block keeps the parked parse from resuming against
                        another row; both read the one field both entries park into. */
                     DCHECK(f->compile != NULL && JS_IsUndefined(ev),
-                           "a module compile answered SUSPENDED and left neither a parked parse nor an "
-                           "evaluation — the flow would stand at a row whose module is neither evaluating "
-                           "nor being parsed");
+                           "a module compile answered suspended and left neither a parked parse nor an evaluation");
                     g_step_unit = STEP_UNIT_MODULE_COMPILE_YIELDED;
                     return 0;
                 }
@@ -8381,8 +8071,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                         /* Parked mid-parse. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
                            flow is at, and the ladder re-enters here when the flow is next picked. */
                         DCHECK(f->compile != NULL && JS_IsUndefined(fn),
-                               "a compile answered SUSPENDED and left neither a parked parse nor a program — the "
-                               "flow would stand at a row whose program is neither running nor being parsed");
+                               "a compile answered suspended and left neither a parked parse nor a program");
                         g_step_unit = STEP_UNIT_COMPILE_YIELDED;
                         return 0;
                     }
@@ -8445,11 +8134,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     JSValue old = document_current_script_set(prog_ctx, flow_dyn_el(f));
 
                     DCHECK(JS_IsNull(old),
-                           "a classic script element began executing while this document's currentScript was "
-                           "still set — a program of the flow's own sequence cannot nest, because the flow "
-                           "holds one program frame, so this is two script executions sharing one document's "
-                           "slot: either the restore at the previous program's completion was skipped, or the "
-                           "write is not riding the running flow's COW delta");
+                           "a classic script began executing while this document's currentScript was set — the flow "
+                           "holds one program frame, so the previous restore was skipped or the write is not riding "
+                           "the running flow's delta");
                     JS_FreeValue(prog_ctx, old);
                 }
             }
@@ -8462,10 +8149,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                from the baseline and compiles the page's own programs too, and `progQueuedCand` is the ask these
                starts are read against. */
             DCHECK(f->compile == NULL,
-                   "a program's start is being counted while this flow still holds a suspended parse — both "
-                   "compile arms above assert the carrier is NULL once they have an answer and both park arms "
-                   "RETURN, so reaching this line with one live means a park arm now falls through to the "
-                   "start count and the count has gone back to measuring compile STINTS rather than programs");
+                   "a program's start is counted while the flow still holds a suspended parse — both compile arms "
+                   "clear the carrier and both park arms return, so a park arm falls through to the start count");
             if (started) {
                 g_prog_starts++;
                 if (flow_dyn_kind(f) == DYN_CANDIDATE) g_prog_starts_cand++; else g_prog_starts_other++;
@@ -8580,12 +8265,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
            (§8.1.4.4 step 8's report is inside step 8), so it sits on the frame side. Two-sided, so a frame kind
            that stops matching the cursor pair fires here rather than at whichever consumer is reached first. */
         DCHECKF((is_program || f->reporting) == (f->last_compiled == f->script_i),
-                "this flow's FRAME and its CURSOR disagree about whether it is inside a program of its own "
-                "sequence: the frame says %s and the pair says %s (script_i=%d last_compiled=%d "
-                "is_program=%d is_call=%d reporting=%d). flow.c's flow_programs_unstarted_for_document states "
-                "the contract — between two programs the cursor stands one past the last started row and "
-                "during one it stands ON it — and the compile site is the only writer of `last_compiled`, so "
-                "one of the two was moved by something that is not a program starting or a row being left",
+                "this flow's frame and cursor disagree about whether it is inside a program: the frame says %s and "
+                "the pair says %s (script_i=%d last_compiled=%d is_program=%d is_call=%d reporting=%d) — during a "
+                "program the cursor stands on the last started row, between programs one past it, and only the "
+                "compile site writes `last_compiled`",
                 (is_program || f->reporting) ? "inside one" : "between programs",
                 (f->last_compiled == f->script_i) ? "inside one" : "between programs",
                 f->script_i, f->last_compiled, is_program, is_call, f->reporting);
@@ -8619,9 +8302,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                frame holds no row of the sequence, and the frame the block above built holds the row
                `last_compiled` was written from; a true reading would have all three exclude this row's program. */
             DCHECK(!started_here || !is_call,
-                   "the frame a step just COMPILED reports itself as a call root — JS_FlowNew builds a program "
-                   "base, so this is a compile that produced something else, and the three consumers below "
-                   "that exclude calls would each exclude the row this step just started");
+                   "the frame a step just compiled reports itself as a call root — JS_FlowNew builds a program base");
             g_step_unit = started_here ? STEP_UNIT_START_PROGRAM : STEP_UNIT_RESUME_PROGRAM;
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
             /* HTML §6.10.1 Close requests' step 9, taken where a task's completion value is in hand: "Alternative
@@ -8638,16 +8319,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                split on `JS_IsException` because a completion is either abrupt or a value. */
             if (r == 0 && f->close_req && !JS_IsException(cv)) {
                 DCHECK(is_call,
-                       "a modelled close request's frame does not report itself as a call root — it is built "
-                       "by JS_FlowNewCall, so a program base here is a frame this flag was set over that is "
-                       "not the task");
+                       "a modelled close request's frame does not report itself as a call root — JS_FlowNewCall "
+                       "builds it");
                 DCHECK(JS_IsBool(cv),
-                       "HTML §6.10.1 Close requests' task completed with something that is not a boolean — "
-                       "its machine's fini yields step 9's one fact and nothing else, so a value of another "
-                       "type is a completion that came from somewhere that is not the task. UNDEFINED HERE "
-                       "IS A DIFFERENT FAULT AND NAMES ITS OWN SITE: it is what a call flow answers when "
-                       "nobody takes its result, so close_request_flow's JS_FlowNewCall was built with "
-                       "take_result false and the boolean was freed one frame below this read");
+                       "HTML §6.10.1 \"Close requests\"' task completed with something that is not a boolean — its "
+                       "machine yields step 9's answer; undefined means close_request_flow's JS_FlowNewCall was "
+                       "built with take_result false");
                 if (JS_ToBool(ctx, cv)) f->close_req_none = 1;
             }
             /* A cross-agent operation's completion is an answer, asked ahead of every throw arm below because this
@@ -8682,12 +8359,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    tail, where the flag says this frame was the row's remaining work and owes §4.12.1.1 step 4's
                    restore; clearing it would leave `document.currentScript` set for the rest of the session in the
                    build that cannot report why. */
-                DFAIL("HTML §8.1.4.4 \"Calling scripts\" step 8's report of a classic script's abrupt "
-                      "completion ITSELF completed abruptly. DOM §2.9 inner invoke step 2.11 catches a "
-                      "listener's throw and §8.1.4.6 step 6's error reporting mode stops a report of a report, "
-                      "so this is a step of §8.1.4.6 throwing rather than the page — the value's own text is "
-                      "the last entry of the result document's `pageErrors`, and what it names is built in "
-                      "core/events/report_exception.c");
+                DFAIL("HTML §8.1.4.4 \"Calling scripts\" step 8's report of a classic script's abrupt completion "
+                      "itself completed abruptly — DOM's inner invoke catches a listener's throw and §8.1.4.6 stops "
+                      "a report of a report, so a step of §8.1.4.6 threw (core/events/report_exception.c); the value "
+                      "is the last entry of `pageErrors`");
             }
             /* A modelled close request that threw is this engine's defect, asked before the orphan arm because both
                can be true of one flow: a flow that drove an uncalled function carries `orphan` for the rest of its
@@ -8702,12 +8377,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    is unescaped). */
                 result_page_error_value(ctx, e);
                 JS_FreeValue(ctx, e);
-                DFAIL("HTML §6.10.1 \"Close requests\"' close request steps completed ABRUPTLY. §6.10.2 states "
-                      "that a close watcher's cancel action and its close action can never throw, and DOM "
-                      "§2.9's inner invoke step 2.11 catches a listener's throw, so this is a step of the "
-                      "close-request or close-watcher algorithms throwing rather than the page — the value's "
-                      "own text is the last entry of the result document's `pageErrors`, and what it names is "
-                      "built in core/html/close_request.c and core/html/close_watcher.c");
+                DFAIL("HTML §6.10.1 \"Close requests\"' close request steps completed abruptly — §6.10.2's cancel "
+                      "and close actions cannot throw and DOM's inner invoke catches a listener's throw, so a step "
+                      "in core/html/close_request.c or close_watcher.c threw; the value is the last entry of "
+                      "`pageErrors`");
             }
             /* A driven orphan that threw is the exploration surface, not a page error. The page never called this
                function; this engine did, with unknown input for every argument and the receiver, so
@@ -8745,20 +8418,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                finished here. This is the only place the value exists, so the condition is asked here rather than
                at the row that queued the program. */
             if (r == 0 && JS_IsString(cv) && flow_dyn_kind(f) == DYN_JAVASCRIPT_URL)
-                DFAIL("a `javascript:` URL evaluated to a STRING — HTML §7.4.2.3.2 step 9 turns that into a new "
-                      "Document that REPLACES the target navigable's active document, built from a synthesized "
-                      "`text/html;charset=utf-8` response whose body is the string. §7.4's navigate can only "
-                      "load an address the host FETCHES (navigable.c's js_nav_load_step asks "
-                      "`document.fetch\\t<prov>\\t<url>`), so build the navigate that takes a RESPONSE THE "
-                      "ENGINE ALREADY HAS and route this through it");
+                DFAIL("a `javascript:` URL evaluated to a string, which HTML §7.4.2.3.2 step 9 turns into a new "
+                      "Document replacing the active one, built from a synthesized `text/html;charset=utf-8` "
+                      "response. §7.4's navigate here loads only addresses the host fetches; build a navigate that "
+                      "takes a response the engine already has and route this through it");
             JS_FreeValue(ctx, cv);
             /* §8.1.4.4 step 8 is about an evaluationStatus, and a frame that suspended or detached has none: both
                returns below leave without reaching the install, so a report built on those paths would be dropped
                silently, carrying an exception that is not this program's completion. */
             DCHECK(report == NULL || r == 0,
-                   "§8.1.4.4 step 8's report was built for a frame that has not COMPLETED — a suspended or "
-                   "detached base has no evaluation status to be abrupt, so the exception this report carries "
-                   "belongs to something other than this program's run");
+                   "§8.1.4.4 step 8's report was built for a frame that has not completed — a suspended or detached "
+                   "base has no abrupt evaluation status");
             if (r == 1) {
                 /* A mid-frame yield, and the one case where it is not more work. A flow that suspended inside a
                    machine holding an unanswered synchronous host request has no work until the host answers, and
@@ -8781,10 +8451,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    bracket); a classic program that detached would leave this document's §3.1.7 currentScript set
                    for ever, and the next program's set would assert one step later at the wrong site. */
                 DCHECK(flow_dyn_el(f) == NULL || document_current_script_is_null(doc_realm(flow_dyn_doc(f))),
-                       "a classic script's program DETACHED its base while §4.12.1.1's currentScript bracket "
-                       "was open — the restore is at the program's completion and a detached base never "
-                       "reaches one, so this document's currentScript would stay set for the rest of the "
-                       "session. Route the restore through whatever drives the detached continuation");
+                       "a classic script's program detached its base while §4.12.1.1's currentScript bracket was "
+                       "open — the restore runs at the program's completion; route it through whatever drives the "
+                       "detached continuation");
                 /* This row is over, which the cursor says and the flag must say with it: a frame this flow no
                    longer owns cannot be §8.1.4.4 step 8's report of the row the cursor is about to leave, and a
                    standing flag would make the next program's completion read as a report. The cursor moves only
@@ -8802,9 +8471,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    in it. A set flag here is a frame that registered itself elsewhere while this flow still expects
                    its completion value, and step 9's answer would be lost silently. */
                 DCHECK(!f->close_req,
-                       "a modelled close request's task DETACHED its base — HTML §6.10.1 Close requests' task "
-                       "is a call of a step machine, which has no continuation to hand to an awaited promise, "
-                       "so this flow is about to drop the completion value step 9's answer rides on");
+                       "a modelled close request's task detached its base — the task is a step-machine call with no "
+                       "continuation to hand an awaited promise, and step 9's answer rides its completion");
                 f->close_req = 0;
                 f->reporting = 0;
                 /* This exit is its own arm, named here because the assignment before the resume runs before any of
@@ -8909,8 +8577,7 @@ int engine_switch_count(void) { return g_switches; }
    a session, for `g_step_unit_runs`' reason: the host wants the instance's ladder. */
 void engine_ladder_task_census(EngineLadderTaskCensus *out)
 {
-    DCHECK(out != NULL, "the ladder's task-arm census was asked for into nothing — a reading that lands nowhere "
-                        "is a reading whose caller cannot have taken it");
+    DCHECK(out != NULL, "the ladder's task-arm census was asked for into nothing");
     out->task_held_deliv = g_task_held_deliv;
     out->task_held_seq   = g_task_held_seq;
     out->task_arm_older  = g_task_arm_older;
@@ -8919,11 +8586,9 @@ void engine_ladder_task_census(EngineLadderTaskCensus *out)
        raised inside the arm at the choice and the total at the convergence point after flow_step returns, so a
        second assignment of STEP_UNIT_RUN_TASK, or a return added between the choice and that point, breaks it. */
     DCHECKF(out->task_arm_older + out->task_arm_no_row == g_step_unit_runs[STEP_UNIT_RUN_TASK],
-            "the task arm ran %ld times and its two reasons account for %ld — the arm is reached either because "
-            "the queued task is strictly OLDER than the row at this flow's cursor or because there is NO row to "
-            "compare against, so a step the histogram counted and neither reason claims is a second writer of "
-            "STEP_UNIT_RUN_TASK or a return added between the choice that raises these and the point that "
-            "records the arm",
+            "the task arm ran %ld times and its two reasons account for %ld — every run is either an older queued "
+            "task or no row to compare, so STEP_UNIT_RUN_TASK has a second writer or a return separates the reason "
+            "from the record",
             g_step_unit_runs[STEP_UNIT_RUN_TASK], out->task_arm_older + out->task_arm_no_row);
 }
 
@@ -8940,8 +8605,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        uses of one instant, and two readings would make the halves exceed the total by whatever ran between them. */
     int64_t now = 0;
 
-    DCHECK(out != NULL, "the lifetime step histogram was asked for into nothing — a reading that lands nowhere "
-                        "is a reading whose caller cannot have taken it");
+    DCHECK(out != NULL, "the lifetime step histogram was asked for into nothing");
     out->steps = g_steps;
     out->unframed_steps = g_unframed_steps;
     /* And what they cost, in the same reading as the count they are divided by. */
@@ -8966,11 +8630,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        after engine_sched_step returns) and is asserted for the next caller. `quantum_slice_open()` is for
        assertions only; a branch on it would choose between a scheduled and an unscheduled path. */
     DCHECK(!quantum_slice_open(),
-           "the step census was composed from INSIDE an open slice — `betweenSlicesUs` closes its open tail "
-           "from the last slice's RETURN, so the running slice's own elapsed time is about to be charged to "
-           "the HOST's half of the partition. The sum still equals `instanceUs`, which is why nothing else "
-           "here can catch it, and the row would report thread the engine was holding as thread it was "
-           "waiting for — the exact reading the split exists to make");
+           "the step census was composed inside an open slice — `betweenSlicesUs` closes from the last slice's "
+           "return, so the running slice would be charged to the host's half");
     out->loop_us           = g_loop_us;
     out->between_slices_us = g_between_us + (g_slice_exit_set ? now - g_slice_exit_us : 0);
     out->slices            = g_slices;
@@ -8980,10 +8641,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        turn was charged, a second writer, or a measure no longer monotone, and would publish `stepUs/instanceUs`
        above 1. */
     DCHECKF(out->step_us <= out->instance_us,
-            "solver/engine.c: the dispatch loop's total %lld exceeds the %lld the instance has measured since "
-            "its first slice — every turn's charge is a sub-interval of that span, so this is a baseline taken "
-            "after a turn was charged or a measure that is no longer monotone, and `stepUs/instanceUs` is "
-            "about to be published as a share above 1",
+            "solver/engine.c: the dispatch loop's total %lld exceeds the %lld the instance has measured since its "
+            "first slice — every turn's charge is a sub-interval of that span",
             (long long)out->step_us, (long long)out->instance_us);
     /* The partition of that span (solver/engine.h's `loop_us` has why these are two rows). The readings telescope:
        the wrapper's entry reading opens the baseline and each slice's closing reading is the next gap's opening, so
@@ -8991,10 +8650,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        was never charged (an exit that escaped the wrapper), a second writer of an accumulator, or a non-monotone
        measure. */
     DCHECKF(out->loop_us + out->between_slices_us == out->instance_us,
-            "solver/engine.c: the instance's span is not partitioned by its two halves (%lld inside the slice "
-            "bracket + %lld between slices against %lld measured since the first slice) — the readings "
-            "telescope from engine_sched_step's own pair, so a difference is a slice whose span was never "
-            "charged, a second writer of one accumulator, or a clock that is no longer monotone",
+            "solver/engine.c: the instance's span is not partitioned by its two halves (%lld in slices + %lld "
+            "between them against %lld) — the readings telescope from engine_sched_step's own pair",
             (long long)out->loop_us, (long long)out->between_slices_us, (long long)out->instance_us);
     /* Every turn's charge is taken inside the dispatch loop, inside the wrapper's bracket, so the turns are a
        sub-interval of their slices; a violation is a turn charged outside a slice (a second driver of flow_step, or
@@ -9008,10 +8665,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        this wrapper brackets, so steps without slices is a step driven from outside the bracket, and every
        per-slice quotient would be a fraction of the wrong population. */
     DCHECKF(out->steps == 0 || out->slices > 0,
-            "solver/engine.c: %ld dispatch turn(s) were taken across ZERO slices — the count is raised in "
-            "engine_sched_step before the body runs and a turn can only be taken inside that body, so this is "
-            "a step driven from outside the slice bracket and every per-slice reading on this census is a "
-            "fraction of a population that did not produce it",
+            "solver/engine.c: %ld dispatch turn(s) were taken across zero slices — a turn is taken only inside "
+            "engine_sched_step's body",
             out->steps);
     /* The compile phase, read with the overrun total it is contained in. */
     out->classic_compiles         = g_classic_compiles;
@@ -9052,9 +8707,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     /* A count of turns cannot exceed the turns: a subset larger than its population is the free arithmetic tell,
        and a fraction whose numerator and denominator advance at different events is unbounded and reads as a rate. */
     DCHECKF(out->slice_overruns <= out->steps,
-            "solver/engine.c: slice_overruns %lld exceeds steps %lld — the overrun count is raised once per "
-            "dispatch turn from the same two clock readings the slice arm is accumulated from, so it can only "
-            "outrun its denominator if one of the two moved without the other",
+            "solver/engine.c: slice_overruns %lld exceeds steps %lld — an overrun is counted once per turn from the "
+            "slice arm's own clock readings",
             (long long)out->slice_overruns, (long long)out->steps);
     /* The compile phase's containment, against the population the numerator is drawn from. The overrun is raised
        per stint, and every stint ends in exactly one of two arms of one straight-line block: parked (naming the
@@ -9065,11 +8719,9 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        since a program parsed over several overrunning stints outruns its own count. */
     DCHECKF(out->classic_compile_overruns
                 <= out->classic_compiles + out->arms[STEP_UNIT_COMPILE_YIELDED],
-            "solver/engine.c: classic_compile_overruns %ld exceeds the %ld compile stint(s) it is drawn from "
-            "(%ld program(s) whose parse finished + %ld stint(s) that handed the thread back) — the overrun "
-            "is raised once per STINT and every stint ends in exactly one of those two arms of one "
-            "straight-line block, so a subset larger than their sum is a third exit from the compile block, "
-            "or a yielded stint whose step name was overwritten before flow_step returned",
+            "solver/engine.c: classic_compile_overruns %ld exceeds the %ld compile stints it is drawn from (%ld "
+            "finished + %ld yielded) — every stint ends in one of those two arms, so the compile block has a third "
+            "exit",
             out->classic_compile_overruns,
             out->classic_compiles + out->arms[STEP_UNIT_COMPILE_YIELDED],
             out->classic_compiles, out->arms[STEP_UNIT_COMPILE_YIELDED]);
@@ -9083,11 +8735,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        `module-compile-handed-the-thread-back`); one row for both would keep this inequality true and make
        g_classic_compiles's stint equality false (solver/step_unit.h). */
     DCHECKF(out->classic_compile_resumed <= out->arms[STEP_UNIT_COMPILE_YIELDED],
-            "solver/engine.c: classic_compile_resumed %ld exceeds the %ld stint(s) that handed a CLASSIC parse "
-            "back — a stint may only CONTINUE a parse this process PARKED, and the classic block's park arm is "
-            "the only site that leaves a carrier in `f->compile` under THIS row (the module arm parks into the "
-            "same field under its own row), so more resumes than parks is a carrier installed by a third site "
-            "and a parse being continued that nothing here suspended",
+            "solver/engine.c: classic_compile_resumed %ld exceeds the %ld stints that parked a classic parse — only "
+            "the classic park arm leaves a carrier for this row, so a third site installed one",
             out->classic_compile_resumed, out->arms[STEP_UNIT_COMPILE_YIELDED]);
     /* The cross-row containment, tying the phase to its turn. A compile stint that met the slice sits inside a step
        at least as long, and the step's reading brackets flow_step from outside (one caller; the slice accounting
@@ -9097,22 +8746,17 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        exit at or past the compile returns. A `continue` below the script row would break this with nothing else
        changing. */
     DCHECKF(out->classic_compile_overruns <= out->slice_overruns,
-            "solver/engine.c: classic_compile_overruns %ld exceeds slice_overruns %lld — a compile stint that "
-            "alone met the slice is inside a step that therefore met it too, and a turn reaches the compile "
-            "at most once, so this says the step containing it was not counted: flow_step has gained a caller "
-            "outside the dispatch loop's clock bracket, an arm that returns before the slice accounting, or a "
-            "`continue` below the script row that lets one turn take two compile stints",
+            "solver/engine.c: classic_compile_overruns %ld exceeds slice_overruns %lld — a stint that met the slice "
+            "is inside a step that met it, so flow_step gained a caller outside the clock bracket or a turn took two "
+            "compile stints",
             out->classic_compile_overruns, (long long)out->slice_overruns);
     /* The repeat partition's two containments: two independent partitions of one population (a parse can be in
        both), so two checks rather than one sum. Both subsets are raised in the same straight-line block as their
        total, with no branch between, so a violation is a raise moved out from under `g_classic_compiles` or behind
        a condition. */
     DCHECKF(out->classic_compile_again <= out->classic_compiles,
-            "solver/engine.c: classic_compile_again %ld exceeds classic_compiles %ld — the repeat count is "
-            "raised in the same straight-line block as the total it is a subset of, with no branch between, so "
-            "a subset larger than its population means one of the two has been moved: a parse marked at the "
-            "stint entry rather than at the stint that FINISHES it would count the second stint of one program "
-            "as a repeat of its own first",
+            "solver/engine.c: classic_compile_again %ld exceeds classic_compiles %ld — the repeat count is raised in "
+            "the same block as its total",
             out->classic_compile_again, out->classic_compiles);
     DCHECKF(out->classic_compile_own_decode <= out->classic_compiles,
             "solver/engine.c: classic_compile_own_decode %ld exceeds classic_compiles %ld — the provenance "
@@ -9124,9 +8768,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        obtained from a parse this process never performed. An implication, not a bound: one parse can be shared
        any number of times. */
     DCHECKF(out->classic_parse_shared == 0 || out->classic_compiles > 0,
-            "solver/engine.c: %ld classic program(s) were started from a shared parse and NOT ONE parse "
-            "finished — a body holds a closure only at the stint that finished parsing its bytes, so a share "
-            "with no compile behind it is a program obtained from a parse this process never performed",
+            "solver/engine.c: %ld classic program(s) were started from a shared parse while no parse finished — a "
+            "body holds a closure only from a finished parse",
             out->classic_parse_shared);
     /* The gauge against the lifetime event that raises it: a body holds at most one parse, and only one it was
        marked for, so the bodies holding one now cannot exceed the parses ever finished. Comparing a gauge with a
@@ -9177,10 +8820,9 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        of the block). A floor across a restart, not an equality: engine_session_close releases `g_orphan_asks` with
        the agent and nothing here, so a second session starts the ask at 0 against a climbing descent count. */
     DCHECKF(g_orphan_asks <= g_unframed_steps,
-            "solver/engine.c: the orphan surface was asked %ld time(s) against %ld descent(s) of the ladder "
-            "it is a rung of — the ask is raised inside engine_orphan_seed, which is reached only from within "
-            "flow_step's `if (!f->frame)` block, and both are counted per pass through that block, so an ask "
-            "outside that containment is a second path to the seed rather than a fact about the frontier",
+            "solver/engine.c: the orphan surface was asked %ld time(s) against %ld ladder descent(s) — "
+            "engine_orphan_seed is reached only inside flow_step's `if (!f->frame)` block, so a second path reaches "
+            "the seed",
             g_orphan_asks, g_unframed_steps);
     /* And the ask's exits partition it (see the rows' declaration). engine_orphan_seed raises the total at its
        entry past the forking gate and exactly one of the three at each exit, so an ask outside the sum is an exit
@@ -9189,11 +8831,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        widen silently. An equality, unlike the floor above, because all four are released together at
        engine_session_close. */
     DCHECKF(g_orphan_asks == g_orphan_asks_memo + g_orphan_asks_empty + g_orphan_asks_took,
-            "solver/engine.c: the orphan surface was asked %ld time(s) and its exits account for %ld (%ld "
-            "memo, %ld empty walk, %ld take) — the total is raised at engine_orphan_seed's entry past the "
-            "forking gate and each of the three at exactly one of its exits, so a difference is an exit that "
-            "records nothing, and the residue a reader computes against `seed-one-orphan-flow` and "
-            "`hand-a-parked-drive-its-function` has silently stopped being the memo and the empty walk",
+            "solver/engine.c: the orphan surface was asked %ld time(s) and its exits account for %ld (%ld memo, %ld "
+            "empty walk, %ld take) — each exit records itself, so one exit records nothing",
             g_orphan_asks, g_orphan_asks_memo + g_orphan_asks_empty + g_orphan_asks_took,
             g_orphan_asks_memo, g_orphan_asks_empty, g_orphan_asks_took);
     /* The clock boundary's chain, which makes "how many dispatches reached the clock" a reading off this
@@ -9243,13 +8882,9 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
                      g_step_unit_runs[STEP_UNIT_CLOSE_REQUEST] + g_step_unit_runs[STEP_UNIT_AWAIT_PEER] +
                      g_step_unit_runs[STEP_UNIT_FINISHED];
         DCHECKF(below == g_clock_render_asks,
-                "the clock boundary was reached %ld times and the eleven arms at or below it account for %ld — "
-                "every dispatch that arrives at the rendering rung leaves through exactly one of them, so a "
-                "difference is a rung that crossed this boundary without joining or leaving solver/engine.c's "
-                "eleven-unit list, a unit written at a second site on the other side of it, or the rendering "
-                "rung being asked more than once per step. The two asserts above cannot see any of those: they "
-                "pin RENDERING/TIMER/IDLE_PERIOD's adjacency to each other and say nothing about what stands "
-                "below all three",
+                "the clock boundary was reached %ld times and the eleven arms at or below it account for %ld — every "
+                "dispatch reaching the rendering rung leaves through one of them, so a unit crossed the boundary, is "
+                "written on both sides of it, or the rung is asked twice per step",
                 g_clock_render_asks, below);
     }
     /* The clock chain's containment in the ladder descents, which a reader comparing
@@ -9260,12 +8895,8 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        ladder stopped above the clock (read off `arms`). Both are per-instance and released by nothing, so a
        restart does not weaken it. */
     DCHECKF(g_clock_render_asks <= g_unframed_steps,
-            "solver/engine.c: the clock boundary was reached %ld time(s) against %ld descent(s) of the work "
-            "ladder — the rendering rung is an `else if` inside the `if (!f->frame)` block the descents are "
-            "counted at and both are raised per PASS through it, so an ask outside that population is the "
-            "chain having been reached from outside the block: a second caller, or the triple hoisted out of "
-            "it. Every reading that compares `stepReachedRenderingLife` with `unframedStepsLifetime` rests on "
-            "this containment",
+            "solver/engine.c: the clock boundary was reached %ld time(s) against %ld ladder descent(s) — the "
+            "rendering rung is inside the `if (!f->frame)` block the descents are counted in",
             g_clock_render_asks, g_unframed_steps);
 }
 
@@ -9345,9 +8976,8 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        is installed as a triple (`started`, `dec_blob`, `pin_blob`) by cold.c's 'f' and 'c' arms and by solve.c's
        @S re-injection. */
     DCHECK(f->started || f->dec_blob == NULL,
-           "a flow that has never run carries a recorded decision path — decide_enter is about to ignore it "
-           "and the flow's first suspend will overwrite the pointer, so the path is dropped AND its segment "
-           "reference leaked. Whatever installed it set `dec_blob` without `started`");
+           "a flow that never ran carries a recorded decision path — decide_enter would ignore it and leak its "
+           "segment; whatever installed it set `dec_blob` without `started`");
     /* A fresh flow replays nothing: decide_enter sets `g_dec_n = 0`, emptying the vector rather than rewinding it,
        and the assert above forbids a never-run flow a recorded path. The other arm installs a recorded path, and a
        forked sibling takes it, because engine_sibling_assemble sets `started`. Installing the path does not
@@ -9391,9 +9021,8 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        returns the moment a parse parks, so a flow here holding one means a completion arm ran while a parse was in
        flight. Asserted rather than freed, since freeing would hide that the finish path ran on a suspended flow. */
     DCHECK(f->compile == NULL,
-           "a flow finished with a program still being PARSED — the row it is standing at never started, so "
-           "either a completion arm ran for a row the flow had not reached or the compile handle outlived the "
-           "program it belongs to");
+           "a flow finished with a program still being parsed — a completion arm ran for an unreached row, or the "
+           "compile handle outlived its program");
     DCHECK(f->frame == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
                              "everything those frames close over, is retained by a handle nothing will free");
     DCHECK(flow_deliver_pending(f) == 0,
@@ -9403,10 +9032,8 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     /* The same for an operation, at both ends: a record never turned into a program is a question nobody
        performed, and a token never spent is a peer's flow parked at the line that asked, for ever. */
     DCHECK(!flow_owes_answer(f),
-           "a flow finished holding a cross-agent operation — either the record was never performed, or its "
-           "program's completion was never sent, and either way the flow that ASKED is suspended at the line "
-           "that asked it with nothing coming. Asked of the QUEUE as well as the arrival slot, because a "
-           "started operation's token is on the row of the program that answers it");
+           "a flow finished holding a cross-agent operation — the record was never performed or its completion never "
+           "sent, so the asking flow waits for nothing (the queue rows hold started operations' tokens)");
     /* The job queue and the pending register are empty here, asserted rather than cleaned up: a walk that frees
        them here could run only when a work item is being dropped, and would hide the drop. flow_step decides
        "finished" only after offering the job queue a turn (the checkpoint before every program, the task arm for
@@ -9447,9 +9074,8 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
 static int engine_branch_hook(JSContext *ctx, JSValueConst cond) {
     int r;
     DCHECK(!g_fork_snapshot_owed,
-           "the interpreter asked for a branch arm while another snapshot-owning ask was still open — the "
-           "decision seam runs no page code, so a second one means something re-entered it and the inner "
-           "fork would be built against the outer ask's activation");
+           "the interpreter asked for a branch arm while another snapshot-owning ask was open — the decision seam "
+           "runs no page code, so something re-entered it");
     g_fork_snapshot_owed = 1;
     /* No non-forking arm: this wrapper is FC_EXPLORE's `branch` and nothing else installs it, so a session that
        does not fork never reaches this line; the interpreter finds no hook, reads -1, and the ordinary ToBool
@@ -9466,12 +9092,10 @@ static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op
                                const char *site) {
     int r;
     DCHECK(!g_fork_snapshot_owed,
-           "the step driver asked for an outcome arm while another snapshot-owning ask was still open — see "
-           "engine_branch_hook");
+           "the step driver asked for an outcome arm while another snapshot-owning ask was open");
     DCHECK(site != NULL,
-           "an outcome ask arrived with no site — quickjs.h's contract says the pair is captured AT THE ASK "
-           "with JS_FLOW_SITE_HERE, so a NULL here is a caller that threaded nothing and would put this "
-           "engine's outcome aborts back to naming one forwarding function for every operation");
+           "an outcome ask arrived with no site — quickjs.h requires the pair captured at the ask with "
+           "JS_FLOW_SITE_HERE");
     g_fork_snapshot_owed = 1;
     r = solver_outcome_at(ctx, over, op, n, real, site);
     g_fork_snapshot_owed = 0;
@@ -9595,8 +9219,8 @@ static uint32_t g_slice_flow_gen;
 static CowDelta *g_slice_delta;
 
 void engine_request_park(void) {
-    DCHECK(g_sess_live, "a park was requested of an engine with no live session — there is no frontier to "
-                        "write out, and the host would then store an empty residue over a real one");
+    DCHECK(g_sess_live, "a park was requested of an engine with no live session — the host would store an empty "
+                        "residue over a real one");
     g_park_req = 1;
 }
 
@@ -9681,8 +9305,8 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
                         "installed by engine_sched_begin and removed by engine_session_close, so this is a "
                         "reclaim against a frontier that is gone");
     DCHECK(rt == JS_GetRuntime(g_sess_ctx),
-           "a reclaim was asked of this engine by a runtime that is not its session's — one instance is one "
-           "runtime, so paging this frontier would not free the memory the other one is short of");
+           "a reclaim was asked by a runtime that is not this session's — paging this frontier frees nothing for the "
+           "other runtime");
     /* The running flow cannot go: its decision state is live in decide.c rather than in its blob and its delta is
        applied to the heap, which cold_park_flow and flow_release both refuse. Every other member is a snapshot. */
     tail = flow_worst(flow_running());
@@ -9769,30 +9393,26 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        What this asserts is the other population: a job on quickjs's own job or task list, which only a raw
        JS_EnqueueJob before the hook can put there and nothing in this engine drains. */
     DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
-           "a job was enqueued on quickjs's own job or task list BEFORE this session began — the user agent's "
-           "own callbacks wait on the baseline list for the first flow, so this is a raw JS_EnqueueJob with no "
-           "owner, a work item the frontier will never run");
+           "a job was on quickjs's own job or task list before this session began — user agent callbacks wait on the "
+           "baseline list, so this is an ownerless JS_EnqueueJob");
     g_sess_ctx = ctx;
     g_sess_cur = NULL; g_sess_live = 1;
     /* The three arrays are one inventory, so a session opened with a length and two of them would have the seed
        read the third off the end. Asserted where the borrow is taken, while its builder is still on the stack. */
     DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL),
-           "a session was opened over a script inventory missing one of its three columns — bodies, srcs and "
-           "types are one table with one length, and the seed below reads all three");
+           "a session was opened over a script inventory missing one of its three columns (bodies, srcs, types)");
     /* A list of `<script>` elements carries their §4.12.1.1 schedules (core/loader/document_scripts.h's
        `sched`); only a host's synthesized program list, which names no element, has none and runs in its own
        order. */
     DCHECK(n == 0 || els == NULL || sched != NULL,
-           "a session was opened over a document's `<script>` elements without their §4.12.1.1 schedules — "
-           "document_exec_scripts computes the column, and without it an `async` external would hold a "
-           "position the as-soon-as-possible set does not have");
+           "a session was opened over `<script>` elements without their §4.12.1.1 schedules — document_exec_scripts "
+           "computes that column");
     /* The document this session is of: the instance's root document, whose script sequence the session runs.
        Asserted against the realm, because everything below compiles by asking the document for its realm, and a
        ctx of another document's realm would run this document's scripts somewhere else. */
     g_sess_doc = world_local_doc();
     DCHECK(doc_realm(g_sess_doc) == ctx,
-           "a session was opened with a realm that is not the root document's — the session's scripts are that "
-           "document's programs, so they would be compiled in one realm and belong to another");
+           "a session was opened with a realm that is not the root document's");
     /* HTML §4.12.1.1 "Processing model": "Let url be the result of encoding-parsing a URL given src, relative to
        el's node document." Resolved once, here, because the standard computes this url once per element and uses
        it for both things this engine asks of it, §8.1.4.2's fetch and, for a module, the record's [[HostDefined]]
@@ -9803,9 +9423,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        re-ask under whichever delta was applied, so a `<base href>` one flow wrote would re-point another flow's
        bundle. */
     DCHECK(g_root_scripts == NULL && g_root_n == 0,
-           "a session opened while the previous session's root script table was still allocated — the table is "
-           "the ENGINE's, so the build below would leak every string in it; engine_session_close is the one "
-           "place it is given back and it is the one place a session ends");
+           "a session opened while the previous root script table was still allocated — engine_session_close is the "
+           "one place it is freed");
     g_root_scripts = n ? (RootScript *)calloc((size_t)n, sizeof(RootScript)) : NULL;
     CHECK(n == 0 || g_root_scripts != NULL,
           "engine: OOM building the root document's script table — every flow of this document is seeded from "
@@ -9887,10 +9506,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        test_forced.c's engine_run), so a second session on one instance crashes here rather than dropping the debt
        it must carry. */
     DCHECK(g_paged_owed == 0 && g_paged_reqs == 0 && g_flows_sold == 0,
-           "a session began on an instance that had already sold flows — the debt those sales left is owed by "
-           "the HOST that was shown the requests, so it crosses a session boundary with them; it must be "
-           "carried into this session, never zeroed, or the first reply that arrives for a sold flow is "
-           "reported as the host's pairing being off");
+           "a session began on an instance whose sold-flow debt is not zero — the debt crosses sessions with the "
+           "host that was shown the requests, so carry it rather than reset it");
     /* Not reset, because they are the instance's totals rather than a session's, and a rate that restarted would
        be a level again (see g_host_asked): g_host_asked/g_host_answered/g_host_answers_extra/g_host_answers_late/
        g_host_terminated; g_reclaim_asks/g_reclaim_unarmed/g_reclaim_floor, which partition against g_flows_sold
@@ -9920,8 +9537,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        which a partial park's read-back needs (its tail returns to the flows that were not paged out). */
     DCHECK(flow_count() == 0,
            "a session began over a frontier that already has members — the boot flow and a parked residue are "
-           "ALTERNATIVES, so whichever is chosen below would be a second seeding of the same document: the "
-           "un-forked path explored twice, and every branch the existing members already stand on re-forked");
+           "alternative seedings");
     if (recipes && *recipes) cold_resume(ctx, recipes);
     else flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
     /* The routing latch is answered here, where the answer is known: only the resume above opens a claim on an
@@ -9984,22 +9600,17 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
     RootScript *rows;
     int i, rown = 0;
 
-    DCHECK(g_sess_live, "a document was joined to an instance with no live session — the flow its scripts are "
-                        "the programs of would have no scheduler to run it, so the document would be parsed, "
-                        "given a realm, and never execute a line");
+    DCHECK(g_sess_live, "a document was joined to an instance with no live session");
     DCHECK(cctx != NULL, "a document was joined with no realm to compile its programs in");
-    DCHECK(doc != 0, "a document was joined naming no document — zero is the world registry's NONE, so the "
-                     "programs below would be compiled in whichever realm the session happens to be rooted at");
+    DCHECK(doc != 0, "a document was joined naming no document (the world registry's NONE)");
     DCHECK(doc != g_sess_doc,
-           "the document this session was opened over was joined to its own agent a second time — its scripts "
-           "are already the frontier's, and a second boot flow over them explores the un-forked path twice");
+           "the session's own document was joined to its agent a second time — its scripts are already the "
+           "frontier's");
     DCHECK(doc_realm(doc) == cctx,
-           "a document was joined naming a realm that is not the one it answers with — the queue carries the "
-           "NAME and the compile resolves it, so the two disagreeing compiles this document's code in another "
-           "document's Window");
+           "a document was joined naming a realm that is not the one it answers with");
     DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL && sched != NULL && els != NULL),
-           "a document was joined with a script inventory missing one of its five columns — bodies, srcs, "
-           "types, sched and els are one table with one length, and the seeding below reads all five");
+           "a document was joined with a script inventory missing one of its five columns (bodies, srcs, types, "
+           "sched, els)");
 
     /* The joined document's boot flow: an empty decision vector over this agent's baseline, minted with a root
        world of its own because it stands on no other flow's decisions. Every timeline this document has is a fork
@@ -10016,10 +9627,8 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
           "realm and never executes a line, which is indistinguishable from a document that had no scripts");
     for (i = 0; i < n; i++) {
         DCHECK(script_type_executes(types[i]),
-               "a joined document's script inventory holds a row whose type executes nothing — an import map "
-               "and a set of speculation rules are registered rather than run and §4.12.1.1's null type runs "
-               "nothing at all, so document_exec_scripts drops all three before they become rows and a fourth "
-               "answer here means the types column was never written for this row");
+               "a joined document's script inventory holds a row whose type executes nothing — document_exec_scripts "
+               "drops import maps, speculation rules and the null type before they become rows");
         DCHECK(bodies[i] != NULL || srcs[i] != NULL,
                "a joined document's script inventory holds an entry with neither source text nor an address — "
                "§4.12.1.1's \"if url is failure … fire an event named error at el, and return\" means such an "
@@ -10107,11 +9716,9 @@ double engine_top_weight(void) {
        frontier whose marks rest on answered entries satisfies neither, because `pend_owed` is false for an
        answered entry. */
     DCHECK(b != NULL || flow_count() == 0 || engine_host_owes() || engine_frontier_settled() || g_referenced,
-           "this engine reported -inf — it can hand the thread to nobody — while the host owes it NOTHING, no "
-           "peer holds a reference into it, and its members are not parked on a REFUSAL either: every member's "
-           "mark rests on a register that has already been ANSWERED, so no host event can clear one, the "
-           "Level-1 order will rank this document last forever and every timeline it holds is unexplored with "
-           "nothing naming it");
+           "this engine reported -inf (nobody can take the thread) while the host owes it nothing, no peer "
+           "references it and no member is parked on a refusal — every member's mark rests on an answered register "
+           "entry, which no host event can clear");
     return b ? flow_weight(b) : -1.0 / 0.0;
 }
 
@@ -10159,16 +9766,15 @@ static int engine_sched_slice(void) {
        (engine_sched_step brackets the slice and returns it verbatim; qjs_step latches it in g_done and answers
        DONE to every later step). */
     DCHECK(g_sess_live,
-           "a slice was opened on a session that is no longer live — the previous step answered "
-           "ENGINE_STEP_DONE and the host stepped again anyway");
+           "a slice was opened on a session that is no longer live — the previous step answered ENGINE_STEP_DONE");
     /* The flow carried across a quantum boundary is still a member of the frontier. The cooperative yield resumes
        "the same top flow on the byte-identical frontier", and what makes that true here is a raw `Flow *` held in
        a static across a return to the host, during which the host routes records, provides replies and answers
        requests. If any of those removed a flow, this pointer would be read (`best != cur`, then flow_switch_out)
        after its free, a lifetime bug looking like a scheduling one. Asserted where the pointer is picked up. */
     DCHECK(cur == NULL || flow_is_member(cur),
-           "the flow this quantum resumes is no longer in the frontier — it was removed while the scheduler was "
-           "returned to the host, so the resume is neither the same flow nor a byte-identical frontier");
+           "the flow this quantum resumes is no longer in the frontier — it was removed while the host held the "
+           "thread");
     /* The finish the previous slice deferred so the host could photograph this member's last moment (@PERWORLD;
        the argument is at `g_sess_finish_owed`). Above the park, the pick and every engine_session_close here, so
        the deferral is a split call rather than a second teardown path: whatever this slice does, the member that
@@ -10177,14 +9783,11 @@ static int engine_sched_slice(void) {
        entry does), so the delta this unapplies is the one photographed. */
     if (g_sess_finish_owed) {
         DCHECK(cur != NULL,
-               "a finish was deferred for a picture and the member it was deferred for is gone — the yield "
-               "hands the thread back with that flow standing and this is the one line that completes it, so "
-               "a NULL here is a session that lost its own cursor across the return and a flow whose COW and "
-               "DOM deltas are still applied to the shared baseline with nothing left to unapply them");
+               "a finish deferred for a picture has lost its member — this line completes it, and the member's COW "
+               "and DOM deltas are still applied");
         DCHECK(!flow_paint_owed(cur),
-               "a finish deferred for a picture belongs to a member that still owes one — the discharge and "
-               "the deferral are written at one line, so this is a mark laid down again while the thread was "
-               "with the host, which would photograph a world that has already ended");
+               "a finish deferred for a picture belongs to a member that owes one again — the discharge and the "
+               "deferral are written at one line");
         g_sess_finish_owed = 0;
         solve_flow_end(cur);
         flow_finish(ctx, cur);
@@ -10328,9 +9931,8 @@ static int engine_sched_slice(void) {
                entry, so a step returning without naming its arm crashes here with the flow in hand rather than
                being attributed to the previous step (solver/step_unit.h). */
             DCHECK(g_step_unit != STEP_UNIT_NONE,
-                   "a scheduler step returned without naming the arm it took — flow_step resets to NONE at its "
-                   "entry and every exit declares itself, so this is an exit added without a name and the "
-                   "member's step-unit row would report whatever the PREVIOUS step did");
+                   "a scheduler step returned without naming the arm it took — flow_step resets to NONE at entry and "
+                   "every exit names itself");
             cur->step_unit = g_step_unit;
             /* And the arm's lifetime count, at this one point for the same reason: an increment per exit is two
                dozen places to forget one, and a forgotten one undercounts silently. The line above is where this
@@ -10345,12 +9947,9 @@ static int engine_sched_slice(void) {
                just returned with its flow in hand, and between an entry and its record the identity is off by one
                by design. */
             DCHECKF(step_unit_runs_total() == g_steps,
-                    "the lifetime step histogram does not account for every scheduler step (%ld arm counts "
-                    "against %ld entries into flow_step) — the entry is counted where flow_step resets the "
-                    "arm name and the arm is counted here, so a difference is a step that entered and did NOT "
-                    "reach this line: a second caller of flow_step, a return added between the call and this "
-                    "record, or a step driven from outside engine_sched_slice. Every reading composed from "
-                    "the histogram is then about a ladder that is not the one this document climbed",
+                    "the lifetime step histogram does not account for every scheduler step (%ld arm counts against "
+                    "%ld entries) — a second caller of flow_step, a return before this record, or a step outside "
+                    "engine_sched_slice",
                     step_unit_runs_total(), g_steps);
             engine_reclaim_set(prev_reclaim);
             ENGINE_NO_STRAY(ctx, "post-step: the arm flow_step just ran", r);
@@ -10396,12 +9995,8 @@ static int engine_sched_slice(void) {
              * consumers between here and the charge are browser components with no scheduler entry. If something
              * that can write the register comes to stand between them, the charge needs its own assert again. */
             DCHECK(flow_running() == cur,
-                   "the flow the scheduler stepped is not the one holding the thread — the unit-of-work "
-                   "boundary on the next line reads `JS_HasParkedFlow` of the RUNTIME, whose parked set "
-                   "belongs to the switched-in flow alone, so the microtask checkpoint and the rejection "
-                   "notify below would run on another flow's suspended activations and the visit credit "
-                   "would be spent on the wrong member; and the aging charge further down would demote a "
-                   "flow that did not burn the time and leave the one that did holding its rank");
+                   "the flow the scheduler stepped is not the one holding the thread — the unit boundary, "
+                   "checkpoint, notify, visit credit and aging charge below all read the switched-in flow");
             /* And which clause answered, recorded where it is decided: the same conjunction in the same order (a
                live frame, the runtime's parked slot, a checkpoint still owed), written as an if/else so the refusing
                clause has a name. Short-circuiting is preserved, so `JS_HasParkedFlow` is not asked of a member
@@ -10466,11 +10061,8 @@ static int engine_sched_slice(void) {
                    construction here, which makes `arms[i] - over_arms[i]` a non-negative reading of one
                    population. */
                 DCHECKF(g_step_unit_over[g_step_unit] <= g_step_unit_runs[g_step_unit],
-                        "arm %d has overrun the slice %ld time(s) against %ld run(s) of that arm — the "
-                        "run is counted at the convergence point above and the overrun on the line above "
-                        "this one, from ONE turn's arm, so a subset larger than its own population is "
-                        "`g_step_unit` having been rewritten between the two lines or an overrun counted "
-                        "for a turn whose arm was never recorded",
+                        "arm %d overran the slice %ld time(s) against %ld run(s) — run and overrun are counted from "
+                        "one turn's arm, so `g_step_unit` was rewritten between them",
                         (int)g_step_unit, g_step_unit_over[g_step_unit], g_step_unit_runs[g_step_unit]);
                 /* And whether the page's code offered a point in this turn, raised here where the turn is known to
                    be one of the population (solver/engine.h's `slice_overrun_asks`); `pa_slice0` was read on
@@ -10479,10 +10071,8 @@ static int engine_sched_slice(void) {
                    accessor asserts as an equivalence. The delta cannot be negative, since `g_preempt_asked`'s only
                    writer is preempt_hook's increment; a negative delta is a reset or a wrap. */
                 DCHECKF(g_preempt_asked >= pa_slice0,
-                        "the preempt policy reports FEWER lifetime consultations after a step than before it "
-                        "(%llu against %llu) — the only writer is preempt_hook's own increment, so this is a "
-                        "second writer that resets it, and every `sliceOverrunAsks` reading taken since is a "
-                        "difference of two unrelated instants",
+                        "the preempt policy reports fewer lifetime consultations after a step than before (%llu "
+                        "against %llu) — preempt_hook's increment is the only writer",
                         (unsigned long long)g_preempt_asked, (unsigned long long)pa_slice0);
                 if (g_preempt_asked == pa_slice0) {
                     g_over_seamless++;
@@ -10498,10 +10088,8 @@ static int engine_sched_slice(void) {
                     /* And the per-arm containment the sum is blind to, for the runs/overruns pair's reason;
                        `g_step_unit_over[g_step_unit]` was raised a few lines up, same arm and no branch between. */
                     DCHECKF(g_step_unit_over_seamless[g_step_unit] <= g_step_unit_over[g_step_unit],
-                            "arm %d offered no suspend point in %ld overrunning turn(s) against %ld "
-                            "overrunning turn(s) of that arm — the overrun is counted a few lines above this "
-                            "one from the SAME `g_step_unit`, so a subset larger than its own population is "
-                            "that name having been rewritten between the two lines",
+                            "arm %d offered no suspend point in %ld overrunning turn(s) against %ld overrunning "
+                            "turn(s) — both are counted from one turn's `g_step_unit`",
                             (int)g_step_unit, g_step_unit_over_seamless[g_step_unit],
                             g_step_unit_over[g_step_unit]);
                 } else {
@@ -10521,10 +10109,8 @@ static int engine_sched_slice(void) {
                            "`stepUnitOverrunAsks` reading taken after it is a wrapped total");
                     g_step_unit_over_asks[g_step_unit] += (long)(g_preempt_asked - pa_slice0);
                     DCHECKF((uint64_t)step_unit_over_asks_total() == g_over_asks,
-                            "the per-arm ask histogram does not account for every point offered by an "
-                            "overrunning turn (%llu arm counts against %llu in the scalar) — both are raised "
-                            "on these two lines from ONE turn's arm and ONE consultation delta, so a "
-                            "difference is a second raise site for one of them",
+                            "the per-arm ask histogram does not account for every point offered by an overrunning "
+                            "turn (%llu against %llu) — both are raised from one turn's arm and consultation delta",
                             (unsigned long long)step_unit_over_asks_total(),
                             (unsigned long long)g_over_asks);
                     /* And the widest interval inside this turn with no point offered, which the sum above is a
@@ -10544,11 +10130,9 @@ static int engine_sched_slice(void) {
                            turn whose worst no-offer stretch exceeds about 2147 seconds on a 32-bit host, an engine
                            hung for half an hour. */
                         DCHECK(gap <= (int64_t)LONG_MAX,
-                               "one turn's widest no-suspend-point stretch does not fit the `long` the "
-                               "step-unit row composer prints — that is about 2147 seconds in the slice's "
-                               "own measure inside a SINGLE turn, so either this engine has held the thread "
-                               "for half an hour without offering a point or the two readings the interval "
-                               "is taken between belong to different clocks");
+                               "one turn's widest no-suspend-point stretch does not fit a `long` (about 2147 seconds "
+                               "in one turn) — the two readings belong to different clocks, or the engine held the "
+                               "thread that long without a point");
                         if (gap > g_over_gap_us) g_over_gap_us = gap;
                         if ((long)gap > g_step_unit_over_gap[g_step_unit])
                             g_step_unit_over_gap[g_step_unit] = (long)gap;
@@ -10557,11 +10141,8 @@ static int engine_sched_slice(void) {
                            scalar is the arms' maximum. Asserted here, with the arm, the turn's readings and its
                            delta in hand. */
                         DCHECKF(step_unit_over_gap_max() == g_over_gap_us,
-                                "the per-arm worst-gap row and its scalar disagree (%ld against %lld) — both "
-                                "are folded from ONE turn's interval on the two lines above this one, and the "
-                                "fold is a MAXIMUM rather than a sum because a sum of maxima is a quantity no "
-                                "turn produced, so a difference is a second raise site for one of them or a "
-                                "row reset while its scalar was not",
+                                "the per-arm worst-gap row and its scalar disagree (%ld against %lld) — both are "
+                                "folded as maxima from one turn's interval",
                                 step_unit_over_gap_max(), (long long)g_over_gap_us);
                     }
                 }
@@ -10581,11 +10162,8 @@ static int engine_sched_slice(void) {
                the _Static_assert catches a narrowing at build time and this catches a clock that stopped being
                what the reading assumes, which together make solver/engine.h's paragraph a checked claim. */
             DCHECK(now - t0 <= INT64_MAX - g_step_us,
-                   "the dispatch loop's microsecond total would overflow — its charges are non-negative and it "
-                   "only climbs, so this is either a slice measure that has stopped being microseconds or an "
-                   "accumulator that has been narrowed under solver/engine.h's `step_us`; either way the "
-                   "census's `stepUs / steps` would read as CHEAP turns rather than as a broken number, which "
-                   "is the one reading that row exists to make and the direction it inverts to");
+                   "the dispatch loop's microsecond total would overflow — the slice measure is no longer "
+                   "microseconds or `step_us` was narrowed");
             g_step_us += now - t0;
             flow_age_running(now - t0);
 #if APICLIENT_DEV
@@ -10602,11 +10180,8 @@ static int engine_sched_slice(void) {
                charge under one quantum is exempt: it is below anything this scheduler decides, and the charges
                telescope. */
             DCHECK(now - t0 < (int64_t)ENGINE_QUANTUM_MS * 1000 || flow_silence_notch(cur) > age_notch0,
-                   "a flow consumed a whole COOPERATIVE QUANTUM of the thread and its rank did not move — the "
-                   "aging term is quantised coarser than the granularity at which the thread is handed over, "
-                   "so the pick that immediately follows this charge is made against a weight this charge did "
-                   "not touch, and a monopolizer is invisible to the ordering for as many picks as that unit "
-                   "is quanta wide");
+                   "a flow consumed a whole cooperative quantum and its rank did not move — the aging term is "
+                   "quantised coarser than the thread is handed over");
 #endif
             /* And the other term's charge, a count and not a clock: the optimism bonus is "∝ 1/(visits+1)", and a
              * visit is a completed unit of work (a program that ended, a job, a delivery, a lifecycle stage), never
@@ -10631,11 +10206,9 @@ static int engine_sched_slice(void) {
                without an arm, and a nested dispatch (a hook between the boundary and here that stepped a flow would
                move `g_steps` under a turn already charged, which `sum(arms) == steps` also fires on). */
             DCHECKF(g_units_done + g_unit_mid_program + g_unit_parked + g_unit_checkpoint_owed == g_steps,
-                    "the unit-of-work boundary's arms do not partition the dispatches (%ld ended + %ld "
-                    "mid-program + %ld parked + %ld checkpoint-owed against %ld steps) — the boundary is "
-                    "evaluated once per turn on a straight line from flow_step's return to this credit and "
-                    "`g_steps` is raised at that step's entry, so a difference is a clause added to the "
-                    "conjunction with no arm, or a dispatch that happened between the two",
+                    "the unit-of-work boundary's arms do not partition the dispatches (%ld ended + %ld mid-program + "
+                    "%ld parked + %ld checkpoint-owed against %ld steps) — a clause was added with no arm, or a "
+                    "dispatch happened between the two counts",
                     g_units_done, g_unit_mid_program, g_unit_parked, g_unit_checkpoint_owed, g_steps);
             /* The cooperative-quantum contract, asserted at its site. A flow_step must reach a suspend point (a
                bytecode back-edge where the preempt hook runs, a step machine's boundary) within the quantum, which
@@ -10679,9 +10252,8 @@ static int engine_sched_slice(void) {
                 if (quantum_measure_is_cpu() && (now - t0) > ENGINE_SEAMLESS_CPU_US && g_preempt_asked == pa0) {
                     /* Sized for the whole line: the fixed text alone is over 200 bytes before quantum_measure()'s
                        54, and `unit=` and `script_i=` are the fields that say where. */
-                    DFAILF("%d ms of THREAD CPU consumed in one step with NO suspend point offered (measure: "
-                           "%s; %ld units of work, which is why the work verdict cannot see this one) — this "
-                           "stretch has no suspend/resume seam; unit=%s script_i=%d",
+                    DFAILF("%d ms of thread CPU consumed in one step with no suspend point offered (measure: %s; %ld "
+                           "units of work) — this stretch has no suspend/resume seam; unit=%s script_i=%d",
                            (int)((now - t0) / 1000), quantum_measure(), work, step_unit_name(g_step_unit),
                            cur ? cur->script_i : -1);
                 }
@@ -10731,13 +10303,11 @@ static int engine_sched_slice(void) {
                        line of source text rather than escapes (check.h escapes what it emits regardless). */
                     excerpt(pl_txt, sizeof pl_txt, pl, pl ? strlen(pl) : 0);
                     excerpt(body_txt, sizeof body_txt, bodytxt, bodyn);
-                    DFAILF("%ld units of work (forks+flows+jobs) with NO suspend point offered "
-                           "(wall gap %d ms, step ran %d ms — reported, NOT the verdict; the slice's own "
-                           "measure here is %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest "
-                           "Web API member step: %s %dms of %dms over %ld member steps; wrapper map "
-                           "%ld/%ld; live objects %lld, heap %lld KiB) — this stretch has no "
-                           "suspend/resume seam; unit=%s script_i=%d "
-                           "flow=%s payload=%s body=%s",
+                    DFAILF("%ld units of work (forks+flows+jobs) with no suspend point offered (wall gap %d ms, step "
+                           "%d ms; slice measure %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest Web "
+                           "API member step %s %dms of %dms over %ld steps; wrapper map %ld/%ld; live objects %lld, "
+                           "heap %lld KiB) — this stretch has no suspend/resume seam; unit=%s script_i=%d flow=%s "
+                           "payload=%s body=%s",
                            work, (int)gap, (int)spent, quantum_measure(),
                            (unsigned long long)(g_preempt_asked - pa0),
                            (unsigned long long)(pq - pq0),
@@ -10787,14 +10357,9 @@ static int engine_sched_slice(void) {
                  * so this is asked per flow, when the mark is made. */
                 DCHECK(pending_host_outstanding(cur->pending) ||
                        pending_declined_outstanding(cur->pending) || g_referenced,
-                       "a flow was marked host-owed while its mark rests on NOTHING — every entry on its "
-                       "register has already been ANSWERED, so no host event can clear this mark and the flow "
-                       "is out of the pick for the rest of the session with its whole timeline unexplored. A "
-                       "deliverable answered entry is taken by the delivery arm above this one, so what "
-                       "reached here is an entry the host settled and nothing will settle again: find why that "
-                       "delivery did not happen. A REFUSED entry is NOT this state — it is owed to the flow "
-                       "and owed by nobody, it is a park the session writes to the cold tier before it closes, "
-                       "and it satisfies the clause beside this one");
+                       "a flow was marked host-owed while every entry on its register is answered — no host event "
+                       "can clear the mark; find why the delivery arm above did not take the answered entry (a "
+                       "refused entry is a different, legal state)");
                 flow_set_host_owed(cur);
             }
             /* Nothing is cleared by progress: no step can answer another flow's wait, since every kind on the
@@ -10847,13 +10412,9 @@ static int engine_sched_slice(void) {
             }
             else {
                 DCHECK(flow_at(cur->reg_i) == cur,
-                       "the yield decision skipped its own third arm on an incumbent the registry does not "
-                       "hold — the skip is sound because a live unmarked member is weighed by the runnable "
-                       "pick, so `top` is at least this flow's weight and the arm could not have fired; a "
-                       "flow that has LEFT the frontier is weighed by nobody, the bound is gone, and this "
-                       "engine will hold the thread past the host's floor with nothing saying so. Either "
-                       "`cur` outlived a flow_remove that should have cleared it, or its registry handle "
-                       "and the registry have come apart");
+                       "the yield decision skipped its third arm on an incumbent the registry does not hold — the "
+                       "skip is sound only for a live member, so `cur` outlived its flow_remove or its registry "
+                       "handle is stale");
             }
             /* The other closing edge of a turn, discharged without buying a return (@PERWORLD): a yield hands the
                host this member standing, with its deltas applied and a step of real work behind it, which is the
@@ -10888,11 +10449,8 @@ static int engine_sched_slice(void) {
            entries are still outstanding to their flows. What this walk catches is a member holding nothing at all,
            a mark laid on a flow that could still progress, which the mark's own assert cannot see. */
         DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced,
-               "the frontier reported a STALL while one of its members was waiting on NOTHING — every entry on "
-               "its register has been answered and delivered, so its mark was laid down while it still had "
-               "work to do and the exploration of that timeline stops here for no reason at all. A member "
-               "parked on a REFUSAL is not this state: a refused entry is still outstanding to its own flow, "
-               "so it satisfies this and is carried out to the cold tier rather than caught here");
+               "the frontier reported a stall while a member waits on nothing — every entry on its register is "
+               "answered and delivered, so its mark was laid while it still had work");
     }
     /* STALLED, not exhausted: the run queue is empty but flows are parked on something only the host can supply.
        Asked before closing, so the session and every parked snapshot stay live and the host steps again once it
@@ -10910,14 +10468,13 @@ static int engine_sched_slice(void) {
     /* Every reaction routes to its enqueuing flow's queue through the enqueue hook, so a job on quickjs's global
        list was enqueued outside a flow and nothing will run it. */
     DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
-           "async: a job reached the global list (enqueued outside a flow) but was never drained");
+           "async: a job reached the global list (enqueued outside a flow) and was never drained");
     /* The same rule one level up, over the flows' own queues. flow_step asserts a flow may not finish holding work,
        but the loop above can also leave with flows alive (every member host-owed, none pickable), and a reaction on
        one of their queues would die with the session. */
     for (int i = 0; i < flow_count(); i++) {
         DCHECK(flow_job_pending(flow_at(i)) == 0,
-               "the frontier was declared exhausted while a live flow still held queued jobs — its promise "
-               "reactions, timer callbacks and delivered messages die with the session");
+               "the frontier was declared exhausted while a live flow still holds queued jobs");
         /* Named residual. Not covered: the two asserts in this loop forbid states the park below handles.
            `flow_job_pending == 0` forbids a state cold_park_flow's banner argues is correct (a job the replay
            re-causes rides the recipe; only flow_job_external is refused there), and `flow_deliver_pending == 0`
@@ -10935,8 +10492,7 @@ static int engine_sched_slice(void) {
            frame is the shape that reaches here holding one (deliveries are made only where flow_step has no
            frame), so if this fires, the enqueue belongs earlier than that branch. */
         DCHECK(flow_deliver_pending(flow_at(i)) == 0,
-               "the frontier was declared exhausted while a live flow still held routed records — a peer's "
-               "message this document never received, dropped with the session");
+               "the frontier was declared exhausted while a live flow still holds routed records");
     }
     /* The conservation law over the deliveries that became tasks. The asserts above are each about one queue at
        one moment; this is the only line that can say every queued §9.3.3 task reached an end, a fact about a run.
@@ -10951,13 +10507,8 @@ static int engine_sched_slice(void) {
         engine_routed_task_census(ends);
         for (int i = 0; i < ROUTED_TASK_END_N; i++) sum += ends[i];
         DCHECK(sum >= g_routed_delivered,
-               "the frontier was declared exhausted with FEWER §9.3.3 delivery-task ends than deliveries — a "
-               "routed record became a task on a receiving timeline's queue (flow_deliver asserts exactly one) "
-               "and that task never ran, so a peer's message was dropped by the SCHEDULER rather than reaching "
-               "any of the three ends on which delivering nothing is correct (§9.3.3 step 8.1's targetOrigin "
-               "check, a target Document §7.5.10 destroyed, and the task's own abrupt completion). It is the "
-               "one outcome that is a defect: find the queue it is standing on and why that flow was never "
-               "picked");
+               "the frontier was declared exhausted with fewer §9.3.3 delivery-task ends than deliveries — a "
+               "delivery task never ran; find the queue it stands on and why that flow was never picked");
         (void)sum;
     }
     /* And the conservation law one level up, over records rather than tasks. Everything above is per (record,
@@ -10981,21 +10532,10 @@ static int engine_sched_slice(void) {
 
         engine_routed_census(&d, &r, &zero);
         DCHECK(zero == 0,
-               "the frontier was declared exhausted holding routed records that NO TIMELINE of this document "
-               "ever admitted — every attachment has been consumed (the walk above asserts no live flow holds "
-               "one and flow_finish asserts it of every flow that ended), so each of these was refused by "
-               "every timeline it was offered to and the peer's message is simply gone, which the page cannot "
-               "tell from a message that was never sent. Each refusal happened at deliver_admits, on one of "
-               "three rows, and the census says which: a RECEIVED world CONTRADICTS it and the arm that "
-               "should take it was never minted; a FORECLOSED world covers it and the parent that took that "
-               "world refused it for a reason of its own; or a cross-instance ANSWER world contradicts it and "
-               "the arm for that peer's other timeline is OWED by flow_answer_fork and was never minted, "
-               "because the peer never answered again. The third is the one this line is the ONLY witness "
-               "for — `routed-delivery-an-arm-is-owed` says at the refusal that the record COULD be lost and "
-               "this says that it WAS. Find which by reading the step-unit histogram first and then "
-               "re-running the routed world vectors through deliver_admits; for the first two the answer is a "
-               "property of the vectors alone, and for the third it is a property of how many timelines the "
-               "peer answered from");
+               "the frontier was declared exhausted holding routed records no timeline of this document admitted — "
+               "each was refused at deliver_admits by a received world that contradicts it, a foreclosed world that "
+               "covers it, or an answer world whose arm flow_answer_fork owes; re-run the routed world vectors "
+               "through deliver_admits to see which");
         (void)zero;
     }
     /* A session that closes over live members writes them down first: the walks above are about work a member
@@ -11017,11 +10557,8 @@ static int engine_sched_slice(void) {
        its recipe written; otherwise its timeline ends with the process while `live` counted it and the result
        document names no residue. */
     DCHECK(flow_count() == 0 || engine_frontier_paged(),
-           "the session closed over LIVE members whose recipes were never written — every one of them holds a "
-           "snapshot, a COW delta and an unexplored timeline, and the instance teardown is about to free them "
-           "with nothing anywhere naming the loss. A resting member is deprioritized and PAGED, never dropped; "
-           "if a new exit reaches this line it takes the park above it, and if it must not, it is not an exit "
-           "that may close a session holding members");
+           "the session closed over live members whose recipes were never written — a resting member is paged, never "
+           "dropped, so a new exit must take the park above");
     engine_session_close();
     return ENGINE_STEP_DONE;
 }
@@ -11064,10 +10601,8 @@ int engine_sched_step(void) {
        before the first slice returns, which is what the flag says. */
     if (g_slice_exit_set) {
         DCHECKF(t_in >= g_slice_exit_us,
-                "solver/engine.c: this slice opened at %lld, BEFORE the previous one returned at %lld — the "
-                "two are readings of one thread clock taken in program order, so this is a measure that has "
-                "stopped being monotone and `betweenSlicesUs` is about to be charged a negative gap, which "
-                "reads as a host that gave the engine more thread than there was",
+                "solver/engine.c: this slice opened at %lld, before the previous one returned at %lld — the thread "
+                "clock is no longer monotone",
                 (long long)t_in, (long long)g_slice_exit_us);
         DCHECK(t_in - g_slice_exit_us <= INT64_MAX - g_between_us,
                "the host's between-slice total would overflow — its charges are non-negative and it only "
@@ -11134,15 +10669,12 @@ int engine_sched_step(void) {
         int64_t t_out = quantum_thread_us();
 
         DCHECKF(t_out >= t_in,
-                "solver/engine.c: this slice closed at %lld, BEFORE it opened at %lld — two readings of one "
-                "thread clock taken in program order, so this is a measure that has stopped being monotone "
-                "and `loopUs` is about to be charged a negative span",
+                "solver/engine.c: this slice closed at %lld, before it opened at %lld — the thread clock is no "
+                "longer monotone",
                 (long long)t_out, (long long)t_in);
         DCHECK(t_out - t_in <= INT64_MAX - g_loop_us,
-               "the dispatch loop's slice-span total would overflow — its charges are non-negative and it "
-               "only climbs, so this is a slice measure that has stopped being microseconds or an accumulator "
-               "narrowed under solver/engine.h's `loop_us`; the reading it feeds does not go absent, it "
-               "INVERTS, and a negative `loopUs` reads as an engine that was never given the thread");
+               "the dispatch loop's slice-span total would overflow — the slice measure is no longer microseconds or "
+               "`loop_us` was narrowed");
         g_loop_us += t_out - t_in;
         /* Carried for the next slice's gap, so the host's time between slices is measured from a reading already
            taken. */
@@ -11193,8 +10725,7 @@ size_t engine_c_alloc_arena(void)
    tier's byte census, the WFQ's order) is composed beside it in solver/result.c. */
 void engine_frontier_census(EngineFrontierCensus *out)
 {
-    DCHECK(out != NULL, "the frontier census was asked for into no record — a reading of an instant that lands "
-                        "nowhere is a census whose caller cannot have taken it at one instant");
+    DCHECK(out != NULL, "the frontier census was asked for into no record");
     out->finished          = g_finished;
     out->finished_flows    = g_finished_flows;
     out->finished_cands    = g_finished_cands;
@@ -11246,17 +10777,12 @@ void engine_frontier_census(EngineFrontierCensus *out)
        this catches a retirement or sale added later without stating which population it moved. `finished` and
        `sold` are instance lifetime totals, so no session boundary separates a total from its arms. */
     DCHECKF(out->finished_flows + out->finished_cands == out->finished,
-            "the frontier census's retirement rows do not partition its retirement total (%ld exploration + "
-            "%ld candidate against %ld finished) — every member is on exactly one side of `Flow.cand_src` for "
-            "the whole of its life, so a difference is a flow_finish that moved the total without saying which "
-            "population retired. Both halves are written at one line in flow_finish; a second retirement path "
-            "is what this fires on",
+            "the census's retirement rows do not partition its retirement total (%ld exploration + %ld candidate "
+            "against %ld finished) — flow_finish writes both halves at one line, so a second retirement path exists",
             out->finished_flows, out->finished_cands, out->finished);
     DCHECKF(out->sold_flows + out->sold_cands == out->sold,
-            "the frontier census's sale rows do not partition its sale total (%ld exploration + %ld candidate "
-            "against %ld sold) — see the retirement assert above; the label is read BEFORE flow_release frees "
-            "it, so a sale path that reads it afterwards gets freed memory rather than a wrong count and this "
-            "is where that shows",
+            "the census's sale rows do not partition its sale total (%ld exploration + %ld candidate against %ld "
+            "sold) — the label is read before flow_release frees it",
             out->sold_flows, out->sold_cands, out->sold);
     /* And the two totals partition the frontier's departures, one level up: without this, the frontier's departure
        count and this file's retirement totals are three numbers in two censuses with no identity between them, and
@@ -11269,11 +10795,8 @@ void engine_frontier_census(EngineFrontierCensus *out)
        but keeps the identity true at every instant. It catches a departure path added later without an arm, which
        any reclamation gated on something other than completion would be. */
     DCHECKF(out->finished + out->sold + (long)flow_departures_teardown() == (long)flow_departures(),
-            "the frontier's departure causes do not partition its departure count (%ld finished + %ld sold + "
-            "%lld gone with the registry against %lld departures) — flow_remove is the one line a member ever "
-            "leaves the frontier on and flow_release is its one caller, so a difference is a FOURTH exit that "
-            "moved the total without crediting an arm, and every reading composed from these rows is then "
-            "about a frontier whose members are not all accounted for",
+            "the frontier's departure causes do not partition its departures (%ld finished + %ld sold + %lld with "
+            "the registry against %lld) — flow_release is flow_remove's one caller, so a fourth exit moved the total",
             out->finished, out->sold,
             (long long)flow_departures_teardown(), (long long)flow_departures());
     /* And the seed table's partition, about a table built once per session: `held` is a row whose source text this
@@ -11292,53 +10815,40 @@ void engine_frontier_census(EngineFrontierCensus *out)
        `prog_starts_cand` counts starts across timelines, and a fork copies an unstarted row into its arm, so
        starts above asks is that copy; an inequality between them would fire on a healthy branch. */
     DCHECKF(out->prog_starts_cand + out->prog_starts_other == out->prog_starts,
-            "the frontier census's program-start rows do not partition its start total (%ld candidate + %ld "
-            "other against %ld starts) — a start is of exactly ONE row and that row's kind is read on the line "
-            "beside the total, so a difference is a second place a program can start that moved the total "
-            "without saying which population it moved",
+            "the census's program-start rows do not partition its start total (%ld candidate + %ld other against %ld "
+            "starts) — each start is one row's, classified beside the total",
             out->prog_starts_cand, out->prog_starts_other, out->prog_starts);
     /* And the two reply doors' own pairs, asserted where all five rows are read together: each door's queue is a
        subset of the replies it examined (both raises happen in one straight-line block for one reply, with no fork
        between), so a queued count above its ask count is a door that raised its queued arm and not its ask. */
     DCHECKF(out->net_prog_fetch_queued <= out->net_prog_fetch_asks,
-            "the fetch() reply door queued more programs than it was shown replies (%ld queued against %ld "
-            "asks) — both are raised in one straight-line block for one reply record, so the queue side is a "
-            "SUBSET by construction and a door that raises engine_note_net_prog_fetch_queued without having "
-            "raised the ask is about to publish a numerator with no denominator under it",
+            "the fetch() reply door queued more programs than it was shown replies (%ld against %ld) — both are "
+            "raised in one block per reply record",
             out->net_prog_fetch_queued, out->net_prog_fetch_asks);
     DCHECKF(out->net_prog_xhr_queued <= out->net_prog_xhr_asks,
-            "the XMLHttpRequest reply door queued more programs than it was shown replies (%ld queued against "
-            "%ld asks) — both are raised in one straight-line block for one reply record, so the queue side "
-            "is a SUBSET by construction and a door that raises engine_note_net_prog_xhr_queued without "
-            "having raised the ask is about to publish a numerator with no denominator under it",
+            "the XMLHttpRequest reply door queued more programs than it was shown replies (%ld against %ld) — both "
+            "are raised in one block per reply record",
             out->net_prog_xhr_queued, out->net_prog_xhr_asks);
     /* And the two arms against the one entry, an inequality: `engine_queue_fetched_script` raises the total and
        has a third caller, test_forced.c's `loadScript` host edge standing in for a `<script src>`-shaped door, so
        the residue is read, not required to be zero. An arm above the total is a door that queued a program without
        going through the one compile entry, a second compile door. */
     DCHECKF(out->net_prog_fetch_queued + out->net_prog_xhr_queued <= out->net_prog_queued,
-            "the reply doors' queued arms exceed the programs the one compile entry built (%ld fetch + %ld "
-            "xhr against %ld at engine_queue_fetched_script) — a door crediting itself with a program that "
-            "entry never saw has queued it somewhere else, which is a SECOND compile door beside the working "
-            "one and is what these rows exist to make visible",
+            "the reply doors' queued programs exceed those the one compile entry built (%ld fetch + %ld xhr against "
+            "%ld at engine_queue_fetched_script) — a door queued a program through a second compile door",
             out->net_prog_fetch_queued, out->net_prog_xhr_queued, out->net_prog_queued);
     /* And the refusal edge's own partition, which makes a zero `sold` readable: every engine_reclaim_tail call
        leaves by one of three doors (declined because the safepoint is unarmed, answered at the floor, a sale of one
        flow), so the arms are the whole of the asks, and this catches a fourth door added without a counter. `asks`
        alone separates "the allocator never refused" from "the pager was consulted and could do nothing". */
     DCHECKF(out->paged_unarmed + out->paged_floor + out->sold == out->paged_asks,
-            "the frontier census's reclaim rows do not partition the asks the allocator made (%ld unarmed + "
-            "%ld at the floor + %ld sold against %ld asked) — engine_reclaim_tail returns through exactly "
-            "three doors and each counts itself on the line it leaves by, so a difference is a fourth exit "
-            "added without a counter and every reading of the pager's behaviour is now attributing those "
-            "refusals to a door they did not go through",
+            "the census's reclaim rows do not partition the allocator's asks (%ld unarmed + %ld at the floor + %ld "
+            "sold against %ld) — engine_reclaim_tail has three exits that each count themselves",
             out->paged_unarmed, out->paged_floor, out->sold, out->paged_asks);
     DCHECKF(out->host_answered <= out->host_asked,
-            "the frontier census was taken with more host answers (%ld) than host asks (%ld) — the two count "
-            "one population (an id this instance minted, and the ONE delivery that settled it), so "
-            "`answered > asked` means either an id was minted outside mint_req and never counted as an ask, "
-            "or one request was credited as settled twice — a second peer TIMELINE's answer is not a second "
-            "payment and belongs in hostAnswersExtra (%ld), which is where the multi-timeline case goes",
+            "the census counts more host answers (%ld) than host asks (%ld) — an id was minted outside mint_req, or "
+            "a request was credited as settled twice (a second peer timeline's answer belongs in hostAnswersExtra, "
+            "%ld)",
             out->host_answered, out->host_asked, out->host_answers_extra);
 }
 
@@ -11385,9 +10895,7 @@ int engine_census_emit(void)
        frontier, the pager's tables, the runtime behind `g_sess_ctx`), so a census outside a live session is about
        nothing, and `result_heap_json`'s null check would report it one component later as a missing runtime. */
     DCHECK(g_sess_live && g_sess_ctx != NULL,
-           "a census was asked for with no live session — every row of these five lines is a walk of the "
-           "frontier, the pager and the runtime this session holds, so a host asking here is reporting on "
-           "state that has been torn down or was never seeded");
+           "a census was asked for with no live session — every row is a walk of state the session holds");
 
     /* Either enough work has happened to be worth a line, or the search grew: a new candidate changes what the
        rest of the run will cost. */
@@ -11506,10 +11014,8 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                write to them captured; with its capture route up every field the provider writes would be recorded
                as a creation in that flow's head and deleted by its next unapply, delivering an empty record. */
             DCHECK(JS_FlowGen() == 0 && cow_current() == NULL,
-                   "the host is being paid with the last flow's generation or its capture route still up — "
-                   "every object the provider now builds either belongs to that flow (so nobody else's write "
-                   "to it is ever captured) or has its every field recorded as a CREATION in that flow's head, "
-                   "which the next context switch deletes: the record arrives at its delivery empty");
+                   "the host is being paid with the last flow's generation or capture route still up — every object "
+                   "the provider builds would belong to that flow");
             int filled = g_provider ? g_provider(ctx) : 0;
             /* And the provider is its own segment: the host's time has two halves that fail in different places,
                the provider, which builds JS values (a reply record, a peer's answer, a cross-agent operation's
@@ -11525,10 +11031,8 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                unconditional, since both are empty on a slice with nothing outstanding too. */
             if (g_provider) {
                 DCHECK(*engine_host_requests() == '\0',
-                       "the smoke host paid and a SYNCHRONOUS request is still outstanding — this provider "
-                       "answers every record it is handed out of its own tables, so the flow blocked on this "
-                       "one is parked at a call site nothing is going to resume, and its whole timeline is lost "
-                       "with nothing but a `blocked` count to say which record it was");
+                       "the smoke host paid and a synchronous request is still outstanding — this provider answers "
+                       "every record it is handed, so the blocked flow will never resume");
                 DCHECK(*engine_pending_fetches() == '\0',
                        "the smoke host paid and a reply is still owed — the same silence one register over: the "
                        "flow that issued this fetch keeps its snapshot and its continuation and is never handed "
@@ -11579,12 +11083,9 @@ static int g_frontier_released;
 /* See solver/engine.h: the frontier goes down while the browser is still standing. */
 void solver_frontier_free(JSContext *ctx)
 {
-    DCHECK(ctx != NULL, "the frontier was released against no realm — its flows hold JSValues and its deltas "
-                        "hold the writes those flows made, so there is a realm they belong to and a release "
-                        "with none would drop them against nothing");
+    DCHECK(ctx != NULL, "the frontier was released against no realm");
     DCHECK(!g_frontier_released,
-           "the frontier was released twice in one agent — the second call walks a registry the first already "
-           "freed, and every flow it would have named is one the first call already tore down");
+           "the frontier was released twice in one agent");
     /* The @S searches go back before the frontier, and the order is the reason. A search takes a reference on the
        decision chain when its sink is detected (add_pending's decide_freeze_path, the re-injection point later
        candidates are seeded from), held neither by a flow nor by the running flow's globals. flow_registry_free
@@ -11602,17 +11103,14 @@ void solver_frontier_free(JSContext *ctx)
 /* See solver/engine.h — the solver half's release column, in reverse dependency order. */
 void solver_agent_free(JSContext *ctx)
 {
-    DCHECK(ctx != NULL, "the solver's agent state was released against no realm — the frontier's flows hold "
-                        "JSValues and its deltas hold the writes those flows made, so there is a realm they "
-                        "belong to and a release with none would drop them against nothing");
+    DCHECK(ctx != NULL, "the solver's agent state was released against no realm");
     /* The frontier is already gone, and went while the browser was still standing (solver_frontier_free in
        solver/engine.h; core/platform.c's census assert is the other end). Reaching here with it live means the
        flows torn down after the lines below would be suspended inside browser components platform_agent_free has
        already finished with. */
     DCHECK(g_frontier_released,
-           "the solver's agent state was released with the FRONTIER STILL LIVE — a suspended flow is a live "
-           "activation of the browser, so its teardown re-enters the very components platform_agent_free has "
-           "already given back; call solver_frontier_free BEFORE platform_agent_free and this after it");
+           "the solver's agent state was released with the frontier still live — call solver_frontier_free before "
+           "platform_agent_free, and this after it");
     /* Nothing of the browser half is still registered here, an ordering statement: each slot holds a C function
        pointer into a browser component, every one released by platform_agent_free before this call, so a slot
        still set is a callback into released state, invisible to both of JS_FreeRuntime's censuses
@@ -11620,8 +11118,7 @@ void solver_agent_free(JSContext *ctx)
        this asserts that it did. */
     DCHECK(g_timer_hook == NULL,
            "§8.1.7's timer step was still registered when the solver's agent state was released — "
-           "core/timing/timer.c claimed it and gives it back at timer_free, which is a row on "
-           "core/platform.h's release column and therefore runs first");
+           "core/timing/timer.c gives it back at timer_free, which runs first");
     DCHECK(g_rendering_hook == NULL,
            "§8.1.7.3's in-parallel half was still registered when the solver's agent state was released — "
            "core/rendering/rendering.c claimed it and gives it back at rendering_free");
@@ -11635,14 +11132,11 @@ void solver_agent_free(JSContext *ctx)
            "the wrapper-census hook was still registered when the solver's agent state was released — "
            "core/dom/node.c claimed it and gives it back at node_free, under the `element` row's cascade");
     DCHECK(g_docdone_hook == NULL,
-           "§13.2.7's document-load lifecycle step was still registered when the solver's agent state was "
-           "released — core/dom/document.c claimed it at document_init and gives it back at "
-           "document_agent_free, which is a row on core/platform.h's release column and therefore runs first");
+           "§13.2.7's document-load lifecycle step was still registered when the solver's agent state was released — "
+           "core/dom/document.c gives it back at document_agent_free, which runs first");
     DCHECK(g_link_connected_hook == NULL,
-           "§4.6.8.20's connected time for parsed link elements was still registered when the solver's agent "
-           "state was released — core/html/html_link.c claimed it at html_link_declare and gives it back at "
-           "html_link_free, which html_element_free calls and core/dom/element.c drives from platform.h's "
-           "release column, and that column runs in full before this one");
+           "§4.6.8.20's connected time for parsed link elements was still registered when the solver's agent state "
+           "was released — html_link_free gives it back, and platform.h's release column runs first");
     /* The orphan counters and the generation they last walked at, given back with the frontier they describe.
        `g_orphans_driven` names nothing (engine_orphan_call names each unknown `{orphan<locator>.argN}` from
        JS_OrphanHash, a fact about the bundle, and two drives of one body sharing the name is correct), so like
