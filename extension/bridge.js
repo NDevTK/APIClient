@@ -1053,11 +1053,12 @@ function frontierPlace(e, when) {
 function frontierProvenance(e) {
   return e.provenance === undefined ? PROVENANCE_DERIVED : e.provenance;
 }
-/* The record a request from instance `eng` is judged against, given the documents the engine names as asking
-   it: the meet of their records (lib/document-record.js's docRecordOfAsker and docRecordMeet), or null when a
-   name is not a document of `eng`, which refuses the request. A name another live instance holds is that
-   instance's; one no instance holds is walked to its creator. */
-function askerRecord(eng, names) {
+/* The record a request or notice from instance `eng` is judged against, given the documents the engine names
+   in `role` (lib/document-record.js's docRecordAskerRefusal): the meet of their records (docRecordOfAsker,
+   docRecordMeet) as `{doc, refusal: null}`, or `{doc: null, refusal}` naming the first that is not a document
+   of `eng`, which refuses it. A name another live instance holds is that instance's; one no instance holds is
+   walked to its creator. */
+function askerRecord(eng, names, role) {
   const lookup = (n) => {
     if (eng.records.has(n)) return eng.records.get(n);
     const h = hostHolderOf(n);
@@ -1065,20 +1066,28 @@ function askerRecord(eng, names) {
                      "engineJoin write the record beside the name");
     return h === null ? undefined : false;
   };
-  const recs = names.map((n) => docRecordOfAsker(n, lookup));
-  return recs.indexOf(null) >= 0 ? null : docRecordMeet(recs);
+  const recs = [];
+  for (const n of names) {
+    const r = docRecordOfAsker(n, lookup);
+    if (r.refusal) return { doc: null, refusal: docRecordAskerRefusal(role, r.refusal, n) };
+    recs.push(r.doc);
+  }
+  return { doc: docRecordMeet(recs), refusal: null };
 }
 /* The records a provisioning notice of instance `eng` is judged by. `issuer` is the issuing document (HTML
    §7.4.2.2's sourceDocument, or the declaring document of a route), whose record the load is decided under.
    `minted` is the new document's name for a navigation, which the engine mints from the navigable's current
    document; that document's record joins the issuer's in `from`, so the new document keeps every flag and mark
-   its navigable carries. Null when either is not a document of `eng`. */
+   its navigable carries. A refusal names whichever of the two failed. */
 function issuedRecords(eng, issuer, minted) {
-  const issuerDoc = askerRecord(eng, [issuer]);
-  if (issuerDoc === null || minted === null) return issuerDoc === null ? null : { issuerDoc, from: issuerDoc };
+  const iss = askerRecord(eng, [issuer], "issuer");
+  if (iss.refusal) return { refusal: iss.refusal };
+  if (minted === null) return { issuerDoc: iss.doc, from: iss.doc, refusal: null };
   const outgoing = docRecordNameParent(minted);
-  const navDoc = outgoing === null ? null : askerRecord(eng, [outgoing]);
-  return navDoc === null ? null : { issuerDoc, from: docRecordJoin(issuerDoc, navDoc) };
+  if (outgoing === null) return { refusal: docRecordAskerRefusal("document", "not-minted", minted) };
+  const nav = askerRecord(eng, [outgoing], "navigable");
+  if (nav.refusal) return { refusal: nav.refusal };
+  return { issuerDoc: iss.doc, from: docRecordJoin(iss.doc, nav.doc), refusal: null };
 }
 /* A top-level document provisioned by a navigation (a swap, a navigation into a peer, a declared route): the
    record `from` (issuedRecords) joined with the navigation's own words and no flags of its own, so it keeps the
@@ -1086,9 +1095,6 @@ function issuedRecords(eng, issuer, minted) {
 function childDocRecord(from, provenance, driven, pinned) {
   return docRecordJoin(from, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
 }
-/* The decline token for a request whose asker is no document of its instance: one word, so the egress
-   histogram stays over a closed set. */
-const ASKER_REFUSAL = "blocked-asker:not-in-instance";
 /* A document's principal: HTML §7.3.2.1's determine the origin returns a new opaque origin when its record
    carries the sandboxed origin browsing context flag, and `origin` (the URL's, or the browser-stated one)
    otherwise. The opaque one is `_senderOrigin`'s "null:<uuid>" shape, unique per document, so clusterKeyOf
@@ -2845,7 +2851,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, driven, credentials, mode, referrerPolicy,
-                         referrer, doc) => {
+                         referrer, asked) => {
     DCHECK(pinned === "pinned" || pinned === "unpinned",
            "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
            "`pinned` or `unpinned` on every line of the pending join, and the chokepoint reads it WITH the " +
@@ -2871,9 +2877,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     /* The method half of the firing question is asked of the chokepoint (`safeFetchMethodRefusal`), so this
        host and engine/trusted.mjs answer it once, in the chokepoint's refusal vocabulary, and the flow stays
        parked rather than being told the server was unreachable. */
-    /* The asking documents' record (askerRecord), null when the engine named a document that is not one of this
-       instance's, which no record here can judge. */
-    if (doc === null) return { refusal: { kind: "decline", reason: ASKER_REFUSAL } };
+    /* The asking documents' judgement (askerRecord). A refusal declines under its closed token, which the
+       egress histogram counts, and its sentence names the document that is not one of this instance's. */
+    if (asked.refusal) {
+      console.warn("[bridge] " + method + " " + u + " is refused: " + asked.refusal.text);
+      return { refusal: { kind: "decline", reason: asked.refusal.token } };
+    }
+    const doc = asked.doc;
     DCHECK(docRecordIs(doc), "a pending request reached the fetch relay with no asking document's record");
     const _mRefusal = self.safeFetchMethodRefusal(method);
     if (_mRefusal) return { refusal: _mRefusal };
@@ -3729,7 +3739,7 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     issued += engineIssue(eng, key,
       () => { eng._egress.asked++;
               return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
-                                 referrerPolicy, referrer, askerRecord(eng, askers)); },
+                                 referrerPolicy, referrer, askerRecord(eng, askers, "asker")); },
       (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
   }
   return issued;
@@ -3761,7 +3771,8 @@ async function engineDeliverReply(eng, method, mode, referrerPolicy, referrer, u
     /* Counted per whole token, never parsed: safe-fetch.js composes `blocked-signal:<name>=<value>` from the
        signal it walked, so the histogram is per signal by construction, and matching `statusText` would be a
        second copy of the policy. The decline family's tokens come from closed sets (`_SIGNALS` and their
-       values, `_DESTRUCTIVE`'s words, Fetch §2.2.5's destinations), so no address or origin reaches this map.
+       values, `_DESTRUCTIVE`'s words, Fetch §2.2.5's destinations, lib/document-record.js's
+       `_ASKER_REFUSALS`), so no address, origin or document name reaches this map.
        The `network` family (refusals a browser also makes, some carrying an origin) is not counted here. A
        first occurrence is inserted, never read through a default. */
     const _tok = answer.refusal.reason;
@@ -3895,13 +3906,14 @@ async function hostNotice(eng, line) {
        record of the child's own descendants walks. A navigable with no parent is an auxiliary one, which
        §7.3.1.7 does not create at all under the creator's sandboxed auxiliary navigation flag; that notice is
        refused here, whatever the engine decided. */
-    const _creatorDoc = askerRecord(eng, [f[C.creator]]);
-    if (_creatorDoc === null || docRecordNameParent(f[C.child]) !== f[C.creator]) {
-      console.warn("[bridge] navigable.create " + f[C.child] + " is refused: " + (_creatorDoc === null
-        ? "its creator " + f[C.creator] + " is no document of the creating instance"
-        : "its name is not minted from its creator " + f[C.creator]));
+    const _created = askerRecord(eng, [f[C.creator]], "creator");
+    const _createRefusal = _created.refusal || (docRecordNameParent(f[C.child]) !== f[C.creator]
+      ? docRecordAskerRefusal("child", "not-minted", f[C.child]) : null);
+    if (_createRefusal) {
+      console.warn("[bridge] navigable.create " + f[C.child] + " is refused: " + _createRefusal.text);
       return;
     }
+    const _creatorDoc = _created.doc;
     const _childOwn = docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
     const _childDoc = f[C.parent] === "u" ? docRecordAuxiliary(_creatorDoc, _childOwn)
                                           : docRecordJoin(_creatorDoc, _childOwn);
@@ -4127,9 +4139,8 @@ async function hostNotice(eng, line) {
     /* The issuing document's record and the navigable's (issuedRecords) joined with the notice's words; a
        notice naming a document that is not this instance's is refused, as a request is. */
     const _swapFrom = issuedRecords(eng, f[P.issuer], f[P.document]);
-    if (_swapFrom === null) {
-      console.warn("[bridge] navigable.swap " + f[P.document] + " is refused: its issuer " + f[P.issuer] +
-                   " or its navigable's document is no document of the swapping instance");
+    if (_swapFrom.refusal) {
+      console.warn("[bridge] navigable.swap " + f[P.document] + " is refused: " + _swapFrom.refusal.text);
       return;
     }
     const _swapDoc = childDocRecord(_swapFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
@@ -4193,9 +4204,8 @@ async function hostNotice(eng, line) {
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
     /* The records, as for a swap. */
     const _navFrom = issuedRecords(eng, f[P.issuer], f[P.document]);
-    if (_navFrom === null) {
-      console.warn("[bridge] navigable.navigate " + f[P.document] + " is refused: its issuer " + f[P.issuer] +
-                   " or its navigable's document is no document of the navigating instance");
+    if (_navFrom.refusal) {
+      console.warn("[bridge] navigable.navigate " + f[P.document] + " is refused: " + _navFrom.refusal.text);
       return;
     }
     const _navDoc = childDocRecord(_navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
@@ -4279,9 +4289,8 @@ async function hostNotice(eng, line) {
     /* `doc` is the declaring document's record (issuedRecords), since this asks about a request issued by that
        document; a declaration naming a document that is not this instance's is refused, as a request is. */
     const _seedFrom = issuedRecords(eng, f[5], null);
-    if (_seedFrom === null) {
-      console.warn("[bridge] a route declaration for `" + f[1] + "` is refused: its declaring document " + f[5] +
-                   " is no document of the declaring instance");
+    if (_seedFrom.refusal) {
+      console.warn("[bridge] a route declaration for `" + f[1] + "` is refused: " + _seedFrom.refusal.text);
       return;
     }
     /* `actor: "page"`: the route was declared by this document's own code, as the load will state. */
@@ -4486,12 +4495,14 @@ async function engineServiceHostRequests(eng) {
     /* The asking document's record, which the two arms this zone performs judge by. A request whose asker is no
        document of this instance is declined whatever its operation, by the rule the pending line's askers are
        held to; a declined rendezvous is not listed again. */
-    const askerDoc = askerRecord(eng, [asker]);
-    if (askerDoc === null) {
-      await engineDeclineRendezvous(eng, id, ASKER_REFUSAL);
+    const _asked = askerRecord(eng, [asker], "asker");
+    if (_asked.refusal) {
+      console.warn("[bridge] host request " + id + " is refused: " + _asked.refusal.text);
+      await engineDeclineRendezvous(eng, id, _asked.refusal.token);
       did++;
       continue;
     }
+    const askerDoc = _asked.doc;
     /* A cross-agent operation is not answered by this zone: it is asked of the peer holding the document.
        `otherW.length` (HTML §7.2.2.2 Indexed access on the Window object) counts the peer's child navigables,
        and the internal methods a lent object performs ([[Get]], [[Set]], [[Delete]], [[Call]]) run the peer's

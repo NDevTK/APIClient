@@ -193,23 +193,47 @@ function docRecordNameParent(name) {
    the engine names it "<creator>.<n>" (solver/world.c's world_mint_doc), so the nearest provisioned ancestor
    of its name is the document whose heap made it, and that record is the floor this zone holds it to.
    `lookup(name)` answers a record for a document of the asking instance, `false` for a document provisioned
-   into another instance, and `undefined` for a name this zone never provisioned. Answers null, the asker
-   refused, when the walk meets another instance's document or runs out of names: the engine named a document
-   that is not one of its own. A name is engine-stated, so an engine can name any document of its own
-   instance; the floor is a record of that instance, never one it does not hold. */
+   into another instance, and `undefined` for a name this zone never provisioned. Answers `{doc, refusal}`:
+   the record and null, or null and why the engine named a document that is not one of its own: `elsewhere`
+   when the walk meets another instance's document, `unprovisioned` when it runs out of names. A name is
+   engine-stated, so an engine can name any document of its own instance; the floor is a record of that
+   instance, never one it does not hold. */
 function docRecordOfAsker(name, lookup) {
   CHECK(typeof name === "string" && name !== "" && typeof lookup === "function",
         "an asker's record was asked with no name or no lookup");
   for (var n = name; ; ) {
     var r = lookup(n);
-    if (r === false) return null;
+    if (r === false) return { doc: null, refusal: "elsewhere" };
     if (r !== undefined) {
       CHECK(_DOC_RECORDS.has(r), "an asker lookup answered something docRecord did not mint for " + n);
-      return r;
+      return { doc: r, refusal: null };
     }
     n = docRecordNameParent(n);
-    if (n === null) return null;
+    if (n === null) return { doc: null, refusal: "unprovisioned" };
   }
+}
+
+/* The refusal of a request or notice whose document is not one of the instance's: a closed token
+   `blocked-asker:<role>-<reason>` (the zone's decline vocabulary, so a census keyed on it stays over a closed
+   set) and a sentence naming the document. `role` says which document failed: the `asker` of a request, the
+   `creator` of a create, the `issuer` of a provisioning notice, or the `navigable`'s current document that a
+   navigation's new name is minted from. `reason` is docRecordOfAsker's, or `not-minted` for a `child` or
+   `document` name that is not minted from the document it must be. */
+var _ASKER_REFUSALS = {
+  "asker-elsewhere": 1, "asker-unprovisioned": 1, "creator-elsewhere": 1, "creator-unprovisioned": 1,
+  "issuer-elsewhere": 1, "issuer-unprovisioned": 1, "navigable-elsewhere": 1, "navigable-unprovisioned": 1,
+  "child-not-minted": 1, "document-not-minted": 1
+};
+function docRecordAskerRefusal(role, reason, name) {
+  var key = role + "-" + reason;
+  CHECK(_ASKER_REFUSALS[key] === 1 && typeof name === "string" && name !== "",
+        "an asker refusal was composed as " + JSON.stringify([role, reason, name]) + ", which is not one of " +
+        "the closed refusals or names no document");
+  var why = reason === "elsewhere" ? "a document of another instance"
+          : reason === "unprovisioned" ? "no document this zone provisioned, nor one minted from such a document"
+          : "not minted from the document it must be";
+  return { token: "blocked-asker:" + key, text: "blocked-asker:" + key + " (the " + role + " " + name + " is " +
+           why + ")" };
 }
 
 /* engine.h's arrival word and the notice's flag set, parsed; the arrival word serialized. */
@@ -236,4 +260,5 @@ if (typeof self !== "undefined") {
   self.docRecordMeet = docRecordMeet;
   self.docRecordOfAsker = docRecordOfAsker;
   self.docRecordNameParent = docRecordNameParent;
+  self.docRecordAskerRefusal = docRecordAskerRefusal;
 }

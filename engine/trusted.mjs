@@ -227,7 +227,7 @@ const ZONE = (() => {
   for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
-                   'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent'])
+                   'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -677,29 +677,37 @@ async function main() {
      the navigable's flags and can never be stronger than the documents that issued it. */
   const childDoc = (from, provenance, driven, pinned) =>
     ZONE.docRecordJoin(from, ZONE.docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
-  /* The record a request from instance `e` is judged against, given the documents the engine names as asking
-     it: the meet of their records (lib/document-record.js's docRecordOfAsker and docRecordMeet), or null when
-     a name is not a document of `e`, which refuses the request. */
-  const askerRecord = (e, names) => {
+  /* The record a request or notice from instance `e` is judged against, given the documents the engine names
+     in `role` (lib/document-record.js's docRecordAskerRefusal): the meet of their records (docRecordOfAsker,
+     docRecordMeet) as `{doc, refusal: null}`, or `{doc: null, refusal}` naming the first that is not a
+     document of `e`, which refuses it. */
+  const askerRecord = (e, names, role) => {
     const lookup = (n) => (docRecords.has(n) ? (e.docs.includes(n) ? docRecords.get(n) : false) : undefined);
-    const recs = names.map((n) => ZONE.docRecordOfAsker(n, lookup));
-    return recs.includes(null) ? null : ZONE.docRecordMeet(recs);
+    const recs = [];
+    for (const n of names) {
+      const r = ZONE.docRecordOfAsker(n, lookup);
+      if (r.refusal) return { doc: null, refusal: ZONE.docRecordAskerRefusal(role, r.refusal, n) };
+      recs.push(r.doc);
+    }
+    return { doc: ZONE.docRecordMeet(recs), refusal: null };
   };
   /* The records a provisioning notice of instance `e` is judged by. `issuer` is the issuing document (HTML
      §7.4.2.2's sourceDocument, or the declaring document of a route), whose record the load is decided under.
      `minted` is the new document's name for a navigation, which the engine mints from the navigable's current
-     document; that document's record joins the issuer's in the new document's, so it keeps every flag and
-     mark its navigable carries. Null when either is not a document of `e`. */
+     document; that document's record joins the issuer's in `from`, so the new document keeps every flag and
+     mark its navigable carries. A refusal names whichever of the two failed. */
   const issuedRecords = (e, issuer, minted) => {
-    const issuerDoc = askerRecord(e, [issuer]);
-    if (issuerDoc === null || minted === null) return issuerDoc === null ? null : { issuerDoc, from: issuerDoc };
+    const iss = askerRecord(e, [issuer], 'issuer');
+    if (iss.refusal) return { refusal: iss.refusal };
+    if (minted === null) return { issuerDoc: iss.doc, from: iss.doc, refusal: null };
     const outgoing = ZONE.docRecordNameParent(minted);
-    const navDoc = outgoing === null ? null : askerRecord(e, [outgoing]);
-    return navDoc === null ? null : { issuerDoc, from: ZONE.docRecordJoin(issuerDoc, navDoc) };
+    if (outgoing === null) return { refusal: ZONE.docRecordAskerRefusal('document', 'not-minted', minted) };
+    const nav = askerRecord(e, [outgoing], 'navigable');
+    if (nav.refusal) return { refusal: nav.refusal };
+    return { issuerDoc: iss.doc, from: ZONE.docRecordJoin(iss.doc, nav.doc), refusal: null };
   };
-  const askerRefusal = (e, names) => `blocked-asker: the engine of [${e.tag}] named ${names.join(', ')} as ` +
-    'asking, and one of them is no document of that instance — the zone judges a request by its asking ' +
-    "document's record and holds no record for this one";
+  /* A refusal's words for this zone's decline records: the closed token's sentence, and the instance. */
+  const askerRefusal = (e, refusal) => `${refusal.text}, as named by the engine of [${e.tag}]`;
   async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, group }) {
     /* The document's record, against which every request it asks is judged (askerRecord). Composed by the
        caller and recorded here, so an instance is never provisioned without one. */
@@ -1018,12 +1026,13 @@ async function main() {
                       'that cannot both be true');
     /* The record this request is judged against: its asking documents' (askerRecord). A line naming a
        document that is not one of this instance's is declined, since no record of it exists here to judge by. */
-    const doc = askerRecord(e, askers);
-    if (doc === null) {
+    const asked = askerRecord(e, askers, 'asker');
+    if (asked.refusal) {
       settle(declineRequest(method, mode, referrerPolicy, referrer, url,
-                            `${method} ${abs} — ${askerRefusal(e, askers)}`));
+                            `${method} ${abs} — ${askerRefusal(e, asked.refusal)}`));
       return;
     }
+    const doc = asked.doc;
     const methodRefusal = ZONE.safeFetchMethodRefusal(method);
     if (methodRefusal) {
       /* §Attacker-sources: a state-mutating request is NEVER fired to learn. `safe-fetch.js` enforces this by
@@ -1290,13 +1299,15 @@ async function main() {
          navigable with no parent is an auxiliary one, which §7.3.1.7 does not create at all under the
          creator's sandboxed auxiliary navigation flag; that notice is refused here, whatever the engine that
          sent it decided. */
-      const creatorDoc = askerRecord(e, [f[C.creator]]);
-      if (creatorDoc === null || ZONE.docRecordNameParent(f[C.child]) !== f[C.creator]) {
-        e.ready.push(decline(`navigable.create ${f[C.child]} — ${creatorDoc === null
-          ? askerRefusal(e, [f[C.creator]])
-          : `the child's name is not minted from its creator ${f[C.creator]}`}`));
+      const created = askerRecord(e, [f[C.creator]], 'creator');
+      const createRefusal = created.refusal ||
+        (ZONE.docRecordNameParent(f[C.child]) !== f[C.creator]
+          ? ZONE.docRecordAskerRefusal('child', 'not-minted', f[C.child]) : null);
+      if (createRefusal) {
+        e.ready.push(decline(`navigable.create ${f[C.child]} — ${askerRefusal(e, createRefusal)}`));
         return;
       }
+      const creatorDoc = created.doc;
       const own = ZONE.docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
       const doc = f[C.parent] === 'u' ? ZONE.docRecordAuxiliary(creatorDoc, own)
                                       : ZONE.docRecordJoin(creatorDoc, own);
@@ -1371,8 +1382,8 @@ async function main() {
       /* The issuing document's record and the navigable's (issuedRecords); a notice naming a document that is
          not this instance's is refused, as a request is. */
       const swapFrom = issuedRecords(e, f[P.issuer], f[P.document]);
-      if (swapFrom === null) {
-        e.ready.push(decline(`navigable.swap ${f[P.document]} — ${askerRefusal(e, [f[P.issuer], f[P.document]])}`));
+      if (swapFrom.refusal) {
+        e.ready.push(decline(`navigable.swap ${f[P.document]} — ${askerRefusal(e, swapFrom.refusal)}`));
         return;
       }
       /* AND IT IS THE SAME NAVIGATION'S WORD, which is what keeps a swap from being a door an address this
@@ -1409,9 +1420,8 @@ async function main() {
                         '(core/frame/navigable.c), and the load below is decided from the last four');
       if (holderOf(f[P.document])) return;
       const navFrom = issuedRecords(e, f[P.issuer], f[P.document]);
-      if (navFrom === null) {
-        e.ready.push(decline(`navigable.navigate ${f[P.document]} — ` +
-                             askerRefusal(e, [f[P.issuer], f[P.document]])));
+      if (navFrom.refusal) {
+        e.ready.push(decline(`navigable.navigate ${f[P.document]} — ${askerRefusal(e, navFrom.refusal)}`));
         return;
       }
       const loaded = await navigate(f[P.address], e.docUrl, `navigable.navigate ${f[P.document]}`,
@@ -1462,8 +1472,8 @@ async function main() {
                         'other word is a field read at the wrong tab');
       /* The declaring document's record (issuedRecords), refused as a request's asker is. */
       const seedFrom = issuedRecords(e, f[5], null);
-      if (seedFrom === null) {
-        e.ready.push(decline(`document.seed ${f[1]} — ${askerRefusal(e, [f[5]])}`));
+      if (seedFrom.refusal) {
+        e.ready.push(decline(`document.seed ${f[1]} — ${askerRefusal(e, seedFrom.refusal)}`));
         return;
       }
       const seedAbs = new URL(f[1], e.docUrl).href;
@@ -1806,11 +1816,12 @@ async function main() {
       /* The asking document's record, which the two arms this zone performs judge by; a request whose asker
          is no document of this instance is declined whatever its operation, by the one rule the fetch bill's
          askers are held to. */
-      const doc = askerRecord(e, [asker]);
-      if (doc === null) {
-        e.ready.push(declineAnswer(id, `\`${op.slice(0, 120)}\` — ${askerRefusal(e, [asker])}`));
+      const asked = askerRecord(e, [asker], 'asker');
+      if (asked.refusal) {
+        e.ready.push(declineAnswer(id, `\`${op.slice(0, 120)}\` — ${askerRefusal(e, asked.refusal)}`));
         return;
       }
+      const doc = asked.doc;
       /* Every cross-agent operation routes the same way: a member of a navigable's Window, the close of a
          traversable, and the internal methods a lent object performs. They differ in what the peer resolves,
          not in who resolves it, so this is a prefix and not a list: a row added to core/frame/remote_op.c's
