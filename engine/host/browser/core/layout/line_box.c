@@ -1258,10 +1258,21 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvai
 bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                           size_t *from)
 {
-    LbFill local, *f = lb_layout(style, run, avail, &local);
-    size_t i, items = f->n == 0 ? 0 : f->lines[f->n - 1].to;
+    LbFill local, *f;
+    size_t i, items;
     bool ready = true;
 
+#if APICLIENT_DEV
+    /* The fill's float check (lb_fill) searches the fill's whole formatting context. It is asked here first,
+       where "not yet" propagates, so a resting drive divides the search; the fill then reads the held answer. */
+    {
+        lxb_dom_element_t *fl;
+
+        if (!block_flow_context_first_float_ask(style, &fl)) return false;
+    }
+#endif
+    f = lb_layout(style, run, avail, &local);
+    items = f->n == 0 ? 0 : f->lines[f->n - 1].to;
     DCHECKF(from != NULL && *from <= items,
             "the atomic inlines of a fill of %zu items were asked from item %zu; a resuming caller passes back "
             "the item this ask stopped at, over the same fill", items, from != NULL ? *from : (size_t)0);

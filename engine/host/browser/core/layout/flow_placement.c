@@ -46,13 +46,15 @@ typedef struct FpEntry {
     FlowRunStart             run_first, run_after;
     /* CSS 2.1 §17.4's table box on this table element's wrapper stack. */
     CssPx                    table_box_top;
-    /* CSS 2.2 §9.5's first float in the context this box establishes, NULL for none. */
+    /* CSS 2.2 §9.5's first float in the context this box establishes, NULL for none, and the node that
+       search examines next while it is stopped. */
     lxb_dom_element_t       *first_float;
+    lxb_dom_node_t          *float_scan;
     bool                     has_top;
     bool                     has_origin;
     bool                     has_cb_width;
     bool                     has_anon;
-    bool                     has_run_first, has_run_after, has_table_box, has_first_float;
+    bool                     has_run_first, has_run_after, has_table_box, has_first_float, has_float_scan;
 } FpEntry;
 
 
@@ -491,6 +493,30 @@ bool flow_placement_first_float_peek(const lxb_dom_element_t *root, lxb_dom_elem
     e = fp_entry_peek(root);
     if (e == NULL || !e->has_first_float) return false;
     *out = e->first_float;
+    return true;
+}
+
+void flow_placement_float_scan_hold(const lxb_dom_element_t *root, lxb_dom_node_t *next)
+{
+    FpEntry *e;
+
+    DCHECK(root != NULL && next != NULL, "a float search's place was held for no context or no node");
+    e = fp_entry_for_write(root);
+    CHECK(e != NULL, "a float search stopped with no placement record to hold its place; it stops only under a "
+                     "resting drive, whose job holds one");
+    DCHECK(!e->has_first_float, "a float search held its place after its context's answer was recorded");
+    e->float_scan = next;
+    e->has_float_scan = true;
+}
+
+bool flow_placement_float_scan_peek(const lxb_dom_element_t *root, lxb_dom_node_t **out)
+{
+    const FpEntry *e;
+
+    DCHECK(root != NULL && out != NULL, "a float search's place was asked for no context or nowhere to put it");
+    e = fp_entry_peek(root);
+    if (e == NULL || !e->has_float_scan) return false;
+    *out = e->float_scan;
     return true;
 }
 

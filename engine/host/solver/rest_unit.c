@@ -35,6 +35,11 @@
    node's boxes run to a few hundred microseconds each. */
 #define REST_UNIT_LAYOUT_BOXES_N   8u
 
+/* Elements a resting drive's float search examines per rest point, 32. The floor is the rest's own cost,
+   which a search pays as one held place; the ceiling is bound (2): an element whose cascaded style is built
+   by its first read costs a few hundred microseconds. */
+#define REST_UNIT_LAYOUT_FLOAT_SCAN_N   32u
+
 /* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
    node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A node whose
    derivation overruns the slice rests mid-node through its job's resting drive (core/layout/layout_job.h). */
@@ -50,6 +55,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
     case REST_UNIT_LAYOUT_QUESTIONS: n = REST_UNIT_LAYOUT_QUESTIONS_N; break;
     case REST_UNIT_LAYOUT_BOXES:     n = REST_UNIT_LAYOUT_BOXES_N;     break;
+    case REST_UNIT_LAYOUT_FLOAT_SCAN: n = REST_UNIT_LAYOUT_FLOAT_SCAN_N; break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a

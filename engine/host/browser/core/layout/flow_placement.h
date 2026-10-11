@@ -136,6 +136,9 @@ bool flow_placement_table_box_peek(const lxb_dom_element_t *table, CssPx *out);
    block_flow_context_first_float finds it; keyed by the context root. */
 void flow_placement_first_float_record(const lxb_dom_element_t *root, lxb_dom_element_t *f);
 bool flow_placement_first_float_peek(const lxb_dom_element_t *root, lxb_dom_element_t **out);
+/* The node that search examines next, held when a resting drive stopped it, so the next ask continues there. */
+void flow_placement_float_scan_hold(const lxb_dom_element_t *root, lxb_dom_node_t *next);
+bool flow_placement_float_scan_peek(const lxb_dom_element_t *root, lxb_dom_node_t **out);
 
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent, so each
    may be differenced across two samples. `asks` counts §9.4.1 stack positions asked, `served` those this

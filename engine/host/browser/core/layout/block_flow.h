@@ -251,6 +251,9 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, BoxTreeChild
    RETIREMENT: this paragraph goes when §9.5.1's placement is built and this entry's callers ask about a
    PLACED float rather than about the context holding one. */
 lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el);
+/* The same search without a drive of its own: false ("not yet") when a resting drive spent its elements
+   (core/layout/layout_job.h's layout_job_scan_take), with its place held for the next ask. */
+bool block_flow_context_first_float_ask(lxb_dom_element_t *el, lxb_dom_element_t **out);
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes"' BOX LIST, IN CONTENT ORDER --------------------------------
    A block container's box list is not a partition of its child nodes and the section says so outright: an

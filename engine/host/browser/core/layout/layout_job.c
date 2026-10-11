@@ -44,6 +44,7 @@ struct LayoutJob {
     unsigned  nest;      /* computing LAYOUT_Q_BF_BOX entries above `base` */
     unsigned  drives;    /* drives open on this job */
     size_t    quota;     /* boxes a resting drive may still lay out in this activation */
+    size_t    scan;      /* elements a resting drive's float search may still examine in this activation */
     bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
     size_t    memo_cap;  /* a power of two, or zero before the first answer */
@@ -300,13 +301,14 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
     job->nest = 0;
     job->drives++;
     job->quota = rest_unit_items(REST_UNIT_LAYOUT_BOXES);
+    job->scan = rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN);
     job->resting = true;
 }
 
 bool layout_job_drive_spent(const LayoutJobDrive *d)
 {
     DCHECK(d->job == lj_current(), "a drive was asked about under a job other than the one it began on");
-    return d->rests && d->job->quota == 0;
+    return d->rests && (d->job->quota == 0 || d->job->scan == 0);
 }
 
 /* Whether a box is deferred because a resting drive spent its items. Only while the resting drive is the
@@ -314,7 +316,17 @@ bool layout_job_drive_spent(const LayoutJobDrive *d)
    no rest. */
 static bool lj_quota_spent(const LayoutJob *job)
 {
-    return job->resting && job->drives == 1 && job->quota == 0;
+    return job->resting && job->drives == 1 && (job->quota == 0 || job->scan == 0);
+}
+
+bool layout_job_scan_take(void)
+{
+    LayoutJob *job = lj_current();
+
+    if (!(job->resting && job->drives == 1)) return true;
+    if (lj_quota_spent(job)) return false;
+    job->scan--;
+    return true;
 }
 
 static void lj_quota_take(LayoutJob *job)

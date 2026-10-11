@@ -69,7 +69,13 @@ typedef enum {
        walk stages and suspends, and the step machine that owns the drive rests. Cost: one box's own work
        between its asks; bound (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket the drive runs
        inside. */
-    REST_UNIT_LAYOUT_BOXES
+    REST_UNIT_LAYOUT_BOXES,
+    /* One element examined under a resting drive by CSS 2.2 §9.5's search of a block formatting context for
+       its first float (core/layout/block_flow.h), which is a walk of the whole context where it finds none.
+       Past this many the search holds its place and the drive rests. Cost: one element's `display`,
+       `position` and `float`, the first read of which builds its cascaded style; bound (2) is asserted by the
+       REST_UNIT_LAYOUT_DESCENDANTS bracket. */
+    REST_UNIT_LAYOUT_FLOAT_SCAN
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is

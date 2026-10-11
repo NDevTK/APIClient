@@ -152,7 +152,8 @@ void layout_job_drive_end(LayoutJobDrive *d);
 
 /* A drive whose driver rests (a step machine's, on its entered job). `begin_resting` asserts it is the job's
    outermost drive and takes every suspended entry the last activation left as its own; `spent` answers whether
-   this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes; `end` on a resting drive
+   this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes or examined its
+   rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN) elements; `end` on a resting drive
    leaves suspended entries in place for the next activation and asserts none is computing. */
 void layout_job_drive_begin_resting(LayoutJobDrive *d);
 bool layout_job_drive_spent(const LayoutJobDrive *d);
@@ -190,6 +191,11 @@ bool layout_job_bf_resume(size_t at, const lxb_dom_element_t *el, LayoutBfCursor
    block box). It answers false when a resting drive is innermost and has spent its items, and the body then
    stages and suspends; otherwise it takes one item when a resting drive is innermost. */
 bool layout_job_bf_step(size_t at);
+
+/* CSS 2.2 §9.5's float search (core/layout/block_flow.h) is about to examine one element. It answers false
+   when a resting drive is innermost and has spent its items, and the search then holds its place and answers
+   "not yet"; otherwise it takes one element when a resting drive is innermost. */
+bool layout_job_scan_take(void);
 
 /* ---- the open chain, for the kinds that are not stacked in release ------------------------------------- */
 
