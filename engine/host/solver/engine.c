@@ -3296,8 +3296,8 @@ const char *engine_driven_token(int driven)
 }
 
 /* Fetch §2.2.5's credentials mode, from the token a record carries: length-delimited because the record's string
-   is read with its length, and derived from core/fetch/fetch.h's own wire spelling (`fetch_credentials_token`'s and nobody else's) rather
-   than a second list of the three words. */
+   is read with its length, and derived from core/fetch/fetch.h's own wire spelling (`fetch_credentials_token`'s
+   and nobody else's) rather than a second list of the three words. */
 static FetchCredentialsMode cred_of_token(const char *tok, size_t n) {
     FetchCredentialsMode m;
     for (m = FETCH_CREDENTIALS_OMIT; m <= FETCH_CREDENTIALS_INCLUDE; m++) {

@@ -460,6 +460,8 @@ static void frontier_rank_changed(void);
 static void flow_ix_insert(Flow *f);
 static void flow_ix_remove(Flow *f);
 static void flow_ix_rekey(Flow *f);
+static void flow_ix_slot_moved(Flow *f);
+static void flow_ix_first_pick(Flow *f);
 static FlowAcct *g_ix_fams;   /* the families holding an indexed member, linked through `ix_fprev`/`ix_fnext` */
 static long g_ix_fams_n;      /* …how many */
 static long g_ix_n;           /* members in the index: the frontier's members not host-owed */
@@ -1392,7 +1394,7 @@ void flow_credit_pick(Flow *f) {
            "this feeds is taken over the members, so a departed flow's dispatch would be counted nowhere and "
            "the starvation reading would be a fraction of the wrong population");
     /* And the index's count of eligible members never dispatched loses this one, read by the plateau rows. */
-    if (f->ix_in && f->picks == 0) g_ix_never_n--;
+    if (f->picks == 0) flow_ix_first_pick(f);
     f->picks++;
     /* And the same event counted for the life of the instance: a member that departs takes its share of the
        per-member total with it, so the sum over standing members is a gauge and a difference of two gauges is not
@@ -3243,7 +3245,8 @@ static double flow_nonreward(const Flow *f) {
        Asked here because this is where a new term is added, so it fires on the diff that causes it.
        Its precondition is rarely true on a real page: `flow_family_notch(f) == 0` means the family has burned less
        than one cooperative quantum since any arm last emitted, and on a one-family frontier that empties the guard
-       as it empties flow_pick_walk's `unrun` population. So it is armed on the smoke fixture and just after an emission.
+       as it empties flow_pick_walk's `unrun` population. So it is armed on the smoke fixture and just after an
+       emission.
        A general guard would compare against a re-association, which differs in the last bit and would report a
        divergence the comparator does not have. The population is covered instead by flow_pick_walk, which stamps
        `key_last`/`phase_last` per member per scan and compares them across a frontier generation: that asks whether
@@ -3263,19 +3266,19 @@ double flow_weight(const Flow *f) {
     return acct_family_val(f) + flow_nonreward(f);
 }
 
-/* The order's index: the runnable maximum asked without weighing the frontier. Members stand in treaps, one per
-   branch bucket, keyed on flow_ix_member_key (the member's own half of the weight plus its share of the rounding
-   margin) and ordered by the member's silence phase; buckets stand in a leftist heap per family, keyed on the
-   bucket's offset plus its treap's largest key; families holding a bucket are on one list. The bucket offset and
-   the family's reward, notch and residue are read once per bucket and family at the query, so a fork re-keys one
-   bucket and an emission one family, never their members. Every stored key and phase equals what its member's
-   current fields give: each writer of an operand re-keys at the write, and an emission re-keys its away list, the
-   only members whose own half it raises. A query explores best-first, bounding each entry by a value no member
-   under it can weigh more than, and calls flow_weight on every member whose bound reaches the answer so far, so it
-   returns what a walk of the runnable members with the walk's tie-break would, pointer for pointer; flow_ix_check
-   asserts that at every census. A member's own bound reads its exact notch (`k + K + carry`, the carry bit being
-   `phase >= S - R` against its family's residue `R`), so its slack is the margin alone. The nodes are embedded in
-   Flow and FlowAcct, so no step of the index allocates or can page a flow out. */
+/* The order's index: the runnable maximum asked without weighing the frontier. The members of one bucket with one
+   operand tuple form a class, which weighs one number; each bucket's classes stand in a treap keyed on
+   flow_ix_member_key (the own half of the weight plus its share of the rounding margin) and ordered by the tuple,
+   phase first, with each class's members in a heap by registry slot. Buckets stand in a leftist heap per family,
+   keyed on the offset plus the treap's largest key; families holding a bucket are on one list. The offset and the
+   family's reward, notch and residue are read at the query, so a fork re-keys one bucket and an emission one
+   family. Every stored key and tuple equals what its member's fields give: each writer of an operand re-keys at
+   the write, and an emission re-keys its away list. A query explores best-first, bounding each entry by a value
+   nothing under it can weigh more than, and calls flow_weight once per class whose bound reaches the answer so
+   far, through the class's lowest slot, so it returns what a walk with the walk's tie-break would, pointer for
+   pointer; flow_ix_check asserts that at every census. A class's own bound reads its exact notch (`k + K +
+   carry`, the carry bit being `phase >= S - R` against the family's residue `R`), so its slack is the margin
+   alone. The nodes are embedded in Flow and FlowAcct, so no step of the index allocates or can page a flow out. */
 static int ix_s(const FlowIxNode *n) { return n ? n->s : 0; }
 
 /* Meld two leftist heaps and return the root (whose `up` the caller sets). The recursion runs down the two right
@@ -3321,12 +3324,21 @@ static void ix_unlink(FlowIxNode **root, FlowIxNode *x) {
     x->l = x->r = x->up = NULL;
 }
 
-/* The members' treap. Search order is (phase, seq), `seq` being unique per member, so the order is total; heap
-   order is `prio`, a hash of `seq`, so the shape is a function of the members and not of the run. Each node holds
-   its subtree's largest key and phase range, repaired from its children by ix_t_fix. */
-static int ix_t_before(const FlowIxTreap *a, const FlowIxTreap *b) {
-    return a->phase < b->phase || (a->phase == b->phase && a->seq < b->seq);
+/* The classes' treap. Search order is the operand tuple, phase first so a subtree spans a phase range; two members
+   with one tuple in one bucket weigh the same to the bit (flow_weight reads nothing else of a member), so a class
+   is one node and its members wait in its heap. Heap order is `prio`. Each node holds its subtree's largest key and
+   phase range, repaired from its children by ix_t_fix. */
+static int ix_t_cmp(const FlowIxTreap *a, const FlowIxTreap *b) {
+    if (a->phase != b->phase) return a->phase < b->phase ? -1 : 1;
+    if (a->notch != b->notch) return a->notch < b->notch ? -1 : 1;
+    if (a->visits != b->visits) return a->visits < b->visits ? -1 : 1;
+    if (a->rung != b->rung) return a->rung < b->rung ? -1 : 1;
+    if (a->replay != b->replay) return a->replay < b->replay ? -1 : 1;
+    if (a->surv != b->surv) return a->surv < b->surv ? -1 : 1;
+    return 0;
 }
+
+static int ix_t_before(const FlowIxTreap *a, const FlowIxTreap *b) { return ix_t_cmp(a, b) < 0; }
 
 static void ix_t_fix(FlowIxTreap *n) {
     n->max = n->key; n->lo = n->hi = n->phase;
@@ -3439,8 +3451,8 @@ static void flow_ix_bucket_sync(FlowAcct *br, FlowAcct *fam) {
     }
 }
 
-/* splitmix64's finaliser: a member's treap priority from its sequence number, so the treap's shape is a function
-   of which members it holds. */
+/* splitmix64's finaliser: a class node's treap priority from its first member's sequence number, so the treap's
+   shape is a function of which members it holds. A representative that hands its node on hands its priority. */
 static uint64_t ix_t_prio(uint64_t seq) {
     uint64_t z = seq + 0x9e3779b97f4a7c15ull;
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
@@ -3448,8 +3460,55 @@ static uint64_t ix_t_prio(uint64_t seq) {
     return z ^ (z >> 31);
 }
 
+/* The class whose tuple equals `probe`'s in this treap, or NULL. */
+static FlowIxTreap *ix_t_find(FlowIxTreap *root, const FlowIxTreap *probe) {
+    while (root) {
+        int c = ix_t_cmp(probe, root);
+        if (c == 0) return root;
+        root = c < 0 ? root->l : root->r;
+    }
+    return NULL;
+}
+
+#define IX_CLASS_FLOW(n) ((Flow *)((char *)(n) - offsetof(Flow, ix_c)))
+
+/* Hand a class's treap node from its representative `from` to `to`, a member of the same class: `to` takes the
+   links, aggregates, priority, member heap and counts, and its neighbours are re-pointed, so the treap's shape and
+   every aggregate stand as they were. */
+static void ix_t_hand_over(FlowIxTreap **root, Flow *from, Flow *to) {
+    FlowIxTreap *n = &to->ix_t, *o = &from->ix_t;
+    DCHECK(ix_t_cmp(n, o) == 0 && n->key == o->key,
+           "a class's treap node was handed to a member with another tuple or key — a class is one tuple and the "
+           "node's aggregates are its key's");
+    n->l = o->l; n->r = o->r; n->up = o->up; n->max = o->max; n->lo = o->lo; n->hi = o->hi; n->prio = o->prio;
+    n->cls = o->cls; n->ncls = o->ncls; n->nnever = o->nnever;
+    if (n->l) n->l->up = n;
+    if (n->r) n->r->up = n;
+    if (!n->up) *root = n; else if (n->up->l == o) n->up->l = n; else n->up->r = n;
+    o->l = o->r = o->up = NULL; o->cls = NULL; o->ncls = o->nnever = 0;
+}
+
+/* The representative of a class is the member at the top of its heap, the lowest registry slot, so a query
+   weighing one member per class weighs the one the walk's tie-break would name. */
+static void ix_class_crown(FlowIxTreap **root, Flow *rep) {
+    Flow *top = IX_CLASS_FLOW(rep->ix_t.cls);
+    if (top != rep) ix_t_hand_over(root, rep, top);
+}
+
+/* The member's tuple and key, fresh from its fields: the class it belongs to and what the class weighs. */
+static void ix_t_stamp(Flow *f) {
+    f->ix_t.key = flow_ix_member_key(f);
+    f->ix_t.phase = flow_silence_phase(f);
+    f->ix_t.notch = flow_service_notch(f);
+    f->ix_t.visits = (int64_t)f->visits;
+    f->ix_t.replay = f->cand_replay;
+    f->ix_t.surv = f->cand_surv;
+    f->ix_t.rung = f->cand_rung;
+}
+
 static void flow_ix_insert(Flow *f) {
     FlowAcct *br;
+    FlowIxTreap *c;
     DCHECK(f != NULL && !f->ix_in && !flow_host_owed(f) && f->family != NULL && f->acct != NULL &&
            f->acct->branch != NULL && f->ix_t.seq != 0,
            "a member entered the order's index twice, while host-owed, without the bucket and family its key is "
@@ -3459,10 +3518,18 @@ static void flow_ix_insert(Flow *f) {
     DCHECK((br->up ? br->up : br) == f->family,
            "a member's branch bucket does not hang under its family's root — a bucket is a root or a node forked off "
            "one, so the index would file this member's bound under another family's coordinate");
-    f->ix_t.key = flow_ix_member_key(f);
-    f->ix_t.phase = flow_silence_phase(f);
-    f->ix_t.prio = ix_t_prio(f->ix_t.seq);
-    ix_t_insert(&br->ix_members, &f->ix_t);
+    ix_t_stamp(f);
+    c = ix_t_find(br->ix_members, &f->ix_t);
+    if (!c) {
+        f->ix_t.prio = ix_t_prio(f->ix_t.seq);
+        f->ix_t.cls = NULL; f->ix_t.ncls = 0; f->ix_t.nnever = 0;
+        ix_t_insert(&br->ix_members, &f->ix_t);
+        c = &f->ix_t;
+    }
+    ix_push(&c->cls, &f->ix_c, -(double)f->reg_i);
+    c->ncls++;
+    if (f->picks == 0) c->nnever++;
+    ix_class_crown(&br->ix_members, IX_TREAP_FLOW(c));
     f->ix_in = 1;
     g_ix_n++;
     if (f->picks == 0) g_ix_never_n++;
@@ -3471,23 +3538,61 @@ static void flow_ix_insert(Flow *f) {
 
 static void flow_ix_remove(Flow *f) {
     FlowAcct *br;
+    FlowIxTreap *c;
+    Flow *rep;
     DCHECK(f != NULL && f->ix_in && f->family != NULL && f->acct != NULL && f->acct->branch != NULL,
            "a member left the order's index without standing in it — the index holds the members not host-owed, so "
            "this member's mark and its index state came apart");
     br = f->acct->branch;
-    ix_t_remove(&br->ix_members, &f->ix_t);
+    c = ix_t_find(br->ix_members, &f->ix_t);
+    DCHECK(c != NULL, "an indexed member's class is not in its bucket's treap — its stored tuple moved without a "
+                      "re-key, or the class was removed while it still had members");
+    rep = IX_TREAP_FLOW(c);
+    ix_unlink(&c->cls, &f->ix_c);
+    c->ncls--;
+    if (f->picks == 0) c->nnever--;
+    if (c->ncls == 0) ix_t_remove(&br->ix_members, c);
+    else if (rep == f) ix_class_crown(&br->ix_members, f);
     f->ix_in = 0;
     g_ix_n--;
     if (f->picks == 0) g_ix_never_n--;
     flow_ix_bucket_sync(br, f->family);
 }
 
-/* After a write to an operand of the member's key or phase. A host-owed member is out of the index and is keyed
-   afresh when it comes back, and a write that left both standing moves nothing. */
+/* After a write to an operand of the member's key or tuple. A host-owed member is out of the index and is keyed
+   afresh when it comes back, and a write that left them all standing moves nothing. */
 static void flow_ix_rekey(Flow *f) {
-    if (!f->ix_in || (f->ix_t.key == flow_ix_member_key(f) && f->ix_t.phase == flow_silence_phase(f))) return;
+    FlowIxTreap fresh;
+    if (!f->ix_in) return;
+    fresh.key = flow_ix_member_key(f); fresh.phase = flow_silence_phase(f); fresh.notch = flow_service_notch(f);
+    fresh.visits = (int64_t)f->visits; fresh.replay = f->cand_replay; fresh.surv = f->cand_surv;
+    fresh.rung = f->cand_rung;
+    if (fresh.key == f->ix_t.key && ix_t_cmp(&fresh, &f->ix_t) == 0) return;
     flow_ix_remove(f);
     flow_ix_insert(f);
+}
+
+/* The member's registry slot moved (flow_remove's swap) or its dispatch count left zero: the class heap is keyed
+   on the first and counts the second, so the class learns of both where they happen. */
+static void flow_ix_slot_moved(Flow *f) {
+    FlowAcct *br;
+    FlowIxTreap *c;
+    if (!f->ix_in) return;
+    br = f->acct->branch;
+    c = ix_t_find(br->ix_members, &f->ix_t);
+    DCHECK(c != NULL, "an indexed member's class is not in its bucket's treap");
+    ix_unlink(&c->cls, &f->ix_c);
+    ix_push(&c->cls, &f->ix_c, -(double)f->reg_i);
+    ix_class_crown(&br->ix_members, IX_TREAP_FLOW(c));
+}
+
+static void flow_ix_first_pick(Flow *f) {
+    FlowIxTreap *c;
+    if (!f->ix_in) return;
+    c = ix_t_find(f->acct->branch->ix_members, &f->ix_t);
+    DCHECK(c != NULL && c->nnever > 0, "a member's first dispatch reached a class counting none undispatched");
+    c->nnever--;
+    g_ix_never_n--;
 }
 
 /* What one ask of the index answered: the maximum (`best`, `bw`) with the incumbent folded in, whether the
@@ -3560,9 +3665,20 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
             if (m->ix_t.l) ix_q_push_tree(&q, m->ix_t.l, e->off, from);
             if (m->ix_t.r) ix_q_push_tree(&q, m->ix_t.r, e->off, from);
         } else {
-            Flow *m = (Flow *)((char *)e - offsetof(Flow, ix_qs));
+            /* One class: its members weigh one number, so it is weighed once, through its lowest slot that is
+               neither the seed nor the excluded member, the member the walk's tie-break would reach first. */
+            Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qs)), *m = r;
+            long nn = r->ix_t.nnever;
             double w;
-            if (m == seed || m == exclude) continue;
+            if (m == seed || m == exclude) {
+                FlowIxNode *top = r->ix_t.cls, *l = top->l, *rt = top->r;
+                FlowIxNode *n2 = !l ? rt : !rt ? l : (l->key > rt->key ? l : rt);
+                m = n2 ? IX_CLASS_FLOW(n2) : NULL;
+            }
+            if (exclude && exclude->ix_in && exclude->picks == 0 && exclude->acct->branch == r->acct->branch &&
+                ix_t_cmp(&exclude->ix_t, &r->ix_t) == 0)
+                nn--;
+            if (!m) continue;
             w = flow_weight(m);
             a.weighed++;
             DCHECKF(w < e->key && e->key - w < 0.5 * FLOW_AGE_QUANTUM && m->ix_t.key == flow_ix_member_key(m) &&
@@ -3573,7 +3689,7 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
                     "of the key's operands did not re-key",
                     w, e->key, m->ix_t.key, flow_ix_member_key(m), (long long)m->ix_t.phase,
                     (long long)flow_silence_phase(m));
-            if (m->picks == 0 && (!nseen || w > nmax)) { nmax = w; nseen = 1; }
+            if (nn > 0 && (!nseen || w > nmax)) { nmax = w; nseen = 1; }
             if (!a.best || w > a.bw || (w == a.bw && m->reg_i < a.best->reg_i)) { a.best = m; a.bw = w; }
         }
     }
@@ -4020,7 +4136,7 @@ int64_t flow_ix_entries(void) { return g_ix_entries; }
    and the query's answer is a walk's. Dev-only and uncounted: no scan row moves, so two documents composed at one
    boundary still differ only in the rows main.c's qjs_emit_partial names. */
 static void flow_ix_check(void) {
-    long in = 0, never = 0, owed = 0, listed = 0;
+    long in = 0, never = 0, owed = 0, listed = 0, classes_n = 0, classes_never = 0;
     const Flow *ref = NULL; double rw = 0.0;
     FlowIxAnswer a;
     for (int i = 0; i < g_flows_n; i++) {
@@ -4052,17 +4168,31 @@ static void flow_ix_check(void) {
             if (!ref || w > rw) { ref = m; rw = w; }
         }
         {
-            double mx = t->key;
-            int64_t lo = t->phase, hi = t->phase;
-            if (t->l) { if (t->l->max > mx) mx = t->l->max; lo = t->l->lo; }
-            if (t->r) { if (t->r->max > mx) mx = t->r->max; hi = t->r->hi; }
-            DCHECK((!t->l || (t->l->up == t && ix_t_before(t->l, t) && t->l->hi <= t->phase &&
-                              t->l->prio <= t->prio)) &&
-                   (!t->r || (t->r->up == t && ix_t_before(t, t->r) && t->r->lo >= t->phase &&
-                              t->r->prio <= t->prio)) &&
-                   t->max == mx && t->lo == lo && t->hi == hi && (t->up != NULL || br->ix_members == t),
-                   "a member treap of the order's index lost its search order, its heap order, its parent links or "
-                   "an aggregate a query bounds a subtree by");
+            const FlowIxTreap *c = ix_t_find(br->ix_members, t);
+            const Flow *r = c ? IX_TREAP_FLOW(c) : NULL;
+            const FlowIxNode *x = &m->ix_c;
+            DCHECK(c != NULL && c->key == t->key && x->key == -(double)m->reg_i &&
+                       (!x->l || (x->l->up == x && x->l->key <= x->key)) &&
+                       (!x->r || (x->r->up == x && x->r->key <= x->key)) &&
+                       ix_s(x->l) >= ix_s(x->r) && x->s == ix_s(x->r) + 1,
+                   "a member of the order's index stands in no class of its tuple, under another key, or out of its "
+                   "class heap's order, slot key or leftist shape");
+            if (r == m) {
+                double mx = t->key;
+                int64_t lo = t->phase, hi = t->phase;
+                if (t->l) { if (t->l->max > mx) mx = t->l->max; lo = t->l->lo; }
+                if (t->r) { if (t->r->max > mx) mx = t->r->max; hi = t->r->hi; }
+                DCHECK((!t->l || (t->l->up == t && ix_t_before(t->l, t) && t->l->hi <= t->phase &&
+                                  t->l->prio <= t->prio)) &&
+                       (!t->r || (t->r->up == t && ix_t_before(t, t->r) && t->r->lo >= t->phase &&
+                                  t->r->prio <= t->prio)) &&
+                       t->max == mx && t->lo == lo && t->hi == hi && (t->up != NULL || br->ix_members == t) &&
+                       t->cls == x && x->up == NULL,
+                       "a class treap of the order's index lost its search order, its heap order, its parent links, "
+                       "an aggregate a query bounds a subtree by, or a representative that is not its class's lowest "
+                       "slot");
+                classes_n += t->ncls; classes_never += t->nnever;
+            }
         }
         DCHECK(br->ix_bin && br->ix_b.key == flow_ix_bucket_key(br) &&
                (!br->ix_b.l || (br->ix_b.l->up == &br->ix_b && br->ix_b.l->key <= br->ix_b.key)) &&
@@ -4073,6 +4203,9 @@ static void flow_ix_check(void) {
     }
     for (const Flow *o = g_owed_head; o; o = o->owed_next) owed--;
     for (const FlowAcct *f = g_ix_fams; f; f = f->ix_fnext) listed++;
+    DCHECKF(classes_n == g_ix_n && classes_never == g_ix_never_n,
+            "the order's index classes count %ld member(s), %ld never dispatched, against %ld and %ld indexed — a "
+            "class count moved without its member", classes_n, classes_never, g_ix_n, g_ix_never_n);
     DCHECKF(in == g_ix_n && never == g_ix_never_n && owed == 0 && listed == g_ix_fams_n,
             "the order's index counts disagree with the frontier (indexed %ld against %ld, never dispatched %ld "
             "against %ld, host-owed list off by %ld, families %ld against %ld)",
@@ -5154,7 +5287,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         /* And the one member the swap moved, re-keyed on the line that moved it. A departure renumbers exactly one
            other member; the guard is `slot < g_flows_n` because the decrement has run, so removing the last member
            self-assigns and an unguarded write would dereference the slot the freed flow occupied. */
-        if (slot < g_flows_n) g_flows[slot]->reg_i = slot;
+        if (slot < g_flows_n) { g_flows[slot]->reg_i = slot; flow_ix_slot_moved(g_flows[slot]); }
         /* And the departure counted, on the line that performs it. This decrement and the registry coming up are
            the only ways `g_flows_n` falls, and the second is asserted to happen only on a drained frontier, so the
            conservation identity is exact. */

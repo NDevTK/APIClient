@@ -61,15 +61,23 @@ typedef struct FlowIxNode {
     unsigned char kind;
 } FlowIxNode;
 
-/* A member's node in its branch bucket's treap (flow.c's flow_ix_* banner): in search order by (`phase`, `seq`),
-   in heap order by `prio`, holding the member's key and, over its subtree, the largest key (`max`) and the phase
-   range (`lo`, `hi`), which is what lets a query read the carry bit of a whole subtree at once. */
+/* A member's operand tuple and, while it represents its class, its node in its branch bucket's treap (flow.c's
+   flow_ix_* banner). A class is the members of one bucket with one tuple (phase, own notch, completed units, the
+   three fitness fields), which weigh the same to the bit; the treap holds one node per class, in search order by
+   the tuple and heap order by `prio`, carrying the class's key and, over its subtree, the largest key (`max`) and
+   the phase range (`lo`, `hi`). `cls` is the class's members in a heap by registry slot, `ncls` and `nnever`
+   how many there are and how many were never dispatched; all of these are read off the representative only. */
 typedef struct FlowIxTreap {
     struct FlowIxTreap *l, *r, *up;
     double key, max;
     int64_t phase, lo, hi;
+    int64_t notch, visits;
+    double replay, surv;
+    int rung;
     uint64_t seq;
     uint64_t prio;
+    struct FlowIxNode *cls;
+    long ncls, nnever;
 } FlowIxTreap;
 
 typedef struct Flow {
@@ -542,12 +550,12 @@ typedef struct Flow {
     int64_t  phase_last;
     double   ikey_last;
 #endif
-    /* This member's place in the order's index (flow.c's flow_ix_* banner): its node in its branch bucket's
-       treap, keyed on flow_ix_member_key and ordered by its silence phase; its two nodes in one query's
-       best-first queue (its subtree, and itself); and whether it is in the index at all, which is exactly "a
-       member not host-owed". Owned and read by flow.c alone. */
+    /* This member's place in the order's index (flow.c's flow_ix_* banner): its key and operand tuple, and its
+       treap node while it represents its class; its two nodes in one query's best-first queue (its subtree, and
+       its class); and whether it is in the index at all, which is exactly "a member not host-owed". Owned and
+       read by flow.c alone. */
     FlowIxTreap ix_t;
-    FlowIxNode ix_qt, ix_qs;
+    FlowIxNode ix_qt, ix_qs, ix_c;   /* …and its node in its class's heap, keyed on its registry slot */
     unsigned char ix_in;
     /* Its links in two populations the index re-keys or re-admits as a whole: its family's away list (members
        whose own silence is non-zero in the current window, the ones an emission re-keys) and the host-owed list
@@ -1246,8 +1254,8 @@ typedef struct {
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
-/* What the order costs to ask (flow_weight itself is O(1), since the preempt hook reads it per opcode), so "the tail is not reached" has two causes: too little thread for the members, or
- * the thread spent asking the order. Entries are counted apart because their cadences differ:
+/* What the order costs to ask (flow_weight itself is O(1), since the preempt hook reads it per opcode), so "the
+ * tail is not reached" has two causes: too little thread for the members, or the thread spent asking the order. Entries are counted apart because their cadences differ:
  *   `next-to-run`: the dispatch loop's pick, one per step, so weights over steps is the frontier a step pays for;
  *   `rival-of-incumbent`: the preempt hook's rescan, one per miss of a key that is a disjunction
  *      (`flow_frontier_gen() != g_seen_gen || cur != g_seen_cur`), so a forking page pays per rank change and a
