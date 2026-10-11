@@ -2480,6 +2480,15 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             session_history_set_active_entry_resource(cctx, entry_resource);
             JS_FreeCString(ctx, entry_resource);
         }
+        /* …and §7.4.1.2's request referrer policy, the one this load fetched under, for a reload of the entry. */
+        {
+            const char *entry_policy = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_REQUEST_REFERRER_POLICY));
+
+            CHECK(entry_policy != NULL, "navigable: OOM taking §7.4.2.2's referrer policy off the load job for its "
+                                        "session history entry");
+            session_history_set_active_entry_request_referrer_policy(cctx, entry_policy);
+            JS_FreeCString(ctx, entry_policy);
+        }
     }
     return JS_STEP_DONE;
 }
@@ -3318,6 +3327,8 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
     {
         JSValue entry_resource = session_history_active_entry_resource(ctx);
         const char *resource = JS_IsString(entry_resource) ? JS_ToCString(ctx, entry_resource) : NULL;
+        /* §7.4.3's reload re-populates the entry under its document state's request referrer policy. */
+        char *entry_policy = session_history_active_entry_request_referrer_policy(ctx);
 
         CHECK(!JS_IsString(entry_resource) || resource != NULL,
               "navigable: OOM taking §7.4.1.2's resource off the entry §7.4.3's reload is re-populating");
@@ -3327,14 +3338,8 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
                                resource,
                                engine_provenance_of_running_path(),
                                engine_driven_token(engine_driven_of_running_path()),
-                               engine_navigation_pinned_token(),
-                               /* Named residual. Not covered: the entry's document state's request referrer
-                                  policy, which §7.4.3's reload re-populates the entry with; core/frame/
-                                  session_history.c's document state holds no such member, so a reload states
-                                  "" and takes this document's container policy. The next diff adds the member
-                                  beside the resource above and reads it here. Its absence shows as a reloaded
-                                  frame whose `referrerpolicy` or link `noreferrer` stops narrowing its Referer. */
-                               "");
+                               engine_navigation_pinned_token(), entry_policy);
+        free(entry_policy);
         if (resource) JS_FreeCString(ctx, resource);
         JS_FreeValue(ctx, entry_resource);
     }

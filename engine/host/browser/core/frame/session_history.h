@@ -357,4 +357,11 @@ uint32_t session_history_active_entry_step(JSContext *ctx);
 void    session_history_set_active_entry_resource(JSContext *ctx, const char *resource);
 JSValue session_history_active_entry_resource(JSContext *ctx);
 
+/* §7.4.1.2's request referrer policy of the active entry's document state, "initially the default referrer
+ * policy": written by the load that populated the entry with the request referrer policy it fetched under (the
+ * job's §7.4.2.2 referrerPolicy, or the host's for a document it roots), and read by §7.4.3's reload. The getter
+ * answers an owned copy. */
+void  session_history_set_active_entry_request_referrer_policy(JSContext *ctx, const char *policy);
+char *session_history_active_entry_request_referrer_policy(JSContext *ctx);
+
 #endif

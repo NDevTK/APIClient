@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
@@ -14,6 +15,7 @@
 #include "core/events/event_target.h"
 #include "core/events/hash_change_event.h"
 #include "core/events/pop_state_event.h"
+#include "core/fetch/fetch.h"   /* Referrer Policy §3's policies, for §7.4.1.2's request referrer policy */
 #include "core/frame/navigation.h"
 #include "core/frame/session_history.h"
 #include "core/frame/window_proxy.h"
@@ -89,6 +91,9 @@ static JSClassID g_slot = JS_INVALID_CLASS_ID;
    resource takes the fetching constructor instead. The two are therefore told apart by the SLOT (JS_IsString)
    and never by the string's length, which is the rule core/frame/navigable.c states at the job's own slot. */
 #define SH_D_RESOURCE "resource"
+/* §7.4.1.2's REQUEST REFERRER POLICY: "a referrer policy, initially the default referrer policy", the policy
+   §7.4.5 fetches this entry's document with, which §7.4.3's reload re-populates the entry under. */
+#define SH_D_REQUEST_REFERRER_POLICY "requestReferrerPolicy"
 
 /* ---- the per-realm record ------------------------------------------------------------------------------------
  *
@@ -290,6 +295,7 @@ static JSValue sh_document_state_new(JSContext *ctx)
        would answer `undefined`, which is a THIRD state neither reader can tell from the null — and the reader
        that matters is §7.4.5's arm choice, where the two answers are two different constructors. */
     JS_SetPropertyStr(ctx, ds, SH_D_RESOURCE, JS_NULL);
+    JS_SetPropertyStr(ctx, ds, SH_D_REQUEST_REFERRER_POLICY, JS_NewString(ctx, "strict-origin-when-cross-origin"));
     return ds;
 }
 
@@ -1413,6 +1419,41 @@ void session_history_set_active_entry_resource(JSContext *ctx, const char *resou
     JS_SetPropertyStr(ctx, ds, SH_D_RESOURCE, JS_NewString(ctx, resource));
     JS_FreeValue(ctx, ds);
     JS_FreeValue(ctx, e);
+}
+
+void session_history_set_active_entry_request_referrer_policy(JSContext *ctx, const char *policy)
+{
+    JSValue e = sh_active_entry(ctx), ds = JS_GetPropertyStr(ctx, e, SH_E_DOCSTATE);
+
+    DCHECK(policy != NULL && fetch_is_referrer_policy(policy),
+           "§7.4.1.2's request referrer policy was set to something that is not a Referrer Policy §3 policy");
+    DCHECK(JS_IsObject(ds),
+           "a §7.4.1.1 entry answered for its DOCUMENT STATE with nothing — sh_entry_new gives every entry one");
+    JS_SetPropertyStr(ctx, ds, SH_D_REQUEST_REFERRER_POLICY, JS_NewString(ctx, policy));
+    JS_FreeValue(ctx, ds);
+    JS_FreeValue(ctx, e);
+}
+
+char *session_history_active_entry_request_referrer_policy(JSContext *ctx)
+{
+    JSValue e = sh_active_entry(ctx), ds = JS_GetPropertyStr(ctx, e, SH_E_DOCSTATE), v;
+    const char *s;
+    char *out;
+
+    DCHECK(JS_IsObject(ds),
+           "a §7.4.1.1 entry answered for its DOCUMENT STATE with nothing — sh_entry_new gives every entry one");
+    v = JS_GetPropertyStr(ctx, ds, SH_D_REQUEST_REFERRER_POLICY);
+    DCHECK(JS_IsString(v), "§7.4.1.2's request referrer policy is not a string — sh_document_state_new writes "
+                           "the default and one setter in this file writes a policy");
+    s = JS_ToCString(ctx, v);
+    CHECK(s != NULL, "session history: OOM reading §7.4.1.2's request referrer policy");
+    out = strdup(s);
+    CHECK(out != NULL, "session history: OOM copying §7.4.1.2's request referrer policy");
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, ds);
+    JS_FreeValue(ctx, e);
+    return out;
 }
 
 JSValue session_history_active_entry_resource(JSContext *ctx)

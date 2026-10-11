@@ -620,6 +620,9 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            moment there is anything to write it on. Without it DOM §4.5 "Interface Document"'s UTF-8 default
            stands for every response. */
         document_set_encoding(g_ctx, root_encoding);
+        /* §7.4.1.2's request referrer policy of the root's entry: the trusted zone's load of this document
+           states none (bridge.js's DOCUMENT_REQUEST_UNSTATED), which is §7.4.2.2's default, the empty string. */
+        session_history_set_active_entry_request_referrer_policy(g_ctx, "");
         JS_FreeValue(g_ctx, root_proxy);
     }
     /* The surface is installed, so every member the platform has is declared; a declaration from here on is a
@@ -797,6 +800,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                              /*about_base_url*/ NULL, /*is_iframe_srcdoc*/ false);
         /* §13.2.3.2's answer onto this document, decoded with its own encoding, for qjs_init's reason. */
         document_set_encoding(cctx, joined_encoding);
+        /* …and its entry's request referrer policy, for the root's reason. */
+        session_history_set_active_entry_request_referrer_policy(cctx, "");
         JS_FreeValue(cctx, proxy);
     }
 
