@@ -61,6 +61,17 @@ typedef struct FlowIxNode {
     unsigned char kind;
 } FlowIxNode;
 
+/* A member's node in its branch bucket's treap (flow.c's flow_ix_* banner): in search order by (`phase`, `seq`),
+   in heap order by `prio`, holding the member's key and, over its subtree, the largest key (`max`) and the phase
+   range (`lo`, `hi`), which is what lets a query read the carry bit of a whole subtree at once. */
+typedef struct FlowIxTreap {
+    struct FlowIxTreap *l, *r, *up;
+    double key, max;
+    int64_t phase, lo, hi;
+    uint64_t seq;
+    uint64_t prio;
+} FlowIxTreap;
+
 typedef struct Flow {
     /* This flow's slot in the frontier's array, so locating a member is a load rather than a walk. It names a
        slot, never a rank: the array is in arrival order and the order is by weight, so no term of flow_weight
@@ -532,9 +543,11 @@ typedef struct Flow {
     double   ikey_last;
 #endif
     /* This member's place in the order's index (flow.c's flow_ix_* banner): its node in its branch bucket's
-       member heap, keyed on flow_ix_member_key; its node in one query's best-first queue; and whether it is in
-       the index at all, which is exactly "a member not host-owed". Owned and read by flow.c alone. */
-    FlowIxNode ix_m, ix_q;
+       treap, keyed on flow_ix_member_key and ordered by its silence phase; its two nodes in one query's
+       best-first queue (its subtree, and itself); and whether it is in the index at all, which is exactly "a
+       member not host-owed". Owned and read by flow.c alone. */
+    FlowIxTreap ix_t;
+    FlowIxNode ix_qt, ix_qs;
     unsigned char ix_in;
     /* Its links in two populations the index re-keys or re-admits as a whole: its family's away list (members
        whose own silence is non-zero in the current window, the ones an emission re-keys) and the host-owed list
@@ -1313,10 +1326,6 @@ FlowKeyChecks flow_key_checks(void);
 /* Lifetime count of queue entries the order's index took across every runnable ask (flow.c's flow_ix_query):
    the index's own work beside `scan<Entry>Weights`, the members it weighed. Never reset; may be differenced. */
 int64_t flow_ix_entries(void);
-/* …and of the members those asks weighed, the ones whose bound stood at least half a quantum above their weight:
-   the carry bit (`k + K + carry`) the bound does not read put them in reach, where the rest were within the
-   rounding margin of the answer. A subset of the runnable entries' `scan<Entry>Weights`. Lifetime. */
-int64_t flow_ix_carried(void);
 
 /* Lifetime count of rank changes (raises of frontier_rank_changed): the denominator of the hook's rescan count.
  * The hook rescans when `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur` (engine.c), so its cadence is
