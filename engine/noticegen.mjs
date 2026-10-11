@@ -9,9 +9,9 @@
  * notice's flag-set field is spelled in.
  *
  * Two consumers. A node reader (trusted.mjs, route.mjs, renderer_host_gate.mjs) imports NAVIGABLE_NOTICE and
- * navigableNoticeField from here, and importing asserts that extension/lib/navigable-notice.js is exactly what the header renders, so a
- * stale extension copy stops every node-driven run. The extension (bridge.js) loads that copy as a classic
- * script. `node engine/noticegen.mjs` writes it; `--check` exits 1 when it is stale. */
+ * navigableNoticeField from here, and importing asserts that extension/lib/navigable-notice.js is exactly what
+ * the header renders, so a stale extension copy stops every node-driven run. The extension (bridge.js) loads
+ * that copy as a classic script. `node engine/noticegen.mjs` writes it; `--check` exits 1 when it is stale. */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -77,8 +77,8 @@ function headerTable() {
 
 /* A field's value: a `token` as written, a `base64` field's bytes (RFC 4648 §4, the engine's JS_Base64Encode)
    decoded as UTF-8, the encoding the notice channel carries its text in. `table` is NAVIGABLE_NOTICE.create,
-   .provision or .request and `f` a record split on TAB. Its source is rendered into extension/lib/navigable-notice.js, so the
-   extension and the node readers run the same reader.
+   .provision or .request and `f` a record split on TAB. Its source is rendered into
+   extension/lib/navigable-notice.js, so the extension and the node readers run the same reader.
    Named residual. Not covered: a CSP byte outside UTF-8 decodes to U+FFFD, where CSP's parse isomorphic-decodes
    header bytes. Next diff builds: the inherited CSP texts as `array<uint8>` parameters of Init and Join, relayed
    undecoded. Absence shows as: a report's original-policy differing from the delivered header's bytes. */
