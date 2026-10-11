@@ -9207,6 +9207,76 @@ static int s_delivery_probed(const char *js, const char *sink, const char *src) 
     return s_num(js, sink, src, "deliveryProbed");
 }
 
+/* One JSON string starting at its opening quote `p`, decoded into `out`; answers the byte past its closing
+   quote. Decodes the escapes json_buf_str writes for ASCII; anything else is refused by name. */
+static const char *s_json_str(const char *p, const char *end, char *out, size_t cap) {
+    size_t o = 0;
+
+    CHECK(p < end && *p == '"', "an @S string field was read from a byte that does not open a JSON string");
+    for (p++; p < end && *p != '"'; p++) {
+        char c = *p;
+        if (c == '\\') {
+            p++;
+            CHECK(p < end, "an @S JSON string ends inside an escape");
+            switch (*p) {
+            case '"': case '\\': case '/': c = *p; break;
+            case 'n': c = '\n'; break;
+            case 't': c = '\t'; break;
+            case 'u': {
+                unsigned v = 0;
+                CHECK(p + 4 < end && sscanf(p + 1, "%4x", &v) == 1 && v < 0x80,
+                      "an @S JSON string carries a \\u escape outside ASCII, which no fixture payload holds");
+                c = (char)v; p += 4; break;
+            }
+            default: CHECK_FAIL("an @S JSON string carries an escape json_buf_str does not write");
+            }
+        }
+        CHECK(o + 1 < cap, "an @S JSON string does not fit its reader's buffer — a truncated payload would be "
+                           "judged on a prefix of its bytes");
+        out[o++] = c;
+    }
+    CHECK(p < end, "an @S JSON string ran past the end of its record");
+    out[o] = 0;
+    return p + 1;
+}
+
+/* HOW MANY ESCAPES A PARKED SEARCH STILL HOLDS AS DELIVERABLE WHILE CARRYING A BYTE ITS SOURCE DECLARES THE
+   BROWSER PERCENT-ENCODES. solve.h declares `payloads` and `withdrawn` one entry per candidate, in one order,
+   with the `probes` inert locators leading; an escape the delivery table contradicts is withdrawn. A kept
+   escape holding a declared byte is a breakout the browser cannot carry, judged deliverable anyway. */
+static int s_kept_undeliverable(const char *js, const char *sink, const char *src) {
+    static const char PL[] = ",\"payloads\":[", WD[] = ",\"withdrawn\":[", ENC[] = ",\"sourceEncodes\":";
+    char enc[64], pay[512];
+    const char *e, *end, *p, *w, *x;
+    size_t span;
+    int i, probes = s_num(js, sink, src, "probes"), bad = 0;
+
+    e = s_record(js, sink, src, &span);
+    CHECK(e != NULL, "the deliverable-escape census was asked of an @S record this document does not carry");
+    end = e + span;
+    for (x = e; x + sizeof ENC - 1 <= end && memcmp(x, ENC, sizeof ENC - 1); x++) {}
+    CHECK(x + sizeof ENC - 1 <= end, "a parked @S search over a percent-encoding source carries no `sourceEncodes`");
+    s_json_str(x + sizeof ENC - 1, end, enc, sizeof enc);
+    for (p = e; p + sizeof PL - 1 <= end && memcmp(p, PL, sizeof PL - 1); p++) {}
+    for (w = e; w + sizeof WD - 1 <= end && memcmp(w, WD, sizeof WD - 1); w++) {}
+    CHECK(p + sizeof PL - 1 <= end && w + sizeof WD - 1 <= end,
+          "a parked @S record carries no `payloads` or no `withdrawn` — solve.h declares both on every one");
+    p += sizeof PL - 1; w += sizeof WD - 1;
+    for (i = 0; *p != ']'; i++) {
+        char *wend;
+        long kept;
+
+        if (i) { CHECK(*p == ',' && *w == ',', "an @S candidate array is not comma-separated"); p++; w++; }
+        p = s_json_str(p, end, pay, sizeof pay);
+        kept = strtol(w, &wend, 10);
+        CHECK(wend != w, "`withdrawn` holds fewer entries than `payloads` — solve.h declares them one per candidate");
+        w = wend;
+        if (i >= probes && kept == 0 && strpbrk(pay, enc)) bad++;
+    }
+    CHECK(*w == ']', "`withdrawn` holds more entries than `payloads` — solve.h declares them one per candidate");
+    return bad;
+}
+
 static int s_poc(const char *js, const char *sink, const char *src, const char *poc) {
     char pat[384];
     int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\",\"poc\":\"%s", sink, src, poc);
@@ -13175,6 +13245,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int s_loc_built   = s_derived  (ss, "eval",      LOCATION_HASH_SRC,   st_loc);
     int s_park_wit    = s_witnessed(ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
     int s_park_built  = s_derived  (ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
+    /* Which writes the two markup searches over unrelated sources learned: the fragment's bytes reach `lhHost`
+       directly and `lhAttr` through the page's `.slice(1)`, `state.other`'s reach `lhOther` alone. A parked
+       record carries `witnessed`; any other stage reads -1, which no row below accepts. */
+    int st_other      = s_stage(ss, "innerHTML", "{state}.other");
+    int s_park_nwit   = st_lpark >= S_SEEN && st_lpark < S_FIRED
+                            ? s_num(ss, "innerHTML", LOCATION_HASH_SRC, "witnessed") : -1;
+    int s_other_nwit  = st_other >= S_SEEN && st_other < S_FIRED
+                            ? s_num(ss, "innerHTML", "{state}.other", "witnessed") : -1;
+    int s_park_kept   = st_lpark >= S_SEEN && st_lpark < S_FIRED
+                            ? s_kept_undeliverable(ss, "innerHTML", LOCATION_HASH_SRC) : -1;
     int s_attr_wit    = s_witnessed(ss, "innerHTML", ATTR_SRC,            st_attr);
     int s_attr_built  = s_derived  (ss, "innerHTML", ATTR_SRC,            st_attr);
     /* AND THE TWO RUNGS BELOW THEM, FOR ALL SEVEN SEARCHES — the URL one included, which is the whole reason
@@ -15247,23 +15327,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            is a claim about a search that may simply not have got there — the false negative this half exists to
            catch, arriving one rung higher than the detection question it already guards. `-witnessed` is the
            observation that closes it: the context probe reached the write and §13.2.5.1's state was read off
-           the string a real run handed it.
-           `-nobuild` IS THE NEGATIVE ITSELF, AT THE RUNG WHERE IT IS DECIDED. §13.2.5.1 "Data state" is left
-           only through `<`, the fragment set holds `<`, and the delivery probe OBSERVES that it does not reach
-           the write — so the derivation must construct NOTHING, and `survivedBy` staying level with `probes` is
-           that statement in the producer's own numbers. It sits below `s-park` (no PoC) and below
-           `s-park-noescape` (no executable position) because a build is what would have to happen first: a
-           spelling constructed out of the data state would show up here before it could ever arrive, escape or
-           fire, which makes this the earliest rung at which a regressed transform is visible. */
+           the string a real run handed it. */
         { "s-park-witnessed", s_park_wit, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
-        /* ITS PREMISE IS `s-park-ran` AND IS DECLARED, because this row is a NEGATIVE and a negative is
-           satisfied by its statement not running: `!s_park_built` reads 1 before any flow has been
-           dispatched, and that 1 went into the verdict as a statement about a search whose candidates had
-           never executed an opcode. MEASURED on the run that found it — at the first table of a native
-           smoke, composed at one unit of engine work with ZERO context switches and ZERO jobs run, this row
-           and `s-park-noescape` read 1 beside `s-park-ran` at 0. The prose above already names `-ran` as the
-           premise of this ladder in words; this is that sentence made a declaration. */
-        { "s-park-nobuild", !s_park_built, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
+        /* WHICH WRITES THIS SEARCH LEARNS FROM, by byte provenance. Its probe's bytes reach `lhHost` directly
+           and `lhAttr` through the page's `.slice(1)` — both are its parse contexts — and never `lhOther`, which
+           in its runs carries `state.other` unknown. Exactly two is the positive and the negative together,
+           and `s-other-ownwrites` is the same question asked of the other source. */
+        { "s-park-ownwrites", s_park_nwit == 2, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .reach = "s-park-ran" },
+        { "s-other-ownwrites", s_other_nwit == 1, "lhOther.innerHTML", SESS_EXPLORE },
+        /* WHAT IT BUILDS FROM THEM IS DELIVERABLE OR WITHDRAWN. §13.2.5.1 "Data state" is left only through
+           `<`, which the fragment percent-encode set holds; the attribute-value context `lhAttr` gives it is
+           left by `'` and `/`, which it does not. So the search builds escapes, and every one it keeps carries
+           no byte the source's declaration encodes — a kept one that does is a regressed delivery table, seen
+           here before it could arrive, escape or fire. Its premise is that something was built. */
+        { "s-park-keptdeliverable", s_park_built && s_park_kept == 0, "lhHost.innerHTML = location.hash",
+          SESS_EXPLORE, .reach = "s-park-ran" },
         /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one — and now names ONE. The three
            rows that stood here read `seen`, `ran` and `atsink`, and the middle one was computed from `tried`,
            which is raised where a candidate FLOW IS CREATED: it said 1 for a search whose flows the scheduler

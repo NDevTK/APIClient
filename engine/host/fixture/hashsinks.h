@@ -41,6 +41,11 @@ static const char HTML_HASHSINKS[] =
        is still `location.hash`, which carries the percent-encode set through the derivation. */
     "var lhAttr = document.createElement('div'); document.body.appendChild(lhAttr);"
     "lhAttr.innerHTML = \"<img alt='\" + location.hash.slice(1) + \"'>\";"
+    /* ANOTHER ATTACKER SOURCE INTO A MARKUP WRITE, the negative control of `s-park-ownwrites`: in a
+       `location.hash` candidate run `state.other` is still unknown, so this write carries none of that
+       search's bytes and must not be learned as its context; its own search learns it alone. */
+    "var lhOther = document.createElement('div'); document.body.appendChild(lhOther);"
+    "lhOther.innerHTML = \"<b title='\" + state.other + \"'>\";"
     /* AND THE SAME SOURCE INTO THE URL CONTEXT, the third of the three, whose class has one vector —
        solver/solve.h: "navigating executes the `javascript:` scheme and nothing else does". The fragment set
        holds space, `"`, `<`, `>` and the backtick and none of `javascript:X9()`, so this one is solvable

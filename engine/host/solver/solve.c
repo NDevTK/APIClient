@@ -928,6 +928,19 @@ static void learn_witness(Cand *e, const char *out) {
            "produced by one of this search's own candidate flows reaching the sink and solve_flow_begin counts "
            "a turn at every switch-in of one, so `turns` is not counting the flow that produced this and the "
            "parked record's scheduling half is reporting about a different quantity than it names");
+    /* The witness is credited on byte provenance: the string holds the running candidate's own substituted
+       bytes, and that candidate is this search's. A probe's bytes reach every write the page builds from the
+       value the substitution returned, through any transform that keeps them, and each such write is a parse
+       context of this search. */
+    {
+        const Flow *f = flow_running();
+        DCHECK(f && f->cand_src && f->cand_payload && !strcmp(f->cand_src, e->src) &&
+                   concolic_candidate_delivered() && strstr(out, f->cand_payload),
+               "a sink search is crediting a context witness whose string does not carry the running "
+               "candidate's own substituted bytes, or whose candidate is another search's — a parse context "
+               "is learned only from a write the search's own probe reached, so this one would derive escapes "
+               "for bytes some other source or the page itself wrote");
+    }
     for (int i = 0; i < e->nwit; i++) if (!strcmp(e->wit[i], out)) return;
     if (e->nwit >= e->witcap) {
         e->witcap = e->witcap ? e->witcap * 2 : 4;
