@@ -60,6 +60,7 @@ const ENDPOINT_ABSENT = Object.freeze({
   pathParamsForced: null, // [{name, values}] the same holes at the one grade that must never be offered —
                           // values EVERY sighting of which stood on a forced arm. null = the run forced
                           // nothing into a hole. `[]` never reaches here, for the reason above.
+  pathParamsDriven: null,
   pathParamDomains: null, // [{name, excludes?, bounds?, predicates?, looselyEquals?}] what this address's
                           // own gates PROVED about each templated hole, keyed by the SAME name the two pools
                           // above are keyed by; null = no gate's claim survived every observed path to any
@@ -76,6 +77,11 @@ const ENDPOINT_ABSENT = Object.freeze({
                           // byte nobody wrote where it did not. `mime` may be null — §5.2's BufferSource arm
                           // supplies no Content-Type, which is the ordinary case for exactly this population.
 });
+
+/* `pathParamsDriven` is [{name, values}], the drive mark over `pathParams`: per hole, the offerable values only
+   this tool's own drives computed (lib/learn.js's `_astDrivenValues`), each one also in that hole's
+   `pathParams` entry. null = no offerable hole value is a drive's alone. A store written before the name
+   carries no key, which is its version and not "no drive": lib/persistence.js's shape bump sheds it. */
 
 /* WHY THE HOLES TAKE TWO FIELDS AND NOT ONE, AND WHY THE SECOND IS NOT A DUPLICATE OF THE FIRST.
    `pathParams` is this record's only statement about what the run learned for a templated segment, and its
@@ -434,32 +440,28 @@ function provenanceOffersExample(p) {
 /* `driven` and `inDriven` are the drive marks beside the offerable pools: the subset of each `valid` list that
    only sightings inside this tool's own drives (the @H record's `driven`) computed. The same one-way law holds:
    a value one page sighting computed is the page's, so an undriven incoming value clears its mark, and a value
-   enters the mark only when a drive is the first to offer it. `null` is a side that states no mark (a record
-   that does not carry one): it marks nothing new and clears nothing. The answer's `driven` is `null` only when
-   neither side states one. */
+   enters the mark only when a drive is the first to offer it. Every record that carries a pool carries its
+   mark, so both sides are lists. */
 function foldValuePools(valid, forced, inValid, inForced, driven, inDriven) {
   DCHECK(Array.isArray(valid) && Array.isArray(forced) && Array.isArray(inValid) && Array.isArray(inForced),
          "the value-pool fold was handed something that is not a pool — every caller normalises its record's " +
          "own spelling of an empty pool (an omitted key, `null`, an absent field) to `[]` BEFORE this point, " +
          "because deciding what an absence means is the record's job and not the fold's, and a fold that " +
          "guessed would answer for a producer that had gone silent");
-  DCHECK((driven === null || (Array.isArray(driven) && driven.every((x) => valid.indexOf(x) >= 0))) &&
-         (inDriven === null || (Array.isArray(inDriven) && inDriven.every((x) => inValid.indexOf(x) >= 0))),
-         "the value-pool fold was handed a drive mark that is neither a stated absence nor a subset of its own " +
-         "offerable pool — a mark names offered values whose every sighting was a drive, so a member outside " +
-         "the pool is a value marked that nothing offers");
-  const v = valid.slice(), f = forced.slice();
-  const d = driven === null && inDriven === null ? null : (driven === null ? [] : driven.slice());
+  DCHECK(Array.isArray(driven) && driven.every((x) => valid.indexOf(x) >= 0) &&
+         Array.isArray(inDriven) && inDriven.every((x) => inValid.indexOf(x) >= 0),
+         "the value-pool fold was handed a drive mark that is not a subset of its own offerable pool — a mark " +
+         "names offered values whose every sighting was a drive, so a member outside the pool is a value " +
+         "marked that nothing offers");
+  const v = valid.slice(), f = forced.slice(), d = driven.slice();
   for (const x of inValid) {
     const at = f.indexOf(x);
     const fresh = v.indexOf(x) < 0;
     if (at >= 0) f.splice(at, 1);          // THE FOLD: most-observed wins, and it wins by MOVING.
     if (fresh) v.push(x);
-    if (inDriven !== null) {
-      const di = d.indexOf(x);
-      if (inDriven.indexOf(x) < 0) { if (di >= 0) d.splice(di, 1); }   // a page sighting: the page's value
-      else if (fresh) d.push(x);                                        // first offered by a drive
-    }
+    const di = d.indexOf(x);
+    if (inDriven.indexOf(x) < 0) { if (di >= 0) d.splice(di, 1); }   // a page sighting: the page's value
+    else if (fresh) d.push(x);                                        // first offered by a drive
   }
   /* AND THE OTHER DIRECTION IS NOT SYMMETRIC. An incoming FORCED value joins the forced pool only where no
      pool already holds it: if the offerable pool has it, some path computed it unforced and the fold has
@@ -648,7 +650,7 @@ function endpointHolePairs(ep, where) {
              "SKIPS any hole nothing filled at that grade, so an empty one would surface a templated segment " +
              "as if a value had been learned for it");
       let cur = out.get(pp.name);
-      if (!cur) { cur = { valid: [], forced: [] }; out.set(pp.name, cur); }
+      if (!cur) { cur = { valid: [], forced: [], driven: [] }; out.set(pp.name, cur); }
       /* CONCAT AND NOT A FOLD: within ONE record the two lists are already disjoint — `checkEndpointRecord`
          asserts exactly that — so this side composes and the caller's fold is the only place that decides. */
       cur[side] = cur[side].concat(pp.values);
@@ -656,6 +658,7 @@ function endpointHolePairs(ep, where) {
   };
   take("pathParams", "valid");
   take("pathParamsForced", "forced");
+  take("pathParamsDriven", "driven");
   return out;
 }
 
@@ -666,7 +669,8 @@ function endpointHolePairs(ep, where) {
    answers to one question, and the question is this walk's: an absent entry is the positive statement that no
    path filled this segment, never a list to default. It is FROZEN because a caller that mutated a shared
    empty pool would corrupt every later miss, which is the one way a shared constant fails silently. */
-const _NO_HOLE_POOLS = Object.freeze({ valid: Object.freeze([]), forced: Object.freeze([]) });
+const _NO_HOLE_POOLS = Object.freeze({ valid: Object.freeze([]), forced: Object.freeze([]),
+                                       driven: Object.freeze([]) });
 
 /* THE RECORD'S PROVED DOMAINS AS PER-NAME CLAIMS — `endpointHolePairs` for the other half of the shape, and
    written beside it for the same reason: the moat's cross-document fold and the Send panel's attach both need
@@ -897,6 +901,10 @@ function checkEndpointRecord(ep, where) {
          "existed carries no such key, and it must crash rather than be read as the absence, because " +
          "\"stored by an older build\" and \"this run forced nothing\" are different facts and only one of " +
          "them is something the moat observed");
+  DCHECK(ep.pathParamsDriven === null || Array.isArray(ep.pathParamsDriven),
+         "an endpoint record's `pathParamsDriven` is neither a list of drive-marked examples nor a stated " +
+         "absence (" + where + ") — `undefined` here is a store written before the name, which the shape " +
+         "bump sheds rather than reads as \"no drive\"");
   DCHECK(ep.pathParamDomains === null || Array.isArray(ep.pathParamDomains),
          "an endpoint record's `pathParamDomains` is neither a list of proved domains nor a stated absence (" +
          where + ") — `null` MEANS no gate's claim survived every observed path to a templated hole of this " +
@@ -962,6 +970,16 @@ function _checkHoleDomains(ep, where) {
    having been bypassed by a producer that appended where it had to promote, and the Send panel would offer
    the value as one the app computes AND label it as one no client sends. */
 function _checkPathParamPools(ep, where) {
+  /* The drive mark names offerable hole values, so each of its values is in that hole's `pathParams` entry. */
+  if (ep.pathParamsDriven !== null) {
+    for (const pp of ep.pathParamsDriven) {
+      const offered = ep.pathParams === null ? undefined : ep.pathParams.find((q) => q.name === pp.name);
+      DCHECK(offered !== undefined && pp.values.every((v) => offered.values.indexOf(v) >= 0),
+             "an endpoint record marks a value of `" + pp.name + "` as computed only by this tool's drives that " +
+             "its offerable hole pool does not hold (" + where + ") — the mark is a subset of `pathParams`, so " +
+             "a member outside it is a value marked that nothing offers");
+    }
+  }
   if (ep.pathParams === null || ep.pathParamsForced === null) return;
   const offerable = new Map();
   for (const pp of ep.pathParams) offerable.set(pp.name, pp.values);

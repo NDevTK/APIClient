@@ -625,15 +625,10 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          can legitimately disagree about a value's grade. Unioning each pool into its namesake would then put
          the same string in both, which lib/field-def.js's own disjointness DCHECK rejects at makeFieldDef and
          which the panel would render as one value offered as the app's and labelled as no client's. */
-      /* The flat record's holes carry no drive mark, so they clear none and mark none: a value the schema
-         marked keeps its mark, and one only the flat record offers arrives unmarked.
-         Named residual. Not covered: the flat endpoint record (`pathParams`, lib/endpoint-record.js) has no
-         drive mark of its own. Next diff: `pathParamsDriven` beside `pathParamsForced`, projected by
-         lib/merge.js's `_astPathParamPool` and folded at its record merge. Its absence shows as a Send-panel
-         example of a hole the resolved schema does not declare, computed only by a drive, rendered unmarked. */
+      /* …and the drive marks: the schema's over its pool, the flat record's (`pathParamsDriven`) over its. */
       const _f = foldValuePools(priorVals === null ? [] : priorVals,
                                 priorForced === null ? [] : priorForced, _hp.valid, _hp.forced,
-                                priorDriven === null ? [] : priorDriven, null);
+                                priorDriven === null ? [] : priorDriven, _hp.driven);
       /* AN EMPTY POOL IS WRITTEN `null`, WHICH IS THIS MAP'S ONE SPELLING OF "nothing was learned at this
          grade" — the same one both literals above declare. A forced-only hole therefore leaves
          `_astValidValues: null` rather than `[]`, and there is nothing for the prefill below to take, which

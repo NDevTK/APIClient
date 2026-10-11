@@ -175,16 +175,14 @@ function scheduleSave() {
    more instance of it. The bump is NOT optional for a name whose absence and whose stated `null` are
    different facts: "stored by an older build" and "this request sends no byte-composed body" are exactly the
    pair `pathParamsForced` states, and reading the first as the second is what the ASK arm exists to stop.
-   AND TO 8 WITH IT AGAIN, FOR THE OTHER HALF OF A SHAPE RATHER THAN A FOURTH BODY ARM. `pathParamDomains` is
-   what the run's own gates PROVED about each templated hole — the DOMAIN half CLAUDE.md §@H says a report
-   carries beside its provenance, "and carrying only one of them is a WRONG REPORT, NOT A PARTIAL ONE". The
-   record held the value pools and lib/merge.js dropped the four domain facts sitting on the very same method
-   parameters it copied those pools from, so lib/send.js declared a hole out of this record and stated
-   `_excludedValues`/`_bounds`/`_predicates`/`_looselyEquals` as `null` — four absences nothing had observed,
-   which lib/popup-form.js renders exactly as it renders a segment no gate ever touched. A store written at 7
-   carries no such key, and the bump is NOT optional for the reason above: "stored by an older build" and "no
-   gate's claim survived every observed path" are two facts and only one of them is something the moat saw. */
-const _STORE_SHAPE = 8;
+   AND TO 8 FOR `pathParamDomains`, what the run's own gates PROVED about each templated hole (the DOMAIN half
+   a report carries beside a value's provenance): a store written at 7 carries no such key, and
+   "stored by an older build" and "no gate's claim survived every observed path" are two facts.
+   AND TO 9 FOR `pathParamsDriven`, the drive mark over each hole's offerable values: a store written at 8
+   carries no such key, and "stored by an older build" and "no hole value is a drive's alone" are two facts,
+   so those stores are ASKED and their endpoints shed against `pageUrl` or stranded and named, never read as
+   unmarked. The bump is not optional for either name, for the reason above. */
+const _STORE_SHAPE = 9;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap

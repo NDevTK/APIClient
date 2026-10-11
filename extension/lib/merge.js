@@ -41,6 +41,22 @@ function _astPathParamPool(method, poolField) {
   return out.length ? out : null;
 }
 
+/* The drive mark projected beside `pathParams`: per hole, the drive-marked values among the ones
+   `_astPathParamPool` copied, so the mark stays a subset of the capped offerable list. */
+function _astPathParamDrivenPool(method) {
+  const offered = _astPathParamPool(method, "_astValidValues");
+  if (offered === null) return null;
+  const out = [];
+  for (const pp of offered) {
+    const marks = method.parameters[pp.name]._astDrivenValues;   // lib/learn.js omits the key when empty
+    if (marks === undefined) continue;
+    DCHECK(Array.isArray(marks), "a path parameter's `_astDrivenValues` is neither omitted nor a list");
+    const vals = pp.values.filter((v) => marks.indexOf(v) >= 0);
+    if (vals.length) out.push({ name: pp.name, values: vals });
+  }
+  return out.length ? out : null;
+}
+
 /* ONE METHOD'S TEMPLATED-HOLE DOMAINS, PROJECTED ONTO THE FLAT ENDPOINT RECORD — the OTHER half of the shape
    §@H says a report must carry, off the SAME objects `_astPathParamPool` already reads and takes only the
    values from. lib/learn.js merges all four onto the method parameter beside the two pools; this walk was
@@ -438,6 +454,8 @@ function mergeASTResultsIntoVDD(tab, results) {
                its own row as the real observation it is. */
             pathParams: _astPathParamPool(_learned.method, "_astValidValues"),
             pathParamsForced: _astPathParamPool(_learned.method, "_astForcedValues"),
+            /* …and the drive mark over the offerable pool, kept to the values that pool projected. */
+            pathParamsDriven: _astPathParamDrivenPool(_learned.method),
             /* AND THE OTHER HALF OF EVERY ONE OF THOSE HOLES, OFF THE SAME METHOD PARAMETERS. The two pools
                above are what the code COMPUTED for a segment; this is what its own gates PROVED the segment
                must satisfy, and §@H is explicit that a shape carrying one of the two is a WRONG report rather
@@ -899,8 +917,7 @@ function _foldEndpointRecordInto(into, from, key) {
   for (const name of new Set([..._a.keys(), ..._b.keys()])) {
     const x = _a.has(name) ? _a.get(name) : _NO_HOLE_POOLS;
     const y = _b.has(name) ? _b.get(name) : _NO_HOLE_POOLS;
-    /* The flat record carries no drive mark (the residual at lib/send.js's schema fold), so neither side states one. */
-    _folded.set(name, foldValuePools(x.valid, x.forced, y.valid, y.forced, null, null));
+    _folded.set(name, foldValuePools(x.valid, x.forced, y.valid, y.forced, x.driven, y.driven));
   }
   /* THE FOLD DOES NOT TRUNCATE, AND `PATH_PARAM_EXAMPLE_CAP` DOES NOT BELONG HERE — the cap's own stated
      defence has no instance at this seam. It reads, at its declaration, "a cap over what this record COPIES
@@ -947,6 +964,7 @@ function _foldEndpointRecordInto(into, from, key) {
   };
   into.pathParams = _project("valid");
   into.pathParamsForced = _project("forced");
+  into.pathParamsDriven = _project("driven");
   /* THE DOMAIN HALF OF THE SAME HOLES, WHICH MERGES BY THE OPPOSITE LAW TO THE POOLS ABOVE AND ROUTES TO THE
      RULES THAT ALREADY SPELL IT. A VALUE is knowledge that accumulates, so the pools UNION; a DOMAIN is a
      claim about the address, so it belongs on the record only where EVERY observed path obeyed it and the four
