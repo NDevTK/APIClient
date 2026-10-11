@@ -12785,10 +12785,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            an adopt: the source is still in the document it came from, which an adopt would have moved. */
         { "/api/importdeep", "impstayed" },
         { "/api/importdeep", "%3Cp%20class%3D%22a%22%3Ex%3Cb%3Ey%3C%2Fb%3E%3C%2Fp%3E%3Ci%3Ez%3C%2Fi%3E" },
-        /* the three arms of `(boolean or ImportNodeOptions)`: omitted is 0 children, `{}` is 2, `{selfOnly:
-           true}` is 0, explicit `true` is 2. An engine that read the omitted call as the dictionary arm
-           answers `no=2` and every other digit the same, so the STRING is the claim and no single count is. */
-        { "/api/importarm",  "no=0&dict=2&self=0&bool=2&attr=impattr" },
         /* step 1's two node kinds and the declaration's §3.2.15 refusal, in order */
         { "/api/importthrow", "NotSupportedError,NotSupportedError,TypeError" },
         { "/api/importreg",  "impscoped,impown" },
@@ -12873,6 +12869,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     for (unsigned ai = 0; ai < sizeof(PLATFORM_ALGOS) / sizeof(PLATFORM_ALGOS[0]); ai++)
         fold_row(&platalgo_tt, &platalgo_why,
                  emitted_record_has(js, PLATFORM_ALGOS[ai][0], PLATFORM_ALGOS[ai][1]), PLATFORM_ALGOS[ai][0]);
+    /* The arms of importNode's `(boolean or ImportNodeOptions)`: omitted is 0 children, `{}` is 2, `{selfOnly:
+       true}` is 0, explicit `true` is 2. An engine that read the omitted call as the dictionary arm answers
+       `no=2` and every other digit the same, so the claim is all five params of the one statement, each the
+       only value its param carries. A record lists its params apart, so no query-string needle can ask it. */
+    fold_row(&platalgo_tt, &platalgo_why,
+             param_value_only(js, "/api/importarm", "no", "0") && param_value_only(js, "/api/importarm", "dict", "2") &&
+             param_value_only(js, "/api/importarm", "self", "0") &&
+             param_value_only(js, "/api/importarm", "bool", "2") &&
+             param_value_only(js, "/api/importarm", "attr", "impattr"),
+             "/api/importarm");
 
     /* ---- §8.1.6.4 step 7.4: A REPORT THIS ENGINE TAKES BACK -------------------------------------------------
      *
