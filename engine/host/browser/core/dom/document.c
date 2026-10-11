@@ -145,9 +145,9 @@ typedef struct Document {
     PermissionsPolicy   *permissions_policy;
     /* Permissions Policy §10.1's report-only permissions policy: "Every Document has a report-only permissions
        policy, which is a permissions policy, which is initially empty", set by §9.6 with report-only true (the
-       `Permissions-Policy-Report-Only` header). A second policy, not a flag: Permissions Policy §9.10 compares the
-       two answers ("if result is `Enabled` and report-only result is `Disabled`" is its report arm), and §9.6 re-runs
-       §9.5 for it so a report-only header never narrows the enforced answer. */
+       `Permissions-Policy-Report-Only` header). A second policy, not a flag: Permissions Policy §9.10 reads both
+       answers ("if result is `Disabled`" reports an enforced violation, "else if report-only result is `Disabled`"
+       a report-only one), and §9.6 re-runs §9.5 for it so a report-only header never narrows the enforced answer. */
     PermissionsPolicy   *report_only_permissions_policy;
     /* HTML §7.1.5's active sandboxing flag set: a field of the Document, not the policy container (§7.5.1's creation
        table lists them on separate rows). Written once, by the install below; no standard writes it again, so it is
@@ -1304,10 +1304,10 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
 /* Bytes for a DOMString a factory is about to put in the tree, when the value may be unknown external input.
    Lexbor stores bytes, and quickjs's `js_force_tostring` asserts by design that a concolic never becomes a
    `const char *` ("the fix is never here"), so the edge that asked answers. The answer is the shape, as
-   core/dom/node.c's `js_cd_set_data` gives for DOM §4.10's `CharacterData.data` ("Unknown external input has no
-   bytes: its SHAPE is what the node carries"), so a source parked in the tree as text reads back as that source. It
-   invents nothing: a shape displays a value the run has, and solver/attr_shadow.c keeps the taint on the slot.
-   `*owned` says who frees it: a shape is borrowed from the concolic, a converted string is this function's.
+   core/dom/node.c's `js_cd_set_data` gives for DOM §4.10's `CharacterData.data` (node.c: unknown external input has
+   no bytes, and its shape is what the node carries), so a source parked in the tree as text reads back as that
+   source. It invents nothing: a shape displays a value the run has, and solver/attr_shadow.c keeps the taint on the
+   slot. `*owned` says who frees it: a shape is borrowed from the concolic, a converted string is this function's.
    Named residual. Not covered: §4.5's `createProcessingInstruction(target, data)` and `createCDATASection(data)`
    take bytes from a byte consumer, so an unknown reaching either dies at that assertion; each runs a step over the
    bytes (§4.5 step 2's `]]>` refusal, the target's match against `xml`) that a shape would decide about a string the
@@ -3716,8 +3716,8 @@ bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature)
        removing an ancestor `<iframe>` stops this document being fully active with nothing done to its navigable. */
     if (!document_fully_active(ctx))
         return false;
-    /* Step 3: Permissions Policy §9.10 "on feature, document, and document's origin", so §9.10's `origin` is this
-       document's own, and `report` takes the default true. Step 4 is the other answer. */
+    /* Step 3, HTML §4.8.5's "on feature, document, and document's origin": Permissions Policy §9.10's `origin` is
+       this document's own, and `report` takes the default true. Step 4 is the other answer. */
     {
         const Origin *origin = window_proxy_origin(d->proxy);
 
