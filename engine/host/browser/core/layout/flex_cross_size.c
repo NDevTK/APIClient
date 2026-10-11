@@ -12,6 +12,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/flex_baseline.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
@@ -88,8 +89,8 @@ static CssPx fx_cross_margins_stretch_fit(lxb_dom_element_t *el, bool vertical)
     return m;
 }
 
-/* One resolution that the baseline refusal, step 11's stretched test and core/layout/flex_position.h's §9.6
-   placement all read, so they cannot disagree about `align-self: auto`. See flex_cross_size.h. */
+/* One resolution that core/layout/flex_baseline.h, step 11's stretched test and core/layout/flex_position.h's
+   §9.6 placement all read, so they cannot disagree about `align-self: auto`. See flex_cross_size.h. */
 CssAlign flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
     if (item != NULL) {
@@ -124,44 +125,6 @@ static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *ite
     if (!css_computed_length_is(item, prop.size, CSS_KEYWORD_AUTO)) return false;
     return !css_computed_length_is(item, prop.margin_start, CSS_KEYWORD_AUTO) &&
            !css_computed_length_is(item, prop.margin_end, CSS_KEYWORD_AUTO);
-}
-
-/* css-flexbox-1 §9.4's step 8.1, the baseline group, which is not computed and so must not be dropped from
-   step 8.3's maximum. §8.3 "Cross-axis Alignment: the align-items and align-self properties" declares
-   `flex-start | flex-end | center | baseline | stretch` (`align-self` adds `auto`), with "align-items sets the
-   default alignment for all of the flex container's items, including anonymous flex items. align-self allows
-   this default alignment to be overridden for individual flex items." css-align-3 §4.2's `first baseline` and
-   `last baseline` are both baseline alignments. */
-static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_dom_element_t *item,
-                                             lxb_dom_node_t *subject)
-{
-    char nbuf[160];
-
-    if (flex_cross_size_resolved_align(container, item).value != CSS_KEYWORD_BASELINE) return;
-    DFAILF("%s: this FLEX ITEM is BASELINE-ALIGNED in the cross axis (css-flexbox-1 §8.3 \"Cross-axis "
-           "Alignment: the align-items and align-self properties\"), so css-flexbox-1 §9.4 \"Cross Size "
-           "Determination\"' step 8 puts it in the FIRST of its two collections and not the second: "
-           "\"Collect all the flex items whose inline-axis is parallel to the main-axis, whose align-self is "
-           "baseline, and whose cross-axis margins are both non-auto. Find the largest of the distances "
-           "between each item's baseline and its hypothetical outer cross-start edge, and the largest of the "
-           "distances between each item's baseline and its hypothetical outer cross-end edge, and sum these "
-           "two values.\" THAT SUM IS NOT THIS ITEM'S OUTER HYPOTHETICAL CROSS SIZE and it is not bounded by "
-           "it either — two items whose baselines sit at different depths push the line TALLER than either of "
-           "them is — so taking the walk below for it would report a line shorter than the page draws, which "
-           "is the one answer a crash here is preferable to. "
-           "FOR §4 \"Flex Items\"' ANONYMOUS FLEX ITEM THE KEYWORD CAME FROM THE CONTAINER, which §8.3 "
-           "states outright — \"align-items sets the default alignment for all of the flex container's items, "
-           "including anonymous flex items\" — so that box is in §9.4 \"Cross Size Determination\"' "
-           "step 8.1's collection exactly as an element "
-           "item declaring `align-self: auto` under the same container is. "
-           "WHAT IT NEEDS IS A BASELINE PER ITEM, MEASURED IN THE SAME FRAME AS THE OUTER CROSS EDGES, and "
-           "core/layout/block_flow.h has both halves: `block_flow_first_line_box_baseline` and "
-           "`block_flow_last_line_box_baseline` each report a distance from the box's TOP CONTENT EDGE and "
-           "each answer FALSE for a box with no in-flow line box, which is css-flexbox-1 §8.5 \"Flex "
-           "Container Baselines\"' own fallback condition. So what is missing is §8.5's choice between them "
-           "and the two distances' conversion from the content edge to the item's OUTER cross edges, not a "
-           "measurement",
-           box_subject_node(subject, nbuf, sizeof nbuf));
 }
 
 /* css-flexbox-1 §9.4 "Cross Size Determination"' step 8 for a single-line container's line (multi-line:
@@ -251,28 +214,31 @@ static CssPx fx_outer_hypothetical_cross(lxb_dom_element_t *container, lxb_dom_e
 /* §4 "Flex Items"' anonymous flex item's outer hypothetical cross size: step 7 over the one non-element box.
      - Inner: an "anonymous block container" holding a child text sequence and no block-level box, so CSS 2.2
        §9.4.2 "Inline formatting contexts" applies and CSS 2.1 §10.6.3's first bullet, "the bottom edge of the
-       last line box", is the height (core/layout/line_box.h). The width is stated explicitly (`used_main`):
-       `style` is the container, whose content box is the whole line, not this item's share.
+       last line box", is the height (core/layout/line_box.h). The width is stated explicitly, the item's used
+       main size: `style` is the container, whose content box is the whole line, not this item's share.
      - Outer: zero. Anonymous, it has initial edges ("non-inherited properties have their initial value", CSS 2.2
        §9.2.1.1 "Anonymous block boxes"); reading them off the container would be the mistake core/layout/
        flex_line.c avoids in the main axis by answering zero for a NULL element. */
-static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container, lxb_dom_node_t *first,
-                                                   lxb_dom_node_t *end, CssPx used_main)
+CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLineMember *m,
+                                      CssPx *first_baseline, CssPx *last_baseline)
 {
     bool any_line_box;
-    CssPx first_baseline, last_baseline, inner;
+    CssPx inner;
     BlockFlowRun seq;
+    lxb_dom_node_t *first = m->first;
     char nbuf[160];
 
+    DCHECK(m->anonymous, "an anonymous flex item's line boxes were measured for an element item");
     /* §4's child text sequence as core/layout/block_flow.h's half-open run: `after` is the box-tree member
        before the sequence (NULL at the container's start) and `end` one past its last text node, as
        core/layout/flex_line.c hands it to the intrinsic pass. Not `first->prev`: under css-display-3 §2.5's
        splice that is NULL at the start of a `contents` element's children, which would start the run at the
        container's own start. */
     seq.after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(first)));
-    seq.end = end;
-    inner = line_box_content_height(container, seq, line_box_available_width_stated(used_main),
-                                    &any_line_box, &first_baseline, &last_baseline);
+    seq.end = m->end;
+    inner = line_box_content_height(container, seq,
+                                    line_box_available_width_stated(flex_line_used_main_size(container, first)),
+                                    &any_line_box, first_baseline, last_baseline);
 
     DCHECKF(any_line_box,
             "%s: css-flexbox-1 §4 \"Flex Items\"' ANONYMOUS FLEX ITEM was measured and CSS 2.2 §9.4.2 "
@@ -291,8 +257,15 @@ static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container,
            "uppermost box top and the lowermost box bottom\" — which core/layout/line_box.c asserts "
            "non-negative at its own origin — so a negative here is a derivation that lost an operand rather "
            "than a page");
-    /* §4's box has no margin, border or padding to add, so the inner size is the outer one. */
     return inner;
+}
+
+/* §4's box has no margin, border or padding to add, so the inner size is the outer one. */
+static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container, const FlexLineMember *m)
+{
+    CssPx first_baseline, last_baseline;
+
+    return flex_cross_size_anonymous_lines(container, m, &first_baseline, &last_baseline);
 }
 
 /* The two preconditions both entries state, in one place: the box is a flex container and its block axis is
@@ -349,25 +322,17 @@ static void fx_require_supported_container(lxb_dom_element_t *container)
                box_subject_computed(container, "writing-mode", wbuf, sizeof wbuf));
 }
 
-/* §9.4's steps 8.2 and 8.1's refusal for one line member on a block cross axis: its outer hypothetical cross
-   size. An element item is step 7 plus its edges; §4's anonymous item is line boxes at its used main size.
-   The baseline refusal comes first because §9.4's step 8.1 collects those items instead. */
+/* §9.4's step 8.2 for one line member on a block cross axis: its outer hypothetical cross size. An element item
+   is step 7 plus its edges; §4's anonymous item is line boxes at its used main size. */
 static CssPx fx_member_outer_hypothetical_cross(lxb_dom_element_t *container, const FlexLineMember *m)
 {
     lxb_dom_element_t *item;
 
     DCHECK(m->first != NULL, "a flex line member carries no identity node");
-    if (m->anonymous) {
-        /* Step 8.1 applies to this box too: §8.3's `align-items` sets the default "for all of the flex
-           container's items, including anonymous flex items". */
-        fx_require_no_baseline_alignment(container, NULL, m->first);
-        return fx_anonymous_outer_hypothetical_cross(container, m->first, m->end,
-                                                     flex_line_used_main_size(container, m->first));
-    }
+    if (m->anonymous) return fx_anonymous_outer_hypothetical_cross(container, m);
     DCHECK(m->first->type == LXB_DOM_NODE_TYPE_ELEMENT && m->end == NULL,
            "a flex line member that is not §4's anonymous item is not an element, or carries a text-sequence end");
     item = lxb_dom_interface_element(m->first);
-    fx_require_no_baseline_alignment(container, item, m->first);
     return fx_outer_hypothetical_cross(container, item, true);
 }
 
@@ -378,6 +343,7 @@ static CssPx fx_member_outer_hypothetical_cross(lxb_dom_element_t *container, co
 static size_t fx_line_cross_sizes(lxb_dom_element_t *container, CssPx **sizes)
 {
     FlexLineMember *m;
+    FlexBaselineExtent group;
     size_t n, lines, i;
 
     n = flex_line_members(container, &m);
@@ -390,9 +356,17 @@ static size_t fx_line_cross_sizes(lxb_dom_element_t *container, CssPx **sizes)
     for (i = 0; i < n; i++) {
         DCHECK(m[i].line < lines && (i == 0 || m[i].line >= m[i - 1].line),
                "flex_line_members answered lines that are not contiguous runs in collection order");
+        /* Step 8.2: "Among all the items not collected by the previous step". */
+        if (flex_baseline_participates(container, &m[i])) continue;
         (*sizes)[m[i].line] = css_px_max((*sizes)[m[i].line], fx_member_outer_hypothetical_cross(container, &m[i]));
     }
     free(m);
+    /* Step 8.1: "Find the largest of the distances between each item's baseline and its hypothetical outer
+       cross-start edge, and the largest of the distances between each item's baseline and its hypothetical
+       outer cross-end edge, and sum these two values." */
+    for (i = 0; i < lines; i++)
+        if (flex_baseline_line_extent(container, i, &group))
+            (*sizes)[i] = css_px_max((*sizes)[i], css_px_add(group.before, group.after));
     return lines;
 }
 

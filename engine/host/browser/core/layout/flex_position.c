@@ -11,6 +11,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/flex_baseline.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
@@ -221,12 +222,10 @@ static CssPx fp_cross_offset(lxb_dom_element_t *container, lxb_dom_element_t *it
                    box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.value));
         share = align.value == CSS_KEYWORD_SELF_END ? 1.0 : 0.0;
         break;
+    /* css-align-3 §9.3 places the item by its baseline-sharing group, fallback alignment included, so the
+       share and the `safe` test below do not apply. */
     case CSS_KEYWORD_BASELINE:
-        DFAILF("%s: `align-self: %s baseline` aligns the item's baseline with the line's baseline group (§9.4 "
-               "step 8.1); build that alignment over core/layout/block_flow.h's first-line-box baseline before "
-               "placing it",
-               box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.baseline));
-        break;
+        return css_px_add(flex_baseline_margin_offset(container, item, line), mt);
     default:
         DFAILF("%s: `%s` is no value css-align-3 §6.2's `align-self` or css-align-3 §7.2's `align-items` resolves to",
                box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.value));

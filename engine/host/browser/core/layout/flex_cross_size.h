@@ -27,6 +27,7 @@
 
 #include "core/css/css_align.h"
 #include "core/css/css_length.h"
+#include "core/layout/flex_line.h"
 
 /* css-flexbox-1 §9.6 "Cross-Axis Alignment"' "If a content-based cross size is needed, use the sum of the flex
    lines' cross sizes" for `container`, as a content-box extent in CSS pixels on its cross axis. `container`
@@ -65,5 +66,12 @@ CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_elem
    `auto`. §4's anonymous item is `item == NULL`: "align-items sets the default alignment for all of the flex
    container's items, including anonymous flex items". */
 CssAlign flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item);
+
+/* §9.4's step 7 for §4's anonymous item `m` of `container`: its line boxes laid out at its used main size,
+   as the content height CSS 2.1 §10.6.3's first bullet gives, with `*first_baseline` and `*last_baseline` the
+   distances from its top to its first and last line box's baseline (core/layout/line_box.h). The item always
+   holds a line box: §4 drops a sequence of document white space. */
+CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLineMember *m,
+                                      CssPx *first_baseline, CssPx *last_baseline);
 
 #endif
