@@ -2572,6 +2572,8 @@ static int idl_bytestring_check(JSContext *ctx, JSValueConst str);
 /* THE NAME A DIAGNOSTIC USES. An algorithm's dictionary has an IDL identifier; an argument's is an anonymous
    member list (the declaration passes the bare array), so it answers with what the page can see instead. It is
    never a hole a `%s` would print as "(null)". */
+static int idl_bodyinit_arm(JSContext *ctx, JSValueConst v, IdlArgType *out);
+
 static const char *idl_dict_where(const IdlDictLevel *w)
 {
     return w->name ? w->name : "the dictionary argument";
@@ -2997,6 +2999,17 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            answers CROSSES for this type, so the pass-through above already rewrote the member to IDL_ANY. */
         if (mt == IDL_STRING_UNLESS_IFACE)
             mt = idl_member_implements(ctx, dm, w, w->mv) ? IDL_ANY : IDL_DOMSTRING;
+        /* `BodyInit?` ON A DICTIONARY MEMBER — RequestInit's `body` — through the union rule the argument
+           path asks, so `{body: {toString() {...}}}` takes the USVString arm here and not at extract a body.
+           The page's null is the IDL null; an absent member was rewritten to IDL_ANY above. */
+        if (mt == IDL_BODYINIT_NULLABLE) {
+            if (JS_IsNull(w->mv)) {
+                mt = IDL_ANY;
+            } else if (idl_bodyinit_arm(ctx, w->mv, &mt) < 0) {
+                JS_FreeValue(ctx, in);
+                return -1;
+            }
+        }
         if (idl_type_pushes_level(mt)) {
             /* §3.2.17 step 4.1.4.1 CONVERTS A MEMBER BY ITS OWN DECLARED TYPE — "Let idlMemberValue be the
                result of converting jsMemberValue to an IDL value whose type is the type member is declared to
@@ -3967,6 +3980,22 @@ static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *
                           type_name);
         return -1;
     }
+    return 0;
+}
+
+/* `BodyInit?`'s §3.2.25 arm for a value that is not the IDL null: a buffer source or a value of one of the four
+   interface arms, each tested by the component that owns it, crosses as itself; anything else is the USVString
+   arm. The buffer arm is asked first because §3.2.25's buffer clauses CONVERT V, so §3.2.26's refusals run on
+   it; the interface arms are references and cross untouched. The argument boundary and the dictionary-member
+   boundary both ask it. Returns -1 with a TypeError live when §3.2.26 refuses the buffer. */
+static int idl_bodyinit_arm(JSContext *ctx, JSValueConst v, IdlArgType *out)
+{
+    if (JS_IsArrayBuffer(v) || JS_GetTypedArrayType(v) >= 0 || JS_IsDataView(v)) {
+        if (idl_buffer_source_refuse(ctx, v, "BodyInit", false, false)) return -1;
+        *out = IDL_ANY;
+        return 0;
+    }
+    *out = (blob_is(v) || form_data_is(v) || usp_list_of(v) || readable_stream_is(v)) ? IDL_ANY : IDL_DOMSTRING;
     return 0;
 }
 
@@ -5762,23 +5791,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 *slot = JS_NULL;
                 goto placed;
             }
-            /* THE FOUR INTERFACE ARMS cross as themselves; only what is none of them takes the USVString arm.
-               `new Response(blob)` stringified to the thirteen bytes of "[object Blob]" while three of those
-               interfaces existed, because the test was written when none of them did. */
-            /* THE BUFFERSOURCE ARM IS ASKED FIRST AND SEPARATELY, for the reason BlobPart's is: §3.2.25's
-               buffer clauses return the result of CONVERTING V, so §3.2.26 Buffer source types' refusals run
-               on a body that is one. The other four arms are INTERFACE types, which §3.2.25 does hand back as
-               references, so they cross untouched. A question some entries of a conversion ask and others do
-               not is one missing capability wearing several names, and this is the third entry of this one. */
-            if (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a)) {
-                if (idl_buffer_source_refuse(ctx, a, "BodyInit", false, false)) {
-                    JS_FreeValue(ctx, cb_result);
-                    return JS_STEP_ABRUPT;
-                }
-                t = IDL_ANY;
-            } else {
-                t = (blob_is(a) || form_data_is(a) || usp_list_of(a) || readable_stream_is(a))
-                  ? IDL_ANY : IDL_DOMSTRING;
+            if (idl_bodyinit_arm(ctx, a, &t) < 0) {
+                JS_FreeValue(ctx, cb_result);
+                return JS_STEP_ABRUPT;
             }
         }
 
