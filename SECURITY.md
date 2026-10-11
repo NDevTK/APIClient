@@ -296,8 +296,10 @@ Residuals, each a difference from the document's own request:
   policy is not observable from this zone. Both use the default policy, strict-origin-when-cross-origin.
 - An iframe srcdoc document's referrer source, its container's URL, is not held.
 - The document's service worker does not see the send.
-- The document's CSP `connect-src` does not bind it. The next member is the zone applying the document's
-  `connect-src` to engine and tool sends.
+- The document's CSP binds an engine page request inside the engine, not here. `fetch_main_blocked`
+  (Fetch §4.1 "Main fetch" step 7) runs for `fetch()`, XHR, images, links and scripts before a pending line
+  exists. A request whose URL is concolic is not checked, since no policy matches a shape. An operator send
+  is not checked against the frame's policy at all.
 
 ## Every way bytes leave
 
