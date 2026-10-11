@@ -5713,32 +5713,26 @@ static long g_prog_queued_cand;
    `s.integrity` or `s.nonce` onto a markup `<script src>` and reaches a detected sink, where the candidate's
    request is admitted or refused on an attribute value its own baseline run never had. */
 static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
-    /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
-       a method, so it is Fetch §2.2.5 Requests' `GET`. STATED, because the seam is keyed on the pair and a
-       park that does not say is a park the join cannot list.
-       …AND THE DESTINATION THAT SAME ALGORITHM SETS, which is the field this park was missing and the reason a
-       shipped extension compiled cross-origin data. "Fetch a classic script" is "Let request be the result of
-       creating a potential-CORS request given url, `script`, and corsSetting", and HTML §2.5.1 Terminology's
-       create-a-potential-CORS request returns "a new request whose URL is url, destination is destination" —
-       so the destination is `script` and this reply is CODE. The trusted zone reads it here; it used to read a
-       list only the module loader wrote, which named dynamic imports and never this. */
+    /* HTML §8.1.4.2 Fetching scripts' "fetch a classic script" sets no method, so it is Fetch §2.2.5's `GET`,
+       stated because the seam is keyed on the pair. Its destination is `script`: it creates "a potential-CORS
+       request given url, `script`, and corsSetting", and HTML §2.5.1 Terminology's create-a-potential-CORS
+       request returns "a new request whose URL is url, destination is destination", so the trusted zone reads
+       this reply as code. */
     JSContext *ctx = doc_realm(f->dyn_doc[at]);
-    /* THE ROW'S BODY IS ITS ADDRESS UNTIL THE REPLY TAKES IT ACROSS (solver/flow.h), and this is now the FIRST
-       read that treats it as a NUL-terminated string, so the pair is asserted here as well as at the delivery
-       that makes the same read. An address is one: it came out of script_src_absolute, which serializes a URL
-       record (URL §4.5 "URL serializing"), and every component of one has been through a percent-encode set
-       built on URL §1.3 "Percent-encoded bytes"' C0 control percent-encode set — "C0 controls and all code
-       points greater than U+007E" — so a NUL is `%00` and never the byte. */
+    /* The row's body is its address until the reply takes it across (solver/flow.h), and this is the first read
+       treating it as a NUL-terminated string, so it is asserted here as at the delivery. An address has no NUL:
+       script_src_absolute serializes a URL record (URL §4.5 URL serializing), whose components went through
+       percent-encode sets built on URL §1.3 Percent-encoded bytes' C0 control percent-encode set ("C0 controls
+       and all code points greater than U+007E"), so a NUL is `%00`. */
     const char *url = dyn_body_text(f->dyn[at]);
     FetchRequest req = { "GET", url, PENDING_DESTINATION_SCRIPT, NULL, NULL, 0,
                          /* placed below, off the element */ { NULL, 0, NULL, 0, CSP_PARSER_METADATA_UNPLACED },
                          /* …and so is the credentials mode, off the same element */
                          FETCH_CREDENTIALS_UNPLACED };
-    /* …AND §4.12.1.1's THREE METADATA MEMBERS, READ OFF THE ROW'S OWN ELEMENT. A document's external script has
-       one — engine_queue_docscript_url and the seed's address arm both take it, and flow_deliver_one_reply
-       asserts it again on the failure path. NULL is a stated answer here and not a hole: a host driving a
-       SYNTHESIZED program list has rows no `<script>` produced, and script_csp_meta answers the empty string
-       for one. */
+    /* §4.12.1.1's three metadata members, off the row's own element (engine_queue_docscript_url and the seed's
+       address arm both take it; flow_deliver_one_reply asserts it on the failure path). NULL is a stated answer:
+       a host driving a synthesized program list has rows no `<script>` produced, and script_csp_meta answers the
+       empty string. */
     ScriptCspMeta meta;
     JSValue e;
 
@@ -5749,153 +5743,102 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
            "the host is shown would be a PREFIX of the address the element names");
     meta = script_csp_meta(ctx, f->dyn_el[at]);
     req.metadata = meta.m;
-    /* …AND ITS CREDENTIALS MODE, off the row's own element and by the same §4.12.1.1 step as the injected
-       script's — see `script_credentials_mode`. A row a host SYNTHESIZED has no element and takes §8.1.4.2's
-       default script fetch options, exactly as its metadata does one line up. */
+    /* The credentials mode, off the same element by the same step as the injected script's (see
+       `script_credentials_mode`); a synthesized row takes §8.1.4.2's default script fetch options. */
     req.credentials = script_credentials_mode(f->dyn_el[at]);
-    /* …AND ITS MODE, off the element, because this park's own banner names its algorithm: "fetch a classic
-       script … creates a potential-CORS request". A document's own `<script src>` with no `crossorigin`
-       attribute is therefore `no-cors`, which is what makes an integrity policy refuse it. */
+    /* The mode, off the element: fetch a classic script creates a potential-CORS request, so a document's own
+       `<script src>` without `crossorigin` is `no-cors`, which is what an integrity policy refuses. */
     req.mode = script_request_mode(SCRIPT_TYPE_CLASSIC, f->dyn_el[at]);
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f), flow_path_pinned(f),
                      parser_inserted, flow_work_seq_next());
-    /* WHICH ROW THIS PARK IS FOR, BY NAME — it is the row's `dyn_id` rather than its position because a
-       position is a fact about the row only while the set is fixed (solver/flow.h), and this entry outlives
-       both §4.12.1.1's "immediately execute the script element" interposition and §7.5.10's removal. */
+    /* Which row this park is for, by name: the row's `dyn_id` rather than its position, which holds only while
+       the set is fixed (solver/flow.h), and this entry outlives §4.12.1.1's immediate interposition and
+       §7.5.10's removal. */
     pending_set_int(e, PEND_SCRIPT_ROW, (int64_t)f->dyn_id[at]);
-    /* AND §4.3 Scheme fetch WITH THE ADDRESS. A document's own `<script src="data:text/javascript,…">` is
-       answered inside this agent at the park, so the entry can already carry its reply when this returns and
-       the flow's next step takes the networking task source's arm above the sequence and delivers it — the
-       same door a host-answered entry leaves by, which is why the flow's own arm at the row no longer has a
-       scheme-answered exit of its own. */
+    /* And §4.3 Scheme fetch with the address: a document's own `<script src="data:text/javascript,…">` is
+       answered at the park, so the entry may already carry its reply when this returns, and the flow's next step
+       delivers it through the networking arm above the sequence, the same door as a host-answered entry. */
     pending_park_request(ctx, e, &req);
     script_csp_meta_free(ctx, &meta);
     JS_FreeValue(ctx, e);
 }
 
-/* `doc` IS WHICH DOCUMENT'S PROGRAM THIS IS, and it is a parameter at every entry rather than a fact the
-   scheduler assumes about itself. It used to be assumed: every program a flow ran was compiled with the
-   SESSION's ctx, with one `? :` for the cross-agent operation — so a document of this agent that is not the
-   one the session was rooted in had no way onto the frontier at all, and the host that had such programs (a
-   same-origin child navigable's classic scripts) kept a queue of its own and ran them itself. */
-/* WHICH FLOW OWNS THE PROGRAM IS A PARAMETER HERE and the running flow's identity is asked one level up: a
-   program the page CAUSED to run belongs to the flow that ran the code, and a JOINED document's own scripts
-   belong to the boot flow this engine mints for that document before any of it has run. Both are members of the
-   one frontier; only one of them has the thread. */
-/* AND WHERE IN THAT SEQUENCE IT LANDS IS A PARAMETER FOR THE IDENTICAL REASON (engine.h's DynPos): the slot a
-   caused program takes is a step of the SPEC of the operation that caused it, so only the caller knows it, and
-   a queue that appended by default gave every one of them the same answer — the tail — including the two the
-   spec runs before anything else in the sequence. */
-/* AND WHICH OF §8.1.4.4's TWO ALGORITHMS EVALUATES IT, AND THE ADDRESS ITS BYTES CAME FROM, for the same
-   reason again: both are facts about the ELEMENT (or about the absence of one), which only the caller has.
-   `stype` is SCRIPT_TYPE_CLASSIC for every row that is not an element's — a `setTimeout` string, a
-   `javascript:` URL, a lazy chunk, a cross-agent operation's program — and that is §8.1.4.4's answer for those
-   rather than a default. `url` is NULL for an INLINE row, whose base URL HTML §4.12.1.1 "Processing model"
-   states as the document's. */
-/* `el` IS THE `script` ELEMENT THE ROW IS THE PROGRAM OF, or NULL for a row no element caused — see
-   solver/flow.h's `dyn_el`, which states why the element is a fact about the ROW rather than something the
-   completion could re-derive, and why NULL is a positive statement rather than a hole. */
-/* `body` IS THE SHARED PROGRAM TEXT AND THIS ENTRY TAKES A REFERENCE ON IT — the caller keeps its own and
-   releases it. That is what makes the row's cost O(1) at every seed and every fork: the bytes belong to the
-   program, not to the timeline holding it (solver/dyn_body.h). */
-/* `parser_inserted` IS WHETHER `el` IS PARSER-INSERTED — HTML §4.12.1.1 "Processing
-   model"'s `parser document` being non-null — carried to the
-   ADDRESS PARK at the foot of this function — it is one of the two facts solver/pending.h's
-   `pending_prov_compose` grades the request on, and the park runs in THIS frame, so it is a parameter rather
-   than a tenth column of the row: a column would be written here and read one line later and never again.
-   IT IS THE CALLER'S TO STATE for `html_script_prepare`'s reason exactly — the party that inserted the element
-   is the only one that can answer, and core/html/html_script.h's slot is UNSTATED for a LOADED document's own
-   markup, which is precisely the population that IS parser-inserted. */
+/* Queues a program into flow `f`'s sequence; every program row is created here. Each fact about the row is a
+   parameter because only the caller knows it:
+   - `doc`, whose program it is (the realm it compiles in), since a flow runs programs of several documents;
+   - `f`, the owner: a program the page caused belongs to the flow that ran the code, a joined document's own
+     scripts to the boot flow minted for it;
+   - `pos` (engine.h's DynPos), because the slot a caused program takes is a step of the causing operation;
+   - `stype` (which of §8.1.4.4's two algorithms evaluates it; SCRIPT_TYPE_CLASSIC is §8.1.4.4's answer for every
+     row that is not an element's) and `url` (the address its bytes came from; NULL for an inline row, whose base
+     URL §4.12.1.1 takes from the document);
+   - `el`, the `script` element it is the program of, or NULL for a row no element caused (flow.h's `dyn_el`);
+   - `body`, the shared program text, on which this takes a reference (the caller keeps and releases its own),
+     so a row costs O(1) at every seed and fork (solver/dyn_body.h);
+   - `parser_inserted`, §4.12.1.1's `parser document` being non-null, passed to the address park at the foot,
+     which grades the request with it. It is the caller's to state: core/html/html_script.h's slot is unstated
+     for a loaded document's own markup, exactly the parser-inserted population. */
 static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind, ScriptType stype,
                               const char *url, char *token, TaskSource src, DynPos pos,
                               lxb_dom_element_t *el, int parser_inserted) {
     int at;
-    /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
-       queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
-       whose sequence this program joins: an injected <script>'s insertion, a document's own load job, a fired
-       PoC, a joined document's boot. A document whose scripts vanished here is indistinguishable from a
-       document that had none, which is exactly what this file's own routed-record asserts exist to prevent. */
+    /* A program queued with no flow would be dropped: there is no global queue, so the caller names the flow whose
+       sequence it joins (an injected <script>'s insertion, a document's load job, a fired PoC, a joined
+       document's boot), and every caller establishes both preconditions. */
     DCHECK(f != NULL, "a program was queued naming no flow — a program is a work item of the ONE frontier and "
                       "there is no member to give it to, so it would be dropped without a trace");
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
-    /* THE `if (!body || !f) return;` THAT STOOD HERE IS GONE. It was a silent drop past the two asserts above,
-       and this function's own comment says what that costs: "a document whose scripts vanished here is
-       indistinguishable from a document that had none". Both conditions are established by every caller — the
-       seed asserts its flow, the two running-flow entries assert `flow_running()`, and each entry asserts its
-       body — so what the guard could still do in release was make a program disappear rather than crash. */
     DCHECK(doc != 0, "a program was queued naming no document — the realm it is compiled in is a fact about "
                      "the document it belongs to, and a program with none would be compiled in whichever realm "
                      "the session happens to be rooted at and read that Window's globals as its own");
-    /* THE KIND AND THE TOKEN ARE ONE STATEMENT, ASSERTED IN BOTH DIRECTIONS. A cross-agent operation's row owes
-       the peer parked on it an answer and carries its rendezvous token (flow.h); every other kind owes nobody
-       anything. A row of that kind with no token is a peer suspended at the line that asked for the rest of the
-       session with nothing in this engine that could say so; a token on any other kind is an answer that will
-       never be sent, because only that kind's completion is read as one. Stated here, at the ONE site that
-       creates a row, so neither can be forgotten at a call site. */
+    /* The kind and the token are one statement, asserted both ways at the one site that creates a row: a
+       cross-agent operation's row carries the token of the peer parked on its completion, and no other kind's
+       completion is read as an answer. */
     DCHECK((kind == DYN_CROSS_AGENT_OP) == (token != NULL),
            "a queued program's kind and its rendezvous token disagree — a cross-agent operation's row must "
            "carry the token of the peer waiting on its completion, and no other kind may carry one, because "
            "only that kind's completion is ever read as an answer");
-    /* THE SEQUENCE HOLDS ONLY EXECUTABLE PROGRAMS, asserted at the ONE site that creates a row rather than at
-       the compile that would then have to pick an algorithm for a program that has none. §4.12.1.1's null type
-       and its two data types run nothing at all, so an import map or a set of speculation rules never becomes
-       a row — document_exec_scripts and html_script_prepare both drop them before they reach here. */
+    /* The sequence holds only executable programs: §4.12.1.1's null type, an import map and speculation rules
+       run nothing, and document_exec_scripts and html_script_prepare drop them before here. */
     DCHECK(script_type_executes(stype),
            "a program was queued with a script type that does not execute — §4.12.1.1's null type, an import "
            "map and a set of speculation rules are registered or ignored rather than evaluated, so none of "
            "them is a program, and §8.1.4.4 has no entry to run this row with");
-    /* AN ADDRESS BELONGS TO A ROW WHOSE BYTES CAME FROM ONE. §8.1.4.2 creates a script based on the RESPONSE'S
-       URL, so a row that was fetched has one and a row the page wrote inline does not — and §4.12.1.1 answers
-       the inline case from the document instead ("let base URL be el's node document's document base URL"),
-       which is what the compile reads when this column is NULL. A DYN_SCRIPT_SRC row is the one shape that is
-       an address and not yet a program, so its address is its own body until the reply arrives. */
+    /* An address belongs to a row whose bytes came from one (§8.1.4.2 bases the script on the response's URL);
+       an inline row has none and §4.12.1.1 answers from the document ("let base URL be el's node document's
+       document base URL"). A DYN_SCRIPT_SRC row's address is its own body until the reply arrives. */
     DCHECK(kind != DYN_SCRIPT_SRC || url == NULL,
            "an entry holding a script's ADDRESS was queued with a second address beside it — the row IS the "
            "URL until flow_deliver_one_reply replaces it with the source text, and that delivery is what moves "
            "it into the address column, so a caller writing both is naming one script two ways");
-    /* WHICH TASK SOURCE, IF ANY, QUEUED THIS ROW — HTML §8.1.7.1 "Definitions"'s `source` field, asserted at
-     * the ONE site that creates a row so that an entry added later cannot answer it by omission. The sentinel
-     * is what makes that possible: TASK_SOURCE_UNSTATED is written by no producer, so a caller that never
-     * thought about the question is distinguishable from one whose answer is "this is not a task".
-     *
-     * WHY THE ROW HAS TO CARRY IT AT ALL. §8.1.7.1 requires that "For each event loop, every task source must
-     * be associated with a specific task queue", and a flow's work is split across arrays that partition by
-     * what a work item IS rather than by where it came from — its program sequence here, its queued callbacks
-     * in `jobs`, its answered host requests in the pending register. Nothing about those three could answer
-     * "is any one source in two of us", because the only statement of a source was PROSE beside each call.
-     * Now the answer for THIS carrier is a grep for the enumerator, and it is: NOT_A_TASK for a document's own
-     * seeded scripts, an element's inline program, a held external-script slot and a cross-agent operation's
-     * answer; SOLVER_CANDIDATE for an @S re-fire; NETWORKING for a program a response produced; and
-     * NAVIGATION_AND_TRAVERSAL for §7.4.2.3.2's `javascript:` URL — which core/frame/navigable.c ALSO queues
-     * on `jobs` for the document load of the same section, and solver/engine.h states at that entry what the
-     * next diff builds and how the split shows without one.
-     * THE NETWORKING ANSWER RAISES A SECOND QUESTION AND IS NOT A VERDICT ON IT. The pending register's
-     * delivery arm calls itself the networking task source's arm, and it is also what queues one of the rows
-     * that names NETWORKING here — so §8.1.4.2's ONE fetch-then-run task is performed as an arm-run plus a
-     * row, on two carriers. Whether that is observable is a different question from the one above (two halves
-     * of one task, not two tasks of one source), and it is not answered here. */
+    /* Which task source, if any, queued this row: HTML §8.1.7.1 Definitions' `source`, asserted at the one site
+     * creating rows so an entry added later cannot answer by omission. TASK_SOURCE_UNSTATED is written by no
+     * producer. §8.1.7.1 requires "every task source must be associated with a specific task queue", and a flow's
+     * work is split across carriers by what it is (this sequence, `jobs`, the pending register), so the row states
+     * its source. The answers are: NOT_A_TASK for a document's seeded scripts, an element's inline program, a held
+     * external-script slot and a cross-agent operation's answer; SOLVER_CANDIDATE for an @S re-fire; NETWORKING for
+     * a program a response produced; NAVIGATION_AND_TRAVERSAL for §7.4.2.3.2's `javascript:` URL, which
+     * core/frame/navigable.c also queues on `jobs` for that section's document load (solver/engine.h states that
+     * split's residual). The NETWORKING rows are queued by the pending register's delivery arm, which is itself
+     * the networking source's arm, so §8.1.4.2's one fetch-then-run task spans two carriers; whether that is
+     * observable is not settled here. */
     DCHECK(src != TASK_SOURCE_UNSTATED,
            "a program was queued without saying which task source, if any, put it there — HTML §8.1.7.1 gives "
            "a task a source so that one source is in one queue, and a row that states none cannot be ordered "
            "against the same source's work on another carrier or shown not to have any");
-    /* A TASK TAKES THE TAIL, AND THAT IS §8.1.7.1's QUEUE RATHER THAN THIS ENGINE'S PREFERENCE. A task is
-       queued; it cannot interpose ahead of tasks already queued on its own source. The one position that is
-       not the tail is what the standard reaches by NOT queuing anything — §4.12.1.1 "Processing model"'s
-       "Otherwise, immediately execute the script element el, even if other scripts are already executing" —
-       so an IMMEDIATE row naming a task source is a caller that has confused running a program in place with
-       queuing one, and the two are the whole of what DynPos distinguishes. */
+    /* A task takes the tail of its source's queue (§8.1.7.1). The one position that is not the tail is reached by
+       queuing nothing, §4.12.1.1's "immediately execute the script element el, even if other scripts are already
+       executing", so an immediate row naming a task source confuses running a program in place with queuing one. */
     DCHECKF(!task_source_is_task(src) || pos == DYN_POS_APPEND,
             "a queued program named the %s task source AND asked to run IMMEDIATELY — a task is queued and "
             "takes the tail of its source's queue, and the only position that is not the tail belongs to a "
             "program the causing algorithm runs in place, which by definition no task source queued",
             task_source_name(src));
-    /* AND THE TWO KINDS THE SOLVER PUTS THERE ARE THE TWO THAT MAY NOT NAME A SOURCE, ASSERTED BOTH WAYS for
-       the reason the token above is: an @S candidate is a program the solver fired and a cross-agent
-       operation's row is a peer's SYNCHRONOUS read answered by running one, so neither was queued by any
-       algorithm of the standard. A source on either would order a program the page never queued against
-       programs it did; the candidate's kind naming any other source, or a page's own program naming the
-       candidate's, is the same mistake pointing the other way. */
+    /* The two kinds the solver queues are the two that may not name a page source, asserted both ways: an @S
+       candidate is a program the solver fired, and a cross-agent operation's row answers a peer's synchronous
+       read; neither was queued by any algorithm of the standard, so a source would order it against the page's
+       tasks. */
     DCHECKF((kind == DYN_CANDIDATE) == (src == TASK_SOURCE_SOLVER_CANDIDATE),
             "a queued program of kind %d says %s about who queued it — only an @S candidate is the solver "
             "re-firing a sink, and only it may say so, because a source is what orders a work item against "
@@ -5925,94 +5868,47 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     }
     at = f->dyn_n;
     if (pos == DYN_POS_IMMEDIATE) {
-        /* "IMMEDIATELY" IS A POSITION RELATIVE TO THE RUNNING PROGRAM, so it is meaningless for any other
-           flow: the slot is the one after the cursor of the flow that HAS the thread. Queued into a sibling it
-           would name a position in a sequence that flow is nowhere near. */
+        /* "Immediately" is relative to the running program, so it means nothing for another flow: the slot is the
+           one after the cursor of the flow that has the thread. */
         DCHECK(f == flow_running(),
                "a program was queued to run IMMEDIATELY into a flow that is not the running one — "
                "`immediately` names the slot after the program that caused it, and the causing program is in "
                "the running flow, so this row would interpose into a stranger's sequence at its cursor");
-        /* THE CURSOR ITSELF WHEN THERE IS NO PROGRAM, THE SLOT AFTER IT WHEN THERE IS. A script element a page
-           inserts from a `.then` reaction is at the cursor, where the sequence has nothing yet, and one
-           inserted from a running <script> is at the slot after it. One expression, both cases, and neither is
-           the tail.
-           AND A LIVE FRAME IS NOT THE SAME FACT AS A LIVE PROGRAM, which is what this line used to spell it as
-           (`f->frame ? …`, over flow.h's "`frame` is exactly inside a program"). `frame` holds THREE kinds of
-           base and only one of them is a row of this sequence — see JS_FlowIsProgram. The other two are a CALL
-           (a driven orphan's, a §8.1.4.4 step 8 report's, a §6.10.1 task's) and a CLONE OF AN ACTIVATION THE
-           HOST NEVER CREATED (an arm forked at a concolic branch inside a module body). Neither is a program,
-           so for both the correct slot is the CURSOR — which is what the frameless parent of that arm computes,
-           so this is also what makes the two byte-identical (§scheduler's razor: an arm that queued at a
-           different slot than the timeline it continues is a reorder).
-           THE OLD SPELLING WAS RELEASE-FATAL AND NOT MERELY WRONG. Both non-program kinds are reached with the
-           cursor AT the end of the sequence — an orphan drive is assembled at `script_i == dyn_n` because
-           running out of rows is WHY the orphan arm was reached, and the measured module-body forks stood at
-           `script_i=1 dyn_n=1` and `script_i=3 dyn_n=3` — so `script_i + 1` is `dyn_n + 1` and the `CHECK`
-           below fires in dev AND in release on an ordinary page: a driven function or a module body that
-           inserts an inline classic <script> (engine_queue_script_immediate). §4.12.1.1 "Processing model"'s
-           "immediately execute the script element" is the commonest thing an SSR hydration shim does.
-           `f->frame &&` STAYS, and it is not redundant: JS_FlowIsProgram reads a base and there is none to
-           read when the slot is empty. */
+        /* The cursor itself when no program is running, the slot after it when one is. A script element inserted
+           from a `.then` reaction is at the cursor; one inserted from a running <script> is after it. A live frame
+           is not a live program: `frame` holds three kinds of base (JS_FlowIsProgram), and a call (a driven
+           orphan, a §8.1.4.4 step 8 report, a §6.10.1 task) or a clone of a module body is not a row, so for both
+           the slot is the cursor, matching the frameless parent of such an arm (an arm queuing at a different
+           slot from the timeline it continues would be a reorder). Those bases stand with the cursor at the end
+           of the sequence, so `script_i + 1` would be `dyn_n + 1` and fail the CHECK below on an ordinary page
+           (an SSR hydration shim's inline <script> from a module body). `f->frame &&` stays: JS_FlowIsProgram needs
+           a base to read. */
         at = (f->frame && JS_FlowIsProgram((JSValue *)f->frame)) ? f->script_i + 1 : f->script_i;
-        /* …AND BEHIND WHAT HAS ALREADY BEEN INTERPOSED AT THAT SAME SLOT. The expression above is the slot for
-           a first interposition and the wrong slot for a second: both compute it identically, so the second
-           shifts the first down and the two run in the REVERSE of the order they were prepared in. HTML §4.12.1.1
-           "Processing model" ends "prepare the script element" with "Otherwise, immediately execute the
-           script element el, even if other scripts are already executing" — in a browser that run happens
-           INSIDE the causing program, so two elements one program prepares run in the order it prepared them:
-           `document.write("<script>a()</script><script>b()</script>")` runs `a` then `b`, and so does
-           `body.appendChild(s1); body.appendChild(s2)`.
-           THE WITNESS IS THE BASE SLOT AND NOT THE CURSOR, which is the one distinction that makes the pair
-           self-validating with no invalidation site. A frameless job at cursor i and the framed program at
-           cursor i-1 are DIFFERENT programs standing at the same cursor — and they share a base, correctly:
-           the job runs after that program, so its script goes behind the one that program interposed. The
-           framed program AT cursor i has base i+1, which is a different witness, so it starts a fresh run —
-           correctly again, because its own interpositions belong ahead of everything the job queued behind it.
-           NO PER-ROW COLUMN WOULD DO — see flow.h: a row an ANCESTOR interposed carries DYN_POS_IMMEDIATE too
-           and stands in the same run, so a scan over `dyn_pos` cannot tell the two apart. */
+        /* Behind what has already been interposed at that slot: two elements one program prepares run in the order
+           prepared (HTML §4.12.1.1's "immediately execute the script element" happens inside the causing
+           program), so `document.write("<script>a()</script><script>b()</script>")` and two `appendChild`s run
+           `a` then `b`. The witness is the base slot, not the cursor: a frameless job at cursor i and the framed
+           program at cursor i-1 share base i, correctly, since the job's script goes behind that program's; the
+           framed program at cursor i has base i+1 and starts a fresh run. No per-row column could do this (flow.h):
+           a row an ancestor interposed is DYN_POS_IMMEDIATE too. */
         if (f->imm_at == at) at = f->imm_next;
         else                 f->imm_at = at;
         f->imm_next = at + 1;
-        /* AND EVERY SLOT THE CURSOR CAN BE AT IS NOW NAMEABLE, which is what deleted the `CHECK` that used to
-           stand here. The cursor used to walk the session document's static sequence [0, n) before this flow's
-           own rows, so `at` was `cursor - n` and went NEGATIVE for a page that `eval`d or injected from any
-           <script> but its LAST — the one position the representation could not express, and a `CHECK` rather
-           than a DCHECK because a negative index is a memmove outside the arrays, so a real page aborted the
-           engine in release. The session document's scripts are rows of THIS table now (engine_seed_scripts),
-           so `at` is an index into the one sequence the cursor indexes and there is no offset left to go
-           negative. What survives is the upper bound, which is a different claim entirely: it is about the
-           cursor and the queue agreeing, not about a position the queue lacks. */
+        /* The upper bound: the cursor names the row the flow is at, so the slot after it is at most one past the
+           last row. A CHECK because a larger index would memmove outside the arrays. */
         CHECK(at <= f->dyn_n,
               "a program's IMMEDIATE slot is past the end of the flow's own queue — the cursor names the row "
               "the flow is at, so the slot after it is at most one past the last row, and a larger index "
               "means the cursor and the queue disagree about how many programs this flow has");
-        /* A ROW THAT SHIFTS USED TO BE A ROW SOMEBODY WAS HOLDING THE INDEX OF, AND AN ABORT STOOD HERE. The
-           register held the row's absolute POSITION, so an interposition below an outstanding external script
-           would have delivered that script's bytes into whichever row moved into the slot — a program silently
-           replaced by another document's. It was asserted rather than handled because it could not happen: a
-           flow parks on such a row with NO frame and cannot leave the slot until the reply fills it. The
-           register names the row by `dyn_id` now (solver/flow.h), and a name survives every shift, so the
-           interposition below is free to move rows under an outstanding reply and the assert has nothing left
-           to say. This is the half of the pair §7.5.10's removal walk in flow.c names as its twin; both went
-           in the diff that built row identity. */
+        /* Rows may shift under an outstanding reply: the register names a row by `dyn_id` (solver/flow.h), which
+           survives every shift (§7.5.10's removal walk in flow.c is the twin). */
     }
-    /* AND THE ROW HAS TO BE SOMEWHERE THIS FLOW CAN STILL REACH, WHICH IS THE HALF NOTHING WAS SAYING. Every
-       other statement about the cursor in this engine is made where the cursor MOVES; this is the one made
-       where a program is QUEUED, and it is the only one that can name the program that is about to be lost.
-       A row at a slot BELOW the cursor is never compiled — flow_step's ladder is `script_i < dyn_n` and walks
-       forward only — and flow_programs_unstarted_for_document does not count it either, because it selects
-       `k >= script_i`, so HTML §7.5.10 "Destroying documents" step 5 reads zero tasks to remove for a row
-       that is unstarted. The program does not fail, throw, or appear anywhere: it is written into the column
-       and nothing ever looks at that slot again.
-       IT IS ASKED OF THE FLOW BEING QUEUED INTO AND NOT OF THE RUNNING ONE, which is the whole reason it
-       belongs here rather than beside the cursor. engine_perform appends a cross-agent operation to EVERY
-       LIVE TIMELINE, so one call queues into flows that will not be stepped for a long time and may never be
-       stepped again — and a cursor-side check speaks only for whichever flow next advances. This speaks for
-       each of them, at the instant its row is written.
-       ITS TWO SIDES CANNOT BE THE SAME FACT ASKED TWICE, which is what makes it a check rather than a
-       restatement: the IMMEDIATE arm above derives `at` FROM the cursor (and its own CHECK bounds it against
-       `dyn_n`), while an APPEND takes `dyn_n` and consults the cursor nowhere at all. The append is the
-       shape that can be behind it, and the append is the shape no line was asking about. */
+    /* The row must be somewhere this flow can still reach. A row below the cursor is never compiled (flow_step's
+       ladder walks forward from `script_i`) and flow_programs_unstarted_for_document, which selects
+       `k >= script_i`, does not count it, so §7.5.10 step 5 would remove nothing for it; the program would vanish
+       silently. Asked of the flow being queued into, not the running one: engine_perform appends to every live
+       timeline, including flows that may never step again. It is a real check: the immediate arm derives `at`
+       from the cursor, while an append takes `dyn_n` and consults the cursor nowhere. */
     DCHECKF(at >= f->script_i,
             "a program was queued into slot %d of a flow whose cursor already stands at %d — the queue walks "
             "FORWARD from the cursor, so this row is behind everything this flow will ever look at: it will "
@@ -6034,48 +5930,34 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
         memmove(&f->dyn_pos[at + 1],   &f->dyn_pos[at],   tail);
     }
-    /* ONE REFERENCE, NOT ONE COPY — and therefore nothing here can fail for want of memory. The row now costs
-       a pointer whatever the program's size, which is what makes a document's bundle cost the instance one
-       buffer instead of one per timeline that runs it. */
+    /* One reference, not one copy, so nothing here can fail for memory: a row costs a pointer whatever the
+       program's size, and a document's bundle costs one buffer however many timelines run it. */
     f->dyn[at] = dyn_body_ref(body);
     f->dyn_cand[at] = (unsigned char)kind;
     f->dyn_type[at] = (unsigned char)stype;
     f->dyn_url[at] = NULL;
     if (url) { f->dyn_url[at] = strdup(url); CHECK(f->dyn_url[at], "engine: OOM queued script address"); }
-    /* THE ELEMENT IS BORROWED AND NOT COPIED — there is no second element to make, and nothing to fail. */
+    /* The element is borrowed, not copied. */
     f->dyn_el[at] = el;
     f->dyn_doc[at] = doc;
-    /* THE ROW IS NAMED AT ITS CREATION AND NEVER AGAIN — the shift above moved the names of every row it
-       moved, so no live row's name changes here and this mint is the only writer of a fresh one.
-       AND THE NAME IS ALSO WHEN IT ARRIVED, which is what lets flow_step order this row against this flow's
-       queued callbacks instead of against the array that holds them (solver/flow.c's g_work_seq). The mint is
-       taken HERE — at the moment the row joins a sequence — and not at the moment the program's bytes were
-       asked for, because what the stamp orders is this flow's work and a row has no position in it until it
-       is in it. An INTERPOSED row (HTML §4.12.1.1 "Processing model"'s "immediately execute the script element")
-       is therefore younger than rows already below the cursor, which is correct and is never consulted: it is
-       DYN_POS_IMMEDIATE, so flow_stack_empty is false for it and no task may begin in front of it at all. */
+    /* The row is named at creation and never again (the shift above carried every moved row's name), and the
+       name is also its arrival stamp (solver/flow.c's g_work_seq), so flow_step orders the row against this
+       flow's queued callbacks. It is taken when the row joins the sequence, not when its bytes were asked for.
+       An interposed row is therefore younger than rows below the cursor, which is never consulted: it is
+       DYN_POS_IMMEDIATE, so flow_stack_empty is false and no task may begin in front of it. */
     f->dyn_id[at] = flow_work_seq_next();
-    /* AND ITS ARRIVAL AS A RUNNABLE WORK ITEM, WHICH FOR EVERY KIND BUT ONE IS THIS SAME INSTANT — a row whose
-       body is already a program can be started the moment it is queued, so its readiness and its creation are
-       one event and one stamp states both. THE EXCEPTION IS THE KIND WHOSE BODY IS AN ADDRESS: a DYN_SCRIPT_SRC
-       row is not runnable until its bytes come back, and flow_deliver_one_reply re-mints this column at the two
-       lines that take a row out of that kind. Assigned from `dyn_id` rather than by a second call of the clock
-       so that the two are EQUAL here by construction — a second mint would make them differ by an increment
-       that means nothing and would put every row of a seed behind every other row's name. */
+    /* Its arrival as a runnable work item is the same instant for every kind but one, so it is assigned from
+       `dyn_id` and the two are equal by construction. A DYN_SCRIPT_SRC row is not runnable until its bytes
+       return; flow_deliver_one_reply re-mints this column at the two lines that take a row out of that kind. */
     f->dyn_run[at] = f->dyn_id[at];
-    f->dyn_token[at] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
-    /* THE POSITION IS KEPT, NOT CONSUMED. `at` says where the row went; this says WHY, and the microtask
-       checkpoint reads it (flow_checkpoint_due) because §4.12.1.1's immediate program ran inside the causing
-       program and §8.1.4.4's checkpoint is owed only once that program's stack has emptied. */
+    f->dyn_token[at] = token;   /* moved: one allocation from engine_perform to flow_answer_perform */
+    /* The position is kept, not consumed: flow_checkpoint_due reads it, because §4.12.1.1's immediate program ran
+       inside the causing program and §8.1.4.4's checkpoint is owed only once that program's stack empties. */
     f->dyn_pos[at] = (unsigned char)pos;
     f->dyn_n++;
-    /* THE ASK, RAISED WHERE THE ROW EXISTS — see g_prog_queued_cand for why it is here and not at the entry
-       that called, and why it is deliberately not comparable as an inequality against the start side. */
-    /* §4.12.1.1's FLAG IS CARRIED FOR THE FETCH A ROW OWES, AND AN ADDRESS ROW IS THE ONLY ROW THAT OWES ONE.
-       That is what makes `0` at every other entry a statement about the ROW rather than a claim about its
-       element: a row whose source text is already here asks nobody for it, so there is no request to grade and
-       nothing reads the flag. Asserted rather than described, so a kind that GROWS a fetch later crashes here
-       instead of grading it `derived` on a flag no caller was ever asked for. */
+    /* The ask is raised where the row exists (see g_prog_queued_cand). The parser-inserted flag is carried for
+       the fetch a row owes, and only an address row owes one, so `0` at every other entry is a statement about
+       the row; a kind that grows a fetch later crashes here instead of being graded on a flag nobody set. */
     DCHECKF(!parser_inserted || kind == DYN_SCRIPT_SRC,
             "a row of kind %d states that a parser inserted its element while owing no fetch — HTML "
             "§4.12.1.1 \"Processing model\"'s `parser document` is "
@@ -6083,21 +5965,16 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
             "pending_prov_compose), so a caller setting it here has stated a fact nothing will ever read",
             (int)kind);
     if (kind == DYN_CANDIDATE) g_prog_queued_cand++;
-    /* AND §4.12.1.1 "Processing model" STEP 33 IS OWED HERE, WHICH IS THE ONE PLACE IT CAN BE OWED ONCE PER
-       ELEMENT. A row holding an ADDRESS is an element whose `src` branch has just been entered, and that
-       branch FETCHES — see engine_pending_docscript, which states why the fetch and the execution slot are two
-       steps of one algorithm and what performing them as one cost. It is AFTER the row is complete because the
-       park reads the row: its document (the realm), its element (the metadata), its body (the address) and its
-       name (`dyn_id`), all of which the lines above have just written.
-       IT IS A ROUTE AND NOT A FALLBACK: the kind decides which one thing happens to this row, there is no
-       second implementation to choose between, and a kind that grows an address later reaches this line by
-       being that kind rather than by a caller remembering to ask. */
+    /* §4.12.1.1 Processing model step 33 is owed here, once per element: an address row is an element whose
+       `src` branch fetches (see engine_pending_docscript). After the row is complete, because the park reads its
+       document, element, body and name. The kind decides; a kind that grows an address later reaches this line
+       by being that kind. */
     if (kind == DYN_SCRIPT_SRC) engine_pending_docscript(f, at, parser_inserted);
 }
 
-/* THE ROW A CALLER HOLDS ALREADY-DECODED BYTES FOR. `body` is the shared text and this entry does NOT take it
-   over: the caller keeps its reference and releases it, exactly as engine_queue_into's does, so a caller that
-   queues one program into several places pays for the bytes once. */
+/* The row a caller holds already-decoded bytes for. `body` is shared text, not taken over: the caller keeps and
+   releases its reference, as engine_queue_into's caller does, so one program queued in several places is paid
+   for once. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
                                  TaskSource src, DynPos pos, lxb_dom_element_t *el, int parser_inserted) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
@@ -6106,15 +5983,11 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
     engine_queue_into(f, doc, body, kind, stype, url, NULL, src, pos, el, parser_inserted);
 }
 
-/* …AND THE ROW A CALLER HOLDS AS BYTES IT HAS NOT SHARED — a `javascript:` URL, an @S candidate, a cross-agent
-   operation's program. The one copy those need is made HERE and released HERE, so the
-   sharing is the only thing the rest of the engine has to know about.
-   IT IS `(body, body_n)` AND NOT A C STRING, and the callers are why rather than symmetry: a `javascript:` URL
-   percent-decodes to a byte sequence in which `%00` is an ordinary byte, an @S candidate is a payload built
-   from attacker input, and an injected `<script>`'s text is whatever a page assigned to `.textContent`. None of
-   those went through HTML §13.2.5.4 "Script data state", which is the one thing that would have made a NUL
-   impossible (it emits a U+FFFD instead), so each of them can hold one and each of them was being read to the
-   first. */
+/* The row a caller holds as unshared bytes: a `javascript:` URL, an @S candidate, a cross-agent operation's
+   program. The one copy they need is made and released here. It takes `(body, body_n)`, not a C string: a
+   `javascript:` URL percent-decodes `%00` to a byte, a candidate is built from attacker input, and an injected
+   `<script>`'s text is whatever the page assigned; none went through HTML §13.2.5.4 Script data state (which
+   emits U+FFFD for a NUL), so each can hold one. */
 static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
                             const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el,
                             int parser_inserted) {
@@ -6128,37 +6001,27 @@ static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKi
     dyn_body_unref(b);
 }
 
-/* …AND THE ROWS NO ELEMENT CAUSED. §4.12.1.1's "execute the script element" never runs for these — a lazy
-   chunk's reply, §7.4.2.3.2's `javascript:` URL, an @S candidate and a cross-agent
-   operation's program are classic scripts §8.1.4.4 evaluates with no element behind them — so the document's
-   §3.1.7 `currentScript` stays null while they run, which is that section's own answer and not a default this
-   entry picks. It is a separate entry rather than a NULL at each call site so that a caller that DOES hold an
-   element cannot pass nothing by omission. */
+/* The rows no element caused: a lazy chunk's reply, §7.4.2.3.2's `javascript:` URL, an @S candidate and a
+   cross-agent operation's program are classic scripts §8.1.4.4 evaluates with no element, so §3.1.7
+   `currentScript` stays null while they run. A separate entry so a caller holding an element cannot pass none by
+   omission. */
 static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
                          const char *url, TaskSource src, DynPos pos) {
-    /* NO ELEMENT, SO NO PARSER INSERTED ONE — §4.12.1.1 gives the flag to a `script` element and this entry is
-       the one for a row no element put there (a `setTimeout` string, an @S candidate, a lazy chunk). It is a
-       positive statement about the row and not a default the reader fills in. */
+    /* No element, so no parser-inserted flag (§4.12.1.1 gives it to `script` elements); a statement about the
+       row. */
     engine_queue_el(doc, body, body_n, kind, stype, url, src, pos, NULL, /*parser_inserted*/0);
 }
 
-/* A DOCUMENT'S SCRIPT INVENTORY, SEEDED AS THE ROWS OF ONE FLOW'S SEQUENCE — the ONE thing that turns a
-   document's <script> elements into work items, used by the root document's seeding (flow_set_seed_hook) and
-   by a joined document's boot flow, because those are the same operation about two documents.
-   HTML §4.12.1.1's ORDER IS THE SEQUENCE'S ORDER, and both halves are positions in it: a row whose SOURCE TEXT is
-   here is a program queued in place, a row that is still owed its bytes is a DYN_SCRIPT_SRC row queued in
-   place holding its address until the reply fills it and stopping the flow there. `urls` are already
-   §4.12.1.1's encoding-parsed addresses — the resolution is the CALLER's because it belongs to the document
-   whose elements these are, and it is computed once per element rather than once per flow.
-   WHICH OF THE TWO A ROW IS, IS ASKED OF ITS BODY AND NOT OF ITS ADDRESS. They are the two independent items
-   HTML §8.1.4.1 "Scripts" gives a script — source text, and "a base URL … either the URL from which the script
-   was obtained, for external scripts, or the document base URL of the containing document, for inline
-   scripts" — so a host that already holds an external script's response hands over a row with BOTH, and that
-   row is a program AT its own address.
-   A ROW THAT IS NEITHER IS NOT A ROW. §4.12.1.1: "If url is failure, then queue an element task on the DOM
-   manipulation task source given el to fire an event named error at el, and return" — that element runs no
-   script, so it takes no position. What is still owed is the error event, which needs a task on the document
-   rather than anything here. */
+/* A document's script inventory seeded as the rows of one flow's sequence: the root document's seeding
+   (flow_set_seed_hook) and a joined document's boot flow are the same operation on two documents. HTML
+   §4.12.1.1's order is the sequence's order: a row whose source text is here is a program queued in place, one
+   still owed its bytes is a DYN_SCRIPT_SRC row in place holding its address and stopping the flow there. `urls`
+   are §4.12.1.1's encoding-parsed addresses, resolved once per element by the caller, whose document they belong
+   to. Which shape a row takes is asked of its body, not its address: HTML §8.1.4.1 Scripts gives a script source
+   text and a base URL independently, so a host that already holds an external script's response hands over both
+   and the row is a program at its own address. A row with neither is not a row: "If url is failure, then queue an
+   element task on the DOM manipulation task source given el to fire an event named error at el, and return"; the
+   owed error event needs a task on the document, not a position. */
 static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, int n) {
     int i;
 
@@ -6179,69 +6042,44 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                "… fire an event named error at el, and return\" means such an element runs no script and takes "
                "no position, so a row that is nothing would park the flow on nothing for the rest of the "
                "session");
-        /* THE POSITION A ROW IS QUEUED AT IS THE POSITION IT IS ADDRESSED AT, which is the whole point of the
-           one sequence: `i` is this element's place in HTML §4.12.1.1's document order and the cursor indexes the same
-           table, so the two cannot come apart. Asserted per row rather than described once. */
+        /* The position a row is queued at is the position it is addressed at: `i` is the element's place in
+           §4.12.1.1's document order and the cursor indexes the same table. Asserted per row. */
         DCHECK(f->dyn_n == i, "a document's scripts left the seed out of document order — the row about to be "
                               "queued is not the one the sequence is at, so the flow's cursor would reach this "
                               "element at some other element's position");
-        /* AND THE ELEMENT TRAVELS WITH THE ROW, at both positions: §4.12.1.1's "execute the script element"
-           is a switch on EL whichever half of §4.12.1.1 put the row here, and an EXTERNAL row is that element's
-           program from the moment it takes its slot rather than from the moment its bytes arrive.
-           NULL IS A STATEMENT AND NOT A HOLE — a host driving a SYNTHESIZED program list (wpt_runner.c's
-           harness prologue and epilogue) has rows no `<script>` produced, and §3.1.7's answer while one of
-           those runs is null, which is the truth about a document that is not executing a script element. */
-        /* …AND SO DOES THE ADDRESS, WHEN THE ROW HAS BOTH. A row whose source text is already here is a
-           PROGRAM (DYN_PAGE_SCRIPT), and §8.1.4.2 "Fetching scripts" says what its base URL is — "creating a
-           classic script given sourceText, settingsObject, response's URL, …" — so the address rides into the
-           row's own address column and flow_dyn_url answers it at the compile. Passing NULL here is what made
-           every pre-fetched external script compile under its document's name, which for a module is the
-           module map key: §8.1.4.2's own note, "the base URL for the module script is set to the response
-           URL … used for URL resolution". A row with only an address is still the DYN_SCRIPT_SRC shape, whose
-           body IS its URL until flow_deliver_one_reply takes it across. */
-        /* THE PROGRAM ROW REFERENCES THE TABLE'S OWN BODY — this is the seeding that used to copy a document's
-           whole bundle into every flow it created. The ADDRESS row still makes a body, because its body IS the
-           address until the reply replaces it and that string is the table's, not this row's; it is tens of
-           bytes and it is released here, the row keeping the reference engine_queue_into took. */
-        /* NO TASK SOURCE, AT EITHER POSITION, AND THAT IS HTML §4.12.1.1's ORDER RATHER THAN AN OMISSION. A
-           document's own scripts are run by the parse that reached them — §8.1.7.1 "Definitions" describes
-           that as work a task DOES ("The HTML parser tokenizing one or more bytes, and then processing any
-           resulting tokens, is typically a task") and not as one task per element — and the order they hold is
-           the one §4.12.1.1 fixed against each other, which the sequence IS. Naming a source here would claim
-           the tail is FIFO among tasks of that source, which is a different reason for the same position and
-           the wrong one. */
+        /* The element travels with the row at both positions: "execute the script element" switches on el, and
+           an external row is that element's program from the moment it takes its slot. NULL is a statement: a host
+           driving a synthesized program list (wpt_runner.c's harness prologue and epilogue) has rows no `<script>`
+           produced, and §3.1.7's answer while one runs is null.
+           A program row with an address keeps it in the address column (§8.1.4.2: "creating a classic script given
+           sourceText, settingsObject, response's URL, …"), so flow_dyn_url answers it at the compile and a module
+           is keyed by its response URL. A row with only an address is the DYN_SCRIPT_SRC shape, whose body is its
+           URL until flow_deliver_one_reply takes it across. The program row references the table's body; the
+           address row makes a small body of its own, released here once engine_queue_into has its reference.
+           No task source at either position: a document's own scripts are run by the parse that reached them
+           (§8.1.7.1 Definitions: "The HTML parser tokenizing one or more bytes, and then processing any resulting
+           tokens, is typically a task"), in the order §4.12.1.1 fixed, which the sequence is. */
         if (rows[i].body) {
-            /* NO FETCH IS OWED — this row's source text is in the table. */
+            /* No fetch is owed: the row's source text is in the table. */
             engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
                               NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el,
                               /*parser_inserted*/0);
         } else {
-            /* AN ADDRESS IS THE ONE BODY WHOSE LENGTH IS ITS `strlen`, and this is where that is stated. It
-               came out of script_src_absolute, which serializes a parsed URL record (URL §4.5 "URL
-               serializing"), and every component of one has been through a percent-encode set that contains
-               U+0000: URL §1.3 "Percent-encoded bytes" defines the C0 control percent-encode set as "C0
-               controls and all code points greater than U+007E", and every other set in that section is
-               defined as containing it. So a serialized URL holds `%00` where a NUL was, never the byte, and
-               the two agree by construction here — flow_deliver_one_reply ASSERTS they still do at the one read
-               that depends on it. */
+            /* An address is the one body whose length is its `strlen`: script_src_absolute serializes a URL record
+               (URL §4.5 URL serializing), whose components went through percent-encode sets containing U+0000 (URL
+               §1.3 Percent-encoded bytes' C0 control percent-encode set, "C0 controls and all code points greater
+               than U+007E", is contained in every other set there), so a NUL is `%00`. flow_deliver_one_reply
+               asserts it at the read that depends on it. */
             DynBody *addr = dyn_body_new(rows[i].url, strlen(rows[i].url));
             CHECK(addr, "engine: OOM seeding an external script's address as its row's body");
-            /* AND WHETHER A PARSER INSERTED THE ELEMENT, FOR THE FETCH IT OWES, WHICH THIS TABLE STATES BY
-               HOLDING AN ELEMENT AT ALL. Every row here came out of `document_exec_scripts`' walk of a PARSED
-               document, so an element in this table was placed by that document's own parser — and the rows
-               with none are the host's SYNTHESIZED list (wpt_runner.c's prologue and epilogue), which is what
-               the `el` column's own contract says a few lines up. The two are the table's two populations and
-               the column is what separates them.
-               NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: a row whose element this table did
-               not get from a parser's walk. No such row exists today — both builders fill `el` from a
-               document's script inventory and the joined one asserts every row has one — so the reading is
-               exact, and it is an INFERENCE FROM THE TABLE'S CONTRACT rather than from the element itself.
-               WHAT THE NEXT DIFF BUILDS: a `parser_ins` column on RootScript, written by the two builders
-               from what the HOST said when it handed the inventory over, so the fact is stated where it is
-               known instead of read off the presence of a neighbour. HOW ITS ABSENCE WOULD SHOW: the day a
-               builder accepts an element for a row no parser produced, that row's program load is graded
-               `observed` — a request only this engine composes reported as one a real load makes, which is
-               the direction CLAUDE.md §@H forbids. */
+            /* Whether a parser inserted the element, for the fetch it owes, read from whether the table holds an
+               element: every row came out of document_exec_scripts' walk of a parsed document, so an element here
+               was placed by that document's parser, and rows without one are the host's synthesized list.
+               Named residual. Not covered: a row whose element did not come from a parser's walk; none exists
+               (both builders fill `el` from a script inventory, and the joined one asserts every row has one),
+               but the reading is an inference from the table's contract. Next diff builds: a `parser_ins` column
+               on RootScript, written by both builders from what the host said. Absence shows as: a builder
+               accepting an element for a row no parser produced grades that row's program load `observed`. */
             engine_queue_into(f, doc, addr, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL,
                               TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el,
                               /*parser_inserted*/rows[i].el != NULL);
@@ -6250,64 +6088,41 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
     }
 }
 
-/* …AND THE ROOT DOCUMENT'S, which is what a fresh timeline of THIS instance's document is made of. It is the
-   seed hook flow_add asks (solver/flow.h), so the boot flow, every cold-resumed replay and every @S candidate
-   session get the same sequence by construction rather than by a line copied into each of them. */
+/* The root document's seeding: a fresh timeline of this instance's document. It is the seed hook flow_add asks
+   (solver/flow.h), so the boot flow, every cold-resumed replay and every @S candidate session get one sequence by
+   construction. */
 static void engine_seed_root_flow(Flow *f) {
     DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the "
                         "table it reads is built when a session opens and given back when one closes");
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
 }
 
-/* WHICH KIND THE PROGRAM AT `script_i` IS, asked at the two places that need it — the compile and the resume.
-   It is RE-DERIVED from the cursor rather than latched in a field, because the cursor is what already says
-   which program is running and a second copy of that fact is a second copy that can be behind.
-   THE CURSOR INDEXES ONE TABLE. It used to walk the session document's static sequence first and this flow's
-   own rows after it, through a `- n` offset that these four accessors each restated; the document's scripts
-   are rows of the same table now, so there is one address space and no half to be in. Past the end is still a
-   real position — the accessors are read before the step decides what the flow is doing — and it is the same
-   answer it always was. */
+/* Which kind the program at `script_i` is, for the compile and the resume. Re-derived from the cursor, which
+   already says which program is running, rather than latched in a field that could lag. The cursor indexes one
+   table; past the end is a real position (the accessors are read before the step decides what the flow does). */
 static DynKind flow_dyn_kind(const Flow *f) {
     if (f->script_i >= f->dyn_n) return DYN_PAGE_SCRIPT;
     return (DynKind)f->dyn_cand[f->script_i];
 }
 
-/* HOW MANY PROGRAM ROWS OF THE LIVE FRONTIER ARE STANDING ON AN ADDRESS RIGHT NOW — the LIVE companion
-   `rootProgramsAwaitedAtSeed`'s own record names as the thing that retires its ambiguity, and this is it.
-   THE PAIR IS A CONSTANT BESIDE A GAUGE AND THAT IS THE WHOLE OF WHAT IT BUYS. `…AwaitedAtSeed` is written at
-   one line and never again — what the document OWED the reply door when its rows were laid down — so it
-   cannot say whether those bytes ever came. This row can, and the two readings take OPPOSITE WORK: `17`
-   beside `0` is a bundle that arrived whole, so a run that never reached its later programs is the ORDER
-   failing; `17` beside `17` is a bundle whose bytes never arrived at all, which is the fetch path. Nothing
-   on the census line separated those, and the question was being settled by counting `<script src>`
-   elements off the page by hand.
-   IT IS PER-FLOW AND THE FAN-OUT IS THE ANSWER RATHER THAN A DISTORTION. A row's kind lives on EACH member's
-   own table (solver/flow.h's `dyn_cand`) and a fork COPIES it, so one document row awaited by N members
-   counts N times — each of those members independently stops at that position until its own delivery pays
-   it, which is exactly the quantity a reader asking what the frontier is waiting for wants. A walk of
-   `g_root_scripts` cannot answer it at all (that table's `.body` is written at the seed and never again) and
-   a document-wide count would be a third thing that is neither.
-   A SECOND WALK OF THE FRONTIER, like `flow_host_owed_count()` beside it on the census line, and for its
-   reason: this is a GAUGE, and the struct `engine_frontier_census` fills is documented at its emitter as
-   LIFETIME COUNTS. Putting it there would have made the kind contract — which groups rows MECHANICALLY by
-   which accessor filled them — wrong about a row for the first time.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: this walks the members the REGISTRY holds, so
-   a member the level-1 pager sold to the cold tier takes its awaited rows out of the number with it; the row
-   is a reading of the RESIDENT frontier rather than of everything the session still owes. WHAT THE NEXT DIFF
-   BUILDS: the same count taken as a member is WRITTEN OUT and carried on the park's own record, beside
-   `sold`, so a reader can tell a frontier that has been paid from one whose debt left with its members —
-   taken at the write because a park stores a recipe and replays the document from its first script
-   (solver/cold.h), so the residue holds no row to recompute it from. HOW ITS ABSENCE WOULD SHOW: on a run
-   whose `sold` is nonzero this row FALLS with no delivery having been made, so a reader watching it drain
-   sees the bundle arriving when what happened is that the members waiting for it were paged out. */
+/* How many program rows of the live frontier stand on an address now: the live companion to
+   `rootProgramsAwaitedAtSeed`. That constant says what the document owed when its rows were laid down; this gauge
+   says whether those bytes came: `17` beside `0` is a bundle that arrived whole (a run that stopped short is the
+   order failing), `17` beside `17` is a bundle that never arrived (the fetch path). Per flow: a row's kind lives on
+   each member's table (flow.h's `dyn_cand`) and a fork copies it, so one row awaited by N members counts N times,
+   each independently stopped there. It is a second walk of the frontier, like `flow_host_owed_count()`, because the
+   struct `engine_frontier_census` fills is documented as lifetime counts.
+   Named residual. Not covered: this walks the members the registry holds, so a member the level-1 pager sold takes
+   its awaited rows with it. Next diff builds: the same count taken as a member is written out, carried on the
+   park's record beside `sold` (the residue is a recipe with no rows to recompute from, solver/cold.h). Absence
+   shows as: on a run with nonzero `sold`, this row falling with no delivery made. */
 long engine_rows_awaiting_bytes(void)
 {
     long n = 0;
     Flow *f;
 
     for (int i = 0; (f = flow_at(i)) != NULL; i++) {
-        /* THE EIGHT PARALLEL ARRAYS ARE ALLOCATED TOGETHER (solver/flow.h), so a member with no rows has no
-           array at all and this is the read that says so rather than indexing one. */
+        /* The parallel arrays are allocated together (solver/flow.h), so a member with no rows has none. */
         if (!f->dyn_cand) continue;
         for (int r = 0; r < f->dyn_n; r++)
             if ((DynKind)f->dyn_cand[r] == DYN_SCRIPT_SRC) n++;
@@ -6315,86 +6130,62 @@ long engine_rows_awaiting_bytes(void)
     return n;
 }
 
-/* AND WHICH DOCUMENT IT BELONGS TO, re-derived from the same cursor and for the same reason. Past the end of
-   the sequence there is no row to ask, and the flow's own document is the session's. */
+/* Which document it belongs to, from the same cursor. Past the end there is no row, and the flow's own document is
+   the session's. */
 static uint32_t flow_dyn_doc(const Flow *f) {
     if (f->script_i >= f->dyn_n) return g_sess_doc;
     return f->dyn_doc[f->script_i];
 }
 
-/* AND WHICH OF §8.1.4.4 "Calling scripts"'s TWO ALGORITHMS EVALUATES IT, re-derived from the same cursor for
-   the same reason. It is the ROW that answers for every position now — the session document's own <script
-   type=module> included, which is what it could not say while its type lived in a parallel array the dyn
-   table's rows had no column for. */
+/* Which of §8.1.4.4 Calling scripts' two algorithms evaluates it, from the same cursor; the row answers for every
+   position, the session document's own `<script type=module>` included. */
 static ScriptType flow_dyn_type(const Flow *f) {
     if (f->script_i >= f->dyn_n) return SCRIPT_TYPE_CLASSIC;
     return (ScriptType)f->dyn_type[f->script_i];
 }
 
-/* AND THE ADDRESS ITS BYTES CAME FROM — §8.1.4.2 "Fetching scripts"'s created-script base URL, and a module
-   row's module map key. NULL for an INLINE row and for a cursor past the end of the sequence, which is
-   §4.12.1.1's "let base URL be el's node document's document base URL" and is read as that by the compile. */
+/* The address its bytes came from: §8.1.4.2 Fetching scripts' created-script base URL, and a module row's module
+   map key. NULL for an inline row and past the end, which the compile reads as §4.12.1.1's "let base URL be el's
+   node document's document base URL". */
 static const char *flow_dyn_url(const Flow *f) {
     if (f->script_i >= f->dyn_n) return NULL;
     return f->dyn_url[f->script_i];
 }
 
-/* AND THE `script` ELEMENT IT IS THE PROGRAM OF — HTML §4.12.1.1 "Processing model"'s "execute the script
-   element", which is a switch on EL and whose "classic" arm brackets the whole run with the document's §3.1.7
-   `currentScript`. Re-derived from the cursor for the reason the four above are, and it is the fact the
-   BRACKET could not otherwise have: the run is a WORK ITEM that starts in one scheduler step and completes in
-   another, with siblings running in between, so the element the completion restores has to be ANSWERABLE at
-   the completion rather than remembered across it in a C local.
-   NULL PAST THE END OF THE SEQUENCE, which is where a driven orphan's CALL frame sits, and NULL for every row
-   no element caused. Both are §3.1.7's own answer — a document running one of those is a document that is not
-   executing a script element — and neither is a hole this accessor fills. */
+/* The `script` element it is the program of: HTML §4.12.1.1's "execute the script element" switches on el, and its
+   classic arm brackets the run with §3.1.7 `currentScript`. The run is a work item that may start and complete in
+   different scheduler steps, so the element must be answerable at the completion, not held in a C local. NULL past
+   the end of the sequence (where a driven orphan's call frame sits) and for every row no element caused, both
+   §3.1.7's own answer. */
 static lxb_dom_element_t *flow_dyn_el(const Flow *f) {
     if (f->script_i >= f->dyn_n) return NULL;
     return f->dyn_el[f->script_i];
 }
 
-/* WHETHER A REPLY EVER BECAME A PROGRAM, PER DOOR, WITH THE DENOMINATOR EACH ARM IS A SHARE OF. See
-   solver/engine.h's `net_prog_*` block for the whole reading; what a reader of THESE lines needs is that the
-   two `…_asks` counters are raised where a door HOLDS A REPLY RECORD and before any type is read, because
-   both doors legitimately decline — a reply whose computed type is not JavaScript is not a program — and a
-   census of what LANDED cannot tell a door nobody reached from one that refused correctly
-   (CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION).
-   THE TOTAL IS RAISED AT THE ONE ENTRY BELOW AND THE TWO ARMS AT THE DOORS, so the relation between them is
-   `fetch + xhr <= total` rather than a partition: a THIRD caller exists on purpose (test_forced.c's
-   `loadScript` host edge, which stands in for a `<script src>`-shaped door and cannot reach the delivery arm
-   at all), so an equality would fire on that fixture. The residue is a row a reader can read: zero in the
-   shipped program, the fixture's own edge in that binary. What the inequality catches is a door raising a
-   queued arm WITHOUT going through this entry, which is the second compile door
-   §A-superseded-system-is-DELETED forbids arriving as an observation.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads them and no arm branches on one. */
+/* Whether a reply ever became a program, per door, with each arm's denominator (solver/engine.h's `net_prog_*`
+   block). The two `…_asks` counters are raised where a door holds a reply record, before any type is read, since
+   both doors correctly decline non-JavaScript replies. The total is raised at engine_queue_fetched_script and the
+   arms at the doors, so `fetch + xhr <= total`, not a partition: test_forced.c's `loadScript` host edge is a third
+   caller that reaches no delivery arm. The inequality catches a door raising a queued arm without going through
+   the entry, a second compile door. A report only. */
 static long g_net_prog_queued, g_net_prog_fetch_asks, g_net_prog_fetch_queued;
 static long g_net_prog_xhr_asks, g_net_prog_xhr_queued;
 
-/* See solver/engine.h for why these are four entries rather than one taking a door. Each is ONE statement and
-   none of them can be half-made; the `…_ask` pair is what gives the `…_queued` pair a denominator. */
+/* See solver/engine.h for why these are four entries rather than one taking a door. Each is one statement; the
+   `…_ask` pair gives the `…_queued` pair a denominator. */
 void engine_note_net_prog_fetch_ask(void)    { g_net_prog_fetch_asks++; }
 void engine_note_net_prog_fetch_queued(void) { g_net_prog_fetch_queued++; }
 void engine_note_net_prog_xhr_ask(void)      { g_net_prog_xhr_asks++; }
 void engine_note_net_prog_xhr_queued(void)   { g_net_prog_xhr_queued++; }
 
-/* THE ENTRY BELOW IS A TASK — so the tail IS its position and it cannot be asked for another (engine.h's
-   DynPos) — and it is a CLASSIC SCRIPT, which is §8.1.4.4's answer for a program that has no `<script>`
-   element behind it rather than a default it happens to pick. An entry that DOES have an element behind it
-   says which of the two algorithms runs it — engine_queue_element_script below.
-   IT USED TO HAVE A NEIGHBOUR AND THE NEIGHBOUR IS DELETED RATHER THAN MOVED. `engine_queue_timer_script`
-   queued HTML §8.7 "Timers"'s string handler as a row at the SET; §8.7 creates and runs that classic script at
-   the EXPIRY, inside step 9's task (substeps 9.8.7-9.8.8), so core/timing/timer.c compiles it there with
-   JS_EVAL_FLAG_TRAMP_CLOSURE and runs it on the firing flow's own trampoline chain. Two things went with it:
-   the TIMER TASK SOURCE stops being in both of a flow's queues (see the run-a-task arm below), and the
-   handler's LENGTH stops being lost — that entry took a NUL-terminated `const char *` and the `strlen` written
-   here was the truncation `setTimeout("\0…")` fell into. */
-/* A PROGRAM WHOSE BYTES CAME FROM A RESPONSE. §8.1.4.2 "Fetching scripts" creates the script with the
-   RESPONSE'S URL, and §8.1.4.1 "Scripts" makes that the row's base URL — "the URL from which the script was
-   obtained, for external scripts" — so this entry REQUIRES one. It is not a defaultable field: the document's
-   address is a DIFFERENT script's answer rather than a weaker form of this one, and taking it silently is
-   what filed a fetched chunk as an inline script (the compile reads a missing address as
-   JS_EVAL_FLAG_INLINE_SCRIPT, which says the bytes were rendered against THIS visitor's credentials) and
-   named the page as the throw site of every error the chunk raised. */
+/* A program whose bytes came from a response: a task, so the tail is its position (engine.h's DynPos), and a
+   classic script, §8.1.4.4's answer for a program with no `<script>` behind it (engine_queue_element_script takes
+   the element's type). §8.1.4.2 creates the script with the response's URL and §8.1.4.1 Scripts makes it the base
+   URL ("the URL from which the script was obtained, for external scripts"), so the address is required: the
+   compile reads a missing address as JS_EVAL_FLAG_INLINE_SCRIPT (rendered against this visitor's credentials) and
+   would name the page as the throw site of every error the chunk raised. A timer's string handler is not queued
+   here: HTML §8.7 Timers creates and runs it at the expiry, in step 9's task (substeps 9.8.7-9.8.8), so
+   core/timing/timer.c compiles it there. */
 void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, const char *url) {
     DCHECK(body != NULL, "a fetched program was queued with no source at all — the caller holds the reply's "
                          "bytes and there is no program in a null one");
@@ -6403,104 +6194,74 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
            "script with the response's URL and §8.1.4.1 keeps it as the script's base URL, so a caller here "
            "with none has the bytes and has thrown away where they came from; nothing downstream can "
            "re-derive it, and the document's address is another script's answer rather than a weaker one");
-    /* THE TOTAL, RAISED AT THE ONE ENTRY A PROGRAM FROM A RESPONSE IS EVER BORN AT — the row it builds is a
-       DYN_PAGE_SCRIPT exactly as the document's own seeded rows are, so its KIND cannot carry this the way
-       DYN_CANDIDATE carries `g_prog_queued_cand`, and the entry is the only thing every such program shares.
-       It is here rather than at the two doors so that a caller is counted by CALLING rather than by its
-       author remembering to; which door it came through is the doors' own to say, and the two arms are
-       compared against this at engine_frontier_census. */
+    /* The total, raised at the one entry where a program from a response is born. Its row is a DYN_PAGE_SCRIPT like
+       the document's own, so the kind cannot carry this as DYN_CANDIDATE carries `g_prog_queued_cand`; a caller is
+       counted by calling, and engine_frontier_census compares the door arms against it. */
     g_net_prog_queued++;
     engine_queue(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, url, TASK_SOURCE_NETWORKING,
                  DYN_POS_APPEND);
 }
 
-/* …AND THE ROW A `<script>` ELEMENT PUT THERE, which is the same position and one more fact: HTML §4.12.1.1
-   "Processing model"'s "execute the script element" ends in a switch on the ELEMENT's type, so the row carries
-   it and flow_step routes to §8.1.4.4 "Calling scripts"'s run-a-classic-script or run-a-module-script
-   accordingly. Three seams reach it and they are the three ways a Document of this agent that is NOT the
-   session's gets its inline programs: a child navigable's (core/frame/navigable.c), a joined one's
-   (engine_join_document) and an element page code INSERTED (core/html/html_script.c). Each of those used to
-   ABORT on `<script type=module>` — a DCHECK apiece, all three naming this column — because the only route was
-   the classic entry above and the page's own `import` would have come back a SyntaxError.
-   THE TAIL IS ITS POSITION and that is §4.12.1.1's own answer for every destination an element with a MODULE
-   type or a `src` reaches: the `list of scripts that will execute when the document has finished parsing` and
-   the `list of scripts that will execute in order as soon as possible` both hold their elements in order, and
-   the `set of scripts that will execute as soon as possible` has no position at all (§13.2.7 waits for it only
-   before the load event), so arrival order is a correct order for it. The ONE destination that is not the tail
-   is `immediately execute the script element`, which §4.12.1.1 reaches only for an inline CLASSIC script and
-   which has its own entry below. */
-/* …AND IT CARRIES THE ELEMENT, because "execute the script element" is a switch on EL and its classic arm
-   brackets the run with that document's §3.1.7 `currentScript`. */
+/* The row a `<script>` element put there: the same position plus the element's type, since §4.12.1.1's "execute
+   the script element" switches on it and flow_step routes to §8.1.4.4's run a classic script or run a module
+   script. Its callers are the three ways a non-session Document of this agent gets its inline programs: a child
+   navigable (core/frame/navigable.c), a joined document (engine_join_document) and an element page code inserted
+   (core/html/html_script.c). The tail is §4.12.1.1's answer for every destination a module or `src` element
+   reaches: the list for after parsing and the in-order as-soon-as-possible list hold their elements in order, and
+   the as-soon-as-possible set has no position (§13.2.7 waits for it only before the load event). The one
+   destination that is not the tail, immediate execution, has its own entry below. It carries the element, whose
+   classic arm brackets the run with §3.1.7 `currentScript`. */
 void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
                                  lxb_dom_element_t *el) {
     DCHECK(el != NULL, "a `<script>` element's program was queued with no element — this entry is the one an "
                        "ELEMENT reaches; the element-less entry is engine_queue_fetched_script, so a caller "
                        "here with nothing to pass is a caller at the wrong entry");
-    /* NO FETCH IS OWED, so §4.12.1.1's flag is not carried — this row's source text is already here. See
-       engine_queue_into, which asserts that only an ADDRESS row may carry one. */
+    /* No fetch is owed, so no parser-inserted flag (engine_queue_into asserts only an address row carries one). */
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, TASK_SOURCE_NOT_A_TASK,
                     DYN_POS_APPEND, el, /*parser_inserted*/0);
 }
 
-/* …AND THE ONE SCRIPT SOURCE THAT IS NOT A TASK. HTML §4.12.1.1 "Processing model" ends "prepare the script
-   element" with "Otherwise, immediately execute the script element el, even if other scripts are already
-   executing" — so an inline classic script a page INSERTED runs at the slot after the program that inserted it,
-   and everything the sequence already holds runs after it. This engine had the classification (html_script.c
-   computes SCRIPT_SCHED_IMMEDIATE and its own DCHECK names this very step) and then queued the result at the
-   tail, which is the position of the one destination HTML §4.12.1.1 says it does NOT take. */
-/* THE TYPE IS CLASSIC AND IS NOT A PARAMETER, because §4.12.1.1 reaches this step for no other: "If el's type
-   is `classic` and el has a src attribute, OR el's type is `module`" sends every module — inline or not — to
-   one of the three lists above, and only what falls past that switch reaches "Otherwise, immediately execute
-   the script element el". An inline module has a graph to load before its result exists, which is exactly why
-   the standard does not run it here. */
+/* The one script source that is not a task: §4.12.1.1's prepare the script element ends "Otherwise, immediately
+   execute the script element el, even if other scripts are already executing", so an inserted inline classic
+   script runs at the slot after the inserting program, ahead of everything the sequence holds (html_script.c
+   computes SCRIPT_SCHED_IMMEDIATE). The type is classic, not a parameter: "If el's type is `classic` and el has a
+   src attribute, or el's type is `module`" sends every module to one of the lists above, and an inline module has a
+   graph to load before its result exists. */
 void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el) {
     DCHECK(el != NULL, "an inline classic script was queued to run IMMEDIATELY with no element — §4.12.1.1 "
                        "reaches `immediately execute the script element` from `prepare the script element`, "
                        "whose whole subject is EL");
-    /* NO FETCH IS OWED — see engine_queue_element_script above. */
+    /* No fetch is owed (see engine_queue_element_script). */
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, TASK_SOURCE_NOT_A_TASK,
                     DYN_POS_IMMEDIATE, el, /*parser_inserted*/0);
 }
 
-/* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
-   caller resolved the URL because §8.1.3.2 "Environment settings objects"' API base URL belongs to the
-   document whose element it is (§4.4 stood here and is "Grouping content").
-   APPEND, and that is HTML §4.12.1.1's own answer rather than a default: this entry is the `list of scripts that will
-   execute in order as soon as possible`, whose elements hold their places against one another, so a new one
-   goes behind the ones already there. */
+/* The external sibling, at the same kind of position with only an address (DYN_SCRIPT_SRC). The caller resolved
+   the URL, because §8.1.3.2 Environment settings objects' API base URL belongs to the element's document. Append
+   is §4.12.1.1's answer: this is the list of scripts that will execute in order as soon as possible, whose elements
+   hold their places against one another. */
 void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el,
                                 int parser_inserted) {
-    /* THE ADDRESS IS THE ROW'S BODY, NOT ITS ADDRESS COLUMN — the row IS the URL until the reply replaces it
-       with the source text, and flow_deliver_one_reply is what MOVES it into the address column at that moment.
-       Writing both here would name one script two ways and engine_queue_into asserts against it. */
+    /* The address is the row's body, not its address column: the row is the URL until the reply replaces it, and
+       flow_deliver_one_reply moves it into the address column then (engine_queue_into asserts against both). */
     DCHECK(el != NULL, "an external document script took its slot with no element — the row is that element's "
                        "program from the moment it takes the position, not from the moment its bytes arrive, "
                        "and §4.12.1.1's `execute the script element` is a switch on EL");
-    /* AND ITS LENGTH IS ITS `strlen`, WHICH IS A FACT ABOUT AN ADDRESS AND NOT A DEFAULT. The caller resolved
-       this with script_src_absolute, so it is a serialized URL (URL §4.5 "URL serializing") and every one of
-       its components went through a percent-encode set built on URL §1.3's C0 control percent-encode set —
-       "C0 controls and all code points greater than U+007E" — which contains U+0000. flow_deliver_one_reply
-       asserts the pair again at the read that turns this body back into a C string. */
+    /* Its length is its `strlen`: script_src_absolute serialized it (URL §4.5), through percent-encode sets
+       containing U+0000 (URL §1.3), and flow_deliver_one_reply asserts the pair again where the body becomes a C
+       string. */
     engine_queue_el(doc, url, strlen(url), DYN_SCRIPT_SRC, stype, NULL, TASK_SOURCE_NOT_A_TASK,
                     DYN_POS_APPEND, el, parser_inserted);
 }
 
-/* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
-   thing — code the page caused to run — but it carries the one difference that matters: it is allowed not to
-   compile. Most breakouts do not fit most sink contexts, which is exactly why the solver tries several and
-   keeps whichever FIRES; a candidate that does not parse simply never fires. */
-/* THE DOCUMENT IS THE SESSION'S, and that is what a candidate IS: the same document re-run with one attacker
-   value substituted for one source. It is stated here rather than taken as a parameter because there is no
-   other document it could be — a breakout that fired in a child navigable is a candidate seeded against that
-   document, which is a session of that document's instance. */
-/* AND `pos` IS THE SINK'S OWN SEMANTICS — see engine.h. An eval sink's code is ECMAScript §19.2.1.1
-   PerformEval, which evaluates the body inside the call expression; a markup sink's auto-firing handler and a
-   URL sink's `javascript:` navigation are tasks. The caller knows which sink fired, so the caller says. */
-/* AND IT IS `(body, body_n)` FOR A REASON THAT IS THIS HALF OF THE PROJECT'S OWN: a candidate is BUILT out of
-   attacker-shaped bytes — a percent-decoded `%00` in a hash, a `\0` in a JSON string a reply carried — and the
-   solver's whole claim is that the candidate it fires is the bytes it constructed. Read to the first NUL, a
-   candidate carrying one fires a DIFFERENT program from the one the search decided on, and the verdict
-   ("no hit") would be about a payload nobody chose. */
+/* An @S candidate, queued as the program it would be if it fired: the same queue (it is code the page caused to
+   run) with one difference, that it may fail to compile. Most breakouts do not fit most sink contexts, and a
+   candidate that does not parse simply never fires. The document is the session's: a candidate is the same
+   document re-run with one attacker value substituted (a breakout in a child navigable is a candidate session of
+   that document's instance). `pos` is the sink's semantics (engine.h): an eval sink's code runs inside the call
+   expression (ECMAScript §19.2.1.1 PerformEval); a markup sink's auto-firing handler and a URL sink's `javascript:`
+   navigation are tasks. `(body, body_n)`, because a candidate is built from attacker-shaped bytes (a decoded `%00`,
+   a `\0` from a reply), and read to the first NUL it would fire a different program from the one the search chose. */
 void engine_queue_candidate(const char *body, size_t body_n, DynPos pos) {
     engine_queue(g_sess_doc, body, body_n, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL,
                  TASK_SOURCE_SOLVER_CANDIDATE, pos);
