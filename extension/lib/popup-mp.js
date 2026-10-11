@@ -170,7 +170,7 @@ function mpRenderAll() {
   const container = document.getElementById("mp-parts-container");
   const info = document.getElementById("mp-boundary-info");
   if (!container) return;
-  container.innerHTML = "";
+  container.replaceChildren();
   if (info) info.textContent = mpState.parts.length + " part" + (mpState.parts.length === 1 ? "" : "s") + " · boundary=" + (mpState.boundary || "auto");
 
   for (let i = 0; i < mpState.parts.length; i++) {
@@ -197,10 +197,11 @@ function _mpBuildPartCard(index) {
 
   const head = document.createElement("div");
   head.className = "mp-part-head";
-  head.innerHTML =
-    '<span class="mp-part-num">Part ' + esc(String(p.partNumber)) + '</span>' +
-    (p.method !== null ? ' <span class="badge">' + esc(p.method) + ' ' + esc(p.path) + '</span>' : '') +
-    ' <span class="mp-part-kind">[' + esc(p.editor.kind) + ']</span>';
+  domAppendChildren(head, [
+    domElement("span", { class: "mp-part-num" }, ["Part " + String(p.partNumber)]),
+    p.method !== null ? [" ", domElement("span", { class: "badge" }, [p.method + " " + p.path])] : [],
+    " ", domElement("span", { class: "mp-part-kind" }, ["[" + p.editor.kind + "]"]),
+  ]);
   const del = document.createElement("button");
   del.className = "btn-small mp-part-del";
   del.type = "button";
@@ -211,7 +212,7 @@ function _mpBuildPartCard(index) {
 
   const ctRow = document.createElement("div");
   ctRow.className = "mp-ct-row";
-  ctRow.innerHTML = '<label>Content-Type</label>';
+  ctRow.appendChild(domElement("label", {}, ["Content-Type"]));
   const ctInput = document.createElement("input");
   ctInput.type = "text";
   ctInput.value = p.contentType;
@@ -394,7 +395,7 @@ function mpCollectBody() {
 function mpClear() {
   mpState = { boundary: null, parts: [] };
   const container = document.getElementById("mp-parts-container");
-  if (container) container.innerHTML = "";
+  if (container) container.replaceChildren();
   const info = document.getElementById("mp-boundary-info");
   if (info) info.textContent = "";
 }

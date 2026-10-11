@@ -11,32 +11,37 @@ function gqlBuildOpPanel(idx, op) {
   // `{extensions.persistedQuery}`) don't ship the query text. Show a
   // dedicated "Persisted Operation" field so the user can see + edit it
   // without the Query textarea looking empty/broken.
-  const persistedHint = op.operation
-    ? `<div class="gql-persisted-hint">Persisted operation — query text is resolved server-side.</div>`
-    : "";
-  const operationFieldHtml = op.operation
-    ? `<div class="gql-field-label">Persisted Operation</div>` +
-      `<input type="text" class="gql-operation" value="${esc(op.operation || "")}">`
-    : "";
+  const label = (text) => domElement("div", { class: "gql-field-label" }, [text]);
+  const persisted = op.operation
+    ? [domElement("div", { class: "gql-persisted-hint" },
+                  ["Persisted operation — query text is resolved server-side."]),
+       label("Persisted Operation"),
+       domElement("input", { type: "text", class: "gql-operation", value: String(op.operation) })]
+    : [];
   const varsRaw = op.variables ? (typeof op.variables === "string" ? op.variables : JSON.stringify(op.variables, null, 2)) : "";
-  div.innerHTML =
-    persistedHint +
-    operationFieldHtml +
-    `<div class="gql-field-label">Query</div>` +
-    `<textarea class="gql-query" placeholder="query { user(id: 1) { name email } }" rows="4">${esc(op.query || "")}</textarea>` +
-    `<div class="gql-field-label">Variables</div>` +
+  const extRaw = op.extensions ? (typeof op.extensions === "string" ? op.extensions : JSON.stringify(op.extensions, null, 2)) : "";
+  domAppendChildren(div, [
+    persisted,
+    label("Query"),
+    domElement("textarea", { class: "gql-query", placeholder: "query { user(id: 1) { name email } }", rows: "4" },
+               [String(op.query || "")]),
+    label("Variables"),
     // Tree container is the authoritative editor. The raw textarea below
     // stays in sync so callers (and existing gqlSaveCurrentOp path) can
     // still read it, and power users can flip it open to edit raw JSON.
-    `<div class="gql-variables-tree" data-gql-idx="${idx}"></div>` +
-    `<details class="gql-variables-raw"><summary>Raw JSON</summary>` +
-    `<textarea class="gql-variables" placeholder='{"id": 1}' rows="3">${esc(varsRaw)}</textarea>` +
-    `</details>` +
-    `<div class="gql-field-label">Operation Name</div>` +
-    `<input type="text" class="gql-opname" placeholder="(optional)" value="${esc(op.operationName || "")}">` +
-    `<details class="gql-extensions-toggle"><summary>Extensions</summary>` +
-    `<textarea class="gql-extensions" placeholder='{"persistedQuery": {...}}' rows="2">${esc(op.extensions ? (typeof op.extensions === "string" ? op.extensions : JSON.stringify(op.extensions, null, 2)) : "")}</textarea>` +
-    `</details>`;
+    domElement("div", { class: "gql-variables-tree", "data-gql-idx": String(idx) }),
+    domElement("details", { class: "gql-variables-raw" }, [
+      domElement("summary", {}, ["Raw JSON"]),
+      domElement("textarea", { class: "gql-variables", placeholder: '{"id": 1}', rows: "3" }, [varsRaw]),
+    ]),
+    label("Operation Name"),
+    domElement("input", { type: "text", class: "gql-opname", placeholder: "(optional)",
+                          value: String(op.operationName || "") }),
+    domElement("details", { class: "gql-extensions-toggle" }, [
+      domElement("summary", {}, ["Extensions"]),
+      domElement("textarea", { class: "gql-extensions", placeholder: '{"persistedQuery": {...}}', rows: "2" }, [extRaw]),
+    ]),
+  ]);
 
   // Populate the contextual tree editor. Uses the same form-field
   // infrastructure the regular body uses, so we get:
@@ -94,7 +99,7 @@ function gqlRenderVariablesTree(panelDiv, op) {
 function gqlRenderVariablesContent(panelDiv, op) {
   const container = panelDiv.querySelector(".gql-variables-tree");
   if (!container) return;
-  container.innerHTML = "";
+  container.replaceChildren();
 
   let parsed = null;
   if (op.variables != null) {
@@ -105,7 +110,9 @@ function gqlRenderVariablesContent(panelDiv, op) {
     }
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    container.innerHTML = '<div class="hint">Variables are not a JSON object — edit via Raw JSON below.</div>';
+    domReplaceChildren(container, [
+      domElement("div", { class: "hint" }, ["Variables are not a JSON object — edit via Raw JSON below."]),
+    ]);
     return;
   }
 
@@ -272,15 +279,15 @@ function gqlRenderTabs() {
   const tabsEl = document.getElementById("gql-op-tabs");
   const showTabs = gqlState.ops.length > 1 || gqlState.batched;
   tabsEl.classList.toggle("hidden", !showTabs);
-  tabsEl.innerHTML = "";
+  tabsEl.replaceChildren();
   for (let i = 0; i < gqlState.ops.length; i++) {
     const tab = document.createElement("span");
     tab.className = "gql-op-tab" + (i === gqlState.activeIdx ? " active" : "");
     const label = gqlState.ops[i].operationName || `Op ${i + 1}`;
-    tab.innerHTML = esc(label);
-    if (gqlState.ops.length > 1) {
-      tab.innerHTML += `<span class="gql-tab-close" data-gql-close="${i}">\u00d7</span>`;
-    }
+    domAppendChildren(tab, [
+      String(label),
+      gqlState.ops.length > 1 ? domElement("span", { class: "gql-tab-close", "data-gql-close": String(i) }, ["\u00d7"]) : [],
+    ]);
     tab.dataset.gqlTab = i;
     tab.addEventListener("click", (e) => {
       if (e.target.dataset.gqlClose !== undefined) return;
@@ -341,7 +348,7 @@ function gqlCollectAllOps() {
 
 function gqlRenderAll() {
   const container = document.getElementById("gql-op-container");
-  container.innerHTML = "";
+  container.replaceChildren();
   for (let i = 0; i < gqlState.ops.length; i++) {
     container.appendChild(gqlBuildOpPanel(i, gqlState.ops[i]));
   }
