@@ -3979,114 +3979,38 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        beside `val` and `fam_us`, written once per family per emission and read by every arm. Absence shows as: a
        frontier whose census reports members at `turns:0` while `wTop` climbs, with every ordering assertion silent
        and nothing distinguishing it from a frontier served correctly. */
-    /* §scheduler'S RAZOR, COUNTED AT THE LINE THAT DECIDES — "drops, starves, skips, reorders, or forgets ANY
-       flow ... it is a CAP". STARVES is the one of the five with no instrument anywhere, and it is not a
-       question a census can answer: three GAUGES over the frontier (`never_picked`, `never_picked_gap`,
-       `never_picked_at_top`) say a tied tail EXISTS at some instant, and none of them can say whether a PICK
-       ever passed over it. This can, because it is asked where the choice is made and about the choice.
-       WHAT IT COUNTS, EXACTLY: the scheduler's own dispatch pick returned a member that has been dispatched
-       before, while a member that never has stood at the SAME weight. flow_pick's comparison is STRICT and the
-       incumbent is the seed, so that is the tie going to the incumbent — which flow.h is right to say must not
-       be cured by relaxing the comparison (that hands the thread away at every opcode). It is counted rather
-       than asserted for exactly that reason: the state is LEGITIMATE for one pick and is the razor's STARVES
-       only as a rate, and a rate is a thing to measure, never a thing to abort on.
-       AND IT IS THE READING MY OWN THREE CENSUS DISCRIMINATORS COULD NOT MAKE, which is why it exists. On a
-       frontier that GROWS BY FORKING, `never_picked` climbing is arithmetic about the fork factor and not
-       about the order (5786 flows created against 1010 dispatches — no ordering can dispatch what the thread
-       has not reached); `picks_max` cannot fall toward 1 while a framed flow legitimately needs many quanta to
-       finish one program; and `picks_live / P` counts BOTH re-dispatches that CONTINUE a program — necessary
-       work — and re-dispatches that pass over a starved member, which are opposite things.
-       AND THIS ROW ALONE DOES NOT SEPARATE THEM EITHER, WHICH IS WHAT THIS PARAGRAPH USED TO CLAIM IN THE
-       WORDS "This separates them: only the second is counted here". It does not and it never did: the
-       condition below asks whether `best` has been dispatched BEFORE and says nothing whatever about whether
-       it has anything to continue, so a framed flow re-picked to FINISH its program while an arm it forked
-       stands tied — which is the ordinary shape of every quantum of every multi-quantum program on a forking
-       page, since an arm is born at its parent's exact weight (flow_fork_inherit) — is counted here beside a
-       pick that passed over a member with nothing in front of it. Those are the two opposite repairs the row
-       is read to choose between, added together. WHAT FOUND IT WAS A DISAGREEMENT AMONG THE SITES THAT DESCRIBE
-       THIS ROW, and the shape is worth more than the incident: a CONSUMER of it declined to print the quotient
-       on the ground that the row "sums re-dispatches that CONTINUE a framed program … with those that pass
-       over a never-run member", while this comment and flow.h — the two sites that DECLARE it — both said the
-       separation had been made. One site disagreeing with its siblings is either the only correct one or the
-       only wrong one, and the consumer outranked both declarations, because a declaration states an intention
-       and a use states what a caller could actually get out of it.
-       SO THE SEPARATION IS THE SECOND COUNTER AND NOT THIS ONE. `g_starved_picks_idle` is the subset in which
-       the re-dispatched member was BETWEEN units of work — no live frame and no microtask checkpoint owed, the
-       boundary flow_between_units states and flow_credit_visit is credited at — so it had finished its trial
-       and was handed the thread again ahead of a member that has never had one. That subset is the defect; the
-       remainder is a program being finished, which is the necessary work no ordering should interrupt on a
-       tie. Read the SUBSET against `picksLifetime` and the remainder as what a forking frontier costs.
-       THE IDLE SUBSET WAS AN UPPER BOUND BY ONE CLAUSE AND IS NO LONGER, AND THE RESIDUAL IS RETIRED HERE
-       RATHER THAN DELETED because what retired it is narrower than what it asked for. It asked for one
-       accessor answering "does this member hold a parked continuation" FOR EVERY MEMBER INCLUDING THE RUNNING
-       ONE, so that this boundary would be engine.c's whole boundary rather than its per-member half — and that
-       accessor is not needed and was never needed, because THIS ROW CANNOT ASK ABOUT THE RUNNING MEMBER. The
-       raise requires `best != seed`, the seed is the incumbent, and the incumbent is the flow holding the
-       thread; so every member this row counts is one whose park queue is on `Flow::parked`, where
-       flow_holds_park reads it exactly. The running member's queue is in the runtime and this file holds no
-       handle to it, which is now an assert inside that predicate rather than a gap in this one.
-       WHICH IS WHY THE RESIDUAL'S OWN CORRECTION IS THE PART WORTH KEEPING: it first read "the uncovered
-       population is exactly the incumbent-with-a-park", and the incumbent is the ONE member this row can
-       never count. Getting the population backwards is what made the remedy a general accessor instead of a
-       field read, and a reader who re-derives the two-spellings argument will re-derive the general accessor
-       with it. What actually closed it was noticing WHO IS COUNTED, not building the thing that would have
-       answered for everybody.
-       ONLY THE SCHEDULER'S OWN PICK, AND ONLY WHERE THAT PICK DISPLACES THE INCUMBENT — `best != seed` IS
-       LOAD-BEARING AND ITS ABSENCE IS WHAT MADE THIS ROW UNREADABLE. This comment used to say FLOW_SCAN_NEXT
-       is "the one call whose answer becomes a dispatch", and that is FALSE of the answer `cur` itself:
-       engine.c credits `flow_credit_pick` inside `if (best != cur)`, so a scan that RETURNS THE INCUMBENT
-       advances no dispatch at all. The incumbent seeds this scan and necessarily has `picks > 0`, and
-       engine.c displaces it only on a STRICTLY better weight — so on a frontier standing at one weight, which
-       §Testing measured on a real page (every account at zero reward, `neverPickedGap` 0.000 at every
-       sample, 73-93% of members tied at the top), the incumbent is RETAINED on nearly every scan and this
-       row fired on each one. It was therefore dominated by the one event the paragraph above calls
-       legitimate in its own words, counting the DESIGN as the defect it exists to find.
-       THE TELL WAS ARITHMETIC AND IT WAS FREE: `starvedPicks` read 964 where the re-dispatches it claims to
-       be a subset of — `picksLifetime` minus the members ever picked — could not exceed 353. A count that
-       cannot be true is a count read against the wrong denominator, and here the two quantities were not
-       even of the same event: this one was raised per SCAN and `picksLifetime` advances per SWITCH. With the
-       displacement clause they are the same event, `starvedPicks <= picksLifetime` holds by construction,
-       and result.c asserts it where both are in one hand.
-       THE DIFFERENT QUESTION IS THE COMPLEMENT AND `g_plateau_held` COUNTS IT NOW: how often the
-       incumbent KEPT the thread while a never-run member stood level with it. This paragraph read "WHAT IS NO
-       LONGER COUNTED ANYWHERE" and the clause is rewritten rather than deleted, because the reasoning that put
-       it there is exactly right and is what a reader re-derives — the two questions must not share a row, and
-       folding them into one is what cost this one its meaning. What was wrong was only the ARITHMETIC of
-       leaving the complement unread: a retention is §Attention's value-yield doing exactly what it is
-       specified to do ("a top-ranked flow runs on at ~zero switch cost"), so it belongs to a reading about
-       PLATEAU DEPTH and never to one about starvation — and a DEPTH is the one thing neither specification
-       states, which is why it had to become rows rather than an argument. `g_plateau_asked`, `g_plateau_held`,
-       `g_plateau_runs` and `g_plateau_held_idle` are those rows,
-       raised in a separate evaluation under a separate condition so that nothing about this row's population
-       depends on theirs. The rival scan, the host's best-weight read, the pager's tail and the census still ask
-       other questions and a count over them would still be a number about the instrument.
-       EXACT `==` AND NO EPSILON, this file's idiom: two members standing at one another read one value twice,
-       and a tolerance would count members the pick can already tell apart.
-       A LIFETIME COUNTER and the only kind a reader may difference — it is off the flows entirely, for
-       `g_picks_total`'s reason, and reset by nothing for `g_rank_changes`'. Read it against `picksLifetime`:
-       the FRACTION is what says whether the tie-break is deciding dispatches or is a rounding event — and the
-       IDLE fraction is what says which of the two repairs that reading is asking for. BOTH are raised here,
-       under one condition, so no reading can be a comparison of two moments: the subset is decided by the same
-       `best` the superset was, in the same evaluation, and `idle <= starved` is true by construction rather
-       than by two writers agreeing. */
+    /* Starvation, counted at the line that decides. The census's gauges (`never_picked`, `never_picked_gap`,
+       `never_picked_at_top`) say a tied tail exists at some instant; none can say whether a pick passed over it.
+       This counts the scheduler's own dispatch pick returning a member dispatched before while a never-dispatched
+       member stood at the same weight, and only where the pick displaces the incumbent (`best != seed`): engine.c
+       credits a dispatch inside `if (best != cur)`, so a scan returning the incumbent advances none, and counting
+       retentions (nearly every scan of a frontier at one weight) would count the design as the defect. With the
+       clause, this and `picksLifetime` count the same event and `starvedPicks <= picksLifetime` holds (result.c
+       asserts it). Counted rather than asserted: one such pick is legitimate (the tie goes to the incumbent, and
+       relaxing the strict comparison would hand the thread away at every opcode), and starvation is a rate.
+       This row does not separate re-dispatches that continue a program (a framed flow finishing while an arm it
+       forked, born at its weight, stands tied) from passes over a member with nothing in front of it.
+       `g_starved_picks_idle` does: the subset whose member was between units (no live frame, no checkpoint owed,
+       flow_between_units, and no parked continuation). The raise requires `best != seed`, so every member counted
+       is one whose park queue is on `Flow::parked`, where flow_holds_park reads it exactly. Read the subset against
+       `picksLifetime` and the remainder as what a forking frontier costs. The complement, the incumbent keeping the
+       thread while a never-run member stands level, is the plateau rows below, raised under a separate condition;
+       the rival scan, the host's best-weight read, the pager's tail and the census ask other questions.
+       Exact `==`, no epsilon: two members at one weight read one value twice. Lifetime counters, off the flows for
+       `g_picks_total`'s reason and reset by nothing, so they difference. Both raised under one condition, so
+       `idle <= starved` holds by construction. */
     if (why == FLOW_SCAN_NEXT && best && best != seed && best->picks > 0 && never && never_w == bw) {
         g_starved_picks++;
         if (flow_between_units(best) && !flow_holds_park(best)) g_starved_picks_idle++;
     }
-    /* …AND THE COMPLEMENT, IN ONE EVALUATION, SO THE THREE IDENTITIES ARE TRUE BY CONSTRUCTION RATHER THAN BY
-       FOUR WRITERS AGREEING. `held` is decided by the same `best`, `seed`, `never` and `bw` `g_starved_picks` was,
-       and every subset is raised inside the `if` of its own population, so `runs <= held <= asked` and
-       `held_idle <= held` cannot be violated by anything but a second writer — which is what result.c asserts.
-       `never != seed` IS PART OF THE QUESTION AND NOT A GUARD PAST A BROKEN INVARIANT. "A never-run member
-       stood LEVEL WITH the incumbent" presupposes a member that is not the incumbent: without the clause, a
-       seed with `picks == 0` becomes its own `never` through the fold's `>=`, compares equal to itself, and
-       every scan of that member's turn reads as a pass-over of somebody who is not there. The comment above
-       says the incumbent "necessarily has `picks > 0`" and that is an argument about engine.c's displacement
-       block rather than a property this function can see — `cur` is restored from `g_sess_cur` across a resume
-       — so the clause is cheap, is the question's own shape, and is what makes the row correct if that
-       argument ever stops holding.
-       CLOSED BY ANY DISPATCH SCAN THAT DID NOT HOLD, ASKED OR NOT, which is why the write to `g_plateau_open`
-       is unconditional inside the scan test rather than inside the ask: see its own banner. */
+    /* And the complement, in one evaluation, so the identities hold by construction: `held` is decided by the same
+       `best`, `seed`, `never` and `bw`, and every subset is raised inside its population's `if`, so
+       `runs <= held <= asked` and `held_idle <= held` (asserted in result.c) fail only for a second writer.
+       `never != seed` is part of the question: "a never-run member stood level with the incumbent" needs a member
+       that is not the incumbent, and a seed with `picks == 0` would otherwise become its own `never` through the
+       fold's `>=`. (That the incumbent has `picks > 0` is an argument about engine.c's displacement block, and
+       `cur` is restored from `g_sess_cur` across a resume.) Closed by any dispatch scan that did not hold, asked
+       or not, so the write to `g_plateau_open` is inside the scan test (see its banner). */
     if (why == FLOW_SCAN_NEXT) {
         int asked = seed_weighed && best && never && never != seed;
         int held  = asked && best == seed && never_w == bw;
@@ -4094,16 +4018,11 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         if (held) {
             g_plateau_held++;
             if (!g_plateau_open) g_plateau_runs++;
-            /* THE ONE CLAUSE OF THE UNIT BOUNDARY THAT IS O(1), AND THE FIELD READ RATHER THAN
-               flow_between_units — WHICH IS A COST DECISION AND IS WHY THIS RAISE IS NOT ITS SIBLING'S.
-               `g_starved_picks_idle` calls flow_between_units because it is raised only where the pick
-               DISPLACES, which is rare; this row fires on a RETENTION, which on a frontier standing at one
-               weight is nearly every scan. flow_between_units' second clause is flow_job_microtask, and that
-               WALKS the member's job queue taking and freeing a JSValue per entry — so calling it here would
-               put a queue walk with refcount traffic on the hot path of a release build, which is the
-               instrument that costs enough to shorten the run it is measuring. `frame` is a field read and is
-               the boundary's primary clause, the one every job arm of flow_step is under. The row is an UPPER
-               BOUND by the other two clauses and the residual at the counter says so. */
+            /* The one O(1) clause of the unit boundary, a field read rather than flow_between_units: this row
+               fires on a retention, nearly every scan of a tied frontier, and flow_between_units' second clause
+               (flow_job_microtask) walks the job queue taking and freeing a JSValue per entry, too costly on the
+               hot path of a release build. `frame` is the boundary's primary clause, the one every job arm of
+               flow_step is under; the row is an upper bound by the other two, as its residual says. */
             if (seed->frame == NULL) g_plateau_held_idle++;
         }
         g_plateau_open = held;
@@ -4111,91 +4030,52 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     return best;
 }
 
-/* HOW MUCH OF AN ORDER SPREAD THE CENSUS'S OWN ROWS CAN ACCOUNT FOR — one term of flow_weight per line, each
-   contributing at most its own reported RANGE, because the range of a sum is at most the sum of the ranges.
-   It is the bound the assertion at the end of flow_wfq_census holds the observed spread to, and it is written
-   term-by-term against flow_weight rather than as a single constant so that ADDING a term to the weight
-   without adding its range here is a compile-visible omission in one place and a fired assert in the other.
-   READ IT AS THE DERIVATION IT IS. `val` and the fitness distance enter the weight positively and contribute
-   max−min directly — the distance's floor is 0 by the type (flow.h), so its maximum IS its range. The optimism
-   term is 1/(1+visits), decreasing, so its range is taken at the visit count's two ends in that order. The
-   aging enters negatively at FLOW_AGE_QUANTUM per notch, and its notch is flow_silence_notch's floor of the
-   SUM `(own_silence + fam_us)` while the census floors the two halves separately: floor(a+b) <= floor(a)+floor(b)+1,
-   so the two reported spreads plus ONE notch bound it exactly. That +1 is the only slack in this function. */
+/* How much of an order spread the census's own rows can account for: one term of flow_weight per line, each at most
+   its reported range, since the range of a sum is at most the sum of the ranges. The bound flow_wfq_census's closing
+   assertion holds the observed spread to, written term by term so that a term added to the weight without a range
+   here is visible in one place and a fired assert in the other. `val` and the fitness distance enter positively
+   and contribute max−min (the distance's floor is 0, flow.h, so its maximum is its range). The optimism
+   1/(1+visits) is decreasing, so its range is taken at the visit count's ends in that order. The aging enters
+   negatively at FLOW_AGE_QUANTUM per notch, and flow_silence_notch floors the sum `(own_silence + fam_us)` while
+   the census floors the halves separately: floor(a+b) <= floor(a)+floor(b)+1, so the two spreads plus one notch
+   bound it exactly, the only slack here. */
 static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
          + c->dist_max
          + (1.0 / (double)(1 + c->vis_min) - 1.0 / (double)(1 + c->vis_max))
-         /* …AND THE BRANCH BONUS'S OWN RANGE, which is a reading of the LEAST-MINTING bucket against the
-            most: the bucket that has taken fewest arms carries the largest bonus, so the extrema invert
-            between the two rows. IT READS THE MINT PAIR AND NOT THE LIVE PAIR, because flow_branch_bonus
-            divides by `sub_born` — and the live pair is NOT a bound on the mint pair's range in either
-            direction: two buckets at one live member apiece span 0.0 of the live reading and 1 - 1/N of this
-            one when one of them has minted N and shed them. A clause left on the live rows would therefore
-            under-bound the spread on exactly the departed-arm frontier the term was changed for, and the
-            assertion at the end of flow_wfq_census would fire on a healthy engine.
-            Guarded because a census that reached no LIVE bucket has no range to report rather than an
-            infinite one — and that is now the only population the guard selects. IT USED TO SELECT ANOTHER,
-            MUCH LARGER ONE, and the sentence here is why nobody looked: branch_take folded a bucket with ZERO
-            live members into these extrema, and the family-root door mints exactly such a bucket the moment a
-            family's root flow departs, so `br_live_min` read 0 on 48 of 56 censuses of the SMOKE FIXTURE and
-            this whole clause scored 0.0 on every one of them — a term the order genuinely spans, deleted from
-            the accounting that exists to say what the order is made of, by a guard whose comment described a
-            census that had reached nothing while the censuses tripping it had reached 198 buckets each. That
-            is why `br_born_max` was moved inside branch_take's live guard beside the new minimum: a range
-            whose two ends are taken over two populations is not a range. */
+         /* And the branch bonus's range, the least-minting bucket against the most (the extrema invert, since the
+            fewest arms carry the largest bonus). The mint pair, not the live pair, because flow_branch_bonus
+            divides by `sub_born`, and the live pair bounds the mint range in neither direction: two buckets at one
+            live member each span 0.0 live and 1 - 1/N here when one has minted N and shed them. Guarded because a
+            census that reached no live bucket has no range to report; branch_take takes both mint extrema inside
+            its live guard, so the two ends are over one population. */
          + (c->br_born_min > 0 && c->br_born_max > 0
               ? 1.0 / (double)c->br_born_min - 1.0 / (double)c->br_born_max : 0.0)
          + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM;
 }
 
-/* WHAT THE ORDERING IS MADE OF — see flow.h for what each row answers and why `val` alone cannot answer it.
- *
- * IT IS A SEPARATE SCAN AND NOT A FIFTH QUESTION FOR flow_pick, which is the opposite of the rule one function
- * up and is deliberate: flow_pick's four questions are all the ORDER, so they must share one comparator or
- * they can disagree about which flow runs. This one decides nothing and reads the order's INPUTS, so sharing
- * that scan would mean giving the pick accumulators it does not need and a shape a census could drift into
- * steering. It reports the terms AND their sum — flow.h says why the sum had to be added, and the sentence that
- * stood here ("it calls flow_weight for nothing at all") had already stopped being true of the loop below.
- *
- * `val_top` IS flow_best's OWN reward, so the top of the census and the top of the order are the same flow by
- * construction rather than by two scans agreeing. */
-/* THE MARK THE CENSUS COUNTS FAMILIES WITH — see FlowAcct's `census_gen`. A generation rather than a clear
-   pass, for the reason the host-owed marks above are one: resetting a per-node flag over a frontier that has
-   reached tens of thousands of members is a walk, and a single increment is not. */
+/* The mark the census counts families with (FlowAcct's `census_gen`): a generation rather than a clear pass, for
+   the host-owed marks' reason. */
 static unsigned g_wfq_census_gen;
 
-/* AND THE BUCKET THE LIVE MAXIMUM IS CURRENTLY OWNED BY, RETAINED ACROSS THE WALK SO ITS OWN THREE NUMBERS CAN
-   BE READ FROM ONE NODE INSTEAD OF ASSEMBLED FROM THREE EXTREMA — flow.h's `br_crowd_live` states what that
-   distinction buys and why three maxima cannot make it.
-   A FILE STATIC AND NOT A FIELD OF THE CENSUS, because `FlowAcct` is private to this translation unit and the
-   census struct is the public seam: a node pointer on it would export the fork tree's internals to every
-   reader of flow.h to save one static here. It shares its lifetime with the generation mark directly above,
-   set by branch_take and cleared by flow_wfq_census at both ends of one scan, and nothing steps the engine
-   between those two points — flow_wfq_census walks, weighs and composes, so no node is minted or freed while
-   this is holding one.
-   CLEARED AFTER IT IS READ AS WELL AS BEFORE THE WALK, which is not belt and braces: a pointer left standing
-   between censuses is a pointer into a node the next departure may free, and the only reason this is safe at
-   all is that it never outlives the scan that set it. */
+/* And the bucket the live maximum is owned by, retained across the walk so its own three numbers are read from one
+   node rather than assembled from three extrema (flow.h's `br_crowd_live` says what that buys). A file static, not
+   a census field, because `FlowAcct` is private here and the census struct is the public seam. It shares the
+   generation mark's lifetime: set by branch_take and cleared by flow_wfq_census at both ends of one scan, during
+   which nothing steps the engine, so no node is minted or freed while it is held. Cleared after it is read as well
+   as before the walk, because between censuses the next departure may free the node it points at. */
 static FlowAcct *g_wfq_census_crowd;
 
-/* AND THE BUCKET THE MINT MAXIMUM IS CURRENTLY OWNED BY, RETAINED FOR THE SAME REASON AND SUBJECT TO EVERY
-   SENTENCE ABOVE — a file static rather than a census field because `FlowAcct` is private to this translation
-   unit, sharing the generation mark's lifetime, set by branch_take and cleared by flow_wfq_census at both ends
-   of one scan, and cleared after it is read as well as before the walk because a pointer left standing between
-   censuses is a pointer into a node the next departure may free.
-   IT IS A SECOND POINTER AND NOT A SECOND WALK, AND IT IS NOT THE CROWD'S UNDER ANOTHER NAME. The crowd is
-   selected by the LIVE maximum and this by the MINT maximum, and `sub_born = live + sub_gone` makes those one
-   bucket only while nothing has been shed — so an arm that minted unboundedly and let each arm FINISH, which
-   is the shape flow.c's fork-tree banner is written against, owns this maximum and not that one. flow.h states
-   what the triple buys and why `br_born_max` alone cannot buy it. */
+/* And the bucket the mint maximum is owned by, retained for the same reasons and under the same lifetime and
+   clearing rules. A second pointer, not the crowd under another name: the crowd is selected by the live maximum and
+   this by the mint maximum, and `sub_born = live + sub_gone` makes those one bucket only while nothing has been
+   shed, so an arm that minted unboundedly and let each arm finish owns this maximum and not that one. flow.h
+   states what the triple buys and why `br_born_max` alone cannot. */
 static FlowAcct *g_wfq_census_minter;
 
-/* OPEN ONE BRANCH BUCKET INTO THE CENSUS, ONCE PER SCAN HOWEVER MANY DOORS REACH IT — the mark is the node's
-   own, so this is idempotent within a scan and that is what makes the sums a PARTITION rather than a weighted
-   count. A FUNCTION and not a macro because it is called from exactly one place per door with no invariant to
-   stamp a site for: nothing here can fail, it only accumulates. Called with a node the caller has already
-   asserted is a bucket (`branch == self`). */
+/* Open one branch bucket into the census, once per scan however many doors reach it: the mark is the node's own, so
+   this is idempotent within a scan and the sums are a partition. A function rather than a macro because nothing
+   here can fail. Called with a node the caller has asserted is a bucket (`branch == self`). */
 static void branch_take(WfqCensus *out, FlowAcct *br) {
     long live;
     if (br->branch_gen == g_wfq_census_gen) return;
@@ -4204,59 +4084,32 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
     out->branches++;
     out->br_live_sum += live;
     out->br_us_sum += br->sub_us;
-    /* THE LIVE EXTREMA RANGE OVER BUCKETS THAT HOLD A MEMBER, AND THE BURN TOTALS OVER EVERY BUCKET TAKEN —
-       two populations through one walk, which is why they used to be one and why that was wrong.
-       A bucket with ZERO live members is not a corner: the family-root door below takes exactly one whenever
-       a family's ROOT FLOW HAS DEPARTED, deliberately, because that node's lifetime burn (boot's, on a real
-       page) must stay inside the identity at the end of this function and nothing names it through `branch`
-       any more. So an empty bucket is the ORDINARY state of any frontier whose boot flow has finished.
-       WHAT IT COST WHILE BOTH QUESTIONS SHARED ONE ANSWER, MEASURED rather than argued — AND THE SUBJECT IS
-       THE SMOKE FIXTURE, WHICH THIS SAID WAS `ONE REAL 4.5 MB BUNDLE`. That was wrong and it is not a label
-       slip: the fixture and a real document read OPPOSITELY on this very scope, so naming the fixture's
-       reading as the real one labels the less relevant of two opposite answers as the relevant one. On the
-       fixture the most crowded bucket holds about 3% of members over ~200 buckets; on a real 4.5 MB bundle
-       replayed from its own mirror the frontier is ONE family over ~50 buckets with ONE bucket holding better
-       than HALF of 75113 members. A reading transferred from a fixture to a real document is a hypothesis,
-       and this one would have been the wrong way round. Over 56 censuses of THE FIXTURE, then:
-       `br_live_sum == members` held in ALL 56 — the partition is exact, because an
-       empty bucket contributes 0 to it — and `br_live_min` read ZERO in 48. An empty bucket holds no member
-       whose weight any comparison reads, so a minimum taken over it describes the thinnest bucket NOBODY
-       stands in, which is not a quantity about the order at all.
-       AND THE ZERO DID NOT MERELY MISLEAD A READER, IT DELETED A TERM FROM THE ACCOUNTING.
-       wfq_accounted_spread guards its branch clause on `br_live_min > 0` and said it did so because "a
-       census that reached no bucket has no range to report rather than an infinite one" — a true sentence
-       about a population this one is not. Those 48 censuses had reached 198 buckets each, so the branch
-       bonus's whole range was scored as 0.0 in the spread that exists to say what the order is made of, on
-       86% of the samples, for as long as the rows have existed.
-       `br_us_max` and `br_us_min` KEEP every taken bucket and that is not an oversight: a departed root's
-       subtree really did receive that thread time, receipt is the question those rows ask, and the burn
-       identity below is over the same population. This is one walk answering two questions, and the answer
-       is two guards rather than one — the looser question had been silently taking the stricter one's answer.
-       THE `branches == 1` FIRST-BUCKET TEST IS GONE FROM THIS PAIR AND NEEDED NO REPLACEMENT FIELD: every
-       assignment below writes a value of at least one, so `br_live_min == 0` IS "no live bucket seen yet",
-       exactly and self-describingly. flow_wfq_census's closing assert states the consequence — a frontier
-       with members standing cannot leave it at zero. */
+    /* The live extrema range over buckets that hold a member, the burn totals over every bucket taken: two
+       populations through one walk. A bucket with zero live members is the ordinary state once a family's root
+       flow has departed: the family-root door takes exactly such a node, deliberately, because its lifetime burn
+       (boot's, on a real page) must stay inside the identity at the end of this function and nothing names it
+       through `branch` any more. A minimum over an empty bucket describes the thinnest bucket nobody stands in, and
+       would score the branch bonus's whole range as 0.0 in wfq_accounted_spread. `br_us_max` and `br_us_min` keep
+       every taken bucket: a departed root's subtree really did receive that thread time, and the burn identity is
+       over the same population. `br_live_min == 0` means "no live bucket seen yet", since every assignment below
+       writes at least one; flow_wfq_census's closing assert says a frontier with members cannot leave it at zero.
+       The fixture and a real document read oppositely on this scope (a few percent of members in the most crowded
+       of many buckets, against one bucket holding more than half of a one-family frontier), so a fixture reading is
+       a hypothesis about real pages. */
     if (live > 0) {
-        /* THE HELD HALF OF THE BURN SPLIT, FOLDED HERE AND ITS TWIN IN THE ARM BELOW so the two are raised by
-           two accumulators under one condition rather than by one accumulator and a subtraction. flow.h says
-           what that buys: the crowd triple's receipt is drawn from the LIVE buckets, so the only denominator
-           it can honestly be a share of is the receipt of the live buckets — and `br_us_sum` is not that,
-           because it deliberately keeps a departed root's whole burn, which on a real page is the largest
-           single term in it. Published as two rows so `br_held_us + br_empty_us == br_us_sum` is a check on
-           this guard rather than a restatement of it. */
+        /* The held half of the burn split, with its twin in the arm below, so the two are raised by two
+           accumulators under one condition rather than by one and a subtraction. The crowd triple's receipt is drawn
+           from live buckets, so its honest denominator is the live buckets' receipt, not `br_us_sum`, which keeps a
+           departed root's whole burn (the largest single term on a real page). Two rows, so
+           `br_held_us + br_empty_us == br_us_sum` checks this guard. */
         out->br_held_us += br->sub_us;
         if (out->br_live_min == 0 || live < out->br_live_min) out->br_live_min = live;
         if (live > out->br_live_max) {
             out->br_live_max = live;
-            /* …AND THE BUCKET ITSELF, RETAINED RATHER THAN COPIED, WHICH IS WHAT MAKES THE IDENTITY A CHECK.
-               Writing the three crowd rows HERE, from `br`, would put the maximum and its companions in one
-               statement, and `br_crowd_live == br_live_max` would then be an assignment compared with itself
-               — the non-check this file refuses everywhere else. The pointer is dereferenced once, after the
-               walk, so the left side of that identity is a second reading of the bucket's own pair and the
-               right side is this running maximum. A fold attached to the wrong comparison separates them.
-               THE MEMBERSHIP PAIR IS THE SELECTOR AND THE BURN IS NOT, deliberately: the row this instrument
-               exists to make readable is the CROWD's receipt, and the crowd is a membership fact. Selecting
-               by burn instead would name the hungriest bucket, which `br_us_max` already reports. */
+            /* And the bucket itself, retained rather than copied, so `br_crowd_live == br_live_max` compares a
+               second reading of the bucket's pair (dereferenced once, after the walk) against this running maximum,
+               rather than an assignment against itself. The membership pair is the selector, not the burn: the row
+               is the crowd's receipt, and the hungriest bucket is already `br_us_max`. */
             g_wfq_census_crowd = br;
         }
         /* …AND THE MINT PAIR, OVER THE SAME POPULATION AND INSIDE THE SAME GUARD, BECAUSE IT IS THE ORDER'S
@@ -4321,6 +4174,11 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
     if (out->branches == 1 || br->sub_us < out->br_us_min) out->br_us_min = br->sub_us;
 }
 
+/* What the ordering is made of; flow.h says what each row answers and why `val` alone cannot. A separate scan, not
+ * a fifth question for flow_pick: flow_pick's four questions are all the order and share one comparator, while
+ * this decides nothing and reads the order's inputs, so sharing that scan would give the pick accumulators it does
+ * not need. It reports the terms and their sum (flow.h says why). `val_top` is flow_best's own reward, so the top
+ * of the census and the top of the order are the same flow by construction. */
 void flow_wfq_census(WfqCensus *out) {
     Flow *top;
     int i;
