@@ -20,6 +20,7 @@
 #include "core/html/html_element.h"
 #include "core/html/html_element_view.h"
 #include "core/idl_args.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
 
@@ -464,31 +465,13 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
         free(r);
         return element_view_length_long(ctx, vertical ? box[3] : box[2]);
     }
+    /* A table element's principal box is CSS 2.1 §17.4's table wrapper box, one fragment, and its border box is
+       its content box (the wrapper takes the initial border and padding): "The width of the table wrapper box
+       is the border-edge width of the table box inside it", and its height is its stack of captions and table
+       box. */
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
-        DFAIL("CSSOM VIEW §7's offsetWidth/offsetHeight step 2 is over the fragments of the PRINCIPAL BOX, and "
-              "an element whose computed `display` is `table` or `inline-table` has the box structure CSS 2.1 "
-              "§17.2.1 Anonymous table objects generates — a table box, an optional caption box and the "
-              "anonymous container around them. TWO OF THOSE THREE ARE BUILT and this line used to say none "
-              "was: core/layout/table_box.h answers §17.2.1's first two stages and the caption boxes CSS 2.1 "
-              "§17.4 Tables in the visual formatting model puts beside the table box. The container is that "
-              "section's TABLE WRAPPER BOX — \"the table generates a principal block box called the table "
-              "wrapper box that contains the table box itself and any caption boxes\" — and no element in the "
-              "tree names it — THOUGH §17.4's SPLIT IS ANSWERED AND THIS LINE USED TO ASK FOR IT: "
-              "core/layout/table_wrapper.h says which declarations land on the wrapper and which on the table "
-              "box, and whether the wrapper is block-level. Its EXTENTS are not §10's either, AND BOTH AXES "
-              "ARE NOW ANSWERED — this line used to name the block axis as the half still missing, and then "
-              "told its reader to BUILD it. CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' "
-              "property owns the table's WIDTH and CSS 2.1 §17.5.3 Table height algorithms owns its HEIGHT, "
-              "and BOTH are components (core/layout/table_width.h, core/layout/table_height.h) that "
-              "core/layout/used_value.c routes a table box to on the declared arm and the `auto` arm alike — "
-              "each section takes the declaration as an INPUT to its own comparison rather than as the used "
-              "value, so there is no declared-height arm left for it to crash in; CSS 2.1 §17.4 Tables in the "
-              "visual formatting model states the wrapper's own width over the first number. WHAT IS STILL MISSING IS STEP 2's OWN ENUMERATION AND NOT AN "
-              "EXTENT: the principal box here is the WRAPPER, whose fragments are the table box and every "
-              "caption box CSS 2.1 §17.4 Tables in the visual formatting model renders \"as normal block "
-              "boxes inside the table wrapper box\", and this entry answers ONE extent. Assemble the "
-              "wrapper's from those, the way CSSOM VIEW §6's entry has to "
-              "assemble its rectangle list");
+        return element_view_length_long(ctx, vertical ? block_flow_table_wrapper_height(el)
+                                                      : used_value_border_edge_px(el, false));
     /* step 2, for a principal box of one fragment */
     return element_view_length_long(ctx, used_value_border_edge_px(el, vertical));
 }

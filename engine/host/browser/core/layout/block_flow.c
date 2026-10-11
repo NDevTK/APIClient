@@ -2919,6 +2919,24 @@ CssPx block_flow_table_box_top(lxb_dom_element_t *table)
     return top;
 }
 
+CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table)
+{
+    CssPx unused = css_px(0.0);
+    bool found = false;
+    char *d = bf_computed(table, "display");
+    bool wrapper = table_wrapper_generates(d);
+    char nbuf[160];
+    BfBox w;
+
+    free(d);
+    DCHECKF(wrapper, "%s: a table wrapper box's height was asked of an element that generates none",
+            box_subject(table, nbuf, sizeof nbuf));
+    w = bf_layout_driven(table, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE);
+    DCHECKF(!found, "%s: the wrapper walk reported placing a box it was not asked about",
+            box_subject(table, nbuf, sizeof nbuf));
+    return w.content_h;
+}
+
 size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
 {
     LayoutJobDrive d;

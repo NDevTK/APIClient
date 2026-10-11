@@ -510,6 +510,12 @@ bool block_flow_is_floated(lxb_dom_element_t *el);
    no such caption. `table` must generate a table wrapper box (asserted). */
 CssPx block_flow_table_box_top(lxb_dom_element_t *table);
 
+/* The height of `table`'s table wrapper box: its stack of top captions, table box and bottom captions (CSS 2.1
+   §17.4, §17.4.1), whose margins stay inside it because the wrapper establishes a block formatting context.
+   The wrapper has the initial border and padding, so this is also its border-box height. `table` must
+   generate a table wrapper box (asserted). */
+CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table);
+
 /* The same enumeration without a drive of its own: false ("not yet") when the walk deferred a contribution,
    with nothing stored; true with the boxes at `*out` (the caller's to free) and their number at `*count`. */
 bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count);
