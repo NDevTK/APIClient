@@ -634,11 +634,9 @@ static lxb_dom_element_t *sa_principal_writing_mode_element(lxb_dom_node_t *doc)
        both from the one operand, which is why this is the subject rather than a second assert. */
     DCHECKF(root != NULL && root->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "the document's document element is %s: "
-           "css-writing-modes-4 §8's principal writing mode was asked of a document with no ROOT ELEMENT. §8 "
-           "determines it from the root element's used values, and both readers reach here only for a document "
-           "that HAS a viewport — CSSOM VIEW §2's viewport scrolling-area row below and CSSOM VIEW §6.1's "
-           "ancestor walk — while a viewport exists only for a document a navigable is presenting, and such a "
-           "document has a root element",
+           "css-writing-modes-4 §8's principal writing mode was asked of a document with no ROOT ELEMENT. "
+           "`scrolling_area_viewport_ending_edge_at_higher_coordinate`, the one caller, answers that document "
+           "before it asks",
            box_subject_node(root, rbuf, sizeof rbuf));
     /* "…a body child element whose display value is not none". `document_body_of` is HTML §3.1.7's body
        element, which is already the FIRST `body` or `frameset` child of the root; the display half is
@@ -658,6 +656,10 @@ bool scrolling_area_viewport_ending_edge_at_higher_coordinate(lxb_dom_node_t *do
            "directions are css-writing-modes-4 §8's principal writing mode, which §8 states over THE DOCUMENT's "
            "root element, so there is no other node this question has an answer for",
            box_subject_node(doc, nbuf, sizeof nbuf));
+    /* With no document element (DOM §4.2.1 lets a page remove it) §8 names no element, and the viewport keeps
+       `writing-mode` and `direction`'s initial values, horizontal-tb and ltr: both ending edges are at the
+       higher coordinate. */
+    if (document_document_element_of(doc) == NULL) return true;
     /* §2 gives "a scrolling box of a viewport or element" ONE definition of its two overflow directions, so
        once §8 has named the element whose used values the viewport's are, this is the element form and not a
        second derivation of the same bit. */
@@ -683,12 +685,10 @@ void scrolling_area_walk_viewport(ScrollingAreaWalk *w, lxb_dom_node_t *doc, Css
            "dimensions of the viewport\", and a viewport has no negative dimension — so this is the ICB extent "
            "and its viewport having come apart, not a layout result",
            vertical ? "block" : "inline", icb_extent.px);
+    /* A page can leave its document with no document element (DOM §4.2.1 "Document tree":
+       `document.removeChild(document.documentElement)`); the viewport then has no descendant box, the extreme
+       is over the empty set, and the area is the initial containing block. */
     rootn = document_document_element_of(doc);
-    DCHECK(rootn != NULL,
-           "CSSOM VIEW §2's scrolling area of a VIEWPORT was asked of a document with no DOCUMENT ELEMENT. The "
-           "extreme over \"all of the viewport's descendants' boxes\" is then over the EMPTY SET and the area "
-           "is the initial containing block alone — a derivation the caller makes for itself, because it is "
-           "the caller that knows a realm is presenting no document at all");
     ending_at_hi = scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, vertical);
     /* THE INITIAL CONTAINING BLOCK'S TWO EDGES ON THIS AXIS, which are the coordinates 0 and `icb_extent` and
        are DERIVED rather than assumed: CSS 2.2 §10.1 anchors the ICB "at the canvas origin", and
@@ -712,10 +712,10 @@ void scrolling_area_walk_viewport(ScrollingAreaWalk *w, lxb_dom_node_t *doc, Css
     w->lo = lo;
     w->hi = hi;
     w->floor = icb_extent;
-    w->root = lxb_dom_interface_element(rootn);
+    w->root = rootn != NULL ? lxb_dom_interface_element(rootn) : NULL;
     w->n = NULL;
     w->best = ending_at_hi ? hi : lo;
-    if (element_view_has_box(rootn)) {
+    if (rootn != NULL && element_view_has_box(rootn)) {
         lxb_dom_element_t *root = lxb_dom_interface_element(rootn);
         CssPx own = sa_edge_from_origin(root, flow_border_box_origin(root), vertical, ending_at_hi);
 
