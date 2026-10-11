@@ -404,8 +404,7 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     const char *want_s = NULL;
     uint8_t *bytes;
     size_t blen = 0, b64_cap, n;
-    char world[512];
-    char *op, *b64;
+    char *head, *op, *b64;
     JSValue holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
     uint32_t nheld = structured_transfer_len(ctx, holders);
     JSValue syms = JS_GetPropertyUint32(ctx, entry, PQ_SYMBOLS);
@@ -445,7 +444,7 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     DCHECK(f != NULL, "a cross-instance post was made outside a flow — there would be no world to carry");
     bytes = JS_GetArrayBuffer(ctx, &blen, buf);
     DCHECK(bytes != NULL, "a queued window message held something that is not the bytes it stored");
-    world_serialize(f->world, world, sizeof world);
+    head = engine_record_head("windowproxy.post", world_doc_name(window_proxy_doc(target)), f);
 
     b64_cap = JS_Base64EncodedSize(blen) + 1;
     b64 = malloc(b64_cap);
@@ -460,12 +459,12 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
        being resolved here. "*" is the spec's any-origin, and an absent one means the same. */
     if (!JS_IsNull(want) && !JS_IsUndefined(want))
         want_s = JS_ToCString(ctx, want);
-    b64_cap = strlen(world) + strlen(world_doc_name(window_proxy_doc(target))) + strlen(want_s ? want_s : "*") + n + 64;
+    b64_cap = strlen(head) + strlen(want_s ? want_s : "*") + n + 8;
     op = malloc(b64_cap);
     CHECK(op != NULL, "window message: OOM building the cross-instance post notice");
-    snprintf(op, b64_cap, "windowproxy.post\t%s\t%s\t%s\t%s",
-             world_doc_name(window_proxy_doc(target)), world, want_s ? want_s : "*", b64);
+    snprintf(op, b64_cap, "%s\t%s\t%s", head, want_s ? want_s : "*", b64);
     engine_host_notify(ctx, op);
+    free(head);
     free(op);
     free(b64);
     if (want_s) JS_FreeCString(ctx, want_s);
@@ -585,8 +584,9 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
 }
 
 /* THE RECORD'S OWN TAIL, READ WHERE IT WAS WRITTEN. window_message_send_remote builds
-   `windowproxy.post\t<target>\t<world>\t<targetOrigin>\t<base64>`; the first two fields are the TRANSPORT's
-   (which instance, whose timeline) and are read by the router, and everything after them is this file's — so
+   `windowproxy.post\t<target>\t<world>\t<marks>\t<targetOrigin>\t<base64>`; the first three fields are the
+   TRANSPORT's (which instance, whose timeline, the sender's path marks) and are read by the router, and
+   everything after them is this file's — so
    this is where they are taken apart. A host that split them itself was the second half of the format, written
    where nothing can check it against the writer, and both hosts that had one had written a different one.
    `tail` is `<targetOrigin>\t<base64>`. */

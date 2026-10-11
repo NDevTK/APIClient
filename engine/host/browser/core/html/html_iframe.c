@@ -1059,11 +1059,15 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
            chain. The quiet half is the loop guard `n < (int)sizeof op`, which permitted a truncated ancestry
            to be SENT: a prefix makes the peer fork a more distant ancestor than the sender named and silently
            lose every write in between, which is world.h's stated reason for crashing rather than sending one. */
-        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t", world_doc_name(window_proxy_doc(nav)));
+        {
+            char *head = engine_record_head("windowproxy.get", world_doc_name(window_proxy_doc(nav)), f);
+
+            n = snprintf(op, sizeof op, "%s", head);
+            free(head);
+        }
         CHECK(n > 0 && (size_t)n < sizeof op,
-              "a cross-document read's target document name did not fit its record — a truncated name reaches "
-              "no instance, and the asking flow parks on a question nothing will ever be asked");
-        n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
+              "a cross-document read's head did not fit its record — a truncated record reaches no instance, and "
+              "the asking flow parks on a question nothing will ever be asked");
         /* AND THE ADDRESSEE, WHICH THIS SITE OWES EVEN THOUGH ITS RECORD IS DEAD ON ARRIVAL. The DFAIL above
            is the dev answer and this line is the RELEASE one: compiled out, the record below goes on the wire
            and the peer parses it, so a record short of the transport's third field would take remote_op.c's

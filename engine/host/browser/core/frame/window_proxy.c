@@ -3612,16 +3612,15 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
            arms are timelines this flow was never in, and a read answered out of one would be the off-diagonal
            member of a cross-product, the fabrication solver/flow.c's commitment record aborts on. */
         addr = engine_flow_addressee(ctx, f, world_doc_name(p->doc));
-        n = snprintf(op, sizeof op, "windowproxy.get\t%s\t", world_doc_name(p->doc));
-        /* Every field's fit is asserted. world_serialize crashes on its own truncation; a truncated document
-           name reaches no instance and parks this flow for ever, and a truncated member makes the peer answer a
-           different question as if it were this one, both silently. */
-        CHECK(n > 0 && (size_t)n < sizeof op,
-              "a cross-document read's target document name did not fit its record — a truncated name reaches "
-              "no instance, and the asking flow parks on a question nothing will ever be asked");
-        n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
-        n += snprintf(op + n, sizeof op - (size_t)n, "\t%s\t%s",
-                      addr ? addr : ENGINE_ADDRESSEE_NONE, PROXY_MEMBER[magic]);
+        /* Every field's fit is asserted: a truncated record reaches no instance and parks this flow for ever, and
+           a truncated member makes the peer answer a different question as if it were this one, both silently. */
+        {
+            char *head = engine_record_head("windowproxy.get", world_doc_name(p->doc), f);
+
+            n = snprintf(op, sizeof op, "%s\t%s\t%s", head, addr ? addr : ENGINE_ADDRESSEE_NONE,
+                         PROXY_MEMBER[magic]);
+            free(head);
+        }
         free(addr);
         /* The addressee's fit is this check's too: a truncated addressee is a world vector naming a timeline this
            flow did not commit to, and the peer would refuse the flows that one contradicts, dropping real

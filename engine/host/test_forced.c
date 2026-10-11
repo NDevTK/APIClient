@@ -16570,14 +16570,20 @@ static void fixture_post_from_peer(JSContext *ctx, const char *peer_doc, const c
     CHECK(n > 0 || sd.len == 0, "the base64 buffer was sized wrong for this message");
     b64[n] = 0;
 
-    rec_cap = strlen(world_doc_name(world_local_doc())) + strlen(vector) + n + 64;
+    rec_cap = strlen(world_doc_name(world_local_doc())) + strlen(vector) + n + 128;
     rec = malloc(rec_cap);
     CHECK(rec != NULL, "test_forced: OOM building a peer's post record");
-    /* `windowproxy.post\t<target doc>\t<sender world>\t<targetOrigin>\t<base64>` — core/frame/window_message.c
-       writes this and solver/engine.c reads the first three fields off it. "*" is §9.3.3's any-origin, which
-       is what a post that names no target origin means. */
-    snprintf(rec, rec_cap, "windowproxy.post\t%s\t%s\t*\t%s",
-             world_doc_name(world_local_doc()), vector, b64);
+    /* `windowproxy.post\t<target doc>\t<sender world>\t<marks>\t<targetOrigin>\t<base64>` —
+       core/frame/window_message.c writes this and solver/engine.c reads the first four fields off it. The peer
+       this stands in for runs the page's own code, so its marks are all clear. "*" is §9.3.3's any-origin. */
+    {
+        char marks[64];
+        EngineArrival clear = { PROV_DERIVED, 0, 0 };
+
+        engine_arrival_token(clear, marks, sizeof marks);
+        snprintf(rec, rec_cap, "windowproxy.post\t%s\t%s\t%s\t*\t%s",
+                 world_doc_name(world_local_doc()), vector, marks, b64);
+    }
     /* THE ORIGIN TRAVELS BESIDE THE RECORD AND NEVER INSIDE IT (SECURITY.md): only the trusted zone may stamp
        one, and this function is standing in for that zone. */
     engine_route(ctx, rec, origin);
@@ -16638,8 +16644,14 @@ static void fixture_ask_remote_op(JSContext *ctx) {
        from this one — so there is no timeline of ours it is in, and every one of our timelines may answer.
        An EMPTY field would be the hole solver/engine.h's token exists to keep out of this grammar; a record
        missing the field entirely takes remote_op.c's field-count CHECK, which is fatal in release too. */
-    snprintf(rec, sizeof rec, "windowproxy.get\t%s\t%s\t%s\tlength",
-             world_doc_name(world_local_doc()), vector, ENGINE_ADDRESSEE_NONE);
+    {
+        char marks[64];
+        EngineArrival clear = { PROV_DERIVED, 0, 0 };
+
+        engine_arrival_token(clear, marks, sizeof marks);
+        snprintf(rec, sizeof rec, "windowproxy.get\t%s\t%s\t%s\t%s\tlength",
+                 world_doc_name(world_local_doc()), vector, marks, ENGINE_ADDRESSEE_NONE);
+    }
     /* THE TOKEN IS THE TRUSTED ZONE'S NAME and this fixture is standing in for the zone, so it mints one. It is
        the thing that may never enter a recipe (solver/engine.h), which is the whole reason the park hands the
        question back instead of carrying it. */

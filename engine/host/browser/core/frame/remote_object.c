@@ -907,7 +907,7 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         RefData *r;
         Flow *f = flow_running();
         Rec rec = { NULL, 0, 0 };
-        char world[1024], idbuf[32];
+        char idbuf[32];
 
         DCHECK(argc >= REF_ARGC[op],
                "a cross-agent trap ran with fewer operands than its internal method is passed — the machine "
@@ -960,16 +960,17 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
                    "page code");
         }
 
-        rec_add(&rec, "object.");
-        rec_add(&rec, REF_VERB[op]);
-        rec_add(&rec, "\t");
-        rec_add(&rec, world_doc_name(r->doc));
-        rec_add(&rec, "\t");
-        world_serialize(f->world, world, sizeof world);
-        rec_add(&rec, world);
-        /* …AND WHICH OF THE HOLDING AGENT'S TIMELINES THIS FLOW IS ALREADY IN. It is the third TRANSPORT
-           field and it sits ahead of every operand, which is remote_op.h's positional contract and not a
-           layout choice: the trusted zone reads this grammar by index while relaying the record whole, so the
+        {
+            char verb[32], *head;
+
+            snprintf(verb, sizeof verb, "object.%s", REF_VERB[op]);
+            head = engine_record_head(verb, world_doc_name(r->doc), f);
+            rec_add(&rec, head);
+            free(head);
+        }
+        /* …AND WHICH OF THE HOLDING AGENT'S TIMELINES THIS FLOW IS ALREADY IN. It is the TRANSPORT field
+           after the path marks and it sits ahead of every operand, which is remote_op.h's positional contract
+           and not a layout choice: the trusted zone reads this grammar by index while relaying the record whole, so the
            slot after the world is the only one a C-only diff may take.
            IT MATTERS MORE FOR A WRITE THAN FOR A READ, which is the same argument the world itself travels
            under one paragraph up. Two arms of a fork writing through one reference are two contradictory

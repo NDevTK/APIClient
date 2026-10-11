@@ -3748,7 +3748,7 @@ const PINNED_NO = "unpinned";
    handed the page a WindowProxy for it; this provisions (or joins) an instance under that name, loading the
    child's document through the safeFetch chokepoint.
    `navigable.swap` and `navigable.navigate`, that header's provision record — see those arms.
-   `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed verbatim to the instance holding
+   `windowproxy.post <target> <world> <marks> <targetOrigin> <base64>` — routed verbatim to the instance holding
    <target>, with this engine's origin stamped on it: the untrusted engine may not state its own origin, since
    a forgeable event.origin defeats every origin check in every bundle. */
 async function hostNotice(eng, line) {
@@ -4158,7 +4158,7 @@ async function hostNotice(eng, line) {
     return;
   }
   if (f[0] === "windowproxy.post") {
-    DCHECK(f.length >= 5, "a windowproxy.post notice was short of its fields");
+    DCHECK(f.length >= 6, "a windowproxy.post notice was short of its fields");
     const target = hostHolderOf(f[1]);
     DCHECK(target !== null, "a message was posted to a document no instance in this pool holds — the create " +
                             "notice naming it was dropped, or that instance was finalized while a peer still " +

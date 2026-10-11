@@ -1420,10 +1420,10 @@ async function main() {
                         group: newGroup(), referenced: 0 });
       return;
     }
-    /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances, relayed
+    /* `windowproxy.post <target doc> <world> <marks> <target origin> <base64>` — §9.4.4 across instances, relayed
        WHOLE with the sender's origin BESIDE the record rather than spliced into it. */
     if (f[0] === 'windowproxy.post') {
-      if (f.length < 5) throw new Error(`a windowproxy.post notice was short of its fields: ${record}`);
+      if (f.length < 6) throw new Error(`a windowproxy.post notice was short of its fields: ${record}`);
       const go = () => {
         const t = holderOf(f[1]);
         if (!t) return false;

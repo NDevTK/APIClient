@@ -2039,9 +2039,9 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            "referenced document's last timeline open, so the provisioning zone did not report that a peer holds a "
            "WindowProxy for this document");
 
-    /* Every routed record's first two fields are the transport's: the target document (which instance) and the
-       sending flow's world (whose timeline). The rest belongs to the component the op names, so a second op is
-       routed without a second router. */
+    /* Every routed record's first three fields are the transport's: the target document (which instance), the
+       sending flow's world (whose timeline) and its path marks (engine_record_head). The rest belongs to the
+       component the op names, so a second op is routed without a second router. */
     dup = strdup(record);
     CHECK(dup != NULL, "engine: OOM routing a record");
     doc = strchr(dup, '\t');
@@ -2328,14 +2328,16 @@ static StepUnit g_step_unit;
 /* Returns which mechanism minted the other side, because this is the one line that knows: the caller writes it
    on the commitment row and deliver_admits reads the row rather than re-deriving it from the vector. "Did this
    fork run" and "does this vector name a branch" agree for this producer but are different questions. */
-static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
+static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec, EngineArrival m)
 {
     char *fork_point = world_vec_fork_point(vec);
     FlowCommitArm covering;
     Flow *sib;
 
-    /* A root world: no branch, so no other side to be on. */
-    if (fork_point == NULL) return FLOW_COMMIT_ARM_NONE;
+    /* A root world from a sender that carries no mark: no branch, so no other side to be on. A marked sender has
+       one even at a root: the timeline in which it never ran (a drive, a forced arm) and so never posted, which
+       is this timeline as it stands, kept unmarked beside the arm that takes the sender's marks. */
+    if (fork_point == NULL && m.prov != PROV_FORCED && !m.driven && !m.pinned) return FLOW_COMMIT_ARM_NONE;
     free(fork_point);
     /* This timeline has not already minted it. The arm for a (flow, world) pair is minted at the flow's first
        delivery from that world, together with its commitment, decided by one predicate (deliver_commit_implied)
@@ -2499,6 +2501,68 @@ void engine_routed_task_census(long *ends) {
     for (i = 0; i < ROUTED_TASK_END_N; i++) ends[i] = g_routed_task_end[i];
 }
 
+char *engine_record_head(const char *op, const char *doc, const Flow *f)
+{
+    char world[1024], marks[64], *out;
+    EngineArrival m;
+    size_t cap;
+
+    DCHECK(op != NULL && doc != NULL && f != NULL, "a cross-instance record's head was composed with no verb, "
+                                                   "no target document or no sending flow");
+    /* world_serialize crashes on truncation rather than sending a prefix. */
+    world_serialize(f->world, world, sizeof world);
+    m.prov = flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED;
+    m.driven = flow_path_driven(f);
+    m.pinned = flow_path_pinned(f);
+    engine_arrival_token(m, marks, sizeof marks);
+    cap = strlen(op) + strlen(doc) + strlen(world) + strlen(marks) + 4;
+    out = malloc(cap);
+    CHECK(out != NULL, "engine: OOM composing a cross-instance record's head");
+    snprintf(out, cap, "%s\t%s\t%s\t%s", op, doc, world, marks);
+    return out;
+}
+
+/* A record's marks field (its fourth for a routed delivery), in the arrival word's grammar and parsed by its
+   one parser: `field` runs to the next tab or the end. */
+static EngineArrival record_marks_field(const char *field)
+{
+    const char *end = strchr(field, '\t');
+    size_t len = end ? (size_t)(end - field) : strlen(field);
+    char word[64];
+
+    CHECK(len < sizeof word, "engine: a record's marks field is longer than any engine_arrival_token writes");
+    memcpy(word, field, len);
+    word[len] = 0;
+    return engine_arrival_of_token(word);
+}
+
+/* A routed record's fourth field: `record` is the whole routed text. */
+static EngineArrival record_marks(const char *record)
+{
+    const char *p = record;
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        p = strchr(p, '\t');
+        CHECK(p != NULL, "engine: a routed record ends before its marks field");
+        p++;
+    }
+    return record_marks_field(p);
+}
+
+/* The receiving timeline takes the sending flow's marks (flow.h's flow_take_peer_marks), on the arm that receives
+   the record, after the arm that does not has been minted with this timeline's own marks: in a real browser that
+   other timeline never got the message. A sender's word is never `observed` (it is composed off a running flow,
+   engine_record_head), so arrival_check holds for it too. */
+static FlowPeerMarks arrival_marks(EngineArrival a);   /* defined with the arrival, below */
+static void deliver_take_marks(Flow *f, EngineArrival m)
+{
+    DCHECK(f == flow_running(), "a sender's marks were taken onto a timeline that is not the one receiving");
+    DCHECK(m.prov != PROV_OBSERVED, "a sending flow's marks state `observed` — engine_record_head composes the "
+                                    "grade off a running flow, which is `derived` or `forced`");
+    flow_take_peer_marks(f, arrival_marks(m));
+}
+
 static void flow_deliver(JSContext *ctx, Flow *f)
 {
     JSValue entry, rv, ov;
@@ -2513,6 +2577,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     StepUnit verdict;
     CowDelta *seg;
     JSContext *rctx;
+    EngineArrival marks;
 
     /* Asserted before the queue is touched, because the take mutates: an abort after it would consume a peer's
        message and leave the residue missing the work item the crash is about. */
@@ -2551,8 +2616,19 @@ static void flow_deliver(JSContext *ctx, Flow *f)
        inherits a record that does not yet name this world, and the mint has happened (or been declined) by the
        time its answer is written down. Two statements, because C does not order the arguments of one call. */
     {
-        FlowCommitArm arm = deliver_fork_arm(ctx, f, vec);
+        FlowCommitArm arm;
+
+        entry = flow_deliver_entry(f, 0);
+        rv = JS_GetPropertyUint32(ctx, entry, 0);
+        record = JS_ToCString(ctx, rv);
+        CHECK(record != NULL, "engine: OOM reading a routed delivery's path marks");
+        marks = record_marks(record);
+        JS_FreeCString(ctx, record);
+        JS_FreeValue(ctx, rv);
+        JS_FreeValue(ctx, entry);
+        arm = deliver_fork_arm(ctx, f, vec, marks);
         deliver_commit_taken(ctx, f, vec, arm);
+        deliver_take_marks(f, marks);
     }
     free(vec);
     /* The oldest unmade delivery, taken from the front and owned here. One per step: the record becomes a task
@@ -2571,6 +2647,9 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     doc = strchr(dup, '\t');    *doc++ = 0;
     worlds = strchr(doc, '\t'); *worlds++ = 0;
     tail = strchr(worlds, '\t'); *tail++ = 0;
+    tail = strchr(tail, '\t');   /* past the path marks, taken above */
+    DCHECK(tail != NULL, "a routed delivery has no fields after its path marks");
+    *tail++ = 0;
     /* The receiving document's realm is what "delivered to that document" means: the event and `event.source`
        are made in it and the task is enqueued at its Window. It must be a document this agent holds, asked
        again here because a delivery off the cold tier never passed engine_route in this session: a resumed flow
@@ -4721,8 +4800,6 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* Being a driven orphan travels: an arm of an orphan drive is that drive continued, no more reproducible from
        a decision vector than its parent, so the cold tier must refuse it too. */
     sib->orphan = parent->orphan;
-    /* And a timeline of a document a drive navigated to is that drive's act on every arm. */
-    sib->arrival_driven = parent->arrival_driven;
     /* The name of the function it drives travels by the same sentence: the arm's recipe must say which body to
        re-take, and the park asserts a drive has a name. */
     sib->orphan_hash = parent->orphan_hash;
@@ -6130,9 +6207,9 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
 /* How the root document was reached (engine.h's engine_set_arrival); `prov` is -1 until a host states it. */
 static EngineArrival g_arrival = { -1, 0, 0 };
 
-/* The marks a timeline of a document reached by `a` starts with. */
-static FlowArrival arrival_marks(EngineArrival a) {
-    FlowArrival m = { a.prov == PROV_FORCED, a.pinned, a.driven };
+/* The marks a timeline takes from another instance's flow whose act is `a`. */
+static FlowPeerMarks arrival_marks(EngineArrival a) {
+    FlowPeerMarks m = { a.prov == PROV_FORCED, a.pinned, a.driven };
     return m;
 }
 
@@ -6171,6 +6248,16 @@ EngineArrival engine_arrival_of_token(const char *token)
     return a;
 }
 
+void engine_arrival_token(EngineArrival a, char *buf, size_t cap)
+{
+    int n;
+
+    arrival_check(a, "a marks word");
+    n = snprintf(buf, cap, "%s,%s,%s", engine_provenance_token(a.prov), engine_driven_token(a.driven),
+                 engine_pinned_token(a.pinned));
+    CHECK(n > 0 && (size_t)n < cap, "engine: a marks word did not fit its room");
+}
+
 void engine_set_arrival(EngineArrival a) {
     arrival_check(a, "the instance's document arrival");
     DCHECKF(g_arrival.prov == -1 ||
@@ -6187,7 +6274,10 @@ void engine_set_arrival(EngineArrival a) {
 static void engine_seed_root_flow(Flow *f) {
     DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the table "
                         "exists only while a session is open");
-    flow_mark_arrival(f, arrival_marks(g_arrival));
+    DCHECKF(f != flow_running() && f->dyn_n == 0,
+            "a document's arrival marks were written onto the running flow or onto one already holding %d program "
+            "row(s) — the seed parks those rows' requests off these bits", f->dyn_n);
+    flow_take_peer_marks(f, arrival_marks(g_arrival));
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
 }
 
@@ -6583,6 +6673,15 @@ static void flow_perform(JSContext *ctx, Flow *f)
            may still name the queue entry, so the row owns its own string. */
         char *own = strdup(token);
         JSContext *rctx = doc_realm(doc);
+        /* The program this operation becomes runs the peer page's code (a close runs its unload handlers) on the
+           asking flow's path, so this timeline takes the asker's marks.
+           Named residual. Not covered: the timeline that was never asked is not kept beside this one, so the
+           answering timeline is graded wholesale. Next diff builds: a perform-time fork as flow_deliver's
+           (deliver_fork_arm), with the unasked arm sending no answer under the asker's rendezvous. Absence shows
+           as: a peer's own later requests graded forced after a forced asker's operation, on every timeline. */
+        {
+            deliver_take_marks(f, record_marks_field(remote_op_marks_field(op)));
+        }
         /* The program is read before the row is made, because reading it sets the operation's operands on the
            answering realm's global (remote_op.c). Its length is its `strlen`: remote_op_program answers one of this
            engine's fixed programs, not page text. */
@@ -9928,7 +10027,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
        world of its own because it stands on no other flow's decisions. Every timeline this document has is a fork
        of it, as every timeline of the root is a fork of engine_sched_begin's flow. */
     f = flow_add_unseeded(g_sess_ctx, JS_UNDEFINED, WORLD_NONE);
-    flow_mark_arrival(f, arrival_marks(arrival));
+    flow_take_peer_marks(f, arrival_marks(arrival));
     /* The same table shape as the root document's seed, built here because §4.12.1.1's encoding-parse belongs to
        this document: §8.1.3.2 "Environment settings objects"' API base URL is the joined document's, so
        `<script src=app.js>` in a document at `/app/child.html` is `/app/app.js`. `cctx`, the joined document's

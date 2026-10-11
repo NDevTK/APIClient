@@ -322,12 +322,14 @@ void engine_set_referenced(int referenced);
 /* The flag above, for the ABI's readers. It is the one copy. */
 int  engine_referenced(void);
 
-/* How a document was reached, stated by the host that provisioned it: the trusted zone's reach grade for the
-   navigation that produced it (solver/pending.h's PROV_*, `observed` for a document a person named), whether
-   that navigation was a drive of this tool's (`driven`), and whether its address rested on a pin (`pinned`).
+/* How another instance's flow stood when its act reached a timeline here: the navigation that produced a
+   document, or the sending flow of a routed record. For a document it is stated by the host that provisioned
+   it: the trusted zone's reach grade for the navigation (solver/pending.h's PROV_*, `observed` for a document a
+   person named), whether that navigation was a drive of this tool's (`driven`), and whether its address rested
+   on a pin (`pinned`).
    Each creating world names its own navigable, so each arrival is one document's. A document reached past a
    forced gate is evidence only that gate produced, so its timelines start with the navigation's marks
-   (flow.h's flow_mark_arrival): forced, pinned and driven carry into every request they make. */
+   (flow.h's flow_take_peer_marks): forced, pinned and driven carry into every request they make. */
 typedef struct { int prov, driven, pinned; } EngineArrival;
 /* The root document's arrival. engine_sched_begin's seed hook marks each root flow before its seed parks
    anything. Required before the first session (asserted there), stated once per instance and never changed
@@ -337,6 +339,9 @@ void engine_set_arrival(EngineArrival a);
    (none holds a comma), parsed for a host stating one (qjs_set_arrival, qjs_join). Anything else is fatal
    (CHECK): the release arm would grade a forced document's timelines as the page's own. */
 EngineArrival engine_arrival_of_token(const char *token);
+/* The one writer of that spelling, for the engine's records (engine_record_head) and a host standing in for a
+   peer. CHECKs the fit. */
+void engine_arrival_token(EngineArrival a, char *buf, size_t cap);
 
 /* Install how the host pays what it owes, for the one-call driver (engine_run), which has no caller to return a
    stall to. The provider fills what engine_pending_fetches and engine_host_requests name and answers how many
@@ -750,6 +755,12 @@ int engine_driven_of_running_path(void);
 
 /* The drive mark's wire spelling, shared by every writer of the field. An unknown value is fatal (CHECK). */
 const char *engine_driven_token(int driven);
+
+/* The transport head `<op>\t<doc>\t<world>\t<marks>` of a record `f` emits (caller frees). `<marks>` is `f`'s
+   marks at this instant in the arrival word's grammar (engine_arrival_token): a handler or program the record
+   makes run in the receiving instance is on `f`'s path, so the receiving timeline takes them (engine.c's
+   deliver_take_marks). Every writer of a cross-instance record composes its head here. */
+char *engine_record_head(const char *op, const char *doc, const struct Flow *f);
 
 /* What the bytes are for: Fetch §2.2.5 "Requests"' destination, stated verbatim off the request record the park
  * carried (core/fetch/fetch.h), never derived here. It is a different fact from the initiator: an injected

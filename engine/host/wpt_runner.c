@@ -1756,10 +1756,10 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
-    /* `windowproxy.post <target doc> <world> <target origin> <base64>`: §9.4.4 across instances. The origin is
-       stamped here by the zone that knows who sent it; the engine may not name its own sender (SECURITY.md), so
-       the notice carries none. */
-    if (nf == 5 && !strcmp(f[0], "windowproxy.post")) {
+    /* `windowproxy.post <target doc> <world> <marks> <target origin> <base64>`: §9.4.4 across instances. The
+       origin is stamped here by the zone that knows who sent it; the engine may not name its own sender
+       (SECURITY.md), so the notice carries none. */
+    if (nf == 6 && !strcmp(f[0], "windowproxy.post")) {
         wpt_route_post(ctx, f[1], whole, from_origin);
         free(whole);
         return;

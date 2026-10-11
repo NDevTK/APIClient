@@ -45,17 +45,18 @@ void remote_op_agent_free(void);
 typedef struct RemoteOp RemoteOp;
 
 /* `record` is the text the asking instance emitted, verbatim, tab-separated:
-     windowproxy.get   <doc> <world+ancestry> <addressee> <member>
-     windowproxy.close <doc> <world+ancestry> <addressee>
-     object.get        <doc> <world+ancestry> <addressee> <generation>:<id> <key>   (and .delete, .has)
-     object.set        <doc> <world+ancestry> <addressee> <generation>:<id> <key> <value>
-     object.apply      <doc> <world+ancestry> <addressee> <generation>:<id> <thisArg> <arg>*
+     windowproxy.get   <doc> <world+ancestry> <marks> <addressee> <member>
+     windowproxy.close <doc> <world+ancestry> <marks> <addressee>
+     object.get        <doc> <world+ancestry> <marks> <addressee> <generation>:<id> <key>   (and .delete, .has)
+     object.set        <doc> <world+ancestry> <marks> <addressee> <generation>:<id> <key> <value>
+     object.apply      <doc> <world+ancestry> <marks> <addressee> <generation>:<id> <thisArg> <arg>*
    An export id indexes one session's table (remote_object.h) and is in range in every session of the
-   document, so the object is named by (generation, id). The first three fields are the transport's: which
-   instance, whose timeline asks, and which of the receiver's timelines the asker is already in; the first two
-   are a routed delivery's, so one router carries both. The addressee sits at index 3, after the world and
-   before every operand, because engine/trusted.mjs and extension/bridge.js read [1] and engine/route.mjs reads
-   [1] and [2] positionally, and they run from the tree while this C runs only after a build; index 3 is also
+   document, so the object is named by (generation, id). The first four fields are the transport's: which
+   instance, whose timeline asks, the asking flow's path marks (solver/engine.h's engine_record_head), and which
+   of the receiver's timelines the asker is already in; the first three are a routed delivery's, so one router
+   carries both. The addressee sits at index 4, after the marks and before every operand, because
+   engine/trusted.mjs and extension/bridge.js read [1] and engine/route.mjs reads
+   [1] and [2] positionally, and they run from the tree while this C runs only after a build; index 4 is also
    the only fixed slot every verb has (`object.apply`'s tail is variadic). Crashes on a verb this agent does
    not perform: an unanswered record parks the asking flow for ever. */
 RemoteOp *remote_op_parse(const char *record);
@@ -73,6 +74,9 @@ const char *remote_op_doc(const RemoteOp *op);
    second reader here would be a second grammar — the defect remote_op.h's own header paragraph names about
    the record — and this file holds no solver dependency at all. What it owes is the FIELD; what the operand
    means is asked where the flows are. */
+/* THE ASKING FLOW'S PATH MARKS — the fourth field, as text (borrowed), parsed in solver/engine.c by the arrival
+   word's one parser, because this file holds no solver dependency. */
+const char *remote_op_marks_field(const RemoteOp *op);
 const char *remote_op_addressee(const RemoteOp *op);
 /* THE MEMBER A `windowproxy.get` NAMES — HTML §7.2.1.3.1 "CrossOriginProperties ( O )"' property name, which
    is the record's one operand — or NULL when the record is not a `windowproxy.get` at all.

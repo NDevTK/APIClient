@@ -751,13 +751,14 @@ static uint32_t close_request_peer(JSContext *ctx, JSValueConst proxy)
 
     DCHECK(f != NULL, "definitely close ran outside a flow, so there is nothing to park on the peer's answer");
     addr = engine_flow_addressee(ctx, f, doc);
-    n = snprintf(op, sizeof op, "windowproxy.close\t%s\t", doc);
-    CHECK(n > 0 && (size_t)n < sizeof op,
-          "a cross-agent close's target document name did not fit its record");
-    n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
-    n += snprintf(op + n, sizeof op - (size_t)n, "\t%s", addr ? addr : ENGINE_ADDRESSEE_NONE);
+    {
+        char *head = engine_record_head("windowproxy.close", doc, f);
+
+        n = snprintf(op, sizeof op, "%s\t%s", head, addr ? addr : ENGINE_ADDRESSEE_NONE);
+        free(head);
+    }
     free(addr);
-    CHECK((size_t)n < sizeof op, "a cross-agent close's addressee did not fit its record");
+    CHECK(n > 0 && (size_t)n < sizeof op, "a cross-agent close's record did not fit");
     return engine_host_request(ctx, op);
 }
 

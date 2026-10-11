@@ -1049,19 +1049,14 @@ void flow_mark_forced_arm(void) {
     g_running->path_forced = 1;
 }
 
-void flow_mark_arrival(Flow *f, FlowArrival a) {
-    DCHECK(f != NULL && f != g_running,
-           "a document's arrival marks were written onto the running flow or onto none — they are a fact about a "
-           "timeline being minted, and flow_mark_forced_arm is the writer for the running one");
-    DCHECKF(f->dyn_n == 0,
-            "a document's arrival marks were written onto a flow already holding %d program row(s) — the seed "
-            "parks those rows' requests off these bits, so marking after it grades them as the page's own",
-            f->dyn_n);
-    DCHECK((a.forced == 0 || a.forced == 1) && (a.pinned == 0 || a.pinned == 1) && (a.driven == 0 || a.driven == 1),
-           "a document's arrival marks are not three bits — engine.c composes them from the host's three words");
-    f->path_forced |= a.forced;
-    f->path_pinned |= a.pinned;
-    f->arrival_driven |= a.driven;
+void flow_take_peer_marks(Flow *f, FlowPeerMarks m) {
+    DCHECK(f != NULL, "another instance's flow's marks were written onto no flow");
+    DCHECK((m.forced == 0 || m.forced == 1) && (m.pinned == 0 || m.pinned == 1) && (m.driven == 0 || m.driven == 1),
+           "another instance's flow's marks are not three bits — engine.c composes them from the wire's three "
+           "words");
+    f->path_forced |= m.forced;
+    f->path_peer_pinned |= m.pinned;
+    f->path_peer_driven |= m.driven;
 }
 
 int flow_path_driven(const Flow *f) {
@@ -1071,13 +1066,13 @@ int flow_path_driven(const Flow *f) {
            "fork copies it, so any other value is memory this field does not own");
     DCHECK(!f->cand_src || (f->cand_payload && !f->cand_sink != !f->cand_vfy),
            "a candidate session is missing its payload or names neither or both of a sink and a witness key");
-    DCHECK(f->arrival_driven == 0 || f->arrival_driven == 1,
-           "a flow's arrival drive mark is neither set nor clear — flow_mark_arrival writes it as a bit");
-    return f->orphan || f->cand_src != NULL || f->arrival_driven;
+    DCHECK(f->path_peer_driven == 0 || f->path_peer_driven == 1,
+           "a flow's peer drive mark is neither set nor clear — flow_take_peer_marks writes it as a bit");
+    return f->orphan || f->cand_src != NULL || f->path_peer_driven;
 }
 
 FlowPathMarks flow_path_marks(const Flow *f) {
-    FlowPathMarks m = { flow_path_forced(f), flow_path_pinned(f) };
+    FlowPathMarks m = { flow_path_forced(f), f->path_pinned, f->path_peer_driven, f->path_peer_pinned };
     return m;
 }
 
@@ -1102,7 +1097,14 @@ int flow_path_pinned(const Flow *f) {
     DCHECK(f->path_pinned == 0 || f->path_pinned == 1,
            "a flow's determined-witness mark is neither set nor clear — it is written in exactly one place, "
            "as a constant, so any other value is memory this field does not own");
-    return f->path_pinned;
+    DCHECK(f->path_peer_pinned == 0 || f->path_peer_pinned == 1,
+           "a flow's peer witness mark is neither set nor clear — flow_take_peer_marks writes it as a bit");
+    return f->path_pinned || f->path_peer_pinned;
+}
+
+int flow_path_peer_pinned(const Flow *f) {
+    DCHECK(f != NULL, "a flow was asked whether a peer's pin reached it, of no flow");
+    return f->path_peer_pinned;
 }
 
 /* Age the running flow by the microseconds of thread time its step just burned. A monopolizer that runs without
@@ -1382,7 +1384,10 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* The marks are monotone, so the parent holds every mark it held at the branch; one it has gained since is
        its own arm's (decide.c marks after the fork takes its blobs) and is not the sibling's. */
     DCHECK(at_branch.forced <= parent->path_forced && at_branch.pinned <= parent->path_pinned &&
-           (at_branch.forced == 0 || at_branch.forced == 1) && (at_branch.pinned == 0 || at_branch.pinned == 1),
+           at_branch.peer_driven <= parent->path_peer_driven && at_branch.peer_pinned <= parent->path_peer_pinned &&
+           (at_branch.forced == 0 || at_branch.forced == 1) && (at_branch.pinned == 0 || at_branch.pinned == 1) &&
+           (at_branch.peer_driven == 0 || at_branch.peer_driven == 1) &&
+           (at_branch.peer_pinned == 0 || at_branch.peer_pinned == 1),
            "a fork handed its sibling a path mark its parent does not hold — the marks are read off the parent at "
            "the branch and only grow, so this is a mark read off another flow or a bit that is not one");
     /* Nothing may have been credited or charged first, because the inheritance assigns both terms: a sibling run or
@@ -1390,7 +1395,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
            sib->cand_replay == 0.0 && sib->cand_replay_of == 0 && sib->cand_replay_arms == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
-           sib->path_pinned == 0 &&
+           sib->path_pinned == 0 && sib->path_peer_driven == 0 && sib->path_peer_pinned == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
            "a forked sibling was credited, charged, dispatched or decided before inheriting its parent's account — "
@@ -1516,6 +1521,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        from too, and a sibling born clean of it would claim its addresses rest on the document's own bytes. Not in
        the equality, for `path_forced`'s reason. */
     sib->path_pinned = at_branch.pinned;
+    sib->path_peer_driven = at_branch.peer_driven;
+    sib->path_peer_pinned = at_branch.peer_pinned;
     /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral. At the instant it is born the sibling is
        worth exactly what its parent is worth. The equality fires the moment anything enters flow_weight that a fork
        does not carry, which is the shape of every banned fix (a depth bonus, a script-index term, a separate visit

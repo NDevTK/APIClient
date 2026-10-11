@@ -2119,7 +2119,11 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     DCHECK((wcls == EPW_UNASKED) == !wit.asked,
            "the witness class and the witness disagree about whether a flow stood at this sighting — both ask "
            "flow_running at one instant");
-    DCHECK(wcls != EPW_MAY_REST_ON || witness_has_pin(&wit),
+    /* A peer's pin is held in the sending instance's store, so a path marked by a delivery alone has none here.
+       Named residual. Not covered: the witness names no pin for such a sighting. Next diff builds: the sender's
+       pin carried with the record's marks and filed into the witness. Absence shows as: a `may-rest-on`
+       sighting whose witness lists no pinned source. */
+    DCHECK(wcls != EPW_MAY_REST_ON || witness_has_pin(&wit) || flow_path_peer_pinned(flow_running()),
            "a sighting's path pinned a value on an arm no example confirmed (`may-rest-on`) and its pin store "
            "holds no pin — the pin and the path bit are written on one line of decide.c and both ride the fork");
     /* And which sources the address's bytes entered through, copied here: `concolic_root_c` points into the value's
