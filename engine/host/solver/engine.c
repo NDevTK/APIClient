@@ -3158,26 +3158,17 @@ static FetchCredentialsMode cred_of_token(const char *tok, size_t n) {
                 "written — the buffer is this function's alone", (int)n, tok);
 }
 
-/* THE SET'S CREDENTIALS MODE IS ITS LEAST CREDENTIALED MEMBER, WHICH IS THE DESTINATION'S RULE AND NOT THE
-   PROVENANCE'S — and the two must not be read as one. The dedup is over the (method, url) PAIR, so ONE reply
-   satisfies every park in the set; the initiator and the provenance fold toward what is MOST OBSERVED, which
-   is a claim about evidence and is monotone in the right direction for both. This is a claim about WHOSE
-   SESSION PAYS, and the two errors are not symmetric: fetching credentialed for a set containing an `omit`
-   park hands that park a personalised body its own algorithm said it must not see, which is the leak
-   CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE is about; fetching uncredentialed for a set containing an
-   `include` park hands it the logged-out body, which is a NARROWING and loses reach rather than spending
-   somebody's session. So the fold is `least credentialed wins`, exactly as the destination's is `strictest
-   ingestion wins`.
-   IT IS WRITTEN OVER THE ENUMERATORS AND NOT OVER THEIR NUMBERS. core/fetch/fetch.h declares them in this
-   order and does not say the order is a rank, so a `<`-fold here would be a second, unstated claim about
-   that declaration — the kind that keeps holding until somebody inserts a member.
-   WHAT IS NOT COVERED: a request's credentials mode is part of what a request IS, so two parks on one
-   (method, url) stating different modes are two REQUESTS a browser makes twice, and this folds them into
-   one. WHAT THE NEXT DIFF BUILDS: the mode in the dedup KEY beside the method and the url — which is not a
-   change to this loop alone, because `engine_provide` pairs a reply against that same (method, url) and
-   would answer only the first of the two lines. HOW ITS ABSENCE SHOWS: a page whose `<img
-   crossorigin=use-credentials src=u>` and whose `fetch(u)` name one address learns the logged-out body for
-   the image, and the census's own request count stays one where a browser's network log shows two. */
+/* The set's credentials mode is its least credentialed member. The dedup is over (method, url), so one reply
+   satisfies every park in the set; the initiator and provenance fold toward the most observed (a claim about
+   evidence), but this is a claim about whose session pays, and the errors are asymmetric: fetching credentialed
+   for a set containing an `omit` park hands that park a personalised body its algorithm forbade, while fetching
+   uncredentialed for an `include` park only narrows. The fold is written over the enumerators, not their
+   numbers, because core/fetch/fetch.h does not declare its order a rank.
+   Named residual. Not covered: two parks on one (method, url) with different modes are two requests a browser
+   makes twice, and this folds them into one. Next diff builds: the mode in the dedup key beside method and url,
+   with engine_provide pairing on the same key (it would otherwise answer only the first line). Absence shows
+   as: a page whose `<img crossorigin=use-credentials src=u>` and `fetch(u)` name one address learns the
+   logged-out body for the image, and the census counts one request where a browser's log shows two. */
 static FetchCredentialsMode cred_narrower(FetchCredentialsMode a, FetchCredentialsMode b) {
     if (a == FETCH_CREDENTIALS_OMIT || b == FETCH_CREDENTIALS_OMIT) return FETCH_CREDENTIALS_OMIT;
     if (a == FETCH_CREDENTIALS_SAME_ORIGIN || b == FETCH_CREDENTIALS_SAME_ORIGIN)
@@ -3189,10 +3180,8 @@ static FetchCredentialsMode cred_narrower(FetchCredentialsMode a, FetchCredentia
     return FETCH_CREDENTIALS_INCLUDE;
 }
 
-/* IS THIS INITIATOR TOKEN THE PARSER-INSERTED ONE — asked of a field of a line and of the entry's own token
-   through the same two comparisons, so the join cannot decide the question one way in one place and another
-   way in the other. It is a MEMBERSHIP test and not a length test: reading "six bytes" as "parser" was sound
-   only while both tokens were six bytes, which is the coupling this file has just stopped relying on. */
+/* Is this initiator token the parser-inserted one? Asked of a line's field and of the entry's own token through
+   the same comparisons, so the join cannot decide it two ways. A membership test, not a length test. */
 static int ini_is_parser(const char *tok, size_t n) {
     if (n == sizeof PENDING_INITIATOR_PARSER - 1 && !memcmp(tok, PENDING_INITIATOR_PARSER, n)) return 1;
     if (n == sizeof PENDING_INITIATOR_SCRIPT - 1 && !memcmp(tok, PENDING_INITIATOR_SCRIPT, n)) return 0;
@@ -3200,11 +3189,10 @@ static int ini_is_parser(const char *tok, size_t n) {
                 "declares", (int)n, tok);
 }
 
-/* …AND THE SAME READER FOR THE PINNED MARK, WHICH THE DEDUP FOLD ASKS OF A LINE ALREADY IN THE BUFFER. It is
-   a `CHECK_FAIL` on an unknown word for `ini_is_parser`'s and `engine_provenance_token`'s reason: the fold
-   would otherwise answer "not pinned" for a token it did not recognise, which is the PERMISSIVE arm of a
-   question about whether an ACT MAY BE SPENT — and the buffer this reads is written by the loop three lines
-   down, so a word it cannot read is this function and its writer having parted. */
+/* The same reader for the pinned mark, which the dedup fold asks of a line already in the buffer. Fatal on an
+   unknown word, for `ini_is_parser`'s reason: "not pinned" for an unrecognised token would be the permissive arm
+   of whether an act may be spent, and the buffer is written by the loop below, so an unreadable word means
+   reader and writer parted. */
 static int pinned_is_yes(const char *tok, size_t n) {
     if (n == sizeof PENDING_PINNED_YES - 1 && !memcmp(tok, PENDING_PINNED_YES, n)) return 1;
     if (n == sizeof PENDING_PINNED_NO - 1 && !memcmp(tok, PENDING_PINNED_NO, n)) return 0;
@@ -3212,18 +3200,19 @@ static int pinned_is_yes(const char *tok, size_t n) {
                 "declares", (int)n, tok);
 }
 
+/* The URLs the host owes, newline-joined across every live flow and deduplicated over (method, url), or "".
+   Several flows park on one request (a candidate re-fire re-runs the exploring flow's fetches) and engine_provide
+   fills every entry that names it, so the list is a set of requests, not of waiters; deduplicating over the URL
+   alone would drop a POST behind a GET and settle the POST with the GET's body. The buffer is this function's,
+   valid until the next call. Each line is
+   `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`. */
 const char *engine_pending_fetches(void) {
     static char *join;
     static size_t cap;
     size_t n_out = 0;
     Flow *f;
 
-    /* ONE PASS AND ONE CONVERSION, for the reason engine_host_requests states. The DEDUP IS OVER THE PAIR, which
-       is what makes it a set of REQUESTS: several flows park on the same request (a candidate re-fire re-runs
-       the exploring flow's fetches) and engine_provide fills every entry naming it, so listing it twice makes
-       the host provide twice and the second call finds nothing left. Deduping over the URL alone did the
-       opposite of that and worse — it deleted the POST from a list that already held the GET, so the host never
-       issued it and the engine settled the POST's promise with the GET's body. */
+    /* One pass and one conversion, for engine_host_requests' reason. */
     if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending requests"); }
     join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
@@ -3236,73 +3225,54 @@ const char *engine_pending_fetches(void) {
             size_t ul = 0, ml = 0, dl = 0, cl = 0;
             const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
             const char *m = JS_IsString(mv) ? JS_ToCStringLen(pending_ctx(), &ml, mv) : NULL;
-            /* FETCH §2.2.5's DESTINATION, off the record the park stamped it on. It is NOT derived from the
-               KIND here, and that is the whole correction: a `<link rel=preload as=script>` and a `fetch()`
-               are one kind of park and opposite answers to "may this reply be compiled", so a kind-to-class
-               table would be a second producer of a fact the request already carries. */
+            /* Fetch §2.2.5's destination, off the record the park stamped it on, not derived from the kind: one
+               kind of park can carry opposite answers to "may this reply be compiled". */
             const char *d = JS_IsString(dv) ? JS_ToCStringLen(pending_ctx(), &dl, dv) : NULL;
-            /* FETCH §2.2.5's CREDENTIALS MODE, off the same record and for the destination's reason
-               exactly: the algorithm that CREATED the request is the only party that knows it, and the
-               party that decides from it is at the other end of this line. pending.h's default is JS_NULL
-               and `pending_park_request` writes this field unconditionally, so a NULL here is a park that
-               never took an address — which the `skip` below has already dropped on `!u`. */
+            /* The credentials mode, off the same record for the same reason: only the creating algorithm knows
+               it. pending.h's default is JS_NULL and `pending_park_request` always writes it, so a NULL here is a
+               park that never took an address, already dropped by `skip` on `!u`. */
             const char *c = JS_IsString(cv) ? JS_ToCStringLen(pending_ctx(), &cl, cv) : NULL;
-            /* HTML §4.12.1.1's `parser document`, READ OFF THE RECORD THE PARK STAMPED IT ON — see
-               engine.h's tokens for why the engine states it and does not act on it. It used to be derived
-               HERE from the park's KIND, which is a fact about WHICH QUEUE the element took: §4.12.1.1
-               "Processing model" puts a NON-parser-inserted element in the in-order list whenever the async
-               IDL setter has cleared `force async` without adding the attribute, and puts a PARSER-inserted
-               `<script async src>` in the ASAP set, so the kind answered this question wrongly in both
-               directions. The pusher states the flag now (pending.h's `parserIns`) and this reads it, which is
-               also what keeps this token and the provenance beside it from being two derivations of one fact
-               that are free to disagree. */
+            /* HTML §4.12.1.1's `parser document`, read off the record (pending.h's `parserIns`); engine.h's
+               tokens say why the engine states it and does not act on it. Not derived from the kind: §4.12.1.1
+               puts a non-parser-inserted element in the in-order list when the async setter clears force async,
+               and a parser-inserted `<script async src>` in the ASAP set. Reading the pusher's flag also keeps
+               this token and the provenance beside it from being two derivations of one fact. */
             const char *ini = pending_get_int(pe, PEND_PARSER_INS)
                               ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
-            /* …AND WHAT THE REQUEST IS EVIDENCE OF, read off the record and never recomputed from the flow.
-               The park stamped it (pending.h's PROV field) at the instant the request was built, which is the
-               only instant at which it is true: this walk runs arbitrarily later, over a flow that may have
-               taken a contradicted arm since, and asking `flow_path_forced(f)` here would file every request
-               a flow ever made under the path it reached last. */
+            /* What the request is evidence of, read off the record (pending.h's PROV field) and never
+               recomputed: it was true at the instant the request was built, and this walk runs later, over a flow
+               that may since have taken a contradicted arm. */
             int prov_v = (int)pending_get_int(pe, PEND_PROV);
             const char *prov = engine_provenance_token(prov_v);
-            /* …AND WHETHER THE ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE, off the same record and for the
-               provenance's reason exactly: the park stamped it at the instant the request was built, which is
-               the only instant at which it is true. A flow that pins a source AFTER parking built this address
-               out of bytes that pin could not have reached, so asking `flow_path_pinned(f)` on this walk would
-               file every request a flow ever made under the witnesses it ended up holding. */
+            /* Whether the address may rest on a witness this engine chose, off the record for the provenance's
+               reason: a pin taken after parking could not have reached this address's bytes. */
             int pinned_v = (int)pending_get_int(pe, PEND_PINNED);
             const char *pinned = engine_pinned_token(pinned_v);
             size_t il = strlen(ini), pl = strlen(prov), nl = strlen(pinned);
-            /* …AND A REQUEST THE ZONE HAS ALREADY REFUSED IS NOT ON THIS LIST, WHICH IS WHAT KEEPS A DECLINE A
-               FORK RATHER THAN A SPIN. An unanswered entry is re-joined on EVERY step, so a zone that declined
-               it once would be shown it again on the next round and would decline it again — and each decline
-               that reached the engine would fork another failure arm, which is a flow per round for the rest
-               of the session over a question that was answered the first time. A refusal is an ANSWER to "will
-               you make this request", and this list is what the host can still be ASKED; the record keeps the
-               reason, and the flow parked on it keeps its snapshot. */
+            /* A request the zone already refused is not listed, which keeps a decline a fork rather than a spin:
+               unanswered entries are re-joined every step, and each decline reaching the engine forks another
+               failure arm. A refusal answers "will you make this request", and this list is what the host can
+               still be asked; the record keeps the reason, and the parked flow its snapshot. */
             int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE) || pending_entry_declined(pe));
             if (!skip) {
                 char *q = join, *stop = join + n_out;
-                /* A SYNCHRONOUS HOST REQUEST HAS NO ADDRESS AND MUST NOT REACH THIS LIST — it is
-                   engine_host_requests' business, and a host handed one here would fetch a URL and settle a
-                   rendezvous that answers a program. It is skipped above by carrying no URL, so this asserts
-                   the reason rather than the symptom. */
+                /* A synchronous host request has no address and belongs to engine_host_requests: listed here, the
+                   host would fetch a URL to settle a rendezvous that answers a program. It is skipped by carrying
+                   no URL, so this asserts the reason. */
                 DCHECK(pending_get_int(pe, PEND_KIND) != FLOW_PENDING_HOSTREQ,
                        "a synchronous host request carries an ADDRESS — it is answered by engine_host_answer "
                        "against a request id, not by a fetched body against a (method, url) pair, so listing "
                        "it here would have the host answer one seam's question through the other");
-                /* THE PRODUCER'S HALF, ASSERTED WHERE THE RECORD IS READ rather than where it is written: a park
-                   that named an address and no method is a component that dropped a field, and the host would be
-                   handed a line the split cannot make sense of. */
+                /* The producer's half, asserted where the record is read: an address with no method is a dropped
+                   field, and the split could not make sense of the line. */
                 DCHECK(m != NULL,
                        "an outstanding request carries an ADDRESS and no METHOD — the reply seam is keyed on the "
                        "pair, so this entry cannot be listed at all. The park that created it must state its "
                        "method (Fetch §2.2.5 Requests: unless stated otherwise it is `GET`)");
-                /* AND THE GRAMMAR HOLDS BY CONSTRUCTION, WHICH IS WHY IT IS CHECKED. URL Standard §4.4 URL
-                   parsing removes all ASCII tab or newline from its input, so a serialized URL has neither; a
-                   method is a token and RFC 9110 §5.6.2 Tokens excludes both. An entry that breaks that is a URL
-                   that never went through the parser — a concolic SHAPE carried through as an address — and the
-                   line it makes silently splits into two records the host then fetches. */
+                /* The line grammar holds by construction and is checked: URL Standard §4.4 URL parsing removes
+                   all ASCII tab and newline, and a method is an RFC 9110 §5.6.2 token. A URL that breaks it never
+                   went through the parser (a concolic shape carried as an address), and the line would split into
+                   two records the host fetches. */
                 DCHECK(!memchr(u, '\t', ul) && !memchr(u, '\n', ul),
                        "an outstanding request's URL holds a TAB or a NEWLINE — URL Standard §4.4 URL parsing "
                        "removes both from its input, so this string never went through the parser and the joined "
@@ -3310,10 +3280,8 @@ const char *engine_pending_fetches(void) {
                 DCHECK(method_is_token(m),
                        "an outstanding request's METHOD is not a token — Fetch §2.2.1 Methods, and RFC 9110 "
                        "§5.6.2 Tokens is the production; the joined line would not split back into the pair");
-                /* AND THE OTHER HALF OF THE PRODUCER'S CONTRACT, asserted where the record is read for the
-                   same reason the method is. An entry that states no destination cannot be classified at the
-                   chokepoint, and the failure is not that the request goes unfetched — it is fetched, as
-                   DATA, and if it is a script park its cross-origin body is then compiled. */
+                /* The destination half of the contract: without it the request cannot be classified at the
+                   chokepoint, and is fetched as data, so a script park's cross-origin body would be compiled. */
                 DCHECK(d != NULL,
                        "an outstanding request carries an ADDRESS and no DESTINATION — Fetch §2.2.5 Requests "
                        "gives every request one and the trusted zone reads it to decide whether the reply may "
@@ -3324,34 +3292,24 @@ const char *engine_pending_fetches(void) {
                        "consumer decides the CORB class by asking whether this value is SCRIPT-LIKE, so a "
                        "value outside the enumeration is read as `not code` by default and a script's reply is "
                        "ingested as data");
-                /* AND THE CREDENTIALS MODE'S HALF OF THE SAME CONTRACT, asserted where the record is read
-                   because that is where a park that never wrote it becomes a line the zone must decide from.
-                   pending.h's default is JS_NULL and the park writes the field unconditionally, so a NULL is
-                   the park door having stopped writing rather than a producer that stated nothing — which is
-                   a different repair, and the two must not read alike here. */
+                /* The credentials half: the park writes the field unconditionally, so a NULL means the park door
+                   was bypassed, a different repair from a producer that stated nothing. */
                 DCHECK(c != NULL,
                        "an outstanding request carries an ADDRESS and no CREDENTIALS MODE — the field is "
                        "written unconditionally by pending_park_request (this file) after it has refused the "
                        "unplaced zero, so a record with an address and no mode is that door having been "
                        "bypassed. Route the park through it; a producer that merely stated nothing aborts "
                        "there instead, naming the algorithm that owes the answer");
-                /* AND THE ENUMERATION, ASKED BY MAKING THE CALL RATHER THAN BY ASSERTING OVER IT. A
-                   DCHECK wrapped round `cred_of_token` would compare a value with the only value it can
-                   return, since that function is FATAL on a word §2.2.5 does not define — and it is fatal
-                   for `engine_provenance_token`'s reason, which is this one: what is at stake is whether
-                   the person's session pays for this fetch, and a release build that let an unknown word
-                   through would have the zone answer that from whichever arm its policy has as its else. */
+                /* The enumeration is checked by making the call: `cred_of_token` is fatal on a word §2.2.5 does
+                   not define (whether the person's session pays is at stake), so a DCHECK around it would compare
+                   a value with the only value it can return. */
                 (void)cred_of_token(c, cl);
-                /* FETCH §4.3 Scheme fetch's CLOSURE, AND THIS IS THE CONSUMER IT BELONGS AT. Everything this
-                   loop writes is handed to the trusted zone, which can fetch NOTHING but an HTTP(S) scheme
-                   (Fetch §2.1 URL) and answers a refusal the page cannot tell from a network failure — so a
-                   URL §4.3 answers INSIDE this agent reaching this line is not a request that will fail, it is
-                   a park that never ran §4.3 at all, and the flow is owed an answer that can only ever be
-                   `blocked`. It used to be asked at each entry that BUILT a request, which is a list to keep
-                   in step with; asked here it is asked once, of everything, so a park added later FIRES
-                   instead of silently widening the old wrong answer. `pending_park_request` is where the
-                   answer is placed (this file) and core/fetch/fetch.c's `fetch_owe` is where a request with a
-                   `deliver` closure gets its own. */
+                /* Fetch §4.3 Scheme fetch's closure, at the consumer. The trusted zone fetches only HTTP(S)
+                   (Fetch §2.1 URL) and its refusal looks like a network failure, so a URL §4.3 answers inside
+                   this agent reaching this line is a park that never ran §4.3, owed an answer that can only be
+                   `blocked`. Asked once here, of everything, a park added later fires.
+                   `pending_park_request` places the local answer; core/fetch/fetch.c's `fetch_owe` handles a
+                   request with a `deliver` closure. */
                 DCHECK(scheme_fetch_is_network(pending_ctx(), u),
                        "a request whose URL's scheme Fetch §4.3 Scheme fetch answers INSIDE this agent is "
                        "about to be handed to the HOST'S network. The trusted zone fetches nothing but an "
@@ -3364,13 +3322,9 @@ const char *engine_pending_fetches(void) {
                 while (q < stop) {
                     char *e = memchr(q, '\n', (size_t)(stop - q));
                     char *lend = e ? e : stop;
-                    /* THE LINE IS SPLIT WHERE IT WAS JOINED rather than measured against this entry's widths.
-                       The old test computed every field boundary from `ml`, a fixed `il` and `ul`, which is
-                       only a comparison at all while every line's token fields are the same length as this
-                       one's — true of two six-byte initiators and false the moment a field has a vocabulary
-                       (`observed`/`derived`/`forced`) rather than a pair. Scanning the TABs asks the line what
-                       its fields are; neither a method (RFC 9110 §5.6.2 Tokens) nor a URL (URL Standard §4.4
-                       URL parsing) can contain one, which is what makes the scan exact. */
+                    /* The line is split where it was joined, by scanning TABs: neither a method (RFC 9110 §5.6.2)
+                       nor a URL (URL Standard §4.4) can contain one, so the scan is exact whatever the token
+                       fields' widths. */
                     char *t1 = memchr(q, '\t', (size_t)(lend - q));
                     char *t2 = t1 ? memchr(t1 + 1, '\t', (size_t)(lend - t1 - 1)) : NULL;
                     char *t3 = t2 ? memchr(t2 + 1, '\t', (size_t)(lend - t2 - 1)) : NULL;
@@ -3384,107 +3338,51 @@ const char *engine_pending_fetches(void) {
                            "reader having parted");
                     if ((size_t)(t1 - q) == ml && !memcmp(q, m, ml) &&
                         (size_t)(lend - (t6 + 1)) == ul && !memcmp(t6 + 1, u, ul)) {
-                        /* THE SET'S INITIATOR IS THE MOST OBSERVED OF ITS MEMBERS, and that is a statement
-                           about the REQUEST rather than a preference. The dedup is over the pair because the
-                           pair is the request's identity and one reply fills every entry parked on it — so
-                           when a document's own `<script src>` and a running arm's `fetch()` name one address,
-                           the line has to state the fact that survives them both: a real load of this document
-                           makes this request. Taking whichever flow happened to be walked first would make a
-                           zone's firing decision a function of scheduler order, which is the same value read
-                           two ways on two runs. The upgrade is monotone and never runs downward.
-                           AND THE PROVENANCE IS JOINED THE SAME WAY, WHICH IS THE MOST OBSERVED AND NOT THE
-                           MOST FORCED. The hazard reads the other way round at first — "a forced arm's request
-                           hiding behind an observed one" — but the set's members are one REQUEST, and if any
-                           member's path stood on no contradicted arm then a real client makes exactly this
-                           request and the server's answer to it is evidence about the app. Labelling that set
-                           FORCED would state "no client makes this request" of a request one does, which is the
-                           false claim §@H forbids pointing the other way, and it would cost the tool the
-                           active-discovery its own §Attacker-sources calls REQUIRED. What a forced flow does
-                           with the reply is a fact about THAT FLOW's path, which its own `path_forced` already
-                           carries into everything it emits; it is not a property of the bytes.
-                           TAKEN OVER THE WHOLE PAIR IN ONE WRITE, so a duplicate that improves only one of the
-                           two fields does not leave the other stale. */
-                        /* AND THE SET'S DESTINATION IS ITS STRICTEST MEMBER, WHICH IS A DIFFERENT RULE FROM
-                           THE TWO ABOVE AND MUST NOT BE READ AS THE SAME ONE. The other two fields fold
-                           toward what is MOST OBSERVED, which is a claim about evidence. This one folds
-                           toward what may be INGESTED MOST NARROWLY, which is a claim about the reply: one
-                           response satisfies every park in the set, so if any member will COMPILE it, the
-                           bytes have to pass the code rule — a cross-origin non-JS body refused for a
-                           `fetch()` that would have read it as data is a narrowing, and the same body
-                           accepted for a `<script src>` is arbitrary code execution. §2.2.5's SCRIPT-LIKE is
-                           exactly that line, so the fold is `script-like wins` and nothing else.
-                           WHERE NEITHER MEMBER IS SCRIPT-LIKE THE LINE KEEPS WHAT IT HAS, and that is stated
-                           rather than left as an accident of walk order: `image` and `font` for one address
-                           impose the same ingestion rule, so no consumer of this seam can tell them apart and
-                           there is nothing for an order to change. The day one can — a consumer that reads
-                           the destination for something other than the code question — the register has to be
-                           keyed on the destination instead of folded over it, and that is the change to make
-                           then rather than a tie-break invented now to look deterministic. */
-                        /* EVERY OFFSET AND EVERY VERDICT IS TAKEN BEFORE THE FIRST WRITE, and the five writes
-                           then run BACK TO FRONT — credentials, witness, provenance, initiator, destination.
-                           (It said `the three writes … provenance, initiator, destination` while the block
-                           wrote five; the RULE was right and its enumeration was two fields stale, which is the
-                           one thing a reader of an ordering constraint must not be handed.) A rewrite shifts
-                           everything after the field it touches, so a later field's offset survives an earlier
-                           field's growth and not the other way round; writing the destination first would
-                           leave the two after it measured against a line that had moved. */
+                        /* The set's initiator is the most observed of its members, a statement about the
+                           request: one reply fills every entry on the pair, so when a document's `<script src>`
+                           and an arm's `fetch()` name one address the line states the fact that survives both (a
+                           real load makes this request), independent of walk order. The upgrade is monotone.
+                           The provenance folds the same way, most observed rather than most forced: if any
+                           member's path stood on no contradicted arm, a real client makes exactly this request
+                           and the server's answer is evidence about the app; labelling it forced would be false
+                           and would cost active discovery. What a forced flow does with the reply is that flow's
+                           `path_forced` fact, not the bytes'.
+                           The destination folds differently, toward the strictest ingestion: if any member will
+                           compile the reply, the bytes must pass the code rule (a cross-origin non-JS body
+                           refused for a `fetch()` is a narrowing; accepted for a `<script src>` it is code
+                           execution), so script-like (§2.2.5) wins. Where no member is script-like the line keeps
+                           what it has, since no consumer distinguishes, say, `image` from `font`; a consumer that
+                           does would need the register keyed on the destination.
+                           Every offset and verdict is taken before the first write, and the five writes run back
+                           to front (credentials, witness, provenance, initiator, destination), because a rewrite
+                           shifts everything after its field. */
                         size_t d_at = (size_t)(t1 + 1 - join), d_len = (size_t)(t2 - (t1 + 1));
                         size_t i_at = (size_t)(t2 + 1 - join), i_len = (size_t)(t3 - (t2 + 1));
                         size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
                         size_t n_at = (size_t)(t4 + 1 - join), n_len = (size_t)(t5 - (t4 + 1));
                         size_t c_at = (size_t)(t5 + 1 - join), c_len = (size_t)(t6 - (t5 + 1));
-                        /* …AND THE SET'S (PROVENANCE, WITNESS) PAIR FOLDS AS A PAIR, TAKING ONE MEMBER'S
-                           WHOLE, WHICH IS THE ONE FOLD THAT CANNOT STATE A PAIR NO MEMBER HELD. The two facts
-                           are NESTED — solver/flow.h declares `path_pinned` strictly inside `path_forced`, and
-                           `pending_pinned_compose` asserts that at every park — so the legal pairs are exactly
-                           (observed, unpinned), (derived, unpinned), (forced, unpinned) and (forced, pinned).
-                           Folding each field by an extremum of its own takes the MINIMUM of the first and the
-                           MAXIMUM of the second, and over a NESTED pair those two extrema need not belong to
-                           one member: a set holding a clean `derived` park and a `forced`+`pinned` one folded
-                           to (derived, pinned), which is a state no park can be in. The consumer rests on the
-                           nesting BY NAME — extension/lib/safe-fetch.js's `_firingRefusal` CHECKs it, and a
-                           CHECK is always fatal — so that pair did not mis-grade a request, it KILLED THE
-                           FETCH PATH for the whole session, taking reply learning with it. The candidate
-                           re-fire named at the top of this function is a generator of the pair rather than an
-                           exotic case: the re-firing flow is forced and pinned by construction and re-runs the
-                           exploring flow's own fetches, so the two park on one (method, url).
-                           THE PAIR'S ORDER IS LEXICOGRAPHIC WITH THE PROVENANCE FIRST, so the provenance still
-                           folds toward what is MOST OBSERVED and the argument above it is untouched. What
-                           changes is that the witness mark stops being a second extremum and is read off
-                           whichever member won — the cleanest member that composed THESE BYTES.
-                           THE RETIRED ARGUMENT, REWRITTEN RATHER THAN DELETED BECAUSE A READER WILL OTHERWISE
-                           RE-DERIVE IT: this folded toward `pinned` on the ground that the set is one ADDRESS,
-                           so if any member composed those bytes out of a witness this engine chose then the
-                           address may be one no server ever had — and that under-claiming here SPENDS AN ACT
-                           where under-claiming the provenance merely grades a reply. That asymmetry is real
-                           and the conclusion does not follow from it, because the witness mark is an
-                           OVER-APPROXIMATION recorded at the FLOW. solver/flow.h says so in its own words: it
-                           cannot be read off the address, because `pin_mint` returns a BARE primitive and
-                           `"/chunks/" + region + ".js"` with `region` pinned is byte-indistinguishable from a
-                           chunk address spelled entirely in the bundle's own source. A member that composed
-                           the SAME BYTES with its own mark CLEAR is therefore a direct refutation of that
-                           approximation for this address — every byte of its address came from outside this
-                           engine, which is engine.h's own text for `unpinned` — and that member alone
-                           justifies the act whether or not the pinned member exists. Under-claiming is the
-                           hazard when nothing refutes the approximation; here the set carries the refutation,
-                           over the same identity, in the same walk. */
-                        /* EVERY READER BELOW TAKES THE COMPUTED OFFSET AND NEVER A `tN + 1` OF ITS OWN, and
-                           that is a repair rather than a style: the offsets and the tab pointers were TWO
-                           SPELLINGS of one position, so inserting a field ahead of the credentials mode moved
-                           `c_at` and left this block's `cred_of_token(t4 + 1, c_len)` reading the field that
-                           had taken its place — with the LENGTH of the field it meant. `cred_of_token` is
-                           fatal on a word §2.2.5 does not define, so every deduped line would have aborted.
-                           One spelling cannot drift from itself. */
+                        /* The (provenance, witness) pair folds as a pair, taking one member's whole, so it
+                           cannot state a pair no member held. The facts are nested (solver/flow.h declares
+                           `path_pinned` inside `path_forced`; `pending_pinned_compose` asserts it), so the legal
+                           pairs are (observed|derived|forced, unpinned) and (forced, pinned). Folding each by its
+                           own extremum could give (derived, pinned), on which extension/lib/safe-fetch.js's
+                           `_firingRefusal` CHECK kills the fetch path for the session; a candidate re-fire
+                           (forced and pinned, re-running the explorer's fetches) generates exactly such a set.
+                           The order is lexicographic, provenance first, so the provenance still folds toward
+                           most observed, and the witness mark is read off the member that won. Taking the
+                           cleanest member is sound for the mark: it is an over-approximation recorded at the
+                           flow and cannot be read off the address (`pin_mint` returns a bare primitive), so a
+                           member that composed the same bytes with its mark clear refutes it for this address. */
+                        /* Every reader below takes the computed offset, never a `tN + 1` of its own, so the
+                           offsets and tab pointers are not two spellings of one position that could drift. */
                         int cur_prov = prov_of_token(join + p_at, p_len);
                         int cur_pinned = pinned_is_yes(join + n_at, n_len);
                         int take_new = prov_v < cur_prov || (prov_v == cur_prov && !pinned_v);
                         int mo_prov = take_new ? prov_v : cur_prov;
                         int mo_pinned = take_new ? pinned_v : cur_pinned;
-                        /* AND THE CONSTRUCTION IS CHECKED WHERE THE PAIR IS MADE. The park asserts the nesting
-                           at one end (`pending_pinned_compose`) and the chokepoint at the other, and this fold
-                           — the one party able to compose a pair neither of them ever saw — held neither. It
-                           is not vacuous: it fails the day either field grows an extremum of its own again,
-                           which is the shape this block had and the regression it now exists to refuse. */
+                        /* The nesting is checked where the pair is made, the one place able to compose a pair
+                           neither the park nor the chokepoint saw; it fails if either field is again folded by
+                           an extremum of its own. */
                         DCHECKF(!mo_pinned || mo_prov == PROV_FORCED,
                                 "this join folded a (provenance, witness) pair no park can hold — provenance "
                                 "%d with the witness mark SET, where solver/flow.h declares `path_pinned` "
@@ -3496,9 +3394,8 @@ const char *engine_pending_fetches(void) {
                         int mo_parser = ini_is_parser(join + i_at, i_len) || ini_is_parser(ini, il);
                         int widen_dst = destination_is_script_like(d, dl) &&
                                         !destination_is_script_like(join + d_at, d_len);
-                        /* …AND THE SET'S CREDENTIALS MODE, WHICH FOLDS THE OTHER WAY FROM THE TWO TOKEN
-                           FIELDS BESIDE IT — see `cred_narrower` for why least-credentialed wins and for the
-                           residual this fold is. */
+                        /* The credentials mode folds the other way from the token fields (see `cred_narrower`
+                           for the rule and its residual). */
                         FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
                                                                     cred_of_token(c, cl));
                         join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
@@ -3508,9 +3405,8 @@ const char *engine_pending_fetches(void) {
                         join_set_field(&join, &n_out, &cap, i_at, i_len,
                                        mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);
                         if (widen_dst) join_set_field(&join, &n_out, &cap, d_at, d_len, d);
-                        /* THE BUFFER MAY HAVE MOVED — both rewrites can realloc — so every pointer this scan
-                           holds (`q`, `stop`, `t1`..`t6`) is dead from here. The break is what makes that
-                           safe, and it is stated rather than left to be noticed. */
+                        /* Both rewrites can realloc, so every pointer this scan holds (`q`, `stop`, `t1`..`t6`) is
+                           dead from here; the break is what makes that safe. */
                         skip = 1; break;
                     }
                     if (!e) break;
@@ -3560,74 +3456,45 @@ void engine_pending_split(char *line, const char **method, const char **destinat
     DCHECK(line && method && destination && initiator && provenance && pinned && credentials && url,
            "a pending line was split with nowhere to put its fields");
     tab = strchr(line, '\t');
-    /* A `CHECK`, NOT A DCHECK, because the release path has no defined answer: the fields are what a reply
-       is delivered against, and a line that is not the shape this engine joined would key a delivery on a method
-       nobody asked for — which is the wrong answer this seam exists to make impossible, in the one build where
-       nothing else would say so. */
+    /* CHECKs, not DCHECKs: release has no defined answer, because the fields key the delivery, and a line not
+       in this engine's grammar would key it on a method nobody asked for. Each missing TAB is checked on its own
+       so the message says which field would have been misread; a URL cannot contain a TAB (URL Standard §4.4),
+       so the URL is the remainder of the line. */
     CHECK(tab != NULL,
           "engine: a host split a pending line that carries no TAB — engine_pending_fetches joins "
           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` lines and this "
           "one is none of that");
     tab2 = strchr(tab + 1, '\t');
-    /* THE SECOND TAB IS THE ONE A HOST WRITTEN AGAINST THE OLD GRAMMAR WOULD NOT FIND, and it is a CHECK for
-       the same sentence as the first with the failure one field over: without it the INITIATOR silently becomes
-       the address, so the zone would fetch the six characters `parser` and every flow parked on the real URL
-       would wait for a reply keyed on a request nothing made. A URL cannot contain a TAB (URL Standard §4.4
-       URL parsing removes every ASCII tab and newline from its input), so the second TAB is unambiguous and
-       the URL is the remainder of the line. */
+    /* Without the second TAB the initiator would become the address. */
     CHECK(tab2 != NULL,
           "engine: a host split a pending line carrying one TAB — engine_pending_fetches joins "
           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and this host is "
           "reading a shorter grammar that preceded it, so its address is about to be a destination");
     tab3 = strchr(tab2 + 1, '\t');
-    /* THE THIRD TAB IS THE ONE A HOST WRITTEN AGAINST THE THREE-FIELD GRAMMAR WOULD NOT FIND, and it is a
-       CHECK for the same sentence as the two above with the failure one field further over: without it the
-       PROVENANCE silently becomes the address, so the zone would fetch the eight characters `observed` and
-       every flow parked on the real URL would wait for a reply keyed on a request nothing made. The
-       three-field grammar was the shape that could not say whether a running-code park was DERIVED or FORCED
-       — nothing on a flow recorded whether its path took a forced arm — so a host still reading it is one
-       whose firing decision cannot see the distinction it is supposed to be made on. */
+    /* Without the third the provenance would become the address, and the firing decision could not see whether
+       a running-code park was derived or forced. */
     CHECK(tab3 != NULL,
           "engine: a host split a pending line carrying two TABs — engine_pending_fetches joins "
           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and this host is "
           "reading a shorter grammar that preceded it, so its address is about to be an initiator token");
     tab4 = strchr(tab3 + 1, '\t');
-    /* THE FOURTH TAB IS THE ONE A HOST WRITTEN AGAINST THE FOUR-FIELD GRAMMAR WOULD NOT FIND, and it is a
-       CHECK for the same sentence as the three above with the failure one field further over. The grammar
-       that preceded it could not say what a set of bytes was FOR: a host read the CORB class out of a side
-       list only the module loader wrote, so a document's own `<script src>` was fetched with no class at all
-       and a cross-origin HTML body served for it was ingested as data and compiled. A host still reading that
-       grammar is one whose ingestion decision is made on a field that is not there. */
+    /* Without the fourth the CORB class would be decided on a field that is not there. */
     CHECK(tab4 != NULL,
           "engine: a host split a pending line carrying three TABs — engine_pending_fetches joins "
           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and this host is "
           "reading the four-field grammar that preceded it, so its address is about to be a provenance token "
           "and its CORB class is about to be decided on a field that is not there");
     tab5 = strchr(tab4 + 1, '\t');
-    /* THE FIFTH TAB IS THE ONE A HOST WRITTEN AGAINST THE FIVE-FIELD GRAMMAR WOULD NOT FIND, and it is a
-       CHECK for the same sentence as the four above with the failure one field further over: without it the
-       CREDENTIALS MODE silently becomes the address, so the zone would fetch the eleven characters
-       `same-origin` and every flow parked on the real URL would wait for a reply keyed on a request nothing
-       made. The grammar that preceded it could not say WHOSE SESSION PAYS: Fetch §2.2.5 "Requests" gives
-       every request a credentials mode and only the algorithm that CREATED the request knows it, so a host
-       still reading five fields is one deciding the credential question by silence — which for a
-       `<link rel=preload>` or an `<img crossorigin=use-credentials>` means a personalised body learned as
-       the logged-out one, and in the other direction means a park whose own algorithm said `omit` fetched
-       with the person's cookies. */
+    /* Without the fifth the credentials mode would become the address, and whose session pays would be
+       decided by silence (Fetch §2.2.5 Requests: only the creating algorithm knows it). */
     CHECK(tab5 != NULL,
           "engine: a host split a pending line carrying four TABs — engine_pending_fetches joins "
           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and this host is "
           "reading the five-field grammar that preceded it, so its address is about to be a credentials "
           "token and whose session pays for this fetch is about to be decided on a field that is not there");
     tab6 = strchr(tab5 + 1, '\t');
-    /* THE SIXTH TAB IS THE ONE A HOST WRITTEN AGAINST THE SIX-FIELD GRAMMAR WOULD NOT FIND, and it is a CHECK
-       for the same sentence as the five above with the failure one field further over: without it the PINNED
-       MARK silently becomes the address, so the zone would fetch the eight characters `unpinned` and every
-       flow parked on the real URL would wait for a reply keyed on a request nothing made. The grammar that
-       preceded it could say only that a request stood past a forced gate, which is one bit for two questions:
-       a lazy chunk of the page's OWN bundle and a data request whose address this engine composed out of a
-       witness it picked were the same word, so a zone that let the first through let the second through with
-       it. A host still reading six fields is one whose firing decision cannot see which of those it has. */
+    /* Without the sixth the pinned mark would become the address, and the zone could not tell a lazy chunk of
+       the page's own bundle from a data request whose address rests on a witness this engine picked. */
     CHECK(tab6 != NULL,
           "engine: a host split a pending line carrying five TABs — engine_pending_fetches joins "
           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and this "
@@ -3646,9 +3513,8 @@ void engine_pending_split(char *line, const char **method, const char **destinat
     *pinned = tab4 + 1;
     *credentials = tab5 + 1;
     *url = tab6 + 1;
-    /* FETCH §2.2.5's ENUMERATION, ASKED OF THE LINE — the same test the join asked before writing it, at the
-       other end, because a field is a contract and a contract is checked by both parties. The EMPTY STRING
-       passes and must: §2.2.5's default is a destination like any other and it is what `fetch()` has. */
+    /* Fetch §2.2.5's enumeration, asked of the line: the join asked it before writing, and both parties check a
+       contract. The empty string passes: it is §2.2.5's default and what `fetch()` has. */
     DCHECK(fetch_is_destination_type(*destination),
            "a pending line's DESTINATION is not one Fetch §2.2.5 Requests enumerates — the host decides from "
            "it whether this reply may be ingested as CODE, and a value it does not know takes the `not "
@@ -3668,46 +3534,21 @@ void engine_pending_split(char *line, const char **method, const char **destinat
            "a pending line's PROVENANCE is none of the three tokens engine.h declares — the trusted zone's "
            "FIRING decision reads this field, and CLAUDE.md forbids a reply to a FORCED request ever being "
            "reported as OBSERVED, which a defaulted fourth value is exactly how it would be");
-    /* FETCH §2.2.5's CREDENTIALS MODE, ASKED OF THE LINE THROUGH THE ONE MAPPING core/fetch/fetch.h OWNS —
-       `fetch_credentials_of_token`, which is FATAL on a word §2.2.5 does not define, so the call IS the
-       check and an assert over it could only compare a value with itself. It is fatal rather than a DCHECK
-       for the reason that file gives: the zone decides a credential question from this field, and a release
-       build that let an unknown word through would have that decided by whichever arm its policy has as its
-       else. */
+    /* The credentials mode, through core/fetch/fetch.h's one mapping, `fetch_credentials_of_token`, which is
+       fatal on an undefined word, so the call is the check. */
     (void)fetch_credentials_of_token(*credentials);
 }
 
-/* IS ANYTHING OUTSTANDING ON THE WHOLE FRONTIER — the third answer over the same two walks above, and the one
- * the scheduler consults before it may call a frontier exhausted.
+/* Is anything outstanding for the host on the whole frontier? The scheduler asks this before it may call a
+ * frontier exhausted. It is the engine's own question, not a host callback: the lists a host would answer from
+ * are this file's walks of this file's registers (engine_pending_fetches, engine_host_requests), and a host
+ * restating them can omit one; a frontier suspended entirely inside cross-instance reads must report stalled.
  *
- * IT USED TO BE A HOST CALLBACK (`engine_set_stall_hook`), justified as "the scheduler holds no idea of what a
- * reply is, and the host holds no idea of what a flow is". That was false in the only direction that matters:
- * the two lists a host would answer from are engine_pending_fetches() and engine_host_requests(), which are THIS
- * FILE's walks of THIS FILE's registers, so every host implemented the hook by restating an engine fact — and
- * a fact restated in three places is a fact three places can get wrong. One of them did. main.c — the SHIPPED
- * host, the one §Testing says is the one that rots — asked `*engine_pending_fetches() != '\0'` and never the
- * synchronous register, while test_forced.c and wpt_runner.c asked both (wpt_runner's own comment spells out
- * why: "a flow parked on either is a flow that has not finished"). So a frontier whose every member was
- * suspended inside a cross-instance read, with no fetch outstanding, reported NOT STALLED to the extension and
- * to engine/route.mjs: the slice fell straight past the report the host reads, seeded candidates over it and
- * declared the session exhausted, killing every one of those continuations. engine/route.mjs aborts on exactly
- * that, at the `!flow_blocked` assert a few lines past the report — a §7.2.1 `w.length` read, which is the
- * one member of the cross-origin twelve that only the peer instance can answer.
- *
- * ASKED OF THE FLOWS, not of the joins, because the joins BUILD TEXT and this needs a yes or no — and through
- * `pending_host_outstanding`, which is the register-arity form of the joins' OWN skip condition, so the two
- * cannot drift the way three copies of a condition did. The DCHECK in the loop is what keeps the two answers
- * the same one: an outstanding entry the host cannot be TOLD about would make this say STALLED over work no
- * host will ever be handed, which is the livelock the callback's failure was the mirror of.
- * IT ASKED `pending_outstanding`, AND THAT SENTENCE CALLED IT "already the exact predicate (`is the host still
- * owed anything on this register`)", WHICH IT IS NOT — it is `pend_owed`, which is "is this FLOW still
- * waiting", and pending.c says the two diverge on exactly one input. That input is a DECLINED entry, and the
- * livelock named above is what it produced: a frontier whose only outstanding records have been REFUSED
- * reported STALLED while both joins answered the empty string, so the host was handed a bill with no record on
- * it, paid nothing, and stepped again — for ever in release, and into main.c's "the scheduler asked this host
- * to PAY and named nothing owed" in dev. The dev walk below already had to exempt `declined` as "deliberately
- * untellable", which is this function conceding at its own assert that it was asking the other question.
- * RETIREMENT: this note goes when no register-arity caller of the host question can reach `pend_owed`. */
+ * Asked of the flows through `pending_host_outstanding`, the register-arity form of the joins' own skip
+ * condition, so the two cannot drift. That is not `pending_outstanding` (pend_owed, "is this flow still
+ * waiting"): the two differ on a declined entry, which the joins do not list, so asking pend_owed would report
+ * a stall the host is handed no record for, a livelock in release and main.c's "the scheduler asked this host to
+ * PAY and named nothing owed" in dev. The dev walk asserts every outstanding entry is tellable. */
 int engine_host_owes(void) {
     for (int i = 0; i < flow_count(); i++) {
         Flow *f = flow_at(i);
@@ -3716,14 +3557,11 @@ int engine_host_owes(void) {
         for (int j = 0, m = pending_count(f->pending); j < m; j++) {
             JSValue e = pending_entry(f->pending, j);
             JSValue uv = pending_get(e, PEND_URL);
-            /* A DECLINED ENTRY IS DELIBERATELY UNTELLABLE, AND THAT IS THE ONE STATE THIS CHECK MUST NOT CALL A
-               DEFECT. Everything else here is one claim — an unanswered entry must be on one of the two lists
-               the host is handed, or the flow waits for the rest of the session with nothing to show for it.
-               A refusal makes that wait DELIBERATE: the zone has answered "no", the joins stop listing the
-               request precisely so it is not re-asked and re-declined, and the flow keeps its snapshot at the
-               line it parked on — §@S's search-not-yet-solved, which fires the day the origin is widened. The
-               `declined` reason on the record is what makes it a park a reader can account for rather than a
-               flow that silently left the run. */
+            /* A declined entry is deliberately untellable and is not a defect. Otherwise every unanswered entry
+               must be on one of the two lists the host is handed, or its flow waits for the session. A refusal
+               makes the wait deliberate: the zone answered no, the joins stop listing it so it is not re-asked,
+               and the flow keeps its snapshot, a parked search that fires the day the origin is widened; the
+               record's `declined` reason accounts for it. */
             int tellable = pending_get_int(e, PEND_HAVE_VALUE) ||
                            pending_entry_declined(e) ||
                            JS_IsString(uv) ||
@@ -3742,21 +3580,13 @@ int engine_host_owes(void) {
     return 0;
 }
 
-/* IS EVERY MEMBER PARKED ON SOMETHING NO HOST EVENT CAN CLEAR — the frontier-arity counterpart of the bill
- * above, and the OTHER answer a `-inf` can honestly carry. The two are asked in that order and only one of
- * them is a claim ON the host: `engine_host_owes` says "pay me and I convert a slice into work", and this says
- * "there is nothing to pay and nothing further I can do, so rank me last and let me write my residue down".
- * A frontier holding even one billable member answers the first, so these never both hold for a reason: a
- * refused member is invisible to `engine_pending_fetches` and `engine_host_requests` by design, so it can
- * never be the thing a bill names.
- * EVERY MEMBER RATHER THAN ANY, because the claim is about what the ENGINE can do and one runnable or billable
- * member falsifies it. `pending_declined_outstanding` is the register-arity refusal question (pending.h) and
- * is asked directly rather than composed out of `outstanding && !host_outstanding`, which is the same answer
- * for a register whose every owed entry is refused and a different one for a mixed register.
- * AN EMPTY FRONTIER ANSWERS 0 AND NOT 1. "Every member is settled" over no members is vacuously true and is
- * the wrong statement to hand a reader: an exhausted frontier is a different fact with a different exit, and a
- * predicate that conflated them would let the -inf assert below be satisfied by the one state it already has
- * its own clause for. */
+/* Is every member parked on something no host event can clear? The frontier-arity counterpart of the bill above
+ * and the other answer a `-inf` can carry. They are asked in that order and never both hold: a refused member
+ * is invisible to both joins, so it is never what a bill names, and one billable member answers the first.
+ * Every member rather than any, because one runnable or billable member falsifies the claim.
+ * `pending_declined_outstanding` (pending.h) is asked directly rather than composed as
+ * `outstanding && !host_outstanding`, which differs on a mixed register. An empty frontier answers 0: exhaustion
+ * is a different fact with its own exit, and a vacuous 1 would satisfy the -inf assert through that state. */
 int engine_frontier_settled(void) {
     if (flow_count() == 0) return 0;
     for (int i = 0; i < flow_count(); i++)
@@ -3764,25 +3594,20 @@ int engine_frontier_settled(void) {
     return 1;
 }
 
-/* Deliver a body for the request `(method, url)` into every flow parked on it. The value lands on the flow's OWN
-   pending entry, so the reaction the resolve enqueues belongs to that flow and to its COW delta — which is why
-   this is here and not in a register beside it. Returns how many entries it filled.
-   THE METHOD IS HALF THE KEY, and this matched on the URL alone. `waiting` was `strcmp(u, url) == 0`, so a page
-   that issued a GET and a POST to one address had the first reply written onto BOTH entries and both promises
-   settled with it: the POST's flow resumed reading a body the server produced for a request it never made, and
-   every @H example, every branch over that body and every @S verdict downstream of it came from that. It is the
-   same correction SECURITY.md §Network records for the XHR seam, made at the seam it names as still open. */
+/* Delivers a body for the request `(method, url)` into every flow parked on it. The value lands on each flow's own
+   pending entry, so the reaction the resolve enqueues belongs to that flow and its COW delta. The method is half
+   the key: matching on the URL alone would settle a POST's promise with a GET's reply (SECURITY.md §Network
+   records the same correction for the XHR seam). Returns how many entries it filled. */
 int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value) {
     PendIndexNode *node;
     int n = 0, matched = 0, i, m;
-    /* THE REPLY'S OWN GRADE, JOINED FROM THE RECORDS IT ANSWERS — see the fold in the fill loop. `-1` is "no
-       record has been read yet", which is a state the tail below refuses to hand on rather than a default. */
+    /* The reply's own grade, joined from the records it answers (see the fill loop). `-1` is "no record read
+       yet", which the tail refuses to hand on. */
     int reply_prov = -1;
     DCHECK(url != NULL, "a body was provided for no URL");
-    /* WHAT THE HOST SENDS BACK IS WHAT THE JOIN EMITTED, and the shape is asserted rather than assumed: an
-       absent method is a host that has not been converted to the pair (the JS bridge's `Provide` carries one),
-       and an address in the method's place is the same host with its operands shifted. Both match nothing, and
-       matching nothing is silent — the flow that IS parked simply waits for the rest of the session. */
+    /* What the host sends back must be what the join emitted: an absent method is a host not converted to the
+       pair (the JS bridge's `Provide` carries one), and an address in the method's place is that host with its
+       operands shifted. Both would match nothing, and the parked flow would silently wait for the session. */
     DCHECK(method != NULL,
            "a reply was provided with NO METHOD — the reply seam is keyed on `(method, url)`; the host that "
            "fetched it is the only zone that knows which request it answers, and it is handed both halves by "
@@ -3790,58 +3615,36 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
     DCHECK(method_is_token(method),
            "a reply was provided with a METHOD that is not a token — Fetch §2.2.1 Methods, RFC 9110 §5.6.2 "
            "Tokens. A host sending the URL where the method goes has its operands shifted by one");
-    /* ONE LOOKUP WHERE THE WHOLE FRONTIER USED TO BE WALKED. This scanned EVERY flow's register and EVERY entry
-       in it, materialising that entry's URL and its method as C strings BEFORE comparing either — once per
-       reply. The set it walked does not shrink in aggregate (a flow keeps an ANSWERED entry until IT delivers,
-       and an @S candidate re-fire re-runs the document and re-issues its fetches), so the cost of answering one
-       reply was set by every request the session had ever made rather than by the ones still outstanding: 147616
-       entries over 3422 flows at one measured stall, with two thirds of the process's CPU inside this function
-       and the join beside it. The question both of them were asking is "which records are still outstanding for
-       this pair", and solver/pending_index.h is that question given a place to be answered — the frontier-wide
-       form of the sentence pending.h already makes about one register.
-       NOTHING IS DROPPED BY LOOKING IT UP INSTEAD (§NO BOUNDS): membership is the SAME predicate this loop
-       computed for itself — an entry carrying an address, not a synchronous request, with no value yet — and a
-       record leaves the set only when it is answered or when the last register naming it is gone. */
+    /* One lookup in the frontier's outstanding set (solver/pending_index.h) rather than a walk of every flow's
+       register: the walked set does not shrink (a flow keeps an answered entry until it delivers, and @S
+       re-fires re-issue their fetches), so a walk costs every request the session ever made, per reply.
+       Membership is the predicate the walk used (an entry with an address, not a synchronous request, no value
+       yet), and a record leaves only when answered or when the last register naming it is gone, so nothing is
+       dropped. */
     node = pending_index_find(method, url);
-    /* THE TWO NUMBERS THE TAIL TELLS APART, TAKEN BEFORE THE FILLS MOVE EITHER. `matched` is every record this
-       frontier has ever parked on this pair, answered or not — which is what makes "answered twice" (matched,
-       none fillable) a different report from "answered for nobody" (nothing matched at all). A fill moves a
-       record from the first term to the second, so the sum is stable across the loop and the read is taken
-       once, here, rather than accumulated inside it. */
+    /* Taken before the fills move either: `m` is the outstanding members, `matched` adds the answered ones, so
+       "answered twice" (matched, none fillable) reads differently from "answered for nobody" (nothing matched).
+       A fill moves a record from one term to the other, so the sum is stable across the loop. */
     m = node ? pending_index_node_count(node) : 0;
     matched = node ? m + (int)pending_index_node_answered(node) : 0;
-    /* BOUNDED BY THE COUNT TAKEN ABOVE AND ALWAYS TAKING THE HEAD, because each fill REMOVES its own record
-       from the set (the `haveValue` write reaches pending.c, which owns every mutation of a register and tells
-       the index): the list shrinks under the loop by exactly one per iteration, so a fixed trip count over
-       index 0 visits each member once and terminates whatever the writes do. The closing assert below is what
-       says the writes did what this structure assumes. */
+    /* Bounded by the count above and always taking the head, because each fill removes its own record (the
+       `haveValue` write reaches pending.c, which tells the index): one per iteration, so the loop visits each
+       member once whatever the writes do. The closing assert checks that assumption. */
     for (i = 0; i < m; i++) {
         JSValue p = pending_index_node_member(node, 0);
-        /* THE INDEX'S HALF OF ITS OWN CONTRACT, ASKED WHERE IT IS SPENT. An indexed record is by construction
-           one with no answer on it; a fill handed an answered one would be this reply overwriting another
-           reply's body, and the flow that already resumed on the first would have read bytes the server
-           produced for the same request at a different time. It cannot fire from this loop's own structure,
-           which is exactly why it is here: what it catches is the index having kept a member the `haveValue`
-           write should have taken out. */
+        /* The index's half of its own contract, asked where it is spent: an indexed record has no answer on it,
+           so an answered one here means the index kept a member the `haveValue` write should have removed, and
+           this reply would overwrite a body a flow already resumed on. */
         DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
                "the frontier's outstanding set handed a reply an ALREADY-ANSWERED record — a record leaves that "
                "set on the write that answers it, so this member outlived its own answer and the body about to "
                "be written would replace one a flow has already resumed on");
-        /* THE PRODUCER'S HALF OF THE CONTRACT THE DRAIN CHECKS, asked HERE so the two together say
-           WHICH of two very different things went wrong. The delivery asserts that a fetch entry carries a
-           §2.2.6 URL list at the moment it is delivered; this asserts that it carried one at the moment
-           it was WRITTEN. One assert alone cannot separate "the host built a bad record" from "a good
-           record was changed after it landed" — and the second is a COW/lifetime bug in this file
-           rather than a host bug, with a different fix and a different blast radius. Two asserts, one
-           contract, and whichever fires names the half.
-           NOT FOR THE PROGRAM KINDS: a docscript, an injected <script src> and a module load are owed
-           BYTES, and their deliveries read `body` off the same record without ever asking for a list. THE
-           SUBRESOURCE KIND IS ASKED ALONGSIDE THE FETCH ONE, which is not a widening of the contract but the
-           SAME population it always covered: an `<img>` and a `<link>` used to park FLOW_PENDING_RESOLVE and
-           were judged by this line, and naming only the fetch kind after they moved would have dropped them
-           silently. Their records come from the same two producers as a `fetch()`'s — qjs_provide's parse and
-           Fetch §4.3 "Scheme fetch", which builds one with a url list of its own (core/fetch/scheme_fetch.c)
-           — so there is no arm on which one of them legitimately arrives without a list. */
+        /* The producer's half of the contract the drain checks: the delivery asserts a fetch entry carries a
+           §2.2.6 URL list when delivered, this asserts it did when written, so whichever fires says whether the
+           host built a bad record or a good one was changed after landing (a COW or lifetime bug here). Program
+           kinds are excluded (they are owed bytes and read `body`); the subresource kind is included, since an
+           `<img>` or `<link>` record comes from the same two producers as a `fetch()`'s (qjs_provide's parse and
+           Fetch §4.3 Scheme fetch, core/fetch/scheme_fetch.c), both of which build a URL list. */
 #if APICLIENT_DEV
         if (((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE ||
              (int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOURCE) && JS_IsObject(value)) {
@@ -3854,29 +3657,18 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
             JS_FreeValue(ctx, ul);
         }
 #endif
-        /* AND WHAT THIS REPLY IS EVIDENCE OF — THE JOIN OF THE RECORDS IT ANSWERS, TAKEN OVER THE SAME SET AND
-           BY THE SAME RULE AS THE LINE THAT ASKED FOR IT. §A-REQUEST-CARRIES-THE-PROVENANCE's two halves are
-           one fact: a reply INHERITS the grade of the request that produced it, and the request the host
-           actually issued is the deduped line `engine_pending_fetches` wrote — whose grade is the MOST
-           OBSERVED of the records parked on the pair, for the argument spelled out at that join (the set is
-           ONE request, so if any member's path stood on no contradicted arm then a real client makes exactly
-           this request and the server's answer to it is evidence about the app). Reading it a second way here
-           would be two answers to one question about one exchange, and they would disagree exactly where it
-           matters: the host fired the joined line and the engine would grade the reply by whichever record it
-           happened to walk first.
-           THE SET IS THE SAME ONE BY CONSTRUCTION, not by agreement. The join lists a record exactly when it
-           carries an address and no value yet, which is the index's own membership predicate, which is the
-           set this loop walks — so the members folded here are the members folded there.
-           MOST OBSERVED IS `min`, because PROV_OBSERVED < PROV_DERIVED < PROV_FORCED is the order pending.h
-           numbers them in and states is the join's (it is why they are numbered rather than named-only). */
+        /* What this reply is evidence of: the join of the records it answers, by the same rule and over the same
+           set as the line that asked for it. A reply inherits its request's grade, and the request the host
+           issued is engine_pending_fetches' deduplicated line, graded most observed over the records on the pair
+           (the argument is at that join). The sets are the same by construction: the join lists a record exactly
+           when it has an address and no value, which is the index's membership predicate. Most observed is `min`,
+           because pending.h numbers PROV_OBSERVED < PROV_DERIVED < PROV_FORCED as the join's order. */
         {
             int rp = (int)pending_get_int(p, PEND_PROV);
 
-            /* THE RANGE, ASKED THROUGH THE MAPPING THAT ALREADY OWNS IT rather than re-spelled as a
-               three-way test this file would then have two copies of. It is fatal in release for that
-               function's own reason, and here the stake is the same one hop further on: a grade outside the
-               vocabulary would reach the @H surface, where it decides whether a learned value is reported as
-               something a real client's request produced. */
+            /* The range, asked through the mapping that owns it; fatal in release because a grade outside the
+               vocabulary would reach the @H surface and decide whether a learned value is reported as a real
+               client's. */
             (void)engine_provenance_token(rp);
             if (reply_prov < 0 || rp < reply_prov) reply_prov = rp;
         }
@@ -3889,52 +3681,33 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
            "a reply filled every record the frontier's outstanding set held for its request and the set still "
            "holds one — the fill is what removes a record, so a survivor is a member whose `haveValue` write "
            "did not reach this index, and the host would be shown this request again for ever");
-    /* AND EVERY FLOW WAITING ON THIS ADDRESS IS ASKABLE AGAIN — the reply it parked on is on its
-       register now, which is the event its host-owed mark was waiting for and the only kind of thing
-       that can change the answer it gave the scheduler (flow.h).
-       THE WHOLE FRONTIER, because the mark is per FLOW and the fill is per RECORD, and the records are all
-       this seam now holds: N arms share one record, one write answers it, and all N observe it — so the flows
-       to un-mark are exactly the ones that name a record, which is the question the index deliberately does not
-       answer (it is a set of REQUESTS, and one record is one member however many arms hold it). This file
-       already takes that trade twice for facts that name no flow — engine_set_referenced, and the shared
-       document-script slot inside flow_deliver_one_reply — and flow_clear_host_owed_all is O(1) on a generation
-       stamp, so the whole-frontier form is cheaper than the walk that used to find the waiters.
-       A CLEAR THAT IS EARLY IS THE ONLY WAY THIS CAN BE WRONG, and it is bounded: a flow re-marked for some
-       other unanswered entry is picked once, reports host-owed again and is re-marked; nothing is dropped,
-       skipped or reordered (§scheduler's razor). A mark kept after the fact it rested on has gone costs the flow
-       its entire timeline, which is the failure this line exists to make impossible. */
+    /* Every flow waiting on this address is askable again: the reply is on its register, the event its
+       host-owed mark waits for (flow.h). The whole frontier, because the mark is per flow and the fill per
+       record: N arms share one record and all observe one write, and the index is a set of requests that does
+       not say which flows hold a record. flow_clear_host_owed_all is O(1) on a generation stamp. An early clear
+       is the only possible error and is bounded: a flow still owed something else is picked once, reports
+       host-owed again and is re-marked, with nothing dropped or reordered; a mark kept past its fact would cost
+       the flow its whole timeline. */
     if (n) flow_clear_host_owed_all();
-    /* LEARNING FROM REPLIES IS THE POINT (CLAUDE.md §Solver), and this is the one point every fetched reply
-       crosses exactly once — a URL two flows parked on is answered here once — so the learning happens here
-       rather than in the per-flow delivery, where it would run once per waiter. What the body says about the
-       addresses the page will go on to fetch (solver/reply_decode.h) is a fact about the SERVER, not about a
-       flow's world, so it is not per-flow state and takes no COW capture, exactly as the endpoint surface
-       does not.
-       AN API'S OWN REJECTION IS READ IN THE TRUSTED ZONE, NOT HERE. `google.rpc.Status` names the endpoint's
-       fields, its canonical service and method and the OAuth scopes it wants — but it is a reply to a
-       DELIBERATELY MALFORMED REQUEST, which is a request this engine cannot make: its only network edge is
-       this register and the host performs a GET through safeFetch. A reader on this side would file whatever
-       rejection a GET happened to provoke under the identity of an endpoint nobody probed. It is
-       extension/lib/req2proto.js, which issues the probe as the page. */
-    /* …AND IT IS TOLD WHAT THIS REPLY IS EVIDENCE OF, because everything it learns is carried at that grade
-       (solver/reply_decode.h). A GRADE THAT CANNOT BE ESTABLISHED CRASHES HERE RATHER THAN BEING FILLED IN:
-       the fold above runs once per filled record and `n` counts exactly those fills, so `n` non-zero with no
-       grade is the fold having been skipped for a record this loop wrote — and the value that would stand in
-       is `observed`, the strongest of the three, on a reply nothing graded. */
+    /* Learning from replies: this is the one point every fetched reply crosses once (a URL two flows parked on
+       is answered once), so learning happens here rather than per waiter. What the body says about addresses
+       the page will fetch (solver/reply_decode.h) is a fact about the server, not a flow's world, so it takes
+       no COW capture, like the endpoint surface. An API's own rejection (`google.rpc.Status`) is read in the
+       trusted zone by extension/lib/req2proto.js: it answers a deliberately malformed request, which this
+       engine, whose only network edge is a GET through safeFetch, cannot make.
+       It is told the reply's grade, which everything learned carries. A missing grade crashes rather than
+       being filled in: the fold runs once per fill and `n` counts the fills, so `n` with no grade is a record
+       written without passing the fold, and the stand-in would be `observed`, the strongest grade. */
     DCHECKF(!n || reply_prov >= 0,
             "a reply filled %d parked record(s) and none of them yielded a provenance — the fold runs on every "
             "record this call writes, so a fill with no grade is a record that reached the write without "
             "passing it. request=%s %s", n, method, url);
     if (n) reply_decode_learn(ctx, method, url, value, reply_prov);
-    /* A REQUEST ANSWERED TWICE, TOLD APART FROM ONE ANSWERED FOR NOBODY. Every entry naming this request already
-       carries a reply, so this call wrote none — and the two numbers are what make that a different failure
-       from `n == 0` with nothing matched at all, which is the host's pairing being off and is the CALLER's
-       assert (it owns the paged-sale credit that legitimately explains it). This one no credit can excuse: a
-       request leaves the join the moment it is answered, so the host was never shown it a second time. The
-       shape it catches is a host with TWO OVERLAPPING LISTS: a side list of addresses that are already parked
-       requests, which a host reads as a second thing to answer and pays twice. That shape is why a fact about
-       a request belongs ON the request — the destination arrived on the pending line for exactly this reason,
-       and the chunk register that used to carry it is gone rather than kept beside the join. */
+    /* A request answered twice, told apart from one answered for nobody. Every entry naming the request already
+       has a reply, so this call wrote none. `n == 0` with nothing matched is the host's pairing being off, the
+       caller's assert (it owns the paged-sale credit that can explain it); this case no credit excuses, since a
+       request leaves the join once answered. It catches a host with two overlapping lists, which is why facts
+       about a request travel on the request itself. */
     if (matched && !n)
         DFAILF("a reply was provided for a request every parked entry has ALREADY been answered for — the "
                "join drops a request as soon as it carries a value, so the host is answering one it was shown "
@@ -3942,23 +3715,18 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
     return n;
 }
 
-/* THE OTHER ANSWER A HOST CAN GIVE ONE OF THESE REQUESTS: this zone will not ask. See engine.h.
+/* The other answer a host can give one of these requests: this zone will not ask (engine.h).
  *
- * IT WRITES A FACT AND FORKS NOTHING, which is the same split engine_host_answer makes at the other seam and
- * for the same reason: this runs BETWEEN scheduler steps, where the running flow, the applied delta and the
- * live DOM head all belong to whichever flow the scheduler last ran, so an arm minted here would be a
- * stranger's timeline wearing the refused flow's name. The refusal lands on the RECORD; flow_decline_fork
- * builds the pair of arms later, from each parked flow's own step, with that flow switched in.
+ * It writes a fact and forks nothing, the split engine_host_answer makes: this runs between scheduler steps,
+ * where the running flow, applied delta and live DOM head are whichever flow last ran, so an arm minted here
+ * would be a stranger's timeline. The refusal lands on the record; flow_decline_fork builds the pair of arms
+ * later from each parked flow's own step.
  *
- * ONE RECORD IS ONE MEMBER OF THE OUTSTANDING SET HOWEVER MANY ARMS HOLD IT (pending_index.h), so marking the
- * members of the pair's node refuses the request for every timeline parked on it at once — exactly as one
- * reply fills every entry naming it. Each of those timelines still owes its OWN arm, which is why the mark
- * that says "this register has had its fork" is per REGISTER and not written here.
- *
- * AND EVERY FLOW PARKED ON IT IS ASKABLE AGAIN. A flow waiting on the host leaves the pick until a HOST EVENT
- * clears it, and a refusal is a host event: without this clear the refused flows would never be picked, so the
- * fork this refusal exists to make would never be taken and the frontier would sit on a decline nobody could
- * act on. Same call, same reasoning and the same bounded early-clear as the reply path's. */
+ * One record is one member of the outstanding set however many arms hold it (pending_index.h), so marking the
+ * pair's members refuses the request for every timeline at once, as one reply fills every entry. Each timeline
+ * still owes its own arm, so the "this register has had its fork" mark is per register and not written here.
+ * Every flow parked on it is askable again: a refusal is a host event, and without the clear the fork it exists
+ * to make would never be taken. */
 int engine_decline(JSContext *ctx, const char *method, const char *url, const char *reason) {
     PendIndexNode *node;
     int matched, marked = 0, i;
@@ -3971,15 +3739,11 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
     DCHECK(method_is_token(method),
            "a refusal names a METHOD that is not a token — Fetch §2.2.1 Methods, RFC 9110 §5.6.2 Tokens. A "
            "host sending the URL where the method goes has its operands shifted by one");
-    /* THE REASON IS NOT OPTIONAL AND NOT ALLOWED TO BE EMPTY, because it is the ONLY account anybody ever gets
-       of a request nobody made: the flow parked on it will not drain this session, and a reader looking at a
-       frontier that stops has nothing else to read. It also decides what happens NEXT — `blocked-signal`
-       names the SIGNAL AND VALUE of the person's own per-origin egress control that holds it, and permitting
-       that value is what would make this fire, while `blocked-destructive` names a refusal nothing reopens —
-       and only the zone that applied the rule knows which. (This is a COMMENT and the string is the trusted
-       zone's; nothing here matches on it, which is why the vocabulary moving is a prose repair rather than a
-       protocol change — `trusted.mjs` says in its own words that the grade is asked of the policy and never
-       parsed out of a `statusText`.) */
+    /* The reason is required and non-empty: it is the only account of a request nobody made, whose flow will
+       not drain this session, and it decides what happens next (`blocked-signal` names the signal and value of
+       the person's per-origin egress control that holds it, `blocked-destructive` a refusal nothing reopens);
+       only the zone that applied the rule knows which. Nothing here matches on the string (trusted.mjs asks the
+       policy for the grade, never a `statusText`). */
     DCHECK(reason != NULL && *reason != '\0',
            "a request was refused with no REASON — the party that refused is the party that knows why, and an "
            "unnamed refusal leaves a frontier parked with nothing anywhere to say which rule holds it");
@@ -3987,28 +3751,16 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
     matched = node ? pending_index_node_count(node) : 0;
     rv = JS_NewString(ctx, reason);
     CHECK(!JS_IsException(rv), "engine: OOM recording the trusted zone's refusal of a request");
-    /* BOUNDED BY THE COUNT TAKEN ABOVE AND ALWAYS TAKING THE HEAD, which is engine_provide's fill loop exactly
-       and is now true for the same reason: each mark REMOVES its own record from the set, because the
-       `declined` write reaches solver/pending.c — which owns every mutation of a register and tells the index —
-       so the list shrinks under the loop by one per iteration and a fixed trip count over index 0 visits each
-       member once and terminates whatever the writes do.
-       IT WAS AN INCREASING INDEX OVER A LIST THAT DID NOT SHRINK, WHICH IS WHY THE TWO HALVES ARE ONE DIFF. The
-       refusal did not unlist, so `mem[i]` was a stable walk; the moment it does, the survivors slide DOWN into
-       the holes behind the cursor (pend_unkey fills a hole with the last member), and an increasing index then
-       steps over one member for every member it marks. The ones it stepped over would be refused for nobody:
-       still keyed, still listed to the host by the join, refused again on the next slice, forking a failure arm
-       per round for the rest of the session. Landing either half alone produces that; the head is what makes
-       the walk independent of where the removals land, and reading the count first is not enough on its own. */
+    /* Bounded by the count above and always taking the head, as in engine_provide's fill loop: each mark removes
+       its own record (the `declined` write reaches solver/pending.c, which tells the index), so the list shrinks
+       by one per iteration. An increasing index would skip one member per mark (pend_unkey fills a hole with the
+       last member), and a skipped member would stay listed and be refused again every round, forking a failure
+       arm each time. */
     for (i = 0; i < matched; i++) {
         JSValue p = pending_index_node_member(node, 0);
-        /* AN ALREADY-REFUSED RECORD CANNOT BE A MEMBER, AND THE `if` THAT SKIPPED ONE IS GONE WITH THE STATE.
-           Its reason was that a record left this node only when the last register naming it gave it back, so a
-           pair whose flows had not yet TAKEN their declines still held them — true while the refusal did not
-           unlist, and now the refusal is exactly what takes the record out of the pair. What that guard
-           protected is unchanged and has become structural rather than checked: a fresh park on the same
-           address (an @S candidate re-fire re-runs the document and re-issues its fetches) puts an UNREFUSED
-           record in the same node, and the refused ones are no longer in it to be overwritten, so no waiting
-           arm can have the sentence it is going to report replaced by one written for a different park. */
+        /* An already-refused record cannot be a member: the refusal takes it out of the pair. So a fresh park on
+           the same address (an @S re-fire re-issues its fetches) puts an unrefused record in the node, and no
+           waiting arm can have its reason replaced by one written for a different park. */
         DCHECK(!pending_entry_declined(p),
                "the frontier's outstanding set holds an ALREADY-REFUSED record — a record leaves its pair on "
                "the write that refuses it, so this member outlived its own refusal, and marking it again would "
@@ -4022,20 +3774,17 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
         JS_FreeValue(ctx, p);
     }
     JS_FreeValue(ctx, rv);
-    /* AND THE SET IS EMPTY FOR THIS PAIR, which is the closing assert engine_provide makes about its own fill
-       and says the writes did what the structure above assumes. A survivor is a member whose `declined` write
-       did not reach this index — the join would go on listing it, the host would refuse it again next slice,
-       and each refusal that reached the engine would fork another failure arm. */
+    /* The set is empty for this pair, engine_provide's closing assert for refusals: a survivor would stay listed,
+       be refused again next slice, and fork another failure arm each time. */
     DCHECK(!node || pending_index_node_count(node) == 0,
            "a refusal marked every record the frontier's outstanding set held for its request and the set "
            "still holds one — the refusal is what removes a record, so this member's `declined` write did not "
            "reach the index, and the host will be shown this request again on the next slice and refuse it "
            "again, one failure arm per round for the rest of the session");
     if (marked) flow_clear_host_owed_all();
-    /* NOBODY IS PARKED ON IT — the same two shapes engine_provide's caller tells apart, and the same credit
-       excuses one of them. A refusal for a pair no flow ever asked for is the host's pending/decline pairing
-       off by one; a refusal for a pair whose flow was PAGED OUT to the cold tier is the mechanism working, and
-       that sale is consumed here exactly as a reply consumes it. */
+    /* Nobody is parked on it: the shapes engine_provide's caller separates, with the same credit. A refusal for
+       a pair no flow asked for is the host's pairing off by one; one for a flow paged out to the cold tier is the
+       mechanism working, and consumes that sale as a reply does. */
     if (matched == 0 && !engine_take_paged_owed())
         DFAILF("a refusal was recorded for a request no flow is parked on and none was paged out — the host's "
                "pending/decline pairing is off, and refusing nothing leaves the flow that IS parked waiting "
@@ -4044,21 +3793,16 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
     return marked;
 }
 
-/* THE SAME REFUSAL FOR A SYNCHRONOUS REQUEST — see the contract in engine.h for why it is keyed on the
-   rendezvous and why it is a second entry rather than a third completion.
-   THE WALK IS engine_host_answer's, DELIBERATELY AND NOT BY COPYING AN IDIOM: that function is the only other
-   writer that reaches a HOSTREQ record from OUTSIDE the asking flow, so it is the only existing statement of
-   where such a record can be — on some flow's register, under the kind, under the id — and a refusal that
-   looked anywhere else would be refusing a population nothing answers.
-   IT STOPS AT THE FIRST MATCH FOR THE REASON STATED THERE: exactly one flow's register can name an unanswered
-   rendezvous, because a fork unshares that one record and mints a fresh id. */
+/* The same refusal for a synchronous request; engine.h says why it is keyed on the rendezvous and is a second
+   entry rather than a third completion. The walk is engine_host_answer's, the one other writer that reaches a
+   HOSTREQ record from outside the asking flow, so it is the statement of where such a record can be. It stops at
+   the first match: exactly one register names an unanswered rendezvous, because a fork unshares it and mints a
+   fresh id. */
 int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
     DCHECK(req != 0, "a synchronous request with no id was refused — the id IS the request's identity for this "
                      "kind, since a host request has no address to be keyed by, so a refusal naming none "
                      "refuses nothing and leaves the asking machine parked");
-    /* THE REASON IS NOT OPTIONAL, for the reason the address-keyed refusal gives at length: it is the only
-       account anybody gets of a request nobody made, the flow parked on it will not drain this session, and it
-       is what tells a reader whether a widening would change the answer. */
+    /* The reason is required, for the address-keyed refusal's reason. */
     DCHECK(reason != NULL && *reason != '\0',
            "a synchronous request was refused with no REASON — the party that refused is the party that knows "
            "why, and an unnamed refusal leaves a machine parked with nothing anywhere to say which rule holds "
@@ -4067,12 +3811,11 @@ int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
-            /* MATCHED ON THE HOST'S NAME — a refusal is the zone answering about an id it was shown. */
+            /* Matched on the host's name: a refusal is the zone answering about an id it was shown. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 (uint32_t)pending_get_int(p, PEND_REQ_HOST) != req) { JS_FreeValue(ctx, p); continue; }
-            /* A REFUSAL AND AN ANSWER CANNOT BOTH BE TRUE OF ONE RENDEZVOUS, asserted here rather than left to
-               the fork: `haveValue` says the zone computed a value, `declined` says it refused to. A record
-               carrying both would have the asking machine take an answer AND a sibling arm wait for one. */
+            /* A refusal and an answer cannot both be true of one rendezvous: the asking machine would take an
+               answer while a sibling arm waited for one. */
             DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
                    "a synchronous request carries BOTH an answer and a refusal — the trusted zone answered this "
                    "rendezvous and then refused it, or refused one whose answer had already been written, and "
@@ -4087,99 +3830,59 @@ int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
                 pending_set(p, PEND_DECLINED, rv);
             }
             JS_FreeValue(ctx, p);
-            /* AND THE FLOW IS ASKABLE AGAIN, on the flow the refusal reached and not at a slice boundary — the
-               same event, and the same line, as an ANSWER arriving: a flow parked on a synchronous request is
-               waiting for the one thing that can change what it told the scheduler, and a refusal is one of the
-               two things that can. Without this the record would sit marked while the pick went on skipping the
-               flow that asked, and `flow_decline_fork` runs on a flow the scheduler picks. */
+            /* The flow is askable again, on the flow the refusal reached, as for an answer: a refusal is one of
+               the two things that can change what it told the scheduler, and `flow_decline_fork` runs on a flow
+               the scheduler picks. */
             flow_clear_host_owed(f);
             return 1;
         }
     }
-    /* NOBODY IS PARKED ON IT. The address-keyed refusal aborts here, and this one may not, because the two are
-       reached by different routes: that one is answering a record THE JOIN LISTED, so a miss is the host's
-       pending/decline pairing off by one. A rendezvous id is handed to the host by `qjs_host_requests` and the
-       asking flow can legitimately be GONE by the time the zone answers — which is exactly what
-       `qjs_host_answer`'s own comment says of the same miss on the same population ("a zero return means that
-       flow is gone, which is not an error: nobody is waiting on the answer"). A refusal is the same act with the
-       same timing, so it carries the same reading. */
+    /* Nobody is parked on it. Unlike the address-keyed refusal this does not abort: that one answers a record
+       the join listed, while a rendezvous id handed out by `qjs_host_requests` may outlive its asking flow, as
+       `qjs_host_answer` says of the same miss ("a zero return means that flow is gone, which is not an error:
+       nobody is waiting on the answer"). */
     return 0;
 }
-/* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
-   run — and the kind decides exactly two questions, both of them at the ends of that program's life: may it
-   fail to COMPILE, and does anything read its COMPLETION VALUE. */
-/* A CROSS-AGENT OPERATION is a fourth kind and answers those two questions differently from all three: its
-   program is the ENGINE's own text, so a compile failure is this engine's bug and not the page's; and its
-   completion is not merely read, it is the ANSWER a peer's flow is parked on. */
-/* AN EXTERNAL SCRIPT'S ADDRESS, HOLDING THE POSITION ITS PROGRAM WILL RUN AT — the fifth kind, and the only one
-   whose payload is not a program yet. The entry carries the URL, the flow WAITS at it (flow_step below), and the
-   reply REPLACES the address with the source text and this kind with DYN_PAGE_SCRIPT (flow_deliver_one_reply), after
-   which it is an ordinary program of the sequence.
-   IT IS WHAT GIVES EVERY DOCUMENT OF THIS AGENT HTML §4.12.1.1's ORDER. The SESSION's document already had it — a slot
-   per script INDEX that the flow stops at — and no other document did: a child navigable's (core/frame/
-   navigable.c) and a joined one's (engine_join_document) external scripts could only park on their replies and
-   become programs when those DRAINED, which is after everything queued in that pass and in ARRIVAL order among
-   the replies. So an inline script written after a parser-blocking `<script src>` ran before the bundle it is
-   written after — HTML §13.2.6.4.8 'The "text" insertion mode' blocks the tokenizer and spins the event loop
-   until that script is `ready to be parser-executed` — and two ordered externals ran in whichever order the
-   network answered. Both were named aborts. What they were missing is a POSITION, and a queue entry IS one. */
-/* AND A SCRIPT ELEMENT WHOSE RESULT IS NULL — the sixth kind, and the only one that RUNS NOTHING. HTML
-   §4.12.1.1 "Processing model" gives the element a `result`, of which one of the five listed possibilities is
-   "null (representing an error)", and a load that did not happen is how it becomes that: the fetch's
-   `onComplete` is "Mark as ready el given result", and "execute the script element" step 4 is then "If el's
-   result is null, then fire an event named error at el, and return".
-   IT IS A ROW AND NOT AN EVENT QUEUED AT THE DELIVERY, because step 4 is a step of EXECUTE and this engine
-   executes a script element when the cursor reaches its position. Firing at the delivery would order the
-   `error` by when the reply landed rather than by where the element stands, which is exactly the ordering
-   HTML §4.12.1.1 fixes between the scripts of one document — a page whose first of two chunks 404s would see its
-   `onerror` run against the second chunk's execution in whichever order the network answered.
-   THE ROW KEEPS ITS ADDRESS AS ITS BODY and takes no address column: a row that runs nothing has no §8.1.4.2
-   created-script base URL, and the address is the account a reader gets of which load failed. */
-/* AND A HOST INSTRUMENT'S PROGRAM — the seventh kind, and the only one the PAGE did not cause to run. It
-   answers this enum's two questions the way a cross-agent operation does and for a different reason: its text
-   is the HOST's (testing/render_diff.js's one collector, handed across the ABI), so a compile failure is that
-   instrument's bug rather than the page's and asserting on it is right; and its COMPLETION VALUE is the whole
-   product — dumped as JSON with every unknown standing on its own example (solver/value_dump.h) and handed
-   back on a register the host drains.
-   IT IS A ROW AND NOT A C EVALUATION, WHICH IS THE ONLY THING THAT MAKES IT POSSIBLE AT ALL. An ABI entry that
-   called JS_Eval between two steps would reach the interpreter on the HOST's own time, where preempt_hook
-   asserts by name that the scheduler's policy is being consulted with no slice open — a flow nobody is
-   driving, measured against a budget belonging to nothing. So the host ASKS and the scheduler runs it, exactly
-   as a park request is asked and performed.
-   IT IS ATTACHED TO EVERY LIVE TIMELINE, for engine_perform's reason and not by analogy: the DOM is per-flow
-   (§State-isolation), so `getBoundingClientRect` has N answers for N timelines and a channel with one answer
-   slot would silently pick one. Each flow dumps its own, and each record carries the WORLD that produced it. */
+/* What kind of program a queued body is. One queue, because all of them are code the page caused to run (or, for
+   the last, the host asked to run); the kind decides whether the program may fail to compile and whether
+   anything reads its completion value.
+   - DYN_PAGE_SCRIPT, DYN_CANDIDATE, DYN_JAVASCRIPT_URL: page programs.
+   - DYN_CROSS_AGENT_OP: the engine's own text, so a compile failure is this engine's bug, and its completion is
+     the answer a peer's flow is parked on.
+   - DYN_SCRIPT_SRC: an external script's address, holding the position its program will run at (HTML
+     §4.12.1.1's order for every document of this agent; §13.2.6.4.8 The "text" insertion mode blocks on a
+     parser-blocking script). The flow waits at it (flow_step), and the reply replaces the address with source
+     text and the kind with DYN_PAGE_SCRIPT (flow_deliver_one_reply).
+   - DYN_SCRIPT_FAILED: an element whose §4.12.1.1 result is "null (representing an error)"; it runs nothing,
+     and "execute the script element" step 4 fires `error` at it when the cursor reaches its position, so
+     `onerror` is ordered by where the element stands, not when the reply landed. Its body is its address, the
+     account of which load failed.
+   - DYN_VALUE_DUMP: a host instrument's program (testing/render_diff.js's collector, across the ABI). A compile
+     failure is the instrument's bug; the completion is dumped as JSON with unknowns on their examples
+     (solver/value_dump.h) for the host to drain. A row, not a C evaluation between steps (preempt_hook asserts
+     that no slice-less evaluation consults the policy), attached to every live timeline, since each flow's DOM
+     answers differently and each record carries its world. */
 typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP,
                DYN_SCRIPT_SRC, DYN_SCRIPT_FAILED, DYN_VALUE_DUMP } DynKind;
 
-/* Deliver ONE of this flow's answered pending entries (the network completed) — see flow_deliver_one_reply. */
-/* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
+/* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work and stalls
    rather than spinning on a delivery that would resolve nothing. */
 static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending); }
-/* AND THE ARRIVAL STAMP OF THE OLDEST ONE IT CAN DELIVER — the question that puts the reply register IN the
-   arrival order instead of above it. Beside the predicate above and not at the ladder, for the reason
-   solver/pending.c gives for writing the walk once: two spellings of "which register" is the shape that
-   drifts, and these two are read on the same line of flow_step. */
+/* The arrival stamp of the oldest deliverable one, which puts the reply register inside the arrival order. Kept
+   beside the predicate above because both are read on one line of flow_step, and solver/pending.c writes the
+   walk once. */
 static uint64_t flow_pending_ready_next_seq(const Flow *f) {
     return pending_ready_next_seq(f->pending);
 }
 
-/* HTML §8.1.4.2'S processResponseConsumeBody STEP THAT MAKES SOURCE TEXT — the point at which a fetched BYTE
-   SEQUENCE becomes a script's text, and the one this engine ran neither half of. The bytes used to go from the
-   host's reply record to the compiler unchanged: one byte no UTF-8 sequence contains made a whole minified
-   bundle a SyntaxError no browser produces (and every endpoint in that chunk was lost with it), while a
-   three-byte surrogate compiled into a string where Encoding's decoder answers U+FFFD.
-   WHICH ALGORITHM RUNS IS §8.1.4.2's OWN SPLIT and not a parameter of one algorithm: a classic script decodes
-   with the response's `Content-Type` charset as a LABEL (Fetch §3.5's legacy extract an encoding, then Encoding
-   §6.1's decode, whose BOM sniff can overrule that label), and a module script is UTF-8 whatever the response
-   says. `doc_ctx` is the realm of the document the program belongs to, and it is read ONLY on the classic arm —
-   HTML §4.12.1.1 says so about the element too: "if el's type is `module`, this encoding will be ignored."
-   AND `bodyBytes` IS NOW ACTUALLY BYTES. This read was `JS_ToCStringLen` over a record field that every
-   producer had already run a decode to build — the extension's `resp.text()` and, one step earlier, C's own
-   `JS_NewStringLen` — so the classic entry's whole reason to exist, honouring the response's charset LABEL,
-   was being asked to honour it over bytes that label had never touched. §2.2.5's body is a byte sequence and
-   crosses as one (fetch.h); this reads it back without a transform in between.
-   Answers malloc'd source text the caller frees; `*out_n` is its length. */
+/* HTML §8.1.4.2's processResponseConsumeBody step that makes source text from a fetched byte sequence. Undecoded
+   bytes would turn one invalid UTF-8 byte into a SyntaxError for a whole bundle, where Encoding's decoder
+   answers U+FFFD. Which algorithm runs is §8.1.4.2's split: a classic script decodes with the response's
+   `Content-Type` charset as a label (Fetch §3.5's legacy extract an encoding, then Encoding §6.1 decode, whose BOM
+   sniff can overrule the label); a module script is UTF-8 whatever the response says. `doc_ctx` is the realm of
+   the program's document, read only on the classic arm (§4.12.1.1: "if el's type is `module`, this encoding
+   will be ignored"). `bodyBytes` is the raw byte sequence (§2.2.5, crossing as bytes per fetch.h), read with no
+   transform in between. Returns malloc'd source text the caller frees; `*out_n` is its length. */
 static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType stype, JSContext *doc_ctx,
                                size_t *out_n)
 {
