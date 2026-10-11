@@ -226,38 +226,21 @@ static bool css_tf_angle(const char *s, const char *e, double *num, char unit[CS
     return true;
 }
 
-/* §3's "with lengths made absolute" for one `<length-percentage>` argument. The membership test comes FIRST
-   and is a separate entry from the parse for the reason core/css/css_length.h states: `css_length_parse` is
-   for a value already known to match the grammar and CRASHES on a non-keyword one that does not, and nothing
-   validated this declaration before this component — lexbor's registry carries no `transform` entry — so asking
-   `css_length_is_length_percentage` is what keeps `translate(2)` an authoring mistake rather than an abort. */
+/* §3's "with lengths made absolute" for one `<length-percentage>` argument. Nothing validated this declaration
+   before this component — lexbor's registry carries no `transform` entry — and `css_length_parse` refuses a
+   value outside the grammar, so `translate(2)` and `translate(red)` are CSS Syntax §2.2 "Error Handling"'s
+   invalid declaration rather than an abort. css-transforms-1 §7.1 "2D Transform Functions" writes no keyword in
+   any translation's grammar, so the parse is given the empty keyword set. */
 static bool css_tf_length(JSContext *realm, const CssFontMetrics *font, const char *s, const char *e,
                           CssLength *out)
 {
     char *copy = malloc((size_t)(e - s) + 1);
-    double bare;
     bool ok;
 
     CHECK(copy != NULL, "css-transforms-1 §7: OOM copying a <length-percentage> out of a transform function");
     memcpy(copy, s, (size_t)(e - s));
     copy[e - s] = '\0';
-    /* A BARE NON-ZERO NUMBER IS REFUSED HERE, AND IT IS THE ONE INPUT THAT WOULD OTHERWISE ABORT THIS ENGINE
-       FROM A STYLESHEET. `css_length_is_length_percentage` answers TRUE for a unitless number — CSS Values §6
-       "Distance Units: the <length> type" permits the unit to be omitted for ZERO, and that predicate cannot
-       see the value — while `css_length_parse` DCHECKs that the number is zero, its own comment saying a
-       unitless non-zero belongs to a property whose grammar admits a bare `<number>` (`line-height`). Neither
-       is wrong: a `transform` is simply the first caller whose value is a STRANGER'S text that nothing
-       validated first, because lexbor's registry carries no `transform` entry. So `translate(2)` — an ordinary
-       authoring mistake — would reach that assert and hand any page an abort switch for this engine, which
-       CLAUDE.md's rule about foreign bytes forbids outright. §7.1 "2D Transform Functions" settles it without
-       widening anything: every translation's argument is `<length-percentage>`, which admits no bare non-zero
-       number, so this is CSS Syntax §2.2 "Error Handling"'s invalid declaration and the check belongs to the
-       grammar rather than to the length parser. THE ZERO STAYS ADMITTED, which is why this tests the VALUE and
-       not the shape: `translate(0)` is a length in every browser. */
-    if (css_tf_number(s, e, &bare) && bare != 0.0) { free(copy); return false; }
-    /* css-transforms-1 §7.1 "2D Transform Functions" writes no keyword in any translation's grammar, so the
-       parse is given the empty keyword set and refuses an identifier itself. */
-    ok = css_length_is_length_percentage(copy) && css_length_parse(realm, font, copy, CSS_KEYWORDS_NONE, out);
+    ok = css_length_parse(realm, font, copy, CSS_KEYWORDS_NONE, out);
     free(copy);
     return ok;
 }

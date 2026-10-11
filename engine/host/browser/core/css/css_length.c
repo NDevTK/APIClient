@@ -426,10 +426,8 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
               "query, and the reason this one crashes instead is that a computed value carries FACTS "
               "where a media query carries its own serialization as the key");
     else
-        DFAIL("a length-valued property's value is a DIMENSION in a unit CSS Values §6 does not define as a "
-              "length at all — an angle, a time, a frequency or a resolution. A property whose grammar admits "
-              "one of those is not a box-model length, so this is a caller asking the wrong component, or "
-              "lexbor's own validation admitting a declaration its grammar rejects");
+        DFAIL("a unit that is not a length reached the length table; both callers admit the unit first "
+              "(css_length_parse through css_len_unit_known, a math leaf through css_length_is_length_unit)");
     return css_px(0.0);
 }
 
@@ -454,6 +452,8 @@ static CssPx css_len_math_length(void *ctx, double n, const char *unit, size_t u
     lower[unit_len] = '\0';
     return css_len_unit_px(c->realm, c->font, lower, n);
 }
+
+static bool css_len_unit_known(const char *unit);
 
 bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value, CssKeywordSet keywords,
                       CssLength *result)
@@ -511,14 +511,8 @@ bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *
                 *result = out;
                 return true;
             }
-            DFAIL("a length-valued property's value is a FUNCTION that is not a math function resolving to a "
-                  "`<length>` — `rgb(1, 2, 3)`, css-sizing's `fit-content()`, a `var()` substitution that "
-                  "produced neither, or a math function whose type is failure (`calc(1px + 1s)`). Every one of "
-                  "those is a declaration CSS Syntax DROPS, and the entry that decides it is "
-                  "`css_length_is_length`, which now asks core/css/css_math.h the same question this arm just "
-                  "asked. So a value reaching here is one that answered TRUE there and FALSE here, which means "
-                  "the two are asking about different productions — or a caller that never asked at all, which "
-                  "for a shorthand lexbor's registry does not carry is the whole of the validation there is");
+            /* Any other function — `rgb(1, 2, 3)`, a math function whose type is not `<length-percentage>`
+               (`calc(1px + 1s)`) — is not a value of a length-valued property's grammar. */
             return false;
         }
         /* The identifier, less any whitespace the serialization left after it, mapped once. One the property's
@@ -536,14 +530,10 @@ bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *
     }
     while (*end != '\0' && isspace((unsigned char)*end)) end++;
     if (*end == '\0') {
-        /* §6: "for zero lengths the unit identifier is optional". A unitless NON-zero is not a length in any
-           property this engine models — it is `line-height: 1.5`, whose own <number> grammar is that property's
-           and not this one's. */
-        DCHECK(num == 0.0,
-               "a length-valued property's value is a UNITLESS NON-ZERO NUMBER. CSS Values §6 permits the "
-               "unit to be omitted only for zero, so this is either a property whose grammar admits a bare "
-               "<number> (`line-height`, `zoom`) reaching a caller that asked for a length, or a serializer "
-               "that dropped a unit");
+        /* css-values-4 §6 "Distance Units: the <length> type": "For zero lengths the unit identifier is
+           optional". A unitless non-zero is not a `<length>`; a property whose grammar has a `<number>` arm
+           (`line-height`) takes it before asking this. */
+        if (num != 0.0) return false;
         out.kind = CSS_LENGTH_ABSOLUTE;
         out.px = css_px(0.0);
         *result = out;
@@ -555,12 +545,9 @@ bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *
         *result = out;
         return true;
     }
-    if (!css_len_unit_of(end, unit)) {
-        DFAIL("a length-valued property's value carries a DIMENSION whose unit is longer than any CSS unit "
-              "identifier — CSS Values §6's longest is five characters (`dvmin`), so this is a value that is "
-              "not a dimension reaching the dimension arm");
-        return false;
-    }
+    /* A unit longer than any identifier, or one §6 does not define as a length (an angle, a time, a
+       frequency, a resolution, or trailing text), is not a `<length>`. */
+    if (!css_len_unit_of(end, unit) || !css_len_unit_known(unit)) return false;
     out.kind = CSS_LENGTH_ABSOLUTE;
     out.px = css_len_unit_px(realm, font, unit, num);
     *result = out;

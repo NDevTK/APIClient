@@ -15,6 +15,7 @@
 #include "core/css/css_image.h"
 #include "core/css/css_length.h"
 #include "core/css/css_logical.h"
+#include "core/css/css_math.h"
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_property_applies.h"
 #include "core/css/css_property_id.h"
@@ -1592,49 +1593,20 @@ static bool line_height_is_number(const char *v, double *out)
     return true;
 }
 
-static CssLineHeight cv_line_height(lxb_dom_element_t *el)
+/* `spec` computed by §5.1's rule. CONSUMES `spec`. FALSE when it is outside §5.1's `Value:` line,
+   `normal | <number [0,∞]> | <length-percentage [0,∞]>`, which only a substitution can produce. */
+static bool cv_line_height_of(lxb_dom_element_t *el, char *spec, CssLineHeight *out)
 {
-    CssLineHeight out = { CSS_LINE_HEIGHT_NORMAL, 0.0, { 0.0, CSS_ENV_NONE, NULL } };
-    lxb_dom_element_t *parent;
-    char *cascaded;
-    CssLength len = css_cv_px(css_px(0.0));
-    bool ok;
+    CssLength len;
 
-    css_cv_modelled(el, "line-height");
-    cascaded = css_cv_cascaded(el, "line-height");
-    switch (css_defaulting_of("line-height", cascaded)) {
-    case CSS_DEFAULTING_DECLARED:
-        break;
-    case CSS_DEFAULTING_INHERITED:
-        /* §7.2: "the property's specified and computed values are the inherited value", and §5.1 makes that
-           value one of three shapes — so it is taken WHOLE from the parent's own answer. Serializing it would
-           turn a number into text a reader could not tell from a length, which is precisely the difference
-           §5.1's example says the children see. */
-        free(cascaded);
-        parent = css_parent_element(el);
-        if (parent != NULL) return css_computed_line_height(parent);
-        cascaded = NULL;
-        break;
-    case CSS_DEFAULTING_INITIAL:
-        free(cascaded);
-        cascaded = NULL;
-        break;
-    }
-    /* §7.1's initial value, which is also §7.2's answer at the root: §5.1's `Initial:` line is `normal`. */
-    if (cascaded == NULL) cascaded = cssom_initial_value("line-height");
-    DCHECK(cascaded != NULL,
-           "§7.1 produced no INITIAL value for `line-height` — css-inline-3 §5.1's `Initial:` line is `normal` "
-           "and lexbor's property registry carries it, so the last layer always answers");
-    if (css_cv_is(cascaded, "normal")) { free(cascaded); return out; }
-    if (line_height_is_number(cascaded, &out.number)) {
-        free(cascaded);
-        DCHECK(out.number >= 0.0,
-               "css-inline-3 §5.1 gives `line-height` a `Value:` line of `normal | <number [0,∞]> | "
-               "<length-percentage [0,∞]>` and says of the number arm that \"negative values are illegal\", so "
-               "a negative one is a declaration css-values-4 §5.1 \"Range Restrictions and Range Definition "
-               "Notation\" should have dropped rather than a factor to multiply a font size by");
-        out.kind = CSS_LINE_HEIGHT_NUMBER;
-        return out;
+    out->kind = CSS_LINE_HEIGHT_NORMAL;
+    if (css_cv_kw_is(spec, "normal")) { free(spec); return true; }
+    if (line_height_is_number(spec, &out->number)) {
+        free(spec);
+        /* §5.1: "Negative values are illegal." */
+        if (out->number < 0.0) return false;
+        out->kind = CSS_LINE_HEIGHT_NUMBER;
+        return true;
     }
     /* §5.1's `<length-percentage>`. The length arm absolutizes through the one unit table, and §6.1.1's own
        parenthesis is why `line-height` is NOT a font-affecting property there — "the other font-relative
@@ -1643,26 +1615,23 @@ static CssLineHeight cv_line_height(lxb_dom_element_t *el)
     /* THE PREDICATE IS THE `<length-percentage>` ONE AND NOT THE `<length>` ONE, which css_length.h warns is
        the way to turn one production into the other silently: §5.1's `Value:` line is
        `<length-percentage [0,∞]>`, and `line-height: 120%` is the commonest declaration this property has. */
-    if (!css_length_is_length_percentage(cascaded)) {
-        free(cascaded);
-        DFAIL("a `line-height` cascaded to a value that is neither `normal`, nor a bare number, nor anything "
-              "css-values-4 §5.6 \"Mixing Percentages and Dimensions\"'s `<length-percentage>` production "
-              "admits — which for this property leaves exactly one "
-              "thing: a MATH FUNCTION whose css-values-4 §10.9 \"Type Checking\" type is `<number>` rather "
-              "than `<length>`, such as `line-height: calc(2 * 1.5)`. css-inline-3 §5.1's `Value:` line admits "
-              "it through the `<number [0,∞]>` branch, and core/css/css_style_declaration.c already knows that "
-              "branch exists — its §10.9 loop names `line-height` as the worked example of a grammar whose "
-              "numeric productions are a disjunction. What is missing is the EVALUATION: core/css/css_math.h "
-              "resolves a math function to a length through core/css/css_length.c's unit table, and a "
-              "number-typed one has no unit to resolve and no entry to answer it. BUILD the `<number>` "
-              "evaluation beside the length one, and this arm becomes the number arm above");
+    if (!css_length_is_length_percentage(spec)) {
+        bool number_math = css_math_matches(spec, strlen(spec), CSS_MATH_PROD_NUMBER);
+
+        free(spec);
+        /* A math function of type `<number>` is in §5.1's grammar through `<number [0,∞]>`. */
+        if (number_math)
+            DFAIL("a `line-height` is a math function whose css-values-4 §10.9 \"Type Checking\" type is "
+                  "`<number>`, such as `calc(2 * 1.5)`, which css-inline-3 §5.1 admits through `<number [0,∞]>`. "
+                  "core/css/css_math.h evaluates a math function only to a length; BUILD the `<number>` "
+                  "evaluation beside it, and this arm becomes the number arm above");
+        return false;
     }
-    ok = computed_length(el, "line-height", cascaded, &len);
-    DCHECK(ok, "a `line-height` that `css_length_is_length_percentage` admitted failed the parse beside it");
-    out.kind = CSS_LINE_HEIGHT_LENGTH;
+    if (!computed_length(el, "line-height", spec, &len)) return false;
+    out->kind = CSS_LINE_HEIGHT_LENGTH;
     if (len.kind == CSS_LENGTH_ABSOLUTE) {
-        out.px = len.px;
-        return out;
+        out->px = len.px;
+        return true;
     }
     /* §5.1's `<percentage>`: "the preferred line height AND COMPUTED VALUE of the property is this percentage
        of the element's COMPUTED font-size" — so unlike every box-model percentage, this one resolves at
@@ -1674,7 +1643,43 @@ static CssLineHeight cv_line_height(lxb_dom_element_t *el)
            "keyword. The two are one question asked twice — `css_length_is_length_percentage` and "
            "`css_length_parse` walk the same productions — so a value that passes the first and is not a "
            "length, a percentage or a calculation to the second means they have come apart");
-    out.px = cv_clamp_px("line-height", css_length_resolve_pct(len, css_font_size_px(el)));
+    out->px = cv_clamp_px("line-height", css_length_resolve_pct(len, css_font_size_px(el)));
+    return true;
+}
+
+static CssLineHeight cv_line_height(lxb_dom_element_t *el)
+{
+    CssLineHeight out = { CSS_LINE_HEIGHT_NORMAL, 0.0, { 0.0, CSS_ENV_NONE, NULL } };
+    CssDefaulting defaulting;
+    char *cascaded;
+    bool ok;
+
+    css_cv_modelled(el, "line-height");
+    cascaded = css_cv_cascaded(el, "line-height");
+    defaulting = css_defaulting_of("line-height", cascaded);
+    /* css-values-5 "Resolving in Properties"' invalid-at-computed-value-time rule, as cv_length states it. */
+    if (defaulting == CSS_DEFAULTING_DECLARED) {
+        if (cv_line_height_of(el, cascaded, &out)) return out;
+        defaulting = css_defaulting_of("line-height", "unset");
+    } else {
+        free(cascaded);
+    }
+    if (defaulting == CSS_DEFAULTING_INHERITED) {
+        /* §7.2: "the property's specified and computed values are the inherited value", and §5.1 makes that
+           value one of three shapes — so it is taken WHOLE from the parent's own answer. Serializing it would
+           turn a number into text a reader could not tell from a length, which is precisely the difference
+           §5.1's example says the children see. */
+        lxb_dom_element_t *parent = css_parent_element(el);
+
+        if (parent != NULL) return css_computed_line_height(parent);
+    }
+    /* §7.1's initial value, which is also §7.2's answer at the root: §5.1's `Initial:` line is `normal`. */
+    cascaded = cssom_initial_value("line-height");
+    DCHECK(cascaded != NULL,
+           "§7.1 produced no INITIAL value for `line-height` — css-inline-3 §5.1's `Initial:` line is `normal` "
+           "and lexbor's property registry carries it, so the last layer always answers");
+    ok = cv_line_height_of(el, cascaded, &out);
+    DCHECK(ok, "`line-height`'s initial value fails css-inline-3 §5.1's own grammar");
     return out;
 }
 
@@ -1694,68 +1699,37 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
 
 /* ---- CSS 2.1 §17.6.1 "The separated borders model"'s `border-spacing` ------------------------------------- */
 
-static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
+/* `spec` computed by §17.6.1's rule. CONSUMES `spec`. FALSE when it is outside §17.6.1's `<length>
+   <length>?`, which only a substitution can produce: lexbor's registry does not carry the property, and
+   core/css/css_shorthand.c's grammar canonicalizes a declared pair to one space. */
+static bool cv_border_spacing_of(lxb_dom_element_t *el, char *spec, CssBorderSpacing *out)
 {
-    CssBorderSpacing out;
-    lxb_dom_element_t *parent;
-    char *cascaded, *sp, *first, *second;
+    char *sp, *first, *second;
     CssLength h, v;
     bool ok;
 
-    css_cv_modelled(el, "border-spacing");
-    cascaded = css_cv_cascaded(el, "border-spacing");
-    switch (css_defaulting_of("border-spacing", cascaded)) {
-    case CSS_DEFAULTING_DECLARED:
-        break;
-    case CSS_DEFAULTING_INHERITED:
-        /* §7.2: "the property's specified and computed values are the inherited value", and §17.6.1 makes that
-           value TWO ABSOLUTE LENGTHS — so it is taken WHOLE from the parent's own answer. Serializing it and
-           re-parsing it here would resolve a `1em` against THIS element's font size, and the value being
-           inherited was absolutized against the PARENT's; §17.6's `Inherited: yes` is what makes that reachable
-           on every table in a document whose `body` declares one. */
-        free(cascaded);
-        parent = css_parent_element(el);
-        if (parent != NULL) return css_computed_border_spacing(parent);
-        cascaded = NULL;
-        break;
-    case CSS_DEFAULTING_INITIAL:
-        free(cascaded);
-        cascaded = NULL;
-        break;
-    }
-    /* §7.1's initial value, which is also §7.2's answer at the root: §17.6.1's `Initial:` line is `0`. */
-    if (cascaded == NULL) cascaded = cssom_initial_value("border-spacing");
-    DCHECK(cascaded != NULL,
-           "§7.1 produced no INITIAL value for `border-spacing`. CSS 2.1 §17.6.1 \"The separated borders "
-           "model\"' `Initial:` line is `0` and lexbor's property registry does not carry the property at all, "
-           "so the value comes from core/css/css_style_declaration.c's table of the initial values the registry "
-           "does not have — a NULL here is that row missing, and the answer would be no spacing rather than a "
-           "spacing of zero, which are different facts about a table nobody declared one on");
-    /* §17.6.1's `<length> <length>?`, split at the ONE space core/css/css_shorthand.c's grammar canonicalizes
-       the pair to. The two components are the cascade's own output — this codebase computed them — so their
-       shape is an invariant to assert rather than input to test. */
-    sp = strchr(cascaded, ' ');
+    sp = strchr(spec, ' ');
     if (sp == NULL) {
         /* §17.6.1: "If one length is specified, it gives both the horizontal and vertical spacing." */
-        first = css_cv_strdup(cascaded);
-        second = css_cv_strdup(cascaded);
+        first = css_cv_strdup(spec);
+        second = css_cv_strdup(spec);
     } else {
         /* §17.6.1: "If two are specified, the first gives the horizontal spacing and the second the vertical
            spacing." */
         *sp = '\0';
-        first = css_cv_strdup(cascaded);
+        first = css_cv_strdup(spec);
         second = css_cv_strdup(sp + 1);
-        DCHECK(strchr(sp + 1, ' ') == NULL,
-               "a specified `border-spacing` carries a THIRD component value. CSS 2.1 §17.6.1 \"The separated "
-               "borders model\"' `Value:` line is `<length> <length>?`, and core/css/css_shorthand.c's grammar "
-               "drops a declaration with more — so a third component here means the cascade handed back a "
-               "value that did not come through that grammar, and the halves this split makes are not the "
-               "lengths the author wrote");
     }
-    free(cascaded);
+    free(spec);
+    if (strchr(second, ' ') != NULL || !css_length_is_length(first) || !css_length_is_length(second)) {
+        free(first);
+        free(second);
+        return false;
+    }
     h = v = css_cv_px(css_px(0.0));
     ok = computed_length(el, "border-spacing", first, &h);
     ok = computed_length(el, "border-spacing", second, &v) && ok;
+    if (!ok) return false;
     /* §17.6.1's `Percentages:` line is `N/A` and its `Value:` line admits no keyword, so BOTH components
        absolutize — there is no arm of this property's computed value that survives as anything else. A
        percentage or a calculation reaching here is the grammar and this derivation having come apart, and
@@ -1778,8 +1752,48 @@ static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
            "a `border-spacing` component computed NEGATIVE past computed_length's range clamp — CSS 2.1 "
            "§17.6.1 \"The separated borders model\" states \"Lengths may not be negative\" and the row's range "
            "is NON_NEGATIVE, so the row and the clamp have come apart");
-    out.horizontal = h.px;
-    out.vertical = v.px;
+    out->horizontal = h.px;
+    out->vertical = v.px;
+    return true;
+}
+
+static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
+{
+    CssBorderSpacing out = { css_px(0.0), css_px(0.0) };
+    CssDefaulting defaulting;
+    char *cascaded;
+    bool ok;
+
+    css_cv_modelled(el, "border-spacing");
+    cascaded = css_cv_cascaded(el, "border-spacing");
+    defaulting = css_defaulting_of("border-spacing", cascaded);
+    /* css-values-5 "Resolving in Properties"' invalid-at-computed-value-time rule, as cv_length states it. */
+    if (defaulting == CSS_DEFAULTING_DECLARED) {
+        if (cv_border_spacing_of(el, cascaded, &out)) return out;
+        defaulting = css_defaulting_of("border-spacing", "unset");
+    } else {
+        free(cascaded);
+    }
+    if (defaulting == CSS_DEFAULTING_INHERITED) {
+        /* §7.2: "the property's specified and computed values are the inherited value", and §17.6.1 makes that
+           value TWO ABSOLUTE LENGTHS — so it is taken WHOLE from the parent's own answer. Serializing it and
+           re-parsing it here would resolve a `1em` against THIS element's font size, and the value being
+           inherited was absolutized against the PARENT's; §17.6's `Inherited: yes` is what makes that reachable
+           on every table in a document whose `body` declares one. */
+        lxb_dom_element_t *parent = css_parent_element(el);
+
+        if (parent != NULL) return css_computed_border_spacing(parent);
+    }
+    /* §7.1's initial value, which is also §7.2's answer at the root: §17.6.1's `Initial:` line is `0`. */
+    cascaded = cssom_initial_value("border-spacing");
+    DCHECK(cascaded != NULL,
+           "§7.1 produced no INITIAL value for `border-spacing`. CSS 2.1 §17.6.1 \"The separated borders "
+           "model\"' `Initial:` line is `0` and lexbor's property registry does not carry the property at all, "
+           "so the value comes from core/css/css_style_declaration.c's table of the initial values the registry "
+           "does not have — a NULL here is that row missing, and the answer would be no spacing rather than a "
+           "spacing of zero, which are different facts about a table nobody declared one on");
+    ok = cv_border_spacing_of(el, cascaded, &out);
+    DCHECK(ok, "`border-spacing`'s initial value fails CSS 2.1 §17.6.1's own grammar");
     return out;
 }
 

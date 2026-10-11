@@ -378,16 +378,17 @@ typedef struct {
    only when one is present. A UNITLESS ZERO is a `<length>` (CSS Values §6, and how lexbor serializes every
    box-model property's initial value).
    AN IDENTIFIER IS MAPPED TO ITS KEYWORD HERE, once, and admitted only if `keywords` — the property's set from
-   core/css/css_property_id.h — holds it. FALSE is an identifier outside the set: the value does not match the
-   property's grammar, which is page input (a `var()` substitution reaches here unvalidated), so the caller
-   answers with CSS's invalid-declaration rule and `*out` is not written. */
+   core/css/css_property_id.h — holds it. FALSE is a value outside the grammar — an identifier outside the set,
+   a unitless non-zero, a unit that is not a length, or a function other than a length math function — which is
+   page input (a `var()` substitution reaches here unvalidated), so the caller answers with CSS's
+   invalid-declaration rule and `*out` is not written. */
 bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value, CssKeywordSet keywords,
                       CssLength *out);
 
 /* IS THIS TEXT A `<length>` AT ALL — CSS Values §6's production, answered WITHOUT crashing and WITHOUT a realm,
    which is a different question from the one above and exists for a different caller. `css_length_parse` is for
-   a value already known to match the grammar (lexbor validated the declaration); it refuses an identifier
-   outside the property's keyword set and CRASHES on any other mismatch, deliberately. A shorthand LEXBOR'S REGISTRY DOES NOT CARRY reaches the cascade as raw tokens with
+   a value already known to match the grammar (lexbor validated the declaration), and refuses one that does
+   not, which leaves it nothing to say about whether a value IS a length. A shorthand LEXBOR'S REGISTRY DOES NOT CARRY reaches the cascade as raw tokens with
    nothing having validated them, so `border-width: red` is a declaration CSS Syntax DROPS — not an engine gap —
    and its expansion has to be able to ask.
    TRUE for a `<number>` (§6's unitless zero, and the unitless non-zero the parse above asserts on), for a
