@@ -558,6 +558,18 @@ static CowDelta *cow_state_ask(int kind) {
     DCHECK(kind >= 0 && kind < COW_STATE_KIND_N,
            "a COW state capture named a kind outside cow.h's list — the enum and the counters are two "
            "expansions of ONE macro, so a value outside it is a cast or an uninitialised read");
+    /* A promise or resolving function is page state: the engine's own bookkeeping objects (pending records, job
+       arrays) are plain objects and arrays, so a settlement or a reaction registered inside an engine-write
+       bracket is a page write the bracket's NULL route would leave uncaptured, leaking into every sibling. */
+    DCHECK(kind != COW_STATE_ASYNC || g_engine_write_depth == 0 || cow_hooks_off(),
+           "a promise's settlement or reaction list changed inside an engine-write bracket — the bracket routes "
+           "captures nowhere, so this page-visible write would leak into every flow; run it outside the bracket");
+    /* …and outside any bracket, a slice is open exactly while the generation stamp is nonzero (JS_SetFlowGen),
+       so a promise changing then with no delta routed is a flow's write that no delta records. */
+    DCHECK(kind != COW_STATE_ASYNC || g_current || g_engine_write_depth > 0 || cow_hooks_off() ||
+           JS_FlowGen() == 0,
+           "a promise's settlement or reaction list changed while a flow slice is open with no delta routed — "
+           "the write lands on the baseline every sibling reads");
     if (cow_hooks_off() || !g_current) return NULL;
     g_state_asks[kind]++;
     return g_current;
