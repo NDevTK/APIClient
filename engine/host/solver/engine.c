@@ -933,6 +933,11 @@ static long g_host_answers_late;
 /* Peer answers no holder admitted: every entry naming the request belongs to a flow whose commitment record
  * refuses the answering timeline (engine_host_answer's state 0). */
 static long g_host_answers_refused;
+/* Holders that refused a peer answer under a foreclosed row: their own record names the answering timeline as
+ * one a family member took (deliver_admits' STEP_UNIT_ROUTED_PARENT_TOOK). Counted per holder, at both of
+ * engine_host_answer's refusals, so a resumed standby meeting the rows its park carried is a number the asking
+ * instance states rather than one a driver infers from which answers were taken. */
+static long g_host_answers_foreclosed;
 /* Requests this engine withdrew before anybody answered them (Fetch §2 Infrastructure's terminate a fetch
  * controller; see engine_host_terminate). A withdrawn id is neither a payment nor an unpaid ask, so it has its
  * own count rather than being folded into either side of the rate. Not reset at a session boundary. */
@@ -1299,6 +1304,7 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec);
 int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const char *marks, JSValueConst value,
                        int completion, int source) {
     int extra = 0, fixed = 0, refused = 0;
+    StepUnit verdict;
 
     DCHECK(req != 0, "the host answered a request with no id");
     DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
@@ -1353,7 +1359,9 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                    (flow_answer_fork, flow_answer_standby), is not its taker. The request's addressee
                    (engine_flow_addressee) narrows to the received rows on the peer's side; a foreclosed row
                    cannot be addressed, so a standby's refusal is made only here. */
-                if (source == ENGINE_ANSWER_PEER && deliver_admits(ctx, f, world) != STEP_UNIT_ROUTED_DELIVERY) {
+                if (source == ENGINE_ANSWER_PEER &&
+                    (verdict = deliver_admits(ctx, f, world)) != STEP_UNIT_ROUTED_DELIVERY) {
+                    if (verdict == STEP_UNIT_ROUTED_PARENT_TOOK) g_host_answers_foreclosed++;
                     refused++;
                     JS_FreeValue(ctx, p);
                     continue;
@@ -1403,7 +1411,8 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
             /* An entry that has left a standby hands every later answer to it: recording one here as well would
                deliver one peer timeline to two asking timelines. */
             if (pending_get_int(p, PEND_STANDBY_LEFT)) { fixed++; JS_FreeValue(ctx, p); continue; }
-            if (deliver_admits(ctx, f, world) != STEP_UNIT_ROUTED_DELIVERY) {
+            if ((verdict = deliver_admits(ctx, f, world)) != STEP_UNIT_ROUTED_DELIVERY) {
+                if (verdict == STEP_UNIT_ROUTED_PARENT_TOOK) g_host_answers_foreclosed++;
                 refused++;
                 JS_FreeValue(ctx, p);
                 continue;
@@ -11346,6 +11355,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_exhausted = g_host_exhausted;
     out->host_answers_late  = g_host_answers_late;
     out->host_answers_refused = g_host_answers_refused;
+    out->host_answers_foreclosed = g_host_answers_foreclosed;
     out->host_terminated    = g_host_terminated;
     out->paged_reqs         = g_paged_reqs;
     out->paged_asks         = g_reclaim_asks;

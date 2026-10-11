@@ -842,32 +842,39 @@ parked.gone = true;
 /* THE ORPHANS: completions held for a read the parked instance asked. They name a token of an instance that is
    gone, so there is no flow, register or instance for them to land in. */
 const orphanCompletions = [...reads.entries()].filter(([k, r]) => r.engine === parked && heldOf(k)).map(([k]) => k);
-holdAfterFirst = false;
+/* Still set for the resumed session. A foreclosed row written in this session (a standby left at a first take,
+   or an arm's own world) can only refuse a later answer to the same request, so with every later answer held a
+   foreclosed refusal phase 5 counts is one against a row the residue carried. */
 engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, 'observed,undriven,unpinned', '', '', '');
 const resumedTag = engines[0].tag;
 console.log(`phase 4: resumed as [${resumedTag}] from the residue; [${engines[1].tag}] never left memory`);
 
 /* WHAT THE PARKED FAMILIES HAD TAKEN, AND WHETHER A RESUMED STANDBY STILL REFUSES IT. A foreclosed row
    (`r<hex vector>,0,3`, flow.h's FLOW_COMMIT_ARM_ANSWER_TAKEN) names a peer timeline a family member took before
-   the park, and `b` never left its session, so its timelines still relate to the row. The witness is one resumed
-   request whose relayed answers include one at or under such a row that no flow took and one under none that a
-   flow took. A descendant names its ancestors only as far as they sent (world.h), so `takenBefore` can miss one;
-   the witness is existential and survives that. */
-const foreclosedHeads = residue.split(';').filter((r) => /^r[0-9a-f]+,0,3$/.test(r))
-  .map((r) => Buffer.from(r.slice(1, r.indexOf(',')), 'hex').toString().split(',')[0]);
-if (!foreclosedHeads.length)
+   the park, and `b` never left its session, so its timelines still relate to the row. Each parked flow carries
+   its own rows, and the union over flows covers every timeline `b` has (each side of its first branch is some
+   family's take), so which answers a resumed request took cannot say which rows it met. The resumed instance
+   says it: `hostAnswersForeclosed` counts holders that refused an answer under their own foreclosed row. */
+const foreclosedRows = residue.split(';').filter((r) => /^r[0-9a-f]+,0,3$/.test(r)).length;
+if (!foreclosedRows)
   fail('the park wrote no foreclosed ANSWER_TAKEN row while `a` held a standby at a read whose first answer it ' +
        'took — flow_answer_standby writes that row on the standby, so the park did not carry it');
-const takenBefore = (vec) => vec.split(',').some((w) => foreclosedHeads.includes(w));
-const standbyWitness = () => [...reads.values()].filter((r) => r.asker === resumedTag &&
-  r.by.some((w, i) => takenBefore(w) && r.taken[i] === 0) && r.by.some((w, i) => !takenBefore(w) && r.taken[i] === 1));
+const foreclosedRefusals = () => {
+  const n = JSON.parse(engines[0].str('qjs_result'))._cold.hostAnswersForeclosed;
+  if (typeof n !== 'number')
+    fail(`[${resumedTag}] the result document's \`_cold\` carries no \`hostAnswersForeclosed\` — ` +
+         'solver/metrics/cold.def declares it, so an absent one is a producer that moved under this reader');
+  return n;
+};
+const resumedTook = () => [...reads.values()].filter((r) => r.asker === resumedTag && r.taken.includes(1));
 
-/* PHASE 5 — THE RESUMED SESSION, until it has emitted the two outputs this drive is about: a resumed request
-   that refused a timeline its family took and took one it had not, and a `w.closed` read back true. */
-await runUntil(() => standbyWitness().length > 0 && closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')));
-console.log(`\nphase 5: the residue foreclosed ${foreclosedHeads.length} taken timeline(s); ` +
-            `${standbyWitness().length} resumed request(s) refused one and took one no family member had taken: ` +
-            standbyWitness().map((r) => r.op).join(' ; '));
+/* PHASE 5 — THE RESUMED SESSION, until it has emitted the outputs this drive is about: a resumed holder that
+   refused an answer under its family's foreclosed row, a resumed request that took one, and a `w.closed` read
+   back true. The census is read last, because composing the result document is the costly conjunct. */
+await runUntil(() => closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')) &&
+                     resumedTook().length > 0 && foreclosedRefusals() > 0);
+console.log(`\nphase 5: the residue carried ${foreclosedRows} foreclosed row(s); ${foreclosedRefusals()} resumed ` +
+            `holder(s) refused an answer under one, and ${resumedTook().length} resumed request(s) took an answer`);
 
 const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].tag);
 /* EVERY WORLD NAME THE RESUMED SESSION PUT ON THE WIRE, against every name the session that ended had already
@@ -982,8 +989,8 @@ if (!worldDeaths.length)
 console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.join(' ')}`);
 console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
             `(${refused} declined by a receiving timeline), ancestry-forked segments: ${forked}, cross-agent ` +
-            `reads asked: ${reads.size}, a resumed standby refused ${standbyWitness().length} taken timeline's ` +
-            `request answer(s), w.closed read back true after the park, parked and resumed across ` +
+            `reads asked: ${reads.size}, ${foreclosedRefusals()} resumed holder(s) refused an answer under a ` +
+            `foreclosed row, w.closed read back true after the park, parked and resumed across ` +
             `${residue.length} bytes of residue`);
 
 /* ── VARIANT A: PARK THE ANSWERING INSTANCE, AS A PROBE AND NOT A GATE ──────────────────────────────────────

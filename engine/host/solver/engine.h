@@ -1104,6 +1104,7 @@ typedef struct {
                               * not a payment, so never added into `host_answered` */
     long host_answers_late;  /* answers refused because the session had already closed */
     long host_answers_refused; /* peer answers every holder's commitment record refused (engine_host_answer) */
+    long host_answers_foreclosed; /* holders that refused one under a row a family member's take wrote */
     long host_terminated;    /* rendezvous ids withdrawn: Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
     /* Whether the allocator's refusal edge reached the pager at all, which a zero `sold` cannot say:
