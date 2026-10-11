@@ -21,7 +21,9 @@ typedef enum {
     /* css-inline-3 §5.1 "Line Spacing: the line-height property": a keyword, a number or a length */
     CSS_COMPUTED_SHAPE_LINE_HEIGHT,
     /* CSS 2.1 §17.6.1 "The separated borders model": "two absolute lengths" */
-    CSS_COMPUTED_SHAPE_BORDER_SPACING
+    CSS_COMPUTED_SHAPE_BORDER_SPACING,
+    /* "specified keyword": one of the row's keyword set, a `CssKeyword` */
+    CSS_COMPUTED_SHAPE_KEYWORD
 } CssComputedShape;
 
 /* The range a property's grammar admits for its numeric values, which css-values-4 §9.1 "Numeric Functions"
@@ -43,7 +45,8 @@ typedef enum {
  * its own rule. `baseline-shift` (css-inline-3 §4.2.3 "Post-Alignment Shift: the baseline-shift longhand") and
  * `flex-basis` (css-flexbox-1 §7.2.3 "The flex-basis property") take the first rows' rule whole but are neither
  * box-model lengths nor limits: a baseline shift's percentage refers to the used `line-height`, which no cascade
- * step holds, so it survives to the computed value; a flex basis adds `content` to `width`'s keywords. */
+ * step holds, so it survives to the computed value; a flex basis adds `content` to `width`'s keywords.
+ * `position` is css-position-3 §2's `Computed value: specified keyword`, held as its ID. */
 #define CSS_PROPERTY_LIST(X)                                                                          \
     X(MARGIN_TOP,          "margin-top",          LXB_CSS_PROPERTY_MARGIN_TOP,     LENGTH, ALL, MARGIN)           \
     X(MARGIN_RIGHT,        "margin-right",        LXB_CSS_PROPERTY_MARGIN_RIGHT,   LENGTH, ALL, MARGIN)           \
@@ -72,6 +75,7 @@ typedef enum {
     X(FLEX_BASIS,          "flex-basis",          LXB_CSS_PROPERTY_FLEX_BASIS,     LENGTH, NON_NEGATIVE, FLEX_BASIS) \
     X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT, NON_NEGATIVE, NONE) \
     X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING, NON_NEGATIVE, NONE) \
+    X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       KEYWORD, ALL, POSITION)        \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
@@ -82,7 +86,6 @@ typedef enum {
     X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        TEXT, ALL, UNTYPED)            \
     X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT, ALL, UNTYPED)            \
     X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          TEXT, ALL, UNTYPED)            \
-    X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       TEXT, ALL, UNTYPED)            \
     X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     TEXT, ALL, UNTYPED)            \
     X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT, ALL, UNTYPED)            \
     X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      TEXT, ALL, UNTYPED)            \

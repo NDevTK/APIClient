@@ -80,6 +80,11 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-flexbox-1 §7.2.3 "The flex-basis property": `content | <'width'>`. */
     case CSS_KEYWORDS_FLEX_BASIS:
         return k == CSS_KEYWORD_CONTENT || css_keyword_set_has(CSS_KEYWORDS_SIZE, k);
+    /* css-position-3 §2 "Choosing A Positioning Scheme: position property": `static | relative | absolute |
+       sticky | fixed`. */
+    case CSS_KEYWORDS_POSITION:
+        return k == CSS_KEYWORD_STATIC || k == CSS_KEYWORD_RELATIVE || k == CSS_KEYWORD_ABSOLUTE ||
+               k == CSS_KEYWORD_STICKY || k == CSS_KEYWORD_FIXED;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

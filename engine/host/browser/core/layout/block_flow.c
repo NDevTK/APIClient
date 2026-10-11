@@ -155,7 +155,7 @@ static CssPx bf_run_value(BfRun r)
 bool block_flow_is_floated(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "CSS 2 §9.5.1's float question was asked of no element");
-    if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) return false;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return false;
     return !bf_computed_is(el, "float", "none");
 }
 
@@ -164,7 +164,7 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
     char *d;
     bool bfc;
 
-    if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) return true;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return true;
     if (block_flow_is_floated(el)) return true;
     d = bf_computed(el, "display");
     bfc = strcmp(d, "inline-block") == 0 || strcmp(d, "flow-root") == 0 ||
@@ -268,7 +268,7 @@ static lxb_dom_element_t *bf_subtree_float(lxb_dom_node_t *n, bool is_context_ro
            Generation: the none and contents keywords" keeps the CHILDREN's boxes, and the loop below already
            reaches them because this walk is over the element tree rather than over a box list. */
         if (bf_computed_is(e, "display", "none")) return NULL;
-        if (bf_computed_is(e, "position", "absolute") || bf_computed_is(e, "position", "fixed")) return NULL;
+        if (css_computed_keyword_is(e, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(e, "position", CSS_KEYWORD_FIXED)) return NULL;
         if (block_flow_is_floated(e)) return e;
         if (bf_establishes_block_formatting_context(e)) return NULL;
     }
@@ -512,7 +512,7 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
        static position, which is a different question ANSWERED BY THE SAME WALK — `block_flow_static_child_top`
        reads the running position out at this child's content position without ever putting it on the stack,
        which is why this classification does not have to change for it. */
-    if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) {
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
         free(d);
         return BLOCK_FLOW_CHILD_NO_BOX;
     }

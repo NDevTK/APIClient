@@ -332,7 +332,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
     /* Out of flow contributes nothing and introduces no break ("out-of-flow boxes and inline box boundaries do
        not introduce a forced line break or soft wrap opportunity in the flow"): CSS 2.2 §9.3.1 takes it out of
        normal flow, as core/layout/line_box.c also skips it. */
-    if (is_computed_is(el, "position", "absolute") || is_computed_is(el, "position", "fixed")) return;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return;
     if (block_flow_is_floated(el))
         DFAIL("CSS 2.2 §9.5 \"Floats\" takes this child out of the line, and css-sizing-3 §5.2 \"Intrinsic "
               "Contributions\" still counts it: CSS 2.2 §10.3.5 \"Floating, non-replaced elements\" computes "

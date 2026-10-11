@@ -94,18 +94,6 @@ static void hev_target(JSValueConst this_val, HevTarget *t)
     hev_target_of_element(el, t);
 }
 
-static bool hev_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = css_computed_value(el, name);
-    bool same;
-
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
-                      "them is in lexbor's registry with an initial value, so the last layer always answers");
-    same = strcmp(v, kw) == 0;
-    free(v);
-    return same;
-}
-
 /* An HTML element's local name, ASCII-lowercase already for an HTML-namespace element. */
 static bool hev_html_local_name_is(const lxb_dom_node_t *n, const char *name)
 {
@@ -197,7 +185,7 @@ static bool hev_chain_reads_positioning_cb(lxb_dom_node_t *n)
     for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
         lxb_dom_element_t *el = lxb_dom_interface_element(a);
 
-        if (hev_computed_is(el, "position", "absolute") || hev_computed_is(el, "position", "fixed"))
+        if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
             return true;
     }
     return false;
@@ -313,7 +301,7 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
    over, which is why the citation moved with them rather than only the marks coming off. */
 static bool hev_establishes_abspos_containing_block(lxb_dom_element_t *el)
 {
-    return !hev_computed_is(el, "position", "static");
+    return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
 }
 
 /* §7's own first list, shared by `offsetParent` and (in the ED) `scrollParent`: the four conditions under which
@@ -327,7 +315,7 @@ static bool hev_null_offset_parent(const HevTarget *t)
     if (!t->has_box) return true;
     if (t->is_root)  return true;
     if (t->is_body)  return true;
-    return hev_computed_is(lxb_dom_interface_element(t->node), "position", "fixed");
+    return css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_FIXED);
 }
 
 /* §7's `offsetParent` ALGORITHM, in the spec's own step order. Returns the element or NULL.
@@ -358,7 +346,7 @@ static lxb_dom_element_t *hev_offset_parent(const HevTarget *t)
            ancestor establishing a fixed position containing block — is the shadow half, which the chain check
            has already crashed on, over the `position: fixed` half the derivation above settles. */
         matches = hev_establishes_abspos_containing_block(anc) || is_body ||
-                  (table_cell && hev_computed_is(lxb_dom_interface_element(t->node), "position", "static"));
+                  (table_cell && css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_STATIC));
         if (!matches) continue;
         /* §7 states its first two bullets over a BOX — a containing block is a box, and step 3 of `offsetTop`
            goes on to subtract this element's top PADDING EDGE — while `display: contents` gives an element none.

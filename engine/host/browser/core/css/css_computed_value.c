@@ -100,7 +100,7 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
         return cascaded;
     case CSS_DEFAULTING_INHERITED:
         free(cascaded);
-        DCHECKF(!css_computed_models_length(name),
+        DCHECKF(!css_computed_models_length(name) && !css_computed_models_keyword(name),
                "`%s`: a LENGTH-valued property was inherited through the entry that answers TEXT. §7.2's "
                "inherited value is the parent's COMPUTED value, which for one of these is an ABSOLUTE LENGTH "
                "carrying the environment fact it derives from — serializing it here to hand it down the tree "
@@ -598,10 +598,9 @@ static char *computed_display(lxb_dom_element_t *el, char *spec)
     out_of_flow = f != NULL && strcmp(f, "none") != 0;
     free(f);
     if (!out_of_flow) {
-        char *p = css_computed_value(el, "position");
+        CssKeyword p = css_computed_keyword(el, "position");
 
-        out_of_flow = css_cv_is(p, "absolute") || css_cv_is(p, "fixed");
-        free(p);
+        out_of_flow = p == CSS_KEYWORD_ABSOLUTE || p == CSS_KEYWORD_FIXED;
     }
     return display_blockified_if(el, spec, out_of_flow);
 }
@@ -1313,6 +1312,14 @@ bool css_computed_models_length(const char *name)
     return id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_LENGTH;
 }
 
+/* Which properties are keyword-shaped is the same table's. */
+bool css_computed_models_keyword(const char *name)
+{
+    CssPropertyId id = css_property_id_of(name);
+
+    return id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_KEYWORD;
+}
+
 /* Every row of core/css/css_property_id.h's table is a property this component derives. */
 bool css_computed_models(const char *name)
 {
@@ -1475,6 +1482,89 @@ bool css_computed_length_is(lxb_dom_element_t *el, const char *name, CssKeyword 
             "would be false for every element",
             name, (unsigned)keyword);
     return css_length_is_keyword(css_computed_length(el, name), keyword);
+}
+
+/* ---- the KEYWORD shape: `Computed value: specified keyword` ---------------------------------------------- */
+
+/* The keyword `spec` names, if `id`'s set holds it. CONSUMES `spec`. FALSE when it fails the row's grammar. */
+static bool cv_keyword_of(CssPropertyId id, char *spec, CssKeyword *out)
+{
+    const char *p = spec;
+    size_t n;
+    CssKeyword k;
+
+    while (*p != '\0' && isspace((unsigned char)*p)) p++;
+    for (n = strlen(p); n > 0 && isspace((unsigned char)p[n - 1]); n--) { }
+    k = css_keyword_of(p, n);
+    free(spec);
+    if (!css_keyword_set_has(css_property_keywords(id), k)) return false;
+    *out = k;
+    return true;
+}
+
+/* The derivation of one keyword-shaped computed value, made on its first ask in a hold. The specified keyword
+   IS the computed one, so the derivation is CSS Cascade §7's defaulting and the parse. */
+static CssKeyword cv_keyword(lxb_dom_element_t *el, CssPropertyId id)
+{
+    const char *name = css_property_name(id);
+    CssKeyword k = CSS_KEYWORD_INVALID;
+    CssDefaulting defaulting;
+    char *cascaded;
+    bool ok;
+
+    css_cv_modelled(el, name);
+    cascaded = css_cv_cascaded(el, name);
+    defaulting = css_defaulting_of(name, cascaded);
+    /* css-values-5 "Resolving in Properties"' invalid-at-computed-value-time rule, as cv_length states it. */
+    if (defaulting == CSS_DEFAULTING_DECLARED) {
+        if (cv_keyword_of(id, cascaded, &k)) return k;
+        defaulting = css_defaulting_of(name, "unset");
+    } else {
+        free(cascaded);
+    }
+    DCHECKF(defaulting != CSS_DEFAULTING_DECLARED, "`%s`: CSS Cascade 5 §7.3.3's `unset` defaulted to a declared "
+            "value", name);
+    if (defaulting == CSS_DEFAULTING_INHERITED) {
+        lxb_dom_element_t *parent = css_parent_element(el);
+
+        if (parent != NULL) return css_computed_keyword(parent, name);
+    }
+    /* §7.1's initial value, which is also §7.2's answer for the root element. */
+    cascaded = cssom_initial_value(name);
+    DCHECKF(cascaded != NULL, "`%s`: §7.1 produced no INITIAL value for a keyword-shaped property", name);
+    ok = cv_keyword_of(id, cascaded, &k);
+    DCHECKF(ok, "`%s`: the initial value is not in the row's keyword set", name);
+    return k;
+}
+
+CssKeyword css_computed_keyword(lxb_dom_element_t *el, const char *name)
+{
+    CssPropertyId id = css_property_id_of(name);
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+
+    DCHECKF(id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_KEYWORD,
+            "`%s`: css_computed_keyword was asked for a property whose row is not KEYWORD-shaped "
+            "(core/css/css_property_id.h); ask the entry its shape names",
+            name);
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, id, &v)) {
+        v.keyword = cv_keyword(el, id);
+        css_computed_style_answer(el, id, &v);
+    }
+    css_computed_style_hold_end(&hold);
+    return v.keyword;
+}
+
+bool css_computed_keyword_is(lxb_dom_element_t *el, const char *name, CssKeyword keyword)
+{
+    CssPropertyId id = css_property_id_of(name);
+
+    DCHECKF(id != CSS_PROPERTY_INVALID && css_keyword_set_has(css_property_keywords(id), keyword),
+            "`%s` was asked whether it computes to keyword %u, which its grammar does not admit, so the answer "
+            "would be false for every element",
+            name, (unsigned)keyword);
+    return css_computed_keyword(el, name) == keyword;
 }
 
 /* ---- css-inline-3 §5.1 "Line Spacing: the line-height property" -------------------------------------------- */
@@ -2115,6 +2205,10 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
            "pair hands a page two numbers with both domains dropped. Ask `css_computed_border_spacing`, "
            "which answers both halves as `CssPx` and doubles §17.6.1's one-length form into the two the "
            "computed value has");
+    DCHECKF(shape != CSS_COMPUTED_SHAPE_KEYWORD,
+            "`%s`: css_computed_value was asked for a property whose computed value is a typed keyword. Ask "
+            "css_computed_keyword, or css_computed_keyword_is at a call site that tests one keyword",
+            name);
     if (shape != CSS_COMPUTED_SHAPE_TEXT) return css_cv_specified(el, name);
     css_computed_style_hold_begin(&hold);
     if (!css_computed_style_ask(el, id, &v)) {
@@ -2249,6 +2343,8 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
                "one of them and crashes rather than inventing a fifth");
         return JS_NewString(ctx, css_keyword_name(len.keyword));
     }
+    /* CSSOM §6.7.2 "Serializing CSS Values": a keyword serializes as its lowercase spelling. */
+    if (css_computed_models_keyword(name)) return JS_NewString(ctx, css_keyword_name(css_computed_keyword(el, name)));
     v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);
     /* A property no cascade layer answers at all — a custom property nobody set — is the EMPTY STRING, which
        is §6.6.1's own answer for one that is not set rather than a default standing in for a value.
@@ -2496,7 +2592,7 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     int side = -1;
     unsigned i;
     CssLength len;
-    char *pos;
+    CssKeyword pos;
 
     group = css_logical_group_of(name, &physical);
     DCHECK(group == CSS_LOGICAL_GROUP_INSET,
@@ -2530,9 +2626,8 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
        rectangle. */
     if (len.kind == CSS_LENGTH_ABSOLUTE || len.kind == CSS_LENGTH_PERCENTAGE ||
         len.kind == CSS_LENGTH_CALCULATED) {
-        pos = css_computed_value(el, "position");
-        if (css_cv_is(pos, "sticky") && len.kind != CSS_LENGTH_ABSOLUTE) {
-            free(pos);
+        pos = css_computed_keyword(el, "position");
+        if (pos == CSS_KEYWORD_STICKY && len.kind != CSS_LENGTH_ABSOLUTE) {
             DFAIL("css-position-3 §3.1 \"Box Insets: the top, right, bottom, left, inset-block-start, "
                   "inset-inline-start, inset-block-end, and inset-inline-end properties\"' `<percentage>` arm "
                   "gives a STICKY box a different basis from every other positioned box, in its own sentence: "
@@ -2551,7 +2646,6 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
                   "as a measurement");
             return css_resolved_computed(ctx, el, name);
         }
-        free(pos);
         /* NAMED RESIDUAL — WHAT IS NOT COVERED: css-position-3 §3.5.2 "Resolving Overconstrained Insets" is
            stated over the one configuration in which a declared inset's answer is NOT its own length. "If the
            inset-modified containing block size in any axis is less than zero, then the weaker inset in the
@@ -2591,7 +2685,7 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     if (!css_length_is_keyword(len, CSS_KEYWORD_AUTO))
         return css_resolved_computed(ctx, el, name);
 
-    pos = css_computed_value(el, "position");
+    pos = css_computed_keyword(el, "position");
     /* css-position-3 §3.3 "Relative Positioning"' three rules, which core/layout/used_value.h answers as a
        PAIR because §3.3 states them over both members at once ("opposing used values in a given axis must be
        negations of each other"). The entry answers the LEADING member and §3.3's own sentence makes the
@@ -2601,16 +2695,14 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
        CSS 2.2 §9.4.3's `direction` rather than §3.3's writing-mode-relative end side, and those differ in a
        vertical writing mode — but that arm is "If neither is auto" and this call is made only when THIS
        member is. */
-    if (css_cv_is(pos, "relative")) {
+    if (pos == CSS_KEYWORD_RELATIVE) {
         CssPx lead = used_value_rel_offset_px(el, PHYS[side].vertical);
 
-        free(pos);
         return css_resolved_px(ctx, PHYS[side].trailing ? css_px_sub(css_px(0.0), lead) : lead);
     }
     /* CSS 2.1 §10.3.7's and §10.6.4's constraint equation, which css-position-3 §5 "Old Absolute Positioning
        Layout Model" is this engine's model of and which solves for whichever of the five terms is `auto`. */
-    if (css_cv_is(pos, "absolute") || css_cv_is(pos, "fixed")) {
-        free(pos);
+    if (pos == CSS_KEYWORD_ABSOLUTE || pos == CSS_KEYWORD_FIXED) {
         return css_resolved_px(ctx, PHYS[side].trailing
                                         ? used_value_abs_offset_trailing_px(el, PHYS[side].vertical)
                                         : used_value_abs_offset_px(el, PHYS[side].vertical));
@@ -2620,7 +2712,6 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
        stuck to, so there is no number to report and the resolved value is the keyword §9's "otherwise" arm
        hands back. That is a POSITIVE statement about the box rather than a missing value, which is why it is
        not a crash. */
-    free(pos);
     return css_resolved_computed(ctx, el, name);
 }
 

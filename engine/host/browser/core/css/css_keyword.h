@@ -25,7 +25,12 @@
     X(SUPER,       "super")                \
     X(TOP,         "top")                  \
     X(CENTER,      "center")               \
-    X(BOTTOM,      "bottom")
+    X(BOTTOM,      "bottom")               \
+    X(STATIC,      "static")               \
+    X(RELATIVE,    "relative")             \
+    X(ABSOLUTE,    "absolute")             \
+    X(STICKY,      "sticky")               \
+    X(FIXED,       "fixed")
 
 /* INVALID is zero so a zeroed value that is not a keyword holds no keyword. */
 typedef enum {
@@ -39,9 +44,9 @@ typedef enum {
 /* The keywords a property's computed value can be, which is the keyword arm of its `Computed value:` line.
  * Each is cited at its row in css_keyword.c. UNTYPED is a NAMED RESIDUAL: a TEXT-shaped row's computed value
  * is still owned text, compared by spelling (core/css/css_computed_value.h's `css_computed_value`). The next
- * diff gives `display` a typed computed value over this list and a set of its own. Until each text row has
- * one, a page's case-folded or substituted spelling of such a keyword can compare unequal to the spelling a
- * consumer tests. */
+ * diffs move each `specified keyword` row to the KEYWORD shape over a set of its own, `display` with a typed
+ * pair of its own. Until each text row has one, a page's case-folded or substituted spelling of such a keyword
+ * can compare unequal to the spelling a consumer tests. */
 typedef enum {
     CSS_KEYWORDS_UNTYPED = 1,
     CSS_KEYWORDS_NONE,
@@ -50,7 +55,8 @@ typedef enum {
     CSS_KEYWORDS_MAX_SIZE,
     CSS_KEYWORDS_INSET,
     CSS_KEYWORDS_BASELINE_SHIFT,
-    CSS_KEYWORDS_FLEX_BASIS
+    CSS_KEYWORDS_FLEX_BASIS,
+    CSS_KEYWORDS_POSITION
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

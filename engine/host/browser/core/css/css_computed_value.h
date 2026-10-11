@@ -114,6 +114,7 @@
 
 #include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
+#include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform_function.h"
 #include "quickjs.h"
@@ -172,8 +173,19 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name);
    keyword arm can come to be read as the whole of a computed length. */
 bool css_computed_length_is(lxb_dom_element_t *el, const char *name, CssKeyword keyword);
 
+/* THE COMPUTED VALUE of a KEYWORD-shaped property on `el` — a row whose `Computed value:` line is "specified
+   keyword" (core/css/css_property_id.h) — as its core/css/css_keyword.h ID, with CSS Cascade §7's defaulting
+   applied. A declaration whose keyword is outside the row's set is invalid at computed-value time. */
+CssKeyword css_computed_keyword(lxb_dom_element_t *el, const char *name);
+
+/* Is it `keyword`? `keyword` must be in `name`'s set, which is asserted, for `css_computed_length_is`'s reason. */
+bool css_computed_keyword_is(lxb_dom_element_t *el, const char *name, CssKeyword keyword);
+
 /* Does this component DERIVE `name`'s computed value from the cascade's specified value? */
 bool css_computed_models(const char *name);
+
+/* Is it KEYWORD-shaped — so `css_computed_keyword` is the entry? */
+bool css_computed_models_keyword(const char *name);
 
 /* Is it a LENGTH — so `css_computed_length` is the entry and `css_computed_value` is not? */
 bool css_computed_models_length(const char *name);

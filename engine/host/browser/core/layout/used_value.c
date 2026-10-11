@@ -297,7 +297,7 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
     }
     /* css-position §2: `absolute` and `fixed` take the box OUT OF FLOW. `relative` and `sticky` do not — a
        relatively positioned box is laid out in normal flow and then OFFSET, so §10.3.3 is still its section. */
-    if (uv_computed_is(el, "position", "absolute") || uv_computed_is(el, "position", "fixed")) {
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
         free(display);
         return UV_BOX_ABS;
     }
@@ -1401,7 +1401,7 @@ static void uv_require_readable_positioning_chain(lxb_dom_element_t *el)
 static bool uv_establishes_abspos_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
 {
     uv_require_readable_positioning(subject, anc);
-    return !uv_computed_is(anc, "position", "static");
+    return !css_computed_keyword_is(anc, "position", CSS_KEYWORD_STATIC);
 }
 
 /* §10.1's four cases, in the spec's own order, answering the BOX whose CONTENT EDGE is the rectangle. Each
@@ -1452,7 +1452,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        the purposes of calculating the static position, the containing block of fixed positioned elements is
        the initial containing block instead of the viewport." Merging the two tags would make that exception
        unspellable and would place every fixed box by the scroll offset it is defined not to move with. */
-    if (uv_computed_is(el, "position", "fixed")) {
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
         uv_require_readable_positioning_chain(el);
         r.box = UV_CB_VIEWPORT;
         return r;
@@ -1470,7 +1470,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        cannot establish a containing block whatever its `position` computes to and the walk steps over it;
        and `none` gives the element AND ITS DESCENDANTS none, which takes the SUBJECT's box with it and is
        therefore a question with no subject rather than a rectangle to find. */
-    if (uv_computed_is(el, "position", "absolute")) {
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE)) {
         for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
             lxb_dom_element_t *anc = lxb_dom_interface_element(a);
             char *d = uv_computed(anc, "display");
@@ -2076,7 +2076,7 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
        box without a layout, and that one says what the NUMBER is, which costs the containing block's own
        height walk. core/layout/block_flow.c asks THIS one of boxes it is only classifying and must not pay
        for the other. */
-    if (uv_computed_is(el, "position", "absolute") || uv_computed_is(el, "position", "fixed")) return false;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return false;
     /* §10.5: "A percentage height on the ROOT ELEMENT is relative to the initial containing block" — whose
        dimensions are the viewport's, so the root's percentage always resolves and never behaves as auto.
        §10.1's first case is the same element, which is why the NULL is that sentence rather than a gap. */
@@ -4589,7 +4589,7 @@ CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
     char      nbuf[160];
 
     DCHECK(el != NULL, "CSS 2.2 §9.4.3's used offset was asked for with no element");
-    DCHECKF(uv_computed_is(el, "position", "relative"),
+    DCHECKF(css_computed_keyword_is(el, "position", CSS_KEYWORD_RELATIVE),
            "%s: CSS 2.2 §9.4.3 \"Relative positioning\" is stated over a box that \"has been laid out "
            "according to the normal flow or floated\" and is then \"shifted relative to this position\", and "
            "this box is not relatively positioned. §9.3.1's positioning scheme decides WHICH section places a "

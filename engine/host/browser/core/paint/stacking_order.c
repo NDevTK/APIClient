@@ -79,11 +79,7 @@ bool stacking_generates_box(lxb_dom_element_t *el)
    values §2 declares. `sticky` is in neither of CSS 2.1's lists because CSS 2.1 has no such value at all. */
 static bool so_is_positioned(lxb_dom_element_t *el)
 {
-    char *p = so_computed(el, "position");
-    bool positioned = strcmp(p, "static") != 0;
-
-    free(p);
-    return positioned;
+    return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
 }
 
 /* DOES A TRANSFORM APPLY TO THIS BOX — the ONE FACT css-transforms-1 §2 "The Transform Rendering Model"
@@ -195,7 +191,6 @@ static bool so_is_inline_level(lxb_dom_element_t *el, const char *display)
 bool stacking_context_forms(lxb_dom_element_t *el)
 {
     char nbuf[160];
-    char *pos;
     int level;
     bool forms;
 
@@ -238,10 +233,8 @@ bool stacking_context_forms(lxb_dom_element_t *el)
        stacking context." CSS 2.1 alone answers `false` here, and the box it answers it for is the ordinary
        `position: fixed` header with no `z-index` — so every positioned descendant of one would be placed in
        the wrong context by the older sentence. `sticky` has no CSS 2.1 sentence to amend at all. */
-    pos = so_computed(el, "position");
-    forms = strcmp(pos, "fixed") == 0 || strcmp(pos, "sticky") == 0;
-    free(pos);
-    return forms;
+    return css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED) ||
+           css_computed_keyword_is(el, "position", CSS_KEYWORD_STICKY);
 }
 
 int stacking_level(lxb_dom_element_t *el)

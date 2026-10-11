@@ -135,13 +135,7 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
     /* §9.3.2: "Applies to: positioned elements". The whole line, and it names no display type, so it is
        answered before `display` is read. */
     if (css_pa_in(CSS_INSET_PROPERTIES, CSS_PA_N(CSS_INSET_PROPERTIES), name)) {
-        char *pos = css_computed_value(el, "position");
-        bool positioned = pos != NULL && strcmp(pos, "static") != 0;
-
-        DCHECK(pos != NULL, "the cascade produced no computed `position` — css-position §2 gives it an initial "
-                            "value of `static`, so the cascade's last layer always answers");
-        free(pos);
-        return positioned;
+        return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
     }
     is_size = css_pa_in(CSS_SIZE_PROPERTIES, CSS_PA_N(CSS_SIZE_PROPERTIES), name);
     is_margin = css_pa_in(CSS_MARGIN_PROPERTIES, CSS_PA_N(CSS_MARGIN_PROPERTIES), name);

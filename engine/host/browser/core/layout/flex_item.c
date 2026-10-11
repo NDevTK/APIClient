@@ -263,7 +263,7 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
         /* §4.1 "Absolutely-Positioned Flex Children": "As it is out-of-flow, an absolutely-positioned child of
            a flex container does not participate in flex layout." A float is not asked about: §4's example
            marks a `float: left` child a flex item ("floating is ignored"). */
-        if (fi_computed_is(el, "position", "absolute") || fi_computed_is(el, "position", "fixed"))
+        if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
             return FLEX_ITEM_CHILD_NONE;
         return FLEX_ITEM_CHILD_ELEMENT;
     }

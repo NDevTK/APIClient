@@ -749,7 +749,7 @@ static FlowPoint fp_abs_origin(lxb_dom_element_t *el)
    composition and `fp_origin_agrees` below must add the same term, so it is asked in one place. */
 static CssPx fp_relative_offset(lxb_dom_element_t *el, bool vertical)
 {
-    if (!fp_computed_is(el, "position", "relative")) return css_px(0.0);
+    if (!css_computed_keyword_is(el, "position", CSS_KEYWORD_RELATIVE)) return css_px(0.0);
     return used_value_rel_offset_px(el, vertical);
 }
 
@@ -813,7 +813,7 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
     /* CSS 2 §9.3.1 takes an absolutely positioned box out of normal flow: its position is §9.3.2's offsets over
        §10.1's third or fourth case, solved by §10.3.7 and §10.6.4, whose `auto` cases use the static
        position, so this consumes §9.4.1's flow layout. */
-    if (fp_computed_is(el, "position", "absolute") || fp_computed_is(el, "position", "fixed"))
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
         return (*out = fp_abs_origin(el), true);
     /* CSS 2 §9.5.1's placement for the root, the one float whose containing block (the initial containing
        block) holds no other box: "a floating box's outer top may not be higher than the top of its containing

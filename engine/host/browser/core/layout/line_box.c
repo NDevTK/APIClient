@@ -479,7 +479,7 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
        introduces no break (css-text-3 §5.5: "out-of-flow boxes and inline box boundaries do not introduce a
        forced line break or soft wrap opportunity in the flow"). Its position is §9.3.2's over a static
        position. */
-    if (lb_computed_is(el, "position", "absolute") || lb_computed_is(el, "position", "fixed")) return;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return;
     if (block_flow_is_floated(el))
         DFAIL("CSS 2.2 §9.5 \"Floats\" takes this box out of the line and puts it beside the line boxes, which "
               "changes the WIDTH available to every one of them: §9.4.2 says line boxes \"may vary in width if "
