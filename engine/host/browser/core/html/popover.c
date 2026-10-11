@@ -1698,6 +1698,14 @@ enum { M_SHOW = 0, M_HIDE, M_TOGGLE };
    and `hidePopover` each pick one unconditionally, so the pick is state rather than a re-read of the magic. */
 enum { PA_NONE = 0, PA_SHOW, PA_HIDE };
 
+/* A member's completion once the algorithm it ran has returned, however that algorithm returned:
+   togglePopover's step 8, "Return true if this's popover visibility state is showing; otherwise false", runs
+   after every return of show popover and hide a popover; showPopover and hidePopover return undefined. */
+static JSValue popover_member_result(JSContext *ctx, int magic, JSValueConst el)
+{
+    return magic == M_TOGGLE ? JS_NewBool(ctx, popover_is_showing(ctx, el)) : JS_UNDEFINED;
+}
+
 #define POPOVER_STAGES(X) \
     X(PO_ENTER,      "HTML §6.12 The popover attribute: the invoked member's own steps (showPopover step 1, " \
                      "togglePopover steps 1-4 and their pick of an algorithm) and then, for show popover, its " \
@@ -2029,7 +2037,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                boolean result is DISCARDED by the standard: what this step is for is the THROW. */
             validity = popover_check_validity(ctx, s->el, popover_is_showing(ctx, s->el), JS_NULL);
             if (validity < 0) return JS_STEP_ABRUPT;
-            *presult = JS_NewBool(ctx, popover_is_showing(ctx, s->el));              /* toggle step 8 */
+            *presult = popover_member_result(ctx, magic, s->el);                     /* toggle step 8 */
             return JS_STEP_DONE;
         }
 
@@ -2043,7 +2051,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             }
             validity = popover_check_validity(ctx, s->el, /*expectedToBeShowing*/ false, JS_NULL);  /* step 3 */
             if (validity < 0) return JS_STEP_ABRUPT;                                            /* step 4 */
-            if (validity == 0) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+            if (validity == 0) { *presult = popover_member_result(ctx, magic, s->el); return JS_STEP_DONE; }
             DCHECK(ps_is_null(ctx, s->el, PS_TRIGGER),
                    "HTML §6.12 The popover attribute's show popover step 5 asserts that the element's POPOVER "
                    "TRIGGER is null — hide a popover step 14 is the only thing that clears it and show popover "
@@ -2124,7 +2132,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                "§6.12's hide a popover answered with a value — it returns nothing, and this call site is the "
                "only thing that reads its completion");
         JS_FreeValue(ctx, ignored);
-        *presult = magic == M_TOGGLE ? JS_NewBool(ctx, popover_is_showing(ctx, s->el)) : JS_UNDEFINED;
+        *presult = popover_member_result(ctx, magic, s->el);
         return JS_STEP_DONE;                                                      /* togglePopover step 8 */
     }
 
@@ -2142,7 +2150,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         s->ev = JS_UNDEFINED;
         if (!not_canceled) {
             popover_cleanup_showing(ctx, s);
-            *presult = JS_UNDEFINED;
+            *presult = popover_member_result(ctx, magic, s->el);
             return JS_STEP_DONE;
         }
         /* Step 10 — "check popover validity is called again because firing the beforetoggle event could have
@@ -2152,7 +2160,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         if (validity != 1) {                                                                     /* step 11 */
             popover_cleanup_showing(ctx, s);
             if (validity < 0) return JS_STEP_ABRUPT;
-            *presult = JS_UNDEFINED;
+            *presult = popover_member_result(ctx, magic, s->el);
             return JS_STEP_DONE;
         }
         /* Steps 12, 13 and 14: shouldRestoreFocus is false, and originalType and effectiveType are both the
@@ -2236,7 +2244,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         if (validity != 1) {                                                                 /* step 15.7 */
             popover_cleanup_showing(ctx, s);                                               /* step 15.7.1 */
             if (validity < 0) return JS_STEP_ABRUPT;                                       /* step 15.7.2 */
-            *presult = JS_UNDEFINED;
+            *presult = popover_member_result(ctx, magic, s->el);
             return JS_STEP_DONE;                                                           /* step 15.7.3 */
         }
         /* Step 15.8 — "If the result of running topmost auto or hint popover on document is null, then set
@@ -2319,7 +2327,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
     }
     popover_cleanup_showing(ctx, s);                                                              /* step 25 */
     popover_queue_toggle_task(ctx, s->el, POPOVER_CLOSED, POPOVER_OPEN, s->source);               /* step 26 */
-    *presult = magic == M_TOGGLE ? JS_NewBool(ctx, popover_is_showing(ctx, s->el)) : JS_UNDEFINED;
+    *presult = popover_member_result(ctx, magic, s->el);
     return JS_STEP_DONE;
 }
 
