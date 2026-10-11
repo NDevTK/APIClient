@@ -363,6 +363,11 @@ struct JSFetchState {
        UNKNOWN EXTERNAL INPUT and a concolic cannot ride a `const char *`. That is also the one thing keeping
        §5.6 step 2's literal Request construction out of reach — request.h's residual states it. */
     JSValue   url;
+    /* §5.4 step 5's parsed URL, serialized: the request's URL from that step on, whatever page code in the
+       stages after it does to the document base URL. JS_UNDEFINED for a Request input (step 6 supplies the
+       URL) and for a concolic, which has no bytes to parse. `url` stays the page's own value, which is what
+       the endpoint surface reports. */
+    JSValue   req_url;
     JSValue   input;    /* the argument ITSELF — a Request carries a captured blob URL entry the URL cannot */
     /* §5.4 steps 10-27, applied by request.c's ONE implementation of them over the CONVERTED dictionary. This
        used to be a lone `JSValue method`: the only one of `RequestInit`'s seventeen members this machine kept,
@@ -443,6 +448,7 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSFetchState *s = st;
     v->val(ctx, &s->url);
+    v->val(ctx, &s->req_url);
     v->val(ctx, &s->input);
     v->val(ctx, &s->body_mime);
     v->val(ctx, &s->sig_flag);   /* §5.6 step 4's borrowed `aborted` flag, held across its fork */
@@ -1062,8 +1068,8 @@ static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value
    A CONVERSION PER READ WOULD BE THE SAME BYTES SEVERAL TIMES AND THE SAME OWNERSHIP RULE SEVERAL TIMES, which
    is the shape a later diff gets wrong by one. The record was filled by §5.4 steps 10-27, and a request that
    reached this seam is one whose method the standard has already normalized and refused. */
-static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord *rec, JSValueConst input,
-                          const HeaderList *hdrs, const char *body, size_t body_len)
+static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url, const RequestRecord *rec,
+                          JSValueConst input, const HeaderList *hdrs, const char *body, size_t body_len)
 {
     JSValue promise, resolving[2], deliver;
     JSValueConst data[2];
@@ -1156,13 +1162,18 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
         /* §4.3 SCHEME FETCH: "Switch on request's current URL's scheme". The scheme is what the URL PARSER
            says it is and not what the string starts with, so the URL is parsed here and every arm below reads
            that record — which is also what lets §6 have the parsed URL it asserts on. A concrete URL is
-           already §5.4 step 5's serialization (FETCH_RECORD), which the parser accepts against any base. A
+           parsed from §5.4 step 5's serialization (`req_url`), which the parser accepts against any base. A
            concolic's shape may parse or not, and is none of the local arms either way. */
         UrlRecord rec;
         const char *scheme;
+        /* What is parsed: §5.4 step 5's serialization where the string arm made one, else the value's own
+           string (a Request input's URL, or a concolic's shape). */
+        const char *pu = JS_IsString(req_url) ? JS_ToCString(ctx, req_url) : NULL;
+        const char *src = pu ? pu : u;
 
+        CHECK(!JS_IsString(req_url) || pu != NULL, "OOM borrowing Fetch §5.4 step 5's parsed URL");
         url_record_init(&rec);
-        scheme = fetch_parse_url(ctx, &rec, u, strlen(u)) ? rec.scheme : NULL;
+        scheme = fetch_parse_url(ctx, &rec, src, strlen(src)) ? rec.scheme : NULL;
         /* WHETHER THIS FLOW HAS A URL AT ALL, asked ONCE because two different steps below turn on the same
            one fact. A CONCOLIC's parse produced a record out of a DISPLAY FORM: its shape
            `/api/u?uid={state}.id` does parse, and it is not the address the request will go to — §5.4 step 2's
@@ -1173,8 +1184,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
 
         DCHECK(scheme != NULL || !url_is_real,
                "a concrete fetch() URL reached Fetch §4.3's scheme switch and the URL parser refused it. It is "
-               "§5.4 step 5's own serialization (FETCH_RECORD), and a serialized URL parses against any base, "
-               "so this is the parser and its serializer disagreeing");
+               "§5.4 step 5's own serialization (FETCH_RECORD), or a Request input's serialized URL, and a "
+               "serialized URL parses against any base, so this is the parser and its serializer disagreeing");
 
         /* §4.1 MAIN FETCH STEP 7, and it runs HERE — before §4.3's scheme fetch, which is step 12 — because
            that is the order the two steps are in. "If should request be blocked due to a bad port, should
@@ -1201,7 +1212,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
         if (url_is_real) {
             /* §5.4's constructor steps set no INITIATOR — the field's §2.2.5 initial value — so NULL is this
                algorithm's answer and not a value this entry failed to read off the record. */
-            char *up = fetch_main_upgrade(ctx, u, /*destination*/ "", /*initiator*/ NULL);
+            char *up = fetch_main_upgrade(ctx, src, /*destination*/ "", /*initiator*/ NULL);
             DCHECK(up == NULL,
                    "Mixed Content §4.1 upgraded a fetch()'s address — its step 1.4 ends the algorithm for a "
                    "destination that is not `image`, `audio` or `video`, and Fetch §5.4 \"Request class\" "
@@ -1209,13 +1220,14 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                    "so an upgrade means this entry's destination has come apart from the one it states below");
             free(up);
         }
-        if (url_is_real && fetch_main_blocked(ctx, u, /*destination*/ "", csp_meta,
+        if (url_is_real && fetch_main_blocked(ctx, src, /*destination*/ "", csp_meta,
                                               req_mode)) {
             JSValue value;
 
             JS_ThrowTypeError(ctx, "Failed to fetch");
             value = JS_GetException(ctx);
             url_record_free(&rec);
+            JS_FreeCString(ctx, pu);
             fetch_settle_local(ctx, resolving, value, /*reject*/ 1);
             JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, resolving[0]);
@@ -1244,6 +1256,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
         if (url_is_real)
             abs = url_serialize(&rec, /*exclude_fragment*/ false);
         url_record_free(&rec);
+        JS_FreeCString(ctx, pu);
     }
     if (u) {
         /* TWO CAPTURES, not three. The request's URL used to ride the closure and become the Response's `url`;
@@ -1425,7 +1438,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                conversions comes through here again against the one call. */
             endpoint_fetch_edge_began();
             s->input = JS_DupValue(ctx, input);
-            s->url = s->body_mime = JS_UNDEFINED;
+            s->url = s->req_url = s->body_mime = JS_UNDEFINED;
             /* …AND §2.2.5's RECORD, FOR THE SAME REASON AS THE TWO SLOTS ABOVE AND ONE MORE: its nine fields
                are DECLARED to this machine's `visit`, so a deep-fork copy arrives holding its own references to
                them and inherits `captured` — running this on a sibling would drop nine references the clone
@@ -1496,10 +1509,10 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* §5.4 STEP 5, the string arm, through the constructor's own implementation: a string the URL parser
-           refuses, or one carrying credentials, is a TypeError and the promise rejects. The parsed URL then IS
-           the request's URL, so `s->url` becomes its serialization here, before the stages below run page code
-           that could move the document base URL. A Request input contributes its parsed URL (step 6). A
-           concolic has no bytes to parse yet; fetch_park reads its shape. */
+           refuses, or one carrying credentials, is a TypeError and the promise rejects. The parsed URL IS the
+           request's URL from here on, so it is held in `req_url` before the stages below run page code that
+           could move the document base URL. A Request input contributes its parsed URL (step 6). A concolic
+           has no bytes to parse yet; fetch_park reads its shape. */
         if (!request_is(s->input) && !concolic_is(s->url)) {
             UrlRecord parsed;
             size_t n = 0;
@@ -1518,8 +1531,8 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             v = JS_NewString(ctx, ser);
             free(ser);
             if (JS_IsException(v)) return -1;
-            JS_FreeValue(ctx, s->url);
-            s->url = v;
+            JS_FreeValue(ctx, s->req_url);
+            s->req_url = v;
         }
         if (request_init_apply(ctx, init, /*from*/ NULL, &s->rec) < 0)
             return -1;
@@ -1892,7 +1905,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        a derived POST is not half-spelled. Nothing fires it: `safeFetchMethodRefusal` declines every non-GET
        at the call site, so what this reaches is the RECORD, which is what CLAUDE.md
        §A-REQUEST-CARRIES-THE-PROVENANCE calls the report. */
-    *presult = fetch_park(ctx, s->url, &s->rec, s->input, s->hdrs, body_bytes, body_bytes_len);
+    *presult = fetch_park(ctx, s->url, s->req_url, &s->rec, s->input, s->hdrs, body_bytes, body_bytes_len);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
