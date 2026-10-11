@@ -118,7 +118,9 @@ CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, b
 typedef struct {
     lxb_dom_element_t *root;            /* the walk root: the element, or the viewport's document element */
     lxb_dom_element_t *exclude_under;   /* the element for its own row; NULL for the viewport's */
-    lxb_dom_node_t    *n;               /* the next descendant to fold; NULL once the walk is complete */
+    lxb_dom_node_t    *n;               /* the node whose boxes fold next (the root first); NULL once complete */
+    int                stage;           /* which of `n`'s folds is next (scrolling_area.c's SA_STAGE_*) */
+    size_t             anon;            /* at that stage, the index of `n`'s next anonymous block box */
     CssPx lo, hi;                       /* the two edges before the walk */
     CssPx best;                         /* the extreme on the ending side so far */
     CssPx floor;                        /* the box's own extent the area cannot be below */

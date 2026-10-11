@@ -299,48 +299,42 @@ static bool sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool 
     }
 }
 
-/* §9.2.1.1's ANONYMOUS BLOCK BOXES of one block container, folded in. This is the OTHER shape of §9.4.2's
-   context — the one with no element to be asked about — and it is reached through core/layout/block_flow.h's
-   own enumeration rather than by this file delimiting runs for itself, because the run's boundaries and the
-   box's POSITION are two halves of one derivation: the position is a distance down §9.4.1's stack, which is
-   the walk that generated the run in the first place, and a second copy here could disagree with it about
-   where a margin collapsed.
-   THE BOX'S OWN MARGIN EDGE IS FOLDED BESIDE ITS CONTENT'S, AND THAT IS NOT DOUBLE COUNTING. §2's extreme is
-   over "the … margin edge of all of the element's descendants' boxes", and an anonymous block box IS one of
-   them — a real box in the box tree, unlike CSS 2.2 §10.8's STRUT, which core/layout/line_box.h excludes from
-   its span for exactly that reason. So its top edge and its bottom edge are both operands, and where its own
-   line boxes are taller than anything on them (a large `line-height`) the box reaches further than its content
-   does. §9.2.1.1's initial values are what make those two edges derivable from one number: no margin, no
-   border and no padding, so the content box, the border box and the margin box are one rectangle.
-   ITS INLINE-AXIS EDGES ARE NOT OPERANDS and block_flow.h states why: `width: auto` with zero margins puts
-   them exactly on the container's own CONTENT edges, which CSS 2 §8.1 nests inside the padding edge this
-   file's caller has already seeded the extreme with. */
-static bool sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, bool ending_at_hi, CssPx *out)
+/* One of §9.2.1.1's anonymous block boxes of block container `b`, the `i`th in core/layout/block_flow.h's
+   enumeration, folded in: the other shape of §9.4.2's context, with no element to ask. The enumeration is
+   block_flow.h's, not runs delimited here, because a run's bounds and its box's position down §9.4.1's stack
+   are one derivation and a second copy could disagree about where a margin collapsed. `*last` reports that no
+   box follows; it is set with nothing folded for a container that generates none.
+   The box's own block-axis margin edges are folded beside its content's: §2's extreme is over "the … margin
+   edge of all of the element's descendants' boxes" and an anonymous block box is one (unlike §10.8's strut,
+   which line_box.h excludes), so its lines can reach past their content. §9.2.1.1's initial values (no margin,
+   border or padding) make its content, border and margin boxes one rectangle. Its inline-axis edges are not
+   operands: `width: auto` with zero margins puts them on the container's content edges, inside the padding
+   edge the caller has already seeded the extreme with. */
+static bool sa_anon_block_box_fold(lxb_dom_element_t *b, size_t i, bool vertical, bool ending_at_hi, CssPx *best,
+                                   bool *last)
 {
     BlockFlowAnonBox *v = NULL;
-    size_t n = 0, i;
-    CssPx content, best = *out;
+    size_t n = 0;
+    CssPx content, origin;
 
     if (!block_flow_anonymous_boxes_ask(b, &v, &n)) return false;
     /* THE CONTAINER'S OWN CONTENT ORIGIN IS ASKED FOR ONLY WHERE THERE IS A BOX TO MEASURE FROM IT, and that
        is a crash surface and not a saving: core/layout/flow_position.h ABORTS for every positioning scheme it
        does not implement, so reading an origin for a container that generates none of §9.2.1.1's boxes would
        raise a float's or an out-of-flow box's crash at an element this fold has nothing to say about. */
-    if (n == 0) { free(v); return true; }
-    if (!sa_content_origin(b, vertical, &content)) { free(v); return false; }
-    for (i = 0; i < n; i++) {
-        CssPx origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
-
-        if (!sa_fold_span(b, v[i].run, origin, vertical, ending_at_hi, &best)) {
-            free(v);
-            return false;
-        }
-        if (!vertical) continue;
-        if (ending_at_hi) best = css_px_max(best, css_px_add(origin, v[i].height));
-        else              best = css_px_min(best, origin);
+    if (i >= n) {
+        DCHECK(i == 0, "an anonymous block box past the end of the enumeration was folded");
+        free(v);
+        *last = true;
+        return true;
     }
+    if (!sa_content_origin(b, vertical, &content)) { free(v); return false; }
+    origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
+    if (!sa_fold_span(b, v[i].run, origin, vertical, ending_at_hi, best)) { free(v); return false; }
+    if (vertical)
+        *best = ending_at_hi ? css_px_max(*best, css_px_add(origin, v[i].height)) : css_px_min(*best, origin);
+    *last = i + 1 == n;
     free(v);
-    *out = best;
     return true;
 }
 
@@ -379,28 +373,27 @@ static bool sa_anon_block_boxes_extreme(lxb_dom_element_t *b, bool vertical, boo
    every box in the document — and `exclude_under` is NULL, because §2's viewport column carries no exclusion
    clause at all. A NULL anchor is the spec's own absence and not a mode switch: there is no ancestor of a
    viewport for a containing block to be, so there is nothing for the test to be asked about. */
-/* Open the walk over `root`'s descendants, folding `root`'s own two shapes of §9.4.2's context into `seed`
-   first, in the same pair and order the fold asks them below. `root` is not one of its own descendants; the
-   boxes folded here are the anonymous inline boxes around its descendant text nodes, which are. */
+/* The folds of one node, in order: its own margin edge, its inline formatting context, then each of its anonymous
+   block boxes. A step folds one of them, so the rest unit counts boxes, not nodes with their whole content. */
+enum { SA_STAGE_EDGE = 0, SA_STAGE_CONTEXT, SA_STAGE_ANON };
+
+/* Open the walk over `root`'s descendants with the extreme at `seed`. The cursor starts at `root` itself, whose
+   own margin edge is the caller's while its two shapes of §9.4.2's context are folded by the walk's steps: the
+   anonymous inline boxes around its descendant text nodes are descendants' boxes. */
 static void sa_walk_open(ScrollingAreaWalk *w, lxb_dom_element_t *root, lxb_dom_element_t *exclude_under,
                          CssPx seed)
 {
-    LayoutJobDrive d;
-
     w->root = root;
     w->exclude_under = exclude_under;
     w->best = seed;
-    /* Folding into an extreme is idempotent, so an attempt that answered "not yet" part way is retried whole. */
-    layout_job_drive_begin(&d);
-    while (!sa_inline_context_extreme(root, w->vertical, w->ending_at_hi, &w->best) ||
-           !sa_anon_block_boxes_extreme(root, w->vertical, w->ending_at_hi, &w->best))
-        (void)block_flow_drive_deferred(&d);
-    layout_job_drive_end(&d);
-    w->n = lxb_dom_interface_node(root)->first_child;
+    w->n = lxb_dom_interface_node(root);
+    w->stage = SA_STAGE_EDGE;
+    w->anon = 0;
 }
 
-/* Fold the next descendant node in tree order into the extreme, and advance the cursor past it. Answers false
-   ("not yet") when a question the node's edges asked was deferred: the cursor stays on the node. */
+/* Fold the cursor node's next box into the extreme, advancing the cursor past the node after its last one.
+   Answers false ("not yet") when a question that box asked was deferred: the cursor stays on it, and folding is
+   idempotent, so the retry folds it again to the same extreme. */
 static bool sa_walk_fold(ScrollingAreaWalk *w)
 {
     lxb_dom_node_t *root = lxb_dom_interface_node(w->root), *n = w->n;
@@ -421,7 +414,11 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                `el`. So a descendant of an out-of-flow box is IN the scrolling area while the box itself is
                out of it, and the inline formatting context an excluded box establishes is folded for the
                same reason: the anonymous inline boxes on its lines have IT as their containing block. */
-            if (w->exclude_under == NULL || !sa_excluded(w->exclude_under, d)) {
+            bool last = false;
+
+            /* The walk root's own margin edge is its caller's. */
+            if (w->stage == SA_STAGE_EDGE && n != root &&
+                (w->exclude_under == NULL || !sa_excluded(w->exclude_under, d))) {
                 /* WHICH DERIVATION ANSWERS THIS BOX'S MARGIN EDGE is CSS 2.2 §9.2.2's own split between an
                    inline box and everything else, asked here because §9.4.2 gives the first a SET of
                    border areas and no `width` or `height` to size one with. */
@@ -431,12 +428,23 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
 
                 if (!ready) return false;
                 w->best = w->ending_at_hi ? css_px_max(w->best, e) : css_px_min(w->best, e);
+                w->stage = SA_STAGE_CONTEXT;
+                return true;
             }
-            /* A "not yet" here leaves the edge folded and the cursor on `d`: folding is idempotent, so the
-               retry folds it again to the same extreme. */
-            if (!sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, &w->best) ||
-                !sa_anon_block_boxes_extreme(d, w->vertical, w->ending_at_hi, &w->best))
-                return false;
+            if (w->stage == SA_STAGE_EDGE) w->stage = SA_STAGE_CONTEXT;
+            if (w->stage == SA_STAGE_CONTEXT) {
+                bool context = block_flow_establishes_inline_context(d);
+
+                if (context && !sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, &w->best)) return false;
+                w->stage = SA_STAGE_ANON;
+                w->anon = 0;
+                if (context) return true;
+            }
+            if (!sa_anon_block_box_fold(d, w->anon, w->vertical, w->ending_at_hi, &w->best, &last)) return false;
+            if (!last) {
+                w->anon++;
+                return true;
+            }
         }
     } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
         lxb_dom_element_t *parent;
@@ -525,6 +533,8 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                   "core/layout/replaced_element.c's own gap for exactly case (3), in place of this one",
                   box_subject(parent, pbuf, sizeof pbuf), box_subject(w->root, wbuf, sizeof wbuf));
     }
+    w->stage = SA_STAGE_EDGE;
+    w->anon = 0;
     if (descend && n->first_child != NULL) { w->n = n->first_child; return true; }
     while (n != root && n->next == NULL) n = n->parent;
     w->n = n == root ? NULL : n->next;

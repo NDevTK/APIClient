@@ -378,8 +378,8 @@ static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el
     es_area_begin(w);
 }
 
-/* One rest unit of the open box's area walks, or, once both are complete, the visit. The descendants are
-   the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures them against the slice; the
+/* One rest unit of the open box's area walks, or, once both are complete, the visit. The boxes the walk folds
+   are the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures them against the slice; the
    unit also ends when the drive spends its bodies (REST_UNIT_LAYOUT_BODIES). */
 static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavior)
 {
