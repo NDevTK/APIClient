@@ -1352,6 +1352,7 @@ enum {
     NAV_LOAD_ARG_REFERRER_POLICY,              /* …its referrer policy item, or JS_NULL for none stated */
     NAV_LOAD_ARG_DOCUMENT_RESOURCE,            /* §7.4.2.2's documentResource: §4.8.5's srcdoc text, or JS_NULL */
     NAV_LOAD_ARG_REQUEST_REFERRER_POLICY,      /* §7.4.2.2's referrerPolicy: the document state's request one */
+    NAV_LOAD_ARG_INITIATOR_DOCUMENT,           /* §7.4.2.2's sourceDocument, by its world document name */
     NAV_LOAD_ARG_COUNT
 };
 
@@ -1727,26 +1728,31 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "script source as the request target. The branch is in navigable_navigate, which every navigation "
            "converges on, so whatever enqueued this load bypassed it");
     if (fetches && !s->req) {
-        /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><url>` — the address last, as on the
-           pending line, so every fixed-vocabulary token comes first and the URL is the remainder. The
-           provenance says what the load is evidence of, the drive mark whose act it is and the witness mark
-           whether its path chose a value; the host decides from all three. */
+        /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB>
+           <initiator><TAB><url>` — the address last, as on the pending line, so every fixed-vocabulary token
+           comes first and the URL is the remainder. The provenance says what the load is evidence of, the drive
+           mark whose act it is and the witness mark whether its path chose a value; the host decides from all
+           three. The destination and referrer policy are §7.4.5's request's, and the initiator is §7.4.2.2's
+           sourceDocument, which for a create's own load is the creator its `navigable.request` named. */
         const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
         const char *drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
         const char *pin = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PINNED));
         char *dest = nav_request_destination(ctx, proxy);
         char *refpol = nav_request_referrer_policy(ctx, s);
+        const char *init = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_INITIATOR_DOCUMENT));
         char *op;
 
-        CHECK(prov != NULL && drv != NULL && pin != NULL,
+        CHECK(prov != NULL && drv != NULL && pin != NULL && init != NULL,
               "navigable: OOM taking §7.4.5's provenance off the load job");
-        op = malloc(strlen(addr) + strlen(prov) + strlen(drv) + strlen(pin) + strlen(dest) + strlen(refpol) + 24);
+        op = malloc(strlen(addr) + strlen(prov) + strlen(drv) + strlen(pin) + strlen(dest) + strlen(refpol) +
+                    strlen(init) + 24);
         CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
-        sprintf(op, "document.fetch\t%s\t%s\t%s\t%s\t%s\t%s", prov, drv, pin, dest, refpol, addr);
+        sprintf(op, "document.fetch\t%s\t%s\t%s\t%s\t%s\t%s\t%s", prov, drv, pin, dest, refpol, init, addr);
         s->req = engine_host_request(ctx, op);
         free(op);
         free(refpol);
         free(dest);
+        JS_FreeCString(ctx, init);
         JS_FreeCString(ctx, pin);
         JS_FreeCString(ctx, drv);
         JS_FreeCString(ctx, prov);
@@ -2642,7 +2648,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
        hand-written enumeration is two copies of one number with only one of them ever read. */
     JSValueConst argv[NAV_LOAD_ARG_COUNT];
     JSValue fn, url, org, csp, self, about, prov, drv, pin, res;
-    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol, reqpol;
+    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ, refpol, reqpol, initdoc;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
@@ -2812,6 +2818,10 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
            "not define — every caller states its operation's, the empty string included");
     reqpol = JS_NewString(ctx, request_referrer_policy);
     CHECK(!JS_IsException(reqpol), "the document-load job's request referrer policy could not be allocated");
+    /* §7.4.2.2's sourceDocument: every caller enqueues from the initiator's own realm (the creator for a create,
+       the navigating document for a navigate, the reloading one for a reload). */
+    initdoc = JS_NewString(ctx, world_doc_name(document_doc(ctx)));
+    CHECK(!JS_IsException(initdoc), "the document-load job's initiator document could not be allocated");
     argv[NAV_LOAD_ARG_PROXY] = proxy;
     argv[NAV_LOAD_ARG_URL] = url;
     argv[NAV_LOAD_ARG_INITIATOR_ORIGIN] = org;
@@ -2829,9 +2839,11 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[NAV_LOAD_ARG_REFERRER_POLICY] = refpol;
     argv[NAV_LOAD_ARG_DOCUMENT_RESOURCE] = res;
     argv[NAV_LOAD_ARG_REQUEST_REFERRER_POLICY] = reqpol;
+    argv[NAV_LOAD_ARG_INITIATOR_DOCUMENT] = initdoc;
     JS_EnqueueCallTask(ctx, fn, COUNTOF(argv), argv,
                        TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.2.2 step 21 */
     JS_FreeValue(ctx, reqpol);
+    JS_FreeValue(ctx, initdoc);
     JS_FreeValue(ctx, res);
     JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, refpol);

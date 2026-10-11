@@ -1859,20 +1859,17 @@ async function seedReferrerPolicy(documentId) {
 }
 
 /* seedSpeaker: the seed of the live document `msg`, re-loading what the browser's navigation loaded. A
-   sub-frame's navigation had its parent document as client, so the load speaks as that parent, found by the
-   browser's own `parentDocumentId`. Its request is the one the parent's instance created that child with
-   (seedChildRequest, which waits for that create): HTML §7.4.5's destination and the request referrer policy
-   after Fetch §4.1 Main fetch, which reads the container's `referrerpolicy` and the parent's container at the
-   create. Where that instance left the pool without creating a child at this address, the load states
-   DOCUMENT_REQUEST_UNSTATED under the parent's container policy (HTML §4.8.5's "navigate an iframe or frame"
-   navigates using the element's node document). A top-level navigation's initiator is not recorded, so the
-   document speaks as itself with no referrer.
-   Named residual. Not covered: a top-level document's initiator; a same-origin child whose browser load
-   redirected, which waits for its parent's instance to leave the pool (only a cross-origin child's load records
-   its final address); and a parent whose seed no instance installed (itself a sub-frame). The next diff puts the
-   creating document on the `document.fetch` record so its final address is recorded too. Their absence shows as
-   a seed load's Referer, Sec-Fetch-Site and Sec-Fetch-Dest differing from the browser's navigation of that
-   document, and as a redirected same-origin frame whose seed is not loaded while its parent's instance runs. */
+   sub-frame's navigation had its parent document as client, found by the browser's `parentDocumentId`, and its
+   request is the one the parent's instance created the child with (seedChildRequest waits for that create):
+   HTML §7.4.5's destination and the request referrer policy after Fetch §4.1 Main fetch. Where that instance
+   left the pool without creating it, the load states DOCUMENT_REQUEST_UNSTATED under the parent's container
+   policy. A top-level navigation's initiator is not recorded, so the document speaks as itself, no referrer.
+   Named residual. Not covered: a top-level document's initiator; a parent whose seed no instance installed (a
+   sub-frame, built by its embedder's instance under an engine name); and a frame the parent's instance never
+   creates (a container not built, a branch not reached), whose seed waits for that instance to leave the pool.
+   The next diff binds an engine-named child document to the browser's documentId when the zone loads it. Their
+   absence shows as a seed load's Referer, Sec-Fetch-Site and Sec-Fetch-Dest differing from the browser's
+   navigation of that document, and as a seed not loaded while its parent's instance runs. */
 function seedSpeaker(msg) {
   return async () => {
     const frames = await swRpc("webNavigation.getAllFrames", { tabId: msg.groupId });
@@ -1916,6 +1913,15 @@ function childRequestRecord(creator, address, facts) {
   if (!c.facts.has(address)) c.facts.set(address, facts);
   const w = c.waiters.get(address);
   if (w !== undefined) { c.waiters.delete(address); for (const resolve of w) resolve(c.facts.get(address)); }
+}
+
+/* A child load of `named` by `creator` landed on `landed`, the address the browser's own sub-frame reports after
+   redirects, so that address answers with the facts the create named. A load no create announced (a later
+   navigation of the frame) has none to file. */
+function childRequestAlias(creator, named, landed) {
+  const c = childRequestsOf(creator);
+  const n = new URL(named).href;
+  if (c.facts.has(n) && URL.canParse(landed)) childRequestRecord(creator, new URL(landed).href, c.facts.get(n));
 }
 
 /* The instance `eng` has left the pool: every document it held creates no more children, so their waiting seeds
@@ -3712,14 +3718,7 @@ async function hostNotice(eng, line) {
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
     const loaded = await eng.fetchedDocument(f[3], f[15], f[17], f[18], /*refusalArm*/"none",
                                              DOCUMENT_REQUEST_UNSTATED);
-    /* The address the child's load landed on is the one the browser's own sub-frame reports, so it answers with
-       the facts of the address the create named. */
-    {
-      const c = childRequestsOf(f[2]);
-      const named = new URL(f[3]).href;
-      if (c.facts.has(named) && URL.canParse(loaded.url))
-        childRequestRecord(f[2], new URL(loaded.url).href, c.facts.get(named));
-    }
+    childRequestAlias(f[2], f[3], loaded.url);
     /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
        this zone followed), not the notice's f[4]: SECURITY.md makes routing and the origin stamped on a
        delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance
@@ -4280,23 +4279,24 @@ async function engineServiceHostRequests(eng) {
     }
     if (!op.startsWith("document.fetch\t")) continue;
     /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB>
-       <url>`, split at the first six tabs after the verb so the address is the remainder. A URL cannot contain a
-       tab (URL Standard §4.4 URL parsing strips them), the first four tokens are lowercase words, and the
-       referrer policy is a Referrer Policy §3 policy or "" (core/frame/navigable.c's HTML §7.4.5 request after
-       Fetch §4.1 Main fetch). Indexed rather than split on every tab, which would silently take the tail of a
-       malformed record. */
+       <initiator><TAB><url>`, split at the first seven tabs after the verb so the address is the remainder. A URL
+       cannot contain a tab (URL Standard §4.4 URL parsing strips them), the first four tokens are lowercase words,
+       the referrer policy is a Referrer Policy §3 policy or "" (core/frame/navigable.c's HTML §7.4.5 request after
+       Fetch §4.1 Main fetch), and the initiator is HTML §7.4.2.2's sourceDocument by its engine name. Indexed
+       rather than split on every tab, which would silently take the tail of a malformed record. */
     const fetchArgs = op.slice("document.fetch\t".length);
     const fetchTab = fetchArgs.indexOf("\t");
     const drivenTab = fetchTab > 0 ? fetchArgs.indexOf("\t", fetchTab + 1) : -1;
     const pinnedTab = drivenTab > 0 ? fetchArgs.indexOf("\t", drivenTab + 1) : -1;
     const destTab = pinnedTab > 0 ? fetchArgs.indexOf("\t", pinnedTab + 1) : -1;
     const policyTab = destTab > 0 ? fetchArgs.indexOf("\t", destTab + 1) : -1;
+    const initTab = policyTab > 0 ? fetchArgs.indexOf("\t", policyTab + 1) : -1;
     DCHECK(fetchTab > 0 && drivenTab > fetchTab + 1 && pinnedTab > drivenTab + 1 && destTab > pinnedTab + 1 &&
-           policyTab > destTab && policyTab < fetchArgs.length - 1,
+           policyTab > destTab && initTab > policyTab + 1 && initTab < fetchArgs.length - 1,
            "a document.fetch request is not `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB>" +
-           "<destination><TAB><referrer policy><TAB><url>`: `" + op + "` — core/frame/navigable.c writes all " +
-           "seven fields on every path, the policy possibly empty, so this zone and that job no longer share a " +
-           "grammar, and the address read out of it would be a token");
+           "<destination><TAB><referrer policy><TAB><initiator><TAB><url>`: `" + op + "` — core/frame/navigable.c " +
+           "writes all eight fields on every path, the policy possibly empty, so this zone and that job no longer " +
+           "share a grammar, and the address read out of it would be a token");
     const fetchRequest = { destination: fetchArgs.slice(pinnedTab + 1, destTab),
                            referrerPolicy: fetchArgs.slice(destTab + 1, policyTab) };
     /* Issued, not awaited, for the XHR seam's reason (a page states a document load with `location.href` or an
@@ -4305,11 +4305,16 @@ async function engineServiceHostRequests(eng) {
     did += engineIssue(eng, "doc\n" + id,
       /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
          parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
-      () => eng.fetchedDocument(fetchArgs.slice(policyTab + 1), fetchArgs.slice(0, fetchTab),
+      () => eng.fetchedDocument(fetchArgs.slice(initTab + 1), fetchArgs.slice(0, fetchTab),
                                 fetchArgs.slice(fetchTab + 1, drivenTab),
                                 fetchArgs.slice(drivenTab + 1, pinnedTab), /*refusalArm*/"rendezvous",
                                 fetchRequest),
-      (r) => engineDeliverDocument(eng, id, r));
+      /* A same-origin child's load files its landed address under its create's facts, as a cross-origin one's
+         does in the `navigable.create` arm. */
+      (r) => {
+        childRequestAlias(fetchArgs.slice(policyTab + 1, initTab), fetchArgs.slice(initTab + 1), r.url);
+        return engineDeliverDocument(eng, id, r);
+      });
     continue;
   }
   return did;

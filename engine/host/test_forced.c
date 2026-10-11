@@ -5357,8 +5357,8 @@ static int hostreq_answer_all(JSContext *ctx)
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
                 /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer
-                   policy><TAB><url>` — the ADDRESS IS THE REMAINDER, past the SIXTH tab. This fixture reads the
-                   five fields before it nowhere: it stands in
+                   policy><TAB><initiator><TAB><url>` — the ADDRESS IS THE REMAINDER, past the SEVENTH tab. This
+                   fixture reads the six fields before it nowhere: it stands in
                    for a trusted zone's network and has no session to spend. Skipping them is not optional —
                    the response-URL write below would make a glued token part of that Document's ORIGIN. */
                 const char *prov_end = memchr(tab + 1 + 15, '\t', (size_t)(end - (tab + 1 + 15)));
@@ -5371,7 +5371,8 @@ static int hostreq_answer_all(JSContext *ctx)
                                                : NULL;
                 const char *rp_end = dest_end ? memchr(dest_end + 1, '\t', (size_t)(end - (dest_end + 1)))
                                               : NULL;
-                const char *asked = rp_end ? rp_end + 1 : end;
+                const char *init_end = rp_end ? memchr(rp_end + 1, '\t', (size_t)(end - (rp_end + 1))) : NULL;
+                const char *asked = init_end ? init_end + 1 : end;
 
                 v = JS_NewObject(ctx);
                 /* FETCH §2.2.6 "Responses"' RESPONSE URL, WHICH THIS FIXTURE SERVES OUT OF A LITERAL AND
@@ -5380,10 +5381,10 @@ static int hostreq_answer_all(JSContext *ctx)
                    satisfy a reader. HTML §7.4.5 determines the loaded Document's ORIGIN over this string, so a
                    host that DID redirect would put a different one here and the Document would belong to
                    another agent cluster. */
-                DCHECK(rp_end != NULL && asked < end,
-                       "a document.fetch request carried no address after its provenance, two marks, destination "
-                       "and referrer policy — the load job writes `document.fetch<TAB><provenance><TAB><driven>"
-                       "<TAB><pinned><TAB><destination><TAB><referrer policy><TAB><url>` "
+                DCHECK(init_end != NULL && asked < end,
+                       "a document.fetch request carried no address after its provenance, two marks, destination, "
+                       "referrer policy and initiator — the load job writes `document.fetch<TAB><provenance><TAB><driven>"
+                       "<TAB><pinned><TAB><destination><TAB><referrer policy><TAB><initiator><TAB><url>` "
                        "(core/frame/navigable.c), so a missing tab or an empty tail is that record's two ends "
                        "disagreeing rather than a page navigating to nothing");
                 if ((size_t)(end - asked) >= sizeof FIXTURE_CROSS_SITE - 1 &&
