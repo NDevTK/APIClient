@@ -1020,6 +1020,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragplace.h"
 #include "fixture/fragxml.h"
 #include "fixture/fragce.h"
+#include "fixture/fragscript.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
 
@@ -1444,6 +1445,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "fragplace", HTML_FRAGPLACE },
     { "fragxml", HTML_FRAGXML },
     { "fragce", HTML_FRAGCE },
+    { "fragscript", HTML_FRAGSCRIPT },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
 };
@@ -11633,6 +11635,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              param_value_is(js, "/api/fragce", "v", "3") && param_value_is(js, "/api/fragce", "u", "true"),
              "the /api/fragce record does not say the constructor ran once, after all three children were placed, "
              "and upgraded the element");
+    /* The fragment members' two ways into the page's code, both after DOM §4.2.3 insert's per-node loop: a
+       `script` target's children changed steps, and setHTMLUnsafe's runScripts post-connection steps. */
+    const char *fragscript_why = NULL; int fragscript_tt = 1;
+    fold_row(&fragscript_tt, &fragscript_why, !!strstr(js, "\"/api/fragscript\""),
+             "NOT REACHED: there is no /api/fragscript record at all, so the script's children changed steps "
+             "never ran it");
+    fold_row(&fragscript_tt, &fragscript_why, param_value_is(js, "/api/fragscript", "v", "1"),
+             "the /api/fragscript record does not say the script ran with its one Text child in place");
+    fold_row(&fragscript_tt, &fragscript_why, param_value_is(js, "/api/fragscriptu", "w", "3"),
+             "the /api/fragscriptu record does not say the runScripts script ran after all three of its target's "
+             "children were inserted — DOM §4.2.3 insert runs the post-connection steps after its per-node loop");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15440,6 +15453,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "frag-place", fragplace_tt, "/api/fragplace", SESS_EXPLORE, fragplace_why },
         { "frag-xml", fragxml_tt, "/api/fragxml", SESS_EXPLORE, fragxml_why },
         { "frag-ce", fragce_tt, "/api/fragce", SESS_EXPLORE, fragce_why },
+        { "frag-script", fragscript_tt, "/api/fragscript", SESS_EXPLORE, fragscript_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },

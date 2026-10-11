@@ -1046,6 +1046,9 @@ bool    idl_dict_bool_at(JSContext *ctx, JSValueConst dict, const char *name,
    with no request outstanding is asserted. */
 typedef struct {
     void *(*take)(JSContext *ctx);                 /* everything recorded so far, or NULL; leaves none behind */
+    /* Everything recorded since, appended to `buf`, a buffer `take` returned and no `step` has walked yet; returns
+       the buffer, which may have moved. One member's records across several body steps are then one batch. */
+    void *(*take_more)(JSContext *ctx, void *buf);
     /* One node; returns a step code. `in`/`out_cb`/`out_argc` are the step-machine request contract. */
     int   (*step)(JSContext *ctx, void *buf, JSStepHdr *h, JSValue in, JSValue **out_cb, int *out_argc);
     void  (*release)(JSContext *ctx, void *buf);

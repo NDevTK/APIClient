@@ -2350,6 +2350,28 @@ static void *element_tree_steps_take(JSContext *ctx)
     return b;
 }
 
+/* The same copy onto a held batch. Only an unwalked buffer may grow: the walk's cursors index `e[]`, and
+   staticNodeList is filled by the walk, so an entry added behind a started walk would be missed by step 11 or
+   reached after step 12 began. */
+static void *element_tree_steps_take_more(JSContext *ctx, void *vb)
+{
+    TreeStepBuf *b = vb;
+
+    DCHECK(b != NULL, "records were appended to no tree-steps batch");
+    DCHECK(b->i == 0 && b->k == 0 && b->phase == TS_PHASE_INSERTION && b->nphase == TS_NODE_EFFECTS &&
+               b->list_n == 0 && b->pcphase == TS_PC_STEPS,
+           "records were appended to a tree-steps batch whose walk has begun — the member must hold its batch "
+           "unwalked until it drains it");
+    if (!g_ts_n) return b;
+    b = js_realloc(ctx, b, sizeof(TreeStepBuf) + sizeof(TreeStepEntry) * (size_t)(b->n + g_ts_n));
+    CHECK(b != NULL, "the tree-steps buffer could not grow — dropping it means an inserted <script> never runs "
+                     "and a custom element never upgrades, silently");
+    memcpy(b->e + b->n, g_ts, sizeof *b->e * (size_t)g_ts_n);
+    b->n += g_ts_n;
+    g_ts_n = 0;
+    return b;
+}
+
 static bool element_tree_steps_recorded(void) { return g_ts_n != 0; }
 
 /* §4.2.3 insert step 11 — "for each shadow-including inclusive descendant inclusiveDescendant of node, in
@@ -2907,8 +2929,8 @@ static void element_tree_steps_unlock(JSContext *ctx, void *vb)
 }
 
 static const IdlTreeSteps ELEMENT_TREE_STEPS = {
-    element_tree_steps_take, element_tree_steps_step, element_tree_steps_free, element_tree_steps_recorded,
-    element_tree_steps_visit, element_tree_steps_unlock
+    element_tree_steps_take, element_tree_steps_take_more, element_tree_steps_step, element_tree_steps_free,
+    element_tree_steps_recorded, element_tree_steps_visit, element_tree_steps_unlock
 };
 
 /* §4.9 `[SameObject] readonly attribute NamedNodeMap attributes`. [SameObject] is an identity the IDL states,

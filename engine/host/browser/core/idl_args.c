@@ -3701,11 +3701,21 @@ static void idl_free_vec(JSContext *ctx, JSValue *vec, int n)
     "Split the member so the mutation and the throw are different stages"
 
 /* Take whatever the mutation chokepoints recorded while the body ran. Called at EVERY boundary a body returns
-   through, so a record cannot outlive the member that caused it. */
+   through, so a record cannot outlive the member that caused it; a batch the member still holds unwalked
+   grows instead (idl_tree_held). */
 static void idl_tree_take(JSContext *ctx, JSIdlArgsState *s)
 {
-    if (!g_tree || s->tree) return;
-    s->tree = g_tree->take(ctx);
+    if (!g_tree) return;
+    s->tree = s->tree ? g_tree->take_more(ctx, s->tree) : g_tree->take(ctx);
+}
+
+/* WHETHER THE MEMBER HOLDS ITS BATCH RATHER THAN DRAINING IT: while its body stands where the page's code must
+   not run (JSTrampStepDef.script_forbidden). DOM §4.2.3 insert runs the post-connection steps over staticNodeList
+   only after its per-node loop, and a body that inserts one node per step is in that loop until it leaves the
+   forbidden stages, so its records are one batch drained then — the order the standard gives. */
+static bool idl_tree_held(const JSIdlArgsState *s)
+{
+    return js_idl_args_script_forbidden(s) != NULL;
 }
 
 /* THE DRAIN, one node per entry. It FORWARDS whatever the walk answers with — JS_STEP_YIELD when it has more
@@ -4179,7 +4189,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
        completion no browser produces), and §3.1.7's slot would keep the element for the rest of the session
        because the bracket's other half never ran. The drain below owns `in` on both arms, which is the same
        sentence this file already makes about the normal completion. */
-    if (JS_IsException(cb_result) && !s->tree && !(m->step && m->step->catches_abrupt)) return JS_STEP_ABRUPT;
+    if (JS_IsException(cb_result) && (!s->tree || idl_tree_held(s)) && !(m->step && m->step->catches_abrupt))
+        return JS_STEP_ABRUPT;
 
     /* THE DRAIN COMES FIRST ON EVERY RE-ENTRY, before the conversion loop or the body, because the steps the
        previous step recorded must finish before anything else this member does.
@@ -4189,7 +4200,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
        page's own code (§4.2.3 insert step 12), the value arriving on a re-entry the WALK caused is that
        program's completion, and freeing it would deliver JS_UNDEFINED to a machine standing on a request. The
        drain owns `in` from here, on both arms. */
-    if (s->tree) {
+    if (s->tree && !idl_tree_held(s)) {
         r = idl_tree_drain(ctx, s, cb_result, out_cb, out_argc);
         if (r) return r;
         if (s->tree_after_body) return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
@@ -6120,7 +6131,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         idl_free_vec(ctx, argv_vec, s->n);
         if (r < 0) {
             s->result = JS_UNDEFINED;
-            DCHECK(!g_tree || !g_tree->recorded(), IDL_TREE_THREW);
+            DCHECK((!g_tree || !g_tree->recorded()) && !s->tree, IDL_TREE_THREW);
             s->ce_threw = 1;                              /* §4.13.6 step 2's catch */
             s->ce_exc = JS_GetException(ctx);
             return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
@@ -6129,7 +6140,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            cannot come first there. No step body both mutates the tree and asks the page for something — and if
            one ever does, its steps would run AFTER that page code, which is the ordering §4.2.3 forbids. */
         if (r > 0 && r != JS_STEP_YIELD) {
-            DCHECK(!g_tree || !g_tree->recorded(),
+            DCHECK((!g_tree || !g_tree->recorded()) && (r == JS_STEP_FORK || !s->tree),
                    "a step body mutated the tree and then parked on the page's code — the insertion steps would "
                    "run after that code, which is not the order §4.2.3 states; split the mutation and the "
                    "request into two stages");
@@ -6137,10 +6148,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         }
         idl_tree_take(ctx, s);
         s->tree_after_body = (r == 0);
+        DCHECK(r != 0 || !idl_tree_held(s),
+               "a member's body finished while standing where it forbids script — the batch it holds would be "
+               "drained by no later step");
         /* JS_UNDEFINED IS THE WHOLE OF WHAT A FIRST ENTRY HAS TO SAY: the walk has just been handed its buffer
            and has made no request, so there is no completion owed to it. The re-entry above is the only site
            that ever carries one. */
-        if (s->tree) { int d = idl_tree_drain(ctx, s, JS_UNDEFINED, out_cb, out_argc); if (d) return d; }
+        if (s->tree && !idl_tree_held(s)) {
+            int d = idl_tree_drain(ctx, s, JS_UNDEFINED, out_cb, out_argc);
+            if (d) return d;
+        }
         if (r) return r;
         return idl_ce_finish(ctx, s, JS_UNDEFINED, out_cb, out_argc);
     }

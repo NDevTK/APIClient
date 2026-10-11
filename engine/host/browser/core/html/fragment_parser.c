@@ -126,8 +126,10 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
    sanitizer walk's cursors inside it). It is not copied, because no fork needs it: HTML §8.5.4's setter and the
    members beside it run as one operation in one task, and between the end of the feed and FRAG_DONE nothing runs
    the page's code — §4.2.3's insertion and removal steps enqueue custom element reactions, which run at the
-   member's [CEReactions] epilogue after this machine returns, and queue mutation records; the scripts placed are
-   Inert or land in a DocumentFragment; §7.5.10's destroy steps queue tasks. So a fork the scheduler takes here
+   member's [CEReactions] epilogue after this machine returns, and queue mutation records; the post-connection and
+   children changed steps, which do run it (a Fragment-mode script under setHTMLUnsafe's runScripts, a `script`
+   target's text), are held by the member until FRAG_DONE (idl_args.c's idl_tree_held), as insert's last step
+   orders them; §7.5.10's destroy steps queue tasks. So a fork the scheduler takes here
    (solver/engine.c's decline fork) is taken at the operation's end instead, through JS_FlowUnforkable, and a
    clone that reaches this answer is a fork that did not ask or page code that ran inside the operation. Asked
    at the fork and not inside `visit`, since a machine must never learn which consumer is visiting it. */
