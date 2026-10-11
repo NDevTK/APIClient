@@ -7206,318 +7206,109 @@ static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_no_
 static long g_unit_mid_program;      /* …the member held a live frame: inside a program, the trial continues */
 static long g_unit_parked;           /* …the runtime held a parked continuation: suspended on an await/reply */
 static long g_unit_checkpoint_owed;  /* …the flow still owed its microtask checkpoint: the turn is not over */
-/* …AND WHAT THOSE STEPS COST, IN THE SLICE'S OWN MEASURE. See EngineStepUnitRuns' `step_us` in solver/engine.h
-   for what the quantity covers, why the reading is a RATIO against `g_steps` and never a total, and why it is
-   in that struct rather than beside any other census row. Declared here because this is where its denominator
-   is declared and where the one line that adds to it stands: a total whose numerator and denominator are
-   written in two files is two populations waiting to be divided by one another.
-   IT IS THE SAME MICROSECONDS `flow_age_running` IS CHARGED, TAKEN AT THE SAME LINE. Not a second clock
-   reading — a second reading would be a different quantity wearing this one's name, and the two would drift by
-   whatever ran between them. The charge already asserts the delta is non-negative (flow.c: a negative charge
-   PROMOTES a monopolizer), so this accumulator inherits that guarantee rather than restating it, and it is why
-   `g_step_us` only climbs.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing reads it to decide anything — no watchdog on a step that
-   ran long, no cap on what a turn may cost, no fixpoint over a mean that stopped moving. A per-step time total
-   is exactly the shape the next reader reaches for to build one, which is why that is said here as well as at
-   the header where they meet the number.
-   AND IT IS `int64_t` RATHER THAN `long`, WHICH IS NOT A SPELLING — see solver/engine.h's `step_us` for the
-   arithmetic. The short of it is that the two counters above are counts and this is a CLOCK: on the wasm32
-   instance the extension actually ships, `long` is four bytes, so a microsecond accumulator overflows after
-   35.8 minutes of the slice's own measure, and the reading it feeds does not go absent, it INVERTS. */
+/* What those steps cost in the slice's own measure (solver/engine.h's EngineStepUnitRuns `step_us`: read as a ratio
+   against `g_steps`, never a total). Declared beside its denominator and its one adding line, so numerator and
+   denominator live in one file. It is the same microseconds `flow_age_running` is charged, taken at the same line,
+   not a second clock reading; the charge asserts the delta non-negative (flow.c), so this only climbs. A report
+   only: no watchdog, cap or fixpoint may be built on it. `int64_t`, not `long`: on wasm32 `long` is four bytes, and
+   a microsecond accumulator would overflow after 35.8 minutes and invert its reading. */
 static int64_t g_step_us;
-/* …AND THE ONE SPLIT OF IT THE ROW ABOVE WAS BUILT TO MAKE AND COULD NOT. `step_us / steps` says a turn is
-   slice-bound or it is not, which is the axis solver/engine.h names — and when it says SLICE-BOUND it cannot
-   say WHICH HALF of the turn spent the time, and the two take opposite work. A turn whose STEP overshoots the
-   slice is the quantum having no asynchronous source to expire it (§scheduler: on a single-threaded wasm
-   instance nothing can raise the yield bit mid-call, so a straight-line stretch never evaluates the budget at
-   all); a turn whose PICK and SWAP dominate is the ordering and the delta costing more than the work they
-   order. Those are different components and different diffs, and one number cannot separate them.
-   TWO ROWS AND NOT A SUBTRACTION, for `g_finished`'s reason: a derived half cannot be checked, and the
-   identity `slice + sched == step` is what a later edit that adds a third phase to the turn breaks loudly
-   instead of silently absorbing into whichever half is spelled as the remainder. Asserted where all three are
-   read together.
-   `sched_us` IS EVERYTHING IN THE TURN THAT IS NOT THE STEP, and that is its honest name rather than a
-   shortfall of it: the charge TELESCOPES (solver/engine.h says so), so this arm carries the previous
-   iteration's tail — the microtask checkpoint, the finish — along with this one's pick and swap. That
-   misattribution is the one the row above already declares, and naming the arm for what it covers rather than
-   for the two things a reader expects is what stops it being read as a pick cost.
-   ONE EXTRA CLOCK READ PER TURN AND NOT PER OPCODE, which is the cost this row may have. On the host that
-   ships, `quantum_thread_us` crosses into the embedder, so the frequency is the whole of the price and it is
-   stated here rather than left to be measured: one read per dispatch, beside one that was already taken.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS), for `g_step_us`' reason and with the same hazard — a per-phase time
-   total is exactly what a watchdog on a long step would be built from. */
+/* The split `step_us / steps` cannot make: when a turn is slice-bound, which half spent the time. A step
+   overshooting the slice is the quantum lacking an asynchronous source to expire it (on single-threaded wasm nothing
+   raises the yield bit mid-call); a pick and swap that dominate are the ordering and the delta costing more than the
+   work. Two rows rather than a subtraction, so `slice + sched == step` is asserted where all three are read and a
+   third phase added later breaks it loudly. `sched_us` is everything in the turn that is not the step: the charge
+   telescopes (solver/engine.h), so it carries the previous iteration's tail (checkpoint, finish) with this one's
+   pick and swap. One extra clock read per turn (`quantum_thread_us` crosses into the embedder on the shipped host).
+   A report only. */
 static int64_t g_slice_us, g_sched_us;
-/* …AND WHAT ALL THREE OF THOSE ARE A SHARE OF — see solver/engine.h's `instance_us`. `g_instance_us0` is the
-   first reading of the slice's own measure this instance ever took, so `quantum_thread_us() - g_instance_us0`
-   is the thread measure that has passed since the dispatch loop first ran and the three arms above are the
-   part of it that went into turns.
-   A SEPARATE FLAG AND NOT A SENTINEL VALUE, because there is no reading a clock cannot legitimately return:
-   `quantum_thread_us()` is a thread measure, so 0 is what it answers at the start of a thread and reserving
-   it would make "the loop has not run" and "the loop ran for no measurable time" one state. That is the
-   several-states-behind-one-answer shape, and it would land on the one row a reader consults to decide
-   whether the engine was given the thread at all.
-   SET AT ONE SITE FROM THE READING `engine_sched_step` TAKES AT ITS OWN FIRST LINE — which is the WRAPPER
-   and not the body, and that is a correction rather than a preference. It used to be opened from
-   engine_sched_slice's entry reading, which is one line LATER: the wrapper arms the quantum, restores the
-   flow stamp and the capture route, and asks a stray check before the body is entered at all, so a span
-   opened inside the body excluded work the engine had already done on its own thread. That was invisible
-   while this row had nothing to partition and is not invisible now — `g_loop_us` below is charged from the
-   wrapper's own two readings, so a baseline opened after the first of them would make the partition assert
-   at the accessor fire on the very first slice. One reading, one site, and every charge below is a
-   sub-interval after it.
-   NOT RESET AT A SESSION BOUNDARY, for `g_step_us`' reason exactly: neither is on the session's ledger, and
-   a park that resumes into the same instance resumes into the same thread and the same span. */
+/* What all three are a share of (solver/engine.h's `instance_us`): `g_instance_us0` is the first reading of the
+   slice's measure this instance took, so `quantum_thread_us() - g_instance_us0` is the thread measure since the
+   dispatch loop first ran. A separate flag rather than a sentinel, because 0 is a legitimate thread-clock reading.
+   Set once, from the reading engine_sched_step's wrapper takes at its first line (not engine_sched_slice's entry,
+   one line later): `g_loop_us` is charged from the wrapper's own two readings, so a later baseline would break the
+   partition assert on the first slice. Not reset at a session boundary, for `g_step_us`'s reason. */
 static int64_t g_instance_us0;
 static int     g_instance_us0_set;
-/* …AND THE PARTITION OF THAT SPAN — see solver/engine.h's `loop_us` for what the pair separates and why a
-   small `stepUs/instanceUs` names no component without it. `g_loop_us` is the thread measure spent inside
-   engine_sched_step's bracket, summed over every slice; `g_between_us` is the measure that passed between one
-   slice's RETURN and the next one's ENTRY, which is the host's own time. Their sum plus the span since the
-   last return is `instance_us` exactly, and the accessor asserts it.
-   BOTH CHARGES ARE WRITTEN IN THE WRAPPER AND NOT AT engine_sched_slice's SEVEN RETURNS, which is the same
-   argument engine_sched_step's banner already makes for `quantum_end()`: a charge before every return is the
-   shape where one of them is eventually missing, and a missing one here would not crash — it would put a
-   slice's whole duration into neither row and quietly break the partition at the accessor instead. One
-   bracket around one call cannot be got wrong.
-   TWO EXTRA CLOCK READS PER SLICE AND NOT PER TURN, stated for `g_slice_us`' reason: `quantum_thread_us`
-   crosses into the embedder on the host that ships, so frequency is the whole of the price — and a slice holds
-   MANY turns, so this is strictly cheaper than the pair the dispatch loop already takes per dispatch.
-   `g_slice_exit_us` IS THE PREVIOUS SLICE'S CLOSING READING, CARRIED, so the gap is measured from a reading
-   that was already taken rather than from a third one; `g_slice_exit_set` is a separate flag for
-   `g_instance_us0_set`'s reason exactly, since 0 is a reading a thread clock legitimately returns and
-   reserving it would make "no slice has returned" and "a slice returned at measure zero" one state.
-   `g_slices` IS THEIR DENOMINATOR and is `long` because it counts slices, where the two above accumulate a
-   CLOCK — the same split `g_steps` and `g_step_us` are on one page up, for the same reason.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads any of the four. A count of slices beside what each
-   one cost is exactly the pair a "this engine is not getting enough thread" throttle would be built from, and
-   the gap row is what a host-side watchdog would read. */
+/* The partition of that span (solver/engine.h's `loop_us`): `g_loop_us` is the measure spent inside
+   engine_sched_step's bracket over every slice, `g_between_us` the measure between one slice's return and the next
+   one's entry (the host's time); with the span since the last return they sum to `instance_us`, asserted at the
+   accessor. Both are charged in the wrapper, not at engine_sched_slice's seven returns, for the reason
+   engine_sched_step gives for `quantum_end()`: a charge per return is eventually missed. Two clock reads per
+   slice. `g_slice_exit_us` carries the previous slice's closing reading; `g_slice_exit_set` is a separate flag, as
+   above. `g_slices` is their denominator (`long`: a count, not a clock). A report only. */
 static int64_t g_loop_us;
 static int64_t g_between_us;
 static int64_t g_slice_exit_us;
 static int     g_slice_exit_set;
 static long    g_slices;
-/* THE PARTITION OF THE ABOVE — see solver/engine.h's `slice_overruns` for why a mean of the two arms cannot
-   answer the question their own banner asks. Counted from the SAME two readings the slice arm is accumulated
-   from, so a turn cannot be charged to one and counted by the other. */
+/* The partition of the above (solver/engine.h's `slice_overruns`), counted from the same two readings the slice arm
+   is accumulated from, so a turn cannot be charged to one and counted by the other. */
 static int64_t g_slice_over;
-/* …AND WHETHER THE PATH THOSE TURNS TOOK OFFERED A SUSPEND POINT AT ALL — see solver/engine.h's
-   `slice_overrun_asks` for what the pair separates and why the arm histogram beside it cannot. The count is
-   `g_preempt_asked`'s own, bracketed across the STEP from the same `t_slice0` the row above is accumulated
-   from, so a consultation cannot be charged to a turn the overrun test did not judge.
-   IN EVERY BUILD, for the reason the increment it reads is: this is one LOAD of a static per turn, which is
-   strictly cheaper than that increment, and a release engine that could not say whether an overrunning turn
-   ever reached the interpreter would leave its own arm histogram's conclusion resting on nothing.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on either. A per-turn count of suspend points
-   offered is exactly what a "this flow is not yielding, take the thread" watchdog would be built from. */
+/* Whether the overrunning turns offered a suspend point at all (solver/engine.h's `slice_overrun_asks`):
+   `g_preempt_asked` bracketed across the step from the same `t_slice0`. In every build: one load per turn, and a
+   release engine must be able to say whether an overrunning turn reached the interpreter. A report only. */
 static uint64_t g_over_asks;       /* suspend points offered, summed over the turns that met the slice */
 static long     g_over_seamless;   /* …and how many of those turns offered NOT ONE */
-/* …AND THE LONGEST STRETCH OF ONE OF THOSE TURNS DURING WHICH THE POLICY WAS NOT CONSULTED AT ALL — see
-   solver/engine.h's `over_gap_arms` for why the pair above is a DENSITY and a density cannot tell nine evenly
-   spread stretches from one unbroken run.
-   THE LIFETIME MAXIMUM, AND THE TWO PER-TURN READINGS IT IS BUILT FROM ARE DECLARED WITH preempt_hook rather
-   than here, because that hook is their writer and it stands above this line. `g_gap_last_us` and
-   `g_gap_max_us` carry one turn; this carries the worst such interval over every non-seamless overrunning
-   turn of the run, and it is what the per-arm row is checked against. The cost of the measurement and the
-   reason it is outside the DEV guard are stated at the writer and not restated here.
-   THE LEAD AND THE TAIL ARE PART OF THE GAP. A turn that consulted nine times in its first millisecond and
-   then ran for seven seconds has its whole finding in the stretch between its LAST offer and its end, so the
-   turn's closing reading closes that interval; opening from the turn's own start closes the symmetric one
-   before the first offer. What this reports is therefore the widest span of the turn containing no offer at
-   all, which is the quantity the cooperative contract is about.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS), and this is the sharpest of the four rows: a per-arm worst gap
-   against the budget is exactly the pair a "this arm has not yielded in N ms, take the thread" watchdog is
-   built from. Nothing branches on it. */
+/* The longest stretch of one of those turns during which the policy was not consulted (solver/engine.h's
+   `over_gap_arms`: the pair above is a density, which cannot tell nine spread stretches from one unbroken run).
+   The lifetime maximum over non-seamless overrunning turns; its per-turn readings, `g_gap_last_us` and
+   `g_gap_max_us`, are declared with their writer preempt_hook. The lead and tail count: the closing reading closes
+   the stretch after the last offer, and the turn's opening reading the one before the first. A report only. */
 static int64_t g_over_gap_us;      /* the worst such interval over every non-seamless overrunning turn */
-/* …AND THE ONE PHASE INSIDE A STEP THAT IS O(A LENGTH THE PAGE CHOSE), AND HOW COARSELY IT RESTS.
-   (This headline read `AND OFFERS NO RAISE POINT AT ALL` while the paragraphs under it were rewritten for the
-   seam that gave it one — a retirement that edits the tail and leaves the headline is the shape that goes on
-   asserting the withdrawn claim to anyone who reads only the first line.)
-   `g_slice_over` says a turn met the slice and `g_step_unit_over` beside it says in which ARM. (This
-   sentence said `the row above` until two rows were inserted between it and that one — a reference by
-   POSITION resolves to whatever now occupies the position, so it carries their NAMES.) Neither can say
-   which PHASE of that arm spent the time, and for the start arms the two phases take OPPOSITE work: a start
-   step is a COMPILE (JS_FlowNew -> JS_Eval over `body_n` bytes) and then an EXECUTION (JS_FlowResume), and
-   only the second runs bytecode.
-   THIS BLOCK USED TO READ `THE COMPILE CANNOT BE PREEMPTED AT ANY INPUT SIZE, which is structural rather
-   than measured`, and derived it: quickjs.h declares exactly four raise kinds — JS_PREEMPT_BACKEDGE, _FORK,
-   _CALL and _HOST — the first three are raised only from the interpreter's own dispatch, so a parse raised
-   nothing and polled nothing for its whole length; the parser's own banner at next_token states the other
-   half, that every production is a state on js_parse_descent's explicit frame stack, so the span was flat C
-   with one driving loop and no seam in it. Its size is `body_n`, the quantity solver/rest_unit.h's bound (1)
-   names as the one that must never appear in a step's cost — `the one the ATTACKER chooses`.
-   IT IS REWRITTEN RATHER THAN DELETED BECAUSE EVERY CLAUSE OF IT IS STILL EXACTLY RIGHT ABOUT THE
-   INTERPRETER'S RAISE KINDS, so a reader who re-derives it from quickjs.h will re-add it. What it is no
-   longer right about is the PARSE: JS_FlowCompileStep polls the same budget hook and the same preempt policy
-   from the parse's own production dispatch and hands the parse back through `f->compile`, so the span these
-   rows were written about now RESTS. The rows stay and what they COUNT changed with it — see THE TWO ROWS
-   ARE COUNTS OF DIFFERENT EVENTS below, which is the half that was not carried to the checks that read them.
-   WHY THIS IS NOT THE PER-ARM TIME solver/engine.h DECLINES. That paragraph refuses a time accumulator per arm
-   because it answers WHERE THE RUN WENT, which is a question about MASS, where the arm histogram answers WHICH
-   ARM CANNOT REST, which is about TRANSPORT. These two are the second question: a COUNT of compile STINTS
-   whose own duration met the slice counts spans in which the parse's rest seam DID NOT FIRE — which used to
-   be `spans that could not have rested however the scheduler was ordered`, and is now the sharper statement,
-   because a stint that reaches the slice is one whose rest point was too far apart to be reached in time.
-   AND IT SETTLES A DISAGREEMENT THIS TREE ALREADY HAS WITH ITSELF. solver/engine.h's `over_arms` records a
-   retired mechanism — that a unit running ENGINE C rather than page bytecode has nothing to raise the request
-   — and refutes it on the native smoke: `start-ended-its-frame` ran 153 times and overran NOT ONCE, so
-   `the compile is not what holds the slice`. That refutation is sound about the population it was taken over
-   cannot reach this one, and the reason is not merely that a fixture's programs are short. The two start rows
-   it compares differ in OUTCOME, and outcome is CORRELATED WITH SOURCE LENGTH — a program that runs to
-   completion inside one step is a short program and one still running at the slice boundary is a long one —
-   so the comparison is STRATIFIED BY THE VERY VARIABLE IN QUESTION and 0 of 153 is evidence about short
-   compiles only. These rows answer it without inferring anything from an outcome.
-   THE THREE STATES THEY SEPARATE, which is what makes the pair a reading rather than two numbers. Against the
-   count of programs a document actually reached: `classicCompiles` near that count with `classicCompileOverruns`
-   at 0 says the compile is not the cost and the next question is the bytecode between the page's own raise
-   points; a nonzero `classicCompileOverruns` says one STINT of a parse ran to the slice boundary with the
-   seam not firing in it, which names the production dispatch's own GRANULARITY — how much of a parse one
-   rest point covers — and no longer names the descent loop as a span to convert, because it has been; and
-   the REPEAT is the third state, which `classicCompileAgain` states DIRECTLY and which this paragraph used to
-   have its reader INFER.
-   THE THIRD STATE'S SENTENCE READ `classicCompiles far above that count says the compile is being REPEATED per
-   flow that crosses a program boundary`, AND THAT INFERENCE IS UNSOUND — it is kept in its own words because it
-   is what a reader re-derives from two counters printed side by side, and because it is the sentence a brief
-   was written out of and a lane was dispatched on. Its numerator's population is wider than its denominator's
-   on TWO INDEPENDENT AXES AT ONCE. (i) FLOWS AND TIMELINES: a fork inherits `last_compiled`, so a sibling does
-   not re-parse the program it branched inside and DOES parse every later program of the sequence itself; an @S
-   candidate session and a cold-resumed replay re-run the document from the baseline and parse its own programs
-   again, which the compile site's own arm comment names as correct. (ii) ROWS: `classicCompiles` counts every
-   APPENDED row as well as every seeded one — a lazy chunk, an injected `<script>`, a `javascript:` URL, a
-   peer's operation, a value dump — and a modern bundle's chunks are the bulk of that, each one DISTINCT BYTES.
-   So a figure many times a document's own `<script>` count is what a healthy run of such a page MUST read, and
-   the reading that called it a repeat cannot tell that page from one that is re-parsing.
-   AND THE DENOMINATOR IT ASKS FOR IS NOT PUBLISHED AT ALL, which is the same defect the tree already records
-   one row over: solver/flow.c's account of `progStarts` read against `rootPrograms` — a count of program STARTS
-   across every flow and every timeline differenced against a count of the document's own ROWS, which agreed by
-   coincidence on one document and was quoted onward as evidence for the method. `rootPrograms` is the nearest
-   published row to `the programs a document reached` and it is narrower on both axes above.
-   WHAT REPLACES THE INFERENCE IS AN OBSERVATION AND NEEDS NO DENOMINATOR (CLAUDE.md
-   §a-bare-count-over-a-population-you-have-not-partitioned): `classicCompileAgain` is the parses whose BYTES
-   some flow of this process had already parsed to completion, partitioned off this same total at this same
-   event, so `again` near 0 with `classicCompiles` far above the document's program count is CHUNK DISCOVERY and
-   `again` large is the repeat, with no reading in which the two look alike. `classicCompileAgainBytes` prices
-   it, because the diff §A-CAPABILITY-MATERIALIZED-PER-FLOW would justify is a megabyte-scale one and a count of
-   repeats says nothing about cost until the lengths are beside it.
-   TWO EXTRA CLOCK READS PER COMPILE AND NOT PER TURN, stated for `g_slice_us`' reason: `quantum_thread_us`
-   crosses into the embedder on the host that ships, so frequency is the whole of the price — and a compile
-   happens once per program a flow starts, where the turn's own pair is taken once per dispatch.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing reads either to decide anything: no refusal of a long
-   source, no cap on what a compile may cost, no fallback that skips one. A per-compile duration test is
-   exactly what a watchdog on a large chunk would be built from, which is why that is said here as well as at
-   the header where a reader meets the numbers.
-   THE TWO ROWS ARE COUNTS OF DIFFERENT EVENTS AND NEITHER IS A SUBSET OF THE OTHER, which is what the rest
-   seam changed and is stated here because the site raises them on two lines a few apart and they read as a
-   pair. A PROGRAM is parsed over one or more STINTS. `g_classic_compiles` is raised once per PROGRAM, at
-   the stint that FINISHES the parse whatever that parse produced; `g_classic_compile_over` is raised once
-   per STINT whose own duration met the slice. So a program parsed over several overrunning stints
-   contributes SEVERAL overruns and ONE compile, and `over <= compiles` is not an invariant and has not been
-   one since the seam landed. It is §AND-THE-DENOMINATOR-CAN-BE-THE-RIGHT-KIND exactly: two counters, each
-   honest about its own event, raised at DIFFERENT events and read as a ratio. The denominator stays
-   per-PROGRAM deliberately — the reason is at the raise site and it is the reading `classicCompiles` exists
-   for, so re-basing it on stints would answer how many times the scheduler LOOKED at a parse instead.
-   AND THE OVERRUN'S OWN DENOMINATOR IS DERIVED RATHER THAN MINTED, because this file already counts both
-   ways a stint can end and a third accumulator would be a second answer to a question already answered
-   (CLAUDE.md §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q": two right answers to one question is the shape
-   that drifts). Every stint ends in exactly one of two arms of ONE straight-line block: it PARKS (`cr == 0`),
-   which names the step STEP_UNIT_COMPILE_YIELDED and therefore raises `g_step_unit_runs[]` at that arm when
-   flow_step returns; or it FINISHES, which raises `g_classic_compiles`. That step name is set at exactly one
-   site in the whole file, the arm count is raised unconditionally at the one convergence point after
-   flow_step, and none of the three accumulators is ever released — so the identity is exact for the life of
-   the process and survives a session close, which is why it is an equality and not a floor:
-
-       compile STINTS == g_classic_compiles + g_step_unit_runs[STEP_UNIT_COMPILE_YIELDED]
-
-   and `g_classic_compile_over <= that sum` is the containment engine_step_unit_runs asserts, where all
-   three are in one hand.
-   `compile STINTS` THERE MEANS CLASSIC ONES, AND IT MEANS IT BY CONSTRUCTION RATHER THAN BY A READER
-   REMEMBERING. §8.1.4.4 "Calling scripts"' MODULE entry parks a parse into the same `f->compile` field now,
-   and it names its own row (`module-compile-handed-the-thread-back`) precisely so that this equality keeps
-   being an equality: a module park filed under the classic row would put stints on the right-hand side that
-   none of the three counters above counts, and the EQUALITY would silently become an inequality while both
-   asserted containments stayed true. solver/step_unit.h records that decision at the arm.
-   RETIREMENT: these two rows go when the parse is a pull whose GRANULARITY solver/rest_unit.h owns — which
-   is NOT the condition that has already landed, and the distinction is the whole of why they are still
-   here. This clause used to read `when a compile can REST`, apposed to the rest_unit half as though they
-   were one condition; a compile CAN rest now, rest_unit.h declares no JS-production kind, and a reader
-   checking the old clause against the tree would have retired two rows that are still the only thing
-   reporting on the new seam. How much of a parse one rest point covers is still decided inside the parser
-   rather than by the scheduler, and these rows are what says whether that granularity is coarse enough to
-   matter. When the ask moves to rest_unit_items, a stint that met the slice is an ordinary preempted span
-   and the count has nothing left to report. */
+/* The one phase inside a step whose cost is a length the page chose: the classic compile. `g_slice_over` and
+   `g_step_unit_over` say a turn met the slice and in which arm, not which phase: a start step is a compile
+   (JS_FlowNew -> JS_Eval over `body_n` bytes) then an execution (JS_FlowResume), and only the second runs bytecode.
+   The parse rests: JS_FlowCompileStep polls the budget hook and preempt policy from the production dispatch and
+   hands back through `f->compile`, so a stint that still meets the slice is one whose rest points were too far
+   apart (the production dispatch's granularity). solver/engine.h's `over_arms` observation (`start-ended-its-frame`
+   ran 153 times and overran never) is stratified by source length, since outcome correlates with it, so it speaks
+   only for short compiles.
+   Readings: `classicCompiles` near the programs reached with `classicCompileOverruns` 0 says the compile is not the
+   cost; nonzero overruns name the parse's granularity; repeats are `classicCompileAgain`. A `classicCompiles` many
+   times a document's `<script>` count is normal (forks parse later programs themselves, @S and cold replays
+   re-parse, and appended rows such as chunks, injected scripts, `javascript:` URLs, operations and dumps count too),
+   and no published row is its denominator (`rootPrograms` is narrower on both axes).
+   The two rows count different events: `g_classic_compiles` once per program, at the stint that finishes its parse;
+   `g_classic_compile_over` once per stint that met the slice, so `over <= compiles` is not an invariant. Every stint
+   parks (naming STEP_UNIT_COMPILE_YIELDED) or finishes (raising `g_classic_compiles`), the step name has one site,
+   and nothing releases the counters, so classic compile stints == g_classic_compiles +
+   g_step_unit_runs[STEP_UNIT_COMPILE_YIELDED], and `g_classic_compile_over` <= that sum is asserted in
+   engine_step_unit_runs. A module parse parks under its own row (`module-compile-handed-the-thread-back`) to keep
+   this an equality. Two clock reads per compile. A report only.
+   Named residual. Not covered: the parse's rest granularity is decided inside the parser, not by the scheduler
+   (rest_unit.h declares no JS-production kind). Next diff builds: the parse as a pull whose granularity
+   solver/rest_unit.h owns (rest_unit_items), after which an overrunning stint is an ordinary preempted span and these
+   rows retire. Absence shows as: nonzero `classicCompileOverruns`. */
 static long g_classic_compiles;       /* classic program compiles, ONE PER PROGRAM, at flow_step's start site */
 static long g_classic_compile_over;   /* compile STINTS that met the slice — NOT a subset of the row above */
-/* AND WHETHER A PARSE THAT HANDED THE THREAD BACK WAS EVER PICKED UP AGAIN, which is the one thing the pair
-   above cannot say and the question a reader of `compile-handed-the-thread-back` actually has. Every compile
-   STINT either BEGINS a parse or CONTINUES one; the stint population is already derived exactly
-   (`g_classic_compiles` + the yielded arm, asserted at the copy-out), and until this row existed nothing
-   partitioned it on that axis — so a stint that resumed a parse and one that started a fresh program were
-   ONE number, in EVERY arm a stint can end in. A resuming stint that parks again is named
-   `compile-handed-the-thread-back` exactly as a first stint is, and one that FINISHES is named by whichever
-   of the start arms its outcome takes — `start-a-classic-program`, one of its three frame-clearing siblings,
-   or `program-did-not-compile` for a parse that ended in a SyntaxError — in each case exactly as a program
-   parsed inside ONE stint is. So there is no arm of the histogram a reader could have differenced to recover
-   this: CLAUDE.md's computed-writer-with-no-reader defect one level up — the operation happens, on a document
-   big enough to be worth interleaving it happens a great many times, and no row anywhere says it happened.
-   WHAT IT DECIDES, AS A SUBTRACTION RATHER THAN AS THIS COUNT. A parse of k stints yields k-1 times if it
-   ENDS and k times while it is still in flight, and is resumed k-1 times either way — so every ENDED parse
-   contributes ZERO to `yielded - resumed` and every parse begun and not ended contributes exactly ONE:
+/* Whether a parse that handed the thread back was picked up again: compile stints that continued a parse rather than
+   beginning one. No arm of the histogram recovers it, since a resuming stint is named like a first stint. A parse of
+   k stints yields k-1 times if it ends (k while in flight) and resumes k-1 times, so
        arms[`compile-handed-the-thread-back`] - classic_compile_resumed
-           == parses suspended right now + parses dropped while suspended
-   That difference is the quantity that separates the two readings a small `classic_compiles` admits. Near
-   zero, the seam is firing and every parse is being carried forward, so a program count below a document's
-   row count is a BUDGET — the parse is making progress and the run ended inside it. Large, parses are being
-   handed back and not picked up, and that is a work item this scheduler is holding and not advancing, which
-   is what §scheduler's razor is about. A reader holding only the yielded arm cannot tell those apart, and
-   both are consistent with every other row on this census.
-   IT IS A COUNT AND NOT A MAXIMUM, DELIBERATELY. The shape a reader reaches for here is the deepest stint
-   count any one parse took, and CLAUDE.md §AND-THE-COUNTER-KIND-NONE-OF-THAT-REACHES is why that is the
-   wrong instrument: a high-water mark SATURATES, so its plateau is indistinguishable from a ceiling and it
-   is not comparable across two runs of different length — which on a wall-denominated slice is every pair of
-   runs. A count is comparable, and the question it is asked is CATEGORICAL: zero against a nonzero yielded
-   arm says no parse in this process was ever continued, which does not depend on how far the run got.
-   HOW ITS OWN ZERO IS SEPARABLE, which a bare count cannot state for itself: the yielded arm is the witness.
-   Both zero is a process in which the parse seam never fired at all — every program parsed inside one stint —
-   and says nothing about resumption. Yielded nonzero with this at zero is the claim above. The two rows are
-   read together or neither is read, which is why the containment below is asserted rather than described.
-   IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS): no parse covers less ground on any reading of it, no
-   stint is refused and no flow is demoted — nothing reads it at all. */
+           == parses suspended now + parses dropped while suspended.
+   Near zero: parses are carried forward, and a low program count is a budget. Large: parses are handed back and not
+   resumed, work this scheduler holds and does not advance. A count, not a maximum: a high-water mark saturates and is
+   not comparable across runs of different length. Both zero means the seam never fired. A report only. */
 static long g_classic_compile_resumed; /* compile STINTS that CONTINUED a parse rather than beginning one */
-/* THE REPEAT, OBSERVED RATHER THAN INFERRED — see the third state above for the inference these replace and
-   solver/dyn_body.h for why the identity is the BODY and not a hash of the source text. All three are raised
-   AT THE SAME EVENT as `g_classic_compiles` — the next statements of one straight-line block, with no branch
-   between them and it — which is what makes the first two a PARTITION of it (the complement
-   is derived and not minted, for the reason the overrun's denominator is) and the third an independent
-   partition of the same population. THE TWO PARTITIONS MAY NOT BE ADDED TO EACH OTHER: `again` and
-   `own_decode` are answers to different questions about one parse, and a parse can be both.
-   `again_bytes` IS int64_t FOR THE REASON `g_step_us` IS, and the arithmetic is worse here: one real bundle
-   ships a 1.4 MB chunk, so a four-byte accumulator of re-parsed bytes turns NEGATIVE after about fifteen
-   hundred repeats of it — which is a plausible count for a page whose frontier forks, and a negative total
-   reads as a cheap engine rather than as a broken number. Asserted at the copy-out beside its neighbours. */
+/* The repeat, observed (solver/dyn_body.h: the identity is the body, not a hash of its text). Raised at the same
+   event as `g_classic_compiles`, the next statements of one straight-line block, so `again` and `own_decode` each
+   partition it (complements derived); they answer different questions about one parse and may not be added
+   together. `again_bytes` is int64_t for `g_step_us`'s reason: one real bundle ships a 1.4 MB chunk, which would
+   overflow a four-byte total after about fifteen hundred repeats. */
 static long    g_classic_compile_again;        /* parses of bytes some flow had ALREADY parsed to completion */
 static int64_t g_classic_compile_again_bytes;  /* and how many source bytes those re-parses covered */
 static long    g_classic_compile_own_decode;   /* parses of a body one flow decoded for its own delivery */
-/* …AND THE PROGRAMS STARTED FROM A PARSE SOMEBODY ELSE HAD ALREADY FINISHED, which is the row WITHOUT WHICH
-   `g_classic_compiles` FALLING IS UNATTRIBUTABLE. A shared parse raises nothing above — it parses no bytes, so
-   it is not a compile, not a repeat and not a stint — and the three rows above therefore report a document
-   whose timelines share their parses as though it had fewer programs, which is EXACTLY the reading that cannot
-   be told from an engine that stopped starting them. THIS ROW IS THAT DISCRIMINATOR AND IT IS A POSITIVE ONE:
-   `classic_compiles + classic_parse_shared` is the number of classic programs whose closure was obtained at
-   all, so the pair is comparable with a pre-sharing revision's `classic_compiles` while neither half is.
-   IT IS NOT A SUBSET OF ANY ROW ABOVE and is not asserted against one: it is raised in the arm where the parse
-   does NOT happen, so it partitions the classic programs STARTED rather than the parses performed, and adding
-   it to `again` or `own_decode` would be adding two answers about different events.
-   WHAT IS ASSERTED AT THE COPY-OUT is the one implication a reader can check without re-deriving anything: a
-   parse can only be SHARED if some parse FINISHED, and the gauge of bodies currently holding one cannot exceed
-   the lifetime count of parses that finished. Both are in one hand there.
-   IT DECIDES NOTHING (§NO BOUNDS): no program is skipped on it, no arm is chosen on it and no source is refused
-   for having been parsed — see solver/dyn_body.h, which owns that argument for the mechanism itself. */
+/* Programs started from a parse another flow finished: without it a falling `g_classic_compiles` is unattributable,
+   since a shared parse parses no bytes and raises nothing above. `classic_compiles + classic_parse_shared` counts the
+   classic programs whose closure was obtained at all, comparable with a pre-sharing revision's `classic_compiles`.
+   Raised where the parse does not happen, so it partitions programs started, not parses, and is no subset of a row
+   above. The copy-out asserts that a shared parse implies some finished parse and that the gauge of bodies holding
+   one does not exceed the lifetime count of finished parses. A report only (solver/dyn_body.h owns the mechanism). */
 static long    g_classic_parse_shared;         /* classic programs started from a parse another flow finished */
-/* AND THE WIDTH OF THE BYTE TOTAL, MADE A BUILD FAILURE RATHER THAN A SENTENCE, for the reason the pair below
-   `g_step_us` gives and with one difference that makes it the more urgent of the two: the runtime check at
-   engine_step_unit_runs is a `DCHECKF`, so it is COMPILED OUT in release — which is the build a real page is
-   measured on. A narrowed field there truncates a re-parsed-byte total silently and in the direction that
-   reads as a cheap engine. BOTH OBJECTS, because the accumulator and the field it is copied into are two
-   declarations in two files and narrowing EITHER loses the same run. */
+/* The width of the byte total as a build failure: the runtime check in engine_step_unit_runs is a DCHECKF, compiled
+   out in release, the build real pages are measured on. Both the accumulator and the field it is copied into, since
+   narrowing either loses the run. */
 _Static_assert(sizeof g_classic_compile_again_bytes >= 8,
                "solver/engine.c: the re-parsed-byte accumulator has been narrowed. On wasm32 `long` is 4 "
                "bytes, so a 32-bit total of source bytes re-parsed turns NEGATIVE after about 1500 repeats of "
@@ -7529,14 +7320,8 @@ _Static_assert(sizeof ((EngineStepUnitRuns *)0)->classic_compile_again_bytes
                "accumulator it is copied from, so engine_step_unit_runs truncates the total on its way to "
                "solver/result.c's census — the same lost run as an overflow and with the same inverted "
                "reading behind it.");
-/* THE WIDTH, MADE A BUILD FAILURE RATHER THAN A SENTENCE. A comment saying "this must be 64-bit" is read by
-   whoever is already thinking about it; the one edit that matters is the one that narrows the type back to
-   match its neighbours on this page, and the author of that edit is precisely the reader the comment misses.
-   BOTH OBJECTS, because the accumulator and the field it is copied into are two declarations in two files and
-   narrowing EITHER loses the same run: a 64-bit accumulator copied into a 32-bit field truncates at the
-   copy-out, which is silent in exactly the same direction. They are asserted together here because this is the
-   one translation unit that holds both: the copy-out (engine_step_unit_runs) and the single add (in
-   engine_sched_slice) are both below this declaration, so a reader who reaches either has passed this line. */
+/* The same for the dispatch accumulator: a comment does not stop the edit that narrows it to match its neighbours.
+   Both objects are asserted here, the one translation unit holding both, above the copy-out and the single add. */
 _Static_assert(sizeof g_step_us >= 8,
                "solver/engine.c: the dispatch loop's microsecond accumulator has been narrowed. On wasm32 "
                "`long` is 4 bytes, so a 32-bit accumulator of the slice's own measure overflows after ~35.8 "
@@ -7546,13 +7331,9 @@ _Static_assert(sizeof ((EngineStepUnitRuns *)0)->step_us >= sizeof g_step_us,
                "solver/engine.h: EngineStepUnitRuns' `step_us` is narrower than the accumulator it is copied "
                "from, so engine_step_unit_runs truncates the total on its way to solver/result.c's census — "
                "the same lost run as an overflow and with the same inverted reading behind it.");
-/* AND THE SAME PAIR FOR THE SPAN'S TWO HALVES, BECAUSE A NARROWING THERE IS WORSE THAN AT `step_us` AND NOT
-   BETTER. Each of these measures a span the dispatch total is only a PART of, so whichever of the three
-   overflows first it is never `g_step_us` — and the symptom is not a row that looks broken, it is the
-   partition assert at engine_step_unit_runs firing with a negative half, which reads as a clock that stopped
-   being monotone rather than as a type that was narrowed. Asserted for the accumulator AND for the field it
-   is copied into, for the reason the pair above is: narrowing either loses the same run, and the truncation
-   at the copy-out is silent in exactly the same direction. */
+/* And for the span's two halves, where narrowing is worse: they measure spans longer than `g_step_us`, so they
+   overflow first, and the symptom is the partition assert firing with a negative half, which reads as a clock that
+   stopped being monotone. */
 _Static_assert(sizeof g_loop_us >= 8 && sizeof g_between_us >= 8 && sizeof g_slice_exit_us >= 8,
                "solver/engine.c: the slice-span accumulators have been narrowed. On wasm32 `long` is 4 bytes, "
                "so a 32-bit accumulator of the slice's own measure overflows after ~35.8 minutes — and these "
@@ -7562,14 +7343,9 @@ _Static_assert(sizeof ((EngineStepUnitRuns *)0)->loop_us >= sizeof g_loop_us &&
                "solver/engine.h: EngineStepUnitRuns' `loop_us`/`between_slices_us` are narrower than the "
                "accumulators they are copied from, so engine_step_unit_runs truncates them on the way to "
                "solver/result.c's census and the partition it asserts stops being about the run that happened.");
-/* THE HISTOGRAM'S SUM, for the one assertion that uses it — side-effect-free, as a DCHECK condition must be.
-   NOT WRAPPED IN `#if APICLIENT_DEV`, and the reason is a trap worth stating rather than a preference: a
-   release DCHECKF does not delete its condition, it makes it UNEVALUATED (`(void)sizeof(cond)`, and
-   `APICLIENT_FMT_UNUSED` does the same to the arguments) — which is what keeps `-Wformat` checking an assert's
-   message and keeps a variable used only in one from reading as unused. sizeof still needs the identifier to
-   EXIST, so a dev-only definition would fail to compile in exactly the build where nothing calls it. `static
-   inline` is what makes that cost nothing: no code is emitted where it is never called, and an unused one is
-   not a `-Wunused-function`. */
+/* The histogram's sum, for the one assertion that uses it. Not under `#if APICLIENT_DEV`: a release DCHECKF leaves
+   its condition unevaluated inside `sizeof`, which still needs the identifier to exist; `static inline` emits nothing
+   where it is never called and draws no `-Wunused-function`. */
 static inline long step_unit_runs_total(void)
 {
     long t = 0;
@@ -7578,31 +7354,19 @@ static inline long step_unit_runs_total(void)
     return t;
 }
 
-/* NO COMPLETION CROSSES A SCHEDULER BOUNDARY — ONE STATEMENT, ASKED AT EVERY BOUNDARY THERE IS.
- *
- * `rt->current_exception` is per-RUNTIME while a completion is per-EVALUATION (ECMA-262 §6.2.4 The Completion
- * Record Specification Type; §5.2.4.3 Shorthands for Unwrapping Completion Records — "?" propagates an abrupt
- * completion TO THE CALLER, never to whatever runs next). Under an interleaving host those are different
- * timelines, so a throw left standing anywhere the scheduler passes is delivered to a flow that did not produce
- * it. The engine refuses to START a flow over one (JS_FlowResume's entry DCHECK) — but that is the VICTIM's
- * end: by the time it fires, whatever produced the completion has returned and nothing records what it was.
- *
- * SO THE BOUNDARIES ARE ASKED, AND THEY PARTITION THE WHOLE OF THE SCHEDULER'S OWN TIME. There are exactly
- * four, and between them there is no unwatched region left:
- *   slice-entry  — the HOST's own time between two slices (a fetch reply parsed into a record, a delivery
- *                  routed, a synchronous answer written) plus, on the first slice, everything the session
- *                  setup did before any flow existed;
- *   pre-step     — the scheduler's own pick: solve_seed_candidates, flow_next_to_run, the context switch
- *                  (flow_switch_out/in, the COW and DOM delta swap, decide/pins resume) and solve_flow_begin;
- *   post-step    — the arm flow_step just ran (this one has fired for nobody, which is what established that
- *                  every arm in flow_step takes its own completion);
- *   slice-exit   — the scheduler's tail after the step: HTML §8.1.7.3's end-of-checkpoint hook, the aging
- *                  charge, and flow_finish.
- * Whichever one fires NAMES the segment, and the four together are a checked contract rather than a probe:
- * they say, permanently, that the scheduler's own time never carries a page's completion.
- *
- * The throw is TAKEN to describe it, which is sound because DFAIL does not return — the state after that call
- * is an abort, so nothing observes the emptied slot. Compiled out entirely in release. */
+/* No completion crosses a scheduler boundary, asked at every boundary. `rt->current_exception` is per runtime while a
+ * completion is per evaluation (ECMA-262 §6.2.4 The Completion Record Specification Type; §5.2.4.3 Shorthands for
+ * Unwrapping Completion Records: "?" propagates an abrupt completion to the caller), so under an interleaving host a
+ * throw left standing would reach a flow that did not produce it. JS_FlowResume's entry DCHECK catches the victim;
+ * these catch the producer. The four boundaries cover all of the scheduler's own time:
+ *   slice-entry: the host's time between slices (a reply parsed into a record, a delivery routed, an answer written),
+ *                plus on the first slice the session setup;
+ *   pre-step:    the pick: solve_seed_candidates, flow_next_to_run, the context switch (flow_switch_out/in, the COW
+ *                and DOM delta swap, decide/pins resume) and solve_flow_begin;
+ *   post-step:   the arm flow_step ran (every arm takes its own completion);
+ *   slice-exit:  the tail: HTML §8.1.7.3's end-of-checkpoint hook, the aging charge, flow_finish.
+ * The one that fires names the segment. The throw is taken to describe it, which is sound because DFAIL does not
+ * return. Compiled out in release. */
 #if APICLIENT_DEV
 static void engine_no_stray_completion(JSContext *ctx, const char *where, int detail)
 {
@@ -7613,12 +7377,9 @@ static void engine_no_stray_completion(JSContext *ctx, const char *where, int de
         return;
     le = JS_GetException(ctx);
     result_error_text(ctx, le, et, sizeof et);
-    /* THE PARK STATE IS PRINTED BESIDE THE UNIT because it separates two readings of one segment that are
-       otherwise identical from outside. `JS_CallAsFlow` answers 0 for a settle that PARKED as well as for one
-       that COMPLETED — its own contract is "0 = done, -1 = it threw" and has no third answer — so a delivery
-       that ran page code which suspended looks exactly like one that ran it to the end. A park standing here
-       says the work is suspended and the completion was never this segment's to take; no park says the segment
-       finished and dropped it. */
+    /* The park state is printed beside the unit because `JS_CallAsFlow` answers 0 for a settle that parked and for
+       one that completed: a park standing here says the work is suspended and the completion was never this
+       segment's; no park says the segment finished and dropped it. */
     JS_FreeValue(ctx, le);
     DFAILF("a completion was still live in the runtime at a SCHEDULER BOUNDARY — at `%s`, after the `%s` "
            "step unit. The exception slot is per-RUNTIME and a completion is per-EVALUATION (§6.2.4), so the "
@@ -7634,77 +7395,38 @@ static void engine_no_stray_completion(JSContext *ctx, const char *where, int de
 #define ENGINE_NO_STRAY(ctx, where, detail) ((void)0)
 #endif
 
-/* DECLARED ABOVE THE ONE FUNCTION THAT WRITES THEM, because flow_step is where a program is compiled and
-   where a flow is finished — the two events these count. The commentary on what each MEANS stays with the
-   accessors that publish them; this is the definition, and it has to precede its first use. */
+/* Declared above flow_step, the one function that writes them (it compiles programs and finishes flows); what each
+   means is documented at the accessors that publish them. */
 static long g_finished;
-/* …AND THE TWO POPULATIONS IT IS THE SUM OF — see EngineFrontierCensus for what each is and why the label is
-   a binary partition. Both are written at the ONE line `g_finished` is, from `Flow.cand_src`, and the identity
-   between the three is asserted where they are read together.
-   BOTH COUNT MEMBERS. `g_finished_cands` is not a count of candidate SESSIONS and its emitted key reads as if
-   it were — engine.h carries the mechanism (the fork copies the substitution to every sibling, so N arms of one
-   seed each raise it) and names solve.c's `_candidates` as the per-session count to read it against. */
+/* The two populations it sums (EngineFrontierCensus), written at the one line `g_finished` is, from
+   `Flow.cand_src`; the identity is asserted where they are read together. Both count members: `g_finished_cands`
+   is not a count of candidate sessions (the fork copies the substitution to every sibling), and engine.h names
+   solve.c's `_candidates` as the per-session count to read it against. */
 static long g_finished_flows, g_finished_cands;
-/* AND A THIRD MISREADING OF THE ROW BELOW, CROSS-RUN WHERE THE ONE UNDER IT IS WITHIN-RUN. `g_deepest` is a
-   HIGH-WATER MARK: it SATURATES and then reads flat for every remaining census, and a flat tail is the exact
-   shape of a ceiling. Read off the TERMINAL census of several short runs it was reported as a gate — "nothing
-   compiles past program 5" — and dispatched as one into three briefs before a lane refuted it. The refutation
-   is within a single run and needs no work proxy: at ONE revision inside the era being blamed, ONE run reads
-   5 for its first FIFTEEN censuses, then 12 at the sixteenth and 15 at the next four. Same run, same binary.
-   This row needs roughly twenty censuses to speak and reads the same low number on ANY short run at ANY
-   revision in that window, so every cross-revision comparison made of it compared RUN LENGTHS.
-   WHAT TO READ INSTEAD IS CATEGORICAL RATHER THAN A MAGNITUDE: `g_finished` crossing zero says whether this
-   document ever finished a flow AT ALL, which does not depend on how far a run got — where "how far did it
-   get" is nothing but that. So quote this row with the LENGTH of its census series beside it, or not at all,
-   and never as a claim about what the engine CAN reach. */
+/* The deepest program any flow started: a high-water mark, so it saturates and then reads flat, the shape of a
+   ceiling. Read off the terminal census of short runs it once looked like a gate ("nothing compiles past program
+   5") while within one run it read 5 for fifteen censuses and then 12 and 15. Quote it with the length of its
+   census series or not at all, never as a claim about what the engine can reach; whether `g_finished` crossed zero
+   is the categorical question that does not depend on run length. */
 static int  g_deepest = -1;
-/* AND THE ROW THE CURSOR IS ACTUALLY ONE PAST, WHICH IS NOT THAT ONE AND WAS BEING READ AS IT. `g_deepest`
-   is the deepest program any flow STARTED; this is the deepest ROW of its sequence any flow has LEFT. They
-   are the same number on a document every one of whose rows runs, and they come apart the moment a row is
-   LEGITIMATELY SKIPPED — HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4, "If el's
-   result is null, then fire an event named error at el, and return", which is a row the cursor passes and
-   the compile never sees. A failed external <script src> is therefore not an error state at all, and there
-   are two of them: a document script's row converted in place, and an injected one's row appended by its own
-   failed reply.
-   THE SPLIT IS FORCED AND MERGING THEM COSTS A DIAGNOSIS IN WHICHEVER DIRECTION IT IS MADE. Raising
-   `g_deepest` for a skipped row would report this document as having STARTED a program it never started,
-   which is the one reading engine.h argues that number exists to make checkable; leaving the cursor
-   identity to be asserted against `g_deepest` charges every correct skip as a defect, which is what it did.
-   §AN-INVARIANT-OVER-A-GATED-OPERATION names the shape: step 4 is an arm that legitimately DECLINES to run
-   a program, so an invariant over the cursor censuses the ASK — the flow reached this row and is leaving it
-   — and never the OUTCOME, which is whether a program started. This is that ask.
-   RAISED AT THE ONE LINE A CURSOR MOVES, so it cannot be forgotten by a site added later: see
-   ENGINE_LEAVE_ROW. A FORK does not raise it and must not — `flow_fork`'s `sib->script_i = parent->script_i`
-   copies a position the PARENT already reached and already recorded, so a sibling born at that cursor has
-   left nothing of its own. */
+/* The deepest row any flow's cursor has left, a different fact from `g_deepest` (the deepest program started). They
+   come apart when a row is legitimately skipped: HTML §4.12.1.1's "execute the script element" step 4, "If el's
+   result is null, then fire an event named error at el, and return", passes a row the compile never sees (a document
+   script's row converted in place, or an injected one's row appended by its failed reply). Merging them would either
+   report a program started that never was, or charge every correct skip as a defect; the cursor is censused at the
+   ask (the flow is leaving the row), not the outcome. Raised only in ENGINE_LEAVE_ROW, the one place a cursor moves.
+   A fork does not raise it: the sibling's copied cursor is a position the parent already recorded. */
 static int  g_deepest_left = -1;
-/* AND THE OTHER END OF THE SAME PROGRAM — the highest index this document has ever run to COMPLETION. It is a
-   separate fact from `g_deepest` and the difference between them is the whole diagnosis, which is exactly why
-   one number could not carry both: `deepest 1` says a flow STARTED the second <script>, and it was read — in
-   two independent analyses of this engine, and in the sentence that commissioned this one — as "no flow has
-   ever begun the second <script>". Neither reading is checkable against the other from one number. With both,
-   `deepest 1, completed 0` states it exactly: some flow finished program 0, no flow has ever finished program
-   1, and therefore nothing this document loads AFTER program 1 — a lazy chunk, an injected <script>, a fired
-   PoC, the whole surface §What-the-tool-produces calls the headline moat — has ever been compiled by anything.
-   `deepest` alone cannot say that, because a flow that starts program i proves only that SOME flow completed
-   i-1, and says nothing about how many programs the document has left to run. */
+/* The highest index this document has run to completion, separate from `g_deepest`: `deepest 1, completed 0` says
+   a flow started program 1 and no flow ever finished it, so nothing the document loads after program 1 (a lazy
+   chunk, an injected <script>, a fired PoC) has been compiled by anything. `deepest` alone proves only that some
+   flow completed the program before the deepest one started. */
 static int  g_completed = -1;
 
-/* THE FLOW LEAVES THE ROW AT ITS CURSOR — the ONE spelling of a cursor advance, and the only one. It is a
-   MACRO EXPANDED AT EACH SITE and never a function called from them, for §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-
-   NOT-A-SITE's reason exactly: the invariant is over a TRANSITION, so a `@WHY` that named this line would
-   name an action with no object for all five of the places a cursor moves, and the reader would be sent to
-   read every one of them.
- *
- * IT ASSERTS THE ROW BEING LEFT EXISTS, WHICH IS THE SAME CLAIM THE TWO COMPLETION SITES USED TO MAKE AFTER
- * THE FACT AND THE OTHER THREE MADE NOWHERE. `script_i < dyn_n` before the move and `script_i <= dyn_n`
- * after it are the identical inequality, and asking it BEFORE is what lets the message name the row rather
- * than the arithmetic — and what extends it from two sites to five, which was never a decision anybody made:
- * the three arms inside the `script_i < dyn_n` ladder were safe BY POSITION, and a position is not a check.
- *
- * AND IT RAISES `g_deepest_left`, because the ask and the advance are one event and an engine that recorded
- * them at two lines would have a site that moved a cursor without saying so. See that declaration for why
- * this is a second fact and not a second spelling of `g_deepest`. */
+/* The flow leaves the row at its cursor: the one spelling of a cursor advance. A macro expanded at each of the five
+ * sites, because the invariant is over a transition and a message naming one shared line would name no site. It
+ * asserts the row being left exists (`script_i < dyn_n` before the move is `script_i <= dyn_n` after it), which
+ * lets the message name the row, and it raises `g_deepest_left`, since the ask and the advance are one event. */
 #define ENGINE_LEAVE_ROW(f) do {                                                                          \
         Flow *leave_f_ = (f);                                                                             \
         DCHECK(leave_f_->script_i < leave_f_->dyn_n,                                                      \
@@ -7718,56 +7440,33 @@ static int  g_completed = -1;
         if (leave_f_->script_i > g_deepest_left) g_deepest_left = leave_f_->script_i;                      \
         leave_f_->script_i++;                                                                              \
     } while (0)
-/* AND THE COUNTS THOSE TWO MAXIMA CANNOT CARRY, WRITTEN AT THE SAME LINE THEY ARE. `deepest` and `completed`
-   are MAXIMA over cursors — one member at program 5 and every member at program 5 read the same — so neither
-   can say HOW MANY starts a run has performed, nor whose. These are that count, partitioned by the KIND of the
-   row started: the @S search's candidate re-fires against every other program. Summed they are one number
-   answering neither question, and the two take opposite work — a page script starting is this document being
-   covered, and a candidate program starting is a constructed PoC getting its one chance to fire.
-   `progStarts` IS WHAT MAKES A ZERO IN THE CANDIDATE ARM READABLE IN THE OTHER DIRECTION. A run that started no
-   program of ANY kind has said nothing about candidates and reads identically to one that started thousands
-   with no candidate among them; those are a question about the run's reach and a question about the search.
-   THREE ROWS AND NOT TWO, for `g_finished`'s reason exactly: the total is written at the ONE line a program is
-   started and each arm on the line beside it, so the identity holds by inspection now and what it catches is a
-   SECOND start path added later that moves the total without saying which population it moved.
-   engine_frontier_census is where all three are read together and is where it fires.
-   `progStartsCand` MAY EXCEED `progQueuedCand`, AND THAT IS A FACT RATHER THAN A COUNT THAT CANNOT BE TRUE. A
-   fork COPIES the whole queue (engine_sibling_assemble), so one ask can stand unstarted in N timelines and be
-   started once by each — the same program on N paths, which is what a fork IS. An inequality asserted between
-   the queue side and the start side would fire on a healthy branch, so there is none: the only containment
-   these four rows have is the partition above, which is over ONE event and has nothing to inherit.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads them and no arm branches on one. */
+/* The counts those two maxima cannot carry (one member or every member at program 5 reads the same), written at the
+   same line: program starts, partitioned by the started row's kind into the @S search's candidate re-fires and
+   everything else. The two take opposite work (a page script starting is coverage; a candidate starting is a PoC's
+   one chance to fire), and `progStarts` makes a zero candidate count readable (a run that started nothing said
+   nothing about candidates). Three rows rather than two, for `g_finished`'s reason: the total and each arm are
+   written at one line, and the identity, checked in engine_frontier_census, catches a second start path added
+   later. `progStartsCand` may exceed `progQueuedCand`: a fork copies the whole queue, so one ask can be started once
+   in each of N timelines, and no inequality between queue and start sides is asserted. A report only. */
 static long g_prog_starts, g_prog_starts_cand, g_prog_starts_other;
 
-/* See engine.h. THE READ IS OF THE TOTAL AND NOT OF EITHER ARM, which is the whole of what "any" means here:
-   a candidate re-fire and a host's synthesized row are programs, and an address minted while one of them was
-   running was minted after this instance had begun executing. Answering from `g_prog_starts_other` alone —
-   or from the page arm alone — would make the bit say something narrower than its name and would be a second
-   partition of a line that already has one.
-   NO ASSERT STANDS HERE AND THAT IS A PROPERTY OF THE READ RATHER THAN AN OMISSION. The only thing that could
-   make this bit wrong is the counter going BACKWARD, and it is `++`-only at the single line a program starts
-   (there is no reset anywhere), so the monotonicity this depends on is true by construction and there is no
-   state to check. The identity between the total and its two arms is a different claim, it belongs to the
-   three rows rather than to this read, and engine_frontier_census already makes it where all three are in one
-   hand — restating it here would be a second copy of one rule, free to drift from the one that is checked. */
+/* See engine.h. It reads the total, not either arm: a candidate re-fire and a host's synthesized row are programs,
+   and an address minted while one ran was minted after this instance began executing. No assert: the counter is
+   `++`-only at the single start line and never reset, and the total-versus-arms identity belongs to
+   engine_frontier_census. */
 int engine_any_program_started(void)
 {
     return g_prog_starts > 0;
 }
 
-/* HTML §8.1.4.4 "Calling scripts", "run a module script" step 8: "If preventErrorReporting is false, then upon rejection of
- * evaluationPromise with reason, report an exception given by reason for script's settings object's global
- * object." A module completes as a PROMISE — that is the whole difference between running a module script and
- * running a classic one, and it is why a top-level `await` is observable — so its failure is not a completion
- * the compile site can read the way it reads a classic script's throw. The reaction below is that step, and it
- * ends in the same place a thrown script does: a page error naming the capability the page needed.
- *
- * IT IS ATTACHED WITH PerformPromiseThen AND NOT WITH `.then`, which is what the spec's "upon rejection of"
- * means and matters twice over. Reading `then` off the promise runs whatever the page put on
- * Promise.prototype, and it constructs through @@species; and the attach MARKS THE PROMISE HANDLED, which is
- * observable — a page's `unhandledrejection` handler must NOT see a module that threw, because HTML has
- * already claimed that rejection for the error report. Dropping the promise instead would have delivered every
- * module's top-level throw as an unhandled rejection, which is a different event with a different name. */
+/* HTML §8.1.4.4 Calling scripts, "run a module script" step 8: "If preventErrorReporting is false, then upon
+ * rejection of evaluationPromise with reason, report an exception given by reason for script's settings object's
+ * global object." A module completes as a promise (which is why top-level `await` is observable), so its failure is
+ * not a throw the compile site can read; this reaction is that step and ends as a thrown script does, in a page
+ * error.
+ * It is attached with PerformPromiseThen, not `.then`: reading `then` would run whatever the page put on
+ * Promise.prototype and construct through @@species, and the attach marks the promise handled, so the page's
+ * `unhandledrejection` handler does not see a rejection HTML has claimed for the error report. */
 static JSValue module_eval_rejected(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     DCHECK(argc == 1, "the rejection reaction of a module script's evaluation promise ran without a reason — "
@@ -7777,10 +7476,9 @@ static JSValue module_eval_rejected(JSContext *ctx, JSValueConst this_val, int a
     return JS_UNDEFINED;
 }
 
-/* Attach that reaction. `ctx` is the PROGRAM's realm — the module's settings object's global is the document
-   the module belongs to, and a reaction function is a runtime-lifetime object that carries the realm it was
-   minted in, so it is minted here per evaluation rather than held in a static that would answer every
-   document's rejection with the first document's ctx. */
+/* Attaches that reaction. `ctx` is the program's realm (the module's settings object's global); a reaction
+   function carries the realm it was minted in, so it is minted per evaluation, not held in a static that would
+   report every document's rejection in the first document's realm. */
 static void module_report_rejection(JSContext *ctx, JSValueConst eval_promise) {
     JSValue on_rejected = JS_NewCFunction(ctx, module_eval_rejected, "reportModuleScriptError", 1);
     JSValue derived;
@@ -7791,124 +7489,76 @@ static void module_report_rejection(JSContext *ctx, JSValueConst eval_promise) {
     CHECK(!JS_IsException(derived),
           "HTML §8.1.4.4 \"Calling scripts\" step 8's rejection reaction could not be attached to a module "
           "promise — the module's own failure would then have no reader at all");
-    /* The derived promise has no reader BY CONSTRUCTION: the handler returns undefined, so it fulfils, and a
-       fulfilled promise nobody reads is not an event. It is freed rather than kept because §8.1.4.4 returns
-       evaluationPromise to its caller and this one is only the capability PerformPromiseThen must produce. */
+    /* The derived promise has no reader by construction (the handler returns undefined, so it fulfils); it is the
+       capability PerformPromiseThen must produce, and §8.1.4.4 returns evaluationPromise itself to its caller. */
     JS_FreeValue(ctx, derived);
     JS_FreeValue(ctx, on_rejected);
 }
 
-/* THE PROGRAMS ARE THE FLOW'S OWN, so this takes no inventory. It used to be handed the session document's
-   `bodies` and its length and to walk them ahead of the flow's rows; both halves are rows of `f->dyn` now. */
+/* The programs are the flow's own rows (`f->dyn`), so this takes no inventory. */
 static int flow_step(JSContext *ctx, Flow *f) {
-    /* A FLOW IS ABOUT TO RUN, SO THE TWO MARKS THAT SAY SO MUST BE ON. This is the ONE point a flow is driven
-       (every JS_FlowNew / JS_FlowResume in this engine is below this line), which is why the claim is made
-       here rather than at each of them. The generation is what stamps every object the flow creates, and
-       g_dom_capture is its twin over the Lexbor tree; with either off, the flow's own creations would be
-       recorded as BASELINE and its DOM writes would land nowhere — the delta would be quietly incomplete and
-       the run would look perfectly healthy. Half of one invariant, stated at the half that runs. */
+    /* A flow is about to run, so the flow stamp and the DOM capture must both be on. This is the one point a flow
+       is driven (every JS_FlowNew / JS_FlowResume is below it). The generation stamps every object the flow
+       creates and g_dom_capture is its twin over the Lexbor tree; with either off the flow's creations would be
+       recorded as baseline and its DOM writes would land nowhere, silently. */
     DCHECK(JS_FlowGen() != 0 && g_dom_capture,
            "a flow is being stepped with the flow stamp or the DOM capture off — the objects it creates would "
            "be stamped baseline and its DOM writes would be captured into no delta, so its state would leak "
            "into every sibling and its rewind would restore something that never existed");
-    /* AND THE STEP HAS NOT NAMED ITSELF YET. Every exit below declares which arm it is (solver/step_unit.h),
-       and the ONLY thing that can make that a rule rather than a habit is starting from a value that is not an
-       arm: the scheduler asserts at its convergence point that a step which returned left a name behind, so an
-       arm added without one crashes there instead of silently inheriting whatever the PREVIOUS step did. It is
-       reset per step and not per flow because the question is about this step, and a flow that is stepped
-       twice through two different arms must read as the second. */
+    /* The step has not named itself yet. Every exit declares its arm (solver/step_unit.h), and starting from a value
+       that is not an arm lets the scheduler's convergence assert catch an arm added without a name instead of it
+       inheriting the previous step's. Reset per step, because a flow stepped through two arms must read as the
+       second. */
     g_step_unit = STEP_UNIT_NONE;
-    /* AND THE STEP IS COUNTED AT THE SAME LINE THE NAME IS CLEARED, because the two are one statement: an
-       ENTRY has happened and no arm has been named for it yet. The lifetime histogram is counted at the other
-       end (the scheduler's convergence point), so the identity between them is between an entry and a record
-       and can therefore fail; counted together they could not. It is a report and never a bound — nothing
-       reads it to decide anything (see g_step_unit_runs). */
+    /* The step is counted where the name is cleared: an entry has happened and no arm is named. The lifetime
+       histogram is counted at the convergence point, so the identity between them can fail. A report only. */
     g_steps++;
-    /* HAS THIS STEP ALREADY PERFORMED ITS TASK — HTML §8.1.7.3 "Processing model" step 2.6, the one act an
-       iteration of step 2 contains. It is declared OUTSIDE the loop and reset per ENTRY, which is the whole of
-       its contract: the loop body below now iterates (the turn continuation at the reply delivery), and a
-       reading declared inside it — as `last_compiled0` deliberately is — would be re-zeroed on the pass that
-       exists precisely to remember. A step therefore runs at most one task and then only step 2.8's checkpoint,
-       whatever the policy answers; the policy decides how much of ONE turn a step completes and never how many
-       turns it takes, which is the difference between a granularity and a cap (§NO BOUNDS, and turn_continues'
-       own note). Nothing else in this function may set it: the flag is what the ONE task arm that continues
-       declares about itself. */
+    /* Whether this step has performed its task (HTML §8.1.7.3 Processing model step 2.6, the one act an iteration of
+       step 2 contains). Declared outside the loop and reset per entry, because the body iterates (the turn
+       continuation at the reply delivery) and must remember across passes. A step runs at most one task and then
+       only step 2.8's checkpoint, whatever the policy answers: the policy decides how much of one turn a step
+       completes, never how many turns, which makes it a granularity and not a cap. Only the task arm that
+       continues sets it. */
     int turn_task_done = 0;
-    /* AND WHETHER THIS CALL BEGAN WITH A LIVE FRAME, read ONCE and before the loop because the question is
-       about the CALL and a per-pass reading could only ever answer about the pass. Its one consumer is the
-       `!framed_at_entry` assert beside `g_unframed_steps++`, which is what this reading is FOR. It is not a
-       second spelling of `f->frame`: the loop is entitled to move that field, and the two being able to
-       disagree is the whole of what makes that assert a check rather than a restatement. Dev-only in
-       effect — DCHECK's release arm is `((void)sizeof(cond))`, so the value is type-checked and never
-       read, and no unused-variable diagnostic has anything to say about it in either build. */
+    /* Whether this call began with a live frame, read once before the loop: the question is about the call, and its
+       one consumer is the `!framed_at_entry` assert beside `g_unframed_steps++`. The loop may move `f->frame`, and
+       the two disagreeing is what makes that assert a check. In release it is only type-checked inside `sizeof`. */
     const int framed_at_entry = (f->frame != NULL);
     for (;;) {
-        /* ONE ARM PER DISTINCT ANSWER, BEFORE ANYTHING ELSE THIS FLOW COULD DO — because everything else it
-           could do consumes the very thing the arm is made of. A peer document's state IS its flows, so a
-           cross-instance read has an answer per peer timeline; the arm is a clone of the frame this flow is
-           SUSPENDED in, and the first resume below takes the answer off the register and leaves that call site
-           behind. It is also the first moment in the whole round at which a fork is even meaningful: the flow
-           is switched in, so its delta, its DOM head and its decision state are the ones an arm inherits.
-           AND A PASS THIS FUNCTION'S OWN `continue` CREATED MAY NOT RENAME THE STEP, WHICH IS WHY THE THREE
-           ASSIGNMENTS AT THE TOP OF THIS LOOP CARRY THE SAME GUARD THE CHECKPOINT ARM ALREADY CARRIES. The
-           loop used to run once, so an arm that named itself and returned was the last writer by construction;
-           the turn continuation at the reply delivery made it ITERATE, and these three run again on every pass
-           with nothing to stop them. A step that performed its task and continued into step 2.8's checkpoint
-           therefore left through `if (turn_task_done) return 0;` carrying `resume-parked-continuation` — the
-           name of an arm it never took — so `deliver-one-reply` could only ever be credited to a delivery whose
-           `turn_continues()` answered NO, which is the case the policy takes least often.
-           THE ROW WAS THEREFORE A FLOOR WEARING A COUNT'S CLOTHES, and its zero could not tell "the arm never
-           ran" from "the arm ran and the turn continued" — the two readings this engine's whole reply question
-           turns on. THAT THE RELABELLING CHANNEL IS LIVE NEEDS NO BUILD TO ESTABLISH, and the derivation is
-           arithmetic over rows the census already prints: `flow_run_one_job` has exactly two call sites, so a
-           run whose `run-a-task` row is 0 ran every one of its jobs through the checkpoint arm; a checkpoint
-           step that does NOT continue runs ONE job and returns still named `microtask-checkpoint`; therefore
-           (jobsRun − microtask-checkpoint) is a FLOOR on the number of passes this loop's own `continue`
-           created. Measured on the smoke at the artifact stamped e3e5f80d: 94 jobs run against 2 steps in that
-           row over 1610 steps, so at least 92 passes reached these three lines with a name already set.
-           `turn_task_done` IS THE SETTLED-NAME PREDICATE AND NOT A SECOND SPELLING OF ONE: its only writer in
-           this function is the reply-delivery arm, and what it means there is exactly that this step has
-           performed its §8.1.7.3 "Processing model" step 2.6 task — which is what `g_step_unit` names. */
+        /* One arm per distinct answer, before anything else this flow could do: everything else consumes what the
+           arm is made of. The arm clones the frame this flow is suspended in, and the first resume below takes the
+           answer off the register and leaves that call site; the flow is switched in, so its delta, DOM head and
+           decision state are what an arm inherits.
+           The three assignments at the top of this loop are guarded by `turn_task_done`, as the checkpoint arm is:
+           the loop iterates (the turn continuation at the reply delivery), and a continued pass must not rename a
+           step already named for the task it performed, or `deliver-one-reply` would be credited only to
+           deliveries whose `turn_continues()` answered no. `turn_task_done` is that settled-name predicate: its only
+           writer is the reply-delivery arm, meaning this step performed its §8.1.7.3 step 2.6 task. */
         if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
         if (flow_answer_fork(ctx, f)) return 0;
-        /* AND ONE ARM PER DECLINED REQUEST, BESIDE IT AND FOR THE SAME REASON — a fork over a VALUE that
-           arrived rather than over a predicate, and the same three things (the frame this flow is SUSPENDED
-           in, its delta, its DOM head) are what the arm is made of, so it is taken at the same point and
-           before anything else this flow could do. What differs is only what arrived: there, a peer's second
-           true answer; here, the trusted zone stating it will not ask at all — which is TWO feasible outcomes
-           and no observation of either, so both arms run (flow_decline_fork). */
+        /* One arm per declined request, beside it for the same reason: a fork over a value that arrived (the zone
+           will not ask, two feasible outcomes and no observation, flow_decline_fork), built from the same frame,
+           delta and DOM head. */
         if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_DECLINED_REQ;
         if (flow_decline_fork(ctx, f)) return 0;
-        /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
-           contract: a forced preempt must be transparent to observable ordering, so the flow resumes BEFORE any
-           job it has queued. Yielding after one resume keeps the scheduler in charge of fairness; the park (if
-           it parks again immediately) rides the switch-out with the flow. Without this the solver host never
-           pumped the slot at all: the continuation sat there until a second flow parked and asserted. */
+        /* The parked continuation outranks everything else this flow could do: a forced preempt must be
+           transparent to observable ordering, so the flow resumes before any job it has queued. Yielding after
+           one resume keeps the scheduler in charge; a park that parks again rides the switch-out. */
         if (!turn_task_done) g_step_unit = STEP_UNIT_RESUME_PARKED;
-        /* AND NOTHING ELSE MAY MOVE THE NAME EITHER, ASSERTED HERE RATHER THAN LEFT AS A PROPERTY OF THE THREE
-           LINES ABOVE. The delivery arm is the only writer of `turn_task_done`, and it writes it on the line
-           after it names the step, so the two are one statement and this is that statement checkable: on any
-           pass this function's own `continue` created, the step is already named for the task it performed. A
-           fourth assignment added above the `turn_task_done` return without this guard CRASHES here instead of
-           silently emptying the row it renames — which is the failure this assert is a repair OF, arriving
-           through an edit rather than through the loop. */
+        /* Nothing else may move the name: the delivery arm writes `turn_task_done` on the line after it names the
+           step, so on any pass created by this function's own `continue` the step is already named. A fourth
+           assignment added above without the guard crashes here. */
         DCHECK(!turn_task_done || g_step_unit == STEP_UNIT_DELIVER_REPLY,
                "a continued pass of one step carries a unit name that is not the task it performed — "
                "`turn_task_done` is written only by the reply-delivery arm, on the line after it names the "
                "step, so any other name here is an assignment that ran on a pass created by this function's "
                "own `continue` and the step is about to be reported as an arm it never took");
-        /* Resuming a parked continuation is progress ONLY if the flow can still get somewhere: a flow blocked
-           on the host resumes into the same wait, so reporting progress spins it against the park. */
-        /* AND ITS COMPLETION IS TAKEN HERE, which is the ONE place it can be. A parked continuation is the LATE
-           half of a job this flow queued: flow_run_one_job reports the throw of a job that finished inside its
-           own call, and the half that PARKED — which is every job long enough to be preempted, and since a step
-           machine offers a park at every re-entry that is most of them — had no reporting path at all. So an
-           uncaught throw out of one was dropped twice over: never recorded as this page's error, and never
-           taken out of `rt->current_exception`, which is per-RUNTIME. This engine interleaves flows, so what
-           found it next was the first evaluation of whichever flow the scheduler chose — another flow's
-           timeline receiving a completion §6.2.4 says belongs to this one. §8.1.4.6 Runtime script errors'
-           "report an exception" is the same hook a script and a job already use, because it is the same
-           event. (§8.1.7.5 stood here and is "Dealing with the event loop from other specifications".) */
+        /* Resuming a parked continuation is progress only if the flow can still get somewhere: a flow blocked on
+           the host resumes into the same wait. Its completion is taken here, the one place it can be: a parked
+           continuation is the late half of a job (a step machine offers a park at every re-entry, so most jobs
+           park), and an uncaught throw from it must be recorded as this page's error (§8.1.4.6 Runtime script
+           errors' "report an exception", the hook scripts and jobs use) and taken out of the per-runtime
+           `rt->current_exception` before another flow's evaluation finds it. */
         {
             JSValue pcv = JS_UNDEFINED;
             if (JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv)) {
@@ -7922,44 +7572,25 @@ static int flow_step(JSContext *ctx, Flow *f) {
             }
             JS_FreeValue(ctx, pcv);
         }
-        /* WHICH ROW THIS FLOW HAD STARTED BEFORE THIS STEP, read BEFORE the block that may start another and
-           consumed at the resume below — see there for what it decides. It is a READING of the one field the
-           compile writes and never a flag beside it: a flag is a second statement of "a program started here"
-           that a later edit can forget to make, and `last_compiled` is the statement the compile already makes
-           (it is written at exactly one line, and the no-replay DCHECK at that line makes it strictly
-           increasing, so "it moved" and "this step compiled" are the same fact rather than two that agree).
-           A step that does not enter the block cannot move it, which is why no reset is needed: it is declared
-           INSIDE the loop body, so it is re-read at every iteration and not merely at every entry. That
-           distinction used to be empty — the sentence here said "every path out of flow_step returns" — and the
-           turn continuation below is what made the loop iterate, so the reading is now per PASS and the
-           justification has to be the declaration's scope rather than the absence of a `continue`. */
+        /* Which row this flow had started before this step, read before the block that may start another and
+           consumed at the resume below. A reading of the one field the compile writes: `last_compiled` is written at
+           one line and strictly increasing (the no-replay DCHECK there), so "it moved" means "this step compiled".
+           Declared inside the loop body, so it is re-read on every pass. */
         int last_compiled0 = f->last_compiled;
         if (!f->frame) {
             const char *body;
-            /* THE LADDER HAS BEEN DESCENDED — counted at the one line that enters it, BEFORE any arm is
-               asked, because what this number exists to say is that the conditions below were REACHED. The
-               orphan ask far down this chain is raised on the same per-pass basis, so `asked` is a subset of
-               this by construction and the containment is asserted where both are in hand
-               (engine_step_unit_runs). See solver/engine.h's `unframed_steps`. */
+            /* The ladder has been descended, counted at the one line entering it, before any arm is asked. The
+               orphan ask below is raised on the same per-pass basis, so `asked` is a subset of this, asserted in
+               engine_step_unit_runs (solver/engine.h's `unframed_steps`). */
             g_unframed_steps++;
-            /* AND THE CALL BEGAN UNFRAMED, WHICH IS THE TWO-DISPATCH STRUCTURE ASSERTED RATHER THAN
-               DESCRIBED. A member born holding a clone of its parent's frame cannot reach this ladder on
-               the dispatch that ENDS that frame: the four frame-clearing arms solver/step_unit.h names —
-               `resume-ended-its-frame`, `start-ended-its-frame`, `program-detached-its-base` and
-               `start-detached-its-base` — all RETURN, so the first dispatch that can descend this ladder is
-               the member's NEXT one. solver/cold.h reads that as a COST and names the absent `continue` at
-               those arms as the repair; this assert is what makes the answer un-re-derivable rather than
-               re-argued, because that `continue` is the drain this function was rewritten out of being —
-               `a completed script advanced to the next one and ran it` — and a resume that ran a program to
-               its end has already performed HTML §8.1.7.3 "Processing model" step 2.6's task, so every arm
-               below this line is the NEXT iteration of step 2 and therefore the next step. §Attention's
-               VALUE yield and its COOPERATIVE QUANTUM are consulted only where flow_step RETURNS, so a pass
-               that arrived here having cleared a frame has spent neither.
-               TWO-SIDED, WHICH IS WHAT STOPS IT BEING A RESTATEMENT: `framed_at_entry` is read before the
-               loop and `f->frame` is what the loop moves, so the two disagree the moment any path between
-               this function's entry and this line clears a frame and carries on. That is the derivation a
-               reader would otherwise have to run by hand (`continue;` inside flow_step, and what stands
-               above each one), and it is spent here instead as a crash that names what was re-created. */
+            /* The call began unframed. A member born with a clone of its parent's frame cannot reach this ladder on
+               the dispatch that ends that frame: the four frame-clearing arms (`resume-ended-its-frame`,
+               `start-ended-its-frame`, `program-detached-its-base`, `start-detached-its-base`) all return, so the
+               ladder is reached on the member's next dispatch. A `continue` at those arms would be the drain this
+               function was rewritten out of: the resume that ran a program to its end performed §8.1.7.3 step 2.6's
+               task, every arm below is the next iteration of step 2, and the value yield and cooperative quantum are
+               consulted only where flow_step returns. Two-sided: `framed_at_entry` is read before the loop and
+               `f->frame` is what the loop moves. */
             DCHECKF(!framed_at_entry,
                     "this call of flow_step began with a LIVE FRAME and has descended the unframed ladder "
                     "anyway (step_unit=%d, orphan asks so far %ld) — a frame-clearing exit must RETURN, "
@@ -7970,36 +7601,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     "cooperative quantum with it, because both are consulted only where this function "
                     "returns",
                     (int)g_step_unit, g_orphan_asks);
-            /* AND ITS LENGTH, WHICH THE BODY ALREADY KNOWS. Both compiles below took `strlen(body)`, which is
-               a pass over every byte of the program each time one starts — on a real single-page app's module
-               bundle that is 2.1 MB walked to learn a number the row was already holding (solver/dyn_body.h). */
+            /* And its length, which the body already holds (solver/dyn_body.h), rather than a `strlen` over every
+               byte of a program each time one starts. */
             size_t body_n = 0;
-            /* WHICH KIND the program about to be compiled is — only a page <script> must parse. */
+            /* Which kind the program about to be compiled is; only a page <script> must parse. */
             DynKind kind = DYN_PAGE_SCRIPT;
-            /* AND WHICH OF §8.1.4.4 "Calling scripts"'S TWO ALGORITHMS RUNS IT — run a classic script, or run
-               a module script. CLASSIC is the answer for every entry a FLOW added, and that is a statement
-               about those entries rather than a default waiting to be overridden: §7.4.2.3.2's `javascript:`
-               URL evaluates a classic script, a lazy chunk and a `setTimeout` string are classic scripts, and a
-               cross-agent operation's program is this engine's own classic text.
-               IT IS THE ROW THAT ANSWERS, NOT THE HALF OF THE SEQUENCE THE CURSOR IS IN. This used to read the
-               session document's types column in one branch and stay CLASSIC everywhere else, which was
-               correct only while the DOCUMENTS THAT ARE NOT THE SESSION'S had no way to state a type at all —
-               and the way they said so was to abort: three DCHECKs, one per seam, on `<script type=module>`.
-               A child navigable's Document, a joined one and an INJECTED element each put their element's type
-               on the row now (flow.h's `dyn_type`), so this is one question with one answer for every position
-               in the sequence. */
+            /* Which of §8.1.4.4 Calling scripts' two algorithms runs it: run a classic script or run a module
+               script. The row answers for every position (flow.h's `dyn_type`, written by child navigables, joined
+               documents and injected elements alike). Classic is the answer for every entry a flow added:
+               §7.4.2.3.2's `javascript:` URL, a lazy chunk and a `setTimeout` string are classic scripts, and a
+               cross-agent operation's program is this engine's own classic text. */
             ScriptType stype = flow_dyn_type(f);
-            /* WHICH OF THE ORPHAN STEP'S THREE OUTCOMES HAPPENED — held so the branch can name its own work
-               rather than labelling three unrelated things with the name of one of them. */
+            /* Which of the orphan step's three outcomes happened, so the branch names its own work. */
             int orphan_step;
-            /* WHAT THE CURSOR SAYS THIS STEP CAN DO WITH THE FLOW'S OWN SEQUENCE — two readings of one row,
-               because HOLDING a program and being able to RUN one are different facts and the ladder below
-               was keyed on the first.
-               `seq_compiles` is `a program starts on THIS step`, and it is what selects the fall-through to
-               the compile ~200 lines below. `seq_awaits` is `the row at the cursor is an external script
-               whose bytes have not come back`, which is HTML §4.12.1.1 "Processing model" step 31's
-               parser-blocking wait and is NOT a reason for the flow to do nothing — see there. They are never
-               both true and the third state (neither) is the cursor past the last row. */
+            /* What the cursor says this step can do with the flow's own sequence: holding a program and being able
+               to run one are different facts. `seq_compiles` means a program starts on this step and selects the
+               fall-through to the compile below. `seq_awaits` means the row at the cursor is an external script whose
+               bytes have not returned, HTML §4.12.1.1 step 31's parser-blocking wait, which is not a reason for the
+               flow to do nothing (see there). Never both; neither means the cursor is past the last row. */
             int seq_compiles = 0;
             int seq_awaits = 0;
             /* THE PARSER'S OWN `<link>` ELEMENTS, AHEAD OF EVERYTHING ELSE THIS FLOW COULD DO — HTML §4.6.8.20
