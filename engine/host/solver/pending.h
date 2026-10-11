@@ -213,8 +213,8 @@ int pending_driven_compose(int kind, int path_driven);
    because it belongs to the REQUEST. A peer's document state IS its flows, so a cross-agent operation is
    performed by every live timeline the peer has and each completes with its own answer: `otherW.length` has N
    answers for N peer timelines and all of them are true. The FIRST fills `value`/`completion`/`answerWorld`
-   above; the rest land here, as [completion, value, world] TRIPLES — the same shape `headers` has one field
-   wider, so pend_list_fork (which copies a tuple by its ARITY) already copies it — until the asking flow forks
+   above; the rest land here, as [completion, value, world, marks] tuples — pend_list_fork copies a tuple by
+   its arity, so it already copies them — until the asking flow forks
    one arm per triple (engine.c's flow_answer_fork, which is the only reader). The world is on the triple and
    not beside it because it is that answer's, and an arm forked over answer k has to be able to say so.
    IT IS `STRUCT` AND THAT IS LOAD-BEARING: an arm DRAINS its own list, so two flows that share a record would
@@ -342,6 +342,8 @@ int pending_driven_compose(int kind, int path_driven);
     /* no answer yet, so no completion type and no answering timeline */               \
     X(COMPLETION, "completion",PEND_SHARE,  JS_UNDEFINED)                              \
     X(ANSWER_WORLD, "answerWorld", PEND_SHARE, JS_NULL)                                \
+    /* …and that timeline's marks (engine_arrival_token), written with it */            \
+    X(ANSWER_MARKS, "answerMarks", PEND_SHARE, JS_NULL)                                \
     /* …and no SECOND answer, which is the common case and stays a tag test */         \
     X(EXTRA,      "extra",     PEND_STRUCT, JS_NULL)                                   \
     /* this flow ISSUED the request, so it is the one that forks an arm per answer */  \
@@ -791,14 +793,14 @@ void pending_set_bytes(JSValueConst e, int field, const void *p, size_t n);
    ANSWERING timeline (world_serialize's grammar) and is copied. Recorded rather than delivered, because the arm
    that will carry it cannot be forked where an answer ARRIVES: that runs between scheduler steps, where the
    running flow, the applied delta and the live DOM head all still belong to some other flow. */
-void pending_extra_add(JSValueConst e, int completion, JSValue value, const char *world);
+void pending_extra_add(JSValueConst e, int completion, JSValue value, const char *world, const char *marks);
 /* How many answers beyond the first this request has been given — 0 for every request nothing forked. */
 int  pending_extra_count(JSValueConst e);
 /* TAKE one, with its completion TYPE as the return value, its value into `*pvalue` and the timeline that
    computed it into `*pworld` (both owned). It leaves the list, because the arm about to be forked over it is
    where it lives from now on — a triple read and left behind would be forked over twice, which is two flows
    exploring one peer timeline. */
-int  pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld);
+int  pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld, JSValue *pmarks);
 
 /* HAS THIS PEER TIMELINE ALREADY ANSWERED THIS REQUEST — asked of the first answer's `answerWorld` and of every
    triple in `extra`. It is the question that separates the two things an arriving answer can be: another of the

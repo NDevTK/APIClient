@@ -559,8 +559,8 @@ async function service(e) {
          was built for rather than something this zone is getting away with. */
       const all = answers.get(key);
       for (const a of all) {
-        e.M.ccall('qjs_host_answer_remote', 'void', ['number','number','number'],
-                  [id, e.cs(a.world), e.cs(a.completion)]);
+        e.M.ccall('qjs_host_answer_remote', 'void', ['number','number','number','number'],
+                  [id, e.cs(a.world), e.cs(a.marks), e.cs(a.completion)]);
         paid++;
       }
       answers.delete(key);
@@ -728,11 +728,12 @@ async function drainNotices(e) {
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
        minted. Held rather than delivered here: the asker is another instance and this loop is inside its step. */
-    /* THE WORLD IS FIELD 3 AND THE COMPLETION IS THE REMAINDER, and the split is that way round because only
-       one of them has a boundary: a world vector's own separators are ':' and ',' (world_serialize), while a
-       completion is remote_object.c's grammar and may contain a tab. This zone reads neither. */
+    /* THE WORLD IS FIELD 3, THE ANSWERING TIMELINE'S MARKS FIELD 4, AND THE COMPLETION IS THE REMAINDER, and the
+       split is that way round because only the completion lacks a boundary: a world vector's own separators are
+       ':' and ',' (world_serialize), while a completion is remote_object.c's grammar and may contain a tab. This
+       zone reads none of them. */
     else if (f[0] === 'remoteop.answer') {
-      if (f.length < 4 || !f[1] || !f[2] || !f[3])
+      if (f.length < 5 || !f[1] || !f[2] || !f[3] || !f[4])
         fail(`a remoteop.answer notice was short of its fields — every answer names the rendezvous token, the ` +
              `TIMELINE of the flow that ran the program, and the completion: ${n}`);
       const list = answersFor(f[1]);
@@ -746,7 +747,7 @@ async function drainNotices(e) {
              `${f[2]}. A document answers a question once per live flow and spends the token off the row as it ` +
              `does, so a repeat is an emission this instance made twice and the arm forked over it would be a ` +
              `second flow exploring a peer timeline that is already an arm`);
-      list.push({ world: f[2], completion: f.slice(3).join('\t') });
+      list.push({ world: f[2], marks: f[3], completion: f.slice(4).join('\t') });
     }
     /* AN OPERATION HANDED BACK, because the instance holding it PARKED while still holding it. The record and
        the token do NOT have one lifetime and that is the whole reason this arm exists: the record is text

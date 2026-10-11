@@ -1112,6 +1112,7 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
 /* The row a taken cross-instance answer owes, defined with the other commitment writer because what a receiving
    timeline has heard from is one question with one set of rules. */
 static void answer_commit_taken(JSContext *ctx, Flow *f, const char *world);
+static void deliver_take_marks(Flow *f, EngineArrival m);   /* defined with the delivery, below */
 
 JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
     Flow *f = flow_running();
@@ -1154,18 +1155,26 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
                (§7.4 step 14's load, XHR §3.5.6's fetch) names no timeline and commits the flow to nothing;
                engine_host_answer asserts the missing name agrees with the answer's source. */
             {
-                JSValue wv = pending_get(e, PEND_ANSWER_WORLD);
+                JSValue wv = pending_get(e, PEND_ANSWER_WORLD), mv = pending_get(e, PEND_ANSWER_MARKS);
 
+                DCHECK(JS_IsString(wv) == JS_IsString(mv),
+                       "a taken answer names its timeline without that timeline's marks, or the reverse — "
+                       "engine_host_answer and flow_answer_fork write the two together");
                 if (JS_IsString(wv)) {
-                    const char *w = JS_ToCString(ctx, wv);
+                    const char *w = JS_ToCString(ctx, wv), *m = JS_ToCString(ctx, mv);
 
-                    CHECK(w != NULL, "engine: OOM recording which peer timeline answered a cross-instance request — "
-                                     "without the commitment this timeline would accept a message from a peer arm it "
-                                     "never took");
+                    CHECK(w != NULL && m != NULL,
+                          "engine: OOM recording which peer timeline answered a cross-instance request — "
+                          "without the commitment this timeline would accept a message from a peer arm it "
+                          "never took");
                     answer_commit_taken(ctx, f, w);
+                    /* The answer rests on the answering timeline's path, as a delivery rests on its sender's. */
+                    deliver_take_marks(f, engine_arrival_of_token(m));
                     JS_FreeCString(ctx, w);
+                    JS_FreeCString(ctx, m);
                 }
                 JS_FreeValue(ctx, wv);
+                JS_FreeValue(ctx, mv);
             }
             v = pending_get(e, PEND_VALUE);   /* the caller's reference; the register's goes with the entry */
             JS_FreeValue(ctx, e);
@@ -1278,8 +1287,8 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
  * Returns 1 when the answer was written onto an entry of a flow that can still consume it, 0 when it was not
  * delivered. After a park the flows are still allocated (cold_park writes recipes; teardown frees them), so the
  * session-live test below is what keeps a found entry from counting as a delivery. */
-int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueConst value, int completion,
-                       int source) {
+int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const char *marks, JSValueConst value,
+                       int completion, int source) {
     int extra = 0, fixed = 0;
 
     DCHECK(req != 0, "the host answered a request with no id");
@@ -1293,6 +1302,9 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
     DCHECK((source == ENGINE_ANSWER_PEER) == (world != NULL && *world),
            "a cross-instance answer disagrees with its source about whether a peer timeline computed it — a peer's "
            "answer names the world of the flow that ran it, and a trusted-zone answer names none");
+    DCHECK((world != NULL) == (marks != NULL && *marks),
+           "a cross-instance answer names its timeline without that timeline's marks, or the reverse — "
+           "perform_answer_notify writes both on every answer");
     /* Parsed only where the assert is compiled: world_parse interns the document names it reads, a side effect
        that may not sit in a DCHECK's condition, and release has no reader for the result. */
 #if APICLIENT_DEV
@@ -1332,6 +1344,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
                 /* The timeline is written with the value, so a flow that took an answer can address its next
                    operation to that timeline and refuse the same one arriving again. */
                 pending_set(p, PEND_ANSWER_WORLD, world ? JS_NewString(ctx, world) : JS_NULL);
+                pending_set(p, PEND_ANSWER_MARKS, marks ? JS_NewString(ctx, marks) : JS_NULL);
                 /* `haveValue` last and through the register, because it is the write that unblocks the flow.
                    The register carries the count `pending_blocked` answers from, and a record cannot find the
                    registers naming it, so the walk that found the register states it. The generic `pending_set`
@@ -1371,7 +1384,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
                draining its own list, so the record is unshared here per flow, as a branch fork does. */
             JS_FreeValue(ctx, p);
             p = pending_unshare(f->pending, i);
-            pending_extra_add(p, completion, JS_DupValue(ctx, value), world);
+            pending_extra_add(p, completion, JS_DupValue(ctx, value), world, marks);
             JS_FreeValue(ctx, p);
             flow_clear_host_owed(f);
             /* Not a payment: the first answer settled the ask, and this is another peer timeline answering. */
@@ -2505,20 +2518,27 @@ void engine_routed_task_census(long *ends) {
     for (i = 0; i < ROUTED_TASK_END_N; i++) ends[i] = g_routed_task_end[i];
 }
 
+/* The marks word of a record `f` sends: a question's head and an answer both carry it. */
+static void flow_marks_token(const Flow *f, char *buf, size_t cap)
+{
+    EngineArrival m;
+
+    m.prov = flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED;
+    m.driven = flow_path_driven(f);
+    m.pinned = flow_path_pinned(f);
+    engine_arrival_token(m, buf, cap);
+}
+
 char *engine_record_head(const char *op, const char *doc, const Flow *f)
 {
     char world[1024], marks[64], *out;
-    EngineArrival m;
     size_t cap;
 
     DCHECK(op != NULL && doc != NULL && f != NULL, "a cross-instance record's head was composed with no verb, "
                                                    "no target document or no sending flow");
     /* world_serialize crashes on truncation rather than sending a prefix. */
     world_serialize(f->world, world, sizeof world);
-    m.prov = flow_path_forced(f) ? PROV_FORCED : PROV_DERIVED;
-    m.driven = flow_path_driven(f);
-    m.pinned = flow_path_pinned(f);
-    engine_arrival_token(m, marks, sizeof marks);
+    flow_marks_token(f, marks, sizeof marks);
     cap = strlen(op) + strlen(doc) + strlen(world) + strlen(marks) + 4;
     out = malloc(cap);
     CHECK(out != NULL, "engine: OOM composing a cross-instance record's head");
@@ -5051,7 +5071,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
     for (i = 0; i < n; i++) {
-        JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, aw = JS_UNDEFINED, se;
+        JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, aw = JS_UNDEFINED, am = JS_UNDEFINED, se;
         JSValue *clone;
         void *parked;
         int in_program, in_job;
@@ -5084,7 +5104,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
            timeline continued, has its own copy. */
         /* Taken from the parent first, so the parent cannot fork over this answer again; the arm's inherited
            copy of the list is cleared below. */
-        completion = pending_extra_pop(e, &av, &aw);
+        completion = pending_extra_pop(e, &av, &aw, &am);
         JS_FreeValue(ctx, e);
 
         /* The arm is a clone of whichever home holds the suspension (the asserts above established exactly one).
@@ -5118,6 +5138,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         /* Whose answer it is, from the same triple: the arm belongs to a named pair of timelines, and its next
            operation is addressed with this (engine_flow_addressee). */
         pending_set(se, PEND_ANSWER_WORLD, aw);
+        pending_set(se, PEND_ANSWER_MARKS, am);
         /* No answers beyond its own, both ways: the inherited remaining list would make the arm fork over answers
            the parent will fork over, and its answer is fixed, so a later answer belongs to the issuer. Together
            these make a peer with N timelines cost exactly N-1 arms. */
@@ -6766,7 +6787,7 @@ static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
 static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, const char *token,
                                   int completion, JSValueConst cv)
 {
-    char world[1024];
+    char world[1024], marks[64];
     char *enc, *rec;
     size_t cap;
 
@@ -6777,13 +6798,15 @@ static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, cons
     /* world_serialize crashes on truncation rather than sending a prefix, so this notice carries the same name as
        every other record of this world. */
     world_serialize(f->world, world, sizeof world);
-    cap = strlen(token) + strlen(world) + strlen(enc) + 24;
+    /* The answering timeline's marks, which the asking arm takes with the answer (engine_host_take). */
+    flow_marks_token(f, marks, sizeof marks);
+    cap = strlen(token) + strlen(world) + strlen(marks) + strlen(enc) + 24;
     rec = malloc(cap);
     CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
                        "asking flow on a question nothing will answer again");
     /* The world sits before the completion because the completion is the remainder: a value grammar may contain a
        tab, a world vector may not (its fields are ':' and ','). */
-    snprintf(rec, cap, "remoteop.answer\t%s\t%s\t%s", token, world, enc);
+    snprintf(rec, cap, "remoteop.answer\t%s\t%s\t%s\t%s", token, world, marks, enc);
     engine_host_notify(ctx, rec);
     free(rec);
     free(enc);

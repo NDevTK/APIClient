@@ -898,7 +898,7 @@ void pending_list_add_pair(JSValueConst list, const char *name, const char *valu
    container of needs no second copier — and a second copier is exactly where a container that must diverge
    quietly stays shared. */
 
-void pending_extra_add(JSValueConst e, int completion, JSValue value, const char *world)
+void pending_extra_add(JSValueConst e, int completion, JSValue value, const char *world, const char *marks)
 {
     JSValue list, pair;
 
@@ -909,6 +909,8 @@ void pending_extra_add(JSValueConst e, int completion, JSValue value, const char
            "a peer's further answer was recorded without the timeline that computed it — a second answer is a "
            "second timeline by definition, so one that names none cannot be told from the first answer arriving "
            "twice, and the arm forked over it would belong to no timeline of the answering document");
+    DCHECK(marks != NULL && *marks, "a peer's further answer was recorded without its timeline's marks — the arm "
+                                    "forked over it would take the answer and none of the path it rests on");
     pend_atoms();
     list = pend_own(e, g_field[PEND_EXTRA]);
     cow_engine_write_begin();
@@ -928,6 +930,7 @@ void pending_extra_add(JSValueConst e, int completion, JSValue value, const char
     JS_SetPropertyUint32(pend_ctx(), pair, 1, value);
     /* …AND SO IS THE TIMELINE, for the same reason and in the same bracket. */
     JS_SetPropertyUint32(pend_ctx(), pair, 2, JS_NewString(pend_ctx(), world));
+    JS_SetPropertyUint32(pend_ctx(), pair, 3, JS_NewString(pend_ctx(), marks));
     JS_SetPropertyUint32(pend_ctx(), list, (uint32_t)pend_len(list), pair);
     cow_engine_write_end();
     JS_FreeValue(pend_ctx(), list);
@@ -985,7 +988,7 @@ int pending_extra_count(JSValueConst e)
     return n;
 }
 
-int pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld)
+int pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld, JSValue *pmarks)
 {
     JSValue list, pair, c;
     int n;
@@ -1013,6 +1016,10 @@ int pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld)
     JS_FreeValue(pend_ctx(), c);
     *pvalue = JS_GetPropertyUint32(pend_ctx(), pair, 1);
     *pworld = JS_GetPropertyUint32(pend_ctx(), pair, 2);
+    DCHECK(pmarks != NULL, "a peer timeline's answer was taken with nowhere to put that timeline's marks");
+    *pmarks = JS_GetPropertyUint32(pend_ctx(), pair, 3);
+    DCHECK(JS_IsString(*pmarks), "a recorded peer answer carries no marks — pending_extra_add writes them with "
+                                 "the world");
     DCHECK(JS_IsString(*pworld),
            "a recorded peer answer carries no timeline — the completion, the value and the world are one write "
            "(pending_extra_add), so a triple missing the third is a record written outside this file");

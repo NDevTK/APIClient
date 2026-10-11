@@ -517,9 +517,10 @@ enum { ENGINE_ANSWER_HOST, ENGINE_ANSWER_PEER };
 /* Deliver an answer, routed by id to one call site (never broadcast like a fetched body). Returns 0 when the
    asking flow is gone, which means nobody is waiting. `world` names the timeline that computed the answer in
    world_serialize's grammar: required for ENGINE_ANSWER_PEER, so N true answers are told apart from one answer
-   relayed twice, and NULL for ENGINE_ANSWER_HOST, which has no flow to name. */
-int      engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueConst value, int completion,
-                            int source);
+   relayed twice, and NULL for ENGINE_ANSWER_HOST, which has no flow to name. `marks` is that timeline's
+   arrival word (engine_arrival_token), present exactly when `world` is; the arm that takes the answer takes it. */
+int      engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const char *marks, JSValueConst value,
+                            int completion, int source);
 /* What the host still owes, as `id<TAB>op` lines. Pulled each step and not deduped (see
    engine_retract_operations). */
 const char *engine_host_requests(void);

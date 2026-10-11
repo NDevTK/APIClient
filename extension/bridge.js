@@ -4256,35 +4256,39 @@ async function hostNotice(eng, line) {
     await target.r.renderer.route({ record: line, senderOrigin: stampOrigin(eng.origin) });
     return;
   }
-  /* `remoteop.answer <token> <world> <completion>` — a completion this instance produced for an operation it
-     was asked to perform, under the token this zone minted. It is a notice, not a return value, because a peer
+  /* `remoteop.answer <token> <world> <marks> <completion>` — a completion this instance produced for an
+     operation it was asked to perform, under the token this zone minted. It is a notice, not a return value, because a peer
      answers by running a program (an IDL getter, a page's setter or function) as a flow on its own frontier.
      Relayed verbatim and unread: the completion is in remote_object.c's grammar, where an object crosses as a
      name in the answering agent's namespace, which only an engine can interpret. */
   if (f[0] === "remoteop.answer") {
-    DCHECK(f.length >= 4, "a remoteop.answer notice was short of its fields — the engine writes the rendezvous " +
-                          "token, the TIMELINE that computed the answer and the completion record, and a " +
-                          "notice missing any of them names no call site or no timeline");
+    DCHECK(f.length >= 5, "a remoteop.answer notice was short of its fields — the engine writes the rendezvous " +
+                          "token, the TIMELINE that computed the answer, its marks and the completion record, " +
+                          "and a notice missing any of them names no call site or no timeline");
     const to = _remoteOps.get(f[1]);
     /* A token this zone did not mint names no asker, leaving the asking flow parked on an answer nothing can
        deliver. */
     DCHECK(to !== undefined, "a peer answered a cross-agent operation under a rendezvous token this zone never " +
                              "minted — the token is echoed verbatim by the instance that performed it, so the " +
                              "flow that asked is parked on an answer nothing can deliver");
-    /* The world is the third field (world_serialize's grammar, separators ':' and ','), the completion the
-       remainder (it may contain a tab). This zone reads neither but must know where one ends. */
+    /* The world is the third field (world_serialize's grammar, separators ':' and ','), the marks the fourth,
+       the completion the remainder (it may contain a tab). This zone reads none of them but must know where
+       each ends. */
     const _t2 = line.indexOf("\t", line.indexOf("\t") + 1);
     const _t3 = _t2 < 0 ? -1 : line.indexOf("\t", _t2 + 1);
-    DCHECK(_t3 > _t2 + 1, "a remoteop.answer notice carried no completion record after its timeline — an empty " +
-                          "answer is not `undefined`, it is a relay that lost the peer's completion, and the " +
-                          "engine's own decoder says so at the other end");
+    const _t4 = _t3 < 0 ? -1 : line.indexOf("\t", _t3 + 1);
+    DCHECK(_t3 > _t2 + 1 && _t4 > _t3 + 1,
+           "a remoteop.answer notice carried no marks or no completion record after its timeline — an empty " +
+           "answer is not `undefined`, it is a relay that lost the peer's completion, and the engine's own " +
+           "decoder says so at the other end");
     /* Every completion is relayed: a peer's document state is its flows, so one question has one true answer per
        timeline, and the asking flow forks an arm over each. Keeping one per token would answer a page from
        whichever timeline the interleaving left. The engine refuses a repeat of one timeline at its delivery
        entry. */
-    if (!to || _t3 < 0) return;
+    if (!to || _t4 < 0) return;
     await to.asker.r.renderer.hostAnswerRemote({ request: to.req, world: line.slice(_t2 + 1, _t3),
-                                                 completion: line.slice(_t3 + 1) });
+                                                 marks: line.slice(_t3 + 1, _t4),
+                                                 completion: line.slice(_t4 + 1) });
     return;
   }
   /* `world.gone <world>` — a world of this instance is finished (its flow left the frontier, or the session

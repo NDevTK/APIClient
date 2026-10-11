@@ -652,6 +652,10 @@
                  "SECOND timeline (a fork the asking flow owes) from ONE timeline's answer delivered TWICE (a " +
                  "relay defect). Without it both look identical and the receiving engine cannot assert on " +
                  "either" },
+          { name: "marks", type: "string", retained: false,
+            why: "the answering timeline's path marks (engine_arrival_token's word), relayed verbatim. The arm " +
+                 "that takes this answer rests on that timeline's forced, driven or pinned path, so its own " +
+                 "requests carry the marks the answer was computed under" },
           { name: "completion", type: "string", retained: false,
             why: "the peer's completion record, RELAYED WHOLE and unread for Perform's reason. An empty one is " +
                  "not `undefined`, it is a relay that lost the peer's answer, and the engine's own decoder " +

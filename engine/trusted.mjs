@@ -1442,8 +1442,9 @@ async function main() {
       if (!go()) held.push({ doc: f[1], what: `post ${f[2]} -> ${f[1]}`, go });
       return;
     }
-    /* `remoteop.answer <token> <world> <completion>` — a COMPLETION the answering instance produced for an
-       operation it was asked to perform. THE WORLD IS FIELD 3 AND THE COMPLETION IS THE REMAINDER, and the
+    /* `remoteop.answer <token> <world> <marks> <completion>` — a COMPLETION the answering instance produced for
+       an operation it was asked to perform. The marks are the answering timeline's, relayed unread with the
+       world. THE WORLD IS FIELD 3 AND THE COMPLETION IS THE REMAINDER, and the
        split is that way round because only one of them has a boundary: a world vector's own separators are
        ':' and ',' (world_serialize) while a completion is remote_object.c's grammar and may contain a tab.
        This zone reads neither — it routes text, and only an engine knows what a name means.
@@ -1452,7 +1453,7 @@ async function main() {
        the asker an arbitrary timeline's value and drop the rest, and a page reading the member twice in one
        expression would get two contradictory answers with nothing able to name the disagreement. */
     if (f[0] === 'remoteop.answer') {
-      if (f.length < 4 || !f[1] || !f[2] || !f[3])
+      if (f.length < 5 || !f[1] || !f[2] || !f[3] || !f[4])
         throw new Error('a remoteop.answer notice was short of its fields — every answer names the rendezvous ' +
                         `token, the TIMELINE of the flow that ran the program, and the completion: ${record}`);
       const r = reads.get(f[1]);
@@ -1468,7 +1469,7 @@ async function main() {
         throw new Error('the peer answered one cross-agent operation TWICE from the SAME timeline — token ' +
                         `${f[1]}, world ${f[2]}`);
       r.by.push(f[2]);
-      r.asker.ready.push(['remote', String(r.id), f[2], b64(f.slice(3).join('\t'))].join('\t'));
+      r.asker.ready.push(['remote', String(r.id), f[2], f[3], b64(f.slice(4).join('\t'))].join('\t'));
       flush();
       return;
     }

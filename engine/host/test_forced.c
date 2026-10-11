@@ -5455,7 +5455,7 @@ static int hostreq_answer_all(JSContext *ctx)
                already have read. */
             /* This fixture stands in for the trusted zone and answers out of its own tables, so every answer
                it gives is a NORMAL completion — there is no peer program here to have thrown in one. */
-            n += engine_host_answer(ctx, id, NULL, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
+            n += engine_host_answer(ctx, id, NULL, NULL, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             JS_FreeValue(ctx, v);
         }
         p = end + 1;
@@ -27818,6 +27818,7 @@ static int abi_pay(void)
                inside this instance because a name only means something to an engine. */
             const char *id_f = abi_take(&p, "request id");
             const char *world = abi_take(&p, "answering timeline");
+            const char *marks = abi_take(&p, "answering timeline's marks");
             char *comp_f = abi_take(&p, "completion record");
             size_t cn = 0;
             char *comp, *end;
@@ -27841,7 +27842,7 @@ static int abi_pay(void)
                    "a peer's completion carries a NUL — remote_object.c's grammar is a one-letter tag and "
                    "'.'-terminated base64, so a NUL in it is a relay that spliced something else in and the "
                    "decode would answer out of the prefix");
-            qjs_host_answer_remote((unsigned)id, world, comp);
+            qjs_host_answer_remote((unsigned)id, world, marks, comp);
             free(comp);
             paid++;
         } else if (!strcmp(verb, "world-gone")) {

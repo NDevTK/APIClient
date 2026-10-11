@@ -1634,7 +1634,7 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned complet
         /* Routed to one call site by id, never broadcast as a fetched body is, because the answer was computed
            under the asking flow's world; a zero return means that flow is gone and nobody waits. No timeline is
            named: this zone computed the value itself, so there is one of it. */
-        engine_host_answer(g_ctx, (uint32_t)req, NULL, v, (int)completion, ENGINE_ANSWER_HOST);
+        engine_host_answer(g_ctx, (uint32_t)req, NULL, NULL, v, (int)completion, ENGINE_ANSWER_HOST);
         JS_FreeValue(g_ctx, v);
     }
 }
@@ -1684,8 +1684,8 @@ QJS_EXPORT void qjs_world_gone(const char *world)
  * rendezvous, opaque to both engines, since two peers may hold the same request id.
  * Nothing runs inside this call: a peer answers by running a program, so the operation becomes a program of every
  * live timeline of the named document on the one frontier. Each completion leaves through `qjs_host_notices` as
- * `remoteop.answer<TAB><token><TAB><world><TAB><completion>`, one per timeline, since that document's state is its
- * flows; `<world>` distinguishes N true answers from one answer relayed N times. */
+ * `remoteop.answer<TAB><token><TAB><world><TAB><marks><TAB><completion>`, one per timeline, since that document's
+ * state is its flows; `<world>` distinguishes N true answers from one answer relayed N times. */
 QJS_EXPORT void qjs_perform(const char *token, const char *record)
 {
     DCHECK(g_begun, "a cross-agent operation was asked of an engine whose frontier was never seeded — there is "
@@ -1699,7 +1699,7 @@ QJS_EXPORT void qjs_perform(const char *token, const char *record)
  * text unread. `req` is this instance's request id, recovered by the zone from its token. `world` is which of the
  * answering document's timelines produced this completion, relayed off the `remoteop.answer` notice, so this entry
  * can tell a second timeline (a fork the asking flow owes) from one timeline's answer delivered twice. */
-QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const char *completion)
+QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const char *marks, const char *completion)
 {
     int type = ENGINE_COMPLETION_NORMAL;
     JSValue v;
@@ -1712,10 +1712,13 @@ QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const ch
            "a peer's completion arrived naming no TIMELINE — the answering instance writes the world of the "
            "flow that ran the program on every answer it emits, so an empty one is a relay that dropped the "
            "field, and this instance can then no longer tell the peer's other timelines from a duplicate");
+    DCHECK(marks != NULL && *marks,
+           "a peer's completion arrived without its timeline's marks — the answering instance writes them beside "
+           "the world on every answer, so an empty one is a relay that dropped the field");
     v = remote_completion_decode(g_ctx, completion, &type);
     /* Routed to one call site by id, as qjs_host_answer's is: the operation ran under the asking flow's world. A
        zero return means that flow is gone. */
-    engine_host_answer(g_ctx, (uint32_t)req, world, v, type, ENGINE_ANSWER_PEER);
+    engine_host_answer(g_ctx, (uint32_t)req, world, marks, v, type, ENGINE_ANSWER_PEER);
     JS_FreeValue(g_ctx, v);
 }
 
