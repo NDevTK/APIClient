@@ -1288,12 +1288,6 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
  * a stranger's timeline. Writing the completion onto the entry is a property write the COW delta and cold tier
  * carry; flow_answer_fork builds the arm with that flow switched in.
  *
- * A peer answer is admitted by the asking flow's commitment record (deliver_admits), the one rule a routed message
- * meets: a flow that took a contradicting timeline's answer or message, or that forecloses this world because a
- * family member took it (flow_answer_fork, flow_answer_standby), is not this timeline's taker. The request's
- * addressee (engine_flow_addressee) already narrows the answering timelines to the received rows on the peer's
- * side; a foreclosed row cannot be addressed, so a standby's refusal is made only here.
- *
  * Returns 1 when the answer was written onto an entry of a flow that can still consume it, 0 when it was not
  * delivered. After a park the flows are still allocated (cold_park writes recipes; teardown frees them), so the
  * session-live test below is what keeps a found entry from counting as a delivery. */
@@ -1351,6 +1345,11 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                 DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
                        "a request whose answer was fixed by an answer fork is unanswered — the arm is built from the "
                        "answer it took, so the two are written together");
+                /* A peer answer meets the rule a routed message does (deliver_admits): a flow committed to a
+                   contradicting timeline, or foreclosing this one because a family member took it
+                   (flow_answer_fork, flow_answer_standby), is not its taker. The request's addressee
+                   (engine_flow_addressee) narrows to the received rows on the peer's side; a foreclosed row
+                   cannot be addressed, so a standby's refusal is made only here. */
                 if (source == ENGINE_ANSWER_PEER && deliver_admits(ctx, f, world) != STEP_UNIT_ROUTED_DELIVERY) {
                     refused++;
                     JS_FreeValue(ctx, p);
